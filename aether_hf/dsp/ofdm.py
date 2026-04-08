@@ -156,7 +156,9 @@ class OFDMModulator:
 class OFDMDemodulator:
     """Demodulates received OFDM symbols."""
 
-    def __init__(self, mode: str = "wide", extended_cp: bool = False):
+    def __init__(self, mode: str = "wide", extended_cp: bool = False,
+                 use_wiener: bool = False, use_blanker: bool = False,
+                 snr_est_db: float = 10.0):
         self.smap = SubcarrierMap(mode)
         self.fft_size = self.smap.fft_size
         self.cp_len = CP_EXTENDED_SAMPLES if extended_cp else CP_DEFAULT_SAMPLES
@@ -164,6 +166,23 @@ class OFDMDemodulator:
 
         # Channel estimate (updated per symbol from pilots)
         self._H: Optional[np.ndarray] = None
+
+        # Optional Wiener channel estimator
+        self._wiener = None
+        if use_wiener:
+            from aether_hf.dsp.wiener import WienerEstimator
+            self._wiener = WienerEstimator(
+                pilot_freq_indices=np.array(self.smap.pilot_indices),
+                data_freq_indices=np.array(self.smap.data_indices),
+                fft_size=self.fft_size,
+                snr_est_db=snr_est_db,
+            )
+
+        # Optional noise blanker
+        self._blanker = None
+        if use_blanker:
+            from aether_hf.dsp.noise_blanker import NoiseBlanker
+            self._blanker = NoiseBlanker()
 
     def demodulate(self, samples: np.ndarray,
                    symbol_index: int = 0) -> np.ndarray:
@@ -178,6 +197,10 @@ class OFDMDemodulator:
         """
         assert len(samples) == self.symbol_len
 
+        # Apply noise blanker (Layer 1+2) before FFT
+        if self._blanker:
+            samples = self._blanker.process_time_domain(samples.copy())
+
         # Strip cyclic prefix
         x = samples[self.cp_len:]
 
@@ -189,14 +212,25 @@ class OFDMDemodulator:
         for i, bin_idx in enumerate(self.smap.pilot_bins):
             H_pilot[i] = X[bin_idx] / self.smap.pilot_values[i]
 
-        # Simple channel interpolation (linear across frequency)
-        # In production, this would be 2D Wiener interpolation
-        self._H = self._interpolate_channel(H_pilot)
+        # Channel estimation: Wiener or linear interpolation
+        if self._wiener:
+            self._H = self._wiener.estimate(H_pilot, symbol_index)
+        else:
+            self._H = self._interpolate_channel(H_pilot)
+
+        # Erasure marking (Layer 3) — flag corrupted subcarriers
+        erasure_mask = None
+        if self._blanker:
+            powers = np.array([np.abs(X[b]) ** 2 for b in self.smap.data_bins])
+            erasure_mask = self._blanker.mark_erasures(powers)
 
         # Extract and equalize data subcarriers
         data_syms = np.zeros(self.smap.n_data, dtype=np.complex128)
         for i, bin_idx in enumerate(self.smap.data_bins):
-            if self._H is not None and abs(self._H[i]) > 1e-10:
+            if erasure_mask is not None and erasure_mask[i]:
+                # Erased — set to zero (LLR will be 0 for this position)
+                data_syms[i] = 0.0
+            elif self._H is not None and abs(self._H[i]) > 1e-10:
                 data_syms[i] = X[bin_idx] / self._H[i]
             else:
                 data_syms[i] = X[bin_idx]
