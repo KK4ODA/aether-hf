@@ -16,7 +16,13 @@ IDs), `docs/COMMUNITY-CONCERNS.md` (what users will judge us on), `docs/adr/` (d
   an assertion to make a test pass — add an ADR if a target genuinely changes.
   `test_vectors.py` pins the transmitter bit-exactly to `vectors/`.
 - `tools/audit_probe_*.py` — frozen evidence scripts from the audit; excluded from lint.
-- `core/` (Rust workspace) and `app/` (Tauri) arrive in Phases 3–4 per ADR-0001.
+- `core/` — the shipped Rust workspace (ADR-0001). `aether-fec` is done and is **bit-exact
+  with the model**: `cargo test` in `core/` runs both its own tests and the cross-validation
+  against `tests/data/fec_vectors.json`. Regenerate those vectors with
+  `python tools/make_fec_vectors.py` **only** when the model deliberately changed — a
+  mismatch otherwise is a bug in the core, not stale vectors. The LDPC base-graph tables are
+  generated from the model's JSON by `build.rs`, so there is one source of truth.
+- `app/` (Tauri) arrives in Phase 4 per ADR-0001.
 
 ## Commands
 ```
@@ -49,8 +55,8 @@ rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2
 (start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
 P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default), a fully measured 14-mode
 rate table, P2-6 (Wiener channel estimation built and benchmarked — **not adopted**, the
-default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete.**
-Next: Phase 3, the Rust core port per ADR-0001.
+default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete**, and Phase 3 has started: P3-1 (Rust workspace + `aether-fec`,
+bit-exact with the model) is done. Next: P3-2, porting the PHY, frame codec and ARQ.
 
 `docs/spec/air-interface.md` is public and its numeric tables are generated —
 run `python tools/make_spec.py` after any waveform, mode or constant change, or

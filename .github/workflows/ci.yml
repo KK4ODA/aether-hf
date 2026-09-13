@@ -45,3 +45,52 @@ jobs:
 
       - name: Tests (quick set)
         run: uv run pytest -m "not slow" -p no:cacheprovider
+
+  core:
+    name: core · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Format check
+        working-directory: core
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        working-directory: core
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # The cross-validation vectors are committed. Regenerating them here and finding a
+      # difference means the model changed without the core being re-checked against it,
+      # which is exactly the drift ADR-0001 forbids.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync (locked)
+        run: uv sync --locked
+
+      - name: Vectors are current with the model
+        run: |
+          uv run python tools/make_fec_vectors.py
+          git diff --exit-code core/aether-fec/tests/data/fec_vectors.json
+
+      - name: Tests
+        working-directory: core
+        run: cargo test --all-features

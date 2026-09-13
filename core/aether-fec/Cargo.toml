@@ -1,0 +1,20 @@
+[package]
+name = "aether-fec"
+description = "Forward error correction for the Aether HF modem: 3GPP TS 38.212 LDPC and CRC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
