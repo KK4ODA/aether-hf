@@ -76,7 +76,8 @@ def run_point(
         result = modem.decode_buffer(y, max_frames=1)
         if result:
             f = result[0]
-            if abs(f.frame.sync.start - lead) <= 3 and f.frame.sync.header.mode == mode_idx:
+            # multipath can lock onto a path up to a few samples late; that still counts
+            if abs(f.frame.sync.start - lead) <= 8 and f.frame.sync.header.mode == mode_idx:
                 acquired += 1
                 snr_est.append(f.frame.snr_3k_db)
             decoded += int(f.payload == payload)

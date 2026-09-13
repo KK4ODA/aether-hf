@@ -14,8 +14,9 @@ build/
 target/
 node_modules/
 
-# Audio captures and benchmark scratch output (committed vectors live in vectors/)
+# Audio captures and benchmark scratch output (committed golden vectors live in vectors/)
 *.wav
+!vectors/*.wav
 *.raw
 bench-out/
 
