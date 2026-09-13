@@ -47,8 +47,14 @@ mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FS
 (`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`); P2-2
 rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2-2a
 (start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
-P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default) and a fully measured
-14-mode rate table. Next: P2-7 specs.
+P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default), a fully measured 14-mode
+rate table, P2-6 (Wiener channel estimation built and benchmarked — **not adopted**, the
+default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete.**
+Next: Phase 3, the Rust core port per ADR-0001.
+
+`docs/spec/air-interface.md` is public and its numeric tables are generated —
+run `python tools/make_spec.py` after any waveform, mode or constant change, or
+`model/tests/test_spec.py` fails.
 
 Note for Phase 3: `LinkEngine.on_preamble` needs the real streaming receiver to report a
 detected preamble before the frame is decoded; `PhyTiming.preamble_detect_s` is what turns

@@ -225,3 +225,45 @@ single-carrier waveform — the FFT spreads one hot sample across all 57 carrier
 Its limit is a *sustained* burst: the reference level is a median of segment medians, which
 holds only while the burst is a minority of the window it looks at
 (`NoiseBlanker.robust_span_samples`, ≈ 57 ms at the defaults).
+
+## Channel estimation: linear vs Wiener (`chanest.csv`, P2-6 — **not adopted**)
+
+P2-6 was conditional: improved channel estimation *if benchmarks justify it*. They did not,
+and the default estimator stays linear-in-frequency with a 3-tap time average. The work and
+the measurements are kept because the reason is specific and reopenable, not a dead end.
+
+**The potential is real.** Measured against the true channel — a noiseless reference run of
+the same fading realisation — Wiener interpolation matched to the delay spread actually
+present beats linear interpolation of the same pilots:
+
+| Channel | linear | Wiener, best matched τ |
+|---|---|---|
+| AWGN @ +4 dB | −7.5 dB | **−12.8** (τ = 0.5 ms) |
+| ITU Good @ +9 dB | −7.4 | **−11.8** (0.5 ms) |
+| ITU Moderate @ +10 dB | −10.1 | **−12.3** (1.0 ms) |
+| ITU Poor @ +8 dB | −5.4 | **−6.7** (2.0 ms) |
+
+(normalised interpolation error; lower is better.) The match matters enormously: the same
+filter designed for 3 ms instead of 1 ms on Moderate gives −8.8 dB, worse than linear.
+
+**It does not survive into frame error rate.** End to end the two are identical on AWGN and
+Wiener is consistently worse on every fading channel — by 0.12 to 0.62 in FER:
+
+| | AWGN | Good | Moderate | Poor |
+|---|---|---|---|---|
+| Wiener vs linear, FER delta | 0.00 | −0.12 … −0.62 | −0.19 … −0.50 | −0.44 … |
+
+Three things were tried and measured before concluding this:
+
+1. **A single robust worst-case design** (the textbook recommendation) — loses nearly
+   everywhere, because most channels are much flatter than the worst case.
+2. **Estimating the delay spread** from the pilot impulse response — the 15-point transform
+   leaks badly enough to overestimate the spread two- to four-fold on fading channels.
+3. **Selecting the design by leave-one-pilot-out cross-validation**, which sidesteps leakage
+   by scoring each candidate on held-out prediction error. This picks sensible designs and
+   still does not recover the gain.
+
+The leading explanation is that the two smoothers overlap: by the time the frequency filter
+runs, the ±1-symbol time average has already removed most of the pilot noise, so the Wiener
+filter's noise-averaging buys little while its design mismatch still costs. If P2-6 is
+reopened it should be as a *joint* 2-D design, not two separable filters applied in sequence.

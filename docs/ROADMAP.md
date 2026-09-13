@@ -525,8 +525,8 @@ amendments (PN preamble sequences, layouts, mode table, P2-3 air interface).
 | P2-3 ✅ (acquisition) | Low-SNR acquisition: PMF-FFT matched-filter bank, type-by-preamble-sequence, chip-signalled mode (ADR-0002 amendment) — 100 % at −5 dB, 87 % at −7 dB. Still open: a spread/repetition mode below −6 dB and the connect-probability benchmark | P1-1, P2-1 |
 | P2-4 ✅ | PAPR study & decision (ADR-0004): iterative clip-and-filter in the transmitter, 5 dB target for BPSK/QPSK/8-PSK and 7 dB for 16-QAM/64-QAM. **+1.0…+1.7 dB delivered power** (more on a harder ALC), PAPR 10 → 5.7/7.3 dB, splatter unchanged. Tone reservation and DFT-spreading measured and rejected. `tools/bench_papr.py`, `phy/papr.py` | P1-7 |
 | P2-5 ✅ | Impulsive-noise defence: median-of-medians blanker ahead of band-limiting (`phy/blanker.py`, on by default) plus per-symbol noise variance so damaged symbols become erasures. Class-A bursts 25 dB above noise take the link from a **total loss at 1 % of samples to zero frame errors up to 10 %**, and cost nothing when there is nothing to blank. `tools/bench_impulsive.py` | P1-6 |
-| P2-6 | Improved channel estimation (MMSE/Wiener 2-D with estimated statistics) if benchmarks justify | P1-6 |
-| P2-7 | Control-plane spec v0.1 (`control-api.md`) and air-interface spec v0.1 | P2-1 |
+| P2-6 ✅ (measured, **not adopted**) | MMSE/Wiener channel estimation built (`phy/wiener.py`, with cross-validated design selection) and benchmarked against linear (`tools/bench_chanest.py`). Matched to the delay spread it wins on raw interpolation error by 1.3–5.3 dB, but the gain does not reach frame error rate and it is worse on every fading channel, so the default stays linear. Reason and reopening conditions in `bench/README.md` | P1-6 |
+| P2-7 ✅ | `docs/spec/air-interface.md` v0.1 — public, FCC §97.309(a)(4), with every number generated from the model by `tools/make_spec.py` and a test that fails if it drifts — and `docs/spec/control-api.md` v0.1 | P2-1 |
 
 Acceptance: §7.4 Poor-channel and protocol gates met; ADR-0004 recorded; specs published.
 
@@ -601,6 +601,6 @@ commands.
 16. **P1-9** Golden vectors v0 in `vectors/`.
 17. **P2-1** ✅ ARQ engine + session FSM + two-modem harness; protocol tests (`test_link.py`, `test_link_harness.py`).
 18. **P2-3** Low-SNR modes and robust control frames; connect-probability benchmark.
-19. **P2-5** Impulsive-noise defence on the streaming RX.
+19. **Phase 3** Rust core port (P3-1, P3-2) per ADR-0001.
 19. **P2-7** Draft `docs/spec/air-interface.md` v0.1 and `control-api.md` v0.1 from the working model.
 20. **P3-1** Scaffold the production core per ADR-0001 and port the FEC against golden vectors.
