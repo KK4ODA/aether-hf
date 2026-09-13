@@ -25,6 +25,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
+from aether_model.phy.blanker import NoiseBlanker
 from aether_model.phy.passband import band_limit_taps
 from aether_model.phy.pipeline import DecodedFrame, Modem
 from aether_model.phy.sync import FrameSync
@@ -40,9 +41,18 @@ class _Pending:
 
 
 class StreamingReceiver:
-    def __init__(self, params: WaveformParams = WIDE_2300, max_buffer_s: float = 6.0) -> None:
+    def __init__(
+        self,
+        params: WaveformParams = WIDE_2300,
+        max_buffer_s: float = 6.0,
+        blank_impulses: bool = True,
+        blanker: NoiseBlanker | None = None,
+    ) -> None:
         self.p = params
-        self.modem = Modem(params)
+        self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
+        self.blanker = (blanker or NoiseBlanker()) if blank_impulses else None
+        """Impulse blanker applied to each incoming block before the band-limiting FIR
+        (P2-5) — it has to run before the filter smears an impulse into a long tail."""
         self._buf = np.zeros(0, dtype=np.complex128)
         self._buf_abs0 = 0  # absolute index of buf[0]
         self._searched_abs = 0  # everything before this absolute index has been searched
@@ -60,6 +70,8 @@ class StreamingReceiver:
         return self._buf_abs0 + len(self._buf)
 
     def feed(self, block: ComplexArray) -> list[DecodedFrame]:
+        if self.blanker is not None:
+            block = self.blanker.process(np.asarray(block, dtype=np.complex128)).samples
         block, self._zi = signal.lfilter(
             self._taps, [1.0], np.asarray(block, dtype=np.complex128), zi=self._zi
         )

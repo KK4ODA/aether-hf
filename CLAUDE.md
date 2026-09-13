@@ -47,8 +47,8 @@ mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FS
 (`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`); P2-2
 rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2-2a
 (start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
-P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). Next: P2-5
-impulsive-noise defence, P2-6 MMSE channel estimation, P2-7 specs.
+P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default) and a fully measured
+14-mode rate table. Next: P2-7 specs.
 
 Note for Phase 3: `LinkEngine.on_preamble` needs the real streaming receiver to report a
 detected preamble before the frame is decoded; `PhyTiming.preamble_detect_s` is what turns

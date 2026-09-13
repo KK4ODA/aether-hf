@@ -23,24 +23,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -5.2,
-    1: -3.6,
-    2: -2.0,
-    3: -0.5,
-    4: 1.0,
-    5: 2.8,
-    6: 4.4,
-    7: 7.5,
+    0: -5.1,
+    1: -3.2,
+    2: -1.8,
+    3: -0.4,
+    4: 1.4,
+    5: 2.9,
+    6: 4.7,
+    7: 6.9,
     8: 6.0,
-    9: 8.0,
+    9: 8.9,
     10: 9.9,
-    11: 12.5,
-    12: 14.5,
+    11: 13.9,
+    12: 15.6,
     13: 16.9,
 }
-"""Minimum usable SNR (3 kHz, FER ≤ 10 %) per mode on AWGN. Modes 0, 2, 4, 6, 8, 10 and 13
-are measured (``bench/baselines/phy_fer.csv``, P2-3 air interface); the rest are interpolated
-until a sweep covers them."""
+"""Minimum usable SNR (3 kHz, FER ≤ 10 %) per mode on AWGN. **Every mode is measured** —
+``bench/baselines/phy_fer_awgn14.csv``, current air interface including ADR-0004 peak
+reduction — regenerate with ``tools/update_rate_table.py --apply``. The interpolated guesses
+this replaced were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate controller
+had no way to discover except by losing frames."""
 
 PAYLOAD_BYTES: dict[int, float] = {
     0: 26,

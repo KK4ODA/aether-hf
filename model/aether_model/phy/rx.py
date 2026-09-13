@@ -23,7 +23,9 @@ Given a :class:`~aether_model.phy.sync.FrameSync`, the receiver
    time-major order together with a per-symbol noise variance ``σ²/|Ĥ|²`` — the LLR
    weighting that lets the LDPC decoder discount faded carriers instead of trusting them.
 
-Noise variance is measured from the pilot residuals over the whole frame. SNR is reported
+Noise variance is measured from the pilot residuals per OFDM symbol, shrunk toward the
+frame-wide value (P2-5) so that a symbol hit by an impulse becomes an erasure rather than
+confident nonsense. SNR is reported
 both per carrier and referenced to 3 kHz for the metrics bus.
 """
 
@@ -43,6 +45,12 @@ from aether_model.phy.preamble import (
     preamble,
 )
 from aether_model.phy.sync import FrameSync
+from aether_model.phy.wiener import (
+    estimate_channel_statistics,
+    frequency_filter,
+    smooth_time,
+    time_filter,
+)
 from aether_model.waveform import WIDE_2300, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
@@ -81,6 +89,41 @@ def layout_for(header_type: FrameType) -> FrameLayout:
 
 
 class FrameReceiver:
+    noise_shrinkage: float = 0.5
+    """How far each per-symbol noise estimate is pulled back toward the frame-wide one.
+    0 trusts 15 pilots completely, 1 ignores them; 0.5 flags a damaged symbol without
+    letting pilot noise alone condemn a clean one (P2-5)."""
+    noise_floor_fraction: float = 0.25
+    """A symbol's variance is never allowed below this multiple of the frame value, so an
+    unluckily quiet pilot set cannot make the decoder over-trust a symbol."""
+    wiener_doppler_max_hz: float = 1.5
+    wiener_time_half_width: int = 1
+    wiener_tau_max_s: float | None = None
+    wiener_design_snr_db: float | None = None
+    """Wiener design parameters (:mod:`aether_model.phy.wiener`). Delay spread and SNR are
+    ``None`` = measured from the pilots on every frame, which is what makes the estimator
+    worth having: matched to the channel it beats linear interpolation everywhere, while a
+    fixed worst-case design loses to it nearly everywhere (P2-6)."""
+    wiener_pilot_passthrough: bool = True
+    """Use the raw (time-smoothed) LS values at the *pilot* carriers when measuring noise.
+    The noise estimate is ``raw - h*known`` at the pilots, which measures noise only if ``h``
+    reproduces them — true of linear interpolation, false of any filter that denoises. Without
+    this the Wiener filter's own smoothing is charged to the noise estimate and every LLR in
+    the frame is scaled wrong."""
+    channel_estimator: str = "linear"
+    """``"linear"`` (default) is linear-in-frequency with a 3-tap time average; ``"wiener"``
+    is the MMSE interpolator of :mod:`aether_model.phy.wiener`.
+
+    P2-6 asked for MMSE estimation *if benchmarks justify it*. They did not, and the default
+    stays linear. Matched to the delay spread actually present, Wiener interpolation beats
+    linear on raw interpolation error by 1.3 dB (ITU Poor) to 5.3 dB (AWGN) — but that gain
+    does not survive into frame error rate here, and on the fading channels the receiver ends
+    up worse. The most likely reason is that the two smoothers overlap: the ±1-symbol time
+    average has already removed most of the pilot noise by the time the frequency filter
+    runs, so its noise-averaging buys little while its design mismatch still costs. Both
+    implementations and the measurements are kept so the question can be reopened with a
+    joint 2-D design rather than two separable ones bolted together."""
+
     def __init__(self, params: WaveformParams = WIDE_2300) -> None:
         self.p = params
         self.dem = OfdmDemodulator(params)
@@ -129,14 +172,35 @@ class FrameReceiver:
         #    on all of them), smoothed over ±1 symbol
         comb = np.zeros((n_sym, len(pc)), dtype=np.complex128)
         comb[pre:] = raw[pre:, pc] / ref
-        sm = comb.copy()
-        for s_i in range(pre, n_sym):
-            lo, hi = max(pre, s_i - 1), min(n_sym - 1, s_i + 1)
-            sm[s_i] = comb[lo : hi + 1].mean(axis=0)
         carriers = np.arange(self.cmap.n_carriers)
+        if self.channel_estimator == "wiener":
+            tau, snr_design = estimate_channel_statistics(comb[pre:], self.p)
+            if self.wiener_tau_max_s is not None:
+                tau = self.wiener_tau_max_s
+            if self.wiener_design_snr_db is not None:
+                snr_design = self.wiener_design_snr_db
+            sm = smooth_time(
+                comb,
+                pre,
+                time_filter(
+                    self.p,
+                    self.wiener_doppler_max_hz,
+                    snr_design,
+                    self.wiener_time_half_width,
+                ),
+            )
+            weights = frequency_filter(self.p, tau, snr_design)
 
-        def interp(row: ComplexArray) -> ComplexArray:
-            return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
+            def interp(row: ComplexArray) -> ComplexArray:
+                return np.asarray(weights @ row, dtype=np.complex128)
+        else:
+            sm = comb.copy()
+            for s_i in range(pre, n_sym):
+                lo, hi = max(pre, s_i - 1), min(n_sym - 1, s_i + 1)
+                sm[s_i] = comb[lo : hi + 1].mean(axis=0)
+
+            def interp(row: ComplexArray) -> ComplexArray:
+                return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
 
         # 3. mode and redundancy version from the pilot-symbol chips (DATA frames)
         mode_idx, rv, runner_up, confidence = 0, 0, 0, 1.0
@@ -174,15 +238,32 @@ class FrameReceiver:
                 h[s_i, 0], h[s_i, -1] = direct[0], direct[-1]
             else:
                 h[s_i] = interp(sm[s_i])
-        # noise variance from pilot residuals on data symbols (smoothed estimate vs raw)
+        # Noise variance from pilot residuals on data symbols (smoothed estimate vs raw),
+        # estimated *per symbol* (P2-5). Impulsive noise is concentrated in time: one hot
+        # sample damages every carrier of the symbol it lands in and none of the others. A
+        # single frame-wide variance would average that damage over clean symbols, which both
+        # overstates the noise on the clean ones and — far worse — understates it on the
+        # damaged ones, so the decoder trusts exactly the LLRs it should be discarding. Per
+        # symbol, a hit symbol's LLRs shrink on their own and it becomes an erasure.
+        if self.channel_estimator == "wiener" and self.wiener_pilot_passthrough:
+            h[pre:, pc] = sm[pre:]
         resid = raw[data_syms][:, pc] - h[data_syms][:, pc] * known[data_syms][:, pc]
-        sigma2 = float(np.mean(np.abs(resid) ** 2)) * (3.0 / 2.0)  # undo the 3-tap averaging bias
+        bias = 3.0 / 2.0  # undo the 3-tap averaging bias
+        sigma2 = float(np.mean(np.abs(resid) ** 2)) * bias
+        per_symbol = np.mean(np.abs(resid) ** 2, axis=1) * bias
+        # Only 15 pilots back each per-symbol estimate, so shrink it toward the frame value:
+        # enough freedom to flag a damaged symbol, not enough for pilot noise alone to
+        # condemn a clean one.
+        sigma2_sym = np.maximum(
+            self.noise_shrinkage * sigma2 + (1.0 - self.noise_shrinkage) * per_symbol,
+            sigma2 * self.noise_floor_fraction,
+        )
         sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
         snr_carrier = sig_power / max(sigma2, 1e-12)
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
         # 5. equalize data carriers of payload symbols, time-major
         eq = raw[data_syms][:, self.data_c] / h[data_syms][:, self.data_c]
-        nv = sigma2 / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
+        nv = sigma2_sym[:, None] / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
         return ReceivedFrame(
             sync=sync,
             layout=layout,

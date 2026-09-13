@@ -10,6 +10,9 @@ fail a PR that regresses a curve by more than 0.3 dB once `tools/bench` exists i
 | `phy_fer.csv` | `python tools/bench_phy.py --frames 30` | same, current air interface (P2-3: PN type preamble, chip-signalled mode, PMF-FFT bank). Generated before ADR-0004 peak reduction; re-checked at all seven measured thresholds afterwards, worst shift ≈ 0.2 dB (QPSK 1/2), so the table still stands |
 | `link_throughput.csv` | `python tools/bench_link.py --bytes 16000 --trials 3` | end-to-end link goodput vs SNR per channel: a whole session (connect, 16 kB, disconnect) with adaptive rate |
 | `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking |
+| `phy_fer_awgn14.csv` | `python tools/bench_phy.py --channels awgn --modes 0,1,...,13 --frames 30` | AWGN FER for **every** mode — the source of the rate controller's threshold table (`tools/update_rate_table.py`) |
+| `impulsive.csv` | `python tools/bench_impulsive.py --frames 10 --modes 0,4,10` | FER vs impulsive-noise rate, with each P2-5 defence on and off |
+| `chanest.csv` | `python tools/bench_chanest.py --frames 16 --snr-offsets 0,2` | linear vs Wiener channel estimation (the P2-6 decision) |
 | `papr.csv` | `python tools/bench_papr.py` | PAPR / EVM / splatter per reduction technique, delivered SNR through a saturating PA, and end-to-end decoding (ADR-0004) |
 | `link_throughput_phy.csv` | `python tools/bench_link.py --backend phy --channels awgn --snr 8,14 --bytes 4000 --trials 1` | two AWGN points re-run through the real modem, to validate the fast backend |
 
@@ -174,3 +177,51 @@ through the hardest clipping tested. Hence ADR-0004's split — 5 dB for BPSK/QP
 7 dB for 16-QAM/64-QAM. Across every measured threshold that costs ≤ 0.2 dB of receiver
 sensitivity for 1.0–1.7 dB of delivered power. Tone reservation was measured and rejected:
 0.1–0.8 dB of PAPR for 5–19 % of the payload.
+
+## Rate-controller thresholds (`phy_fer_awgn14.csv`, P2-2b follow-up)
+
+`link/rate.py` picks modes from a table of minimum usable SNR. Seven of the fourteen entries
+used to be interpolated guesses, and the P2-4 work caught two of them costing frames. This
+sweep covers every mode, and `tools/update_rate_table.py --apply` regenerates the table from
+it. The guesses were optimistic exactly where it hurts most — the fast modes:
+
+| Mode | 9 (16-QAM 2/3) | 11 (64-QAM 2/3) | 12 (64-QAM 3/4) | 7 (8-PSK 2/3) |
+|---|---|---|---|---|
+| guessed | +8.0 | +12.5 | +14.5 | +7.5 |
+| measured | +8.9 | +13.9 | +15.6 | +6.9 |
+
+The seven previously-measured modes moved by 0.0–0.4 dB, which is also the clearest
+measurement of what ADR-0004 peak reduction cost in sensitivity: ≤ 0.4 dB, against the
+1.0–1.7 dB of transmit power it bought.
+
+## Impulsive noise (`impulsive.csv`, P2-5)
+
+Frame error rate against the fraction of samples hit by a burst 25 dB above the noise, each
+defence on and off. Impulsive noise is the impairment OFDM handles *worse* than a
+single-carrier waveform — the FFT spreads one hot sample across all 57 carriers of its symbol.
+
+| P(impulse) | none | per-symbol σ² | blanker | both | blanked |
+|---|---|---|---|---|---|
+| 0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 % |
+| 0.002 | 0.10 | 0.00 | 0.00 | 0.00 | 0.19 % |
+| 0.005 | 0.60 | 0.50 | 0.00 | 0.00 | 0.49 % |
+| 0.01 | 1.00 | 1.00 | 0.00 | 0.00 | 0.96 % |
+| 0.05 | 1.00 | 1.00 | 0.00 | 0.00 | 4.77 % |
+| 0.10 | 1.00 | 1.00 | 0.00 | 0.00 | 9.28 % |
+| 0.20 | 1.00 | 1.00 | 0.30 | 0.20 | 18.28 % |
+
+(QPSK 1/2 at +4 dB; BPSK 1/5 and 16-QAM 3/4 behave the same way.) Three things to read off it:
+
+* **The blanker does nearly all the work.** Without it the link is a total loss from 1 % of
+  samples upward; with it, nothing is lost until 20 %.
+* **Per-symbol noise variance is a second-order help**, worth something only at low impulse
+  rates. That is the erasure mechanism working as designed and also its limit: it can
+  discount the damaged symbols only while most symbols are clean.
+* **The blanker is free when there is nothing to blank.** At P = 0 it removes 0.00 % of
+  samples and changes no decode, at any mode or SNR — which is why it is on by default. The
+  blanked fraction tracks the impulse rate almost exactly (18.28 % at P = 0.20), so it is
+  finding the impulses and essentially nothing else.
+
+Its limit is a *sustained* burst: the reference level is a median of segment medians, which
+holds only while the burst is a minority of the window it looks at
+(`NoiseBlanker.robust_span_samples`, ≈ 57 ms at the defaults).

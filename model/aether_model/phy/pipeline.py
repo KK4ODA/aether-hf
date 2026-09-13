@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from aether_model.frame.codec import FrameCodec
 from aether_model.frame.modes import CONTROL_MODE, LONG, MODES, SHORT, FrameLayout, Mode
+from aether_model.phy.blanker import NoiseBlanker
 from aether_model.phy.preamble import FrameHeader, FrameType
 from aether_model.phy.rx import FrameReceiver, ReceivedFrame
 from aether_model.phy.sync import FrameDetector, FrameSync
@@ -40,11 +41,20 @@ class DecodedFrame:
 class Modem:
     """Stateless-ish TX/RX front for one waveform (codecs are cached per mode/layout)."""
 
-    def __init__(self, params: WaveformParams = WIDE_2300) -> None:
+    def __init__(
+        self,
+        params: WaveformParams = WIDE_2300,
+        blank_impulses: bool = True,
+        blanker: NoiseBlanker | None = None,
+    ) -> None:
         self.p = params
         self.tx = FrameTransmitter(params)
         self.detector = FrameDetector(params)
         self.rx = FrameReceiver(params)
+        self.blanker = (blanker or NoiseBlanker()) if blank_impulses else None
+        """Impulse blanker run ahead of band-limiting (P2-5). On by default: measured to cost
+        a clean channel nothing at any mode while removing impulsive noise that otherwise
+        takes the link to 100 % frame errors."""
         self._codecs: dict[tuple[int, str], FrameCodec] = {}
 
     def codec(self, mode: Mode, layout: FrameLayout) -> FrameCodec:
@@ -113,7 +123,9 @@ class Modem:
         return DecodedFrame(payload, frame, mode)
 
     def decode_buffer(self, x: ComplexArray, max_frames: int = 4) -> list[DecodedFrame]:
-        """Band-limit, detect and decode every frame in a baseband buffer."""
+        """Blank impulses, band-limit, detect and decode every frame in a baseband buffer."""
+        if self.blanker is not None:
+            x = self.blanker.process(x).samples
         y = self.detector.condition(x)
         out: list[DecodedFrame] = []
         for sync in self.detector.detect(y, max_frames=max_frames):
