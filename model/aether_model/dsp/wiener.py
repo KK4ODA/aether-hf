@@ -1,5 +1,5 @@
 """
-aether_hf/dsp/wiener.py
+aether_model/dsp/wiener.py
 
 2D Wiener channel estimator for OFDM.
 
@@ -12,7 +12,6 @@ OFDMDemodulator, providing ~2-5 dB improvement under fading.
 """
 
 import numpy as np
-from typing import Optional
 
 
 class WienerEstimator:
@@ -71,8 +70,7 @@ class WienerEstimator:
         self._history: list[np.ndarray] = []
         self._max_history = pilot_time_spacing * 2
 
-    def estimate(self, H_pilot: np.ndarray,
-                 symbol_index: int = 0) -> np.ndarray:
+    def estimate(self, H_pilot: np.ndarray, symbol_index: int = 0) -> np.ndarray:
         """Estimate channel at data positions from pilot observations.
 
         Args:

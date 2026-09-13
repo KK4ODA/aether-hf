@@ -1,5 +1,5 @@
 """
-aether_hf/protocol/session.py
+aether_model/protocol/session.py
 
 AETHER HF session state machine.
 
@@ -10,28 +10,32 @@ Handles rate adaptation, HARQ, and ARQ windowing.
 """
 
 import logging
-import time
 import secrets
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum, auto
-from dataclasses import dataclass, field
-from typing import Optional, Callable
 
-from aether_hf.constants import (
-    ARQ_WINDOW_SIZE, SEQ_NUM_MOD, MAX_HARQ_ROUNDS,
-    ACK_OK, ACK_UP, ACK_DOWN, NACK, NACK_IR, QRT,
-    CONNECT_TIMEOUT_S, CONSECUTIVE_FAIL_PROBE,
-    CONSECUTIVE_FAIL_WAIT, CONSECUTIVE_FAIL_DISC,
+from aether_model.constants import (
+    ACK_DOWN,
+    ACK_OK,
+    ACK_UP,
     GUARD_STANDARD_SYMS,
+    MAX_HARQ_ROUNDS,
+    NACK,
+    NACK_IR,
+    QRT,
+    SEQ_NUM_MOD,
 )
-from aether_hf.speed_levels import SpeedLevel, get_level, WIDE_LEVELS, NARROW_LEVELS
+from aether_model.speed_levels import NARROW_LEVELS, WIDE_LEVELS, SpeedLevel
 
 log = logging.getLogger(__name__)
 
 
 class SessionState(Enum):
-    IDLE          = auto()
-    CONNECTING    = auto()
-    CONNECTED     = auto()
+    IDLE = auto()
+    CONNECTING = auto()
+    CONNECTED = auto()
     DISCONNECTING = auto()
 
 
@@ -43,31 +47,34 @@ class SessionRole(Enum):
 @dataclass
 class ChannelMetrics:
     """Channel quality indicators from the receiver."""
-    snr_db:             float = 0.0
-    dispersion_index:   float = 0.0
-    ldpc_iterations:    int   = 0
-    ldpc_max_iter:      int   = 40
-    fer_ewma:           float = 0.0
-    consecutive_fails:  int   = 0
+
+    snr_db: float = 0.0
+    dispersion_index: float = 0.0
+    ldpc_iterations: int = 0
+    ldpc_max_iter: int = 40
+    fer_ewma: float = 0.0
+    consecutive_fails: int = 0
 
 
 @dataclass
 class SessionConfig:
     """Negotiated session parameters."""
-    mode:              str = "wide"     # wide, narrow, emergency
-    protocol_version:  int = 1
-    speed_level:       int = 5         # initial level
-    guard_symbols:     int = GUARD_STANDARD_SYMS
-    profile:           str = "throughput"  # throughput or latency
+
+    mode: str = "wide"  # wide, narrow, emergency
+    protocol_version: int = 1
+    speed_level: int = 5  # initial level
+    guard_symbols: int = GUARD_STANDARD_SYMS
+    profile: str = "throughput"  # throughput or latency
 
 
 @dataclass
 class PendingFrame:
     """A frame awaiting acknowledgment in the ARQ window."""
-    seq_num:     int
-    data:        bytes
-    harq_round:  int = 0
-    sent_at:     float = 0.0
+
+    seq_num: int
+    data: bytes
+    harq_round: int = 0
+    sent_at: float = 0.0
 
 
 class AetherSession:
@@ -77,8 +84,8 @@ class AetherSession:
         self,
         my_call: str,
         mode: str = "wide",
-        on_state_change: Optional[Callable] = None,
-        on_data_received: Optional[Callable] = None,
+        on_state_change: Callable | None = None,
+        on_data_received: Callable | None = None,
     ):
         self.my_call = my_call.upper()
         self.remote_call = ""
@@ -122,14 +129,14 @@ class AetherSession:
         self._set_state(SessionState.CONNECTING)
 
         return {
-            "type":        "CONNECT",
-            "my_call":     self.my_call,
+            "type": "CONNECT",
+            "my_call": self.my_call,
             "remote_call": self.remote_call,
-            "mode":        self._mode,
+            "mode": self._mode,
             "version_min": 1,
             "version_max": 1,
-            "nonce":       self._nonce,
-            "guard":       self._config.guard_symbols,
+            "nonce": self._nonce,
+            "guard": self._config.guard_symbols,
         }
 
     def handle_connect(self, frame: dict) -> dict:
@@ -138,7 +145,6 @@ class AetherSession:
         Returns a CONNECT-ACK frame dict.
         """
         self.remote_call = frame.get("my_call", "").upper()
-        remote_nonce = frame.get("nonce", "")
         self._nonce = secrets.token_hex(8)
 
         # Negotiate parameters
@@ -156,14 +162,14 @@ class AetherSession:
         self.role = SessionRole.IRS
 
         return {
-            "type":        "CONNECT-ACK",
-            "my_call":     self.my_call,
+            "type": "CONNECT-ACK",
+            "my_call": self.my_call,
             "remote_call": self.remote_call,
-            "mode":        self._config.mode,
-            "version":     1,
-            "level":       self.current_level.level,
-            "nonce":       self._nonce,
-            "guard":       self._config.guard_symbols,
+            "mode": self._config.mode,
+            "version": 1,
+            "level": self.current_level.level,
+            "nonce": self._nonce,
+            "guard": self._config.guard_symbols,
         }
 
     def handle_connect_ack(self, frame: dict):
@@ -203,15 +209,14 @@ class AetherSession:
         self._pending[seq] = pf
 
         return {
-            "type":     "DATA",
-            "seq":      seq,
-            "level":    self.current_level.level,
-            "harq":     0,
-            "data":     data,
+            "type": "DATA",
+            "seq": seq,
+            "level": self.current_level.level,
+            "harq": 0,
+            "data": data,
         }
 
-    def handle_ack(self, ack_type: int, seq_num: int,
-                   snr: float, metrics: dict):
+    def handle_ack(self, ack_type: int, seq_num: int, snr: float, metrics: dict):
         """Process an ACK frame from the receiver."""
         self._metrics.snr_db = snr
         self._metrics.ldpc_iterations = metrics.get("ldpc_iter", 0)

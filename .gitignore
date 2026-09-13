@@ -1,9 +1,26 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 dist/
 build/
 .eggs/
+
+# Rust (core/) and Tauri (app/)
+target/
+node_modules/
+
+# Audio captures and benchmark scratch output (committed vectors live in vectors/)
 *.wav
 *.raw
+bench-out/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

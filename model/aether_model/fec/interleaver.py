@@ -1,5 +1,5 @@
 """
-aether_hf/fec/interleaver.py
+aether_model/fec/interleaver.py
 
 Three-stage interleaver for AETHER HF.
 
@@ -73,8 +73,7 @@ class TimeInterleaver:
 class AetherInterleaver:
     """Combined frequency + time interleaver for one codeword."""
 
-    def __init__(self, block_length: int, n_carriers: int,
-                 time_depth: int = 8):
+    def __init__(self, block_length: int, n_carriers: int, time_depth: int = 8):
         self._freq = FrequencyInterleaver(n_carriers)
         self._time = TimeInterleaver(block_length, depth=time_depth)
 

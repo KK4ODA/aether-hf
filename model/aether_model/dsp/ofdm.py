@@ -1,5 +1,5 @@
 """
-aether_hf/dsp/ofdm.py
+aether_model/dsp/ofdm.py
 
 OFDM modulator and demodulator for AETHER HF.
 
@@ -11,13 +11,18 @@ Handles:
 """
 
 import numpy as np
-from typing import Optional
 
-from aether_hf.constants import (
-    FFT_SIZE_W, BASEBAND_RATE, CP_DEFAULT_SAMPLES, CP_EXTENDED_SAMPLES,
-    DATA_CARRIERS_W, PILOT_CARRIERS_W, TOTAL_CARRIERS_W,
-    DATA_CARRIERS_N, PILOT_CARRIERS_N, TOTAL_CARRIERS_N,
-    PILOT_FREQ_SPACING, RAISED_COSINE_BETA,
+from aether_model.constants import (
+    CP_DEFAULT_SAMPLES,
+    CP_EXTENDED_SAMPLES,
+    DATA_CARRIERS_N,
+    DATA_CARRIERS_W,
+    FFT_SIZE_W,
+    PILOT_CARRIERS_N,
+    PILOT_CARRIERS_W,
+    RAISED_COSINE_BETA,
+    TOTAL_CARRIERS_N,
+    TOTAL_CARRIERS_W,
 )
 
 
@@ -100,8 +105,7 @@ class OFDMModulator:
         self._window[:n_taper] = taper
         self._window[-n_taper:] = taper[::-1]
 
-    def modulate(self, data_symbols: np.ndarray,
-                 symbol_index: int = 0) -> np.ndarray:
+    def modulate(self, data_symbols: np.ndarray, symbol_index: int = 0) -> np.ndarray:
         """Map data symbols to subcarriers and produce one OFDM symbol.
 
         Args:
@@ -130,7 +134,7 @@ class OFDMModulator:
         x = np.fft.ifft(X) * np.sqrt(self.fft_size)  # normalize power
 
         # Add cyclic prefix
-        cp = x[-self.cp_len:]
+        cp = x[-self.cp_len :]
         x_cp = np.concatenate([cp, x])
 
         # Apply raised-cosine window
@@ -156,21 +160,27 @@ class OFDMModulator:
 class OFDMDemodulator:
     """Demodulates received OFDM symbols."""
 
-    def __init__(self, mode: str = "wide", extended_cp: bool = False,
-                 use_wiener: bool = False, use_blanker: bool = False,
-                 snr_est_db: float = 10.0):
+    def __init__(
+        self,
+        mode: str = "wide",
+        extended_cp: bool = False,
+        use_wiener: bool = False,
+        use_blanker: bool = False,
+        snr_est_db: float = 10.0,
+    ):
         self.smap = SubcarrierMap(mode)
         self.fft_size = self.smap.fft_size
         self.cp_len = CP_EXTENDED_SAMPLES if extended_cp else CP_DEFAULT_SAMPLES
         self.symbol_len = self.fft_size + self.cp_len
 
         # Channel estimate (updated per symbol from pilots)
-        self._H: Optional[np.ndarray] = None
+        self._H: np.ndarray | None = None
 
         # Optional Wiener channel estimator
         self._wiener = None
         if use_wiener:
-            from aether_hf.dsp.wiener import WienerEstimator
+            from aether_model.dsp.wiener import WienerEstimator
+
             self._wiener = WienerEstimator(
                 pilot_freq_indices=np.array(self.smap.pilot_indices),
                 data_freq_indices=np.array(self.smap.data_indices),
@@ -181,11 +191,11 @@ class OFDMDemodulator:
         # Optional noise blanker
         self._blanker = None
         if use_blanker:
-            from aether_hf.dsp.noise_blanker import NoiseBlanker
+            from aether_model.dsp.noise_blanker import NoiseBlanker
+
             self._blanker = NoiseBlanker()
 
-    def demodulate(self, samples: np.ndarray,
-                   symbol_index: int = 0) -> np.ndarray:
+    def demodulate(self, samples: np.ndarray, symbol_index: int = 0) -> np.ndarray:
         """Demodulate one OFDM symbol.
 
         Args:
@@ -202,7 +212,7 @@ class OFDMDemodulator:
             samples = self._blanker.process_time_domain(samples.copy())
 
         # Strip cyclic prefix
-        x = samples[self.cp_len:]
+        x = samples[self.cp_len :]
 
         # FFT → frequency domain
         X = np.fft.fft(x) / np.sqrt(self.fft_size)
@@ -237,8 +247,7 @@ class OFDMDemodulator:
 
         return data_syms
 
-    def demodulate_frame(self, samples: np.ndarray,
-                         n_symbols: int) -> np.ndarray:
+    def demodulate_frame(self, samples: np.ndarray, n_symbols: int) -> np.ndarray:
         """Demodulate multiple OFDM symbols.
 
         Returns:

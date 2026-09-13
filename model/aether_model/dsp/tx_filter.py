@@ -1,5 +1,5 @@
 """
-aether_hf/dsp/tx_filter.py
+aether_model/dsp/tx_filter.py
 
 Transmit bandpass filter for spectrum mask compliance.
 
@@ -13,16 +13,19 @@ transmission to meet the out-of-band emission limits:
 import numpy as np
 from scipy.signal import firwin, lfilter
 
-from aether_hf.constants import BASEBAND_RATE
+from aether_model.constants import BASEBAND_RATE
 
 
 class TxFilter:
     """FIR bandpass filter for transmit spectrum shaping."""
 
-    def __init__(self, bandwidth_hz: float = 2300.0,
-                 sample_rate: float = BASEBAND_RATE,
-                 num_taps: int = 127,
-                 guard_hz: float = 100.0):
+    def __init__(
+        self,
+        bandwidth_hz: float = 2300.0,
+        sample_rate: float = BASEBAND_RATE,
+        num_taps: int = 127,
+        guard_hz: float = 100.0,
+    ):
         """
         Args:
             bandwidth_hz: Occupied signal bandwidth (Hz).
@@ -70,7 +73,7 @@ class TxFilter:
         # Shift output to align with input
         result = np.zeros_like(samples)
         if delay < len(filtered):
-            result[:len(filtered) - delay] = filtered[delay:]
+            result[: len(filtered) - delay] = filtered[delay:]
 
         return result
 
@@ -82,6 +85,6 @@ class TxFilterNarrow(TxFilter):
         super().__init__(
             bandwidth_hz=500.0,
             sample_rate=sample_rate,
-            num_taps=255,     # more taps for narrower transition band
+            num_taps=255,  # more taps for narrower transition band
             guard_hz=50.0,
         )

@@ -1,5 +1,5 @@
 """
-aether_hf/dsp/preamble.py
+aether_model/dsp/preamble.py
 
 Preamble generation and detection for AETHER HF.
 
@@ -10,9 +10,15 @@ Parts:
 """
 
 import numpy as np
-from aether_hf.constants import (
-    ZC_LENGTH, ZC_ROOT, BASEBAND_RATE, FFT_SIZE_W,
-    CP_DEFAULT_SAMPLES, CFO_SWEEP_RANGE_HZ, CFO_SWEEP_STEP_HZ,
+
+from aether_model.constants import (
+    BASEBAND_RATE,
+    CFO_SWEEP_RANGE_HZ,
+    CFO_SWEEP_STEP_HZ,
+    CP_DEFAULT_SAMPLES,
+    FFT_SIZE_W,
+    ZC_LENGTH,
+    ZC_ROOT,
 )
 
 
@@ -58,7 +64,7 @@ class PreambleGenerator:
         zc_padded = np.zeros(self.fft_size, dtype=np.complex128)
         zc_padded[:ZC_LENGTH] = self.zc
         zc_td = np.fft.ifft(zc_padded) * np.sqrt(self.fft_size)
-        zc_cp = np.concatenate([zc_td[-self.cp_len:], zc_td])
+        zc_cp = np.concatenate([zc_td[-self.cp_len :], zc_td])
         parts.append(zc_cp)  # symbol 1
         parts.append(zc_cp)  # symbol 2 (repeat)
 
@@ -66,14 +72,14 @@ class PreambleGenerator:
         X_sync = np.zeros(self.fft_size, dtype=np.complex128)
         X_sync[:] = self.sync_pn
         sync_td = np.fft.ifft(X_sync) * np.sqrt(self.fft_size)
-        sync_cp = np.concatenate([sync_td[-self.cp_len:], sync_td])
+        sync_cp = np.concatenate([sync_td[-self.cp_len :], sync_td])
         parts.append(sync_cp)
 
         # Part C: Channel estimation OFDM symbol
         X_train = np.zeros(self.fft_size, dtype=np.complex128)
         X_train[:] = self.train_qpsk
         train_td = np.fft.ifft(X_train) * np.sqrt(self.fft_size)
-        train_cp = np.concatenate([train_td[-self.cp_len:], train_td])
+        train_cp = np.concatenate([train_td[-self.cp_len :], train_td])
         parts.append(train_cp)
 
         return np.concatenate(parts)
@@ -83,7 +89,7 @@ class PreambleGenerator:
         zc_padded = np.zeros(self.fft_size, dtype=np.complex128)
         zc_padded[:ZC_LENGTH] = self.zc
         zc_td = np.fft.ifft(zc_padded) * np.sqrt(self.fft_size)
-        zc_cp = np.concatenate([zc_td[-self.cp_len:], zc_td])
+        zc_cp = np.concatenate([zc_td[-self.cp_len :], zc_td])
         return np.concatenate([zc_cp, zc_cp])
 
 
@@ -108,12 +114,9 @@ class PreambleDetector:
             CFO_SWEEP_STEP_HZ,
         )
         t = np.arange(self.symbol_len) / BASEBAND_RATE
-        self._shift_vectors = [
-            np.exp(-2j * np.pi * f * t) for f in self._cfo_hypotheses
-        ]
+        self._shift_vectors = [np.exp(-2j * np.pi * f * t) for f in self._cfo_hypotheses]
 
-    def detect(self, samples: np.ndarray,
-               threshold: float = 0.5) -> tuple[bool, int, float]:
+    def detect(self, samples: np.ndarray, threshold: float = 0.5) -> tuple[bool, int, float]:
         """Detect preamble in received samples with CFO sweep.
 
         Args:
@@ -137,17 +140,19 @@ class PreambleDetector:
         for cfo_idx, shift_vec in enumerate(self._shift_vectors):
             for offset in range(0, search_len, step):
                 # Extract two consecutive symbol-length chunks
-                seg1 = samples[offset:offset + self.symbol_len]
+                seg1 = samples[offset : offset + self.symbol_len]
 
                 # Apply CFO correction
-                seg1_corrected = seg1 * shift_vec[:len(seg1)]
+                seg1_corrected = seg1 * shift_vec[: len(seg1)]
 
                 # Correlate with known ZC
-                corr = np.abs(np.correlate(
-                    seg1_corrected[self.cp_len:self.cp_len + self.fft_size],
-                    self._zc_td,
-                    mode='valid',
-                ))
+                corr = np.abs(
+                    np.correlate(
+                        seg1_corrected[self.cp_len : self.cp_len + self.fft_size],
+                        self._zc_td,
+                        mode="valid",
+                    )
+                )
                 if len(corr) == 0:
                     continue
 
@@ -165,8 +170,7 @@ class PreambleDetector:
         detected = best_corr >= threshold
         return detected, best_offset, best_cfo
 
-    def estimate_fine_cfo(self, samples: np.ndarray,
-                          offset: int, coarse_cfo: float) -> float:
+    def estimate_fine_cfo(self, samples: np.ndarray, offset: int, coarse_cfo: float) -> float:
         """Estimate fine CFO from the repeated ZC symbols (Part A).
 
         Uses the phase difference between the two ZC repetitions.
@@ -174,8 +178,8 @@ class PreambleDetector:
         sym1_start = offset + self.cp_len
         sym2_start = offset + self.symbol_len + self.cp_len
 
-        seg1 = samples[sym1_start:sym1_start + self.fft_size]
-        seg2 = samples[sym2_start:sym2_start + self.fft_size]
+        seg1 = samples[sym1_start : sym1_start + self.fft_size]
+        seg2 = samples[sym2_start : sym2_start + self.fft_size]
 
         # Correct coarse CFO
         t1 = np.arange(len(seg1)) / BASEBAND_RATE

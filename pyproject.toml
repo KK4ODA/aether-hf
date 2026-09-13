@@ -1,0 +1,111 @@
+[project]
+name = "aether-model"
+version = "0.2.0"
+description = "Aether HF reference model: waveform, FEC, channel simulator and benchmark harness (not the shipped modem)"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "KK4ODA and Aether HF contributors" }]
+keywords = ["amateur-radio", "hf", "modem", "ofdm", "ldpc", "arq", "winlink"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Communications :: Ham Radio",
+  "Programming Language :: Python :: 3",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+audio = ["sounddevice>=0.4.6"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-timeout>=2.3",
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "pre-commit>=3.7",
+]
+
+[project.urls]
+Homepage = "https://github.com/KK4ODA/aether-hf"
+Issues = "https://github.com/KK4ODA/aether-hf/issues"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["model/aether_model"]
+
+[tool.uv]
+# The model is a development artefact; keep resolution reproducible.
+required-version = ">=0.5"
+
+# ── pytest ────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["model/tests"]
+pythonpath = ["model"]
+addopts = "-q -ra --strict-markers --timeout=300"
+xfail_strict = true
+markers = [
+  "slow: takes more than ~10 s; excluded from the default CI run with -m 'not slow'",
+  "audit: documents a defect found in the 2026-09-13 audit (docs/AUDIT.md); flips to PASS when fixed",
+]
+filterwarnings = ["error::DeprecationWarning:aether_model.*"]
+
+# ── ruff ──────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["model", "tools"]
+extend-exclude = ["core", "app", "tools/audit_probe_*.py"]  # probes are frozen audit evidence
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY", "RUF", "SIM", "PL"]
+ignore = [
+  "PLR0913", # many arguments — DSP constructors legitimately take many parameters
+  "PLR2004", # magic numbers — DSP code is full of justified literals
+  "PLR0912", "PLR0915", # branch/statement counts — revisit when legacy modules are rewritten
+  "E741",    # ambiguous names like l — not used, but keep the door open for I/Q maths
+  "RUF001", "RUF002", "RUF003", # allow unicode punctuation in docstrings/comments
+]
+# Legacy modules scheduled for rewrite (see docs/AUDIT.md) get lint but not pedantry.
+[tool.ruff.lint.per-file-ignores]
+"model/aether_model/dsp/ofdm.py" = ["PL", "B"]
+"model/aether_model/dsp/preamble.py" = ["PL", "B"]
+"model/aether_model/dsp/modulation.py" = ["PL", "B"]
+"model/aether_model/dsp/wiener.py" = ["PL", "B"]
+"model/aether_model/dsp/noise_blanker.py" = ["PL", "B"]
+"model/aether_model/dsp/tx_filter.py" = ["PL", "B"]
+"model/aether_model/fec/*.py" = ["PL", "B"]
+"model/aether_model/protocol/*.py" = ["PL", "B"]
+"model/aether_model/host/*.py" = ["PL", "B"]
+"model/aether_model/audio/*.py" = ["PL", "B"]
+"model/tests/*.py" = ["PL"]
+"tools/*.py" = ["PL", "E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ── mypy ──────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "model"
+packages = ["aether_model"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+# New code (post-audit) is typed strictly; legacy modules are checked loosely until rewritten.
+[[tool.mypy.overrides]]
+module = ["aether_model.channel", "aether_model.waveform"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+[[tool.mypy.overrides]]
+module = ["aether_model.dsp.*", "aether_model.fec.*", "aether_model.protocol.*", "aether_model.host.*", "aether_model.audio.*", "aether_model.speed_levels", "aether_model.constants"]
+ignore_errors = true

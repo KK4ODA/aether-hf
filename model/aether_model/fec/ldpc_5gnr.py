@@ -1,5 +1,5 @@
 """
-aether_hf/fec/ldpc_5gnr.py
+aether_model/fec/ldpc_5gnr.py
 
 LDPC encoder/decoder using 5G NR-inspired base graph construction.
 
@@ -15,9 +15,9 @@ Supports code rates: 1/4, 1/3, 1/2, 2/3, 3/4, 5/6
 Block lengths: 256, 512, 1024, 2048, 4096 (via lifting factor Z)
 """
 
-import numpy as np
 import logging
-from typing import Optional
+
+import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -65,18 +65,65 @@ def _bg_rate_1_2() -> np.ndarray:
     # Systematic part connections (first 12 info columns)
     connections = [
         # (row, col, shift)
-        (0, 0, 0), (0, 1, 3), (0, 2, 5), (0, 6, 1), (0, 9, 2), (0, 10, 7),
-        (1, 0, 2), (1, 3, 0), (1, 4, 6), (1, 7, 4), (1, 11, 1),
-        (2, 1, 0), (2, 3, 3), (2, 5, 7), (2, 8, 2), (2, 10, 5),
-        (3, 2, 0), (3, 4, 4), (3, 6, 3), (3, 9, 6), (3, 11, 0),
-        (4, 0, 5), (4, 5, 0), (4, 7, 2), (4, 8, 6), (4, 10, 3),
-        (5, 1, 4), (5, 3, 7), (5, 6, 0), (5, 9, 1), (5, 11, 5),
-        (6, 0, 1), (6, 2, 6), (6, 4, 0), (6, 7, 3), (6, 8, 7),
-        (7, 1, 6), (7, 5, 2), (7, 9, 0), (7, 10, 4), (7, 11, 7),
-        (8, 0, 7), (8, 3, 1), (8, 6, 5), (8, 7, 0), (8, 8, 3),
-        (9, 2, 2), (9, 4, 7), (9, 5, 4), (9, 9, 3), (9, 10, 0),
-        (10, 0, 4), (10, 1, 7), (10, 3, 5), (10, 11, 2),
-        (11, 2, 3), (11, 6, 7), (11, 8, 0), (11, 10, 6),
+        (0, 0, 0),
+        (0, 1, 3),
+        (0, 2, 5),
+        (0, 6, 1),
+        (0, 9, 2),
+        (0, 10, 7),
+        (1, 0, 2),
+        (1, 3, 0),
+        (1, 4, 6),
+        (1, 7, 4),
+        (1, 11, 1),
+        (2, 1, 0),
+        (2, 3, 3),
+        (2, 5, 7),
+        (2, 8, 2),
+        (2, 10, 5),
+        (3, 2, 0),
+        (3, 4, 4),
+        (3, 6, 3),
+        (3, 9, 6),
+        (3, 11, 0),
+        (4, 0, 5),
+        (4, 5, 0),
+        (4, 7, 2),
+        (4, 8, 6),
+        (4, 10, 3),
+        (5, 1, 4),
+        (5, 3, 7),
+        (5, 6, 0),
+        (5, 9, 1),
+        (5, 11, 5),
+        (6, 0, 1),
+        (6, 2, 6),
+        (6, 4, 0),
+        (6, 7, 3),
+        (6, 8, 7),
+        (7, 1, 6),
+        (7, 5, 2),
+        (7, 9, 0),
+        (7, 10, 4),
+        (7, 11, 7),
+        (8, 0, 7),
+        (8, 3, 1),
+        (8, 6, 5),
+        (8, 7, 0),
+        (8, 8, 3),
+        (9, 2, 2),
+        (9, 4, 7),
+        (9, 5, 4),
+        (9, 9, 3),
+        (9, 10, 0),
+        (10, 0, 4),
+        (10, 1, 7),
+        (10, 3, 5),
+        (10, 11, 2),
+        (11, 2, 3),
+        (11, 6, 7),
+        (11, 8, 0),
+        (11, 10, 6),
     ]
     # Parity part: dual-diagonal structure (columns 12-23)
     for i in range(12):
@@ -93,12 +140,40 @@ def _bg_rate_3_4() -> np.ndarray:
     """Base graph for rate ~3/4 (6 check rows, 24 columns)."""
     bg = -np.ones((6, 24), dtype=int)
     connections = [
-        (0, 0, 0), (0, 2, 3), (0, 5, 1), (0, 8, 7), (0, 11, 2), (0, 14, 5),
-        (1, 1, 0), (1, 3, 4), (1, 6, 2), (1, 9, 6), (1, 12, 0), (1, 15, 3),
-        (2, 0, 5), (2, 4, 0), (2, 7, 3), (2, 10, 1), (2, 13, 7), (2, 16, 4),
-        (3, 1, 2), (3, 5, 6), (3, 8, 0), (3, 11, 4), (3, 14, 1), (3, 17, 7),
-        (4, 2, 7), (4, 6, 0), (4, 9, 5), (4, 12, 3), (4, 15, 6),
-        (5, 3, 1), (5, 7, 7), (5, 10, 0), (5, 13, 2), (5, 16, 5),
+        (0, 0, 0),
+        (0, 2, 3),
+        (0, 5, 1),
+        (0, 8, 7),
+        (0, 11, 2),
+        (0, 14, 5),
+        (1, 1, 0),
+        (1, 3, 4),
+        (1, 6, 2),
+        (1, 9, 6),
+        (1, 12, 0),
+        (1, 15, 3),
+        (2, 0, 5),
+        (2, 4, 0),
+        (2, 7, 3),
+        (2, 10, 1),
+        (2, 13, 7),
+        (2, 16, 4),
+        (3, 1, 2),
+        (3, 5, 6),
+        (3, 8, 0),
+        (3, 11, 4),
+        (3, 14, 1),
+        (3, 17, 7),
+        (4, 2, 7),
+        (4, 6, 0),
+        (4, 9, 5),
+        (4, 12, 3),
+        (4, 15, 6),
+        (5, 3, 1),
+        (5, 7, 7),
+        (5, 10, 0),
+        (5, 13, 2),
+        (5, 16, 5),
     ]
     for i in range(6):
         bg[i, 18 + i] = 0
@@ -114,14 +189,44 @@ def _bg_rate_2_3() -> np.ndarray:
     """Base graph for rate ~2/3 (8 check rows, 24 columns)."""
     bg = -np.ones((8, 24), dtype=int)
     connections = [
-        (0, 0, 0), (0, 3, 5), (0, 6, 2), (0, 9, 7), (0, 12, 1),
-        (1, 1, 0), (1, 4, 3), (1, 7, 6), (1, 10, 0), (1, 13, 4),
-        (2, 2, 0), (2, 5, 7), (2, 8, 1), (2, 11, 5), (2, 14, 3),
-        (3, 0, 4), (3, 3, 0), (3, 6, 6), (3, 9, 2), (3, 15, 7),
-        (4, 1, 5), (4, 4, 0), (4, 7, 3), (4, 10, 7), (4, 12, 0),
-        (5, 2, 6), (5, 5, 0), (5, 8, 4), (5, 11, 1), (5, 13, 5),
-        (6, 0, 3), (6, 6, 0), (6, 9, 5), (6, 14, 7),
-        (7, 3, 2), (7, 7, 0), (7, 10, 4), (7, 15, 1),
+        (0, 0, 0),
+        (0, 3, 5),
+        (0, 6, 2),
+        (0, 9, 7),
+        (0, 12, 1),
+        (1, 1, 0),
+        (1, 4, 3),
+        (1, 7, 6),
+        (1, 10, 0),
+        (1, 13, 4),
+        (2, 2, 0),
+        (2, 5, 7),
+        (2, 8, 1),
+        (2, 11, 5),
+        (2, 14, 3),
+        (3, 0, 4),
+        (3, 3, 0),
+        (3, 6, 6),
+        (3, 9, 2),
+        (3, 15, 7),
+        (4, 1, 5),
+        (4, 4, 0),
+        (4, 7, 3),
+        (4, 10, 7),
+        (4, 12, 0),
+        (5, 2, 6),
+        (5, 5, 0),
+        (5, 8, 4),
+        (5, 11, 1),
+        (5, 13, 5),
+        (6, 0, 3),
+        (6, 6, 0),
+        (6, 9, 5),
+        (6, 14, 7),
+        (7, 3, 2),
+        (7, 7, 0),
+        (7, 10, 4),
+        (7, 15, 1),
     ]
     for i in range(8):
         bg[i, 16 + i] = 0
@@ -138,14 +243,44 @@ def _bg_rate_1_3() -> np.ndarray:
     bg = -np.ones((16, 24), dtype=int)
     # Dense connections for low rate
     connections = [
-        (0, 0, 0), (0, 1, 3), (0, 2, 5), (0, 3, 1), (0, 4, 7),
-        (1, 0, 2), (1, 1, 0), (1, 5, 4), (1, 6, 6), (1, 7, 1),
-        (2, 2, 0), (2, 3, 7), (2, 4, 3), (2, 5, 0), (2, 7, 5),
-        (3, 0, 6), (3, 1, 4), (3, 3, 0), (3, 6, 2), (3, 7, 7),
-        (4, 0, 1), (4, 2, 7), (4, 4, 0), (4, 5, 3), (4, 6, 5),
-        (5, 1, 5), (5, 3, 2), (5, 4, 6), (5, 6, 0), (5, 7, 4),
-        (6, 0, 3), (6, 2, 1), (6, 5, 7), (6, 7, 0),
-        (7, 1, 7), (7, 3, 4), (7, 4, 2), (7, 6, 0),
+        (0, 0, 0),
+        (0, 1, 3),
+        (0, 2, 5),
+        (0, 3, 1),
+        (0, 4, 7),
+        (1, 0, 2),
+        (1, 1, 0),
+        (1, 5, 4),
+        (1, 6, 6),
+        (1, 7, 1),
+        (2, 2, 0),
+        (2, 3, 7),
+        (2, 4, 3),
+        (2, 5, 0),
+        (2, 7, 5),
+        (3, 0, 6),
+        (3, 1, 4),
+        (3, 3, 0),
+        (3, 6, 2),
+        (3, 7, 7),
+        (4, 0, 1),
+        (4, 2, 7),
+        (4, 4, 0),
+        (4, 5, 3),
+        (4, 6, 5),
+        (5, 1, 5),
+        (5, 3, 2),
+        (5, 4, 6),
+        (5, 6, 0),
+        (5, 7, 4),
+        (6, 0, 3),
+        (6, 2, 1),
+        (6, 5, 7),
+        (6, 7, 0),
+        (7, 1, 7),
+        (7, 3, 4),
+        (7, 4, 2),
+        (7, 6, 0),
     ]
     for i in range(16):
         bg[i, 8 + i] = 0
@@ -160,12 +295,37 @@ def _bg_rate_1_4() -> np.ndarray:
     """Base graph for rate ~1/4 (18 check rows, 24 columns)."""
     bg = -np.ones((18, 24), dtype=int)
     connections = [
-        (0, 0, 0), (0, 1, 3), (0, 2, 5), (0, 3, 1), (0, 4, 7), (0, 5, 2),
-        (1, 0, 2), (1, 1, 0), (1, 2, 6), (1, 3, 4), (1, 4, 1), (1, 5, 5),
-        (2, 0, 5), (2, 1, 7), (2, 2, 0), (2, 3, 3), (2, 4, 6), (2, 5, 0),
-        (3, 0, 1), (3, 1, 4), (3, 2, 7), (3, 3, 0), (3, 4, 2),
-        (4, 0, 4), (4, 1, 6), (4, 2, 3), (4, 5, 7),
-        (5, 0, 7), (5, 3, 5), (5, 4, 0), (5, 5, 3),
+        (0, 0, 0),
+        (0, 1, 3),
+        (0, 2, 5),
+        (0, 3, 1),
+        (0, 4, 7),
+        (0, 5, 2),
+        (1, 0, 2),
+        (1, 1, 0),
+        (1, 2, 6),
+        (1, 3, 4),
+        (1, 4, 1),
+        (1, 5, 5),
+        (2, 0, 5),
+        (2, 1, 7),
+        (2, 2, 0),
+        (2, 3, 3),
+        (2, 4, 6),
+        (2, 5, 0),
+        (3, 0, 1),
+        (3, 1, 4),
+        (3, 2, 7),
+        (3, 3, 0),
+        (3, 4, 2),
+        (4, 0, 4),
+        (4, 1, 6),
+        (4, 2, 3),
+        (4, 5, 7),
+        (5, 0, 7),
+        (5, 3, 5),
+        (5, 4, 0),
+        (5, 5, 3),
     ]
     for i in range(18):
         bg[i, 6 + i] = 0
@@ -180,10 +340,30 @@ def _bg_rate_5_6() -> np.ndarray:
     """Base graph for rate ~5/6 (4 check rows, 24 columns)."""
     bg = -np.ones((4, 24), dtype=int)
     connections = [
-        (0, 0, 0), (0, 3, 2), (0, 6, 5), (0, 9, 1), (0, 12, 7), (0, 15, 3),
-        (1, 1, 0), (1, 4, 4), (1, 7, 6), (1, 10, 0), (1, 13, 2), (1, 16, 5),
-        (2, 2, 0), (2, 5, 3), (2, 8, 7), (2, 11, 1), (2, 14, 4), (2, 17, 6),
-        (3, 0, 5), (3, 3, 0), (3, 6, 3), (3, 9, 7), (3, 12, 1), (3, 18, 0),
+        (0, 0, 0),
+        (0, 3, 2),
+        (0, 6, 5),
+        (0, 9, 1),
+        (0, 12, 7),
+        (0, 15, 3),
+        (1, 1, 0),
+        (1, 4, 4),
+        (1, 7, 6),
+        (1, 10, 0),
+        (1, 13, 2),
+        (1, 16, 5),
+        (2, 2, 0),
+        (2, 5, 3),
+        (2, 8, 7),
+        (2, 11, 1),
+        (2, 14, 4),
+        (2, 17, 6),
+        (3, 0, 5),
+        (3, 3, 0),
+        (3, 6, 3),
+        (3, 9, 7),
+        (3, 12, 1),
+        (3, 18, 0),
     ]
     for i in range(4):
         bg[i, 20 + i] = 0
@@ -217,7 +397,7 @@ def _expand_base_graph(bg: np.ndarray, Z: int) -> np.ndarray:
             sub = np.zeros((Z, Z), dtype=np.int8)
             for k in range(Z):
                 sub[k, (k + s) % Z] = 1
-            H[i * Z:(i + 1) * Z, j * Z:(j + 1) * Z] = sub
+            H[i * Z : (i + 1) * Z, j * Z : (j + 1) * Z] = sub
 
     return H
 
@@ -247,7 +427,7 @@ class LDPC5GNR:
         # Actual codeword length after lifting
         self.n = bg_cols * self.Z
         self.m = bg_rows * self.Z  # number of parity checks
-        self.k = self.n - self.m   # information bits
+        self.k = self.n - self.m  # information bits
 
         if self.k < 1:
             self.k = max(1, int(self.n * rate))
@@ -257,7 +437,7 @@ class LDPC5GNR:
         self.H = _expand_base_graph(self._bg, self.Z)
 
         # Trim to actual dimensions
-        self.H = self.H[:self.m, :self.n]
+        self.H = self.H[: self.m, : self.n]
 
         # Pre-compute adjacency lists for BP decoding
         self._cn_to_vn = []  # check node → connected variable nodes
@@ -268,8 +448,10 @@ class LDPC5GNR:
         for j in range(self.n):
             self._vn_to_cn.append(np.where(self.H[:, j] == 1)[0])
 
-        log.debug(f"LDPC: n={self.n}, k={self.k}, m={self.m}, Z={self.Z}, "
-                  f"rate={self.k / self.n:.3f}, bg={bg_rows}x{bg_cols}")
+        log.debug(
+            f"LDPC: n={self.n}, k={self.k}, m={self.m}, Z={self.Z}, "
+            f"rate={self.k / self.n:.3f}, bg={bg_rows}x{bg_cols}"
+        )
 
     def encode(self, info_bits: np.ndarray) -> np.ndarray:
         """Systematic encoding: [info_bits | parity_bits].
@@ -279,15 +461,15 @@ class LDPC5GNR:
         assert len(info_bits) == self.k, f"Expected {self.k} bits, got {len(info_bits)}"
 
         codeword = np.zeros(self.n, dtype=np.int8)
-        codeword[:self.k] = info_bits
+        codeword[: self.k] = info_bits
 
         # Compute syndrome from info bits
-        H_info = self.H[:, :self.k]
+        H_info = self.H[:, : self.k]
         syndrome = H_info @ info_bits % 2
 
         # Solve for parity bits using back-substitution on H_parity
         # H_parity has dual-diagonal structure from the base graph
-        H_parity = self.H[:, self.k:]
+        H_parity = self.H[:, self.k :]
         parity = np.zeros(self.m, dtype=np.int8)
 
         # Forward substitution (dual-diagonal is lower triangular-ish)
@@ -305,7 +487,7 @@ class LDPC5GNR:
             if len(nz) > 0:
                 parity[nz[0] if nz[0] >= i else nz[-1]] = s
 
-        codeword[self.k:self.k + len(parity)] = parity[:self.n - self.k]
+        codeword[self.k : self.k + len(parity)] = parity[: self.n - self.k]
         return codeword
 
     def decode(self, llr: np.ndarray) -> tuple[np.ndarray, bool, int]:
@@ -361,11 +543,11 @@ class LDPC5GNR:
             hard = (total_llr < 0).astype(np.int8)
             syndrome = self.H @ hard % 2
             if np.all(syndrome == 0):
-                return hard[:self.k], True, iteration + 1
+                return hard[: self.k], True, iteration + 1
 
         # Did not converge
         hard = (total_llr < 0).astype(np.int8)
-        return hard[:self.k], False, self.max_iter
+        return hard[: self.k], False, self.max_iter
 
 
 # ── Code cache ────────────────────────────────────────────────────────
@@ -373,8 +555,7 @@ class LDPC5GNR:
 _cache: dict[tuple[int, float], LDPC5GNR] = {}
 
 
-def get_5gnr_code(block_length: int, rate: float,
-                  max_iter: int = 40) -> LDPC5GNR:
+def get_5gnr_code(block_length: int, rate: float, max_iter: int = 40) -> LDPC5GNR:
     """Get or create a 5G NR LDPC code instance (cached)."""
     key = (block_length, round(rate, 4))
     if key not in _cache:

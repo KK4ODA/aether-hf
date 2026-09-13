@@ -1,5 +1,5 @@
 """
-aether_hf/host/vara_compat.py
+aether_model/host/vara_compat.py
 
 VARA-compatible TCP host interface.
 
@@ -11,12 +11,13 @@ Command port: text-based, line-delimited (MYCALL, CONNECT, LISTEN, etc.)
 Data port: binary stream for payload data.
 """
 
+import contextlib
 import logging
 import socket
 import threading
-from typing import Optional, Callable
+from collections.abc import Callable
 
-from aether_hf.constants import DEFAULT_CMD_PORT, DEFAULT_DATA_PORT
+from aether_model.constants import DEFAULT_CMD_PORT, DEFAULT_DATA_PORT
 
 log = logging.getLogger(__name__)
 
@@ -30,11 +31,11 @@ class VaraCompatServer:
 
     def __init__(
         self,
-        cmd_port:  int = DEFAULT_CMD_PORT,
+        cmd_port: int = DEFAULT_CMD_PORT,
         data_port: int = DEFAULT_DATA_PORT,
         bind_addr: str = "127.0.0.1",
-        on_command: Optional[Callable[[str], None]] = None,
-        on_data:    Optional[Callable[[bytes], None]] = None,
+        on_command: Callable[[str], None] | None = None,
+        on_data: Callable[[bytes], None] | None = None,
     ):
         self._cmd_port = cmd_port
         self._data_port = data_port
@@ -42,10 +43,10 @@ class VaraCompatServer:
         self._on_command = on_command
         self._on_data = on_data
 
-        self._cmd_server: Optional[socket.socket] = None
-        self._data_server: Optional[socket.socket] = None
-        self._cmd_client: Optional[socket.socket] = None
-        self._data_client: Optional[socket.socket] = None
+        self._cmd_server: socket.socket | None = None
+        self._data_server: socket.socket | None = None
+        self._cmd_client: socket.socket | None = None
+        self._data_client: socket.socket | None = None
 
         self._running = False
         self._lock = threading.Lock()
@@ -69,23 +70,18 @@ class VaraCompatServer:
         self._data_server.bind((self._bind, self._data_port))
         self._data_server.listen(1)
 
-        threading.Thread(target=self._accept_cmd, daemon=True,
-                         name="VARA-Cmd-Accept").start()
-        threading.Thread(target=self._accept_data, daemon=True,
-                         name="VARA-Data-Accept").start()
+        threading.Thread(target=self._accept_cmd, daemon=True, name="VARA-Cmd-Accept").start()
+        threading.Thread(target=self._accept_data, daemon=True, name="VARA-Data-Accept").start()
 
         log.info(f"VARA-compat server on cmd:{self._cmd_port} data:{self._data_port}")
 
     def stop(self):
         """Stop the TCP servers."""
         self._running = False
-        for s in (self._cmd_client, self._data_client,
-                  self._cmd_server, self._data_server):
+        for s in (self._cmd_client, self._data_client, self._cmd_server, self._data_server):
             if s:
-                try:
+                with contextlib.suppress(OSError):
                     s.close()
-                except OSError:
-                    pass
         self._cmd_client = None
         self._data_client = None
 
@@ -113,9 +109,8 @@ class VaraCompatServer:
                 client, addr = self._cmd_server.accept()
                 log.info(f"Host connected to command port from {addr}")
                 self._cmd_client = client
-                threading.Thread(target=self._read_cmd, daemon=True,
-                                 name="VARA-Cmd-Read").start()
-            except socket.timeout:
+                threading.Thread(target=self._read_cmd, daemon=True, name="VARA-Cmd-Read").start()
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -128,9 +123,8 @@ class VaraCompatServer:
                 client, addr = self._data_server.accept()
                 log.info(f"Host connected to data port from {addr}")
                 self._data_client = client
-                threading.Thread(target=self._read_data, daemon=True,
-                                 name="VARA-Data-Read").start()
-            except socket.timeout:
+                threading.Thread(target=self._read_data, daemon=True, name="VARA-Data-Read").start()
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -218,10 +212,8 @@ class VaraCompatServer:
     def _send_cmd_line(self, line: str):
         """Send a line to the host command port."""
         if self._cmd_client:
-            try:
-                self._cmd_client.sendall(f"{line}\r\n".encode("utf-8"))
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                self._cmd_client.sendall(f"{line}\r\n".encode())
 
     def get_tx_data(self, max_bytes: int) -> bytes:
         """Consume data from the TX buffer for transmission."""

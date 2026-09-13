@@ -1,5 +1,5 @@
 """
-aether_hf/audio/soundcard.py
+aether_model/audio/soundcard.py
 
 Sound card audio I/O with resampling between 48 kHz audio and 12 kHz baseband.
 
@@ -7,15 +7,16 @@ Uses sounddevice (PortAudio wrapper) for cross-platform audio.
 Falls back to a file-based loopback for testing without hardware.
 """
 
+import contextlib
 import logging
-import threading
 import queue
-import numpy as np
-from typing import Optional
 
-from aether_hf.constants import SAMPLE_RATE, BASEBAND_RATE, RESAMPLE_FACTOR, AUDIO_BUFFER_SIZE
+import numpy as np
+
+from aether_model.constants import AUDIO_BUFFER_SIZE, RESAMPLE_FACTOR, SAMPLE_RATE
 
 log = logging.getLogger(__name__)
+_RNG = np.random.default_rng()
 
 
 class AudioInterface:
@@ -25,8 +26,7 @@ class AudioInterface:
     real audio, and vice versa for transmission.
     """
 
-    def __init__(self, device_in: Optional[str] = None,
-                 device_out: Optional[str] = None):
+    def __init__(self, device_in: str | None = None, device_out: str | None = None):
         self._dev_in = device_in
         self._dev_out = device_out
         self._running = False
@@ -40,6 +40,7 @@ class AudioInterface:
         """Start audio I/O."""
         try:
             import sounddevice as sd
+
             self._start_sounddevice(sd)
         except ImportError:
             log.warning("sounddevice not available — using loopback mode")
@@ -53,8 +54,7 @@ class AudioInterface:
             self._stream.close()
             self._stream = None
 
-    def read_baseband(self, n_samples: int,
-                      timeout: float = 1.0) -> Optional[np.ndarray]:
+    def read_baseband(self, n_samples: int, timeout: float = 1.0) -> np.ndarray | None:
         """Read baseband (12 kHz complex) samples from the receiver.
 
         Returns None on timeout.
@@ -87,6 +87,7 @@ class AudioInterface:
         The complex baseband is obtained by mixing to DC first.
         """
         from scipy.signal import decimate
+
         # Simple decimation (prototype — production would use a proper
         # analytic signal conversion with Hilbert transform)
         real_12k = decimate(audio_48k.astype(np.float64), RESAMPLE_FACTOR)
@@ -99,6 +100,7 @@ class AudioInterface:
         Interpolates by 4 and takes the real part (SSB-like).
         """
         from scipy.signal import resample_poly
+
         # Take real part for audio output
         real_12k = baseband_12k.real.astype(np.float64)
         audio_48k = resample_poly(real_12k, RESAMPLE_FACTOR, 1)
@@ -122,10 +124,8 @@ class AudioInterface:
             if indata is not None:
                 mono = indata[:, 0] if indata.ndim > 1 else indata
                 baseband = self._downsample(mono)
-                try:
+                with contextlib.suppress(queue.Full):  # drop the block if the consumer is behind
                     self._rx_queue.put_nowait(baseband)
-                except queue.Full:
-                    pass  # drop oldest if queue full
 
             # TX: get baseband, upsample, output
             try:
@@ -163,6 +163,6 @@ class LoopbackAudio(AudioInterface):
         """In loopback mode, TX goes straight to RX with optional noise."""
         noise_power = 10 ** (self._noise_db / 10)
         noise = np.sqrt(noise_power / 2) * (
-            np.random.randn(len(samples)) + 1j * np.random.randn(len(samples))
+            _RNG.standard_normal(len(samples)) + 1j * _RNG.standard_normal(len(samples))
         )
         self._rx_queue.put(samples + noise)

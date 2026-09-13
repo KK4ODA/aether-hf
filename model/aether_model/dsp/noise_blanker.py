@@ -1,5 +1,5 @@
 """
-aether_hf/dsp/noise_blanker.py
+aether_model/dsp/noise_blanker.py
 
 Three-layer impulsive noise defense (Section 6.1 of the spec).
 
@@ -11,9 +11,8 @@ Operates on complex baseband samples before the OFDM FFT.
 """
 
 import numpy as np
-from typing import Optional
 
-from aether_hf.constants import BASEBAND_RATE, FFT_SIZE_W
+from aether_model.constants import BASEBAND_RATE, FFT_SIZE_W
 
 
 class NoiseBlanker:
@@ -65,8 +64,7 @@ class NoiseBlanker:
 
         return out
 
-    def mark_erasures(self, subcarrier_powers: np.ndarray,
-                      n_neighbors: int = 5) -> np.ndarray:
+    def mark_erasures(self, subcarrier_powers: np.ndarray, n_neighbors: int = 5) -> np.ndarray:
         """Layer 3: Mark corrupted subcarriers as erasures.
 
         Args:
@@ -84,19 +82,19 @@ class NoiseBlanker:
         for i in range(n):
             lo = max(0, i - half_win)
             hi = min(n, i + half_win + 1)
-            neighbors = np.concatenate([
-                subcarrier_powers[lo:i],
-                subcarrier_powers[i+1:hi],
-            ])
+            neighbors = np.concatenate(
+                [
+                    subcarrier_powers[lo:i],
+                    subcarrier_powers[i + 1 : hi],
+                ]
+            )
             if len(neighbors) == 0:
                 continue
             local_avg = np.mean(neighbors)
             if local_avg <= 0:
                 continue
 
-            ratio_db = 10 * np.log10(
-                subcarrier_powers[i] / local_avg + 1e-30
-            )
+            ratio_db = 10 * np.log10(subcarrier_powers[i] / local_avg + 1e-30)
             if ratio_db > self._erasure_thresh_db:
                 erasures[i] = True
 
@@ -116,14 +114,12 @@ class NoiseBlanker:
             return samples
 
         # Use cumulative sum for efficient windowed RMS
-        amp_sq = amplitudes ** 2
+        amp_sq = amplitudes**2
         cumsum = np.cumsum(amp_sq)
         # Windowed mean of squared amplitudes
         windowed_mean = np.zeros(n)
         windowed_mean[:window] = cumsum[:window] / np.arange(1, window + 1)
-        windowed_mean[window:] = (
-            cumsum[window:] - cumsum[:-window]
-        ) / window
+        windowed_mean[window:] = (cumsum[window:] - cumsum[:-window]) / window
         rms = np.sqrt(windowed_mean + 1e-30)
 
         # Blank samples exceeding threshold
