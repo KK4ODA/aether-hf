@@ -144,7 +144,7 @@ class FrameDetector:
         p = _moving_sum(prod, lag)
         energy = _moving_sum(np.abs(x) ** 2, lag)  # window energy at every position
         r = 0.5 * (energy[:-lag] + energy[lag:])  # mean energy of both windows → M ≤ 1
-        floor = 1e-3 * float(np.mean(np.abs(x) ** 2)) * lag  # ignore silence
+        floor = max(1e-3 * float(np.mean(np.abs(x) ** 2)) * lag, 1e-30)  # ignore silence
         return np.abs(p) ** 2 / np.maximum(r, floor) ** 2
 
     # ── stage 2: fractional CFO ───────────────────────────────────────

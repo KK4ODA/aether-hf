@@ -76,16 +76,8 @@ ignore = [
 ]
 # Legacy modules scheduled for rewrite (see docs/AUDIT.md) get lint but not pedantry.
 [tool.ruff.lint.per-file-ignores]
-"model/aether_model/dsp/ofdm.py" = ["PL", "B"]
-"model/aether_model/dsp/preamble.py" = ["PL", "B"]
-"model/aether_model/dsp/modulation.py" = ["PL", "B"]
-"model/aether_model/dsp/wiener.py" = ["PL", "B"]
-"model/aether_model/dsp/noise_blanker.py" = ["PL", "B"]
-"model/aether_model/dsp/tx_filter.py" = ["PL", "B"]
-"model/aether_model/fec/*.py" = ["PL", "B"]
 "model/aether_model/protocol/*.py" = ["PL", "B"]
 "model/aether_model/host/*.py" = ["PL", "B"]
-"model/aether_model/audio/*.py" = ["PL", "B"]
 "model/tests/*.py" = ["PL"]
 "tools/*.py" = ["PL", "E501"]
 
@@ -104,9 +96,9 @@ check_untyped_defs = true
 ignore_missing_imports = true
 # New code (post-audit) is typed strictly; legacy modules are checked loosely until rewritten.
 [[tool.mypy.overrides]]
-module = ["aether_model.channel", "aether_model.waveform"]
+module = ["aether_model.channel", "aether_model.waveform", "aether_model.phy.*", "aether_model.fec.*", "aether_model.frame.*", "aether_model.hal.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 [[tool.mypy.overrides]]
-module = ["aether_model.dsp.*", "aether_model.fec.*", "aether_model.protocol.*", "aether_model.host.*", "aether_model.audio.*", "aether_model.speed_levels", "aether_model.constants"]
+module = ["aether_model.protocol.*", "aether_model.host.*", "aether_model.constants"]
 ignore_errors = true

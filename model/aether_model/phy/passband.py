@@ -57,6 +57,8 @@ class _Fir:
         self._zi: NDArray = np.zeros(len(taps) - 1, dtype=dtype)
 
     def __call__(self, x: NDArray) -> NDArray:
+        if len(x) == 0:
+            return np.zeros(0, dtype=self._zi.dtype)
         y, self._zi = signal.lfilter(self.taps, [1.0], x, zi=self._zi)
         return np.asarray(y)
 

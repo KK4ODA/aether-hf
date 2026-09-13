@@ -62,6 +62,10 @@ class Modem:
         codec = self.codec(CONTROL_MODE, SHORT)
         return self.tx.baseband(FrameHeader(FrameType.CONTROL), SHORT, codec.encode(payload, rv))
 
+    def audio(self, baseband: ComplexArray, level: float = 0.25) -> NDArray[np.float32]:
+        """48 kHz float32 audio of a baseband burst at RMS ``level`` (default −12 dBFS)."""
+        return (self.tx.audio(baseband) * level).astype(np.float32)
+
     def payload_bytes(self, mode: Mode | None = None) -> int:
         return (
             self.codec(mode, LONG).payload_bytes
