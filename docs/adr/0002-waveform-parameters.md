@@ -105,3 +105,14 @@ channel estimate. The air interface was changed so that nothing weak is on the c
   87 % at −7 dB, 70 % at −8 dB; type and mode correct in every acquired frame down to
   −10 dB; BPSK 1/5 decodes 100 % at −5 dB and ~50 % at −6 dB — the code, not the
   acquisition, is now the floor.
+
+### Redundancy version in the chips (P2-1)
+
+The HARQ redundancy version is signalled with the mode: one chip sequence per (RV, mode)
+pair, 4 × 14 = 56 sequences (`chip_index(mode, rv) = rv·14 + mode`, so RV-0 frames are
+bit-identical to the P2-3 design and the golden vectors hold). Carrying the RV outside the
+codeword — as a cellular downlink does in its control information — lets the link layer
+soft-combine a retransmission with a first transmission whose payload, and therefore
+sequence number, it never decoded. Measured: (mode, RV) read correctly in 36/36 frames at
+the combining thresholds; QPSK ½ decodes from RV0 + RV1 at −1 dB (single-shot threshold
+≈ +2 dB) and 16-QAM ¾ at +6 dB (single-shot ≈ +10 dB).

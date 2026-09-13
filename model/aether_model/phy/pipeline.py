@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 from aether_model.frame.codec import FrameCodec
 from aether_model.frame.modes import CONTROL_MODE, LONG, MODES, SHORT, FrameLayout, Mode
 from aether_model.phy.preamble import FrameHeader, FrameType
-from aether_model.phy.rx import FrameReceiver, ReceivedFrame, layout_for
+from aether_model.phy.rx import FrameReceiver, ReceivedFrame
 from aether_model.phy.sync import FrameDetector, FrameSync
 from aether_model.phy.tx import FrameTransmitter
 from aether_model.waveform import WIDE_2300, WaveformParams
@@ -58,7 +58,7 @@ class Modem:
     def data_burst(self, payload: bytes, mode: Mode, rv: int = 0) -> ComplexArray:
         codec = self.codec(mode, LONG)
         return self.tx.baseband(
-            FrameHeader(FrameType.DATA, mode.index), LONG, codec.encode(payload, rv)
+            FrameHeader(FrameType.DATA, mode.index, rv), LONG, codec.encode(payload, rv)
         )
 
     def control_burst(self, payload: bytes, rv: int = 0) -> ComplexArray:
@@ -78,34 +78,44 @@ class Modem:
 
     # ── receive ───────────────────────────────────────────────────────
 
+    def demodulate(self, x: ComplexArray, sync: FrameSync) -> ReceivedFrame:
+        """Equalized symbols plus the (mode, rv) read from the chips — the soft frame a link
+        layer combines across retransmissions. Retries the runner-up chip hypothesis only
+        through :meth:`decode_sync`."""
+        return self.rx.receive(x, sync)
+
+    def decode_frame(
+        self, frame: ReceivedFrame, buffer: FloatArray | None = None
+    ) -> tuple[bytes | None, FloatArray]:
+        """Decode a demodulated frame with the RV it announced, optionally soft-combining
+        with ``buffer`` (HARQ-IR). Returns ``(payload or None, llr buffer)``."""
+        control = frame.sync.header.frame_type is FrameType.CONTROL
+        mode = CONTROL_MODE if control else MODES[frame.mode]
+        return self.codec(mode, frame.layout).decode(
+            frame.symbols, frame.noise_var, rv=frame.rv, buffer=buffer
+        )
+
     def decode_sync(
-        self, x: ComplexArray, sync: FrameSync, rv: int = 0, buffer: FloatArray | None = None
+        self, x: ComplexArray, sync: FrameSync, buffer: FloatArray | None = None
     ) -> DecodedFrame:
         frame = self.rx.receive(x, sync)
-        layout = layout_for(sync.header.frame_type)
         if sync.header.frame_type is FrameType.CONTROL:
-            codec = self.codec(CONTROL_MODE, layout)
-            payload, _ = codec.decode(frame.symbols, frame.noise_var, rv=rv, buffer=buffer)
+            payload, _ = self.decode_frame(frame, buffer)
             return DecodedFrame(payload, frame, CONTROL_MODE)
         mode = MODES[frame.mode]
-        payload, _ = self.codec(mode, layout).decode(
-            frame.symbols, frame.noise_var, rv=rv, buffer=buffer
-        )
+        payload, _ = self.decode_frame(frame, buffer)
         if payload is None and frame.mode_confidence < MODE_RETRY_CONFIDENCE:
-            # the chip metric was close: try the runner-up mode before giving up
-            alt = self.rx.receive(x, sync, mode=frame.mode_runner_up)
-            alt_mode = MODES[alt.mode]
-            payload, _ = self.codec(alt_mode, layout).decode(
-                alt.symbols, alt.noise_var, rv=rv, buffer=buffer
-            )
+            # the chip metric was close: try the runner-up (mode, rv) before giving up
+            alt = self.rx.receive(x, sync, hypothesis=frame.chip_runner_up)
+            payload, _ = self.decode_frame(alt, buffer)
             if payload is not None:
-                return DecodedFrame(payload, alt, alt_mode)
+                return DecodedFrame(payload, alt, MODES[alt.mode])
         return DecodedFrame(payload, frame, mode)
 
     def decode_buffer(self, x: ComplexArray, max_frames: int = 4) -> list[DecodedFrame]:
         """Band-limit, detect and decode every frame in a baseband buffer."""
         y = self.detector.condition(x)
-        out = []
+        out: list[DecodedFrame] = []
         for sync in self.detector.detect(y, max_frames=max_frames):
             try:
                 out.append(self.decode_sync(y, sync))

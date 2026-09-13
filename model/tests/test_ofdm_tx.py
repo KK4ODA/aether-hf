@@ -49,9 +49,13 @@ def test_frame_type_sequences_and_mode_chips() -> None:
     a = pre.sc_values(FrameType.DATA)[pre.even]
     b = pre.sc_values(FrameType.CONTROL)[pre.even]
     assert abs(np.vdot(a, b)) / np.vdot(a, a).real < 0.3
-    chips = [np.concatenate([pre.mode_chips(m, i) for i in range(4)]) for m in range(14)]
+    chips = [
+        np.concatenate([pre.mode_chips(m, i, rv) for i in range(4)])
+        for rv in range(4)
+        for m in range(14)
+    ]
     assert all(len(c) == 168 and np.all(np.abs(c) == 1.0) for c in chips)
-    worst = max(abs(np.vdot(chips[i], chips[j])) / 168 for i in range(14) for j in range(i + 1, 14))
+    worst = max(abs(np.vdot(chips[i], chips[j])) / 168 for i in range(56) for j in range(i + 1, 56))
     assert worst <= 0.2
 
 
@@ -65,9 +69,11 @@ def test_sc_symbol_has_two_identical_halves_and_unit_power() -> None:
 
 
 def test_header_validation() -> None:
-    assert FrameHeader(FrameType.DATA, 13).mode == 13
+    assert FrameHeader(FrameType.DATA, 13, 3).mode == 13
     with pytest.raises(ValueError):
         FrameHeader(FrameType.DATA, 14)
+    with pytest.raises(ValueError):
+        FrameHeader(FrameType.DATA, 0, 4)
 
 
 # ── symbol round trip ─────────────────────────────────────────────────

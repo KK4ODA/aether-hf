@@ -8,9 +8,10 @@ Given a :class:`~aether_model.phy.sync.FrameSync`, the receiver
    data-aided step brings the offset error from the preamble's ≈ 0.7 Hz at 0 dB down to
    well under 0.1 Hz, which 64-QAM needs;
 2. takes the FFT of every symbol (pilot symbols, data symbols);
-3. for DATA frames, reads the mode: the data carriers of the full pilot symbols carry the
-   mode's PN chips, which are correlated coherently (using the comb-pilot channel estimate
-   of those symbols) against all 14 mode sequences; the best/runner-up ratio is reported so
+3. for DATA frames, reads the mode and redundancy version: the data carriers of the full
+   pilot symbols carry the (rv, mode) PN chips, which are correlated coherently (using the
+   comb-pilot channel estimate of those symbols) against all 56 sequences; the
+   best/runner-up ratio is reported so
    the caller can fall back to the runner-up if the CRC fails;
 4. estimates the channel on every symbol:
    * full estimates (all carriers) on the full pilot symbols, once their chips are known;
@@ -35,7 +36,12 @@ from numpy.typing import NDArray
 
 from aether_model.frame.modes import LONG, PREAMBLE_SYMBOLS, SHORT, FrameLayout
 from aether_model.phy.ofdm import OfdmDemodulator
-from aether_model.phy.preamble import FrameType, mode_chip_sequences, preamble
+from aether_model.phy.preamble import (
+    FrameType,
+    chip_hypothesis,
+    mode_chip_sequences,
+    preamble,
+)
 from aether_model.phy.sync import FrameSync
 from aether_model.waveform import WIDE_2300, WaveformParams
 
@@ -61,10 +67,13 @@ class ReceivedFrame:
     """Total carrier offset actually removed (preamble estimate + data-aided residual)."""
     mode: int = 0
     """Mode index read from the pilot-symbol chips (DATA) or the control mode (CONTROL)."""
-    mode_runner_up: int = 0
+    rv: int = 0
+    """Redundancy version read from the same chips (0 for CONTROL frames)."""
+    chip_runner_up: int = 0
+    """Second-best chip hypothesis (:func:`~aether_model.phy.preamble.chip_hypothesis`)."""
     mode_confidence: float = 1.0
-    """Best mode metric divided by the runner-up; below ~1.3 the caller may retry with
-    ``mode_runner_up`` if the CRC fails."""
+    """Best chip metric divided by the runner-up; below ~1.3 the caller may retry with
+    ``chip_runner_up`` if the CRC fails."""
 
 
 def layout_for(header_type: FrameType) -> FrameLayout:
@@ -85,9 +94,11 @@ class FrameReceiver:
         layout = layout_for(sync.header.frame_type)
         return sync.start, sync.start + layout.samples
 
-    def receive(self, x: ComplexArray, sync: FrameSync, mode: int | None = None) -> ReceivedFrame:
-        """Demodulate and equalize one frame. ``mode`` overrides chip-based detection (used
-        for the runner-up retry)."""
+    def receive(
+        self, x: ComplexArray, sync: FrameSync, hypothesis: int | None = None
+    ) -> ReceivedFrame:
+        """Demodulate and equalize one frame. ``hypothesis`` (a chip-sequence index)
+        overrides chip-based (mode, rv) detection — used for the runner-up retry."""
         layout = layout_for(sync.header.frame_type)
         start, end = self.frame_span(sync)
         if end + self.dem.fft_offset > len(x):
@@ -127,8 +138,8 @@ class FrameReceiver:
         def interp(row: ComplexArray) -> ComplexArray:
             return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
 
-        # 3. mode from the pilot-symbol chips (DATA frames)
-        mode_idx, runner_up, confidence = 0, 0, 1.0
+        # 3. mode and redundancy version from the pilot-symbol chips (DATA frames)
+        mode_idx, rv, runner_up, confidence = 0, 0, 0, 1.0
         if sync.header.frame_type is FrameType.DATA:
             dc = self.data_c
             z_parts = []
@@ -141,10 +152,9 @@ class FrameReceiver:
             n_used = len(z)
             metrics = np.array([abs(np.vdot(seq[:n_used], z)) for seq in seqs]) / np.sqrt(n_used)
             order = np.argsort(metrics)[::-1]
-            mode_idx, runner_up = int(order[0]), int(order[1])
+            best, runner_up = int(order[0]), int(order[1])
             confidence = float(metrics[order[0]] / max(metrics[order[1]], 1e-12))
-            if mode is not None:
-                mode_idx = mode
+            mode_idx, rv = chip_hypothesis(best if hypothesis is None else hypothesis)
 
         # 4. known carrier values per symbol, then channel estimates
         known = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
@@ -152,7 +162,7 @@ class FrameReceiver:
         for pilot_no, s_i in enumerate(pilot_syms):
             known[s_i] = self.pilot_seq
             if sync.header.frame_type is FrameType.DATA:
-                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no)
+                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no, rv)
             full[s_i] = True
         for s_i in data_syms:
             known[s_i, pc] = ref
@@ -183,6 +193,7 @@ class FrameReceiver:
             channel=h[pre:],
             cfo_hz=cfo_total,
             mode=mode_idx,
-            mode_runner_up=runner_up,
+            rv=rv,
+            chip_runner_up=runner_up,
             mode_confidence=confidence,
         )

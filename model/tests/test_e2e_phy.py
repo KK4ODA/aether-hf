@@ -181,6 +181,38 @@ def test_reported_snr_is_calibrated(modem: Modem, rng: np.random.Generator) -> N
     assert f.frame.snr_3k_db == pytest.approx(10.0, abs=1.0)
 
 
+@pytest.mark.parametrize(("mode_idx", "snr_3k_db"), [(4, -1.0), (10, 6.0)])
+def test_harq_ir_combining_across_redundancy_versions(
+    modem: Modem, mode_idx: int, snr_3k_db: float, rng: np.random.Generator
+) -> None:
+    """The RV rides in the pilot-symbol chips, so a retransmission can be soft-combined
+    with the failed first transmission: ≈ 3 dB below the single-shot threshold, RV0
+    alone fails and RV0 + RV1 decodes."""
+    mode = MODES[mode_idx]
+    combined = 0
+    for trial in range(4):
+        payload = _payload(rng, modem, mode_idx)
+        buffer = None
+        for rv in range(2):
+            ch = make_channel(
+                "awgn",
+                snr_db=snr_3k_db,
+                fs=FS,
+                seed=700 + 10 * trial + rv,
+                signal_power=1.0,
+                cfo_hz=float(rng.uniform(-100, 100)),
+            )
+            y = modem.detector.condition(ch.process(_buffer(modem.data_burst(payload, mode, rv))))
+            (sync,) = modem.detector.detect(y)
+            frame = modem.demodulate(y, sync)
+            assert (frame.mode, frame.rv) == (mode_idx, rv)
+            alone, _ = modem.decode_frame(frame)
+            assert alone is None or rv == 1  # RV0 alone must not decode this low
+            decoded, buffer = modem.decode_frame(frame, buffer)
+        combined += int(decoded == payload)
+    assert combined >= 3
+
+
 def test_poor_channel_decoding(modem: Modem, rng: np.random.Generator) -> None:
     """ITU Poor (2 ms / 1 Hz) at +10 dB: BPSK ½ must decode most frames — the pilot grid
     and per-carrier LLR weighting are what make this work."""

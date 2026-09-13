@@ -10,12 +10,15 @@ both. With the full processing gain of the preamble behind it, this two-way deci
 reliable wherever the preamble is detectable at all — far below where a separate header
 symbol could be read.
 
-Mode signalling: DATA frames carry their mode index as PN chips on the *data* carriers of
-the full pilot symbols (4 × 42 = 168 chips in a LONG frame). The comb pilots on those
-symbols stay known, so the receiver estimates the channel from them, correlates the chips
-coherently against all 14 mode sequences, and only then treats the pilot symbols as fully
-known. CONTROL frames always use the control mode, so their pilot symbols carry the plain
-pilot sequence.
+Mode and redundancy-version signalling: DATA frames carry their mode index and HARQ
+redundancy version as PN chips on the *data* carriers of the full pilot symbols (4 × 42 =
+168 chips in a LONG frame); one sequence per (RV, mode) pair, 4 × 14 = 56 in all. The comb
+pilots on those symbols stay known, so the receiver estimates the channel from them,
+correlates the chips coherently against all 56 sequences, and only then treats the pilot
+symbols as fully known. Carrying the RV here — outside the LDPC codeword, like the DCI of a
+cellular downlink — is what lets the link layer soft-combine retransmissions of a frame
+whose payload (and therefore sequence number) it could not decode. CONTROL frames always
+use the control mode and RV 0, so their pilot symbols carry the plain pilot sequence.
 
 PN rather than Zadoff–Chu everywhere in the preamble: a ZC chirp shifted in frequency is
 (up to phase) the same chirp shifted in time, so a matched filter could not tell a CFO
@@ -41,6 +44,8 @@ SC_SEEDS = {0: 4649, 1: 7919}
 """PN seeds of the Schmidl–Cox sequence per frame type (fixed by the air-interface spec)."""
 MODE_CHIP_SEED = 20260913
 N_MODES = 14
+N_RV = 4
+"""Redundancy versions signalled per frame (TS 38.212 rate matching has four)."""
 MAX_PILOT_SYMBOLS = 4
 
 
@@ -54,10 +59,25 @@ class FrameHeader:
     frame_type: FrameType
     mode: int = 0
     """Mode index for DATA frames; ignored (0) for CONTROL frames."""
+    rv: int = 0
+    """HARQ redundancy version for DATA frames; ignored (0) for CONTROL frames."""
 
     def __post_init__(self) -> None:
         if not 0 <= self.mode < N_MODES:
             raise ValueError(f"mode index must be 0 … {N_MODES - 1}")
+        if not 0 <= self.rv < N_RV:
+            raise ValueError(f"redundancy version must be 0 … {N_RV - 1}")
+
+
+def chip_index(mode: int, rv: int) -> int:
+    """Index of the chip sequence carrying (mode, rv). RV 0 uses the first 14 sequences,
+    so RV-0 frames are unchanged from the P2-3 air interface (golden vectors hold)."""
+    return rv * N_MODES + mode
+
+
+def chip_hypothesis(index: int) -> tuple[int, int]:
+    """Inverse of :func:`chip_index`: ``(mode, rv)``."""
+    return index % N_MODES, index // N_MODES
 
 
 def _pn(seed: int, n: int) -> ComplexArray:
@@ -87,8 +107,9 @@ def _select_pn_set(length: int, count: int, seed: int, max_corr: float) -> list[
 
 @cache
 def mode_chip_sequences(n_chips: int) -> tuple[ComplexArray, ...]:
-    """One ±1 sequence of ``n_chips`` per mode, pairwise |correlation| ≤ 0.2."""
-    return tuple(_select_pn_set(n_chips, N_MODES, MODE_CHIP_SEED, 0.2))
+    """One ±1 sequence of ``n_chips`` per (rv, mode) pair (:func:`chip_index` order),
+    pairwise |correlation| ≤ 0.2."""
+    return tuple(_select_pn_set(n_chips, N_RV * N_MODES, MODE_CHIP_SEED, 0.2))
 
 
 class Preamble:
@@ -118,9 +139,9 @@ class Preamble:
         sc = self.sc_values(header.frame_type)
         return [sc, sc.copy()]
 
-    def mode_chips(self, mode: int, pilot_symbol_index: int) -> ComplexArray:
+    def mode_chips(self, mode: int, pilot_symbol_index: int, rv: int = 0) -> ComplexArray:
         """Chips (±1) for the data carriers of the given full pilot symbol of a DATA frame."""
-        seq = mode_chip_sequences(self.n_chips)[mode]
+        seq = mode_chip_sequences(self.n_chips)[chip_index(mode, rv)]
         a = pilot_symbol_index * self.n_data
         if a + self.n_data > len(seq):
             raise ValueError("more pilot symbols than the chip sequence covers")
