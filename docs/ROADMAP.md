@@ -517,8 +517,8 @@ amendments (PN preamble sequences, layouts, mode table, P2-3 air interface).
 
 | ID | Task | Depends on |
 |---|---|---|
-| P2-1 | ARQ engine + session FSM (PHY-agnostic): selective repeat, ACK bitmap, RX-recommended level, HARQ-IR via RVs, timers, BREAK, keep-alive; two-modem in-process harness over the simulator | P1-7 |
-| P2-2 | Rate controller with hysteresis; throughput-vs-SNR benchmark on Good/Moderate/Poor incl. slow SNR ramps | P2-1 |
+| P2-1 ✅ | ARQ engine + session FSM (PHY-agnostic, event-driven `aether_model/link/`): selective repeat, ACK bitmap, RX-recommended mode, HARQ-IR combining with the RV carried in the pilot chips and the sequence number inferred for failed frames, connect/turn/disc handshakes, timers, BREAK, keep-alive. Two harnesses: a lossy-pipe discrete-event sim and a two-modem harness over the **real PHY + channel simulator** (bit-exact transfer; real LLR HARQ rescue below the mode threshold) | P1-7 |
+| P2-2 | Rate controller with hysteresis (baseline inner+outer loop exists in `link/rate.py`); throughput-vs-SNR benchmark on Good/Moderate/Poor incl. slow SNR ramps | P2-1 |
 | P2-3 ✅ (acquisition) | Low-SNR acquisition: PMF-FFT matched-filter bank, type-by-preamble-sequence, chip-signalled mode (ADR-0002 amendment) — 100 % at −5 dB, 87 % at −7 dB. Still open: a spread/repetition mode below −6 dB and the connect-probability benchmark | P1-1, P2-1 |
 | P2-4 | PAPR study & decision (clip-and-filter / tone reservation / DFT-spread) with saturating-PA model; ADR-0004 | P1-7 |
 | P2-5 | Impulsive-noise defence on the streaming RX (blanker + erasure LLR scaling) measured on class-A channel | P1-6 |
@@ -596,7 +596,7 @@ commands.
 14. **P1-7** End-to-end loopback + `tools/bench` runner; FER/throughput curves for all modes on AWGN/Good/Moderate/Poor.
 15. **P1-8** Audio HAL for the model (sounddevice, WAV, simulator); virtual-cable loopback test on Windows.
 16. **P1-9** Golden vectors v0 in `vectors/`.
-17. **P2-1** ARQ engine + session FSM + two-modem harness; protocol tests.
+17. **P2-1** ✅ ARQ engine + session FSM + two-modem harness; protocol tests (`test_link.py`, `test_link_harness.py`).
 18. **P2-3** Low-SNR modes and robust control frames; connect-probability benchmark.
 19. **P2-7** Draft `docs/spec/air-interface.md` v0.1 and `control-api.md` v0.1 from the working model.
 20. **P3-1** Scaffold the production core per ADR-0001 and port the FEC against golden vectors.

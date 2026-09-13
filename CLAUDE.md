@@ -42,8 +42,16 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 ## Current phase
 Phase 1 is complete in the model; Phase 2 is in progress on branch `phase-2`. Done:
 P2-3 low-SNR acquisition (PMF-FFT bank in `phy/sync.py`, frame type by preamble sequence,
-mode by pilot-symbol chips; 100 % at −5 dB). In progress: P2-1 ARQ engine + session FSM
-(`aether_model/link/`, PHY-agnostic, event-driven) with a two-modem harness over the real
-PHY and channel simulator. Next: P2-2 rate control, P2-4 PAPR study.
+mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FSM
+(`aether_model/link/`, PHY-agnostic, event-driven) with two harnesses — a lossy-pipe sim
+(`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`). Next: P2-2
+rate-control hysteresis + throughput benchmark, P2-4 PAPR study.
+
+Link layer (`aether_model/link/`): `frames.py` (DATA/CONTROL/connect formats, callsign
+packing), `engine.py` (`LinkEngine`, event-driven: `connect/send/disconnect/tick/on_frame`
+→ `Action`s), `rate.py` (rate recommendation), `sim.py` (`TwoStationSim` discrete-event
+driver), `harness.py` (real-PHY bridge). The DATA header is static across a frame's
+retransmissions so the receiver can soft-combine identical codewords; the RV rides in the
+chips, not the header.
 Benchmarks: `tools/bench_phy.py` (≈ 40 min full grid) and `tools/bench_ldpc.py`; golden
 vectors: `tools/make_vectors.py` (regenerate only with an ADR).
