@@ -22,6 +22,9 @@ from aether_model.waveform import WIDE_2300, WaveformParams
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 
+MODE_RETRY_CONFIDENCE = 1.3
+"""Below this chip-metric ratio a CRC failure triggers a retry with the runner-up mode."""
+
 
 @dataclass
 class DecodedFrame:
@@ -79,9 +82,24 @@ class Modem:
         self, x: ComplexArray, sync: FrameSync, rv: int = 0, buffer: FloatArray | None = None
     ) -> DecodedFrame:
         frame = self.rx.receive(x, sync)
-        mode = MODES[sync.header.mode] if sync.header.frame_type is FrameType.DATA else CONTROL_MODE
-        codec = self.codec(mode, layout_for(sync.header.frame_type))
-        payload, _ = codec.decode(frame.symbols, frame.noise_var, rv=rv, buffer=buffer)
+        layout = layout_for(sync.header.frame_type)
+        if sync.header.frame_type is FrameType.CONTROL:
+            codec = self.codec(CONTROL_MODE, layout)
+            payload, _ = codec.decode(frame.symbols, frame.noise_var, rv=rv, buffer=buffer)
+            return DecodedFrame(payload, frame, CONTROL_MODE)
+        mode = MODES[frame.mode]
+        payload, _ = self.codec(mode, layout).decode(
+            frame.symbols, frame.noise_var, rv=rv, buffer=buffer
+        )
+        if payload is None and frame.mode_confidence < MODE_RETRY_CONFIDENCE:
+            # the chip metric was close: try the runner-up mode before giving up
+            alt = self.rx.receive(x, sync, mode=frame.mode_runner_up)
+            alt_mode = MODES[alt.mode]
+            payload, _ = self.codec(alt_mode, layout).decode(
+                alt.symbols, alt.noise_var, rv=rv, buffer=buffer
+            )
+            if payload is not None:
+                return DecodedFrame(payload, alt, alt_mode)
         return DecodedFrame(payload, frame, mode)
 
     def decode_buffer(self, x: ComplexArray, max_frames: int = 4) -> list[DecodedFrame]:

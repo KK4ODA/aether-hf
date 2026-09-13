@@ -47,7 +47,7 @@ class StreamingReceiver:
         self._buf_abs0 = 0  # absolute index of buf[0]
         self._searched_abs = 0  # everything before this absolute index has been searched
         self._pending: list[_Pending] = []
-        self._done: list[int] = []  # absolute starts of frames already handed out
+        self._done: list[tuple[int, int]] = []  # spans of frames already handed out
         self._max_buf = int(max_buffer_s * params.fs_baseband)
         self._lookback = 3 * params.symbol_samples
         self.frames_decoded = 0
@@ -73,13 +73,13 @@ class StreamingReceiver:
         rel0 = search_abs0 - self._buf_abs0
         region = self._buf[rel0:]
         if len(region) >= 4 * self.p.symbol_samples:
-            known = [p.sync.start for p in self._pending] + self._done
+            spans = [(p.sync.start, p.end_abs) for p in self._pending] + self._done
             for sync in det.detect(region, max_frames=8):
                 start_abs = sync.start + search_abs0
-                if any(abs(start_abs - k) < self.p.symbol_samples for k in known):
-                    continue
-                known.append(start_abs)
+                if any(a - self.p.symbol_samples < start_abs < b for a, b in spans):
+                    continue  # duplicate, or inside a frame we already know about
                 layout_samples = self.modem.rx.frame_span(replace(sync, start=0))[1]
+                spans.append((start_abs, start_abs + layout_samples))
                 self._pending.append(
                     _Pending(replace(sync, start=start_abs), start_abs + layout_samples)
                 )
@@ -93,7 +93,7 @@ class StreamingReceiver:
         for pend in sorted(self._pending, key=lambda q: q.sync.start):
             if pend.end_abs + margin <= self.samples_seen:
                 rel = replace(pend.sync, start=pend.sync.start - self._buf_abs0)
-                self._done = [*self._done, pend.sync.start][-20:]
+                self._done = [*self._done, (pend.sync.start, pend.end_abs)][-20:]
                 try:
                     decoded = self.modem.decode_sync(self._buf, rel)
                 except (ValueError, IndexError):

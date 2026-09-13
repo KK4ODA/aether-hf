@@ -507,9 +507,11 @@ New: `model/aether_model/{fec,phy,frame,hal}`, `tools/bench`, `vectors/`.
 
 **Status (2026-09-13): Phase 1 complete in the model.** AWGN thresholds (FER < 5 %, 3 kHz,
 with random CFO/SRO): BPSK ½ −1 dB, QPSK ½ +2, 16-QAM ½ +7, 64-QAM ⅚ +17 dB
-(`bench/baselines/phy_fer.csv`). Acquisition is reliable to ≈ −2 dB; extending it to
-≈ −7 dB for the BPSK 1/5 mode is P2-3 (matched-filter-bank detection). ADR-0002 carries
-the amendments (PN preamble sequences, layouts, mode table).
+(`bench/baselines/phy_fer_phase1_uw.csv`, summarised in `bench/README.md`). Acquisition
+was reliable to ≈ −2 dB with the Phase 1 preamble; P2-3 (branch `phase-2`) replaced it
+with a matched-filter bank and chip-signalled mode — acquisition is now 100 % at −5 dB and
+87 % at −7 dB, and the BPSK 1/5 code (≈ −6 dB) is the floor. ADR-0002 carries the
+amendments (PN preamble sequences, layouts, mode table, P2-3 air interface).
 
 ### Phase 2 — Link robustness and performance (weeks 10–20)
 
@@ -517,7 +519,7 @@ the amendments (PN preamble sequences, layouts, mode table).
 |---|---|---|
 | P2-1 | ARQ engine + session FSM (PHY-agnostic): selective repeat, ACK bitmap, RX-recommended level, HARQ-IR via RVs, timers, BREAK, keep-alive; two-modem in-process harness over the simulator | P1-7 |
 | P2-2 | Rate controller with hysteresis; throughput-vs-SNR benchmark on Good/Moderate/Poor incl. slow SNR ramps | P2-1 |
-| P2-3 | Low-SNR modes (R=1/5, spreading), robust ACK/connect frames; connect-probability-vs-SNR benchmark | P1-1, P2-1 |
+| P2-3 ✅ (acquisition) | Low-SNR acquisition: PMF-FFT matched-filter bank, type-by-preamble-sequence, chip-signalled mode (ADR-0002 amendment) — 100 % at −5 dB, 87 % at −7 dB. Still open: a spread/repetition mode below −6 dB and the connect-probability benchmark | P1-1, P2-1 |
 | P2-4 | PAPR study & decision (clip-and-filter / tone reservation / DFT-spread) with saturating-PA model; ADR-0004 | P1-7 |
 | P2-5 | Impulsive-noise defence on the streaming RX (blanker + erasure LLR scaling) measured on class-A channel | P1-6 |
 | P2-6 | Improved channel estimation (MMSE/Wiener 2-D with estimated statistics) if benchmarks justify | P1-6 |

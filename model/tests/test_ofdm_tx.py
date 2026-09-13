@@ -44,34 +44,30 @@ def test_zadoff_chu_is_cazac() -> None:
         zadoff_chu(57, 3)  # 3 divides 57
 
 
-def test_uw_sequences_have_low_cross_correlation() -> None:
+def test_frame_type_sequences_and_mode_chips() -> None:
     pre = preamble(P)
-    cands = pre.uw_candidates()
-    assert len(cands) == 32
-    worst = 0.0
-    for a in cands:
-        assert np.all(np.abs(cands[a]) == 1.0)
-        for b in cands:
-            if a < b:
-                worst = max(worst, abs(np.vdot(cands[a], cands[b])) / 57)
-    assert worst <= 0.3
+    a = pre.sc_values(FrameType.DATA)[pre.even]
+    b = pre.sc_values(FrameType.CONTROL)[pre.even]
+    assert abs(np.vdot(a, b)) / np.vdot(a, a).real < 0.3
+    chips = [np.concatenate([pre.mode_chips(m, i) for i in range(4)]) for m in range(14)]
+    assert all(len(c) == 168 and np.all(np.abs(c) == 1.0) for c in chips)
+    worst = max(abs(np.vdot(chips[i], chips[j])) / 168 for i in range(14) for j in range(i + 1, 14))
+    assert worst <= 0.2
 
 
 def test_sc_symbol_has_two_identical_halves_and_unit_power() -> None:
     mod = OfdmModulator(P)
     pre = preamble(P)
-    ext = mod.to_time(pre.sc_values)
+    ext = mod.to_time(pre.sc_values())
     body = ext[P.cp_samples : P.cp_samples + P.fft_size]
     np.testing.assert_allclose(body[:100], body[100:], atol=1e-12)
     assert np.mean(np.abs(body) ** 2) == pytest.approx(1.0, rel=0.02)
 
 
-def test_header_round_trip() -> None:
-    for code in [*list(range(14)), 16]:
-        assert FrameHeader.from_code(code).code == code
-    assert FrameHeader(FrameType.CONTROL, 5).code == 16
+def test_header_validation() -> None:
+    assert FrameHeader(FrameType.DATA, 13).mode == 13
     with pytest.raises(ValueError):
-        FrameHeader.from_code(20)
+        FrameHeader(FrameType.DATA, 14)
 
 
 # ── symbol round trip ─────────────────────────────────────────────────
@@ -105,7 +101,9 @@ def test_symbol_round_trip_survives_timing_offset_within_cp(rng: np.random.Gener
         assert slope == pytest.approx(2 * np.pi * early / P.fft_size, abs=1e-9)
 
 
-def test_full_pilot_symbol_has_low_papr() -> None:
+def test_plain_pilot_symbol_has_low_papr() -> None:
+    """Control-frame pilot symbols carry the pure Zadoff–Chu sequence (≈ 3.5 dB PAPR);
+    data-frame pilot symbols carry mode chips on their data carriers and look like data."""
     mod = OfdmModulator(P)
     ext = mod.to_time(mod.symbol_values(None, full_pilot=True))
     body = ext[P.cp_samples : P.cp_samples + P.fft_size]

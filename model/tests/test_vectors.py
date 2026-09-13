@@ -67,7 +67,7 @@ def test_receiver_decodes_vector(entry: dict, modem: Modem) -> None:  # type: ig
     frames = modem.decode_buffer(y, max_frames=2)
     assert len(frames) == 1
     assert frames[0].payload == bytes.fromhex(entry["payload_hex"])
-    assert frames[0].frame.sync.header.mode == entry["mode"]
+    assert frames[0].frame.mode == entry["mode"]
 
 
 def test_noise_vector_yields_no_frames(modem: Modem) -> None:

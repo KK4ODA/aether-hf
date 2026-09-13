@@ -41,15 +41,17 @@ def test_noiseless_acquisition_is_exact(modem: Modem, rng: np.random.Generator) 
     s = syncs[0]
     assert s.start == LEAD
     assert abs(s.cfo_hz) < 0.05
-    assert s.header.frame_type is FrameType.DATA and s.header.mode == 4
-    assert s.header_confidence > 3.0
+    assert s.header.frame_type is FrameType.DATA
+    assert s.header_confidence > 2.0  # DATA vs CONTROL preamble sequences
     assert s.timing_peak > 0.95
+    frame = modem.rx.receive(_buffer(burst), s)
+    assert frame.mode == 4 and frame.mode_confidence > 3.0
 
 
 @pytest.mark.parametrize("cfo", [-250.0, -133.3, -41.0, 0.0, 39.0, 77.7, 250.0])
 def test_acquisition_at_0_db_across_cfo(modem: Modem, cfo: float, rng: np.random.Generator) -> None:
     """ADR-0002 target: timing within ±1 sample at 0 dB (3 kHz); the preamble CFO estimate
-    is within ±2 Hz and the receiver's data-aided refinement brings it within ±0.5 Hz."""
+    is within ±3 Hz and the receiver's data-aided refinement brings it within ±0.5 Hz."""
     burst = modem.data_burst(_payload(rng, modem, 0), MODES[0])
     ch = make_channel(
         "awgn", snr_db=0.0, fs=FS, seed=int(abs(cfo) * 10) + 3, signal_power=1.0, cfo_hz=cfo
@@ -59,10 +61,36 @@ def test_acquisition_at_0_db_across_cfo(modem: Modem, cfo: float, rng: np.random
     assert len(syncs) == 1, cfo
     s = syncs[0]
     assert abs(s.start - LEAD) <= 1, (s.start, cfo)
-    assert abs(s.cfo_hz - cfo) < 2.0, (s.cfo_hz, cfo)
-    assert s.header.mode == 0
+    assert abs(s.cfo_hz - cfo) < 3.0, (s.cfo_hz, cfo)
+    assert s.header.frame_type is FrameType.DATA
     frame = modem.rx.receive(y, s)
     assert abs(frame.cfo_hz - cfo) < 0.5, (frame.cfo_hz, cfo)
+    assert frame.mode == 0
+
+
+@pytest.mark.parametrize("snr_3k_db", [-5.0, -3.0])
+def test_low_snr_acquisition_and_decode(
+    modem: Modem, snr_3k_db: float, rng: np.random.Generator
+) -> None:
+    """P2-3: the most robust mode must acquire and decode at −5 dB (3 kHz) with random
+    offsets; the BPSK-1/5 code itself gives up around −6 dB."""
+    ok = 0
+    for trial in range(6):
+        payload = _payload(rng, modem, 0)
+        cfo = float(rng.uniform(-250, 250))
+        ch = make_channel(
+            "awgn",
+            snr_db=snr_3k_db,
+            fs=FS,
+            seed=500 + trial,
+            signal_power=1.0,
+            cfo_hz=cfo,
+            sro_ppm=float(rng.uniform(-80, 80)),
+        )
+        y = ch.process(_buffer(modem.data_burst(payload, MODES[0])))
+        frames = modem.decode_buffer(y)
+        ok += int(len(frames) == 1 and frames[0].payload == payload)
+    assert ok >= 5
 
 
 def test_control_frame_header_is_recognised(modem: Modem, rng: np.random.Generator) -> None:
@@ -72,6 +100,7 @@ def test_control_frame_header_is_recognised(modem: Modem, rng: np.random.Generat
     )
     frames = modem.decode_buffer(y)
     assert len(frames) == 1 and frames[0].frame.sync.header.frame_type is FrameType.CONTROL
+    assert frames[0].frame.sync.header_confidence > 1.5
     assert frames[0].payload == payload
 
 

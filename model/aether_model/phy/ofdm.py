@@ -103,14 +103,23 @@ class OfdmModulator:
         # Scale so that a symbol with unit-power carriers has unit mean power per sample.
         self._scale = n / math.sqrt(self.cmap.n_carriers)
 
-    def symbol_values(self, data: ComplexArray | None, full_pilot: bool = False) -> ComplexArray:
+    def symbol_values(
+        self,
+        data: ComplexArray | None,
+        full_pilot: bool = False,
+        chips: ComplexArray | None = None,
+    ) -> ComplexArray:
         """Carrier values (length n_carriers) for a data symbol with comb pilots, or a full
-        pilot symbol."""
+        pilot symbol (optionally with ``chips`` — ±1 header chips — on its data carriers)."""
         cm = self.cmap
         x = np.zeros(cm.n_carriers, dtype=np.complex128)
         seq = cm.pilot_sequence
         if full_pilot:
             x[:] = seq
+            if chips is not None:
+                if len(chips) != len(cm.data_carriers):
+                    raise ValueError(f"need {len(cm.data_carriers)} chips")
+                x[cm.data_carriers] = chips
             return x
         if data is None or len(data) != len(cm.data_carriers):
             raise ValueError(f"need {len(cm.data_carriers)} data-carrier values")

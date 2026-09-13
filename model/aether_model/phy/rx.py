@@ -7,14 +7,18 @@ Given a :class:`~aether_model.phy.sync.FrameSync`, the receiver
    symbols (the channel cancels between consecutive symbols) and corrects again — this
    data-aided step brings the offset error from the preamble's ≈ 0.7 Hz at 0 dB down to
    well under 0.1 Hz, which 64-QAM needs;
-2. takes the FFT of every symbol (unique word, pilot symbols, data symbols);
-3. estimates the channel on every symbol:
-   * full estimates (all carriers) on the unique word and the full pilot symbols;
+2. takes the FFT of every symbol (pilot symbols, data symbols);
+3. for DATA frames, reads the mode: the data carriers of the full pilot symbols carry the
+   mode's PN chips, which are correlated coherently (using the comb-pilot channel estimate
+   of those symbols) against all 14 mode sequences; the best/runner-up ratio is reported so
+   the caller can fall back to the runner-up if the CRC fails;
+4. estimates the channel on every symbol:
+   * full estimates (all carriers) on the full pilot symbols, once their chips are known;
    * comb estimates (every 4th carrier) on data symbols, smoothed over the neighbouring
      symbols (3-tap, ±1 symbol — well inside the coherence time of a 1 Hz Doppler channel)
      and linearly interpolated across carriers (both edges are pilots, so nothing is ever
      extrapolated);
-4. equalizes the data carriers by division and returns the constellation symbols in
+5. equalizes the data carriers by division and returns the constellation symbols in
    time-major order together with a per-symbol noise variance ``σ²/|Ĥ|²`` — the LLR
    weighting that lets the LDPC decoder discount faded carriers instead of trusting them.
 
@@ -29,9 +33,9 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import LONG, SHORT, FrameLayout
+from aether_model.frame.modes import LONG, PREAMBLE_SYMBOLS, SHORT, FrameLayout
 from aether_model.phy.ofdm import OfdmDemodulator
-from aether_model.phy.preamble import FrameType, preamble
+from aether_model.phy.preamble import FrameType, mode_chip_sequences, preamble
 from aether_model.phy.sync import FrameSync
 from aether_model.waveform import WIDE_2300, WaveformParams
 
@@ -55,6 +59,12 @@ class ReceivedFrame:
     """Channel estimate per data symbol × carrier (diagnostics: shape (n_symbols, n_carriers))."""
     cfo_hz: float = 0.0
     """Total carrier offset actually removed (preamble estimate + data-aided residual)."""
+    mode: int = 0
+    """Mode index read from the pilot-symbol chips (DATA) or the control mode (CONTROL)."""
+    mode_runner_up: int = 0
+    mode_confidence: float = 1.0
+    """Best mode metric divided by the runner-up; below ~1.3 the caller may retry with
+    ``mode_runner_up`` if the CRC fails."""
 
 
 def layout_for(header_type: FrameType) -> FrameLayout:
@@ -75,7 +85,9 @@ class FrameReceiver:
         layout = layout_for(sync.header.frame_type)
         return sync.start, sync.start + layout.samples
 
-    def receive(self, x: ComplexArray, sync: FrameSync) -> ReceivedFrame:
+    def receive(self, x: ComplexArray, sync: FrameSync, mode: int | None = None) -> ReceivedFrame:
+        """Demodulate and equalize one frame. ``mode`` overrides chip-based detection (used
+        for the runner-up retry)."""
         layout = layout_for(sync.header.frame_type)
         start, end = self.frame_span(sync)
         if end + self.dem.fft_offset > len(x):
@@ -83,18 +95,9 @@ class FrameReceiver:
         per = self.p.symbol_samples
         fs = self.p.fs_baseband
         n_sym = layout.total_symbols
-        # known carrier values per symbol (comb pilots everywhere from the UW onward)
-        known = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
-        full = np.zeros(n_sym, dtype=bool)
-        known[2] = self.pre.uw_values(sync.header)
-        full[2] = True
-        pilot_syms = {3 + i for i in layout.pilot_symbol_indices}
-        for s in range(3, n_sym):
-            if s in pilot_syms:
-                known[s] = self.pilot_seq
-                full[s] = True
-            else:
-                known[s, self.pilot_c] = self.pilot_seq[self.pilot_c]
+        pre = PREAMBLE_SYMBOLS
+        pilot_syms = [pre + i for i in layout.pilot_symbol_indices]
+        data_syms = [s for s in range(pre, n_sym) if s not in pilot_syms]
         raw_in = np.asarray(x[start : end + per], dtype=np.complex128)
         t = np.arange(len(raw_in)) / fs
 
@@ -102,47 +105,72 @@ class FrameReceiver:
             seg = raw_in * np.exp(-2j * np.pi * cfo * t)
             return np.stack([self.dem.carriers(seg, i * per) for i in range(n_sym)])
 
-        # 1. CFO removal, then data-aided residual from pilot phase progression
+        # 1. CFO removal, then data-aided residual from comb-pilot phase progression
         raw = demod(sync.cfo_hz)
         pc = self.pilot_c
-        prod = raw[3:, pc] * np.conj(raw[2:-1, pc]) * known[2:-1, pc] * np.conj(known[3:, pc])
+        ref = self.pilot_seq[pc]
+        prod = raw[pre + 1 :, pc] * np.conj(raw[pre:-1, pc]) * ref * np.conj(ref)
         residual = float(np.angle(prod.sum()) / (2 * np.pi * self.p.symbol_period_s))
         cfo_total = sync.cfo_hz + residual
-        # 2. raw carriers of every symbol with the refined offset
         raw = demod(cfo_total)
-        # 3. channel estimates
-        # comb LS estimates on every symbol from 2 onward (pilot carriers exist on all)
-        comb = np.zeros((n_sym, len(self.pilot_c)), dtype=np.complex128)
-        comb[2:] = raw[2:, self.pilot_c] / known[2:, self.pilot_c]
-        # 3-tap time smoothing of the comb estimates (symbols 2 … n_sym−1)
+
+        # 2. comb LS estimates on every symbol after the preamble (pilot carriers are known
+        #    on all of them), smoothed over ±1 symbol
+        comb = np.zeros((n_sym, len(pc)), dtype=np.complex128)
+        comb[pre:] = raw[pre:, pc] / ref
         sm = comb.copy()
-        for s in range(2, n_sym):
-            lo, hi = max(2, s - 1), min(n_sym - 1, s + 1)
-            sm[s] = comb[lo : hi + 1].mean(axis=0)
-        # frequency interpolation to all carriers
-        h = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
+        for s_i in range(pre, n_sym):
+            lo, hi = max(pre, s_i - 1), min(n_sym - 1, s_i + 1)
+            sm[s_i] = comb[lo : hi + 1].mean(axis=0)
         carriers = np.arange(self.cmap.n_carriers)
-        for s in range(2, n_sym):
-            if full[s]:
-                # full symbols: use the direct LS estimate, lightly smoothed across carriers
-                direct = raw[s] / known[s]
-                h[s] = np.convolve(direct, np.array([0.25, 0.5, 0.25]), mode="same")
-                h[s, 0], h[s, -1] = direct[0], direct[-1]
+
+        def interp(row: ComplexArray) -> ComplexArray:
+            return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
+
+        # 3. mode from the pilot-symbol chips (DATA frames)
+        mode_idx, runner_up, confidence = 0, 0, 1.0
+        if sync.header.frame_type is FrameType.DATA:
+            dc = self.data_c
+            z_parts = []
+            for s_i in pilot_syms:
+                h_est = interp(sm[s_i])[dc]
+                z_parts.append(raw[s_i, dc] * np.conj(h_est))
+            z = np.concatenate(z_parts)
+            z /= max(float(np.linalg.norm(z)), 1e-12)
+            seqs = mode_chip_sequences(self.pre.n_chips)
+            n_used = len(z)
+            metrics = np.array([abs(np.vdot(seq[:n_used], z)) for seq in seqs]) / np.sqrt(n_used)
+            order = np.argsort(metrics)[::-1]
+            mode_idx, runner_up = int(order[0]), int(order[1])
+            confidence = float(metrics[order[0]] / max(metrics[order[1]], 1e-12))
+            if mode is not None:
+                mode_idx = mode
+
+        # 4. known carrier values per symbol, then channel estimates
+        known = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
+        full = np.zeros(n_sym, dtype=bool)
+        for pilot_no, s_i in enumerate(pilot_syms):
+            known[s_i] = self.pilot_seq
+            if sync.header.frame_type is FrameType.DATA:
+                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no)
+            full[s_i] = True
+        for s_i in data_syms:
+            known[s_i, pc] = ref
+        h = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
+        for s_i in range(pre, n_sym):
+            if full[s_i]:
+                direct = raw[s_i] / known[s_i]
+                h[s_i] = np.convolve(direct, np.array([0.25, 0.5, 0.25]), mode="same")
+                h[s_i, 0], h[s_i, -1] = direct[0], direct[-1]
             else:
-                h[s] = np.interp(carriers, self.pilot_c, sm[s].real) + 1j * np.interp(
-                    carriers, self.pilot_c, sm[s].imag
-                )
+                h[s_i] = interp(sm[s_i])
         # noise variance from pilot residuals on data symbols (smoothed estimate vs raw)
-        data_syms = [s for s in range(3, n_sym) if s not in pilot_syms]
-        resid = (
-            raw[data_syms][:, self.pilot_c]
-            - h[data_syms][:, self.pilot_c] * known[data_syms][:, self.pilot_c]
-        )
+        resid = raw[data_syms][:, pc] - h[data_syms][:, pc] * known[data_syms][:, pc]
         sigma2 = float(np.mean(np.abs(resid) ** 2)) * (3.0 / 2.0)  # undo the 3-tap averaging bias
         sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
         snr_carrier = sig_power / max(sigma2, 1e-12)
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
-        # 4. equalize data carriers of payload symbols, time-major
+        # 5. equalize data carriers of payload symbols, time-major
         eq = raw[data_syms][:, self.data_c] / h[data_syms][:, self.data_c]
         nv = sigma2 / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
         return ReceivedFrame(
@@ -152,6 +180,9 @@ class FrameReceiver:
             noise_var=nv.reshape(-1),
             snr_carrier_db=10 * np.log10(snr_carrier),
             snr_3k_db=10 * np.log10(snr_carrier * bw_ratio),
-            channel=h[3:],
+            channel=h[pre:],
             cfo_hz=cfo_total,
+            mode=mode_idx,
+            mode_runner_up=runner_up,
+            mode_confidence=confidence,
         )

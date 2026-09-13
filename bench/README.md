@@ -6,6 +6,8 @@ fail a PR that regresses a curve by more than 0.3 dB once `tools/bench` exists i
 | File | Produced by | What |
 |---|---|---|
 | `ldpc_bg2_awgn.csv` | `python tools/bench_ldpc.py --max-blocks 1024 --target-errors 60` | BLER/BER vs E_s/N_0, TS 38.212 BG2, K′ = 480, BPSK, AWGN, RV0 rate matching |
+| `phy_fer_phase1_uw.csv` | `python tools/bench_phy.py --frames 30` at commit `377be74` | FER / throughput vs SNR (3 kHz) per mode and ITU channel, **Phase 1 air interface** (3-symbol preamble with unique word, S&C-nominated detector) |
+| `phy_fer.csv` | `python tools/bench_phy.py --frames 30` | same, current air interface (P2-3: PN type preamble, chip-signalled mode, PMF-FFT bank) |
 
 Conventions: E_s/N_0 per transmitted BPSK symbol; E_b/N_0 = E_s/N_0 − 10·log10(R).
 All SNRs elsewhere in the project are referenced to a 3 kHz noise bandwidth (see
@@ -21,3 +23,24 @@ Reference points from `ldpc_bg2_awgn.csv` (BLER = 10 %):
 | 2/3 | ≈ 2.1 | 1.1 |
 | 3/4 | ≈ 2.7 | 1.6 |
 | 5/6 | ≈ 3.5 | 2.4 |
+
+## PHY, Phase 1 air interface (`phy_fer_phase1_uw.csv`, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
+
+Minimum usable SNR (3 kHz noise bandwidth) for FER ≤ 10 %, linearly interpolated:
+
+| Mode | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| BPSK 1/5 | −3.3 | +3.3 | +2.7 | +3.0 |
+| BPSK 1/2 | −1.3 | +5.7 | +5.7 | +3.3 |
+| QPSK 1/2 | +1.0 | +8.7 | +9.0 | +6.5 |
+| 8-PSK 1/2 | +4.4 | +12.0 | +12.5 | +10.0 |
+| 16-QAM 1/2 | +6.2 | +14.0 | +13.5 | +12.3 |
+| 16-QAM 3/4 | +9.9 | +17.8 | +19.8 | > +24 |
+| 64-QAM 5/6 | +16.9 | +24.8 | > +30 | > +31 |
+
+Reading the fading columns: ITU Good/Moderate (0.1–0.5 Hz Doppler) hold one channel
+realisation for the whole 1 s frame, so only the 2.3 kHz of frequency diversity helps and
+the curves are shallow; Poor (1 Hz) changes within the frame and the interleaver turns
+that into time diversity — hence Poor ≤ Moderate for the low modes. BPSK 1/5 on AWGN was
+acquisition-limited in this sweep (the detector, not the code, stopped at −3 dB); the
+P2-3 detector removes that limit (acquisition 100 % at −5 dB, 87 % at −7 dB).

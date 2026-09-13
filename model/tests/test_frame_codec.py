@@ -27,8 +27,8 @@ def test_long_layout_numbers() -> None:
     assert LONG.pilot_symbol_indices == (0, 8, 16, 24)
     assert LONG.n_payload_symbols == 28
     assert LONG.qam_symbols == 28 * 42
-    assert LONG.total_symbols == 35
-    assert LONG.duration_s == pytest.approx(35 * 248 / 8000)
+    assert LONG.total_symbols == 34
+    assert LONG.duration_s == pytest.approx(34 * 248 / 8000)
 
 
 def test_short_layout_numbers() -> None:

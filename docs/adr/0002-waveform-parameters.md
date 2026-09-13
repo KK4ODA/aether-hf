@@ -77,3 +77,31 @@ Recorded as the model was built and measured (`model/aether_model/phy/`, `frame/
   `bench/baselines/phy_fer.csv`): BPSK ½ −1 dB, QPSK ½ +2, 8-PSK ½ +5, 16-QAM ½ +7,
   16-QAM ¾ +10, 64-QAM ⅚ +17. BPSK 1/5 is acquisition-limited at −3 dB: the decoder
   works to ≈ −6 dB but the preamble detector does not yet (roadmap P2-3).
+
+## Amendments (2026-09-13, Phase 2 / P2-3 — low-SNR acquisition)
+
+Measurement showed the unique-word header, not the preamble, was the low-SNR bottleneck:
+a coherent 57-chip header metric sits at the noise level at −7 dB (3 kHz) whatever the
+channel estimate. The air interface was changed so that nothing weak is on the critical path:
+
+- **Preamble = two Schmidl–Cox symbols only** (LONG frame 34 symbols ≈ 1.05 s, SHORT 14
+  symbols ≈ 0.43 s). The unique-word symbol is gone.
+- **Frame type is carried by the SC sequence** (`SC_SEEDS`: DATA / CONTROL). The receiver's
+  matched-filter bank correlates against both, so the type decision has the full preamble
+  processing gain behind it.
+- **Mode is carried as PN chips on the data carriers of the full pilot symbols** of DATA
+  frames (4 × 42 = 168 chips; 14 sequences with pairwise |ρ| ≤ 0.2, `MODE_CHIP_SEED`).
+  The receiver estimates the channel from the comb pilots of those symbols, correlates
+  the chips coherently, then treats the pilot symbols as fully known. If the CRC fails
+  and the chip metric ratio was below 1.3, the runner-up mode is tried once. Control
+  frames use the fixed control mode; their pilot symbols carry the plain pilot sequence.
+- **Acquisition is a partial-matched-filter/FFT bank** (62 segments of 8 samples, 256-bin
+  FFT: ±300 Hz at 3.9 Hz) evaluated at every position, followed by a fine-grid (0.24 Hz)
+  evaluation at the winning position and a full-symbol-lag refinement. Threshold 0.36 on
+  the normalised peak (noise maximum 0.33 over 60 s; 0 false alarms). Detections are
+  suppressed inside an accepted frame's span and one symbol before a stronger peak (the
+  identical SC symbols produce a 0.7 sidelobe one symbol early).
+- **Measured** (AWGN, random ±250 Hz CFO): acquisition 100 % at −5 dB, 97 % at −6 dB,
+  87 % at −7 dB, 70 % at −8 dB; type and mode correct in every acquired frame down to
+  −10 dB; BPSK 1/5 decodes 100 % at −5 dB and ~50 % at −6 dB — the code, not the
+  acquisition, is now the floor.

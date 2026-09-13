@@ -1,55 +1,53 @@
-"""Frame acquisition: timing, carrier-frequency offset and header detection (roadmap P1-5).
+"""Frame acquisition: timing, carrier-frequency offset and header detection (P1-5, P2-3).
 
-Stages, on complex baseband at ``fs_baseband``:
+Stages, on band-limited complex baseband at ``fs_baseband``:
 
-1. **Coarse detection** — the two identical Schmidl–Cox symbols make the preamble periodic
-   with the symbol period; the normalised lag-``symbol_samples`` autocorrelation metric
-   ``M(d) = |P(d)|² / R(d)²`` rises to ≈ (SNR/(1+SNR))² over the preamble and is ≈ 0
-   elsewhere. Its plateau centre gives timing to within roughly ±CP.
-2. **Fractional CFO** — from the phase of the half-symbol (lag N/2) autocorrelation at the
-   coarse position; unambiguous only modulo twice the subcarrier spacing (80 Hz).
-3. **Fine timing and the 80 Hz ambiguity** — the CFO-corrected signal is cross-correlated
-   with the known two-symbol Schmidl–Cox waveform around the coarse position, once for
-   every hypothesis ``f_coarse + 80·k`` (k = −3 … 3, covering ±280 Hz). A residual CFO of
-   even a few hertz decorrelates the 62 ms matched filter, so the hypothesis with the
-   highest normalised peak is unambiguous; its peak locates the preamble to the sample
-   (strongest path; the mid-CP FFT window tolerates ±2.5 ms of earlier or later paths).
-   The CFO is then refined from the full-symbol-lag autocorrelation (±16 Hz range, but the
-   residual is now within a couple of hertz).
-4. **Integer CFO and header** — FFTs of the second Schmidl–Cox symbol, the unique word and
-   the full pilot symbol that follows it. Three channel-blind statistics are correlated with
-   their known values for every (header code, integer bin shift) hypothesis: the SC2 → UW
-   ratio on the even carriers, the UW's adjacent-carrier differential, and the UW → pilot
-   ratio. Ratios of consecutive symbols cancel the channel (and any residual timing ramp);
-   the differential cancels it too because adjacent carriers see nearly the same channel.
-   The best hypothesis gives the header and completes the CFO estimate.
+1. **Matched-filter bank (PMF-FFT).** The known two-symbol Schmidl–Cox waveform (496
+   samples) is split into 62 segments of 8 samples. Each segment is correlated with the
+   signal at every timing position; an FFT across the 62 segment outputs (zero-padded to
+   256 bins) evaluates the full 496-sample matched filter for every carrier-offset
+   hypothesis on a 3.9 Hz grid over ±300 Hz, in one vectorised pass. The statistic at
+   position ``d`` is the best bin's normalised correlation (1.0 = perfect match). This is
+   the classic partial-matched-filter/FFT acquisition used in GNSS and burst modems: the
+   full 27 dB processing gain of the preamble with no time/frequency ambiguity (the SC
+   sequence is PN, not a chirp) and less than ~2 dB of segment/scallop loss at the edge
+   of the range.
+2. **Fine CFO.** At the found position the segmented matched filter is evaluated on a
+   0.24 Hz grid (a longer FFT over the same 62 segment outputs), then refined with the
+   full-symbol-lag phase (±16 Hz range, well inside the fine-grid residual). The
+   half-symbol Schmidl–Cox estimate is not used: at low SNR its error occasionally exceeds
+   the refinement's range and aliases by 32 Hz.
+3. **Frame type.** The bank is run for both Schmidl–Cox sequences (DATA / CONTROL); the
+   type is whichever reference wins at the candidate position, with the ratio of the two
+   peaks as the confidence. Because this decision rides on the full preamble gain it is
+   essentially error-free wherever the frame is detectable. The mode of a DATA frame is
+   read later by the receiver from the pilot-symbol chips (see :mod:`preamble`).
 
-The result is a :class:`FrameSync` (start sample of the first preamble symbol, total CFO,
-header, and quality metrics for diagnostics).
+Candidates are the local maxima of the bank statistic above ``min_timing_peak``. The
+statistic's noise maximum over 60 s of band-limited noise is ≈ 0.32; the default threshold
+of 0.36 gave no false alarms in that test. The occasional false alarm at the margin costs
+only a failed CRC, which is why the threshold is set for sensitivity rather than purity.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
+from aether_model.frame.modes import LONG, SHORT
 from aether_model.phy.ofdm import OfdmDemodulator, OfdmModulator
 from aether_model.phy.passband import band_limit_taps
-from aether_model.phy.preamble import FrameHeader, preamble
+from aether_model.phy.preamble import FrameHeader, FrameType, preamble
 from aether_model.waveform import WIDE_2300, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 
-MAX_INTEGER_SHIFT = 2
-"""Residual integer-CFO search in the header stage (safety net; the ambiguity is resolved
-by the matched-filter hypothesis test)."""
-CFO_HYPOTHESES = range(-3, 4)
-"""Multiples of 2·Δf (80 Hz) tested against the matched filter: ±240 Hz + fractional."""
+SEGMENT_LEN = 8
+FFT_LEN = 256
 
 
 @dataclass(frozen=True)
@@ -59,11 +57,11 @@ class FrameSync:
     cfo_hz: float
     header: FrameHeader
     coarse_metric: float
-    """Peak Schmidl–Cox metric (≈ (SNR/(1+SNR))²)."""
+    """Bank statistic's raw bin frequency estimate (Hz) — kept for diagnostics."""
     header_confidence: float
-    """Best differential-correlation metric divided by the runner-up."""
+    """Bank peak of the winning frame-type reference divided by the other type's peak."""
     timing_peak: float
-    """Normalised matched-filter peak (1.0 = perfect match)."""
+    """Normalised matched-filter-bank peak (1.0 = perfect match)."""
 
 
 def _moving_sum(x: NDArray, length: int) -> NDArray:
@@ -76,49 +74,38 @@ class FrameDetector:
         self,
         params: WaveformParams = WIDE_2300,
         *,
-        threshold: float = 0.06,
-        min_timing_peak: float = 0.33,
-        min_header_confidence: float = 1.3,
-        max_candidates: int = 12,
+        min_timing_peak: float = 0.36,
+        max_cfo_hz: float = 300.0,
+        max_candidates: int = 16,
         min_gap_samples: int | None = None,
     ) -> None:
-        """Thresholds, from noise-only measurements on band-limited noise (10 s buffers):
-        the coarse metric's noise floor peaks around 0.10 (correlated noise inflates the
-        Schmidl–Cox statistic), so it only *nominates* candidates (``threshold`` 0.06 keeps
-        preambles down to ≈ −6 dB in the running); acceptance needs the 496-sample
-        matched-filter peak (noise ≤ 0.26; preamble ≥ 0.42 at −4 dB) and the header
-        confidence (noise ≤ 1.23; preamble ≥ 1.9 at 0 dB, ≥ 1.25 at −4 dB)."""
         self.p = params
         self.min_timing_peak = min_timing_peak
-        self.min_header_confidence = min_header_confidence
+        self.max_cfo_hz = max_cfo_hz
         self.max_candidates = max_candidates
         self._band_taps = band_limit_taps(params)
         self.pre = preamble(params)
         self.mod = OfdmModulator(params)
         self.dem = OfdmDemodulator(params)
-        self.threshold = threshold
         self.n = params.fft_size
         self.period = params.symbol_samples
         self.min_gap = min_gap_samples or 4 * self.period
-        # Known two-symbol Schmidl–Cox waveform for the matched filter (no trailing taper).
-        sc2 = self.mod.modulate([self.pre.sc_values, self.pre.sc_values])[: 2 * self.period]
-        self._sc_ref = sc2 / np.sqrt(np.sum(np.abs(sc2) ** 2))
-        # Known statistics for every header code: SC2→UW ratio (even carriers), UW
-        # differential, UW→pilot ratio — each row normalised.
-        cands = self.pre.uw_candidates()
-        self._codes = sorted(cands)
-        pilot = self.dem.cmap.pilot_sequence
-        even = self.pre.even
-        sc = self.pre.sc_values
-
-        def rows(fn: Callable[[ComplexArray], ComplexArray]) -> ComplexArray:
-            r = np.stack([fn(cands[c]) for c in self._codes])
-            return r / np.linalg.norm(r, axis=1, keepdims=True)
-
-        self._even = even
-        self._ref_sc_uw = rows(lambda u: np.conj(sc[even]) * u[even])
-        self._ref_diff = rows(lambda u: u[1:] * np.conj(u[:-1]))
-        self._ref_uw_pilot = rows(lambda u: np.conj(u) * pilot)
+        # Known two-symbol Schmidl–Cox waveforms (unit energy), one per frame type,
+        # segmented for the bank.
+        self._types = [FrameType.DATA, FrameType.CONTROL]
+        self._ref_segs = []
+        for ft in self._types:
+            sc = self.pre.sc_values(ft)
+            wave = self.mod.modulate([sc, sc])[: 2 * self.period]
+            wave = wave / np.sqrt(np.sum(np.abs(wave) ** 2))
+            n_seg = len(wave) // SEGMENT_LEN
+            self._ref_segs.append(wave[: n_seg * SEGMENT_LEN].reshape(n_seg, SEGMENT_LEN))
+        self.n_seg = self._ref_segs[0].shape[0]
+        self._ref_len = self.n_seg * SEGMENT_LEN
+        # Bank bin → frequency, and the bins inside the search range.
+        fs = params.fs_baseband
+        self._bin_hz = np.fft.fftfreq(FFT_LEN, d=SEGMENT_LEN / fs)
+        self._bins_ok = np.flatnonzero(np.abs(self._bin_hz) <= max_cfo_hz)
 
     # ── stage 0: conditioning ─────────────────────────────────────────
 
@@ -133,149 +120,95 @@ class FrameDetector:
         delay = (len(self._band_taps) - 1) // 2
         return np.asarray(y[delay : delay + len(x)], dtype=np.complex128)
 
-    # ── stage 1: coarse metric ────────────────────────────────────────
+    # ── stage 1: matched-filter bank ──────────────────────────────────
 
-    def coarse_metric(self, x: ComplexArray) -> FloatArray:
-        """M(d) for every start position d where a full two-symbol span fits."""
-        lag = self.period
-        if len(x) < 2 * lag:
-            return np.zeros(0)
-        prod = np.conj(x[:-lag]) * x[lag:]
-        p = _moving_sum(prod, lag)
-        energy = _moving_sum(np.abs(x) ** 2, lag)  # window energy at every position
-        r = 0.5 * (energy[:-lag] + energy[lag:])  # mean energy of both windows → M ≤ 1
-        floor = max(1e-3 * float(np.mean(np.abs(x) ** 2)) * lag, 1e-30)  # ignore silence
-        return np.abs(p) ** 2 / np.maximum(r, floor) ** 2
+    def bank(self, x: ComplexArray, chunk: int = 8192) -> tuple[FloatArray, FloatArray, FloatArray]:
+        """For every start position: (best normalised peak over both frame types, CFO of
+        the best bin in Hz, peak of the *other* type at that position)."""
+        x = np.asarray(x, dtype=np.complex128)
+        n_pos = len(x) - self._ref_len + 1
+        if n_pos <= 0:
+            return np.zeros(0), np.zeros(0), np.zeros(0)
+        energy = np.sqrt(np.maximum(_moving_sum(np.abs(x) ** 2, self._ref_len), 1e-30))
+        floor = 1e-3 * float(np.sqrt(np.mean(np.abs(x) ** 2))) * np.sqrt(self._ref_len)
+        peaks = np.zeros((len(self._types), n_pos))
+        cfos = np.zeros((len(self._types), n_pos))
+        for p0 in range(0, n_pos, chunk):
+            p1 = min(n_pos, p0 + chunk)
+            m = p1 - p0
+            norm = np.maximum(energy[p0:p1], floor)
+            for ti, ref in enumerate(self._ref_segs):
+                parts = np.empty((m, self.n_seg), dtype=np.complex128)
+                for k in range(self.n_seg):
+                    a = p0 + k * SEGMENT_LEN
+                    seg = x[a : a + m + SEGMENT_LEN - 1]
+                    parts[:, k] = np.correlate(seg, ref[k], mode="valid")
+                mag = np.abs(np.fft.fft(parts, n=FFT_LEN, axis=1)[:, self._bins_ok])
+                best = np.argmax(mag, axis=1)
+                peaks[ti, p0:p1] = mag[np.arange(m), best] / norm
+                cfos[ti, p0:p1] = self._bin_hz[self._bins_ok][best]
+        win = np.argmax(peaks, axis=0)
+        cols = np.arange(n_pos)
+        self._last_type = win
+        return peaks[win, cols], cfos[win, cols], peaks[1 - win, cols]
 
-    # ── stage 2: fractional CFO ───────────────────────────────────────
+    # ── stage 2: CFO refinement ───────────────────────────────────────
 
-    def coarse_cfo(self, x: ComplexArray, d: int) -> float:
-        """Half-symbol-lag estimate at coarse position ``d`` (unambiguous modulo 80 Hz)."""
-        half = self.n // 2
+    def fine_cfo(self, x: ComplexArray, start: int, frame_type: FrameType) -> float:
+        """CFO at a known preamble position: the segmented matched filter evaluated on a
+        fine frequency grid (0.24 Hz), then the full-symbol-lag refinement (±16 Hz range —
+        safe because the fine-grid estimate leaves a residual of a hertz or two)."""
         fs = self.p.fs_baseband
-        a = d + self.p.cp_samples  # inside the first SC symbol's useful part
-        seg = x[a : a + self.n]
-        c1 = np.vdot(seg[:half], seg[half:])  # Σ conj(x[m]) x[m+half]
-        return float(np.angle(c1) * fs / (2 * np.pi * half))
-
-    def refine_cfo(self, x: ComplexArray, start: int, cfo_hz: float) -> float:
-        """Full-symbol-lag refinement (±16 Hz range) at the fine timing ``start``."""
-        fs = self.p.fs_baseband
+        ref = self._ref_segs[self._types.index(frame_type)]
+        seg = x[start : start + self._ref_len].reshape(self.n_seg, SEGMENT_LEN)
+        parts = np.sum(seg * np.conj(ref), axis=1)
+        n_fine = 16 * FFT_LEN
+        spectrum = np.fft.fft(parts, n=n_fine)
+        freqs = np.fft.fftfreq(n_fine, d=SEGMENT_LEN / fs)
+        ok = np.abs(freqs) <= self.max_cfo_hz
+        f0 = float(freqs[ok][np.argmax(np.abs(spectrum[ok]))])
         t = (np.arange(2 * self.period) + start) / fs
-        y = x[start : start + 2 * self.period] * np.exp(-2j * np.pi * cfo_hz * t)
+        y = x[start : start + 2 * self.period] * np.exp(-2j * np.pi * f0 * t)
         c2 = np.vdot(y[: self.period], y[self.period :])
-        return float(cfo_hz + np.angle(c2) * fs / (2 * np.pi * self.period))
-
-    # ── stage 3: fine timing ──────────────────────────────────────────
-
-    def fine_timing(self, x: ComplexArray, d: int, cfo_hz: float, span: int) -> tuple[int, float]:
-        fs = self.p.fs_baseband
-        lo = max(0, d - span)
-        hi = min(len(x) - 2 * self.period, d + span)
-        if hi <= lo:
-            return d, 0.0
-        t = np.arange(lo, hi + 2 * self.period) / fs
-        y = x[lo : hi + 2 * self.period] * np.exp(-2j * np.pi * cfo_hz * t)
-        corr = np.abs(np.correlate(y, self._sc_ref, mode="valid"))  # positions lo … hi
-        energy = np.sqrt(_moving_sum(np.abs(y) ** 2, 2 * self.period))
-        norm = corr / np.maximum(energy[: len(corr)], 1e-12)
-        peak = float(norm.max())
-        return lo + int(np.argmax(norm)), peak
-
-    # ── stage 4: header and integer CFO ───────────────────────────────
-
-    def header_and_integer_cfo(
-        self, x: ComplexArray, start: int, cfo_hz: float
-    ) -> tuple[int, int, float]:
-        """Returns ``(header code, integer bin shift, confidence)``; the code may be a reserved
-        value on noise, which the caller treats as a rejection."""
-        fs = self.p.fs_baseband
-
-        def spectrum_of(symbol_index: int) -> ComplexArray:
-            seg_start = start + symbol_index * self.period + self.dem.fft_offset
-            seg = x[seg_start : seg_start + self.n]
-            if len(seg) < self.n:
-                raise ValueError("preamble runs past the end of the buffer")
-            t = (np.arange(self.n) + seg_start) / fs
-            return np.fft.fft(seg * np.exp(-2j * np.pi * cfo_hz * t))
-
-        s_sc2, s_uw, s_pilot = spectrum_of(1), spectrum_of(2), spectrum_of(3)
-        bins = self.dem.cmap.bins
-        best = (-1.0, 0, 0)
-        second = 0.0
-
-        def corr(ref: ComplexArray, z: ComplexArray) -> FloatArray:
-            return np.abs(ref @ np.conj(z)) / max(np.linalg.norm(z), 1e-12)
-
-        for m in range(-MAX_INTEGER_SHIFT, MAX_INTEGER_SHIFT + 1):
-            idx = (bins + m) % self.n
-            y_uw = s_uw[idx]
-            metrics = (
-                corr(self._ref_sc_uw, np.conj(s_sc2[idx][self._even]) * y_uw[self._even])
-                + corr(self._ref_diff, y_uw[1:] * np.conj(y_uw[:-1]))
-                + corr(self._ref_uw_pilot, np.conj(y_uw) * s_pilot[idx])
-            ) / 3.0
-            k = int(np.argmax(metrics))
-            val = float(metrics[k])
-            if val > best[0]:
-                second = max(second, best[0])
-                best = (val, k, m)
-            else:
-                second = max(second, val)
-        val, k, m = best
-        confidence = val / max(second, 1e-12)
-        return self._codes[k], m, confidence
+        return f0 + float(np.angle(c2) * fs / (2 * np.pi * self.period))
 
     # ── full acquisition ──────────────────────────────────────────────
 
     def detect(self, x: ComplexArray, max_frames: int = 1) -> list[FrameSync]:
-        """Find up to ``max_frames`` preambles in ``x`` (offline, whole-buffer).
-
-        Candidates are the strongest coarse-metric plateaus above ``threshold``, examined in
-        order of metric value; each is accepted or rejected on the matched-filter peak and
-        header confidence, so periodic interferers (tones, CW) and noise peaks are dropped
-        without stopping the search."""
+        """Find up to ``max_frames`` preambles in ``x`` (offline, whole-buffer)."""
         x = np.asarray(x, dtype=np.complex128)
-        metric = self.coarse_metric(x)
+        peak, bin_cfo, other = self.bank(x)
         found: list[FrameSync] = []
-        mask = metric >= self.threshold
-        two_df = 2 * self.p.subcarrier_spacing_hz
+        if len(peak) == 0:
+            return found
+        mask = peak >= self.min_timing_peak
+        # The two SC symbols are identical, so a preamble preceded by silence also produces a
+        # ≈ 0.7 sidelobe one symbol early. Never accept a peak until the statistic one symbol
+        # later exists (a stronger one there wins); in streaming use the caller re-scans.
+        mask[max(0, len(mask) - self.period) :] = False
         for _ in range(self.max_candidates):
             if len(found) >= max_frames:
                 break
             idx = np.flatnonzero(mask)
             if len(idx) == 0:
                 break
-            d_peak = int(idx[np.argmax(metric[idx])])
-            run_lo = d_peak
-            while run_lo > 0 and mask[run_lo - 1]:
-                run_lo -= 1
-            run_hi = d_peak
-            while run_hi + 1 < len(mask) and mask[run_hi + 1]:
-                run_hi += 1
-            d0 = (run_lo + run_hi) // 2
-            reject_lo, reject_hi = max(0, d0 - self.period), min(len(mask), d0 + self.period)
-            f_coarse = self.coarse_cfo(x, d0)
-            start, tpeak, f_hyp = d0, -1.0, f_coarse
-            for k in CFO_HYPOTHESES:
-                f_k = f_coarse + k * two_df
-                s_k, p_k = self.fine_timing(x, d0, f_k, span=self.period)
-                if p_k > tpeak:
-                    start, tpeak, f_hyp = s_k, p_k, f_k
-            if tpeak < self.min_timing_peak:
-                mask[reject_lo:reject_hi] = False
+            start = int(idx[np.argmax(peak[idx])])
+            reject_lo, reject_hi = max(0, start - self.period), min(len(mask), start + self.period)
+            later = start + self.period
+            if later < len(peak) and peak[later] > peak[start]:
+                mask[reject_lo:reject_hi] = False  # this was the early sidelobe
                 continue
-            f_frac = self.refine_cfo(x, start, f_hyp)
-            try:
-                code, m, conf = self.header_and_integer_cfo(x, start, f_frac)
-            except ValueError:  # preamble would run past the end of the buffer
-                mask[reject_lo:reject_hi] = False
+            if start + 4 * self.period + self.dem.fft_offset > len(x):
+                mask[reject_lo:reject_hi] = False  # too close to the end to be usable yet
                 continue
-            if code > 16 or conf < self.min_header_confidence:
-                mask[reject_lo:reject_hi] = False
-                continue
-            cfo = f_frac + m * self.p.subcarrier_spacing_hz
-            header = FrameHeader.from_code(code)
-            found.append(FrameSync(start, cfo, header, float(metric[d_peak]), conf, tpeak))
-            mask[max(0, start - self.min_gap) : min(len(mask), start + self.min_gap)] = False
+            header = FrameHeader(self._types[int(self._last_type[start])])
+            cfo = self.fine_cfo(x, start, header.frame_type)
+            confidence = float(peak[start] / max(other[start], 1e-12))
+            found.append(
+                FrameSync(start, cfo, header, float(bin_cfo[start]), confidence, float(peak[start]))
+            )
+            # Nothing else can start inside this frame (strong data symbols correlate with
+            # the reference at ≈ 0.3–0.4, which the threshold does not exclude).
+            span = (LONG if header.frame_type is FrameType.DATA else SHORT).samples
+            mask[max(0, start - self.min_gap) : min(len(mask), start + span)] = False
         return sorted(found, key=lambda f: f.start)

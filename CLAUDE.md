@@ -40,8 +40,10 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phase 1 is complete in the model (branch `phase-1`). Next: Phase 2 — P2-1 ARQ engine +
-session FSM with a two-modem harness (use `hal.audio.SimulatorBackend` peers or baseband
-directly), P2-3 low-SNR acquisition (matched-filter bank; target −7 dB), P2-4 PAPR study.
+Phase 1 is complete in the model; Phase 2 is in progress on branch `phase-2`. Done:
+P2-3 low-SNR acquisition (PMF-FFT bank in `phy/sync.py`, frame type by preamble sequence,
+mode by pilot-symbol chips; 100 % at −5 dB). In progress: P2-1 ARQ engine + session FSM
+(`aether_model/link/`, PHY-agnostic, event-driven) with a two-modem harness over the real
+PHY and channel simulator. Next: P2-2 rate control, P2-4 PAPR study.
 Benchmarks: `tools/bench_phy.py` (≈ 40 min full grid) and `tools/bench_ldpc.py`; golden
 vectors: `tools/make_vectors.py` (regenerate only with an ADR).

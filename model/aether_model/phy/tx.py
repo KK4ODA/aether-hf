@@ -1,7 +1,8 @@
 """Frame transmitter: header + coded symbols → complex baseband → audio (roadmap P1-4).
 
-A frame is ``[SC, SC, UW] + data symbols``; data symbol ``i`` is a full pilot symbol when
-``i`` is in ``layout.pilot_symbol_indices`` and otherwise carries the next
+A frame is ``[SC, SC] + data symbols`` (the SC sequence encodes the frame type); data
+symbol ``i`` is a full pilot symbol when ``i`` is in ``layout.pilot_symbol_indices`` — in
+DATA frames its data carriers carry the mode's PN chips — and otherwise carries the next
 ``n_data_carriers`` constellation symbols (time-major) on its data carriers with comb
 pilots. Frames are separated by ``guard_symbols`` of silence so the windowed edges decay
 cleanly; the trailing taper of one frame overlap-adds into the guard.
@@ -15,7 +16,7 @@ from numpy.typing import NDArray
 from aether_model.frame.modes import FrameLayout
 from aether_model.phy.ofdm import OfdmModulator
 from aether_model.phy.passband import BasebandToAudio
-from aether_model.phy.preamble import FrameHeader, preamble
+from aether_model.phy.preamble import FrameHeader, FrameType, preamble
 from aether_model.waveform import WIDE_2300, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
@@ -40,9 +41,14 @@ class FrameTransmitter:
         symbols = self.pre.symbols(header)
         pilots = set(layout.pilot_symbol_indices)
         pos = 0
+        pilot_no = 0
         for i in range(layout.data_symbols):
             if i in pilots:
-                symbols.append(self.mod.symbol_values(None, full_pilot=True))
+                chips = None
+                if header.frame_type is FrameType.DATA:
+                    chips = self.pre.mode_chips(header.mode, pilot_no)
+                pilot_no += 1
+                symbols.append(self.mod.symbol_values(None, full_pilot=True, chips=chips))
             else:
                 symbols.append(self.mod.symbol_values(qam[pos : pos + self.n_data]))
                 pos += self.n_data

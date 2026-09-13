@@ -1,9 +1,11 @@
 """Frame layouts and the mode table — everything derives from :mod:`aether_model.waveform`.
 
-A *frame* is a preamble (3 OFDM symbols: two Schmidl–Cox symbols and a unique word) followed
-by ``data_symbols`` OFDM symbols, every ``pilot_symbol_period``-th of which (starting with
-the first) is a full pilot symbol. A *mode* is a (modulation, code rate) pair; together with
-a layout it fixes the number of coded bits, information bits and payload bytes per frame.
+A *frame* is a preamble (two Schmidl–Cox symbols whose PN sequence encodes the frame
+type) followed by ``data_symbols`` OFDM symbols, every ``pilot_symbol_period``-th of which
+(starting with the first) is a full pilot symbol; in DATA frames the data carriers of the
+full pilot symbols carry the mode index as PN chips. A *mode* is a (modulation, code rate)
+pair; together with a layout it fixes the number of coded bits, information bits and
+payload bytes per frame.
 
 Base-graph choice follows the public 5G rule (TS 38.212 §7.2.2): BG2 for small blocks or
 low rates, BG1 otherwise. One code block per frame.
@@ -18,7 +20,7 @@ from aether_model.fec.crc import CRC24A, Crc
 from aether_model.fec.nr_ldpc import select_lifting_size
 from aether_model.waveform import WIDE_2300, Modulation, WaveformParams
 
-PREAMBLE_SYMBOLS = 3
+PREAMBLE_SYMBOLS = 2
 PAYLOAD_CRC: Crc = CRC24A
 
 
@@ -60,9 +62,9 @@ class FrameLayout:
 
 
 LONG = FrameLayout("long", data_symbols=32)
-"""Data frames: 35 symbols ≈ 1.09 s; 28 payload symbols × 42 carriers = 1 176 QAM symbols."""
+"""Data frames: 34 symbols ≈ 1.05 s; 28 payload symbols × 42 carriers = 1 176 QAM symbols."""
 SHORT = FrameLayout("short", data_symbols=12)
-"""Control frames (ACK, connect, ping): 15 symbols ≈ 0.47 s; 10 × 42 = 420 QAM symbols →
+"""Control frames (ACK, connect, ping): 14 symbols ≈ 0.43 s; 10 × 42 = 420 QAM symbols →
 7 payload bytes at the control mode (BPSK 1/5)."""
 
 
