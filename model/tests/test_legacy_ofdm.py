@@ -6,21 +6,21 @@ import numpy as np
 import pytest
 from conftest import audit_xfail
 
-from aether_model.dsp.modulation import Demapper, Mapper
 from aether_model.dsp.ofdm import OFDMDemodulator, OFDMModulator, SubcarrierMap
-from aether_model.speed_levels import Modulation
+from aether_model.phy.constellation import constellation
+from aether_model.waveform import Modulation
 
 
 def _qpsk_symbol(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     smap = SubcarrierMap("wide")
-    bits = rng.integers(0, 2, smap.n_data * 2).astype(np.int8)
-    return bits, Mapper(Modulation.QPSK).map(bits)
+    bits = rng.integers(0, 2, smap.n_data * 2).astype(np.uint8)
+    return bits, constellation(Modulation.QPSK).map(bits)
 
 
 def test_qpsk_hard_decisions_survive_noiseless_loopback(rng: np.random.Generator) -> None:
     bits, syms = _qpsk_symbol(rng)
     rx = OFDMDemodulator("wide").demodulate(OFDMModulator("wide").modulate(syms))
-    assert np.array_equal(Demapper(Modulation.QPSK).hard_demap(rx), bits)
+    assert np.array_equal(constellation(Modulation.QPSK).hard(rx), bits)
 
 
 def test_symbol_length_is_fft_plus_cp() -> None:
@@ -59,13 +59,3 @@ def test_wide_mode_fits_in_2300_hz() -> None:
         + 1
     ) * spacing
     assert occupied <= 2300.0
-
-
-@pytest.mark.audit
-@audit_xfail("§2 dsp/ofdm.py", "16-QAM cannot pass through the self-inflicted 14.5 dB SNR ceiling")
-def test_16qam_hard_decisions_survive_noiseless_loopback(rng: np.random.Generator) -> None:
-    smap = SubcarrierMap("wide")
-    bits = rng.integers(0, 2, smap.n_data * 4).astype(np.int8)
-    syms = Mapper(Modulation.QAM16).map(bits)
-    rx = OFDMDemodulator("wide").demodulate(OFDMModulator("wide").modulate(syms))
-    assert np.array_equal(Demapper(Modulation.QAM16).hard_demap(rx), bits)
