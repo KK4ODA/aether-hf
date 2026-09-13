@@ -7,9 +7,10 @@ fail a PR that regresses a curve by more than 0.3 dB once `tools/bench` exists i
 |---|---|---|
 | `ldpc_bg2_awgn.csv` | `python tools/bench_ldpc.py --max-blocks 1024 --target-errors 60` | BLER/BER vs E_s/N_0, TS 38.212 BG2, K′ = 480, BPSK, AWGN, RV0 rate matching |
 | `phy_fer_phase1_uw.csv` | `python tools/bench_phy.py --frames 30` at commit `377be74` | FER / throughput vs SNR (3 kHz) per mode and ITU channel, **Phase 1 air interface** (3-symbol preamble with unique word, S&C-nominated detector) |
-| `phy_fer.csv` | `python tools/bench_phy.py --frames 30` | same, current air interface (P2-3: PN type preamble, chip-signalled mode, PMF-FFT bank) |
+| `phy_fer.csv` | `python tools/bench_phy.py --frames 30` | same, current air interface (P2-3: PN type preamble, chip-signalled mode, PMF-FFT bank). Generated before ADR-0004 peak reduction; re-checked at all seven measured thresholds afterwards, worst shift ≈ 0.2 dB (QPSK 1/2), so the table still stands |
 | `link_throughput.csv` | `python tools/bench_link.py --bytes 16000 --trials 3` | end-to-end link goodput vs SNR per channel: a whole session (connect, 16 kB, disconnect) with adaptive rate |
 | `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking |
+| `papr.csv` | `python tools/bench_papr.py` | PAPR / EVM / splatter per reduction technique, delivered SNR through a saturating PA, and end-to-end decoding (ADR-0004) |
 | `link_throughput_phy.csv` | `python tools/bench_link.py --backend phy --channels awgn --snr 8,14 --bytes 4000 --trials 1` | two AWGN points re-run through the real modem, to validate the fast backend |
 
 Conventions: E_s/N_0 per transmitted BPSK symbol; E_b/N_0 = E_s/N_0 − 10·log10(R).
@@ -146,3 +147,30 @@ The fast backend models only the *error process*; all protocol timing is shared 
 real-PHY harness. Re-running two AWGN points through the real modem reproduces the
 lossy-pipe goodput exactly — 764.7 bps at +8 dB and 849.8 bps at +14 dB on both — because at
 those SNRs no frame fails in either backend, so only the timing matters.
+
+## PAPR (`papr.csv`, P2-4 / ADR-0004)
+
+Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
+that is link margin thrown away — but only the constraint that actually binds decides how
+much is recoverable. Under an *EVM* budget, clipping is worthless (it spends the same budget
+the PA does). Under a *splatter* budget, which is what applies on a shared band, clip-and-
+filter lets the transmitter be driven harder without splashing:
+
+| Clip target | PAPR | EVM | splatter | gain, soft PA (p=2) | gain, ALC-like PA (p=5) |
+|---|---|---|---|---|---|
+| none | 10.6 dB | — | −67 dB | reference | reference |
+| 7 dB | 7.6 dB | −31.9 dB | −70 dB | +0.25 dB | +0.50 dB |
+| 6 dB | 6.7 dB | −26.9 dB | −70 dB | +0.50 dB | +0.99 dB |
+| 5 dB | 5.9 dB | −22.8 dB | −70 dB | +0.98 dB | +1.71 dB |
+| 4 dB | 5.1 dB | −19.5 dB | −69 dB | +1.46 dB | +2.20 dB |
+
+(Delivered receiver SNR at a −40 dB splatter limit, best drive chosen per variant. The gain
+is the same at a −20 dB and a −30 dB noise floor, so it is genuine link gain.)
+
+The EVM ceiling bites the amplitude-modulated constellations, and it has to be measured at
+each mode's *threshold* to show up: at comfortable SNRs clipping to 5 dB looks free, but at
+its actual threshold 16-QAM 3/4 goes from 0 % to 45 % frame errors, while 8-PSK 1/2 rides
+through the hardest clipping tested. Hence ADR-0004's split — 5 dB for BPSK/QPSK/8-PSK,
+7 dB for 16-QAM/64-QAM. Across every measured threshold that costs ≤ 0.2 dB of receiver
+sensitivity for 1.0–1.7 dB of delivered power. Tone reservation was measured and rejected:
+0.1–0.8 dB of PAPR for 5–19 % of the payload.

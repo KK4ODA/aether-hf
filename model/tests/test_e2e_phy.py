@@ -143,7 +143,9 @@ def test_noiseless_frame_decodes_with_negligible_evm(
     payload = _payload(rng, modem, 13)  # 64-QAM 5/6 — the least forgiving mode
     frames = modem.decode_buffer(_buffer(modem.data_burst(payload, MODES[13])))
     assert len(frames) == 1 and frames[0].payload == payload
-    assert frames[0].frame.snr_carrier_db > 40.0
+    # the floor is now ADR-0004 peak reduction, not the modem: 64-QAM clips to 7 dB, whose
+    # EVM is −32 dB. Without clipping this reads > 40 dB.
+    assert frames[0].frame.snr_carrier_db > 28.0
 
 
 @pytest.mark.parametrize(

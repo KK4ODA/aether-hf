@@ -13,8 +13,9 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import FrameLayout
+from aether_model.frame.modes import MODES, FrameLayout
 from aether_model.phy.ofdm import OfdmModulator
+from aether_model.phy.papr import ClipAndFilter, clip_target_db
 from aether_model.phy.passband import BasebandToAudio
 from aether_model.phy.preamble import FrameHeader, FrameType, preamble
 from aether_model.waveform import WIDE_2300, WaveformParams
@@ -23,11 +24,20 @@ ComplexArray = NDArray[np.complex128]
 
 
 class FrameTransmitter:
-    def __init__(self, params: WaveformParams = WIDE_2300) -> None:
+    def __init__(self, params: WaveformParams = WIDE_2300, papr_reduction: bool = True) -> None:
         self.p = params
         self.mod = OfdmModulator(params)
         self.pre = preamble(params)
         self.n_data = len(self.mod.cmap.data_carriers)
+        self.papr_reduction = papr_reduction
+        """Clip-and-filter the finished burst (ADR-0004). Off reproduces the raw OFDM
+        envelope, for comparisons and for a PA that is already linear enough."""
+        self._clippers: dict[float, ClipAndFilter] = {}
+
+    def _clipper(self, target_db: float) -> ClipAndFilter:
+        if target_db not in self._clippers:
+            self._clippers[target_db] = ClipAndFilter(self.p, target_papr_db=target_db)
+        return self._clippers[target_db]
 
     def symbol_values(
         self, header: FrameHeader, layout: FrameLayout, qam: ComplexArray
@@ -56,8 +66,13 @@ class FrameTransmitter:
         return symbols
 
     def baseband(self, header: FrameHeader, layout: FrameLayout, qam: ComplexArray) -> ComplexArray:
-        """Windowed complex-baseband waveform of one frame (``layout.samples + taper`` long)."""
-        return self.mod.modulate(self.symbol_values(header, layout, qam))
+        """Windowed complex-baseband waveform of one frame (``layout.samples + taper`` long),
+        peak-reduced per ADR-0004 unless ``papr_reduction`` is off."""
+        x = self.mod.modulate(self.symbol_values(header, layout, qam))
+        if not self.papr_reduction:
+            return x
+        target = clip_target_db(MODES[header.mode].modulation.bits_per_symbol)
+        return self._clipper(target).process(x)
 
     def burst(
         self,

@@ -120,28 +120,41 @@ def test_plain_pilot_symbol_has_low_papr() -> None:
 # ── frame transmitter ─────────────────────────────────────────────────
 
 
-def _frame(rng: np.random.Generator, mode_idx: int = 4):
+def _frame(rng: np.random.Generator, mode_idx: int = 4, papr_reduction: bool = True):
     codec = FrameCodec(MODES[mode_idx], LONG)
     payload = rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8).tobytes()
     qam = codec.encode(payload)
-    tx = FrameTransmitter(P)
+    tx = FrameTransmitter(P, papr_reduction=papr_reduction)
     return codec, payload, tx.baseband(FrameHeader(FrameType.DATA, mode_idx), LONG, qam)
 
 
 def test_frame_waveform_length_power_and_papr(rng: np.random.Generator) -> None:
+    """The burst the PA sees: peak-reduced per ADR-0004, average power still unity."""
     _, _, bb = _frame(rng)
     assert len(bb) == LONG.samples + P.taper_samples
     assert abs(db(float(np.mean(np.abs(bb) ** 2)))) < 0.5
     papr = db(np.max(np.abs(bb) ** 2) / np.mean(np.abs(bb) ** 2))
-    assert 6.0 < papr < 12.0  # OFDM with 57 carriers; the PAPR study (P2-4) will act on this
+    assert papr < 6.5  # ADR-0004 target 5 dB for QPSK, plus the filter's peak regrowth
+
+
+def test_raw_ofdm_papr_is_what_the_study_measured(rng: np.random.Generator) -> None:
+    """Without peak reduction the envelope is the textbook one: 57 independently modulated
+    carriers sum to something very nearly complex Gaussian."""
+    _, _, bb = _frame(rng, papr_reduction=False)
+    papr = db(np.max(np.abs(bb) ** 2) / np.mean(np.abs(bb) ** 2))
+    assert 9.0 < papr < 11.5
 
 
 def test_preamble_symbols_have_the_same_power_as_data_symbols(rng: np.random.Generator) -> None:
-    """No level step between preamble and data (the ALC complaint about Mercury)."""
+    """No level step between preamble and data (the ALC complaint about Mercury).
+
+    Peak reduction spreads a little clipped energy across symbol boundaries, so the average
+    step is ~1.1 dB rather than the ~0.6 dB of the raw waveform — while the *peak* the ALC
+    actually reacts to drops by more than 4 dB, which is the point."""
     _, _, bb = _frame(rng)
     per = P.symbol_samples
     powers = [np.mean(np.abs(bb[i * per : (i + 1) * per]) ** 2) for i in range(LONG.total_symbols)]
-    assert max(powers) / min(powers) < 10 ** (1.0 / 10)  # within 1 dB
+    assert max(powers) / min(powers) < 10 ** (1.5 / 10)
 
 
 def test_occupied_bandwidth_and_out_of_band_emissions(rng: np.random.Generator) -> None:
@@ -212,8 +225,8 @@ def test_rx_converter_rejects_the_image_and_out_of_band_noise() -> None:
 def test_frame_survives_the_audio_path_noiselessly(rng: np.random.Generator) -> None:
     """TX baseband → 48 kHz audio → RX baseband, then demodulate with the known delay:
     every data symbol's EVM stays below −40 dB (the legacy path had 30/104 bit errors)."""
-    codec, payload, bb = _frame(rng)
-    tx = FrameTransmitter(P)
+    codec, payload, bb = _frame(rng, papr_reduction=False)
+    tx = FrameTransmitter(P, papr_reduction=False)
     audio = tx.audio(np.concatenate((np.zeros(400), bb)))
     rx = AudioToBaseband(P)
     y = rx.process(audio.astype(np.float64))
