@@ -6,14 +6,15 @@ Open-source HF ARQ data modem (VARA-HF-class) for amateur radio. Read in this or
 IDs), `docs/COMMUNITY-CONCERNS.md` (what users will judge us on), `docs/adr/` (decisions).
 
 ## Layout
-- `model/aether_model/` — Python reference model. New, trusted code: `channel.py` (calibrated
-  HF simulator), `waveform.py` (ADR-0002 numerology). Everything under `dsp/`, `fec/`,
-  `protocol/`, `host/`, `audio/` plus `constants.py`/`speed_levels.py` is **legacy prototype
-  code scheduled for rewrite**; do not extend it, replace it per the roadmap task.
-- `model/tests/` — pytest. `test_channel.py`/`test_waveform.py` must always pass.
-  `test_legacy_*.py` hold strict `xfail` tests (marker `audit`) that document each audit
-  defect; remove the marker in the same PR that fixes the defect. **Never** loosen an
-  assertion to make a test pass — add an ADR if a target genuinely changes.
+- `model/aether_model/` — Python reference model: `channel.py` (calibrated HF simulator),
+  `waveform.py` (ADR-0002 numerology), `fec/` (TS 38.212 LDPC, CRC), `phy/` (constellations,
+  OFDM, preamble, sync, receiver, passband, streaming, pipeline), `frame/` (modes, codec),
+  `hal/` (audio backends). `protocol/` and `host/` plus `constants.py` are **legacy stubs**
+  replaced in Phases 2–3; do not extend them.
+- `model/tests/` — pytest, all strict. A known defect gets an `xfail(strict=True)` naming
+  the finding (marker `audit`) and loses the marker in the PR that fixes it. **Never** loosen
+  an assertion to make a test pass — add an ADR if a target genuinely changes.
+  `test_vectors.py` pins the transmitter bit-exactly to `vectors/`.
 - `tools/audit_probe_*.py` — frozen evidence scripts from the audit; excluded from lint.
 - `core/` (Rust workspace) and `app/` (Tauri) arrive in Phases 3–4 per ADR-0001.
 
@@ -39,5 +40,8 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phase 0 (audit & stabilization). Next: Phase 1 tasks P1-1 … P1-9 in `docs/ROADMAP.md`
-§13; the ordered queue is §14. Start with P1-2 (Gray labelling) and P1-1 (TS 38.212 BG2).
+Phase 1 is complete in the model (branch `phase-1`). Next: Phase 2 — P2-1 ARQ engine +
+session FSM with a two-modem harness (use `hal.audio.SimulatorBackend` peers or baseband
+directly), P2-3 low-SNR acquisition (matched-filter bank; target −7 dB), P2-4 PAPR study.
+Benchmarks: `tools/bench_phy.py` (≈ 40 min full grid) and `tools/bench_ldpc.py`; golden
+vectors: `tools/make_vectors.py` (regenerate only with an ADR).

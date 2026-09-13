@@ -52,3 +52,28 @@ QPSK ½ ≈ 1 185 bps, 16-QAM ¾ ≈ 3 556 bps, 64-QAM ⅚ ≈ 5 927 bps, before
 - The 25 % comb-pilot overhead is a deliberate robustness-first choice; the throughput cost
   is measured, not assumed, in Phase 2.
 - Any change to this table requires amending this ADR and the pinned tests together.
+
+## Amendments (2026-09-13, Phase 1 implementation)
+
+Recorded as the model was built and measured (`model/aether_model/phy/`, `frame/`):
+
+- **Preamble sequences are PN, not Zadoff–Chu.** A ZC chirp's frequency shift is (up to
+  phase) a time shift, so neither the Schmidl–Cox matched filter nor a differential
+  unique-word detector could separate carrier offset from timing — the same flaw the audit
+  found in the legacy detector. The SC symbols carry a fixed PN sequence on the even
+  carriers (`SC_SEED`); the unique word is one of 32 PN sequences selected for low mutual
+  and shifted correlation, and its index is the frame header (14 data modes + control).
+  Full pilot symbols keep the Zadoff–Chu sequence (root 7) for its low PAPR (≈ 3.5 dB).
+- **Header and integer CFO** are detected from three channel-blind statistics (SC2→UW
+  ratio, UW adjacent-carrier differential, UW→pilot ratio); the 80 Hz ambiguity of the
+  half-symbol CFO estimate is resolved by matched-filter hypothesis testing.
+- **Window taper** 8 samples (1 ms); effective CP 5 ms.
+- **Frame layouts:** LONG = 3 + 32 symbols (1.09 s, 28 payload symbols × 42 carriers);
+  SHORT (control) = 3 + 12 symbols (0.47 s, 7 payload bytes at BPSK 1/5).
+- **Mode table** (14 modes, `frame/modes.py`): BPSK 1/5 … 64-QAM 5/6, one LDPC block per
+  frame with CRC-24A; base graph per TS 38.212 §7.2.2.
+- **Interleaver:** coprime-stride permutation `k·p mod E`, `p ≈ E/φ`.
+- **Measured AWGN thresholds** (FER < 5 %, 3 kHz SNR, random ±100 Hz CFO and ±50 ppm SRO,
+  `bench/baselines/phy_fer.csv`): BPSK ½ −1 dB, QPSK ½ +2, 8-PSK ½ +5, 16-QAM ½ +7,
+  16-QAM ¾ +10, 64-QAM ⅚ +17. BPSK 1/5 is acquisition-limited at −3 dB: the decoder
+  works to ≈ −6 dB but the preamble detector does not yet (roadmap P2-3).

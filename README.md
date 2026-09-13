@@ -9,19 +9,21 @@ fading HF channels — with a **publicly documented air interface**, a **VARA-co
 interface** so existing applications work unchanged, and a **headless core** that runs on a
 Raspberry Pi gateway as happily as on a Windows desktop.
 
-> **Status: pre-alpha, not usable on the air.**
-> The repository currently contains a Python *reference model* and a calibrated *channel
-> simulator*. There is no working modem yet. The first on-air-capable build is the goal of
-> roadmap Phases 1–3. Nothing here has measured performance, and this README will not claim
-> any until a committed benchmark curve backs it.
+> **Status: pre-alpha, not usable on the air yet.**
+> The repository contains a Python *reference model* with a calibrated channel simulator
+> and a complete PHY (3GPP LDPC, OFDM, acquisition, equalizing receiver, 14 modes) that
+> decodes frames end-to-end through simulated HF channels and the 48 kHz audio path.
+> There is no ARQ, no host interface and no shipped application yet (Phases 2–4). Every
+> performance figure in this repository comes from a committed benchmark curve in
+> `bench/baselines/`.
 
 ## Where things stand
 
 A full technical audit was done on 2026-09-13 — read [`docs/AUDIT.md`](docs/AUDIT.md). In
 short: the original prototype's DSP, FEC, sync, audio and protocol layers each had a
-disqualifying defect, and its test suite had been relaxed until it passed. Every finding is
-now encoded as a strict `xfail` test in `model/tests/test_legacy_*.py`; each one flips to a
-real assertion in the pull request that fixes it.
+disqualifying defect, and its test suite had been relaxed until it passed. Every finding was
+encoded as a strict `xfail` test and retired together with the module it documented as the
+Phase 1 rewrite replaced it; the audit itself remains the record of why.
 
 The plan from here is [`docs/ROADMAP.md`](docs/ROADMAP.md) (architecture, DSP decisions,
 protocol/API design, testing strategy, release engineering, phased tasks) and the field
@@ -30,8 +32,8 @@ in [`docs/COMMUNITY-CONCERNS.md`](docs/COMMUNITY-CONCERNS.md).
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 — Audit & stabilization | tooling, strict tests, CI, calibrated simulator, ADRs | **in progress** (this branch) |
-| 1 — Core HF modem | real LDPC (3GPP TS 38.212 BG2), OFDM TX/RX, sync, end-to-end loopback, benchmarks | next |
+| 0 — Audit & stabilization | tooling, strict tests, CI, calibrated simulator, ADRs | done |
+| 1 — Core HF modem | real LDPC (3GPP TS 38.212), OFDM TX/RX, sync, end-to-end loopback, benchmarks, golden vectors | **done in the Python model** (`phase-1` branch) |
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR study | |
 | 3 — Application integration | Rust core, `aetherd`, PTT/CAT, VARA-compatible TCP, Pat/VarAC/Winlink verification, Pi gateway build | |
 | 4 — Desktop application | Tauri GUI, setup wizard, diagnostics | |
@@ -53,10 +55,12 @@ rationale: [`docs/ROADMAP.md` §4](docs/ROADMAP.md#4-recommended-target-architec
 
 ```
 docs/          AUDIT.md · ROADMAP.md · COMMUNITY-CONCERNS.md · adr/ (decisions) · spec/ (later)
-model/         Python reference model: aether_model/ (channel.py, waveform.py, legacy modules) + tests/
-tools/         audit probe scripts (frozen evidence) · benchmark runner (later)
+model/         Python reference model: aether_model/{channel,waveform,fec,phy,frame,hal} + tests/
+               (protocol/ and host/ are legacy stubs until Phases 2–3 replace them)
+tools/         bench_ldpc.py · bench_phy.py · make_vectors.py · extract_nr_ldpc_tables.py · audit probes
+bench/         committed baseline curves
+vectors/       golden test vectors (TX bit-exact, RX must decode)
 core/ app/     Rust workspace and Tauri app — created in Phase 3 / 4
-vectors/       golden test vectors — created in Phase 1
 ```
 
 ## Working on the model
@@ -75,7 +79,9 @@ Conventions that matter:
 
 * **SNR is always referenced to a 3 kHz noise bandwidth**, Doppler spread is the ITU-R
   F.1487 2σ value. `model/aether_model/channel.py` is calibrated to both and its tests are
-  the guarantee behind every future benchmark number.
+  the guarantee behind every benchmark number.
+* Measured so far (AWGN, FER < 5 %, random CFO/SRO): BPSK ½ at −1 dB, QPSK ½ at +2 dB,
+  16-QAM ½ at +7 dB, 64-QAM ⅚ at +17 dB — see `bench/README.md` for fading channels.
 * **No test threshold is ever relaxed to make a suite pass.** A known defect gets an
   `xfail(strict=True)` that names the audit finding; nothing else.
 * Numbers about the waveform come from `model/aether_model/waveform.py`, never from prose.

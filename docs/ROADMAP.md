@@ -261,7 +261,7 @@ current code's *strategy* was defensible; its *parameters and implementation* we
 | Cyclic prefix | 6 ms (48 samples) → Ts = 31 ms, 32 Bd | covers ITU Poor (2 ms) and NVIS (up to 7 ms with extended CP option) |
 | Carriers | 2 300 Hz: 57 (2 280 Hz); 2 750 Hz: 68; 500 Hz: 12 | US bandwidth limit now 2.8 kHz; VARA offers 500/2300/2750 |
 | Pilots | comb every 4th carrier incl. both edges + full pilot symbol every 8th symbol | 2-D interpolation with no extrapolation |
-| Preamble | 2 identical PN OFDM symbols (Schmidl–Cox timing + fractional CFO) + 1 unique-word symbol (integer CFO, frame type, mode) — all band-limited to the data bandwidth | ±250 Hz acquisition without CAT; deterministic frame timing |
+| Preamble | 2 identical PN OFDM symbols on even carriers (Schmidl–Cox timing + fractional CFO) + 1 PN unique-word symbol whose index is the header (integer CFO, frame type, mode) — PN, never Zadoff–Chu (chirps confuse time and frequency) | ±250 Hz acquisition without CAT; deterministic frame timing |
 | Windowing | proper raised-cosine with overlap-add (symbol extended by taper) + polyphase TX filter | spectral mask without ICI |
 | Modulations | BPSK, QPSK, 8-PSK, 16-QAM, 64-QAM (Gray-labelled, BICM) | 32/128/256-QAM are not realistic on HF fading channels |
 | FEC | 3GPP TS 38.212 LDPC **BG2** (K ≤ 3 840, rates 1/5 … 8/9) with circular-buffer rate matching, RV0–3 | one public code family covers all rates *and* gives HARQ-IR for free; Sionna/py3gpp as oracles. Fallback: IEEE 802.11n codes (648/1296/1944) + a PEG-designed low-rate code |
@@ -475,13 +475,13 @@ Dependencies are listed by task ID. "Files" refer to today's layout; the model w
 
 | ID | Task | Depends on |
 |---|---|---|
-| P0-1 | Repo hygiene: `pyproject.toml` (uv/pip), `requirements.lock`, `LICENSE-MIT` + `LICENSE-APACHE`, `ruff`, `mypy`, `pre-commit`, `pytest` config, `.editorconfig` | – |
-| P0-2 | GitHub Actions CI (Windows + Linux): lint + pytest; badge in README | P0-1 |
-| P0-3 | Replace test suite: convert both test files to strict pytest; mark known-broken behaviour `xfail(strict=True)` with the audit finding as reason; delete relaxed thresholds | P0-1 |
-| P0-4 | Rewrite README honestly; move audit + roadmap under `docs/`; add `CLAUDE.md`, `CONTRIBUTING.md`, issue/PR templates | – |
-| P0-5 | ADR-0001 language/stack decision; ADR-0002 waveform parameter targets; ADR-0003 FEC family | P0-4 |
-| P0-6 | Fix channel simulator: continuous low-rate fading with state, Doppler 2σ, no per-block normalization, correct F.1487 table, 3 kHz SNR reference, add CFO/SRO/adjacent-channel/PA-clip impairments; statistical unit tests (Rayleigh amplitude CDF, Doppler spectrum width, SNR calibration) | P0-3 |
-| P0-7 | Delete `fec/ldpc.py`, stream-of-consciousness comments; regenerate `constants.py` from ADR-0002 | P0-5 |
+| P0-1 ✅ | Repo hygiene: `pyproject.toml` (uv/pip), `requirements.lock`, `LICENSE-MIT` + `LICENSE-APACHE`, `ruff`, `mypy`, `pre-commit`, `pytest` config, `.editorconfig` | – |
+| P0-2 ✅ | GitHub Actions CI (Windows + Linux): lint + pytest; badge in README | P0-1 |
+| P0-3 ✅ | Replace test suite: convert both test files to strict pytest; mark known-broken behaviour `xfail(strict=True)` with the audit finding as reason; delete relaxed thresholds | P0-1 |
+| P0-4 ✅ | Rewrite README honestly; move audit + roadmap under `docs/`; add `CLAUDE.md`, `CONTRIBUTING.md`, issue/PR templates | – |
+| P0-5 ✅ | ADR-0001 language/stack decision; ADR-0002 waveform parameter targets; ADR-0003 FEC family | P0-4 |
+| P0-6 ✅ | Fix channel simulator: continuous low-rate fading with state, Doppler 2σ, no per-block normalization, correct F.1487 table, 3 kHz SNR reference, add CFO/SRO/adjacent-channel/PA-clip impairments; statistical unit tests (Rayleigh amplitude CDF, Doppler spectrum width, SNR calibration) | P0-3 |
+| P0-7 ✅ | Delete `fec/ldpc.py`, stream-of-consciousness comments; regenerate `constants.py` from ADR-0002 | P0-5 |
 
 Risks: scope creep into Phase 1. Acceptance: CI green on a suite where every assertion is
 meaningful; simulator calibration tests pass; README makes no unmeasured claim.
@@ -491,19 +491,25 @@ Files: everything under `aether_hf/tests`, `dsp/channel.py`, `constants.py`, REA
 
 | ID | Task | Depends on |
 |---|---|---|
-| P1-1 | **FEC:** TS 38.212 BG2 LDPC encoder (double-diagonal + back-substitution), circular-buffer rate matching RV0–3, vectorized layered min-sum decoder (numpy; numba/Rust later); validate against Sionna/py3gpp; BLER curves for K ∈ {200, 500, 1 000, 2 000, 3 800} at rates 1/5…5/6 | P0-6 |
-| P1-2 | **Constellations:** correct Gray labels, vectorized max-log LLR demapper with noise-variance input; tests for Gray property and LLR sign | P0-3 |
-| P1-3 | **Frame codec:** header/CRC-16/CRC-24, row-column interleaver + BICM, mode table derived from waveform; spec §frames drafted alongside | P1-1, P1-2 |
-| P1-4 | **OFDM TX:** carrier map with edge pilots, scattered pilot grid, windowed OLA, TX filter, passband placement, 8 k → 48 k polyphase; noiseless EVM test = 0 | P0-7 |
-| P1-5 | **Preamble & sync:** band-limited S&C pair + UW; detector with fine timing (±1 sample) and CFO (fractional + integer) to ±0.5 Hz at 0 dB across ±250 Hz; SRO estimation; false-alarm rate test on noise/voice | P1-4 |
-| P1-6 | **OFDM RX:** streaming demodulator with timing/CFO/SRO/phase tracking, LS + 2-D interpolation equalizer, noise-variance estimate feeding LLRs | P1-5 |
-| P1-7 | **End-to-end PHY loopback:** bytes → WAV → bytes at every mode through the simulator; benchmark runner producing FER/throughput-vs-SNR CSV + plots; baselines committed | P1-3, P1-6 |
-| P1-8 | **Audio HAL (model):** sounddevice backend + WAV backend + simulator backend, ring-buffered streaming, device enumeration, level metering; loopback via virtual cable on Windows | P1-4 |
-| P1-9 | **Golden vectors v0:** per-mode TX waveforms and RX expectations in `vectors/` | P1-7 |
+| P1-1 ✅ | **FEC:** TS 38.212 BG2 LDPC encoder (double-diagonal + back-substitution), circular-buffer rate matching RV0–3, vectorized layered min-sum decoder (numpy; numba/Rust later); validate against Sionna/py3gpp; BLER curves for K ∈ {200, 500, 1 000, 2 000, 3 800} at rates 1/5…5/6 | P0-6 |
+| P1-2 ✅ | **Constellations:** correct Gray labels, vectorized max-log LLR demapper with noise-variance input; tests for Gray property and LLR sign | P0-3 |
+| P1-3 ✅ | **Frame codec:** header/CRC-16/CRC-24, row-column interleaver + BICM, mode table derived from waveform; spec §frames drafted alongside | P1-1, P1-2 |
+| P1-4 ✅ | **OFDM TX:** carrier map with edge pilots, scattered pilot grid, windowed OLA, TX filter, passband placement, 8 k → 48 k polyphase; noiseless EVM test = 0 | P0-7 |
+| P1-5 ✅ | **Preamble & sync:** band-limited S&C pair + UW; detector with fine timing (±1 sample) and CFO (fractional + integer) to ±0.5 Hz at 0 dB across ±250 Hz; SRO estimation; false-alarm rate test on noise/voice | P1-4 |
+| P1-6 ✅ | **OFDM RX:** streaming demodulator with timing/CFO/SRO/phase tracking, LS + 2-D interpolation equalizer, noise-variance estimate feeding LLRs | P1-5 |
+| P1-7 ✅ | **End-to-end PHY loopback:** bytes → WAV → bytes at every mode through the simulator; benchmark runner producing FER/throughput-vs-SNR CSV + plots; baselines committed | P1-3, P1-6 |
+| P1-8 ✅ | **Audio HAL (model):** sounddevice backend + WAV backend + simulator backend, ring-buffered streaming, device enumeration, level metering; loopback via virtual cable on Windows | P1-4 |
+| P1-9 ✅ | **Golden vectors v0:** per-mode TX waveforms and RX expectations in `vectors/` | P1-7 |
 
 Risks: LDPC decoder speed in Python (mitigate: vectorize, numba); sync under Poor+CFO+SRO
 combined. Acceptance: gates in §7.4 for AWGN; Poor channel FER curves exist for every mode.
 New: `model/aether_model/{fec,phy,frame,hal}`, `tools/bench`, `vectors/`.
+
+**Status (2026-09-13): Phase 1 complete in the model.** AWGN thresholds (FER < 5 %, 3 kHz,
+with random CFO/SRO): BPSK ½ −1 dB, QPSK ½ +2, 16-QAM ½ +7, 64-QAM ⅚ +17 dB
+(`bench/baselines/phy_fer.csv`). Acquisition is reliable to ≈ −2 dB; extending it to
+≈ −7 dB for the BPSK 1/5 mode is P2-3 (matched-filter-bank detection). ADR-0002 carries
+the amendments (PN preamble sequences, layouts, mode table).
 
 ### Phase 2 — Link robustness and performance (weeks 10–20)
 
