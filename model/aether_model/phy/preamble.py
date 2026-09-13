@@ -1,19 +1,21 @@
 """Frame preamble: two Schmidl–Cox symbols and a unique word that carries the frame header.
 
-Symbol 1–2 (``SC``): a Zadoff–Chu sequence on the *even* carriers only (odd carriers zero),
-so each symbol's useful part consists of two identical halves. The receiver detects the
-frame and estimates fractional CFO from that repetition without knowing anything else
+Symbol 1–2 (``SC``): a pseudo-random BPSK sequence on the *even* carriers only (odd carriers
+zero), so each symbol's useful part consists of two identical halves. The receiver detects
+the frame and estimates fractional CFO from that repetition without knowing anything else
 (Schmidl & Cox, IEEE Trans. Commun. 1997). The two symbols are identical, which also gives
 a full-symbol repetition for a finer CFO estimate and a two-symbol matched filter for
-sample-accurate timing.
+sample-accurate timing. The sequence is PN rather than Zadoff–Chu on purpose: a ZC chirp
+shifted in frequency is (up to phase) the same chirp shifted in time, so a matched filter
+could not tell a CFO error from a timing error; a PN symbol decorrelates under either.
 
-Symbol 3 (``UW``): a Zadoff–Chu sequence of the largest prime length ≤ n_carriers,
-cyclically extended over all carriers (the LTE construction), whose root encodes the frame
-header (frame type and mode). Prime length matters: for composite lengths, roots whose
-difference shares a factor with N correlate strongly. The receiver identifies the root —
-and the integer part of the CFO — by a differential correlation across carriers, which is
-insensitive to the unknown channel phase. Distinct roots have cross-correlation ≈ 1/√N, so
-32 hypotheses are separated by ~17 dB of processing gain over a single carrier's SNR.
+Symbol 3 (``UW``): a pseudo-random BPSK sequence on all carriers, one sequence per header
+code (frame type and mode), chosen for low mutual and shifted correlation. Three
+channel-blind correlations identify the code and the integer part of the CFO: the ratio
+of consecutive symbols on shared carriers (SC2 → UW, UW → first pilot symbol) and the
+UW's own adjacent-carrier differential. A PN sequence is used rather than a Zadoff–Chu
+sequence because a ZC chirp's adjacent-carrier differential is a pure tone, which a bin
+shift merely rotates — it carries no integer-CFO information.
 
 All three symbols have the same mean power as data symbols and near-constant envelopes.
 """
@@ -28,12 +30,13 @@ from functools import cache
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.phy.ofdm import PILOT_ROOT, carrier_map, zadoff_chu
+from aether_model.phy.ofdm import carrier_map
 from aether_model.waveform import WIDE_2300, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
 
-SC_ROOT = 3
+SC_SEED = 4649
+"""Seed of the Schmidl–Cox PN sequence (fixed by the air-interface specification)."""
 N_HEADER_CODES = 32
 
 
@@ -65,28 +68,33 @@ class FrameHeader:
         raise ValueError(f"reserved header code {code}")
 
 
-def largest_prime_at_most(n: int) -> int:
-    for cand in range(n, 1, -1):
-        if all(cand % d for d in range(2, math.isqrt(cand) + 1)):
-            return cand
-    raise ValueError("no prime ≤ n")
+def _pn_candidates(n_carriers: int, count: int, seed: int = 20260913) -> list[ComplexArray]:
+    rng = np.random.default_rng(seed)
+    return [
+        (1.0 - 2.0 * rng.integers(0, 2, n_carriers)).astype(np.complex128) for _ in range(count)
+    ]
 
 
-def header_roots(n_carriers: int) -> tuple[int, ...]:
-    """32 roots of the prime-length unique-word sequence (all non-zero residues are coprime)."""
-    n_zc = largest_prime_at_most(n_carriers)
-    roots = [u for u in range(1, n_zc) if u != PILOT_ROOT]
-    if len(roots) < N_HEADER_CODES:
-        raise ValueError(f"only {len(roots)} usable roots for {n_carriers} carriers")
-    # spread the chosen roots over the available range rather than taking the first 32
-    step = len(roots) / N_HEADER_CODES
-    return tuple(roots[int(i * step)] for i in range(N_HEADER_CODES))
+def _shifted_self_correlation(x: ComplexArray, max_shift: int = 3) -> float:
+    n = len(x)
+    worst = 0.0
+    for m in range(1, max_shift + 1):
+        worst = max(worst, float(abs(np.vdot(x[m:], x[:-m]))) / (n - m))
+    return worst
 
 
-def unique_word(n_carriers: int, root: int) -> ComplexArray:
-    """Prime-length Zadoff–Chu cyclically extended to ``n_carriers`` (unit magnitude)."""
-    n_zc = largest_prime_at_most(n_carriers)
-    return zadoff_chu(n_zc, root)[np.arange(n_carriers) % n_zc]
+def unique_words(n_carriers: int, count: int = N_HEADER_CODES) -> list[ComplexArray]:
+    """``count`` PN sequences of length ``n_carriers`` with pairwise |correlation| ≤ 0.3 and
+    low correlation with their own shifted copies (deterministic selection)."""
+    chosen: list[ComplexArray] = []
+    for cand in _pn_candidates(n_carriers, 40 * count):
+        if _shifted_self_correlation(cand) > 0.3:
+            continue
+        if all(abs(np.vdot(cand, c)) / n_carriers <= 0.3 for c in chosen):
+            chosen.append(cand)
+            if len(chosen) == count:
+                return chosen
+    raise RuntimeError("could not find enough unique-word sequences")
 
 
 class Preamble:
@@ -95,11 +103,11 @@ class Preamble:
         self.cmap = carrier_map(params)
         n = self.cmap.n_carriers
         self.even = np.flatnonzero(self.cmap.bins % 2 == 0)
-        self._roots = header_roots(n)
         sc = np.zeros(n, dtype=np.complex128)
-        sc[self.even] = zadoff_chu(len(self.even), SC_ROOT) * math.sqrt(n / len(self.even))
+        pn = 1.0 - 2.0 * np.random.default_rng(SC_SEED).integers(0, 2, len(self.even))
+        sc[self.even] = pn * math.sqrt(n / len(self.even))
         self._sc = sc
-        self._uw = {code: unique_word(n, root) for code, root in enumerate(self._roots)}
+        self._uw = dict(enumerate(unique_words(n)))
 
     @property
     def sc_values(self) -> ComplexArray:

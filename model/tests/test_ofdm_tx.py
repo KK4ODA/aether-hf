@@ -12,7 +12,7 @@ from aether_model.frame.modes import LONG, MODES, SHORT
 from aether_model.phy.constellation import constellation
 from aether_model.phy.ofdm import OfdmDemodulator, OfdmModulator, carrier_map, zadoff_chu
 from aether_model.phy.passband import AudioToBaseband, BasebandToAudio
-from aether_model.phy.preamble import FrameHeader, FrameType, header_roots, preamble
+from aether_model.phy.preamble import FrameHeader, FrameType, preamble
 from aether_model.phy.tx import FrameTransmitter
 from aether_model.waveform import WIDE_2300, Modulation
 
@@ -44,22 +44,17 @@ def test_zadoff_chu_is_cazac() -> None:
         zadoff_chu(57, 3)  # 3 divides 57
 
 
-def test_header_roots_are_distinct_and_exclude_pilot_root() -> None:
-    roots = header_roots(57)
-    assert len(roots) == 32 and len(set(roots)) == 32
-    assert all(0 < r < 53 for r in roots)  # prime length 53 for 57 carriers
-    assert 7 not in roots
-
-
 def test_uw_sequences_have_low_cross_correlation() -> None:
     pre = preamble(P)
     cands = pre.uw_candidates()
+    assert len(cands) == 32
     worst = 0.0
     for a in cands:
+        assert np.all(np.abs(cands[a]) == 1.0)
         for b in cands:
             if a < b:
                 worst = max(worst, abs(np.vdot(cands[a], cands[b])) / 57)
-    assert worst < 0.25  # ≈ 1/√53 = 0.14 for prime-length ZC pairs, plus extension leakage
+    assert worst <= 0.3
 
 
 def test_sc_symbol_has_two_identical_halves_and_unit_power() -> None:
