@@ -38,7 +38,8 @@ def test_other_bandwidths() -> None:
 
 
 def test_cp_covers_itu_poor_delay_spread() -> None:
-    assert WIDE_2300.cp_s >= 2.0e-3 * 2  # 2 ms delay spread with 2× margin
+    assert WIDE_2300.effective_cp_s >= 2.0e-3 * 2  # 2 ms delay spread with 2× margin
+    assert WIDE_2300.effective_cp_s == pytest.approx(5e-3)
 
 
 def test_raw_rates_are_in_varas_class() -> None:

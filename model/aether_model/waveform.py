@@ -60,6 +60,9 @@ class WaveformParams:
     """Comb pilots on every symbol: every N-th carrier, both band edges always pilots."""
     pilot_symbol_period: int = 8
     """Every N-th OFDM symbol is a full pilot symbol (time-direction channel tracking)."""
+    taper_samples: int = 8
+    """Raised-cosine taper on each symbol edge (1 ms); adjacent symbols overlap-add by this
+    much, so the effective cyclic prefix is ``cp_samples − taper_samples`` = 5 ms."""
     audio_rate: int = 48000
 
     # ── derived ───────────────────────────────────────────────────────
@@ -87,6 +90,10 @@ class WaveformParams:
     @property
     def symbol_rate_bd(self) -> float:
         return 1.0 / self.symbol_period_s
+
+    @property
+    def effective_cp_s(self) -> float:
+        return (self.cp_samples - self.taper_samples) / self.fs_baseband
 
     @property
     def n_carriers(self) -> int:

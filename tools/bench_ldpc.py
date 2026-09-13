@@ -42,7 +42,7 @@ def run_point(
 ) -> dict[str, float | int | str]:
     z = select_lifting_size(2, info_len)
     code = nr_ldpc_code(2, z)
-    e = int(round(info_len / rate))
+    e = round(info_len / rate)
     rm = RateMatcher(code, info_len, e, rv=0)
     bpsk = constellation(Modulation.BPSK)
     noise_var = 1.0 / 10 ** (es_n0_db / 10)

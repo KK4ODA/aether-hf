@@ -124,6 +124,13 @@ class NrLdpcCode:
         for i, j, vs in self.bg.entries:
             rows[i].append((j, vs[self.i_ls] % self.z))
         self._rows = [(np.array([j for j, _ in r]), np.array([s for _, s in r])) for r in rows]
+        # Flat variable index of every edge of every check in each block row: check r of block
+        # row i is connected to variable j·Z + (r + s) mod Z for each entry (j, s).
+        r = np.arange(self.z)
+        self._gather = [
+            (cols[:, None] * self.z + (r[None, :] + shifts[:, None]) % self.z).astype(np.int64)
+            for cols, shifts in self._rows
+        ]
         self._prepare_encoder()
 
     # ── encoding ──────────────────────────────────────────────────────
@@ -229,44 +236,37 @@ class NrLdpcCode:
             raise ValueError(f"expected {self.n_full} LLRs per codeword, got {x.shape[1]}")
         b = x.shape[0]
         z = self.z
-        post = x.copy().reshape(b, -1, z)  # (batch, block col, Z)
+        post = x.copy()  # (batch, n_full) posterior LLRs
         # check-to-variable messages, one Z-vector per edge per codeword
         r_msgs = [np.zeros((b, len(cols), z)) for cols, _ in self._rows]
         converged = np.zeros(b, dtype=bool)
         iters = np.full(b, max_iter, dtype=np.int64)
+        arange_deg = [np.arange(len(cols))[None, :, None] for cols, _ in self._rows]
 
         for it in range(1, max_iter + 1):
-            for i, (cols, shifts) in enumerate(self._rows):
-                # v2c: variable posteriors aligned to the checks of this block row, minus
-                # this row's previous contribution.
-                v = np.stack(
-                    [np.roll(post[:, j, :], -s, axis=1) for j, s in zip(cols, shifts, strict=True)],
-                    axis=1,
-                )  # (b, deg, z)
-                v -= r_msgs[i]
+            for i, idx in enumerate(self._gather):
+                # v2c: variable posteriors gathered onto this block row's checks, minus the
+                # row's previous contribution.
+                v = post[:, idx] - r_msgs[i]  # (b, deg, z)
                 mag = np.abs(v)
-                sgn = np.sign(v)
-                sgn[sgn == 0] = 1.0
+                sgn = np.where(v < 0, -1.0, 1.0)
                 prod = np.prod(sgn, axis=1, keepdims=True)  # (b, 1, z)
                 idx0 = np.argmin(mag, axis=1, keepdims=True)  # (b, 1, z)
                 min1 = np.take_along_axis(mag, idx0, axis=1)
-                is_min = np.arange(len(cols))[None, :, None] == idx0  # (b, deg, z)
+                is_min = arange_deg[i] == idx0  # (b, deg, z)
                 min2 = np.where(is_min, np.inf, mag).min(axis=1, keepdims=True)
-                c2v = np.where(is_min, min2, min1)
-                c2v = alpha * c2v * prod * sgn
+                c2v = alpha * np.where(is_min, min2, min1) * prod * sgn
                 r_msgs[i] = c2v
-                new = v + c2v
-                for e, (j, s) in enumerate(zip(cols, shifts, strict=True)):
-                    post[:, j, :] = np.roll(new[:, e, :], s, axis=1)
+                post[:, idx] = v + c2v
             if early_stop:
-                hard = (post < 0).astype(np.uint8)
+                hard = (post < 0).astype(np.uint8).reshape(b, -1, z)
                 ok = self._syndromes_zero(hard)
                 newly = ok & ~converged
                 iters[newly] = it
                 converged |= ok
                 if converged.all():
                     break
-        hard = (post < 0).astype(np.uint8).reshape(b, -1)
+        hard = (post < 0).astype(np.uint8)
         if not early_stop:
             converged = self._syndromes_zero(hard.reshape(b, -1, z))
         if single:

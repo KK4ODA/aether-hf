@@ -98,7 +98,7 @@ class FrameCodec:
         llr_interleaved = self.constellation.llr(y, noise_var)
         llr_e = llr_interleaved[self._perm]
         full = self._rate_matcher(rv).recover(llr_e, buffer=buffer)
-        hard, converged, _ = self.code.decode(full, max_iter=max_iter)
+        hard, _converged, _ = self.code.decode(full, max_iter=max_iter)
         block = hard[: self.info_bits]
         if not PAYLOAD_CRC.check(block):
             return None, full
