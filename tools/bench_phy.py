@@ -32,9 +32,9 @@ from aether_model.waveform import WIDE_2300
 
 # Rough AWGN thresholds (3 kHz SNR) per mode, used only to pick where a sweep starts.
 _START_AWGN = {
-    0: -8,
-    1: -6,
-    2: -4,
+    0: -9,
+    1: -7,
+    2: -5,
     3: -3,
     4: -1,
     5: 1,
@@ -77,7 +77,7 @@ def run_point(
         if result:
             f = result[0]
             # multipath can lock onto a path up to a few samples late; that still counts
-            if abs(f.frame.sync.start - lead) <= 8 and f.frame.sync.header.mode == mode_idx:
+            if abs(f.frame.sync.start - lead) <= 8 and f.frame.mode == mode_idx:
                 acquired += 1
                 snr_est.append(f.frame.snr_3k_db)
             decoded += int(f.payload == payload)
