@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap and task queue
+    url: https://github.com/KK4ODA/aether-hf/blob/master/docs/ROADMAP.md
+    about: Phase plan and the ordered list of next tasks

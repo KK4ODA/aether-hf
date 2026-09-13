@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a capability or a change to the plan
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today? Who else has this problem?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+  - type: input
+    id: roadmap
+    attributes:
+      label: Roadmap fit
+      placeholder: e.g. Phase 3 / P3-8, or "not on the roadmap"

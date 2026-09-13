@@ -1,0 +1,34 @@
+name: On-air report
+description: What happened when you used Aether over a real HF path
+labels: [field-report]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Path
+      placeholder: "KK4ODA (GA) ↔ W1AW (CT), 40 m, 2026-09-13 02:00 UTC, ~1 100 km"
+    validations:
+      required: true
+  - type: input
+    id: stations
+    attributes:
+      label: Equipment
+      placeholder: "IC-7300 + Digirig, 50 W dipole ↔ FT-891 + SignaLink, 100 W vertical"
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What happened
+      description: Connect success/fail, modes used, throughput, retries, SNR shown, anything odd (ALC, PTT, audio levels).
+    validations:
+      required: true
+  - type: textarea
+    id: recording
+    attributes:
+      label: Recording
+      description: Attach a 48 kHz mono WAV of the received audio if you have one — it becomes a regression test.

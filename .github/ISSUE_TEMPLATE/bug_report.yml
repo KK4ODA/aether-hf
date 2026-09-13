@@ -1,0 +1,36 @@
+name: Bug report
+description: Something is wrong in the model, the modem or the app
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v0.2.0 or git SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [model / simulator, DSP / waveform, FEC, ARQ / protocol, host interface (VARA-compatible TCP), audio / PTT / CAT, desktop app, installer / updater, docs]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands, settings, radio and interface if on the air.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostics
+      description: Attach the diagnostic bundle (app) or test/benchmark output (model). Logs and a 48 kHz WAV of received audio are gold.
