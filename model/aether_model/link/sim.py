@@ -160,12 +160,17 @@ class TwoStationSim:
         st = self.st[who]
         t = max(at, st.tx_end)
         st.busy.append((t, t + tx.duration_s))
+        sof = st.engine.timing.preamble_detect_s
         for frame in tx.frames:
             dur = (
                 st.engine.timing.data_frame_s
                 if frame.container is Container.DATA
                 else st.engine.timing.control_frame_s
             )
+            if sof is not None and frame.container is Container.DATA:
+                # acquisition succeeds far below every mode's decode threshold (P2-3: 100 %
+                # at −5 dB), so a listening receiver is assumed to see every preamble
+                self._push(t + sof, "preamble", 1 - who, (t, t + sof))
             self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur))
             t += dur
         st.tx_end = t
@@ -185,6 +190,15 @@ class TwoStationSim:
         eng.tick(arrival)
         eng.on_frame(sf, arrival)
         self._pump(rx, arrival)
+
+    def _announce(self, rx: int, t_start: float, at: float) -> None:
+        """Tell a listening receiver that a frame's preamble was detected (P2-2a)."""
+        if self._busy(rx, t_start, at):
+            return
+        eng = self.st[rx].engine
+        eng.tick(at)
+        eng.on_preamble(t_start + self.prop_s, at)
+        self._pump(rx, at)
 
     # ── run loop ──────────────────────────────────────────────────────
 
@@ -213,6 +227,9 @@ class TwoStationSim:
                 if ev.kind == "arrive":
                     fr, t0, t1 = cast("tuple[TxFrame, float, float]", ev.data)
                     self._deliver(ev.who, fr, t0, t1)
+                elif ev.kind == "preamble":
+                    t0, t1 = cast("tuple[float, float]", ev.data)
+                    self._announce(ev.who, t0, t1)
                 elif ev.kind == "tx_done":
                     self.st[ev.who].engine.on_tx_done(nt)
                     self._pump(ev.who, nt)

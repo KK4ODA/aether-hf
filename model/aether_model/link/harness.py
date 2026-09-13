@@ -52,14 +52,21 @@ class RealSoftFrame:
         return payload, llr
 
 
-def phy_timing(params: WaveformParams = WIDE_2300) -> PhyTiming:
-    """Timing and per-mode capacities for the real waveform."""
+def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) -> PhyTiming:
+    """Timing and per-mode capacities for the real waveform.
+
+    ``preamble_detect_s`` is four symbol periods: the two Schmidl–Cox symbols the detector
+    correlates against, plus the one-symbol sidelobe guard it needs before accepting a peak
+    (P2-3), plus a symbol of slack for block-boundary latency in the streaming receiver.
+    Pass ``start_of_frame=False`` to model a PHY that cannot report preambles.
+    """
     caps = {m.index: m.payload_bytes(LONG) for m in MODES}
     return PhyTiming(
         data_frame_s=LONG.duration_s,
         control_frame_s=SHORT.duration_s,
         turnaround_s=0.25,
         detect_latency_s=0.15,
+        preamble_detect_s=4 * params.symbol_period_s if start_of_frame else None,
         data_capacity=caps,
     )
 

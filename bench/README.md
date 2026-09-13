@@ -73,57 +73,76 @@ P2-3 detector removes that limit (acquisition 100 % at −5 dB, 87 % at −7 dB)
 ## Link layer, goodput vs SNR (`link_throughput.csv`, P2-2)
 
 A complete session — connect, 16 kB transfer, orderly disconnect — with the rate controller
-free to pick any mode. Median of 3 trials; the mode in brackets is the fastest one reached.
-"—" means the transfer did not finish inside the time cap (the channel is below the most
-robust mode's threshold).
+free to pick any mode. Median of 3 trials; brackets give the fastest mode reached and the
+efficiency against that channel's own capacity. "—" means the transfer did not finish inside
+the time cap (the channel is below the most robust mode's threshold).
 
 | SNR (3 kHz) | AWGN | Good | Moderate | Poor |
 |---|---|---|---|---|
-| −4 | 91 (m0) | — | — | — |
-| +0 | 203 (m1) | — | — | — |
-| +4 | 578 (m4) | 112 (m2) | 124 (m2) | 173 (m2) |
-| +8 | 1032 (m6) | 333 (m4) | 385 (m4) | 568 (m5) |
-| +12 | 1510 (m9) | 764 (m8) | 778 (m8) | 924 (m8) |
-| +16 | 1771 (m11) | 1179 (m10) | 1096 (m10) | 1391 (m11) |
-| +20 | 1877 (m13) | 1378 (m12) | 1394 (m11) | 1548 (m13) |
+| −4 | 102 (m0, 0.52) | — | — | — |
+| +0 | 169 (m1, 0.23) | — | — | — |
+| +4 | 578 (m4, 0.40) | 126 (m1, 0.36) | 140 (m1, 0.40) | 151 (m2, 0.28) |
+| +8 | 1162 (m6, 0.39) | 299 (m4, 0.41) | 346 (m4, 0.48) | 595 (m4, 0.41) |
+| +12 | 1696 (m9, 0.51) | 859 (m6, 0.52) | 819 (m6, 0.56) | 1034 (m6, 0.63) |
+| +16 | 2003 (m11, 0.40) | 1246 (m9, 0.42) | 1419 (m9, 0.48) | 1565 (m11, 0.47) |
+| +20 | 2106 (m13, 0.38) | 1696 (m11, 0.51) | 1565 (m11, 0.47) | 1745 (m13, 0.35) |
 
-**Efficiency.** Goodput is 0.55–0.67 of the raw payload rate of the mode in use once a
-transfer is long enough to amortise the rate ramp (16 kB reaches ≈ 0.55, 250 kB ≈ 0.67).
-The gap is structural, not waste in the code, and splits three ways:
+**Efficiency.** Against the raw payload rate of the mode in use, goodput is ≈ 0.71–0.75 once
+a transfer is long enough to amortise the rate ramp (250 kB on AWGN: 0.71 at +12 dB, 0.75 at
++20 dB). A 16 kB session reaches ≈ 0.5, the rest going to the climb from the most robust mode.
+What remains is structural, not waste:
 
-* **≈ 25 % fixed cost per burst** — the IRS waits one whole data-frame time of silence to be
-  sure the burst has ended (it cannot be told: the burst length would have to sit in the
-  header, and the header must not change between the identical retransmissions the receiver
-  soft-combines), then an ACK occupies 0.43 s. A start-of-frame (preamble-detected) signal
-  from the PHY to the link layer would cut that wait from 1.5 s to ≈ 0.45 s and is the single
-  biggest throughput win available — recorded as a P2-2 follow-up in the roadmap.
+* **per-burst turnaround** — the IRS waits for silence to know a burst ended, then its ACK
+  occupies 0.43 s. With the start-of-frame signal (below) that wait is 0.12 s rather than a
+  whole 1.05 s data frame.
 * **rate ramp** — the controller starts on the most robust mode and climbs at most two modes
-  per burst, so short transfers spend much of their life below the mode they end on.
-* **deliberate conservatism** — the hysteresis band (margin + 1.5 dB) keeps the link one mode
-  below the edge. At +12 dB on AWGN it settles on mode 9 rather than mode 10.
+  per burst, so short transfers spend much of their life below the mode they finish on.
+* **deliberate conservatism** — the hysteresis band keeps the link a little below the edge.
 
-Burst length was swept (4/6/8/12/16 frames): goodput peaks at **6–8 frames** and *falls*
-beyond that, because the ACK is also the rate-control feedback — longer bursts mean fewer
-decisions per transfer and a slower climb, which costs more than the saved turnarounds.
-The default is 6.
+Burst length was swept (4/6/8/12/16 frames): goodput peaks at **6–8** and *falls* beyond that,
+because the ACK is also the rate-control feedback — longer bursts mean fewer decisions per
+transfer and a slower climb, costing more than the saved turnarounds. The default is 6.
 
-**Fading columns.** The controller only knows the AWGN threshold table and widens its margin
-when frames fail, so on Good/Moderate it ends one or two modes below what that channel could
-carry — the price of not having per-channel thresholds. Learning a per-channel offset is the
-obvious next refinement.
+### P2-2a — start-of-frame signal
+
+A PHY that reports a detected preamble (`PhyTiming.preamble_detect_s`, four symbol periods
+= 0.124 s for this waveform) lets the receiver hold its ACK as soon as it hears the next
+frame begin, instead of assuming that a frame-time of quiet means the burst is over. The
+burst length cannot simply be put in the header: the header has to be identical across the
+retransmissions the receiver soft-combines.
+
+| | +4 dB | +12 dB | +20 dB | 250 kB @ +12 | 250 kB @ +20 |
+|---|---|---|---|---|---|
+| without | 503 | 1510 | 1877 | 2103 (0.63) | 3709 (0.67) |
+| with | 567 | 1696 | 2106 | 2369 (0.71) | 4177 (0.75) |
+
+≈ +13 % throughput across the range.
+
+### P2-2b — the margin learns the channel
+
+A failed burst is a measurement: mode *m* dying at SNR *s* says this channel needs more than
+`s − threshold[m]` dB of margin. The controller now jumps toward that figure (capped at 3 dB
+per burst) instead of creeping up in fixed 1.5 dB steps, and holds what it learned — the
+margin decays once every three clean bursts rather than every one. Before the first failure
+there is nothing to protect, so decay is immediate and a good link still converges fast.
+
+The effect is largest exactly where the AWGN table is most wrong. Against the previous
+controller (16 kB sessions): Moderate +16 dB 1096 → 1419 bps (+29 %), Good +20 dB 1378 →
+1696 (+23 %), AWGN +20 dB 1877 → 2106 (+12 %). Note that at +12 dB on the fading channels it
+now settles *lower* — mode 6 rather than mode 8 — and still delivers more: the old behaviour
+was overshooting onto a mode the channel could not hold and paying for it in retransmissions.
 
 ## Link layer, rate tracking under a fade (`link_ramp.csv`)
 
 A ±8 dB triangular fade (60 s period) around the stated mean, 24 kB transfers. Every run
-completed. On AWGN at a +8 dB mean the controller made 20–24 mode changes and 22–23
-retransmissions; on Poor at the same mean, 41–45 changes and 73–78 retransmissions. Nothing
-stalled and no session was lost, which is the property being tested — the hysteresis stops
-the controller from flapping on a static channel without stopping it from tracking a moving
-one.
+completed. On AWGN at a +8 dB mean the controller made 16–20 mode changes and 15–18
+retransmissions; on Poor at the same mean, 33–34 changes and 60–70 retransmissions. Nothing
+stalled and no session was lost, which is the property under test — the hysteresis stops the
+controller flapping on a static channel without stopping it tracking a moving one.
 
 ## Backend cross-check (`link_throughput_phy.csv`)
 
 The fast backend models only the *error process*; all protocol timing is shared with the
 real-PHY harness. Re-running two AWGN points through the real modem reproduces the
-lossy-pipe goodput exactly — 674.7 bps at +8 dB and 756.4 bps at +14 dB on both — because at
+lossy-pipe goodput exactly — 764.7 bps at +8 dB and 849.8 bps at +14 dB on both — because at
 those SNRs no frame fails in either backend, so only the timing matters.

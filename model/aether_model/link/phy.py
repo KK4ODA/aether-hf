@@ -54,6 +54,12 @@ class PhyTiming:
     """Guard from the end of a received burst to keying up (PTT, audio latency, RX flush)."""
     detect_latency_s: float = 0.15
     """Worst-case delay from a frame's last sample to the engine hearing about it."""
+    preamble_detect_s: float | None = None
+    """Delay from a frame's *first* sample to the PHY reporting its preamble via
+    :meth:`~aether_model.link.engine.LinkEngine.on_preamble`. When a PHY provides that
+    signal the receiver learns a burst is continuing this quickly; when it is ``None`` the
+    receiver has to wait a whole data frame of silence instead to be sure a burst has
+    ended, which costs roughly a quarter of the air time (see ``bench/README.md``)."""
     data_capacity: dict[int, int] | None = None
     """PHY payload bytes per DATA-container mode index (mode → bytes)."""
 

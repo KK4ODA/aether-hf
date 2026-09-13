@@ -45,8 +45,13 @@ P2-3 low-SNR acquisition (PMF-FFT bank in `phy/sync.py`, frame type by preamble 
 mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FSM
 (`aether_model/link/`, PHY-agnostic, event-driven) with two harnesses — a lossy-pipe sim
 (`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`); P2-2
-rate-control hysteresis and the `tools/bench_link.py` goodput benchmark. Next: P2-2a
-(start-of-frame signal to the link layer, ≈ 25 % throughput), P2-4 PAPR study.
+rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2-2a
+(start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
+Next: P2-4 PAPR study, P2-5 impulsive-noise defence.
+
+Note for Phase 3: `LinkEngine.on_preamble` needs the real streaming receiver to report a
+detected preamble before the frame is decoded; `PhyTiming.preamble_detect_s` is what turns
+that signal on, and leaving it `None` is the safe fallback (costs ~13 % throughput).
 
 Link layer (`aether_model/link/`): `frames.py` (DATA/CONTROL/connect formats, callsign
 packing), `engine.py` (`LinkEngine`, event-driven: `connect/send/disconnect/tick/on_frame`

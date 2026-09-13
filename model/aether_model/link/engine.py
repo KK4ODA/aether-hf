@@ -292,6 +292,19 @@ class LinkEngine:
         else:
             self._on_data(frame)
 
+    def on_preamble(self, t_start: float, now: float) -> None:
+        """The PHY has detected a frame starting at ``t_start`` but has not decoded it yet.
+
+        This is what lets the IRS answer a burst promptly: it now knows the burst is still
+        running and can hold its ACK until that frame has finished, instead of assuming a
+        whole frame of silence means the burst ended. Optional — a PHY that cannot report
+        preambles simply leaves :attr:`PhyTiming.preamble_detect_s` unset."""
+        self.now = max(self.now, now)
+        if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
+            return
+        deadline = t_start + self.timing.data_frame_s + self._irs_reply_delay()
+        self._deadlines["ack"] = max(self._deadlines.get("ack", 0.0), deadline)
+
     # ── timers ────────────────────────────────────────────────────────
 
     def next_deadline(self) -> float | None:
@@ -305,12 +318,18 @@ class LinkEngine:
         self._deadlines.pop(name, None)
 
     def _irs_reply_delay(self) -> float:
-        """How long the IRS waits after a burst's last frame before its ACK: one whole data
-        frame of silence (so a contiguous next frame would already have been detected) plus
-        the end-of-burst gap and keying turnaround. The frame boundary, not a sub-frame gap,
-        is what tells the IRS the burst is over — the ISS carries no burst length that could
-        change between the identical retransmissions the receiver soft-combines."""
-        return self.timing.data_frame_s + self.cfg.burst_gap_s + self.timing.turnaround_s
+        """How long the IRS waits after a burst's last frame before sending its ACK.
+
+        The ISS carries no burst length — the header must be identical across the
+        retransmissions the receiver soft-combines — so the end of a burst is inferred from
+        silence. How *much* silence depends on what the PHY reports: given a start-of-frame
+        signal (:attr:`PhyTiming.preamble_detect_s`) a contiguous next frame announces itself
+        that quickly, so the IRS only waits that long; without one it has to wait a whole
+        data frame, which is roughly a quarter of the air time."""
+        quiet = self.timing.preamble_detect_s
+        if quiet is None:
+            quiet = self.timing.data_frame_s
+        return quiet + self.cfg.burst_gap_s + self.timing.turnaround_s
 
     def _response_wait(self, response_s: float, responder_delay: float = 0.0) -> float:
         """How long to wait for a peer response of the given air time, from the end of our
@@ -686,8 +705,10 @@ class LinkEngine:
         failed = len(self._burst) - ok
         snrs = [r.frame.snr_db for r in self._burst]
         snr = sum(snrs) / len(snrs) if snrs else None
+        modes = [r.frame.mode for r in self._burst]
+        burst_mode = max(set(modes), key=modes.count) if modes else None
         self._finish_burst()
-        self.rate.observe(snr, ok, failed)
+        self.rate.observe(snr, ok, failed, burst_mode)
         if self._disc_requested:
             self._send_disc()
             return

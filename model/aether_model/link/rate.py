@@ -80,9 +80,18 @@ class RateController:
     min_margin_db: float = 1.5
     max_margin_db: float = 12.0
     up_step_db: float = 1.5
-    """Margin increase per burst that had a decoding failure."""
+    """Margin increase per failed burst when the mode that failed is not reported."""
+    max_jump_db: float = 3.0
+    """Cap on a single targeted margin increase, so one deep fade cannot slam the link to
+    its slowest mode and strand it there."""
     down_step_db: float = 0.25
-    """Margin decrease per clean burst."""
+    """Margin decrease per clean burst, applied once every :attr:`decay_every` of them."""
+    decay_every: int = 3
+    """Clean bursts per step of margin decay, *once a failure has taught the margin
+    something*. The margin encodes what this channel costs over AWGN — a property of the
+    propagation, not of the last burst — so it is learned quickly from failures and given up
+    slowly. Before the first failure there is nothing to protect and the margin decays on
+    every clean burst, so a good link still reaches its mode within a few bursts."""
     up_hysteresis_db: float = 1.5
     """Extra headroom demanded before stepping up, on top of the margin. This is the whole
     anti-oscillation mechanism: a mode entered at SNR ``x`` is only left upward at
@@ -98,27 +107,47 @@ class RateController:
     _index: int = 0
     """Position in :attr:`modes` — the recommendation is ``modes[_index]``."""
     _clean_run: int = 0
+    _clean_since_decay: int = 0
+    _ever_failed: bool = False
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
 
     # ── inputs ────────────────────────────────────────────────────────
 
-    def observe(self, snr_db: float | None, ok: int, failed: int) -> None:
-        """Feed one burst: mean SNR of its frames and how many decoded / failed."""
+    def observe(self, snr_db: float | None, ok: int, failed: int, mode: int | None = None) -> None:
+        """Feed one burst: mean SNR of its frames, how many decoded / failed, and the mode
+        they were sent in (which turns a failure into a measurement — see :meth:`_widen`)."""
         if snr_db is not None:
             self._smoothed = (
                 snr_db if self._smoothed is None else 0.7 * self._smoothed + 0.3 * snr_db
             )
             self.snr_db = self._smoothed
         if failed:
-            self.margin_db = min(self.max_margin_db, self.margin_db + self.up_step_db)
+            self._widen(snr_db, mode)
+            self._ever_failed = True
             self._clean_run = 0
+            self._clean_since_decay = 0
             self._step_down()
         elif ok:
-            self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
             self._clean_run += 1
+            self._clean_since_decay += 1
+            if self._clean_since_decay >= (self.decay_every if self._ever_failed else 1):
+                self._clean_since_decay = 0
+                self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
             self._step_up()
+
+    def _widen(self, snr_db: float | None, mode: int | None) -> None:
+        """A failed burst is a measurement, not just a nudge: mode ``m`` failing at SNR ``s``
+        says this channel needs more than ``s − threshold[m]`` dB of margin. Jump most of the
+        way there instead of creeping up in fixed steps — on a fading channel, where every
+        mode costs 6–10 dB more than the AWGN table predicts, creeping means overshooting the
+        mode for many bursts first. The jump is capped so one deep fade cannot strand the link."""
+        target = self.margin_db + self.up_step_db
+        if snr_db is not None and mode is not None and mode in self.thresholds:
+            implied = snr_db - self.thresholds[mode] + self.up_step_db
+            target = max(target, min(implied, self.margin_db + self.max_jump_db))
+        self.margin_db = min(self.max_margin_db, max(self.min_margin_db, target))
 
     def recommend(self) -> int:
         return self.modes[self._index]

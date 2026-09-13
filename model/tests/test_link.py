@@ -369,3 +369,65 @@ def test_rate_control_beats_a_fixed_conservative_mode(timing: PhyTiming) -> None
         times[name] = sim.run(until=6000)
         assert sim.delivered(1) == msg
     assert times["adaptive"] < 0.25 * times["pinned"], times
+
+
+# ── P2-2a / P2-2b ─────────────────────────────────────────────────────
+
+
+def _timing(*, start_of_frame: bool) -> PhyTiming:
+    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    return PhyTiming(
+        data_frame_s=LONG.duration_s,
+        control_frame_s=SHORT.duration_s,
+        preamble_detect_s=4 * LONG.waveform.symbol_period_s if start_of_frame else None,
+        data_capacity=caps,
+    )
+
+
+def test_start_of_frame_signal_raises_throughput() -> None:
+    """P2-2a: told when a frame *starts*, the receiver no longer has to wait a whole frame of
+    silence to know a burst has ended, which is about a quarter of the air time."""
+    msg = bytes(16000)
+    times = {}
+    for sof in (False, True):
+        timing = _timing(start_of_frame=sof)
+        a = LinkEngine("W4ODA", timing, seed=1)
+        b = LinkEngine("KK4XYZ", timing, seed=2)
+        sim = TwoStationSim(a, b, snr_db=14.0, seed=5)
+        a.connect("KK4XYZ")
+        a.send(msg)
+        a.disconnect()
+        times[sof] = sim.run(until=6000)
+        assert sim.delivered(1) == msg
+    assert times[True] < 0.92 * times[False], times
+
+
+def test_margin_learns_the_channel_penalty_in_one_step() -> None:
+    """P2-2b: a failure is a measurement. Mode 4 dying at +12 dB says this channel wants
+    ~11 dB more than the AWGN table predicts, so the margin jumps toward that instead of
+    creeping up in fixed steps and overshooting the mode for several bursts first."""
+    rc = RateController()
+    start = rc.margin_db
+    rc.observe(12.0, ok=0, failed=4, mode=4)
+    assert rc.margin_db - start > rc.up_step_db  # targeted, not a fixed nudge
+    assert rc.margin_db - start <= rc.max_jump_db  # but a single fade cannot strand the link
+
+
+def test_learned_margin_is_sticky_then_decays() -> None:
+    rc = RateController()
+    rc.observe(12.0, ok=0, failed=4, mode=4)
+    learned = rc.margin_db
+    for _ in range(rc.decay_every - 1):
+        rc.observe(12.0, ok=6, failed=0, mode=4)
+    assert rc.margin_db == learned  # a couple of clean bursts do not give it up
+    rc.observe(12.0, ok=6, failed=0, mode=4)
+    assert rc.margin_db < learned  # but it is not permanent either
+
+
+def test_margin_decays_freely_before_anything_is_learned() -> None:
+    """Stickiness protects a *learned* penalty; on a link that has never failed there is
+    nothing to protect, so a clean channel must still reach its mode quickly."""
+    rc = RateController()
+    for _ in range(3):
+        rc.observe(10.0, ok=6, failed=0, mode=0)
+    assert rc.margin_db < RateController().margin_db - 2 * rc.down_step_db

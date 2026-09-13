@@ -519,8 +519,8 @@ amendments (PN preamble sequences, layouts, mode table, P2-3 air interface).
 |---|---|---|
 | P2-1 ✅ | ARQ engine + session FSM (PHY-agnostic, event-driven `aether_model/link/`): selective repeat, ACK bitmap, RX-recommended mode, HARQ-IR combining with the RV carried in the pilot chips and the sequence number inferred for failed frames, connect/turn/disc handshakes, timers, BREAK, keep-alive. Two harnesses: a lossy-pipe discrete-event sim and a two-modem harness over the **real PHY + channel simulator** (bit-exact transfer; real LLR HARQ rescue below the mode threshold) | P1-7 |
 | P2-2 ✅ | Rate controller with hysteresis (`link/rate.py`: inner loop on measured thresholds, adaptive outer-loop margin, fast-down/slow-up state machine — settles with zero oscillation at a mode boundary, absorbs a 14 dB collapse in ≤ 3 bursts); `tools/bench_link.py` goodput-vs-SNR benchmark on AWGN/Good/Moderate/Poor plus ±8 dB fade ramps, both backends (`bench/README.md`) | P2-1 |
-| P2-2a | **Start-of-frame signal from PHY to link layer.** The IRS currently waits one whole data-frame time of silence to detect the end of a burst, ≈ 25 % of the air time; a preamble-detected callback would cut it to ≈ 0.45 s. Biggest single throughput win identified by the P2-2 benchmark | P2-2 |
-| P2-2b | Per-channel threshold learning in the rate controller (it only knows the AWGN table today, so it ends one or two modes low on Good/Moderate) | P2-2 |
+| P2-2a ✅ | Start-of-frame signal from PHY to link layer (`PhyTiming.preamble_detect_s`, `LinkEngine.on_preamble`): the IRS holds its ACK as soon as it hears the next frame begin instead of waiting a whole data frame of silence. **+13 % throughput**; steady-state efficiency 0.67 → 0.75. Still to do in Phase 3: have the real receiver emit the callback from the streaming detector | P2-2 |
+| P2-2b ✅ | The margin learns the channel: a failed burst at a known mode and SNR sets the implied penalty directly (capped 3 dB/burst) instead of creeping in fixed steps, and is held for three clean bursts before decaying. **+29 % on Moderate at +16 dB, +23 % on Good at +20 dB**; the controller now settles lower on fading channels and delivers more, because it no longer overshoots | P2-2 |
 | P2-3 ✅ (acquisition) | Low-SNR acquisition: PMF-FFT matched-filter bank, type-by-preamble-sequence, chip-signalled mode (ADR-0002 amendment) — 100 % at −5 dB, 87 % at −7 dB. Still open: a spread/repetition mode below −6 dB and the connect-probability benchmark | P1-1, P2-1 |
 | P2-4 | PAPR study & decision (clip-and-filter / tone reservation / DFT-spread) with saturating-PA model; ADR-0004 | P1-7 |
 | P2-5 | Impulsive-noise defence on the streaming RX (blanker + erasure LLR scaling) measured on class-A channel | P1-6 |
@@ -600,6 +600,6 @@ commands.
 16. **P1-9** Golden vectors v0 in `vectors/`.
 17. **P2-1** ✅ ARQ engine + session FSM + two-modem harness; protocol tests (`test_link.py`, `test_link_harness.py`).
 18. **P2-3** Low-SNR modes and robust control frames; connect-probability benchmark.
-19. **P2-2a** Start-of-frame signal to the link layer (≈ 25 % throughput).
+19. **P2-4** PAPR study and decision (ADR-0004).
 19. **P2-7** Draft `docs/spec/air-interface.md` v0.1 and `control-api.md` v0.1 from the working model.
 20. **P3-1** Scaffold the production core per ADR-0001 and port the FEC against golden vectors.
