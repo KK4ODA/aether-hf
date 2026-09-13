@@ -41,8 +41,10 @@ _HARQ_GAIN_DB = 3.0
 """Soft-combining energy gained per retransmission of the same block."""
 
 
-def _success_prob(mode: int, snr_db: float, energy_db: float) -> float:
-    threshold = AWGN_THRESHOLD_DB.get(mode, 0.0)
+def _success_prob(
+    mode: int, snr_db: float, energy_db: float, thresholds: dict[int, float] | None = None
+) -> float:
+    threshold = (thresholds or AWGN_THRESHOLD_DB).get(mode, 0.0)
     return 1.0 / (1.0 + math.exp(-_STEEP * (snr_db + energy_db - threshold)))
 
 
@@ -61,11 +63,13 @@ class SimFrame:
     t_end: float
     payload: bytes
     _draw: float
+    _thresholds: dict[int, float] | None = None
+    """Per-mode FER thresholds of the channel being modelled; AWGN when unset."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
         gained = prior + (_HARQ_GAIN_DB if buffer is not None else 0.0)
-        if self._draw <= _success_prob(self.mode, self.snr_db, gained):
+        if self._draw <= _success_prob(self.mode, self.snr_db, gained, self._thresholds):
             return self.payload, gained
         return None, gained
 
@@ -100,6 +104,8 @@ class TwoStationSim:
         seed: int = 0,
         prop_s: float = 0.01,
         frame_factory: FrameFactory | None = None,
+        thresholds: dict[int, float] | None = None,
+        snr_schedule: Callable[[float], float] | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -109,6 +115,9 @@ class TwoStationSim:
         self._seq = 0
         self.t = 0.0
         self._factory: FrameFactory = frame_factory or self._synthetic_frame
+        self.thresholds = thresholds
+        self.snr_schedule = snr_schedule
+        """SNR as a function of time, for ramps. Overrides :attr:`snr_db` when set."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
@@ -122,12 +131,16 @@ class TwoStationSim:
             t_end=t_end,
             payload=frame.payload,
             _draw=self.rng.random(),
+            _thresholds=self.thresholds,
         )
 
     # ── scheduling ────────────────────────────────────────────────────
 
     def set_snr(self, snr_db: float) -> None:
         self.snr_db = snr_db
+
+    def snr_at(self, t: float) -> float:
+        return self.snr_schedule(t) if self.snr_schedule is not None else self.snr_db
 
     def _push(self, t: float, kind: str, who: int, data: object = None) -> None:
         heapq.heappush(self._q, _Ev(t, self._seq, kind, who, data))
@@ -165,7 +178,7 @@ class TwoStationSim:
         if self._busy(rx, t0, t1):
             return  # half-duplex or collision: the receiver was transmitting
         arrival = t1 + self.prop_s
-        sf = self._factory(frame, self.snr_db, t0 + self.prop_s, arrival)
+        sf = self._factory(frame, self.snr_at(0.5 * (t0 + t1)), t0 + self.prop_s, arrival)
         if sf is None:
             return
         eng = self.st[rx].engine

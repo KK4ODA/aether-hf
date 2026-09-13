@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import pytest
 
 from aether_model.frame.modes import LONG, MODES, SHORT
@@ -131,14 +133,63 @@ def test_usable_modes_are_pareto_and_sorted() -> None:
         )
 
 
+def _settle(rc: RateController, snr_db: float, bursts: int = 20) -> int:
+    """Feed clean bursts at a fixed SNR until the recommendation stops moving."""
+    for _ in range(bursts):
+        rc.observe(snr_db, ok=6, failed=0)
+    return rc.recommend()
+
+
 def test_rate_recommendation_climbs_with_snr() -> None:
+    floor = usable_modes()[0]
     prev = -1
-    for snr in range(-4, 22, 2):
-        rc = RateController()
-        rc.observe(float(snr), ok=6, failed=0)
-        m = rc.recommend()
-        assert m >= prev
+    for snr in range(-6, 22, 2):
+        m = _settle(RateController(), float(snr))
+        assert m >= prev, (snr, m, prev)
+        # never recommends a mode the SNR cannot carry — unless already on the slowest one
+        assert m == floor or AWGN_THRESHOLD_DB[m] <= snr, (snr, m)
         prev = m
+
+
+def test_rate_controller_converges_quickly() -> None:
+    """A clean link must reach its final mode in a handful of bursts, not crawl up the table
+    one mode at a time for half a minute."""
+    for snr in (0.0, 8.0, 14.0, 20.0):
+        rc = RateController()
+        final = _settle(RateController(), snr)
+        track = [rc.observe(snr, ok=6, failed=0) or rc.recommend() for _ in range(20)]
+        assert track.index(final) + 1 <= 8, (snr, track)
+
+
+def _boundary_track(rc: RateController, snr_db: float, bursts: int) -> list[int]:
+    """Drive the controller against a channel that fails any mode needing more than
+    ``snr_db − 1`` dB, and return the sequence of recommendations."""
+    track = []
+    for _ in range(bursts):
+        m = rc.recommend()
+        track.append(m)
+        failed = 3 if AWGN_THRESHOLD_DB[m] > snr_db - 1.0 else 0
+        rc.observe(snr_db, ok=6 - failed, failed=failed)
+    return track
+
+
+def test_rate_controller_does_not_oscillate_at_a_mode_boundary() -> None:
+    """The point of the hysteresis: parked where two modes are nearly equally plausible, the
+    controller must settle instead of flapping and losing a burst to every change."""
+    track = _boundary_track(RateController(), 9.0, bursts=40)
+    assert len(set(track[-20:])) == 1, track  # perfectly steady once settled
+    assert AWGN_THRESHOLD_DB[track[-1]] <= 9.0
+
+
+def test_rate_controller_backs_off_fast_when_the_channel_collapses() -> None:
+    """Fast down, slow up: a 14 dB collapse must be absorbed in a couple of bursts."""
+    rc = RateController()
+    high = _settle(rc, 18.0)
+    track = _boundary_track(rc, 4.0, bursts=12)
+    assert track[0] == high
+    sustainable = next(i for i, m in enumerate(track) if AWGN_THRESHOLD_DB[m] <= 3.0)
+    assert sustainable <= 4, track
+    assert len(set(track[-5:])) == 1, track  # and it stays there
 
 
 def test_rate_margin_backs_off_on_failures() -> None:
@@ -150,6 +201,20 @@ def test_rate_margin_backs_off_on_failures() -> None:
         rc.observe(10.0, ok=0, failed=6)
     assert rc.margin_db > base  # failures widen the margin
     assert rc.recommend() <= good_mode  # a wider margin never picks a faster mode
+
+
+def _track_burst_modes(engine: LinkEngine) -> list[int]:
+    """Record the mode of every burst the engine sends (the controller's live decisions —
+    ``engine.rate`` itself is reset when the session ends)."""
+    track: list[int] = []
+    original = engine._send_burst
+
+    def wrapped() -> None:
+        track.append(min(engine._recommended, engine.cfg.max_mode))
+        original()
+
+    engine._send_burst = wrapped  # type: ignore[method-assign]
+    return track
 
 
 # ── session FSM over the simulator ────────────────────────────────────
@@ -261,3 +326,46 @@ def test_peer_disconnect_is_observed(timing: PhyTiming) -> None:
     sim.run(until=200)
     assert any("disconnected" in e for e in sim.events(1))
     assert b.state is State.IDLE
+
+
+def test_transfer_survives_a_slow_snr_ramp(timing: PhyTiming) -> None:
+    """P2-2: the channel fades from +18 dB to +2 dB and back over the transfer. The rate
+    controller must follow it down and up without losing the session or the data."""
+    a, b = _pair(timing)
+
+    def schedule(t: float) -> float:
+        """Triangular fade, 60 s period: +18 dB down to +2 and back."""
+        phase = t % 60.0
+        return 18.0 - 0.533 * phase if phase < 30.0 else 2.0 + 0.533 * (phase - 30.0)
+
+    sim = TwoStationSim(a, b, snr_db=18.0, seed=13, snr_schedule=schedule)
+    msg = bytes((i * 17) % 256 for i in range(12000))
+    track = _track_burst_modes(a)
+    a.connect("KK4XYZ")
+    a.send(msg)
+    a.disconnect()
+    sim.run(until=3000)
+    assert sim.delivered(1) == msg
+    assert len(set(track)) >= 4, track  # it really did move around the mode table
+    assert max(track) >= 8, track  # and exploited the good half of the fade
+    steps = [m for i, m in enumerate(track) if i == 0 or m != track[i - 1]]  # drop plateaus
+    deltas = [b_ - a_ for a_, b_ in pairwise(steps)]
+    reversals = sum(1 for x, y in pairwise(deltas) if x * y < 0)
+    assert reversals >= 2, track  # followed the channel down and back up
+
+
+def test_rate_control_beats_a_fixed_conservative_mode(timing: PhyTiming) -> None:
+    """Adaptation has to pay for itself: on a good channel the controller must finish a
+    transfer far sooner than a link pinned to the most robust mode."""
+    msg = bytes(6000)
+    times = {}
+    for name, cfg in (("adaptive", LinkConfig()), ("pinned", LinkConfig(max_mode=0))):
+        a = LinkEngine("W4ODA", timing, cfg, seed=1)
+        b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+        sim = TwoStationSim(a, b, snr_db=16.0, seed=21)
+        a.connect("KK4XYZ")
+        a.send(msg)
+        a.disconnect()
+        times[name] = sim.run(until=6000)
+        assert sim.delivered(1) == msg
+    assert times["adaptive"] < 0.25 * times["pinned"], times

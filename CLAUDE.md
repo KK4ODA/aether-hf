@@ -44,8 +44,9 @@ Phase 1 is complete in the model; Phase 2 is in progress on branch `phase-2`. Do
 P2-3 low-SNR acquisition (PMF-FFT bank in `phy/sync.py`, frame type by preamble sequence,
 mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FSM
 (`aether_model/link/`, PHY-agnostic, event-driven) with two harnesses — a lossy-pipe sim
-(`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`). Next: P2-2
-rate-control hysteresis + throughput benchmark, P2-4 PAPR study.
+(`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`); P2-2
+rate-control hysteresis and the `tools/bench_link.py` goodput benchmark. Next: P2-2a
+(start-of-frame signal to the link layer, ≈ 25 % throughput), P2-4 PAPR study.
 
 Link layer (`aether_model/link/`): `frames.py` (DATA/CONTROL/connect formats, callsign
 packing), `engine.py` (`LinkEngine`, event-driven: `connect/send/disconnect/tick/on_frame`
