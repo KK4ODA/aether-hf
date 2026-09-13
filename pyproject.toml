@@ -54,6 +54,7 @@ xfail_strict = true
 markers = [
   "slow: takes more than ~10 s; excluded from the default CI run with -m 'not slow'",
   "audit: documents a defect found in the 2026-09-13 audit (docs/AUDIT.md); flips to PASS when fixed",
+  "oracle: cross-checks against an optional third-party implementation (skipped when it is not installed)",
 ]
 filterwarnings = ["error::DeprecationWarning:aether_model.*"]
 
