@@ -17,10 +17,9 @@
 //! streaming receiver that takes blocks of any size and reports a frame's preamble as soon as
 //! acquisition finds it.
 //!
-//! # Not yet ported
-//!
-//! The transmitter here does not apply the ADR-0004 peak reduction the model applies by
-//! default, so it is compared against the model with that switched off.
+//! The transmitter applies ADR-0004 peak reduction by default, at the target its frame's
+//! constellation can absorb; `without_papr_reduction` turns it off for a benchmark or a
+//! comparison against an unclipped reference.
 
 pub mod blanker;
 pub mod codec;
@@ -29,6 +28,7 @@ pub mod fir;
 pub mod modem;
 pub mod modes;
 pub mod ofdm;
+pub mod papr;
 pub mod passband;
 pub mod preamble;
 pub mod rx;
@@ -49,6 +49,7 @@ pub use constellation::{Complex, Constellation, NoiseVar};
 pub use fir::{Fir, Sample};
 pub use modem::{DecodedFrame, Modem, ModemError};
 pub use modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, PREAMBLE_SYMBOLS, SHORT};
+pub use papr::{CLIP_TARGET_DB, CLIP_TARGET_DENSE_DB, ClipAndFilter, clip_target_db, papr_db};
 pub use passband::{AudioToBaseband, BasebandToAudio};
 pub use stream::{PendingFrame, StreamingReceiver};
 pub use waveform::{Bandwidth, Modulation, WIDE_2300, WaveformParams};

@@ -11,8 +11,9 @@
 
 use crate::{
     constellation::Complex,
-    modes::FrameLayout,
+    modes::{CONTROL_MODE, FrameLayout, MODES},
     ofdm::OfdmModulator,
+    papr::{ClipAndFilter, clip_target_db},
     preamble::{FrameHeader, FrameType, Preamble},
     waveform::{WIDE_2300, WaveformParams},
 };
@@ -24,6 +25,9 @@ pub struct FrameTransmitter {
     modulator: OfdmModulator,
     preamble: Preamble,
     n_data_carriers: usize,
+    /// Whether to apply ADR-0004 peak reduction. On by default; a benchmark or a comparison
+    /// against an unclipped reference turns it off.
+    pub papr_reduction: bool,
 }
 
 /// Why a frame could not be assembled.
@@ -61,7 +65,15 @@ impl FrameTransmitter {
             modulator,
             preamble: Preamble::new(params),
             n_data_carriers,
+            papr_reduction: true,
         }
+    }
+
+    /// The same transmitter with peak reduction switched off.
+    #[must_use]
+    pub fn without_papr_reduction(mut self) -> Self {
+        self.papr_reduction = false;
+        self
     }
 
     /// The modulator, for callers that need the carrier map.
@@ -113,7 +125,8 @@ impl FrameTransmitter {
         Ok(symbols)
     }
 
-    /// Windowed complex-baseband waveform of one frame, `layout.samples() + taper` long.
+    /// Windowed complex-baseband waveform of one frame, `layout.samples() + taper` long,
+    /// peak-reduced per ADR-0004 unless [`papr_reduction`](Self::papr_reduction) is off.
     ///
     /// # Errors
     /// If `qam` is not exactly the layout's slot count.
@@ -124,7 +137,20 @@ impl FrameTransmitter {
         qam: &[Complex],
     ) -> Result<Vec<Complex>, TxError> {
         let symbols = self.symbol_values(header, layout, qam)?;
-        Ok(self.modulator.modulate(&symbols))
+        let waveform = self.modulator.modulate(&symbols);
+        Ok(self.reduce_peaks(header, &waveform))
+    }
+
+    /// Apply ADR-0004 peak reduction, at the target this frame's constellation can absorb.
+    fn reduce_peaks(&self, header: &FrameHeader, waveform: &[Complex]) -> Vec<Complex> {
+        if !self.papr_reduction {
+            return waveform.to_vec();
+        }
+        let bits = match header.frame_type {
+            FrameType::Control => CONTROL_MODE.modulation.bits_per_symbol(),
+            FrameType::Data => MODES[header.mode].modulation.bits_per_symbol(),
+        };
+        ClipAndFilter::new(self.params, clip_target_db(bits)).process(waveform)
     }
 
     /// The numerology in use.
@@ -187,7 +213,14 @@ mod tests {
         let qam = codec.encode(&payload(codec.payload_bytes), 0).unwrap();
         let header = FrameHeader::new(FrameType::Data, 4, 0).unwrap();
         let expected = tx.symbol_values(&header, &LONG, &qam).unwrap();
-        let waveform = tx.baseband(&header, &LONG, &qam).unwrap();
+        // peak reduction off: what is under test is the modulator and demodulator agreeing
+        // exactly, and ADR-0004's clipping is a deliberate distortion on top of that. Its
+        // own cost is measured in `papr`, and what it does to a real frame is measured in
+        // `a_peak_reduced_frame_still_decodes`.
+        let waveform = FrameTransmitter::default()
+            .without_papr_reduction()
+            .baseband(&header, &LONG, &qam)
+            .unwrap();
         let period = WIDE_2300.symbol_samples();
 
         // the last symbol has no successor to overlap with, so stop one short

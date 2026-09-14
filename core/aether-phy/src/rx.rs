@@ -448,7 +448,20 @@ mod tests {
 
     /// Transmit a frame into a buffer with lead-in silence, as a receiver would see it.
     fn transmit(mode_index: usize, rv: u8, lead: usize) -> (Vec<Complex>, Vec<u8>, FrameSync) {
-        let tx = FrameTransmitter::default();
+        transmit_with(mode_index, rv, lead, false)
+    }
+
+    /// `peak_reduced` selects whether ADR-0004 clipping is applied. Most receiver tests want
+    /// it off, so that what they measure is the receiver rather than the transmitter's own
+    /// deliberate distortion.
+    fn transmit_with(
+        mode_index: usize,
+        rv: u8,
+        lead: usize,
+        peak_reduced: bool,
+    ) -> (Vec<Complex>, Vec<u8>, FrameSync) {
+        let mut tx = FrameTransmitter::default();
+        tx.papr_reduction = peak_reduced;
         let codec = FrameCodec::new(MODES[mode_index], LONG).expect("codec");
         let data = payload(codec.payload_bytes);
         let qam = codec.encode(&data, rv).expect("encode");
@@ -466,6 +479,48 @@ mod tests {
                 frame_type: FrameType::Data,
             },
         )
+    }
+
+    #[test]
+    fn a_peak_reduced_frame_still_decodes_and_says_what_it_cost() {
+        // ADR-0004 buys transmit power with in-band distortion, so a peak-reduced frame has
+        // a signal-to-noise ratio ceiling of its own that no receiver can see past. Every
+        // mode has to stay decodable under it, and the ceiling has to stay where the ADR
+        // measured it — if it drops, the mode thresholds move and the rate table is wrong.
+        for mode_index in [0usize, 4, 8, 13] {
+            let (buffer, data, sync) = transmit_with(mode_index, 0, 500, true);
+            let rx = FrameReceiver::default();
+            let frame = rx.receive(&buffer, &sync, None).expect("receive");
+            assert_eq!(frame.mode, mode_index, "mode of {mode_index}");
+
+            let codec = FrameCodec::new(MODES[mode_index], LONG).expect("codec");
+            let (payload, _) = codec
+                .decode(
+                    &frame.symbols,
+                    NoiseVar::PerSymbol(&frame.noise_var),
+                    0,
+                    None,
+                )
+                .expect("decode");
+            assert_eq!(
+                payload.as_deref(),
+                Some(data.as_slice()),
+                "mode {mode_index} did not survive its own peak reduction"
+            );
+
+            // the clip targets are −22.8 dB EVM for the PSK modes and −31.9 dB for the QAM
+            // ones; anything much below 20 dB here would mean the clipper had changed
+            let floor = if MODES[mode_index].modulation.bits_per_symbol() >= 4 {
+                28.0
+            } else {
+                20.0
+            };
+            assert!(
+                frame.snr_carrier_db > floor,
+                "mode {mode_index}: peak reduction left {:.1} dB, expected better than {floor}",
+                frame.snr_carrier_db
+            );
+        }
     }
 
     #[test]

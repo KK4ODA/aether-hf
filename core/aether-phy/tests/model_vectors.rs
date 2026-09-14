@@ -362,13 +362,19 @@ fn whole_frames_match_the_model() {
     // time samples goes with it, so a scaling or windowing error that happened to cancel at
     // the carriers would still be caught.
     //
-    // ADR-0004 peak reduction is off on both sides; the Rust transmitter does not implement
-    // it yet, and comparing against a model that does would compare two different waveforms.
+    // Every frame appears twice, with ADR-0004 peak reduction off and on. The unreduced pass
+    // compares the modulator alone; the reduced one compares the clipper as well, and the
+    // peak-to-average ratio it reaches — already checked below — is what says the two
+    // clippers agree rather than merely both being clippers.
     let doc = vectors();
     let cases = doc["waveform_frames"].as_array().expect("waveform frames");
     assert!(!cases.is_empty());
+    assert!(
+        cases.iter().any(|c| c["peak_reduced"] == true)
+            && cases.iter().any(|c| c["peak_reduced"] == false),
+        "the vectors must cover both, or one of the two paths goes untested"
+    );
 
-    let tx = FrameTransmitter::default();
     let demodulator = OfdmDemodulator::new(WIDE_2300);
     let period = WIDE_2300.symbol_samples();
 
@@ -383,6 +389,16 @@ fn whole_frames_match_the_model() {
             "long" => (MODES[int(case, "mode")], LONG),
             "short" => (CONTROL_MODE, SHORT),
             other => panic!("unknown layout {other}"),
+        };
+        let peak_reduced = case["peak_reduced"].as_bool().expect("peak_reduced");
+        let label = format!(
+            "{label}, peak reduction {}",
+            if peak_reduced { "on" } else { "off" }
+        );
+        let tx = if peak_reduced {
+            FrameTransmitter::default()
+        } else {
+            FrameTransmitter::default().without_papr_reduction()
         };
         let rv = int(case, "rv") as u8;
         let header = match case["frame_type"].as_str().expect("frame type") {
@@ -424,41 +440,41 @@ fn whole_frames_match_the_model() {
 
         // strided time samples
         let stride = int(case, "stride");
-        let expected_samples = case["strided_samples"].as_array().expect("strided samples");
-        for (index, want) in expected_samples.iter().enumerate() {
-            let got = waveform[index * stride];
-            let (wr, wi) = (want[0].as_f64().expect("re"), want[1].as_f64().expect("im"));
-            assert!(
-                (got.0 - wr).abs() < 1e-9 && (got.1 - wi).abs() < 1e-9,
-                "{label}: sample {} ({}, {}) vs ({wr}, {wi})",
-                index * stride,
-                got.0,
-                got.1
-            );
-        }
+        let sampled: Vec<(f64, f64)> =
+            (0..case["strided_samples"].as_array().expect("samples").len())
+                .map(|index| waveform[index * stride])
+                .collect();
+        expect_complex(
+            &sampled,
+            &case["strided_samples"],
+            &format!("{label}: samples"),
+        );
 
         // carrier values of every symbol the demodulator can reach
         let expected_carriers = case["carriers"].as_array().expect("carriers");
-        for (symbol, want_symbol) in expected_carriers.iter().enumerate() {
+        for (symbol, want) in expected_carriers.iter().enumerate() {
             let got = demodulator
                 .carriers(&waveform, symbol * period)
                 .expect("in range");
-            let want = want_symbol.as_array().expect("carrier values");
-            assert_eq!(
-                got.len(),
-                want.len(),
-                "{label}: symbol {symbol} carrier count"
-            );
-            for (carrier, (g, w)) in got.iter().zip(want).enumerate() {
-                let (wr, wi) = (w[0].as_f64().expect("re"), w[1].as_f64().expect("im"));
-                assert!(
-                    (g.0 - wr).abs() < 1e-9 && (g.1 - wi).abs() < 1e-9,
-                    "{label}: symbol {symbol} carrier {carrier}: ({}, {}) vs ({wr}, {wi})",
-                    g.0,
-                    g.1
-                );
-            }
+            expect_complex(&got, want, &format!("{label}: symbol {symbol}"));
         }
+    }
+}
+
+/// Compare complex values against a `[[re, im], ...]` array from the vector file.
+fn expect_complex(got: &[(f64, f64)], want: &Value, label: &str) {
+    let want = want
+        .as_array()
+        .unwrap_or_else(|| panic!("{label}: not an array"));
+    assert_eq!(got.len(), want.len(), "{label}: count");
+    for (index, (g, w)) in got.iter().zip(want).enumerate() {
+        let (wr, wi) = (w[0].as_f64().expect("re"), w[1].as_f64().expect("im"));
+        assert!(
+            (g.0 - wr).abs() < 1e-9 && (g.1 - wi).abs() < 1e-9,
+            "{label}: entry {index} is ({}, {}), the model has ({wr}, {wi})",
+            g.0,
+            g.1
+        );
     }
 }
 

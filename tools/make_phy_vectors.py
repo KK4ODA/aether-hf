@@ -203,10 +203,14 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
     commit. A strided set of time samples goes with it so a scaling or windowing error that
     somehow cancelled at the carriers would still show up.
 
-    Peak reduction (ADR-0004) is switched off: the Rust transmitter does not implement it
-    yet, and comparing against a model that does would be comparing two different waveforms.
+    Every case is emitted twice, with ADR-0004 peak reduction off and on. The unreduced
+    pass compares the modulator alone; the reduced one compares the clipper as well, and its
+    recorded peak-to-average ratio is what says the two clippers reached the same place.
     """
-    tx = FrameTransmitter(WIDE_2300, papr_reduction=False)
+    transmitters = {
+        False: FrameTransmitter(WIDE_2300, papr_reduction=False),
+        True: FrameTransmitter(WIDE_2300, papr_reduction=True),
+    }
     dem = OfdmDemodulator(WIDE_2300)
     period = WIDE_2300.symbol_samples
     out = []
@@ -226,30 +230,32 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
             if frame_type is FrameType.DATA
             else FrameHeader(FrameType.CONTROL)
         )
-        waveform = tx.baseband(header, layout, qam)
-        # carrier values of every symbol but the last (which has no successor to overlap)
-        carriers = [
-            complex_list(dem.carriers(waveform, i * period))
-            for i in range(layout.total_symbols - 1)
-        ]
-        power = float(np.mean(np.abs(waveform) ** 2))
-        peak = float(np.max(np.abs(waveform) ** 2))
-        out.append(
-            {
-                "mode": mode.index,
-                "mode_name": mode.name,
-                "layout": layout.name,
-                "frame_type": frame_type.name,
-                "rv": rv,
-                "payload": payload.hex(),
-                "n_samples": len(waveform),
-                "mean_power": power,
-                "papr_db": float(10 * np.log10(peak / power)),
-                "stride": 97,
-                "strided_samples": complex_list(waveform[::97]),
-                "carriers": carriers,
-            }
-        )
+        for peak_reduced, tx in transmitters.items():
+            waveform = tx.baseband(header, layout, qam)
+            # carrier values of every symbol but the last (no successor to overlap)
+            carriers = [
+                complex_list(dem.carriers(waveform, i * period))
+                for i in range(layout.total_symbols - 1)
+            ]
+            power = float(np.mean(np.abs(waveform) ** 2))
+            peak = float(np.max(np.abs(waveform) ** 2))
+            out.append(
+                {
+                    "mode": mode.index,
+                    "mode_name": mode.name,
+                    "layout": layout.name,
+                    "frame_type": frame_type.name,
+                    "rv": rv,
+                    "peak_reduced": peak_reduced,
+                    "payload": payload.hex(),
+                    "n_samples": len(waveform),
+                    "mean_power": power,
+                    "papr_db": float(10 * np.log10(peak / power)),
+                    "stride": 97,
+                    "strided_samples": complex_list(waveform[::97]),
+                    "carriers": carriers,
+                }
+            )
     return out
 
 
