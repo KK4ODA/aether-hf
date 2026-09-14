@@ -13,15 +13,16 @@
 //! # Not yet ported
 //!
 //! The transmitter here does not apply the ADR-0004 peak reduction the model applies by
-//! default, so it is compared against the model with that switched off. Acquisition, channel
-//! estimation and the receiver are still to come; until they are, this crate can build a
-//! frame and take one apart given its position, but it cannot find one in a stream.
+//! default, so it is compared against the model with that switched off. **Acquisition** is
+//! still to come: this crate can build a frame and take one apart given its position and a
+//! rough carrier offset, but it cannot yet find one in a stream.
 
 pub mod codec;
 pub mod constellation;
 pub mod modes;
 pub mod ofdm;
 pub mod preamble;
+pub mod rx;
 pub mod tx;
 pub mod waveform;
 
