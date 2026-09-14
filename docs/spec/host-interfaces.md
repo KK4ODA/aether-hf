@@ -92,7 +92,7 @@ Unsolicited, at any time.
 |---|---|
 | `PTT ON` / `PTT OFF` | The transmitter was keyed or released |
 | `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel |
-| `CONNECTED <mine> <remote> <bandwidth>` | A session came up |
+| `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
 | `DISCONNECTED` | A session ended |
 | `BUFFER <bytes>` | The number of payload bytes still to send changed |
 | `REGISTERED <call>` | Sent before `CONNECTED` |
@@ -142,7 +142,7 @@ changing as clients are tested against it, and it cannot destabilise the modem u
 | Client | Status |
 |---|---|
 | The test suite's own host client | **Passing** — setup, call, session notifications, payload both ways, second-host refusal |
-| Pat | **Not yet verified.** Open item for P3-5 |
+| Pat 1.0.0 | **Passing on the bench** (2026-09-14): two daemons over the simulated channel at 15 dB, Pat at both ends; a P2P B2F session — connect, SID exchange, a proposal, a message with a 6 000-byte incompressible attachment, `FF`/`FQ`, disconnect — in 84 s, the attachment byte-identical on arrival. One fix on the way: the called side's `CONNECTED` had named this station first. On the air: not yet |
 | Winlink Express | Not yet verified |
 | VarAC | Not yet verified |
 | BPQ32 | Not yet verified |
@@ -155,8 +155,9 @@ this table is what the compatibility claim rests on, and it should be read as ex
 
 ## 8. Open items for v1.0
 
-* Field verification with Pat, then Winlink Express P2P between two instances, then VarAC and
-  BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the matrix).
+* Pat on the air (the bench is done; `docs/user/field-test.md`), then Winlink Express P2P
+  between two instances, then VarAC and BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the
+  matrix). All four can now be tried with no radio over `[sim]`.
 * Compression negotiation (P3-6), which changes what `COMPRESSION` means from recorded to
   acted on.
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always

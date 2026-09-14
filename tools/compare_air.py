@@ -1,19 +1,26 @@
 """Measured against predicted: what a recorded session did, next to what the simulator says.
 
     python tools/compare_air.py field/sessions/<name>.json [--channel awgn|good|moderate|poor]
-                                [--baselines bench/baselines]
+                                [--baselines bench/baselines] [--no-sim]
 
 Field validation (roadmap Phase 6) ends with "simulator-vs-air throughput within 20 %", and
 this is the comparison. From the sidecar it takes what the receiving station measured —
-the frames it heard, their modes and SNRs, which decoded, and the bytes delivered over the
-session — and puts beside each number what the committed benchmark curves predict at the
-same SNR: the AWGN frame error rate per mode (`phy_fer_awgn14.csv`) and the link goodput per
-channel class (`link_throughput.csv`), interpolated. The channel class is the operator's call
-(`--channel`); without it every class is shown, and the one the air was closest to is the
-one to write down.
+the frames it heard, their modes and SNRs, which decoded, and the link bytes delivered over
+the session — and puts beside each number what the simulator says for the same SNR:
 
-A session that disagrees with the simulator by more than 20 % is not a failure of either —
-it is the number the roadmap says to recalibrate on, once there are enough of them.
+* the AWGN frame error rate per mode, from the committed curve (`phy_fer_awgn14.csv`);
+* the link goodput the reference model's discrete-event simulator delivers for **this
+  session's size** at this SNR on this channel class, with a real station's latency
+  (a quarter-second playback backlog and the keying lead, which the benchmark grid does
+  not carry) — the like-for-like number, and the one the 20 % verdict is against;
+* the committed asymptotic goodput curve (`link_throughput.csv`, 16 kB transfers), for
+  scale: a short session sits below it because connect, the rate ramp and the disconnect
+  are a larger share of it.
+
+The channel class is the operator's call (`--channel`); without it every class is shown, and
+the one the air was closest to is the one to write down. A session that disagrees with the
+simulator by more than 20 % is not a failure of either — it is the number the roadmap says
+to recalibrate on, once there are enough of them.
 """
 
 from __future__ import annotations
@@ -21,14 +28,66 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 import statistics
 import sys
 from collections import defaultdict
 from itertools import pairwise
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from aether_model.frame.modes import LONG, MODES, SHORT
+from aether_model.link.engine import LinkEngine
+from aether_model.link.phy import PhyTiming
+from aether_model.link.sim import TwoStationSim
+from bench_link import channel_thresholds
+
 ROOT = Path(__file__).resolve().parents[1]
 CLASSES = ("awgn", "good", "moderate", "poor")
+
+# What a real station adds that the benchmark grid does not: the daemon keeps a quarter of
+# a second of playback queued ahead of the sound card and keys 0.1 s before a burst
+# (`PhyTiming.tx_latency_s`), and the samples take about as long again to come back
+# through the other station's capture and receiver.
+REAL_TX_LATENCY_S = 0.4
+REAL_PROPAGATION_S = 0.45
+
+
+def predict_session(
+    link_bytes: int, snr_db: float, channel: str, fer_csv: Path, trials: int = 3
+) -> float:
+    """Goodput the reference model's simulator gives a session of this size, with a real
+    station's latency: connect, one transfer, disconnect, averaged over a few seeds."""
+    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    timing = PhyTiming(
+        data_frame_s=LONG.duration_s,
+        control_frame_s=SHORT.duration_s,
+        data_capacity=caps,
+        tx_latency_s=REAL_TX_LATENCY_S,
+        preamble_detect_s=4 * LONG.waveform.symbol_period_s,
+    )
+    thresholds = None if channel == "awgn" else channel_thresholds(fer_csv).get(channel)
+    payload = bytes(random.Random(7).getrandbits(8) for _ in range(link_bytes))
+    rates = []
+    for trial in range(trials):
+        a = LinkEngine("W4ODA", timing, None, seed=100 + trial)
+        b = LinkEngine("KK4XYZ", timing, None, seed=200 + trial)
+        sim = TwoStationSim(
+            a,
+            b,
+            snr_db=snr_db,
+            seed=300 + trial,
+            prop_s=REAL_PROPAGATION_S,
+            thresholds=thresholds,
+        )
+        a.connect("KK4XYZ")
+        a.send(payload)
+        a.disconnect()
+        seconds = sim.run(until=80.0 * link_bytes / 1000.0 + 400.0)
+        rates.append(8 * len(sim.delivered(1)) / seconds if seconds > 0 else 0.0)
+    return statistics.mean(rates)
 
 
 def interpolate(points: list[tuple[float, float]], x: float) -> float | None:
@@ -72,7 +131,7 @@ def goodput_curves(path: Path) -> dict[str, list[tuple[float, float]]]:
     return averaged
 
 
-def report(sidecar: Path, channel: str | None, baselines: Path) -> int:
+def report(sidecar: Path, channel: str | None, baselines: Path, simulate: bool) -> int:
     document = json.loads(sidecar.read_text(encoding="utf-8"))
     if document.get("format") != "aether-hf-session/1":
         sys.exit(f"{sidecar}: not a session sidecar")
@@ -103,8 +162,8 @@ def report(sidecar: Path, channel: str | None, baselines: Path) -> int:
         failed = sum(1 for f in heard if not f["decoded"])
         snr = statistics.mean(float(f["snr_3k_db"]) for f in heard)
         measured = failed / len(heard)
-        predicted = interpolate(fer.get(mode, []), snr)
-        shown = f"{predicted:9.3f}" if predicted is not None else f"{'-':>9}"
+        expected = interpolate(fer.get(mode, []), snr)
+        shown = f"{expected:9.3f}" if expected is not None else f"{'-':>9}"
         print(f"{mode:>4} {len(heard):>6} {failed:>6} {snr:>7.1f} {measured:>9.3f} {shown}")
 
     delivered = counters.get("bytes_delivered")
@@ -122,20 +181,26 @@ def report(sidecar: Path, channel: str | None, baselines: Path) -> int:
     )
     goodput = goodput_curves(baselines / "link_throughput.csv")
     classes = [channel] if channel else list(CLASSES)
-    worst_within = None
+    within = None
+    print(f"{'class':>10} {'same session':>14} {'ratio':>6}  {'16 kB curve':>12}")
     for name in classes:
-        predicted = interpolate(goodput.get(name, []), mean_snr)
+        asymptotic = interpolate(goodput.get(name, []), mean_snr)
+        shown_curve = f"{asymptotic:9.0f} b/s" if asymptotic is not None else f"{'-':>12}"
+        if simulate:
+            predicted: float | None = predict_session(
+                int(delivered), mean_snr, name, baselines / "phy_fer.csv"
+            )
+        else:
+            predicted = asymptotic
         if predicted is None:
-            print(f"  {name:>8}: no baseline")
+            print(f"{name:>10} {'no baseline':>14}")
             continue
         ratio = measured_bps / predicted if predicted else float("inf")
         verdict = "within 20 %" if 0.8 <= ratio <= 1.2 else f"{(ratio - 1) * 100:+.0f} %"
-        print(
-            f"  {name:>8}: predicted {predicted:6.0f} bit/s  measured/predicted {ratio:5.2f}  {verdict}"
-        )
+        print(f"{name:>10} {predicted:10.0f} b/s {ratio:6.2f}  {shown_curve}  {verdict}")
         if channel:
-            worst_within = 0.8 <= ratio <= 1.2
-    if channel and worst_within is False:
+            within = 0.8 <= ratio <= 1.2
+    if channel and within is False:
         print("\nthe air and the simulator disagree by more than 20 % for this channel class")
         return 1
     return 0
@@ -146,8 +211,13 @@ def main() -> int:
     parser.add_argument("sidecar", type=Path)
     parser.add_argument("--channel", choices=CLASSES, help="the channel class the air was")
     parser.add_argument("--baselines", type=Path, default=ROOT / "bench" / "baselines")
+    parser.add_argument(
+        "--no-sim",
+        action="store_true",
+        help="compare with the asymptotic curve only, without running the simulator",
+    )
     args = parser.parse_args()
-    return report(args.sidecar, args.channel, args.baselines)
+    return report(args.sidecar, args.channel, args.baselines, not args.no_sim)
 
 
 if __name__ == "__main__":

@@ -420,18 +420,29 @@ fn report_state(
     let detail = data["detail"].as_str().unwrap_or("");
     match name {
         "connected" => {
-            // the detail is "<call> (role)"; the callsign is what the host wants
-            let remote = detail.split_whitespace().next().unwrap_or("").to_owned();
+            // the detail is "<call> (role)"; the callsign is what the host wants, and the
+            // role decides the order of the two: the published form is CONNECTED <caller>
+            // <called>, so a station that was called puts the caller first. Pat ignores a
+            // CONNECTED whose second callsign is not its own — found with Pat itself over
+            // the simulated channel, when the called side never learned it had been called.
+            let mut words = detail.split_whitespace();
+            let remote = words.next().unwrap_or("").to_owned();
+            let called = words.next() == Some("(irs)");
             *connected_to = Some(remote.clone());
             let mine = host.my_call().unwrap_or("").to_owned();
+            let (caller, callee) = if called {
+                (remote, mine.clone())
+            } else {
+                (mine.clone(), remote)
+            };
             // a client that thinks the modem is speed-limited warns its user about it; this
             // one is free software and has no such limit, so say so before the session
-            say(writer, &Notification::Registered(mine.clone()).line())
+            say(writer, &Notification::Registered(mine).line())
                 && say(
                     writer,
                     &Notification::Connected {
-                        mine,
-                        remote,
+                        caller,
+                        called: callee,
                         bandwidth_hz: BANDWIDTH_HZ,
                     }
                     .line(),
@@ -669,6 +680,52 @@ mod tests {
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED W4ODA KK4XYZ 2300");
 
+        stop.store(true, Ordering::Relaxed);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn a_station_that_was_called_puts_the_caller_first() {
+        // Pat over the simulated channel: the called side's Pat never learned it had been
+        // called, because CONNECTED named this station first and a host ignores a CONNECTED
+        // whose second callsign is not its own. The published form is <caller> <called>.
+        let (handle, control) = channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            let mut announced = false;
+            while !flag.load(Ordering::Relaxed) {
+                for command in control.drain() {
+                    let _ = command
+                        .reply
+                        .send(Response::ok(command.request.id.clone(), json!({})));
+                }
+                if !announced && control.subscriber_count() > 0 {
+                    announced = true;
+                    // somebody called us: the modem reports the peer and our role
+                    control.publish(&Event::new(
+                        "state",
+                        json!({"name": "connected", "detail": "KK4XYZ (irs)"}),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        let server = HostServer::start(
+            &HostConfig {
+                enabled: true,
+                bind: "127.0.0.1:0".to_owned(),
+            },
+            handle,
+        )
+        .expect("start");
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let connected = client.expect(|l| l.starts_with("CONNECTED"));
+        assert_eq!(connected, "CONNECTED KK4XYZ W4ODA 2300");
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");
     }

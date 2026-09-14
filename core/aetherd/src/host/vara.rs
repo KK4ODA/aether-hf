@@ -291,10 +291,11 @@ pub enum Notification {
     Busy(bool),
     /// A session is up.
     Connected {
-        /// This station.
-        mine: String,
-        /// The other one.
-        remote: String,
+        /// The station that called.
+        caller: String,
+        /// The station that was called. A host takes a `CONNECTED` whose second callsign is
+        /// not its own as somebody else's business, so the order is not decoration.
+        called: String,
         /// The bandwidth in use, in hertz.
         bandwidth_hz: u32,
     },
@@ -320,11 +321,11 @@ impl Notification {
             Self::Busy(true) => out.push_str("BUSY ON"),
             Self::Busy(false) => out.push_str("BUSY OFF"),
             Self::Connected {
-                mine,
-                remote,
+                caller,
+                called,
                 bandwidth_hz,
             } => {
-                let _ = write!(out, "CONNECTED {mine} {remote} {bandwidth_hz}");
+                let _ = write!(out, "CONNECTED {caller} {called} {bandwidth_hz}");
             }
             Self::Disconnected => out.push_str("DISCONNECTED"),
             Self::Buffer(bytes) => {
@@ -515,8 +516,8 @@ mod tests {
         assert_eq!(Notification::IAmAlive.line(), "IAMALIVE");
         assert_eq!(
             Notification::Connected {
-                mine: "W4ODA".into(),
-                remote: "KK4XYZ".into(),
+                caller: "W4ODA".into(),
+                called: "KK4XYZ".into(),
                 bandwidth_hz: BANDWIDTH_HZ,
             }
             .line(),
