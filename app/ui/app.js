@@ -385,8 +385,10 @@ async function loadDevices() {
   fill($("dev-in"), all.filter((d) => d.input).map((d) => d.name), "system default");
   fill($("dev-out"), all.filter((d) => d.output).map((d) => d.name), "system default");
   fill($("dev-ptt"), devicesSeen.serial_ports, "none (VOX or receive only)");
+  $("dev-in").addEventListener("change", checkRates);
+  $("dev-out").addEventListener("change", checkRates);
   fillProfiles();
-  markStep(2, true);
+  checkRates();
   writeConfig();
 }
 
@@ -426,6 +428,28 @@ async function loadConfig() {
 
 function select(element, value) {
   if ([...element.options].some((option) => option.value === value)) element.value = value;
+}
+
+// The modem runs at 48 kHz and does not resample. On Windows a USB radio codec runs at
+// whatever Sound settings say, and 44.1 kHz is a common factory setting — so say so here,
+// where it can be fixed, rather than let the daemon refuse to start later.
+function rateProblem(name, direction) {
+  if (!name) return "";
+  const device = devicesSeen.devices.find((d) => d.name === name);
+  const rates = device?.[direction === "capture" ? "input_rates" : "output_rates"] ?? [];
+  if (rates.length === 0 || rates.includes(48000)) return "";
+  return `${name} ${direction === "capture" ? "captures" : "plays"} at ${rates.join(" or ")} Hz, and the modem needs 48000 Hz. On Windows: Settings > System > Sound > the device > Advanced, set the format to 48000 Hz, then reload this page.`;
+}
+
+function checkRates() {
+  const problems = [
+    rateProblem($("dev-in").value, "capture"),
+    rateProblem($("dev-out").value, "playback"),
+  ].filter(Boolean);
+  $("rate-note").textContent = problems.join(" ");
+  $("rate-note").hidden = problems.length === 0;
+  markStep(2, problems.length === 0 && Boolean($("wz-profile").value));
+  return problems.length === 0;
 }
 
 function writeConfig() {
@@ -544,6 +568,7 @@ function applyProfile() {
   const output = matching.find((d) => d.output)?.name;
   if (input) select($("dev-in"), input);
   if (output) select($("dev-out"), output);
+  checkRates();
   if (profile.ptt === "none") {
     $("dev-ptt").value = "";
   } else if ($("dev-ptt").value === "" && devicesSeen.serial_ports.length === 1) {

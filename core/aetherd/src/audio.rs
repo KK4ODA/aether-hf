@@ -60,8 +60,9 @@ impl core::fmt::Display for AudioError {
             ),
             Self::Unsupported(detail) => write!(
                 f,
-                "the audio device cannot do what the modem needs ({detail}). The modem runs at \
-                 48 kHz; on Windows, check the device's default format in Sound settings"
+                "{detail}. On Windows: Settings > System > Sound > the device > Advanced, set \
+                 the format to 48000 Hz; on Linux the card's rate is whatever ALSA or \
+                 PipeWire is configured for"
             ),
             Self::Stream(detail) => write!(
                 f,
@@ -119,7 +120,12 @@ impl Default for AudioConfig {
     }
 }
 
-/// Name and channel count of a device the system offers.
+/// A device the system offers, and the sample rates it will run at.
+///
+/// The rates are the point. On Windows a USB radio codec runs at whatever its "default
+/// format" is set to in Sound settings, and 44.1 kHz is a common factory setting; the modem
+/// needs 48 kHz and does not resample, so a panel that knows the rates can say "set this
+/// device to 48 kHz" before the daemon fails to start, instead of after.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInfo {
     /// What to put in the configuration file.
@@ -128,6 +134,28 @@ pub struct DeviceInfo {
     pub input: bool,
     /// Whether it can play.
     pub output: bool,
+    /// Sample rates it captures at, in Hz. Empty when it cannot capture, or will not say.
+    pub input_rates: Vec<u32>,
+    /// Sample rates it plays at, in Hz.
+    pub output_rates: Vec<u32>,
+}
+
+/// The distinct sample rates a set of stream configurations covers.
+///
+/// A range is reported as its two ends: a shared-mode Windows device has one rate and
+/// reports it twice; ALSA reports a real span, and naming its ends is enough to tell an
+/// operator whether 48 kHz is inside it.
+fn rates_of<I>(ranges: I) -> Vec<u32>
+where
+    I: IntoIterator<Item = cpal::SupportedStreamConfigRange>,
+{
+    let mut rates: Vec<u32> = ranges
+        .into_iter()
+        .flat_map(|range| [range.min_sample_rate().0, range.max_sample_rate().0])
+        .collect();
+    rates.sort_unstable();
+    rates.dedup();
+    rates
 }
 
 /// Every audio device the system offers, for an operator choosing one.
@@ -146,6 +174,14 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, AudioError> {
                 name,
                 input: device.default_input_config().is_ok(),
                 output: device.default_output_config().is_ok(),
+                input_rates: device
+                    .supported_input_configs()
+                    .map(rates_of)
+                    .unwrap_or_default(),
+                output_rates: device
+                    .supported_output_configs()
+                    .map(rates_of)
+                    .unwrap_or_default(),
             }
         })
         .collect())
@@ -344,10 +380,23 @@ fn stream_config(
         .filter(|range| range.sample_format() == cpal::SampleFormat::F32)
         .find(|range| range.min_sample_rate() <= wanted && wanted <= range.max_sample_rate())
         .ok_or_else(|| {
-            AudioError::Unsupported(format!(
-                "{} at {rate} Hz in 32-bit float",
-                if input { "capture" } else { "playback" }
-            ))
+            // Say what the device *does* offer: "44100" is the whole diagnosis, and the
+            // fix is one setting away
+            let offered = rates_of(supported.iter().copied());
+            let direction = if input { "capture" } else { "playback" };
+            let name = device.name().unwrap_or_else(|_| "the device".to_owned());
+            AudioError::Unsupported(if offered.is_empty() {
+                format!("{direction} on {name:?} offers no format the modem can use")
+            } else {
+                format!(
+                    "{direction} on {name:?} runs at {} Hz, and the modem needs {rate} Hz",
+                    offered
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                )
+            })
         })?;
     Ok((*chosen).with_sample_rate(wanted).config())
 }

@@ -24,3 +24,5 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# native message boxes, for the one thing the panel cannot show: why the daemon did not start
+tauri-plugin-dialog = "2"

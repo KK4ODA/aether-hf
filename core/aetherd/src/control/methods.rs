@@ -132,14 +132,22 @@ impl DaemonState {
 pub fn device_inventory() -> Value {
     match crate::audio::list_devices() {
         Ok(devices) => json!({
-            "devices": devices
-                .iter()
-                .map(|d| json!({"name": d.name, "input": d.input, "output": d.output}))
-                .collect::<Vec<_>>(),
+            "devices": devices.iter().map(device_json).collect::<Vec<_>>(),
             "serial_ports": crate::ptt::list_serial_ports(),
         }),
         Err(error) => json!({ "error": error.to_string() }),
     }
+}
+
+/// One audio device, as the API describes it.
+fn device_json(device: &crate::audio::DeviceInfo) -> Value {
+    json!({
+        "name": device.name,
+        "input": device.input,
+        "output": device.output,
+        "input_rates": device.input_rates,
+        "output_rates": device.output_rates,
+    })
 }
 
 /// Handle one request against a station.
@@ -466,10 +474,7 @@ fn devices(id: Option<String>) -> Response {
         Ok(devices) => Response::ok(
             id,
             json!({
-                "devices": devices
-                    .iter()
-                    .map(|d| json!({"name": d.name, "input": d.input, "output": d.output}))
-                    .collect::<Vec<_>>(),
+                "devices": devices.iter().map(device_json).collect::<Vec<_>>(),
                 "serial_ports": crate::ptt::list_serial_ports(),
             }),
         ),

@@ -136,7 +136,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: |
+            core
+            app/src-tauri
+
+      # The shell bundles the daemon as a sidecar, and Tauri's build script insists the
+      # sidecar exists before it will build anything — so the daemon comes first.
+      - name: Build and stage the daemon
+        run: python tools/stage_daemon.py
 
       - name: Format check
         working-directory: app/src-tauri

@@ -237,6 +237,13 @@ main {
   max-width: 68ch;
 }
 
+.note.warn {
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+  padding-left: 10px;
+  margin-top: 8px;
+}
+
 .sub {
   color: var(--ink-faint);
   font-size: 12px;

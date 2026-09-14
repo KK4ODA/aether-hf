@@ -27,6 +27,7 @@ use std::{
 };
 
 use tauri::Manager as _;
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
 
 /// Where the daemon listens by default. The shell does not currently offer to change it;
 /// an operator who has moved it can run the daemon themselves and the shell will attach.
@@ -41,31 +42,53 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// The daemon this shell started, if it started one.
 struct Daemon(Mutex<Option<Child>>);
 
+/// Why the daemon could not be started, if it could not.
+struct StartupError(Option<String>);
+
 fn main() {
-    let started = match ensure_daemon() {
-        Ok(child) => child,
+    let context = tauri::generate_context!();
+    // Where the bundler put the panel: beside the binary on Windows, under /usr/lib on a
+    // Debian package, inside the mounted image for an AppImage. Tauri's own resolver knows
+    // every layout it produces, which is the reason to ask it rather than guess.
+    let resources =
+        tauri::utils::platform::resource_dir(context.package_info(), &tauri::Env::default()).ok();
+    let (started, failure) = match ensure_daemon(resources.as_deref()) {
+        Ok(child) => (child, None),
         Err(message) => {
-            // Nothing to show it in yet, so the terminal is the only place it can go. A
-            // packaged build has no terminal, which is why the panel also renders its own
-            // "not connected" state and keeps retrying.
             eprintln!("aether: {message}");
-            None
+            (None, Some(message))
         }
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Daemon(Mutex::new(started)))
+        .manage(StartupError(failure))
+        .setup(|app| {
+            // A packaged build has no terminal, so a daemon that would not start has to be
+            // explained on screen: the panel would otherwise sit at "not connected" for ever,
+            // with the reason — a sound card at the wrong rate, a serial port that is held —
+            // written somewhere nobody is looking.
+            if let Some(message) = &app.state::<StartupError>().0 {
+                app.dialog()
+                    .message(message)
+                    .title("Aether HF could not start the modem")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 stop_daemon(&window.state::<Daemon>());
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("the desktop shell could not start");
 }
 
 /// Start the daemon unless one is already listening.
-fn ensure_daemon() -> Result<Option<Child>, String> {
+fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, String> {
     if reachable() {
         // Somebody is already running one — a service, or a terminal. Attaching is right:
         // two modems on one sound card is not a situation to invent behaviour for.
@@ -76,10 +99,20 @@ fn ensure_daemon() -> Result<Option<Child>, String> {
     let config = config_path()?;
     let mut command = Command::new(&binary);
     command.arg("--config").arg(&config);
-    if let Some(ui) = ui_dir() {
+    if let Some(ui) = ui_dir(resources) {
         command.env("AETHER_UI_DIR", ui);
     }
-    let child = command
+    // The daemon's output goes to a file, not a pipe: a pipe nobody drains would stall the
+    // daemon once it filled, and a file is also the only record a packaged build keeps of
+    // what the daemon said. Truncated on every start so it describes this run.
+    let log = daemon_log_path(&config);
+    if let Ok(file) = std::fs::File::create(&log) {
+        if let Ok(errors) = file.try_clone() {
+            command.stderr(errors);
+        }
+        command.stdout(file);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| format!("cannot start {}: {e}", binary.display()))?;
 
@@ -87,6 +120,18 @@ fn ensure_daemon() -> Result<Option<Child>, String> {
     while Instant::now() < deadline {
         if reachable() {
             return Ok(Some(child));
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            // it gave up before it listened; what it said on the way out is the reason
+            let said = tail_of(&log, 12);
+            return Err(if said.is_empty() {
+                format!("the modem daemon stopped ({status}) without saying why")
+            } else {
+                format!(
+                    "The modem daemon stopped:\n\n{said}\n\nFix the setting it names, then start Aether HF again. The configuration is {}.",
+                    config.display()
+                )
+            });
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -96,14 +141,32 @@ fn ensure_daemon() -> Result<Option<Child>, String> {
     ))
 }
 
+/// Where the daemon's own output is kept: beside the configuration, which is the one place
+/// an operator already knows to look.
+fn daemon_log_path(config: &std::path::Path) -> PathBuf {
+    config.parent().map_or_else(
+        || PathBuf::from("aetherd.log"),
+        |dir| dir.join("aetherd.log"),
+    )
+}
+
+/// The last few lines of a file, for showing a person.
+fn tail_of(path: &std::path::Path, lines: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    let start = all.len().saturating_sub(lines);
+    all[start..].join("\n").trim().to_owned()
+}
+
 fn reachable() -> bool {
     CONTROL.parse().is_ok_and(|address| {
         TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
     })
 }
 
-/// Where the daemon binary is: beside this one, which is how it is packaged, and failing
-/// that in the workspace's build output, which is where it is during development.
+/// Where the daemon binary is: beside this one, which is where the bundler's sidecar lands
+/// on every platform, and failing that in the workspace's build output, which is where it
+/// is during development.
 fn daemon_path() -> Result<PathBuf, String> {
     let name = if cfg!(windows) {
         "aetherd.exe"
@@ -136,16 +199,21 @@ fn daemon_path() -> Result<PathBuf, String> {
     ))
 }
 
-/// Where the station panel is: beside this binary in a package, or `app/ui` in a checkout.
-fn ui_dir() -> Option<PathBuf> {
+/// Where the station panel is: in the package's resources, beside this binary, or `app/ui`
+/// in a checkout, in that order.
+fn ui_dir(resources: Option<&std::path::Path>) -> Option<PathBuf> {
     let own = std::env::current_exe().ok()?;
     let dir = own.parent()?;
-    for candidate in [dir.join("ui"), dir.join("../../../ui")] {
-        if candidate.join("index.html").is_file() {
-            return candidate.canonicalize().ok();
-        }
+    let mut candidates = Vec::new();
+    if let Some(resources) = resources {
+        candidates.push(resources.join("ui"));
     }
-    None
+    candidates.push(dir.join("ui"));
+    candidates.push(dir.join("../../../ui"));
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("index.html").is_file())
+        .and_then(|found| found.canonicalize().ok())
 }
 
 /// Where the operator's configuration lives.
