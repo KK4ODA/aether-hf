@@ -4,15 +4,23 @@
 //! specification (ADR-0001), and `tests/model_vectors.rs` checks this crate against vectors
 //! it generates.
 //!
-//! Frame formats and the rate controller are here. The ARQ engine and session state machine
-//! are still to come; until they are, this crate can build and parse every frame the protocol
-//! uses and decide which mode to ask for, but it cannot run a session.
+//! * [`frames`] — the wire formats, data and control.
+//! * [`rate`] — the receiver-side mode recommendation.
+//! * [`phy`] — what the engine needs from a physical layer, and nothing more.
+//! * [`engine`] — the ARQ engine and session state machine.
+//! * [`sim`] — two engines over a lossy pipe, for testing the protocol without DSP.
 
+pub mod engine;
 pub mod frames;
+pub mod phy;
 pub mod rate;
+pub mod sim;
 
+pub use engine::{Action, LinkConfig, LinkEngine, LinkStats, Role, State};
 pub use frames::{
     CONTROL_BYTES, ConnectBody, ControlFrame, ControlKind, DATA_HEADER, DataHeader, DataKind,
     FrameError, WINDOW,
 };
+pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};
+pub use sim::{SimFrame, TwoStationSim};

@@ -14,4 +14,5 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
+aether-phy = { path = "../aether-phy" }
 serde_json = "1"
