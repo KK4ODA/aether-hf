@@ -61,6 +61,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # cpal builds against the system audio API; on Linux that is ALSA, and its headers are
+      # not on the runner by default. Nothing here opens a device — there is no sound card on
+      # a runner — but the daemon crate will not compile without them.
+      - name: Install ALSA headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
