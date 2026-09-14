@@ -91,7 +91,8 @@ jobs:
           uv run python tools/make_fec_vectors.py
           uv run python tools/make_phy_vectors.py
           uv run python tools/make_phy_tables.py
-          git diff --exit-code core/aether-fec/tests/data/fec_vectors.json core/aether-phy/tests/data/phy_vectors.json core/aether-phy/data/preamble_tables.json
+          uv run python tools/make_link_vectors.py
+          git diff --exit-code core/aether-fec/tests/data/fec_vectors.json core/aether-phy/tests/data/phy_vectors.json core/aether-phy/data/preamble_tables.json core/aether-link/tests/data/link_vectors.json
 
       - name: Tests
         working-directory: core

@@ -1,0 +1,17 @@
+[package]
+name = "aether-link"
+description = "Aether HF link layer: frame formats, ARQ engine and session state machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"

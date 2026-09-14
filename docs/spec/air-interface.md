@@ -245,6 +245,12 @@ CONTROL container:
 
 Kinds: `ACK`, `POLL`, `TURN`, `DISC`, `DISC_ACK`.
 
+The SNR byte is the measurement rounded to the nearest integer decibel and clamped to
+−40 … +40, with **ties rounded to even** (12.5 dB encodes as 12, 13.5 as 14). The tie rule
+is stated because it is the kind of detail two implementations silently disagree on —
+Python rounds halves to even and Rust rounds them away from zero — and a wire format that
+two correct implementations encode differently is not a wire format.
+
 ### 7.2 Session
 
 One station is the information sending station (ISS), the other the information receiving

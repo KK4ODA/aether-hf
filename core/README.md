@@ -7,7 +7,7 @@ these crates are the implementation, and the two are required to agree bit-for-b
 |---|---|---|
 | `aether-fec` | done | TS 38.212 CRCs, LDPC (BG1/BG2) encode and layered decode, rate matching with incremental redundancy |
 | `aether-phy` | in progress (P3-2) | waveform, constellations, mode table, frame codec, OFDM, preamble and transmitter — all cross-validated against the model. Acquisition, channel estimation and the receiver still to come |
-| `aether-link` | planned (P3-2) | ARQ engine and session state machine |
+| `aether-link` | in progress (P3-2) | frame formats and rate control — cross-validated. The ARQ engine and session state machine are still to come |
 | `aether-hal`, `aether-api`, `aetherd` | planned (P3-3, P3-4) | audio, PTT, control plane, daemon |
 
 ```
