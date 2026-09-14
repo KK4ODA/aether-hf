@@ -1,0 +1,491 @@
+/* Aether HF — the station panel.
+ *
+ * Dark by default. This is looked at in a shack at night as often as at a desk, and an
+ * instrument that glows white at two in the morning is the wrong instrument. A light
+ * variant follows the system setting for the people who want one.
+ *
+ * Everything is a token so the two themes stay one design rather than two. */
+
+:root {
+  color-scheme: dark;
+
+  --ink: #e8eaed;
+  --ink-dim: #98a0aa;
+  --ink-faint: #6b737d;
+  --ground: #14171b;
+  --panel: #1c2026;
+  --panel-raised: #232830;
+  --edge: #2f3640;
+
+  /* One accent, used for the thing the operator acts on and nothing else. */
+  --accent: #4db3a4;
+  --accent-ink: #06201c;
+
+  /* Semantic, and deliberately separate from the accent: these are states, not choices. */
+  --live: #57c785;
+  --warn: #e0a33e;
+  --hot: #e05c5c;
+  --idle: #5a6570;
+
+  --radius: 6px;
+  --gap: 14px;
+
+  --face: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --numerals: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --ink: #1a1d21;
+    --ink-dim: #545c66;
+    --ink-faint: #838b95;
+    --ground: #f2f4f6;
+    --panel: #ffffff;
+    --panel-raised: #f7f9fa;
+    --edge: #d9dee4;
+    --accent: #10776a;
+    --accent-ink: #ffffff;
+    --live: #1f8a4c;
+    --warn: #9a6a10;
+    --hot: #b3322f;
+    --idle: #9aa3ad;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px/1.55 var(--face);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ── bars ───────────────────────────────────────────────────────── */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 10px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--edge);
+}
+
+footer.bar {
+  border-bottom: 0;
+  border-top: 1px solid var(--edge);
+  margin-top: auto;
+  color: var(--ink-faint);
+  font-size: 12px;
+  justify-content: space-between;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+h1 .thin {
+  font-weight: 300;
+  color: var(--ink-dim);
+}
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-dim);
+  margin: 22px 0 8px;
+}
+
+.callsign {
+  margin-left: auto;
+  font: 600 15px/1 var(--numerals);
+  letter-spacing: 0.06em;
+}
+
+/* ── lamps ──────────────────────────────────────────────────────── */
+
+.indicators {
+  display: flex;
+  gap: 8px;
+}
+
+.lamp {
+  font: 600 10px/1 var(--numerals);
+  letter-spacing: 0.1em;
+  padding: 5px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--edge);
+  color: var(--ink-faint);
+  background: var(--panel-raised);
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.lamp.on {
+  color: var(--accent-ink);
+  border-color: transparent;
+}
+
+#lamp-ptt.on {
+  background: var(--hot);
+  color: #fff;
+}
+
+#lamp-busy.on {
+  background: var(--warn);
+  color: #1a1400;
+}
+
+#lamp-link.on {
+  background: var(--live);
+  color: #04220f;
+}
+
+/* ── tabs ───────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--edge);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-dim);
+  font: inherit;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.tab:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── panels ─────────────────────────────────────────────────────── */
+
+main {
+  padding: 20px 18px 28px;
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* `display: flex` beats the browser's own `[hidden] { display: none }`, so a hidden panel
+ * stays on screen unless this says otherwise. */
+.panel[hidden] {
+  display: none;
+}
+
+.note {
+  margin: 0;
+  color: var(--ink-dim);
+  max-width: 68ch;
+}
+
+.sub {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+/* ── the state strip: the one thing visible from across the room ── */
+
+.state-strip {
+  border: 1px solid var(--edge);
+  border-left: 4px solid var(--idle);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 14px 18px;
+}
+
+.state-strip[data-state="connected"] {
+  border-left-color: var(--live);
+}
+
+.state-strip[data-state="connecting"],
+.state-strip[data-state="disconnecting"] {
+  border-left-color: var(--warn);
+}
+
+.state-strip[data-state="offline"] {
+  border-left-color: var(--hot);
+}
+
+.state-name {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.state-detail {
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+/* ── readings ───────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--gap);
+}
+
+.reading {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.reading .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+}
+
+.reading .value {
+  font: 500 24px/1.25 var(--numerals);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.reading .sub {
+  margin-top: 2px;
+  min-height: 1.2em;
+}
+
+/* ── chart ──────────────────────────────────────────────────────── */
+
+.chart {
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.chart figcaption {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 180px;
+}
+
+/* ── tables ─────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+caption,
+thead th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+caption {
+  padding: 10px 14px 6px;
+}
+
+th,
+td {
+  padding: 6px 14px;
+  border-top: 1px solid var(--edge);
+}
+
+thead th {
+  border-top: 0;
+  padding-top: 10px;
+  padding-bottom: 8px;
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-family: var(--numerals);
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr:first-child td {
+  border-top: 1px solid var(--edge);
+}
+
+.counters td:first-child {
+  color: var(--ink-dim);
+}
+
+.modes tbody tr[data-usable="false"] {
+  color: var(--ink-faint);
+}
+
+/* ── controls ───────────────────────────────────────────────────── */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.row > label {
+  min-width: 76px;
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+input[type="text"],
+select,
+textarea {
+  background: var(--panel-raised);
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 7px 9px;
+  font: inherit;
+  min-width: 0;
+}
+
+input[type="text"] {
+  font-family: var(--numerals);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  width: 11ch;
+}
+
+select {
+  flex: 1 1 240px;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--numerals);
+  font-size: 13px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid var(--edge);
+  background: var(--panel-raised);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 7px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--ink-faint);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+button.danger {
+  color: var(--hot);
+}
+
+/* ── text panes ─────────────────────────────────────────────────── */
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.received,
+.config {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0;
+  font: 13px/1.5 var(--numerals);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 8em;
+  max-height: 26em;
+  overflow-y: auto;
+}
+
+.config {
+  min-height: 0;
+  color: var(--ink-dim);
+}
+
+.log-line .when {
+  color: var(--ink-faint);
+}
+
+.log-line.bad {
+  color: var(--hot);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

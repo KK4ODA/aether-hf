@@ -35,6 +35,12 @@ pub struct ControlConfig {
     pub bind: String,
     /// Bearer token. Required for any non-loopback bind.
     pub token: Option<String>,
+    /// Directory of static files to serve at `/`, for the station panel.
+    ///
+    /// A gateway is a headless machine, and the only practical way to look at one is a
+    /// browser over an SSH tunnel. Serving the panel from the daemon is what makes that
+    /// work without a second program to install (ADR-0001 §3, ADR-0005).
+    pub ui_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ControlConfig {
@@ -42,6 +48,7 @@ impl Default for ControlConfig {
         Self {
             bind: "127.0.0.1:8515".to_owned(),
             token: None,
+            ui_dir: None,
         }
     }
 }
@@ -121,6 +128,10 @@ impl ControlServer {
         let running = Arc::new(AtomicBool::new(true));
         let loop_running = Arc::clone(&running);
         let token = config.token.clone();
+        let ui_dir = config
+            .ui_dir
+            .as_ref()
+            .and_then(|dir| dir.canonicalize().ok());
         std::thread::Builder::new()
             .name("aetherd-control".to_owned())
             .spawn(move || {
@@ -131,10 +142,19 @@ impl ControlServer {
                     let Ok(stream) = stream else { continue };
                     let handle = handle.clone();
                     let token = token.clone();
+                    let ui_dir = ui_dir.clone();
                     let running = Arc::clone(&loop_running);
                     let _ = std::thread::Builder::new()
                         .name("aetherd-control-conn".to_owned())
-                        .spawn(move || serve(&stream, &handle, token.as_deref(), &running));
+                        .spawn(move || {
+                            serve(
+                                &stream,
+                                &handle,
+                                token.as_deref(),
+                                ui_dir.as_deref(),
+                                &running,
+                            );
+                        });
                 }
             })
             .map_err(|e| ServerError::Bind(format!("cannot start the listener thread: {e}")))?;
@@ -144,7 +164,13 @@ impl ControlServer {
 }
 
 /// Read the request line and headers, then decide what kind of connection this is.
-fn serve(stream: &TcpStream, handle: &ControlHandle, token: Option<&str>, running: &AtomicBool) {
+fn serve(
+    stream: &TcpStream,
+    handle: &ControlHandle,
+    token: Option<&str>,
+    ui_dir: Option<&std::path::Path>,
+    running: &AtomicBool,
+) {
     let Ok(peer_loopback) = stream.peer_addr().map(|a| a.ip().is_loopback()) else {
         return;
     };
@@ -212,6 +238,7 @@ fn serve(stream: &TcpStream, handle: &ControlHandle, token: Option<&str>, runnin
         &mut reader,
         handle,
         authorised,
+        ui_dir,
     );
 }
 
@@ -251,6 +278,7 @@ fn serve_rest(
     reader: &mut BufReader<TcpStream>,
     handle: &ControlHandle,
     authorised: bool,
+    ui_dir: Option<&std::path::Path>,
 ) {
     if !authorised {
         write_http(stream, 401, "application/json", &unauthorised_body());
@@ -259,6 +287,13 @@ fn serve_rest(
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("");
+
+    if method == "GET"
+        && let Some(dir) = ui_dir
+        && serve_file(stream, dir, path)
+    {
+        return;
+    }
 
     if method != "POST" {
         let body = serde_json::to_string(&Response::failed(
@@ -303,6 +338,48 @@ fn serve_rest(
         "application/json",
         &text,
     );
+}
+
+/// Serve one file from the panel directory, if the path names one.
+///
+/// The path is resolved and then checked to be **inside** the directory it was resolved
+/// against. Without that, `GET /../../etc/shadow` would be served by a process that an
+/// operator has deliberately pointed at a network interface.
+fn serve_file(stream: &TcpStream, dir: &std::path::Path, path: &str) -> bool {
+    let requested = path.split('?').next().unwrap_or("/");
+    let relative = match requested {
+        "/" | "" => "index.html",
+        other => other.trim_start_matches('/'),
+    };
+    if relative.is_empty() {
+        return false;
+    }
+    let Ok(full) = dir.join(relative).canonicalize() else {
+        return false;
+    };
+    if !full.starts_with(dir) || !full.is_file() {
+        return false;
+    }
+    let Ok(body) = std::fs::read(&full) else {
+        return false;
+    };
+    let content_type = match full.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        _ => "application/octet-stream",
+    };
+    let mut writer = stream;
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Cache-Control: no-cache\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    writer.write_all(head.as_bytes()).is_ok() && writer.write_all(&body).is_ok()
 }
 
 /// A WebSocket session: requests in, replies and events out.
@@ -406,6 +483,7 @@ mod tests {
             &ControlConfig {
                 bind: "0.0.0.0:0".to_owned(),
                 token: None,
+                ui_dir: None,
             },
             handle,
         )
@@ -424,6 +502,7 @@ mod tests {
             &ControlConfig {
                 bind: "127.0.0.1:0".to_owned(),
                 token: None,
+                ui_dir: None,
             },
             handle,
         )
@@ -459,6 +538,7 @@ mod tests {
             &ControlConfig {
                 bind: "127.0.0.1:0".to_owned(),
                 token: None,
+                ui_dir: None,
             },
             handle,
         )
@@ -491,6 +571,62 @@ mod tests {
     }
 
     #[test]
+    fn the_panel_is_served_and_cannot_be_escaped_from() {
+        // this process can key a transmitter and an operator may point it at a network
+        // interface, so a path that climbs out of the panel directory has to be refused
+        let dir = std::env::temp_dir().join(format!("aether-ui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("index.html"), b"<h1>panel</h1>").expect("write");
+        let secret = dir.parent().expect("parent").join("aether-secret.txt");
+        std::fs::write(&secret, b"not for you").expect("write");
+
+        let (handle, _control) = channel();
+        let server = ControlServer::start(
+            &ControlConfig {
+                bind: "127.0.0.1:0".to_owned(),
+                token: None,
+                ui_dir: Some(dir.clone()),
+            },
+            handle,
+        )
+        .expect("start");
+
+        let fetch = |path: &str| {
+            use std::io::{Read, Write};
+            let mut stream = TcpStream::connect(server.address).expect("connect");
+            stream
+                .write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+                .expect("write");
+            let mut text = String::new();
+            let _ = stream.read_to_string(&mut text);
+            text
+        };
+
+        let page = fetch("/");
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        assert!(page.contains("<h1>panel</h1>"), "{page}");
+        assert!(page.contains("text/html"), "{page}");
+
+        for climb in [
+            "/../aether-secret.txt",
+            "/..%2Faether-secret.txt",
+            "/./../aether-secret.txt",
+        ] {
+            let answer = fetch(climb);
+            assert!(
+                !answer.contains("not for you"),
+                "{climb} escaped the panel directory: {answer}"
+            );
+        }
+
+        let missing = fetch("/nothing-here.js");
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+        let _ = std::fs::remove_file(&secret);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_get_is_told_what_the_interface_actually_speaks() {
         use std::io::{Read, Write};
         let (handle, _control) = channel();
@@ -498,6 +634,7 @@ mod tests {
             &ControlConfig {
                 bind: "127.0.0.1:0".to_owned(),
                 token: None,
+                ui_dir: None,
             },
             handle,
         )
@@ -520,6 +657,7 @@ mod tests {
             &ControlConfig {
                 bind: "127.0.0.1:0".to_owned(),
                 token: None,
+                ui_dir: None,
             },
             handle,
         )

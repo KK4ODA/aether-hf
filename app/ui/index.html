@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aether HF</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <h1>Aether<span class="thin"> HF</span></h1>
+      <div class="indicators">
+        <span class="lamp" id="lamp-ptt" title="Transmitter">TX</span>
+        <span class="lamp" id="lamp-busy" title="Channel occupancy">BUSY</span>
+        <span class="lamp" id="lamp-link" title="Connection to the modem">LINK</span>
+      </div>
+      <div class="callsign" id="callsign">—</div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab" role="tab" data-panel="status" aria-selected="true">Status</button>
+      <button class="tab" role="tab" data-panel="session" aria-selected="false">Session</button>
+      <button class="tab" role="tab" data-panel="setup" aria-selected="false">Setup</button>
+      <button class="tab" role="tab" data-panel="log" aria-selected="false">Log</button>
+    </nav>
+
+    <main>
+      <!-- ── status ─────────────────────────────────────────────── -->
+      <section id="panel-status" class="panel">
+        <div class="state-strip" id="state-strip">
+          <div class="state-name" id="state-name">disconnected</div>
+          <div class="state-detail" id="state-detail">Not connected to a modem.</div>
+        </div>
+
+        <div class="grid">
+          <div class="reading">
+            <div class="label">Mode</div>
+            <div class="value" id="v-mode">—</div>
+            <div class="sub" id="v-mode-name"></div>
+          </div>
+          <div class="reading">
+            <div class="label">Signal above noise</div>
+            <div class="value" id="v-excess">—</div>
+            <div class="sub" id="v-floor"></div>
+          </div>
+          <div class="reading">
+            <div class="label">Queued</div>
+            <div class="value" id="v-queued">—</div>
+            <div class="sub">bytes still to send</div>
+          </div>
+          <div class="reading">
+            <div class="label">Compression</div>
+            <div class="value" id="v-compress">—</div>
+            <div class="sub" id="v-compress-sub"></div>
+          </div>
+        </div>
+
+        <figure class="chart">
+          <figcaption>
+            Channel level against the learned noise floor, last two minutes
+          </figcaption>
+          <canvas id="chart" width="900" height="180"></canvas>
+        </figure>
+
+        <table class="counters">
+          <caption>Since the daemon started</caption>
+          <tbody id="counters"></tbody>
+        </table>
+      </section>
+
+      <!-- ── session ────────────────────────────────────────────── -->
+      <section id="panel-session" class="panel" hidden>
+        <div class="row">
+          <label for="remote">Call</label>
+          <input id="remote" type="text" placeholder="KK4XYZ" autocomplete="off" spellcheck="false" />
+          <button id="btn-connect" class="primary">Connect</button>
+          <button id="btn-disconnect">Disconnect</button>
+          <button id="btn-abort" class="danger">Abort</button>
+          <button id="btn-beacon">Beacon</button>
+        </div>
+        <p class="note" id="session-note">
+          <strong>Disconnect</strong> finishes sending what is queued and then closes.
+          <strong>Abort</strong> does not. <strong>Beacon</strong> puts this station's
+          callsign on the air once, addressed to nobody, so anyone listening can report
+          hearing you.
+        </p>
+
+        <div class="split">
+          <div>
+            <h2>Send</h2>
+            <textarea id="outgoing" rows="6" placeholder="Text to send once a session is up…"></textarea>
+            <div class="row">
+              <button id="btn-send" class="primary">Send</button>
+              <span class="sub" id="send-note"></span>
+            </div>
+          </div>
+          <div>
+            <h2>Received</h2>
+            <pre id="incoming" class="received" aria-live="polite"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── setup ──────────────────────────────────────────────── -->
+      <section id="panel-setup" class="panel" hidden>
+        <p class="note">
+          This version reads its configuration from a file at startup and does not change it
+          from here. Pick the devices below and it will write you the lines to paste.
+        </p>
+
+        <div class="row">
+          <label for="dev-in">Capture</label>
+          <select id="dev-in"></select>
+        </div>
+        <div class="row">
+          <label for="dev-out">Playback</label>
+          <select id="dev-out"></select>
+        </div>
+        <div class="row">
+          <label for="dev-ptt">Keying</label>
+          <select id="dev-ptt"></select>
+        </div>
+        <div class="row">
+          <label for="setup-call">Callsign</label>
+          <input id="setup-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <h2>station.toml</h2>
+        <pre id="config-out" class="config"></pre>
+        <div class="row">
+          <button id="btn-copy">Copy</button>
+          <span class="sub" id="copy-note"></span>
+        </div>
+
+        <h2>What this modem can do</h2>
+        <table class="modes">
+          <thead>
+            <tr>
+              <th>Mode</th>
+              <th>Name</th>
+              <th class="num">Bytes per frame</th>
+              <th class="num">Rate</th>
+              <th class="num">Needs</th>
+            </tr>
+          </thead>
+          <tbody id="modes"></tbody>
+        </table>
+      </section>
+
+      <!-- ── log ────────────────────────────────────────────────── -->
+      <section id="panel-log" class="panel" hidden>
+        <div class="row">
+          <button id="btn-clear-log">Clear</button>
+          <span class="sub">Newest last.</span>
+        </div>
+        <pre id="log" class="received" aria-live="polite"></pre>
+      </section>
+    </main>
+
+    <footer class="bar">
+      <span id="footer-version">not connected</span>
+      <span id="footer-endpoint"></span>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

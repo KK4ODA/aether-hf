@@ -191,6 +191,10 @@ pub struct ControlSection {
     /// Bearer token, required for a non-loopback bind.
     #[serde(default)]
     pub token: Option<String>,
+    /// Directory holding the station panel, served at `/`. A gateway is headless, and a
+    /// browser over an SSH tunnel is the only practical way to look at one.
+    #[serde(default)]
+    pub ui_dir: Option<std::path::PathBuf>,
 }
 
 fn default_bind() -> String {
@@ -203,6 +207,7 @@ impl Default for ControlSection {
             enabled: default_true(),
             bind: default_bind(),
             token: None,
+            ui_dir: None,
         }
     }
 }
@@ -381,6 +386,7 @@ impl Config {
         crate::control::ControlConfig {
             bind: self.control.bind.clone(),
             token: self.control.token.clone(),
+            ui_dir: self.control.ui_dir.clone(),
         }
     }
 
@@ -453,6 +459,10 @@ enabled = true
 # one rather than leaving a transmitter open to the network.
 bind = "127.0.0.1:8515"
 # token = "a long random string"
+# The station panel, served at http://<bind>/ so a headless gateway can be watched from a
+# browser over an SSH tunnel. Point it at the `app/ui` directory of a checkout, or at wherever
+# your package installed it.
+# ui_dir = "/usr/share/aetherd/ui"
 
 [host]
 # The VARA-compatible host interface, so Winlink Express, Pat, VarAC and BPQ32 can use this
