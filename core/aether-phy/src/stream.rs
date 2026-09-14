@@ -27,6 +27,7 @@ use std::collections::VecDeque;
 
 use crate::{
     Complex,
+    blanker::StreamingBlanker,
     fir::Fir,
     modem::{DecodedFrame, Modem},
     rx::FrameSync,
@@ -46,6 +47,7 @@ pub struct PendingFrame {
 pub struct StreamingReceiver {
     params: WaveformParams,
     modem: Modem,
+    blanker: Option<StreamingBlanker>,
     band: Fir<Complex>,
     /// Group delay of the band-limiting filter, in baseband samples. Every absolute index
     /// this receiver reports is in the filtered stream, which lags the input by this much.
@@ -90,8 +92,15 @@ impl StreamingReceiver {
     pub fn new(params: WaveformParams, max_buffer_s: f64, blank_impulses: bool) -> Self {
         let modem = Modem::new(params, blank_impulses);
         let band = Fir::new(modem.band_taps().to_vec());
-        let delay_samples = band.delay();
+        let blanker = modem.blanker().cloned().map(StreamingBlanker::new);
+        // the blanker holds samples back until their window can be centred, so the stream
+        // this receiver indexes is later than its input by that much as well as the filter's
+        let delay_samples = band.delay()
+            + blanker
+                .as_ref()
+                .map_or(0, StreamingBlanker::latency_samples);
         Self {
+            blanker,
             band,
             delay_samples,
             modem,
@@ -110,9 +119,20 @@ impl StreamingReceiver {
     }
 
     /// Total samples that have entered the filtered stream.
+    ///
+    /// This is behind the input by [`blanker_latency`](Self::blanker_latency), because the
+    /// blanker cannot judge a sample until some of its future has arrived.
     #[must_use]
     pub fn samples_seen(&self) -> usize {
         self.buffer_start + self.buffer.len()
+    }
+
+    /// How far the indexed stream runs behind the input, in samples.
+    #[must_use]
+    pub fn blanker_latency(&self) -> usize {
+        self.blanker
+            .as_ref()
+            .map_or(0, StreamingBlanker::latency_samples)
     }
 
     /// The modem behind it, for decoding a frame again with a HARQ buffer.
@@ -138,9 +158,9 @@ impl StreamingReceiver {
     /// Feed a block of baseband and take out whatever finished.
     pub fn feed(&mut self, block: &[Complex]) -> Vec<DecodedFrame> {
         let blanked = self
-            .modem
-            .blanker()
-            .map_or_else(|| block.to_vec(), |b| b.process(block).samples);
+            .blanker
+            .as_mut()
+            .map_or_else(|| block.to_vec(), |b| b.process(block));
         let filtered = self.band.process(&blanked);
         self.buffer.extend_from_slice(&filtered);
 
@@ -404,6 +424,8 @@ mod tests {
             "buffer grew to {} samples, limit {limit}",
             rx.buffer.len()
         );
-        assert_eq!(rx.samples_seen(), 60 * 8000);
+        // the blanker holds a window back so it can be centred, so the stream this receiver
+        // indexes runs exactly that far behind its input
+        assert_eq!(rx.samples_seen(), 60 * 8000 - rx.blanker_latency());
     }
 }

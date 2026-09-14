@@ -90,6 +90,26 @@ impl BasebandToAudio {
         self.band.delay() * self.params.resample_factor() + self.interpolate.delay()
     }
 
+    /// Baseband samples still inside the filters, which [`flush`](Self::flush) pushes out.
+    #[must_use]
+    pub fn tail_samples(&self) -> usize {
+        let r = self.params.resample_factor();
+        self.band.taps().len() + self.interpolate.taps().len().div_ceil(r) + 1
+    }
+
+    /// Push the chain empty, and return the audio that was still inside it.
+    ///
+    /// A burst that is not flushed loses its last symbols. The filters hold about a group
+    /// delay of signal — a hundred-odd baseband samples through the band limiter, and the
+    /// interpolator's own length on top — and what stays behind is the tail of the final
+    /// frame of the burst, which is then simply never transmitted. Measured, that cost the
+    /// last frame of every burst 28 dB and made it undecodable, while every earlier frame in
+    /// the same burst came through untouched.
+    pub fn flush(&mut self) -> Vec<f32> {
+        let zeros = vec![(0.0, 0.0); self.tail_samples()];
+        self.process(&zeros)
+    }
+
     /// Convert a block of baseband samples to audio.
     pub fn process(&mut self, baseband: &[Complex]) -> Vec<f32> {
         let filtered = self.band.process(baseband);
@@ -254,6 +274,42 @@ mod tests {
         }
         // well under the 0.39 a single sample of slip at this tone would cost
         assert!(worst < 0.05, "round trip error {worst} after de-rotation");
+    }
+
+    #[test]
+    fn a_flushed_burst_carries_its_whole_tail() {
+        // What this catches: a transmitter that hands the chain a burst and stops gets back
+        // audio that is short by the filters' group delay, so the end of the last frame is
+        // never transmitted at all.
+        let params = WIDE_2300;
+        let burst = tone(400.0, 2000, params.fs_baseband);
+
+        let mut unflushed = BasebandToAudio::new(params);
+        let short = unflushed.process(&burst);
+
+        let mut flushed = BasebandToAudio::new(params);
+        let mut whole = flushed.process(&burst);
+        whole.extend(flushed.flush());
+
+        assert_eq!(short.len(), burst.len() * params.resample_factor());
+        assert!(whole.len() > short.len(), "flushing produced nothing");
+
+        // the energy the unflushed version dropped is the end of the burst, not a rounding
+        let dropped: f64 = whole[short.len()..]
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum();
+        let total: f64 = whole.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        assert!(dropped > 0.0, "nothing was held back");
+        assert!(
+            dropped / total > 1e-4,
+            "only {:.2e} of the energy was held back; the test signal is too long to show it",
+            dropped / total
+        );
+        // and the flush really does empty the chain: a second one gives silence
+        let again = flushed.flush();
+        let residue: f64 = again.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        assert!(residue < 1e-12, "the chain was not empty after a flush");
     }
 
     #[test]

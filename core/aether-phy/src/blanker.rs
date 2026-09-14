@@ -96,6 +96,12 @@ impl NoiseBlanker {
         }
     }
 
+    /// Samples per segment of the envelope estimate.
+    #[must_use]
+    pub fn window(&self) -> usize {
+        self.window
+    }
+
     /// Longest burst the reference can survive: it has to stay a minority of the segments the
     /// running median looks at. About 57 ms at 8 kHz with the defaults.
     #[must_use]
@@ -316,9 +322,198 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_signal_is_blanked_the_same_whatever_the_block_size() {
+        // This is the property the streaming wrapper exists for. Without it the reference is
+        // a statistic of whatever block the sound card happened to deliver, so the start of
+        // every burst is judged against the silence in front of it and blanked — measured at
+        // 20 dB of signal-to-noise ratio on a clean channel.
+        let mut samples = noise(30_000, 0.01, 23);
+        // a strong signal that starts abruptly, as a burst on a quiet channel does
+        for (index, sample) in samples.iter_mut().enumerate().take(20_000).skip(8_000) {
+            let phase = 0.7 * index as f64;
+            *sample = (phase.cos(), phase.sin());
+        }
+        samples[14_000] = (60.0, 0.0); // and one genuine impulse inside it
+
+        let reference = {
+            let mut blanker = StreamingBlanker::default();
+            let mut out = blanker.process(&samples);
+            out.extend(blanker.flush());
+            out
+        };
+        assert_eq!(reference.len(), samples.len());
+
+        for chunk in [251usize, 683, 1024, 4096] {
+            let mut blanker = StreamingBlanker::default();
+            let mut out = Vec::new();
+            for block in samples.chunks(chunk) {
+                out.extend(blanker.process(block));
+            }
+            out.extend(blanker.flush());
+            assert_eq!(out.len(), samples.len(), "block size {chunk}: length");
+            for (index, (got, want)) in out.iter().zip(&reference).enumerate() {
+                assert!(
+                    (got.0 - want.0).abs() < 1e-12 && (got.1 - want.1).abs() < 1e-12,
+                    "block size {chunk} changed sample {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_burst_that_starts_abruptly_is_not_mistaken_for_an_impulse() {
+        let mut samples = noise(30_000, 0.01, 29);
+        let signal = 8_000..20_000;
+        for (index, sample) in samples
+            .iter_mut()
+            .enumerate()
+            .take(signal.end)
+            .skip(signal.start)
+        {
+            let phase = 0.7 * index as f64;
+            *sample = (phase.cos(), phase.sin());
+        }
+        let mut blanker = StreamingBlanker::default();
+        let mut out = Vec::new();
+        for block in samples.chunks(683) {
+            out.extend(blanker.process(block));
+        }
+        out.extend(blanker.flush());
+
+        let removed = signal.clone().filter(|&i| out[i] == (0.0, 0.0)).count();
+        assert!(
+            removed < signal.len() / 200,
+            "blanked {removed} of {} signal samples",
+            signal.len()
+        );
+    }
+
+    #[test]
+    fn the_streaming_wrapper_holds_back_exactly_its_stated_latency() {
+        let mut blanker = StreamingBlanker::default();
+        let latency = blanker.latency_samples();
+        let samples = noise(10_000, 0.01, 31);
+        let emitted: usize = samples.chunks(1000).map(|b| blanker.process(b).len()).sum();
+        assert_eq!(
+            emitted,
+            samples.len() - latency,
+            "held back {} rather than {latency}",
+            samples.len() - emitted
+        );
+        assert_eq!(blanker.flush().len(), latency);
+    }
+
+    #[test]
     fn an_empty_block_is_not_an_error() {
         let result = NoiseBlanker::default().process(&[]);
         assert!(result.samples.is_empty());
         assert!(result.fraction() == 0.0, "an empty block blanks nothing");
+    }
+}
+
+/// A [`NoiseBlanker`] for a live stream.
+///
+/// Blanking a live stream is not the same job as blanking a buffer, and doing it block by
+/// block is wrong in a way that is easy to miss: the reference is a *local* statistic, so a
+/// block that is half silence and half signal has a reference taken from the silence, and the
+/// blanker removes the start of every burst it hears. Measured on a clean channel at the
+/// daemon's own block size, that cost a frame 20 dB of signal-to-noise ratio — the blanker
+/// doing far more damage than the impulses it exists to remove.
+///
+/// The fix is to give the streaming path the same view the offline one has: a window centred
+/// on each sample, with real signal on both sides of it. That means holding samples back
+/// until their future has arrived, so this introduces a fixed latency of
+/// [`latency_samples`](Self::latency_samples) — one robust span, about 57 ms at 8 kHz with the
+/// default settings. Everything downstream sees a stream that is simply late by that much.
+#[derive(Debug, Clone)]
+pub struct StreamingBlanker {
+    blanker: NoiseBlanker,
+    /// Retained samples: history, then what is about to be emitted, then the lookahead.
+    pending: Vec<Complex>,
+    /// How far into `pending` has already been emitted.
+    emitted: usize,
+    span: usize,
+    history: usize,
+    /// Stream index of `pending[0]`, so the segment grid can be kept aligned to the stream.
+    absolute: usize,
+}
+
+impl Default for StreamingBlanker {
+    fn default() -> Self {
+        Self::new(NoiseBlanker::default())
+    }
+}
+
+impl StreamingBlanker {
+    /// Wrap a blanker for streaming use.
+    #[must_use]
+    pub fn new(blanker: NoiseBlanker) -> Self {
+        let span = blanker.robust_span_samples().max(1);
+        Self {
+            blanker,
+            pending: Vec::new(),
+            emitted: 0,
+            span,
+            // A centred window needs one span on each side, but the reference is a median of
+            // *segment* medians and the segment grid is laid out from the start of whatever
+            // buffer it is given: judged over a buffer barely wider than the window itself,
+            // every segment is an edge segment. Carrying several spans of history makes the
+            // statistics the same whatever size the sound card hands over — measured, that is
+            // the difference between a clean frame and one 18 dB down at small block sizes.
+            history: 4 * span,
+            absolute: 0,
+        }
+    }
+
+    /// How far behind its input the output runs, in samples.
+    #[must_use]
+    pub fn latency_samples(&self) -> usize {
+        self.span
+    }
+
+    /// The blanker being applied.
+    #[must_use]
+    pub fn blanker(&self) -> &NoiseBlanker {
+        &self.blanker
+    }
+
+    /// Feed a block; get back the samples whose windows are now complete.
+    pub fn process(&mut self, block: &[Complex]) -> Vec<Complex> {
+        self.pending.extend_from_slice(block);
+        if self.pending.len() < self.emitted + 2 * self.span {
+            return Vec::new(); // not enough future yet to judge anything new
+        }
+        let result = self.blanker.process(&self.pending);
+        let emit_to = self.pending.len() - self.span;
+        let out = result.samples[self.emitted..emit_to].to_vec();
+
+        // Drop history only down to a segment boundary of the *stream*. The envelope
+        // estimate lays its segments out from the start of the buffer it is handed, so a
+        // buffer that starts mid-segment produces different medians — and the blanked output
+        // would then depend on the size of the blocks the sound card happened to deliver.
+        let window = self.blanker.window();
+        let wanted = emit_to.saturating_sub(self.history);
+        let keep_from = wanted - (self.absolute + wanted) % window;
+        self.pending.drain(..keep_from);
+        self.absolute += keep_from;
+        self.emitted = emit_to - keep_from;
+        out
+    }
+
+    /// Emit everything still held back, judged against whatever context exists.
+    ///
+    /// For the end of a recording. A live receiver never calls this.
+    pub fn flush(&mut self) -> Vec<Complex> {
+        if self.pending.len() <= self.emitted {
+            self.pending.clear();
+            self.emitted = 0;
+            return Vec::new();
+        }
+        let result = self.blanker.process(&self.pending);
+        let out = result.samples[self.emitted..].to_vec();
+        self.absolute += self.pending.len();
+        self.pending.clear();
+        self.emitted = 0;
+        out
     }
 }

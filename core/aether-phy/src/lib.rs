@@ -43,7 +43,7 @@ mod tables {
     include!(concat!(env!("OUT_DIR"), "/preamble_tables.rs"));
 }
 
-pub use blanker::{BlankMode, NoiseBlanker};
+pub use blanker::{BlankMode, NoiseBlanker, StreamingBlanker};
 pub use codec::{FrameCodec, coprime_stride};
 pub use constellation::{Complex, Constellation, NoiseVar};
 pub use fir::{Fir, Sample};
