@@ -668,6 +668,7 @@ impl Config {
 /// once. Saying which is which is the difference between a setting that appears to work and
 /// one that does.
 pub const LIVE_KEYS: &[&str] = &[
+    "audio.tx_level",
     "radio.max_key_s",
     "radio.wait_for_clear",
     "radio.max_mode",

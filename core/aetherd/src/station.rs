@@ -184,8 +184,15 @@ enum Outgoing {
         /// Whether it is silence. Keying an SSB transmitter with no audio puts nothing on
         /// the air, so a keying test need not wait for the channel; a tone must.
         silent: bool,
+        /// Whether it is a tune tone, which the operator may cut short.
+        tone: bool,
     },
 }
+
+/// The Morse identifier's amplitude as a fraction of the transmit level: a little below the
+/// data waveform's peak, because it is an identifier and not the signal, and scaled with
+/// the drive so an operator who sets the level by the tone has set the identifier too.
+const CW_ID_RELATIVE_LEVEL: f64 = 0.8;
 
 /// What the sound card is delivering, over the last few seconds.
 ///
@@ -324,10 +331,15 @@ pub struct Station<P: Ptt> {
     from_audio: AudioToBaseband,
     ptt: PttWatchdog<P>,
     busy: BusyDetector,
+    /// Audio waiting for the sound card, at unit level; the transmit level is applied as
+    /// it leaves, which is what lets the level change under a tone that is playing.
     playback: VecDeque<f32>,
     baseband_seen: usize,
     audio_seen: usize,
     transmitting: bool,
+    /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
+    /// nothing else may: a burst cut short is a session broken.
+    playing_tone: bool,
     pending: VecDeque<Outgoing>,
     meter: LevelMeter,
     /// The session recording in progress, if one is.
@@ -391,6 +403,7 @@ impl<P: Ptt> Station<P> {
             baseband_seen: 0,
             audio_seen: 0,
             transmitting: false,
+            playing_tone: false,
             pending: VecDeque::new(),
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
@@ -628,6 +641,8 @@ impl<P: Ptt> Station<P> {
     /// them here is what makes `config.set` mean something before the next restart rather
     /// than after it.
     pub fn apply_live(&mut self, config: &crate::config::Config) {
+        // applied as audio leaves, so it takes effect on a tone already playing
+        self.config.tx_level = config.audio.tx_level;
         self.config.max_key_s = config.radio.max_key_s;
         self.config.wait_for_clear = config.radio.wait_for_clear;
         self.config.link.max_mode = config.radio.max_mode;
@@ -691,6 +706,7 @@ impl<P: Ptt> Station<P> {
         self.pending.push_back(Outgoing::Audio {
             samples: vec![0.0; samples],
             silent: true,
+            tone: false,
         });
         Ok(())
     }
@@ -724,18 +740,40 @@ impl<P: Ptt> Station<P> {
             return Err("the channel is busy");
         }
         let rate = self.config.params.audio_rate as f64;
-        let level = self.config.tx_level;
         let tone = crate::cwid::CwId {
             // a steady tone is one very long dah; the shaped edges keep it from clicking
             wpm: 1.2 / (seconds / 3.0),
             tone_hz: 1500.0,
-            level,
+            // full scale here: the transmit level is applied as the audio leaves
+            level: 1.0,
         };
         self.pending.push_back(Outgoing::Audio {
             samples: tone.audio("T", rate),
             silent: false,
+            tone: true,
         });
         Ok(())
+    }
+
+    /// Cut a tune tone short, playing or still queued.
+    ///
+    /// An operator setting drive has a hand on the control and the other on this: the tone
+    /// is bounded either way, but ten seconds of carrier after the ALC is where it should
+    /// be is ten seconds too many. Nothing but a tone is ever cut: a burst stopped halfway
+    /// is a session broken. Returns whether there was a tone to stop.
+    pub fn tune_stop(&mut self) -> bool {
+        let queued = self.pending.len();
+        self.pending
+            .retain(|next| !matches!(next, Outgoing::Audio { tone: true, .. }));
+        let mut stopped = self.pending.len() != queued;
+        if self.playing_tone {
+            // the keying tail goes with it; the transmitter unkeys as soon as the queue
+            // is empty, which is the point
+            self.playback.clear();
+            self.playing_tone = false;
+            stopped = true;
+        }
+        stopped
     }
 
     /// The last few seconds of received audio, as levels an operator can set a sound card by.
@@ -915,6 +953,7 @@ impl<P: Ptt> Station<P> {
         // it would hear one endless burst and never answer.
         if self.playback.is_empty() && self.transmitting {
             self.transmitting = false;
+            self.playing_tone = false;
             if let Some(recording) = &mut self.recording {
                 recording.event(
                     now,
@@ -944,9 +983,12 @@ impl<P: Ptt> Station<P> {
                 recording.event(now, "ptt", "keyed", &format!("{:?}", self.engine.state()));
             }
         }
+        // the level is applied here, on the way out, so a change reaches a tone that is
+        // already playing — an operator adjusts drive by ear and by the ALC, live
+        let level = self.config.tx_level as f32;
         let count = out.len().min(self.playback.len());
         for slot in out.iter_mut().take(count) {
-            *slot = self.playback.pop_front().unwrap_or(0.0);
+            *slot = self.playback.pop_front().unwrap_or(0.0) * level;
         }
         Ok(count)
     }
@@ -1111,13 +1153,14 @@ impl<P: Ptt> Station<P> {
             Outgoing::Frames(frames) => frames,
             // raw audio goes out as it is, inside the same keying and lead and tail as a
             // burst, so a keying test exercises exactly the path a transmission uses
-            Outgoing::Audio { samples, .. } => {
+            Outgoing::Audio { samples, tone, .. } => {
                 let audio_rate = self.config.params.audio_rate as f64;
                 let lead = (self.config.key_lead_s * audio_rate) as usize;
                 let tail = (self.config.key_tail_s * audio_rate) as usize;
                 self.playback.extend(std::iter::repeat_n(0.0f32, lead));
                 self.playback.extend(samples);
                 self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+                self.playing_tone = tone;
                 return;
             }
         };
@@ -1153,10 +1196,10 @@ impl<P: Ptt> Station<P> {
         // flush the chain after the burst, or its filters keep the tail of the last frame
         let mut rendered = self.to_audio.process(&baseband);
         rendered.extend(self.to_audio.flush());
-        let level = self.config.tx_level as f32;
 
+        // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-        self.playback.extend(rendered.iter().map(|&x| x * level));
+        self.playback.extend(rendered);
         self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
     }
@@ -1175,6 +1218,10 @@ impl<P: Ptt> Station<P> {
         if !due {
             return;
         }
+        let cw = crate::cwid::CwId {
+            level: CW_ID_RELATIVE_LEVEL,
+            ..cw
+        };
         let audio = cw.audio(&self.engine.my_call, audio_rate);
         if audio.is_empty() {
             return;
@@ -1429,6 +1476,45 @@ mod tests {
             peak < 0.7,
             "peak {peak} leaves no headroom at tx_level 0.25"
         );
+    }
+
+    #[test]
+    fn the_transmit_level_reaches_a_tone_that_is_already_playing_and_the_tone_can_be_stopped() {
+        // an operator sets drive with one hand on the rig's control and the other on the
+        // level: the tone has to follow the level while it plays, and stop when asked
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                tx_level: 0.25,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.tune(4.0).expect("idle");
+        let mut out = vec![0.0f32; 4800];
+        let rms = |out: &[f32]| (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+        // past the keying lead and the tone's shaped edge
+        for _ in 0..6 {
+            station.playback(&mut out).expect("playback");
+        }
+        let before = rms(&out);
+        let mut louder = crate::config::Config::parse(crate::config::EXAMPLE).expect("example");
+        louder.audio.tx_level = 0.5;
+        station.apply_live(&louder);
+        station.playback(&mut out).expect("playback");
+        let after = rms(&out);
+        assert!(
+            (after / before - 2.0).abs() < 0.05,
+            "the level did not follow: {before} then {after}"
+        );
+        assert!(station.transmitting());
+        assert!(station.tune_stop(), "there was a tone to stop");
+        let count = station.playback(&mut out).expect("playback");
+        assert_eq!(count, 0, "the tone kept playing");
+        assert!(!station.transmitting(), "the transmitter stayed keyed");
+        assert!(!station.tune_stop(), "nothing left to stop");
     }
 
     #[test]

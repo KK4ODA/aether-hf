@@ -80,7 +80,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
 | `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
-| `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the configured level, so the operator can set drive by the rig's ALC | Bounded at 10 s. `TUNE OFF` is accepted and does nothing: a tone is bounded when it starts |
+| `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, so the operator can set drive by the rig's ALC | Bounded at 10 s. `TUNE OFF` cuts a tone short; the level follows `audio.tx_level` live, so the drive can be set while the tone plays |
 | `VERSION` | → `VERSION Aether HF <version>` | |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
 

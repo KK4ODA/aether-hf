@@ -524,6 +524,18 @@ select {
   flex: 1 1 240px;
 }
 
+input[type="range"] {
+  flex: 1 1 240px;
+  accent-color: var(--accent);
+  min-width: 0;
+}
+
+.numerals {
+  font-family: var(--numerals);
+  font-variant-numeric: tabular-nums;
+  min-width: 6ch;
+}
+
 /* prose, not a callsign: the notes that go into a recording */
 input#record-notes {
   font-family: inherit;

@@ -417,6 +417,10 @@ async function loadDevices() {
 
 // What the daemon is actually running, as `config.get` reported it.
 let liveConfig = null;
+// The setup section's own words, to put back once a failed load has been followed by a
+// good one — the panel reconnects after a restart, and "the connection closed" would
+// otherwise stay on screen with nothing closed.
+let setupNoteAtRest = null;
 let liveKeys = [];
 let configPath = "";
 
@@ -436,6 +440,9 @@ async function loadConfig() {
   liveKeys = answer.live_keys ?? [];
   configPath = answer.path ?? "";
   $("btn-apply").disabled = false;
+  setupNoteAtRest ??= $("setup-note").textContent;
+  $("setup-note").textContent = setupNoteAtRest;
+  showTxLevel(liveConfig.audio?.tx_level ?? 0.25);
 
   // show the operator what is there now, so the form is not a blank slate over live settings
   if (!$("setup-call").value) $("setup-call").value = liveConfig.callsign ?? "";
@@ -515,6 +522,7 @@ function formChanges() {
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
+  changes["audio.tx_level"] = txLevel();
   return changes;
 }
 
@@ -743,10 +751,64 @@ async function transmitTest(method, seconds, label) {
     $("wz-tx-note").textContent = `${label} — watch the radio.`;
     markStep(4, true);
     log(label);
+    return true;
+  } catch (error) {
+    $("wz-tx-note").textContent = error.message;
+    log(error.message, true);
+    return false;
+  }
+}
+
+// ── the transmit level ──────────────────────────────────────────────
+//
+// The slider is in decibels below full scale, because that is how drive is thought about;
+// the file holds the amplitude, because that is what the modem multiplies by. The level is
+// live in the modem and applied as audio leaves, so moving it during a tune tone moves the
+// tone — the rig's ALC answers at once.
+
+const TUNE_SECONDS = 10;
+let tuneTimer = null;
+
+function txLevel() {
+  return Number(10 ** (Number($("tx-level").value) / 20).toFixed(4));
+}
+
+function showTxLevel(level) {
+  const db = Math.round(20 * Math.log10(Math.max(level, 1e-3)));
+  $("tx-level").value = String(Math.max(-34, Math.min(0, db)));
+  $("tx-level-reading").textContent = `${db === 0 ? "" : "−"}${Math.abs(db)} dB`;
+}
+
+async function saveTxLevel() {
+  try {
+    await call("config.set", { "audio.tx_level": txLevel() });
+    log(`transmit level ${$("tx-level-reading").textContent}`);
   } catch (error) {
     $("wz-tx-note").textContent = error.message;
     log(error.message, true);
   }
+}
+
+function tuneButton(playing) {
+  $("wz-tune").textContent = playing ? "Stop the tone" : `Tune tone, ${TUNE_SECONDS} s`;
+  $("wz-tune").setAttribute("aria-pressed", String(playing));
+  clearTimeout(tuneTimer);
+  tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
+}
+
+async function toggleTune() {
+  if ($("wz-tune").getAttribute("aria-pressed") === "true") {
+    tuneButton(false);
+    try {
+      await call("tune", { duration_s: 0 });
+      $("wz-tx-note").textContent = "Tone stopped.";
+    } catch (error) {
+      $("wz-tx-note").textContent = error.message;
+    }
+    return;
+  }
+  const started = await transmitTest("tune", TUNE_SECONDS, `Tune tone for ${TUNE_SECONDS} s`);
+  if (started) tuneButton(true);
 }
 
 // ── actions ─────────────────────────────────────────────────────────
@@ -827,7 +889,9 @@ function wire() {
     writeConfig();
   });
   $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));
-  $("wz-tune").addEventListener("click", () => transmitTest("tune", 3.0, "Tune tone for 3 s"));
+  $("wz-tune").addEventListener("click", toggleTune);
+  $("tx-level").addEventListener("input", () => showTxLevel(txLevel()));
+  $("tx-level").addEventListener("change", saveTxLevel);
   $("wz-save").addEventListener("click", wizardSave);
   $("btn-copy").addEventListener("click", async () => {
     try {

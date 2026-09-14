@@ -167,16 +167,22 @@
               <h3>4. Keying and drive</h3>
               <div class="row">
                 <button id="wz-ptt">Key for 1 s</button>
-                <button id="wz-tune">Tune tone, 3 s</button>
+                <button id="wz-tune" aria-pressed="false">Tune tone, 10 s</button>
                 <span class="sub" id="wz-tx-note" role="status" aria-live="polite"></span>
+              </div>
+              <div class="row">
+                <label for="tx-level">Transmit level</label>
+                <input id="tx-level" type="range" min="-34" max="0" step="1" value="-12" aria-describedby="tx-level-reading" />
+                <span class="sub numerals" id="tx-level-reading" aria-live="polite">−12 dB</span>
               </div>
               <p class="sub">
                 <strong>Key</strong> puts the radio into transmit with no audio: watch the
                 rig and the interface's PTT light. It keys at once — an SSB transmitter with
                 no audio radiates nothing. <strong>Tune</strong> keys with a steady tone at
-                the configured level: set the drive so the rig's ALC barely moves. A tone is a
+                the transmit level and the level follows the slider while it plays: set it so
+                the rig's ALC barely moves, then press the button again to stop. A tone is a
                 transmission, so it is refused while the channel is busy, and both are refused
-                during a session.
+                during a session. The level is saved as you release the slider.
               </p>
             </li>
             <li class="step" data-step="5">

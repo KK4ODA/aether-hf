@@ -526,10 +526,9 @@ fn apply(
             let _ = handle.call(request("beacon", json!({})));
             true
         }
-        // `TUNE OFF` (zero seconds) has nothing to stop: a tone is bounded when it is
-        // started, and cutting one short is not something the published interface needs.
+        // `TUNE OFF`: cut the tone short, if one is playing or queued
         HostAction::Tune(seconds) if *seconds <= 0.0 => {
-            let _ = host;
+            let _ = handle.call(request("tune", json!({ "duration_s": 0.0 })));
             true
         }
         HostAction::Tune(seconds) => {

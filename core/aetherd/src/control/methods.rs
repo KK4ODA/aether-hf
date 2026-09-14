@@ -378,6 +378,12 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
                 .get("duration_s")
                 .and_then(Value::as_f64)
                 .unwrap_or(3.0);
+            // zero is "stop": the tone is bounded either way, but an operator whose ALC
+            // is where it should be does not want the rest of it
+            if seconds == 0.0 {
+                let stopped = station.tune_stop();
+                return Response::ok(id, json!({ "stopped": stopped }));
+            }
             match station.tune(seconds) {
                 Ok(()) => Response::ok(id, json!({ "accepted": true, "duration_s": seconds })),
                 Err(reason) => Response::failed(
