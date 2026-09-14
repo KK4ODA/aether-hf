@@ -103,3 +103,50 @@ jobs:
       - name: Tests
         working-directory: core
         run: cargo test --release --all-features
+
+  app:
+    name: app · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Tauri on Linux renders through WebKitGTK and needs its development headers, plus the
+      # libraries its tray and icon handling link against. Windows needs nothing: WebView2 is
+      # part of the system.
+      - name: Install WebKitGTK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Format check
+        working-directory: app/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The shell is a window around the panel and a supervisor for the daemon; there is no
+      # display on a runner, so building it is the test. The panel itself has no build step
+      # (ADR-0005) and is checked by the browser it runs in.
+      - name: Build
+        working-directory: app/src-tauri
+        run: cargo build --release
+
+      - name: The panel parses
+        run: node --check app/ui/app.js
