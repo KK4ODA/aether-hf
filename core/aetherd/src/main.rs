@@ -123,7 +123,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                     println!("no serial ports");
                 }
                 for port in ports {
-                    println!("{port}");
+                    println!("{:<12} {}", port.name, port.description);
                 }
                 return Ok(None);
             }

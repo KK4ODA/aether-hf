@@ -555,10 +555,55 @@ impl Ptt for SerialPtt {
 
 /// Serial ports the system offers, for an operator choosing one.
 #[must_use]
-pub fn list_serial_ports() -> Vec<String> {
+pub fn list_serial_ports() -> Vec<SerialPortInfo> {
     serialport::available_ports()
-        .map(|ports| ports.into_iter().map(|port| port.port_name).collect())
+        .map(|ports| ports.into_iter().map(SerialPortInfo::from).collect())
         .unwrap_or_default()
+}
+
+/// A serial port as the operator should see it: its name, and what is behind it.
+///
+/// A radio's USB port often presents two serial ports and only one of them keys. The
+/// FTDX10's Silicon Labs bridge calls them the *Enhanced* port (CAT) and the *Standard* port
+/// (PTT and CW on its RTS/DTR), and Windows numbers them in whichever order it met them —
+/// so "COM6, the one I always use" keys nothing while COM7 does. A name alone cannot say
+/// which is which; the description can.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SerialPortInfo {
+    /// The name the configuration takes: `COM7`, `/dev/ttyUSB1`.
+    pub name: String,
+    /// What the driver says is behind it, or empty when it says nothing.
+    pub description: String,
+}
+
+impl From<serialport::SerialPortInfo> for SerialPortInfo {
+    fn from(port: serialport::SerialPortInfo) -> Self {
+        let description = match port.port_type {
+            serialport::SerialPortType::UsbPort(usb) => {
+                let product = usb.product.unwrap_or_default();
+                // Windows appends the port's own name to the friendly name; it is the name
+                // column already
+                let product = product
+                    .strip_suffix(&format!(" ({})", port.port_name))
+                    .unwrap_or(&product)
+                    .to_owned();
+                match usb.manufacturer {
+                    Some(maker) if !product.starts_with(&maker) && !product.is_empty() => {
+                        format!("{maker} {product}")
+                    }
+                    Some(maker) if product.is_empty() => maker,
+                    _ => product,
+                }
+            }
+            serialport::SerialPortType::BluetoothPort => "Bluetooth".to_owned(),
+            serialport::SerialPortType::PciPort => "built in".to_owned(),
+            serialport::SerialPortType::Unknown => String::new(),
+        };
+        Self {
+            name: port.port_name,
+            description,
+        }
+    }
 }
 
 /// Check that a callsign is one the protocol can carry.

@@ -386,19 +386,28 @@ async function loadDevices() {
     none.value = "";
     none.textContent = placeholder;
     select.append(none);
-    for (const name of entries) {
+    for (const entry of entries) {
       const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
+      option.value = entry.name;
+      option.textContent = entry.label ?? entry.name;
       select.append(option);
     }
     select.addEventListener("change", writeConfig);
   };
   devicesSeen = { devices: devices.devices ?? [], serial_ports: devices.serial_ports ?? [] };
   const all = devicesSeen.devices;
-  fill($("dev-in"), all.filter((d) => d.input).map((d) => d.name), "system default");
-  fill($("dev-out"), all.filter((d) => d.output).map((d) => d.name), "system default");
-  fill($("dev-ptt"), devicesSeen.serial_ports, "none (VOX or receive only)");
+  fill($("dev-in"), all.filter((d) => d.input), "system default");
+  fill($("dev-out"), all.filter((d) => d.output), "system default");
+  // a radio's USB port is often two serial ports and only one of them keys; the driver's
+  // description is how an operator tells them apart, so it goes next to the name
+  fill(
+    $("dev-ptt"),
+    devicesSeen.serial_ports.map((p) => ({
+      name: p.name,
+      label: p.description ? `${p.name} — ${p.description}` : p.name,
+    })),
+    "none (VOX or receive only)",
+  );
   $("dev-in").addEventListener("change", checkRates);
   $("dev-out").addEventListener("change", checkRates);
   fillProfiles();
@@ -574,7 +583,9 @@ const PROFILES = [
     match: /USB AUDIO\s+CODEC/i,
     ptt: "serial",
     line: "rts",
-    note: "Yaesu's enhanced USB port carries audio and two serial ports; keying is on RTS of the standard one.",
+    // the CP2105 bridge's two ports: the Enhanced one is CAT, the Standard one keys
+    port: /Standard COM Port/i,
+    note: "Yaesu's USB port is two serial ports: the Enhanced one is CAT, the Standard one keys on RTS — that one is chosen when it can be told apart. The rig's PTT select for the mode in use (RPTT SELECT / DATA PTT SELECT) must be RTS.",
   },
   {
     name: "SignaLink USB",
@@ -645,9 +656,13 @@ function applyProfile() {
   checkRates();
   if (profile.ptt === "none") {
     $("dev-ptt").value = "";
+  } else if (profile.port && $("dev-ptt").value === "") {
+    // the profile knows which of the interface's ports keys, by what the driver calls it
+    const keying = devicesSeen.serial_ports.find((p) => profile.port.test(p.description));
+    if (keying) $("dev-ptt").value = keying.name;
   } else if ($("dev-ptt").value === "" && devicesSeen.serial_ports.length === 1) {
     // one serial port on the machine: almost certainly the interface's
-    $("dev-ptt").value = devicesSeen.serial_ports[0];
+    $("dev-ptt").value = devicesSeen.serial_ports[0].name;
   }
   writeConfig();
 }

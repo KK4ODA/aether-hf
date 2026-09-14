@@ -873,7 +873,7 @@ mod tests {
         daemon.devices = || {
             json!({
                 "devices": [{"name": "USB Audio CODEC", "input": true, "output": true}],
-                "serial_ports": ["COM3"],
+                "serial_ports": [{"name": "COM3", "description": "Prolific PL2303GC USB Serial COM Port"}],
             })
         };
         daemon
@@ -933,7 +933,7 @@ mod tests {
         assert_eq!(bundle["status"]["state"], "idle");
         assert_eq!(bundle["config"]["callsign"], "N0CALL");
         assert_eq!(bundle["audio"]["dropped_samples"], 7);
-        assert_eq!(bundle["devices"]["serial_ports"][0], "COM3");
+        assert_eq!(bundle["devices"]["serial_ports"][0]["name"], "COM3");
         assert_eq!(bundle["log"][0]["event"], "watchdog");
         assert_eq!(bundle["log"][0]["level"], "warn");
         assert!(

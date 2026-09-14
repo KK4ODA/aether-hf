@@ -120,7 +120,7 @@ distinction matters to an operator watching a transfer and is why both exist.
 
 | Method | Params | Result |
 |---|---|---|
-| `devices.list` | — | input/output devices with names and default flags, and serial ports |
+| `devices.list` | — | input/output devices with names and default flags, and serial ports as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys |
 | `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light |
 | `tune` | `duration_s` (0.5–10) | keys and plays a steady tone at the configured transmit level, for setting drive by the rig's ALC |
 | `audio.level` | — | the last three seconds of received audio: RMS and peak in dBFS, clipping fraction, and a sentence of advice |
