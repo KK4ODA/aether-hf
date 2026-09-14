@@ -55,6 +55,10 @@ class DataKind(Enum):
     DATA = 0
     CONNECT_REQ = 1
     CONNECT_ACK = 2
+    BEACON = 3
+    """Unproto: sent outside any session, addressed to nobody, carrying this station's
+    callsign. It is how an operator answers "can anybody hear me?" without arranging a
+    contact first, which on HF is most of what a new station needs to know."""
 
 
 class DataFlags(IntFlag):

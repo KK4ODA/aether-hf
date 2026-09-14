@@ -67,7 +67,14 @@ mod base64_lite {
 pub fn is_mutating(method: &str) -> bool {
     matches!(
         method,
-        "connect" | "disconnect" | "abort" | "send" | "listen" | "config.set" | "ptt.test"
+        "connect"
+            | "disconnect"
+            | "abort"
+            | "send"
+            | "listen"
+            | "beacon"
+            | "config.set"
+            | "ptt.test"
     )
 }
 
@@ -79,6 +86,17 @@ pub fn dispatch<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response
         "status" => Response::ok(id, status(station)),
         "capabilities" => Response::ok(id, capabilities()),
         "connect" => connect(station, params, id),
+        "beacon" => match station.beacon() {
+            Ok(()) => Response::ok(id, json!({ "accepted": true })),
+            Err(reason) => Response::failed(
+                id,
+                ApiError::new(
+                    "not_idle",
+                    format!("Cannot beacon: {reason}. A beacon is sent outside a session."),
+                    true,
+                ),
+            ),
+        },
         "disconnect" => {
             // orderly: what is queued is sent and acknowledged first
             station.disconnect();
@@ -457,6 +475,7 @@ mod tests {
             "abort",
             "send",
             "listen",
+            "beacon",
             "config.set",
         ] {
             assert!(is_mutating(method), "{method} should be mutating");

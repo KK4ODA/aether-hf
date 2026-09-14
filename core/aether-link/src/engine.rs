@@ -1127,7 +1127,9 @@ impl LinkEngine {
                 self.disarm(Timer::Ack);
                 return;
             }
-            DataKind::ConnectAck => return,
+            // a beacon belongs to nobody's session; it is reported by the caller and
+            // never enters the sequence-numbered stream
+            DataKind::ConnectAck | DataKind::Beacon => return,
             DataKind::Data => {}
         }
 
@@ -1316,7 +1318,7 @@ impl LinkEngine {
         match header.kind {
             DataKind::ConnectReq => self.handle_connect_req(header, &body),
             DataKind::ConnectAck => self.handle_connect_ack(header, &body),
-            DataKind::Data => {}
+            DataKind::Data | DataKind::Beacon => {}
         }
     }
 

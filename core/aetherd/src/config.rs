@@ -125,6 +125,25 @@ pub struct RadioSection {
     /// too, so leaving it on costs nothing when talking to a station that cannot.
     #[serde(default = "default_true")]
     pub compress: bool,
+    /// Identify in Morse at the end of a transmission. Off by default: Aether's own frames
+    /// carry both callsigns, and whether that satisfies the local rules is something only the
+    /// operator knows.
+    #[serde(default)]
+    pub cw_id: bool,
+    /// Morse speed in words per minute.
+    #[serde(default = "default_cw_wpm")]
+    pub cw_id_wpm: f64,
+    /// Longest a station may transmit without identifying, in seconds.
+    #[serde(default = "default_cw_interval")]
+    pub cw_id_interval_s: f64,
+}
+
+fn default_cw_wpm() -> f64 {
+    20.0
+}
+
+fn default_cw_interval() -> f64 {
+    600.0
 }
 
 fn default_max_key() -> f64 {
@@ -151,6 +170,9 @@ impl Default for RadioSection {
             busy_threshold_db: default_busy_threshold(),
             max_mode: default_max_mode(),
             compress: default_true(),
+            cw_id: false,
+            cw_id_wpm: default_cw_wpm(),
+            cw_id_interval_s: default_cw_interval(),
         }
     }
 }
@@ -309,6 +331,13 @@ impl Config {
                 self.audio.tx_level
             )));
         }
+        if self.radio.cw_id && !(5.0..=40.0).contains(&self.radio.cw_id_wpm) {
+            return Err(ConfigError::Invalid(format!(
+                "cw_id_wpm is {}; below 5 an identifier takes longer than the transmission \
+                 and above 40 very few people can copy it",
+                self.radio.cw_id_wpm
+            )));
+        }
         if self.radio.max_key_s <= 0.0 {
             return Err(ConfigError::Invalid(
                 "max_key_s must be positive: a watchdog that can never fire is not one".into(),
@@ -411,6 +440,11 @@ max_mode = 13
 # Offer payload compression. Used only if the other station offers it too, so leaving this on
 # costs nothing when talking to one that cannot.
 compress = true
+# Identify in Morse at the end of a transmission. Off by default: Aether's frames carry both
+# callsigns, and whether that satisfies your licence conditions is your call, not the modem's.
+cw_id = false
+cw_id_wpm = 20.0
+cw_id_interval_s = 600.0
 
 [control]
 # The modem's own interface: JSON over WebSocket at ws://<bind>/v1, or POST /v1/<method>.
@@ -549,6 +583,23 @@ mod tests {
 
         let on = Config::parse("callsign = \"W4ODA\"\n[host]\nenabled = true\n").expect("parse");
         assert!(on.host.enabled);
+    }
+
+    #[test]
+    fn morse_identification_is_off_by_default_and_its_speed_is_checked() {
+        let plain = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        assert!(!plain.radio.cw_id, "it identified without being asked to");
+
+        let on = Config::parse("callsign = \"W4ODA\"\n[radio]\ncw_id = true\n").expect("parse");
+        assert!(on.radio.cw_id);
+
+        for bad in ["cw_id_wpm = 1.0", "cw_id_wpm = 200.0"] {
+            let text = format!("callsign = \"W4ODA\"\n[radio]\ncw_id = true\n{bad}\n");
+            assert!(Config::parse(&text).is_err(), "accepted {bad}");
+        }
+        // the speed is only checked when it will actually be used
+        let unused = "callsign = \"W4ODA\"\n[radio]\ncw_id_wpm = 200.0\n";
+        assert!(Config::parse(unused).is_ok());
     }
 
     #[test]

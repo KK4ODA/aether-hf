@@ -50,6 +50,7 @@ fn data_kind(name: &str) -> DataKind {
         "DATA" => DataKind::Data,
         "CONNECT_REQ" => DataKind::ConnectReq,
         "CONNECT_ACK" => DataKind::ConnectAck,
+        "BEACON" => DataKind::Beacon,
         other => panic!("unknown data kind {other}"),
     }
 }

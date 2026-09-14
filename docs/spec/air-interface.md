@@ -230,7 +230,16 @@ soft-combines them; a header that changed would make the combination meaningless
 no burst length or position appears here — the receiver derives a frame's position in its
 burst from its air time, and the end of a burst from the silence that follows.
 
-Kinds: `DATA`, `CONNECT_REQ`, `CONNECT_ACK` (callsigns do not fit in a control frame).
+Kinds: `DATA`, `CONNECT_REQ`, `CONNECT_ACK` (callsigns do not fit in a control frame), and
+`BEACON`.
+
+A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
+id of zero and a body that is one packed callsign. It is how an operator answers "can anybody
+hear me?" without arranging a contact first, which on HF is most of what a new station needs
+to know. A receiver reports the callsign and the SNR it measured and does nothing else — a
+beacon is never answered on the air, because a channel where every beacon drew a reply would
+be unusable. It is sent at the most robust mode, because the whole point is to be heard by
+somebody who cannot yet hear anything else.
 
 CONTROL container:
 

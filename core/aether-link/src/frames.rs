@@ -61,6 +61,10 @@ pub enum DataKind {
     ConnectReq,
     /// A connection acceptance.
     ConnectAck,
+    /// Unproto: sent outside any session, addressed to nobody, carrying this station's
+    /// callsign. It is how an operator answers "can anybody hear me?" without arranging a
+    /// contact first, which on HF is most of what a new station needs to know.
+    Beacon,
 }
 
 impl DataKind {
@@ -69,6 +73,7 @@ impl DataKind {
             Self::Data => 0,
             Self::ConnectReq => 1,
             Self::ConnectAck => 2,
+            Self::Beacon => 3,
         }
     }
 
@@ -77,6 +82,7 @@ impl DataKind {
             0 => Some(Self::Data),
             1 => Some(Self::ConnectReq),
             2 => Some(Self::ConnectAck),
+            3 => Some(Self::Beacon),
             _ => None,
         }
     }
@@ -629,6 +635,39 @@ mod tests {
         assert_eq!(seq_distance(0, 255), 1);
         assert!(in_window(3, 0, WINDOW));
         assert!(!in_window(200, 0, WINDOW));
+    }
+
+    #[test]
+    fn a_beacon_carries_a_callsign_and_nothing_else() {
+        // unproto: no session, no sequence, just who is transmitting
+        let header = DataHeader {
+            kind: DataKind::Beacon,
+            seq: 0,
+            session: 0,
+        };
+        let body = pack_callsign("W4ODA").expect("pack");
+        let frame = encode_data(&header, &body, 26).expect("encode");
+        let (got_header, got_body) = decode_data(&frame).expect("decode");
+        assert_eq!(got_header, header);
+        assert_eq!(unpack_callsign(&got_body).expect("unpack"), "W4ODA");
+    }
+
+    #[test]
+    fn every_data_kind_survives_the_header_byte() {
+        for kind in [
+            DataKind::Data,
+            DataKind::ConnectReq,
+            DataKind::ConnectAck,
+            DataKind::Beacon,
+        ] {
+            let header = DataHeader {
+                kind,
+                seq: 5,
+                session: 9,
+            };
+            let frame = encode_data(&header, b"x", 26).expect("encode");
+            assert_eq!(decode_data(&frame).expect("decode").0.kind, kind);
+        }
     }
 
     #[test]

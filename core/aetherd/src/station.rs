@@ -24,6 +24,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use aether_link::{
     Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
+    frames::{DataHeader, DataKind, decode_data, encode_data, pack_callsign, unpack_callsign},
     rate::PAYLOAD_BYTES,
 };
 use aether_phy::{
@@ -37,6 +38,7 @@ use aether_phy::{
 use crate::{
     busy::{BusyConfig, BusyDetector},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
+    cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
 };
 
@@ -66,6 +68,13 @@ pub struct StationConfig {
     /// Offer stream compression in the connect handshake. Used only if the peer offers it
     /// too; a station that cannot decompress must never be sent a compressed stream.
     pub compress: bool,
+    /// Identify in Morse at the end of a transmission, and how. `None` for not at all, which
+    /// is the default: Aether's own frames carry both callsigns, and whether that satisfies
+    /// the local rules is something only the operator knows.
+    pub cw_id: Option<CwId>,
+    /// Longest a station may transmit without a Morse identifier, in seconds. Ignored when
+    /// `cw_id` is `None`. Ten minutes is the common regulatory figure.
+    pub cw_id_interval_s: f64,
 }
 
 impl Default for StationConfig {
@@ -84,6 +93,8 @@ impl Default for StationConfig {
             max_key_s: 30.0,
             wait_for_clear: true,
             compress: true,
+            cw_id: None,
+            cw_id_interval_s: 600.0,
         }
     }
 }
@@ -164,6 +175,12 @@ pub struct StationStats {
     pub bytes_before_compression: usize,
     /// Bytes the compressor produced, which is what the link actually carries.
     pub bytes_after_compression: usize,
+    /// Morse identifiers sent.
+    pub cw_ids: usize,
+    /// Beacons transmitted.
+    pub beacons_sent: usize,
+    /// Beacons heard from other stations.
+    pub beacons_heard: usize,
 }
 
 /// One station: link engine, physical layer, radio.
@@ -189,6 +206,8 @@ pub struct Station<P: Ptt> {
     decompressor: Decompressor,
     /// Application bytes waiting for a session to negotiate compression.
     outbound: Vec<u8>,
+    /// When the last Morse identifier went out, in station time.
+    last_cw_id: Option<f64>,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -244,6 +263,7 @@ impl<P: Ptt> Station<P> {
             compressor: Compressor::new(false),
             decompressor: Decompressor::new(false),
             outbound: Vec::new(),
+            last_cw_id: None,
             stats: StationStats::default(),
             config,
         }
@@ -398,6 +418,39 @@ impl<P: Ptt> Station<P> {
         self.engine.request_break();
     }
 
+    /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
+    ///
+    /// It is how an operator answers "can anybody hear me?" without arranging a contact
+    /// first. Sent at the most robust mode, because the point is to be heard by somebody who
+    /// cannot yet hear anything else — and never while a session is running, which would put
+    /// a frame into the middle of somebody's transfer.
+    ///
+    /// # Errors
+    /// If a session is up, or the callsign cannot be packed.
+    pub fn beacon(&mut self) -> Result<(), &'static str> {
+        if self.engine.state() != State::Idle {
+            return Err("a session is running");
+        }
+        let body =
+            pack_callsign(&self.config.callsign).map_err(|_| "the callsign will not pack")?;
+        let header = DataHeader {
+            kind: DataKind::Beacon,
+            seq: 0,
+            session: 0,
+        };
+        let capacity = self.engine.timing().capacity(0);
+        let payload =
+            encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
+        self.pending.push_back(vec![aether_link::TxFrame {
+            container: Container::Data,
+            payload,
+            mode: 0,
+            rv: 0,
+        }]);
+        self.stats.beacons_sent += 1;
+        Ok(())
+    }
+
     // ── audio ─────────────────────────────────────────────────────────
 
     /// Hand over audio the sound card captured.
@@ -495,6 +548,18 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
+            // A beacon belongs to no session, so it is handled before anything the engine
+            // would do with it. It is reported and never answered: a channel where every
+            // beacon drew a reply would be unusable.
+            if let Some(caller) = beacon_callsign(&decoded) {
+                self.stats.beacons_heard += 1;
+                self.busy.mark_frame(now);
+                self.events.push(format!(
+                    "beacon:{caller} at {:.1} dB",
+                    decoded.frame.snr_3k_db
+                ));
+                continue;
+            }
             let container = if decoded.frame.sync.frame_type == FrameType::Control {
                 Container::Control
             } else {
@@ -616,7 +681,34 @@ impl<P: Ptt> Station<P> {
 
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         self.playback.extend(rendered.iter().map(|&x| x * level));
+        self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+    }
+
+    /// Put a Morse identifier at the end of this transmission, if one is due.
+    ///
+    /// It goes inside the same keying, after the data and before the tail, which is what an
+    /// identifier is: part of the transmission it identifies. That also means it counts
+    /// against the key-time watchdog like everything else, which is correct — a station is
+    /// transmitting either way.
+    fn append_cw_id(&mut self, now: f64, audio_rate: f64) {
+        let Some(cw) = self.config.cw_id else { return };
+        let due = self
+            .last_cw_id
+            .is_none_or(|last| now - last >= self.config.cw_id_interval_s);
+        if !due {
+            return;
+        }
+        let audio = cw.audio(&self.config.callsign, audio_rate);
+        if audio.is_empty() {
+            return;
+        }
+        // a moment of silence so the identifier is not run into the data
+        let gap = (0.1 * audio_rate) as usize;
+        self.playback.extend(std::iter::repeat_n(0.0f32, gap));
+        self.playback.extend(audio);
+        self.last_cw_id = Some(now);
+        self.stats.cw_ids += 1;
     }
 
     /// Whether it is polite to start transmitting.
@@ -631,6 +723,19 @@ impl<P: Ptt> Station<P> {
         }
         self.busy.settled() && !self.busy.busy(now)
     }
+}
+
+/// The callsign in a beacon frame, if that is what this is.
+fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
+    if decoded.frame.sync.frame_type != FrameType::Data {
+        return None;
+    }
+    let payload = decoded.payload.as_ref()?;
+    let (header, body) = decode_data(payload).ok()?;
+    if header.kind != DataKind::Beacon {
+        return None;
+    }
+    unpack_callsign(&body).ok()
 }
 
 /// Link-layer timing derived from the waveform tables.
@@ -845,6 +950,120 @@ mod tests {
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received(), message);
+    }
+
+    #[test]
+    fn a_station_identifies_in_morse_when_asked_to_and_not_otherwise() {
+        // Off by default: a station that identifies when it need not is spending air time,
+        // and one that fails to when it must is breaking the rules. Only the operator knows
+        // which applies, so the daemon does not guess.
+        let quiet = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert!(
+            quiet.config.cw_id.is_none(),
+            "it identified without being asked"
+        );
+
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId::default()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.connect("KK4XYZ").expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        for _ in 0..400 {
+            station.playback(&mut out).expect("playback");
+            station.capture(&vec![0.0f32; 4096]).expect("capture");
+            if station.stats.cw_ids > 0 {
+                break;
+            }
+        }
+        assert_eq!(station.stats.cw_ids, 1, "the identifier never went out");
+    }
+
+    #[test]
+    fn the_identifier_does_not_repeat_inside_its_interval() {
+        // it is an identifier, not a beacon; sending it on every transmission would waste a
+        // large fraction of a slow link
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId::default()),
+                cw_id_interval_s: 600.0,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.connect("KK4XYZ").expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        for _ in 0..1200 {
+            station.playback(&mut out).expect("playback");
+            station.capture(&vec![0.0f32; 4096]).expect("capture");
+        }
+        assert!(
+            station.now() > 60.0,
+            "the test did not run long enough to matter"
+        );
+        assert!(
+            station.stats.transmissions > 1,
+            "only {} transmission(s), so there was nothing to repeat over",
+            station.stats.transmissions
+        );
+        assert_eq!(
+            station.stats.cw_ids,
+            1,
+            "it identified {} times in {:.0} s with a 600 s interval",
+            station.stats.cw_ids,
+            station.now()
+        );
+    }
+
+    #[test]
+    fn a_beacon_crosses_the_air_and_is_reported_but_never_answered() {
+        // "can anybody hear me?" without arranging a contact first, which on HF is most of
+        // what a new station needs to know
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.beacon().expect("idle");
+        air.run(30.0, |_, b| b.stats.beacons_heard > 0);
+
+        assert_eq!(air.b.stats.beacons_heard, 1, "the beacon was not heard");
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e.starts_with("beacon:W4ODA")),
+            "the callsign was not reported: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.contains("dB")),
+            "the signal report is missing, which is the whole point: {events:?}"
+        );
+        // a channel where every beacon drew a reply would be unusable
+        assert_eq!(air.b.stats.transmissions, 0, "it answered a beacon");
+        assert_eq!(air.b.state(), State::Idle);
+        assert_eq!(air.a.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_beacon_is_refused_while_a_session_is_running() {
+        // it would put an unproto frame into the middle of somebody's transfer
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(30.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected());
+        assert!(air.a.beacon().is_err(), "it beaconed during a session");
     }
 
     #[test]

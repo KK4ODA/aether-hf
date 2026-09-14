@@ -463,9 +463,14 @@ fn apply(
             let _ = handle.call(request("abort", json!({})));
             true
         }
-        // Neither is implemented yet, and both would key a transmitter. Saying nothing would
-        // leave the operator believing their station had identified or tuned when it had not.
-        HostAction::Tune(_) | HostAction::CqFrame => {
+        HostAction::CqFrame => {
+            let _ = handle.call(request("beacon", json!({})));
+            true
+        }
+        // Tuning is not implemented, and it would key a transmitter. Saying nothing would
+        // leave the operator believing their station had put out a carrier when it had not;
+        // the host interface specification records it as understood but not acted on.
+        HostAction::Tune(_) => {
             let _ = host;
             true
         }

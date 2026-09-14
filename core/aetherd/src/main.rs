@@ -151,6 +151,11 @@ fn run() -> Result<(), String> {
         max_key_s: config.radio.max_key_s,
         wait_for_clear: config.radio.wait_for_clear,
         compress: config.radio.compress,
+        cw_id: config.radio.cw_id.then(|| aetherd::cwid::CwId {
+            wpm: config.radio.cw_id_wpm,
+            ..aetherd::cwid::CwId::default()
+        }),
+        cw_id_interval_s: config.radio.cw_id_interval_s,
         ..StationConfig::default()
     };
 

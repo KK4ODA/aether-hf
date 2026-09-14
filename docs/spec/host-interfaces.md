@@ -74,7 +74,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `COMPRESSION OFF\|TEXT\|FILES` | What the host wants compressed | Recorded; see §5 |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
-| `CQFRAME` | Send an unproto identification frame | See §5 |
+| `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
 | `TUNE <seconds>` / `TUNE OFF` | Put a carrier on the air for tuning | Bounded at 30 s; see §5 |
 | `VERSION` | → `VERSION Aether-HF-<version>` | |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
@@ -113,11 +113,17 @@ the request and then transmitting 2300 Hz anyway would put a station outside the
 operator chose, which is an operator's decision and sometimes a legal one.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `TUNE`, `CQFRAME`. The setting is remembered and reported back, and the modem
-answers `OK` because the command was understood — but compression negotiation, Morse
-identification and the unproto frames are P3-6, and tuning is not implemented. **`TUNE` does
-not key the transmitter in this version.** An operator who needs a tuning carrier must use
-their radio's own tune function.
+`P2P SESSION`, `TUNE`. The setting is remembered and reported back, and the modem answers `OK`
+because the command was understood.
+
+Compression and Morse identification both exist (P3-6) but are configured on the station, not
+per host session: compression is negotiated with the *other station* in the connect handshake
+and cannot be turned on from one end alone, and whether to identify in Morse is a licence
+question for the operator rather than a runtime choice for a client. Wiring these commands to
+those settings is an open item.
+
+**`TUNE` does not key the transmitter in this version.** An operator who needs a tuning
+carrier must use their radio's own tune function.
 
 **Everything else in §3 is acted on.**
 
