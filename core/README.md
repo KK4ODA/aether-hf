@@ -6,15 +6,18 @@ these crates are the implementation, and the two are required to agree bit-for-b
 | Crate | Status | What |
 |---|---|---|
 | `aether-fec` | done | TS 38.212 CRCs, LDPC (BG1/BG2) encode and layered decode, rate matching with incremental redundancy |
-| `aether-phy` | in progress (P3-2) | waveform, constellations, mode table, frame codec, OFDM, preamble, transmitter and receiver — cross-validated against the model. **Acquisition** (finding a frame in a stream) is the remaining gap |
+| `aether-phy` | in progress (P3-2) | waveform, constellations, mode table, frame codec, OFDM, preamble, transmitter and receiver — cross-validated against the model. acquisition too — a frame can be built, found in a stream, demodulated and decoded entirely in Rust |
 | `aether-link` | in progress (P3-2) | frame formats and rate control — cross-validated. The ARQ engine and session state machine are still to come |
 | `aether-hal`, `aether-api`, `aetherd` | planned (P3-3, P3-4) | audio, PTT, control plane, daemon |
 
 ```
-cargo test                                   # unit tests + cross-validation against the model
+cargo test --release                         # unit tests + cross-validation against the model
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
+
+Use `--release` for the tests. The acquisition search is real signal processing and an
+unoptimised build runs it about twenty times slower without covering anything extra.
 
 ## Staying bit-exact
 

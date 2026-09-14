@@ -56,9 +56,11 @@ rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2
 P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default), a fully measured 14-mode
 rate table, P2-6 (Wiener channel estimation built and benchmarked — **not adopted**, the
 default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete.** Phase 3: P3-1 done (`aether-fec`, bit-exact with the model);
-P3-2 in progress — `aether-phy` (waveform, constellations, modes, frame codec, OFDM,
-preamble, transmitter) and `aether-link` (frame formats, rate control) are ported and
-cross-validated. Remaining in P3-2: the receiver and the ARQ engine.
+P3-2 in progress — `aether-phy` is **complete** (waveform, constellations, modes, frame
+codec, OFDM, preamble, transmitter, receiver, acquisition: a frame can be built, found in a
+stream, demodulated and decoded entirely in Rust) and `aether-link` has frame formats and
+rate control. Remaining in P3-2: the ARQ engine. Run the Rust tests with
+`cargo test --release` — the acquisition search is ~20x slower in a debug build.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
