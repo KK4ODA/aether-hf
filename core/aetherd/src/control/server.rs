@@ -119,8 +119,17 @@ impl ControlServer {
         if !is_loopback(&config.bind) && config.token.is_none() {
             return Err(ServerError::Unprotected(config.bind.clone()));
         }
-        let listener = TcpListener::bind(&config.bind)
-            .map_err(|e| ServerError::Bind(format!("cannot bind {}: {e}", config.bind)))?;
+        let listener = TcpListener::bind(&config.bind).map_err(|e| {
+            ServerError::Bind(if e.kind() == std::io::ErrorKind::AddrInUse {
+                format!(
+                    "{} is already in use: another aetherd, or another program, is listening \
+                     there. Stop it, or change [control] bind",
+                    config.bind
+                )
+            } else {
+                format!("cannot listen on {}: {e}", config.bind)
+            })
+        })?;
         let address = listener
             .local_addr()
             .map_err(|e| ServerError::Bind(format!("{e}")))?;

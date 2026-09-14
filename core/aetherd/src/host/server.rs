@@ -149,8 +149,16 @@ fn bind_pair(address: &str) -> Result<(TcpListener, TcpListener), HostError> {
         .map_err(|e| HostError::Bind(format!("{address} is not an address: {e}")))?;
 
     if wanted.port() != 0 {
-        let command = TcpListener::bind(wanted)
-            .map_err(|e| HostError::Bind(format!("cannot bind {wanted}: {e}")))?;
+        let command = TcpListener::bind(wanted).map_err(|e| {
+            HostError::Bind(if e.kind() == std::io::ErrorKind::AddrInUse {
+                format!(
+                    "{wanted} is already in use: another modem — VARA itself, perhaps — or \
+                     another aetherd is listening there. Stop it, or change [host] bind"
+                )
+            } else {
+                format!("cannot listen on {wanted}: {e}")
+            })
+        })?;
         let mut data_address = wanted;
         data_address.set_port(wanted.port() + 1);
         let data = TcpListener::bind(data_address).map_err(|e| {

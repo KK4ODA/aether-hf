@@ -9,25 +9,25 @@
   <body>
     <header class="bar">
       <h1>Aether<span class="thin"> HF</span></h1>
-      <div class="indicators">
-        <span class="lamp" id="lamp-ptt" title="Transmitter">TX</span>
-        <span class="lamp" id="lamp-busy" title="Channel occupancy">BUSY</span>
-        <span class="lamp" id="lamp-link" title="Connection to the modem">LINK</span>
+      <div class="indicators" role="group" aria-label="Indicators">
+        <span class="lamp" id="lamp-ptt" role="img" aria-label="Transmitter off" title="Transmitter">TX</span>
+        <span class="lamp" id="lamp-busy" role="img" aria-label="Channel clear" title="Channel occupancy">BUSY</span>
+        <span class="lamp" id="lamp-link" role="status" aria-label="Not connected to the modem" title="Connection to the modem">LINK</span>
       </div>
       <div class="callsign" id="callsign">—</div>
     </header>
 
-    <nav class="tabs" role="tablist">
-      <button class="tab" role="tab" data-panel="status" aria-selected="true">Status</button>
-      <button class="tab" role="tab" data-panel="session" aria-selected="false">Session</button>
-      <button class="tab" role="tab" data-panel="setup" aria-selected="false">Setup</button>
-      <button class="tab" role="tab" data-panel="log" aria-selected="false">Log</button>
+    <nav class="tabs" role="tablist" aria-label="Panels">
+      <button class="tab" role="tab" id="tab-status" data-panel="status" aria-selected="true" aria-controls="panel-status">Status</button>
+      <button class="tab" role="tab" id="tab-session" data-panel="session" aria-selected="false" aria-controls="panel-session" tabindex="-1">Session</button>
+      <button class="tab" role="tab" id="tab-setup" data-panel="setup" aria-selected="false" aria-controls="panel-setup" tabindex="-1">Setup</button>
+      <button class="tab" role="tab" id="tab-log" data-panel="log" aria-selected="false" aria-controls="panel-log" tabindex="-1">Log</button>
     </nav>
 
     <main>
       <!-- ── status ─────────────────────────────────────────────── -->
-      <section id="panel-status" class="panel">
-        <div class="state-strip" id="state-strip">
+      <section id="panel-status" class="panel" role="tabpanel" aria-labelledby="tab-status">
+        <div class="state-strip" id="state-strip" role="status">
           <div class="state-name" id="state-name">disconnected</div>
           <div class="state-detail" id="state-detail">Not connected to a modem.</div>
         </div>
@@ -59,7 +59,7 @@
           <figcaption>
             Channel level against the learned noise floor, last two minutes
           </figcaption>
-          <canvas id="chart" width="900" height="180"></canvas>
+          <canvas id="chart" width="900" height="180" role="img" aria-label="Channel level chart; the current reading is in Signal above noise"></canvas>
         </figure>
 
         <table class="counters">
@@ -69,7 +69,7 @@
       </section>
 
       <!-- ── session ────────────────────────────────────────────── -->
-      <section id="panel-session" class="panel" hidden>
+      <section id="panel-session" class="panel" role="tabpanel" aria-labelledby="tab-session" hidden>
         <div class="row">
           <label for="remote">Call</label>
           <input id="remote" type="text" placeholder="KK4XYZ" autocomplete="off" spellcheck="false" />
@@ -88,7 +88,7 @@
         <div class="split">
           <div>
             <h2>Send</h2>
-            <textarea id="outgoing" rows="6" placeholder="Text to send once a session is up…"></textarea>
+            <textarea id="outgoing" rows="6" aria-label="Text to send" placeholder="Text to send once a session is up…"></textarea>
             <div class="row">
               <button id="btn-send" class="primary">Send</button>
               <span class="sub" id="send-note"></span>
@@ -96,13 +96,13 @@
           </div>
           <div>
             <h2>Received</h2>
-            <pre id="incoming" class="received" aria-live="polite"></pre>
+            <pre id="incoming" class="received" role="log" aria-label="Received text"></pre>
           </div>
         </div>
       </section>
 
       <!-- ── setup ──────────────────────────────────────────────── -->
-      <section id="panel-setup" class="panel" hidden>
+      <section id="panel-setup" class="panel" role="tabpanel" aria-labelledby="tab-setup" hidden>
         <div class="wizard" id="wizard">
           <ol class="steps">
             <li class="step" data-step="1">
@@ -201,6 +201,7 @@
 
         <h2>What this modem can do</h2>
         <table class="modes">
+          <caption class="sr-only">Modes, slowest first</caption>
           <thead>
             <tr>
               <th>Mode</th>
@@ -215,7 +216,7 @@
       </section>
 
       <!-- ── log ────────────────────────────────────────────────── -->
-      <section id="panel-log" class="panel" hidden>
+      <section id="panel-log" class="panel" role="tabpanel" aria-labelledby="tab-log" hidden>
         <div class="row">
           <button id="btn-clear-log">Clear</button>
           <button id="btn-diagnostics">Copy diagnostic bundle</button>
@@ -226,7 +227,7 @@
           token taken out, the state of the link, the devices this machine reports, and the
           daemon's last few hundred log lines. It never contains your traffic.
         </p>
-        <pre id="log" class="received" aria-live="polite"></pre>
+        <pre id="log" class="received" role="log" aria-label="Log"></pre>
       </section>
     </main>
 

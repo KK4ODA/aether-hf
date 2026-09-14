@@ -47,11 +47,27 @@ pub enum AudioError {
 impl core::fmt::Display for AudioError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NoDevice(name) => write!(f, "no audio device named {name:?}"),
-            Self::Unsupported(detail) => {
-                write!(f, "device cannot do what the modem needs: {detail}")
-            }
-            Self::Stream(detail) => write!(f, "audio stream: {detail}"),
+            Self::NoDevice(name) if name.starts_with("default ") => write!(
+                f,
+                "this machine has no {name} device. Plug the radio interface in, or name a \
+                 device in [audio]; `aetherd --list-devices` shows what is there"
+            ),
+            Self::NoDevice(name) => write!(
+                f,
+                "there is no audio device named {name:?}. The name has to match exactly what \
+                 `aetherd --list-devices` prints; if the interface was unplugged, plug it back \
+                 in and start again"
+            ),
+            Self::Unsupported(detail) => write!(
+                f,
+                "the audio device cannot do what the modem needs ({detail}). The modem runs at \
+                 48 kHz; on Windows, check the device's default format in Sound settings"
+            ),
+            Self::Stream(detail) => write!(
+                f,
+                "the audio stream failed: {detail}. Another program may have exclusive use of \
+                 the device"
+            ),
         }
     }
 }

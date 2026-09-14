@@ -89,12 +89,12 @@ function connect() {
 }
 
 function setLink(up) {
-  $("lamp-link").classList.toggle("on", up);
+  setLamp("lamp-link", up, up ? "Connected to the modem" : "Not connected to the modem");
   if (!up) {
     setState("offline", "Not connected", `No modem at ${endpoint()}. Retrying.`);
     $("footer-version").textContent = "not connected";
-    $("lamp-ptt").classList.remove("on");
-    $("lamp-busy").classList.remove("on");
+    setLamp("lamp-ptt", false, "Transmitter off");
+    setLamp("lamp-busy", false, "Channel clear");
   }
   for (const id of ["btn-connect", "btn-disconnect", "btn-abort", "btn-beacon", "btn-send"]) {
     $(id).disabled = !up;
@@ -110,7 +110,7 @@ function onEvent(frame) {
       applyMetrics(data);
       break;
     case "ptt":
-      $("lamp-ptt").classList.toggle("on", data.on === true);
+      setLamp("lamp-ptt", data.on === true, data.on === true ? "Transmitter keyed" : "Transmitter off");
       break;
     case "state":
       log(`${data.name}: ${data.detail}`);
@@ -156,8 +156,8 @@ async function refreshStatus() {
 
   $("callsign").textContent = status.callsign || "—";
   $("footer-version").textContent = `aetherd ${status.version} · ptt: ${status.ptt}`;
-  $("lamp-ptt").classList.toggle("on", status.transmitting === true);
-  $("lamp-busy").classList.toggle("on", status.channel_busy === true);
+  setLamp("lamp-ptt", status.transmitting === true, status.transmitting ? "Transmitter keyed" : "Transmitter off");
+  setLamp("lamp-busy", status.channel_busy === true, status.channel_busy ? "Channel busy" : "Channel clear");
 
   $("v-queued").textContent = String(status.queued_bytes ?? 0);
   const saving = status.compression_saving ?? 0;
@@ -206,9 +206,9 @@ function applyMetrics(metrics) {
     if (history.length > 240) history.shift();
     drawChart();
   }
-  $("lamp-busy").classList.toggle("on", metrics.channel_busy === true);
+  setLamp("lamp-busy", metrics.channel_busy === true, metrics.channel_busy ? "Channel busy" : "Channel clear");
   if (metrics.transmitting !== undefined) {
-    $("lamp-ptt").classList.toggle("on", metrics.transmitting === true);
+    setLamp("lamp-ptt", metrics.transmitting === true, metrics.transmitting ? "Transmitter keyed" : "Transmitter off");
   }
   if (metrics.audio !== undefined) updateMeter(metrics.audio);
 }
@@ -641,17 +641,34 @@ async function transmitTest(method, seconds, label) {
 
 // ── actions ─────────────────────────────────────────────────────────
 
+function selectTab(tab, focus = false) {
+  for (const other of document.querySelectorAll(".tab")) {
+    const selected = other === tab;
+    other.setAttribute("aria-selected", String(selected));
+    // one tab stop for the whole list; the arrow keys move within it
+    other.tabIndex = selected ? 0 : -1;
+    $(`panel-${other.dataset.panel}`).hidden = !selected;
+  }
+  if (focus) tab.focus();
+  if (tab.dataset.panel === "status") drawChart();
+}
+
 function wire() {
-  for (const tab of document.querySelectorAll(".tab")) {
-    tab.addEventListener("click", () => {
-      for (const other of document.querySelectorAll(".tab")) {
-        const selected = other === tab;
-        other.setAttribute("aria-selected", String(selected));
-        $(`panel-${other.dataset.panel}`).hidden = !selected;
-      }
-      if (tab.dataset.panel === "status") drawChart();
+  const tabs = [...document.querySelectorAll(".tab")];
+  for (const [index, tab] of tabs.entries()) {
+    tab.addEventListener("click", () => selectTab(tab));
+    tab.addEventListener("keydown", (event) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1, Home: -index, End: tabs.length - 1 - index }[
+        event.key
+      ];
+      if (step === undefined) return;
+      event.preventDefault();
+      selectTab(tabs[(index + step + tabs.length) % tabs.length], true);
     });
   }
+  $("remote").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") $("btn-connect").click();
+  });
 
   $("btn-connect").addEventListener("click", async () => {
     const remote = $("remote").value.trim().toUpperCase();
@@ -736,6 +753,14 @@ async function copyDiagnostics() {
   } catch (error) {
     note.textContent = error.message;
   }
+}
+
+// A lamp says its state in words as well as in colour, for a screen reader and for
+// anyone who cannot tell the colours apart.
+function setLamp(id, on, label) {
+  const lamp = $(id);
+  lamp.classList.toggle("on", on);
+  if (lamp.getAttribute("aria-label") !== label) lamp.setAttribute("aria-label", label);
 }
 
 function log(message, bad = false) {

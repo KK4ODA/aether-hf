@@ -31,11 +31,12 @@ pub enum PttError {
 impl core::fmt::Display for PttError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Backend(message) => write!(f, "ptt backend: {message}"),
+            Self::Backend(message) => write!(f, "keying: {message}"),
             Self::WatchdogTripped => {
                 write!(
                     f,
-                    "ptt watchdog tripped; release the key before transmitting again"
+                    "the key-time watchdog tripped and the transmitter was released; it stays \
+                     released until the software asks again from a clean state"
                 )
             }
         }
@@ -129,8 +130,14 @@ impl RigctldPtt {
                 .address
                 .parse()
                 .map_err(|e| PttError::Backend(format!("bad address {}: {e}", self.address)))?;
-            let stream = std::net::TcpStream::connect_timeout(&address, self.timeout)
-                .map_err(|e| PttError::Backend(format!("connect {}: {e}", self.address)))?;
+            let stream =
+                std::net::TcpStream::connect_timeout(&address, self.timeout).map_err(|e| {
+                    PttError::Backend(format!(
+                        "cannot reach rigctld at {} ({e}). Is it running, and is [ptt] address \
+                         the address it listens on?",
+                        self.address
+                    ))
+                })?;
             stream
                 .set_read_timeout(Some(self.timeout))
                 .and_then(|()| stream.set_write_timeout(Some(self.timeout)))
@@ -490,7 +497,13 @@ impl SerialPtt {
         let port = serialport::new(path, 9600)
             .timeout(std::time::Duration::from_millis(100))
             .open()
-            .map_err(|e| PttError::Backend(format!("open {path}: {e}")))?;
+            .map_err(|e| {
+                PttError::Backend(format!(
+                    "cannot open the serial port {path} ({e}). `aetherd --list-ports` shows \
+                     what is there; a port that exists but will not open is usually held by \
+                     another program, such as a rig-control one"
+                ))
+            })?;
         let mut ptt = Self {
             path: path.to_owned(),
             line,
