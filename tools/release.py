@@ -43,6 +43,13 @@ SITES: list[tuple[Path, str]] = [
         r'(?P<pre>"version": ")(?P<v>[^"]+)(?P<post>")',
     ),
     (ROOT / "pyproject.toml", r'(?m)^(?P<pre>version = ")(?P<v>[^"]+)(?P<post>")'),
+    # uv.lock records the project's own version too, and `uv sync --locked` refuses a lock
+    # that disagrees with pyproject.toml: the first tagged release failed its benchmark
+    # gate on exactly that
+    (
+        ROOT / "uv.lock",
+        r'(?m)^(?P<pre>name = "aether-model"\nversion = ")(?P<v>[^"]+)(?P<post>")',
+    ),
     (
         ROOT / "model" / "aether_model" / "__init__.py",
         r'(?m)^(?P<pre>__version__ = ")(?P<v>[^"]+)(?P<post>")',
