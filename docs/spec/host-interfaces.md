@@ -65,8 +65,8 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 
 | Command | Effect | Notes |
 |---|---|---|
-| `MYCALL <call>[ <call>…]` | Sets the callsigns this station answers to | Space- or comma-separated. Refused if any callsign is not one the link layer can carry (`A–Z 0–9 - /`, at most nine characters) |
-| `CONNECT <from> <to>` | Starts a session | |
+| `MYCALL <call>[ <call>…]` | Sets the callsigns this station answers to; the first is the one it calls as | Space- or comma-separated. Refused if any callsign is not one the link layer can carry (`A–Z 0–9 - /`, at most nine characters). Reaches the modem (`callsigns.set`), so the host's callsign replaces the one in the configuration file — the host owns the operator's callsign; VARA has none of its own. Given during a session it takes effect when the session ends |
+| `CONNECT <from> <to>` | Starts a session, as `<from>` when that is one of the `MYCALL` callsigns | A station that answers to a club or tactical call besides its own chooses between them here; the called station answers as whichever of its callsigns was called |
 | `DISCONNECT` | Closes it once the queue drains | Orderly |
 | `ABORT` | Drops it immediately | Not orderly |
 | `LISTEN ON` / `LISTEN OFF` | Answer incoming calls, or not | |
@@ -76,7 +76,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `BW2300` | Selects the bandwidth | The only one this PHY has (ADR-0002) |
 | `BW500`, `BW2750` | — | **Refused.** See §5 |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
-| `COMPRESSION OFF\|TEXT\|FILES` | What the host wants compressed | Recorded; see §5 |
+| `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
 | `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
@@ -148,7 +148,7 @@ changing as clients are tested against it, and it cannot destabilise the modem u
 |---|---|
 | The test suite's own host client | **Passing** — setup, call, session notifications, payload both ways, second-host refusal |
 | Pat 1.0.0 | **Passing on the bench** (2026-09-14): two daemons over the simulated channel at 15 dB, Pat at both ends; a P2P B2F session — connect, SID exchange, a proposal, a message with a 6 000-byte incompressible attachment, `FF`/`FQ`, disconnect — in 84 s, the attachment byte-identical on arrival. One fix on the way: the called side's `CONNECTED` had named this station first. On the air: not yet |
-| Winlink Express | Not yet verified |
+| Winlink Express 1.8.5.0 | **Passing on the bench** (2026-09-14): two instances over the simulated channel at 15 dB, a Vara HF P2P session each, `MYCALL KK4ODA-1` and `KK4ODA-2`. A P2P message with a 6 000-byte incompressible attachment (zipped by Winlink Express, which does not allow `.bin`): 6 637 bytes in 36 s by its own count, the whole B2F session 62 s, the attachment byte-identical on arrival. Its opening line, verbatim in the adapter's test: `PUBLIC ON`, `CWID ON`, `COMPRESSION ON`, `BW<max>`, `MYCALL`, `LISTEN ON`. Two things it found. `COMPRESSION ON` is not in the published set and was `WRONG`; it is `TEXT` and is now heard. And **`MYCALL` had stopped at the adapter** — the modems kept the callsigns in their configuration files, and a call to the name Winlink Express chose was never answered — which is why `MYCALL` now reaches the modem (`callsigns.set`) and `CONNECT <from> <to>` says which callsign the session runs under. Quirks: it demands a TNC path even with auto-launch off (it launched `C:\VARA\Vara.exe` once before that was unchecked — set the path to `aetherd` and untick the launch), it opens a session on port 8300 by default so a second instance needs its own port before its session window is ever opened, and it wants a centre frequency before it will call. On the air: not yet |
 | VarAC 15.0.18 | **Talks to it; cannot operate with it yet.** Its start-up conversation is verbatim in the adapter's test: `BW500`, `CHAT ON`, `LISTEN ON`, `IGNOREKISSDCD ON`, `LISTEN CQ`, `VERSION`, `MYCALL <call> <call>-T`, `BW500` again. Three of those had come back `WRONG` and are now heard (§3). What remains is the one this modem cannot do: **VarAC's ecosystem is 500 Hz** — it disables its whole interface until `BW500` is answered `OK`, and refuses to call at 2300 Hz on a calling frequency ("you can't use a 2300/2750Hz bandwidth on a calling QRG"). VarAC support therefore needs a 500 Hz waveform (ADR-0002 anticipated one, 12 carriers), which is a Phase 2-class task, not an adapter change |
 | BPQ32 | Not yet verified |
 
@@ -160,9 +160,9 @@ this table is what the compatibility claim rests on, and it should be read as ex
 
 ## 8. Open items for v1.0
 
-* Pat on the air (the bench is done; `docs/user/field-test.md`), then Winlink Express P2P
-  between two instances, then VarAC and BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the
-  matrix). All four can now be tried with no radio over `[sim]`.
+* Pat and Winlink Express on the air (the bench is done for both; `docs/user/field-test.md`),
+  then BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the matrix, and VarAC waits on the
+  500 Hz waveform below). All four can be tried with no radio over `[sim]`.
 * Compression negotiation (P3-6), which changes what `COMPRESSION` means from recorded to
   acted on.
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always
