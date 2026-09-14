@@ -30,7 +30,10 @@ pub const DEFAULT_COMMAND_PORT: u16 = 8300;
 /// Aether's own name on purpose: see the module documentation.
 #[must_use]
 pub fn version_string() -> String {
-    format!("Aether-HF-{}", env!("CARGO_PKG_VERSION"))
+    // Three words, like the published reply's shape — <product> <band> <version> — so a
+    // host that takes the version from the fourth token of the line finds one. VarAC does,
+    // and "Aether-HF-0.2.0" put an exception in its log. The name is still this modem's.
+    format!("Aether HF {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// Bandwidth this physical layer offers, in hertz (ADR-0002).
@@ -132,6 +135,20 @@ pub struct HostState {
     pub cw_id: bool,
     /// Bytes the modem still has to send, as last reported.
     pub buffer: usize,
+    /// Settings the host asked for that this modem hears and does not act on.
+    pub recorded: Recorded,
+}
+
+/// What a host asked for that changes nothing here — heard, so the host is not told the
+/// modem is broken, and kept, so the control API can say what was asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Recorded {
+    /// `CHAT ON`: `VarAC` asks for it on every start, and the short frames it means are a
+    /// different air interface this modem does not have.
+    pub chat: bool,
+    /// `LISTEN CQ`: hear only CQ frames. This station hears everything and answers calls to
+    /// its own callsigns either way.
+    pub cq_only: bool,
 }
 
 impl Default for HostState {
@@ -139,6 +156,7 @@ impl Default for HostState {
         Self {
             callsigns: Vec::new(),
             listening: false,
+            recorded: Recorded::default(),
             public: true,
             compression: Compression::default(),
             session: SessionKind::default(),
@@ -209,6 +227,22 @@ impl HostState {
                 self.listening = false;
                 HostOutcome::acting(HostAction::Listen(false))
             }
+            // VarAC: hear only CQ frames. This station hears everything and answers calls
+            // to its own callsigns regardless, which is what a host wanting CQs also wants.
+            ("LISTEN", ["CQ"]) => {
+                self.listening = true;
+                self.recorded.cq_only = true;
+                HostOutcome::acting(HostAction::Listen(true))
+            }
+            ("CHAT", ["ON"]) => {
+                self.recorded.chat = true;
+                HostOutcome::ok()
+            }
+            ("CHAT", ["OFF"]) => {
+                self.recorded.chat = false;
+                HostOutcome::ok()
+            }
+
             ("PUBLIC", ["ON"]) => {
                 self.public = true;
                 HostOutcome::ok()
@@ -258,7 +292,8 @@ impl HostState {
             // One bandwidth exists (ADR-0002). Accepting a request for another and then
             // transmitting 2300 Hz anyway would put a station outside what its operator
             // asked for, so the others are refused.
-            ("BW2300", []) => HostOutcome::ok(),
+            // ...and a KISS-port detail with no KISS port behind it: heard, nothing to do
+            ("BW2300", []) | ("IGNOREKISSDCD", ["ON" | "OFF"]) => HostOutcome::ok(),
             // `BW500` and `BW2750` fall through to the same refusal as anything unknown,
             // which is the right answer: this physical layer does not have them.
             _ => HostOutcome::wrong(),
@@ -429,6 +464,28 @@ mod tests {
         assert!(host.listening);
         assert_eq!(host.command("LISTEN OFF").action, HostAction::Listen(false));
         assert!(!host.listening);
+    }
+
+    #[test]
+    fn what_varac_says_on_every_start_is_heard_rather_than_refused() {
+        // verbatim from VarAC 15.0.18's first conversation with this modem: three of these
+        // came back WRONG, which is what a modem says to a command it has never heard of
+        let mut host = HostState::default();
+        assert_eq!(host.command("CHAT ON").replies, vec!["OK"]);
+        assert!(host.recorded.chat);
+        assert_eq!(host.command("CHAT OFF").replies, vec!["OK"]);
+        assert_eq!(host.command("IGNOREKISSDCD ON").replies, vec!["OK"]);
+        let listen = host.command("LISTEN CQ");
+        assert_eq!(listen.replies, vec!["OK"]);
+        assert_eq!(listen.action, HostAction::Listen(true));
+        assert!(host.listening && host.recorded.cq_only);
+        // and the two it says that this modem genuinely cannot do stay refused
+        assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
+        assert_eq!(
+            host.command("MYCALL KK4ODA-1 KK4ODA-T").replies,
+            vec!["OK"],
+            "a tactical suffix is a callsign like any other"
+        );
     }
 
     #[test]

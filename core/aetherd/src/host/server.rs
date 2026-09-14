@@ -38,6 +38,10 @@ pub struct HostConfig {
     pub enabled: bool,
     /// Address for the command port. The data port is the next one up.
     pub bind: String,
+    /// Print every command line received and every line sent, to standard error. Every
+    /// client differs a little in what it sends, and the first run against a new one is
+    /// a conversation worth reading verbatim.
+    pub trace: bool,
 }
 
 impl Default for HostConfig {
@@ -45,6 +49,7 @@ impl Default for HostConfig {
         Self {
             enabled: false,
             bind: format!("127.0.0.1:{DEFAULT_COMMAND_PORT}"),
+            trace: false,
         }
     }
 }
@@ -127,7 +132,14 @@ impl HostServer {
         let busy = Arc::new(AtomicBool::new(false));
 
         spawn_data_loop(data, Arc::clone(&pipe), Arc::clone(&running))?;
-        spawn_command_loop(command, handle, pipe, busy, Arc::clone(&running))?;
+        spawn_command_loop(
+            command,
+            handle,
+            pipe,
+            busy,
+            Arc::clone(&running),
+            config.trace,
+        )?;
 
         Ok(Self {
             command_address,
@@ -260,6 +272,7 @@ fn spawn_command_loop(
     pipe: Arc<Mutex<DataPipe>>,
     busy: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    trace: bool,
 ) -> Result<(), HostError> {
     std::thread::Builder::new()
         .name("aetherd-host-cmd".to_owned())
@@ -286,7 +299,7 @@ fn spawn_command_loop(
                 let spawned = std::thread::Builder::new()
                     .name("aetherd-host-conn".to_owned())
                     .spawn(move || {
-                        serve_commands(&stream, &handle, &pipe, &busy, &running);
+                        serve_commands(&stream, &handle, &pipe, &busy, &running, trace);
                         released.store(false, Ordering::SeqCst);
                     });
                 if spawned.is_err() {
@@ -306,6 +319,7 @@ fn serve_commands(
     pipe: &Arc<Mutex<DataPipe>>,
     busy: &AtomicBool,
     running: &AtomicBool,
+    trace: bool,
 ) {
     if stream.set_read_timeout(Some(POLL)).is_err() {
         return;
@@ -321,6 +335,9 @@ fn serve_commands(
     let mut connected_to: Option<String> = None;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
+        if trace {
+            eprintln!("host -> {line}");
+        }
         // the published interface terminates every line with a carriage return
         writer.write_all(format!("{line}\r").as_bytes()).is_ok()
     };
@@ -333,6 +350,9 @@ fn serve_commands(
             LineResult::Idle => {}
             LineResult::Line => {
                 let text = String::from_utf8_lossy(&line).to_string();
+                if trace {
+                    eprintln!("host <- {}", text.trim());
+                }
                 let outcome = host.command(&text);
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
@@ -640,6 +660,7 @@ mod tests {
             &HostConfig {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
+                trace: false,
             },
             handle,
         )
@@ -715,6 +736,7 @@ mod tests {
             &HostConfig {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
+                trace: false,
             },
             handle,
         )
@@ -756,6 +778,7 @@ mod tests {
             &HostConfig {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
+                trace: false,
             },
             handle,
         )

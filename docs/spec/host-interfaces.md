@@ -20,7 +20,9 @@ layer and nothing more:
   compatibility with a proprietary waveform is not achievable and is not attempted.
 * **Nothing here is derived from VARA's internals.** Only the documented command set is
   implemented, from its documented behaviour.
-* **The modem never claims to be VARA.** `VERSION` answers `VERSION Aether-HF-<version>`.
+* **The modem never claims to be VARA.** `VERSION` answers `VERSION Aether HF <version>` —
+  three words, the shape of the published reply, so a host that takes the version from the
+  fourth token finds one (VarAC does); the name is this modem's.
 
 That last point is a decision, not an oversight. `COMMUNITY-CONCERNS.md` §1 is that a new mode
 lives or dies by how many working gateways it has; §13 is the corollary — a gateway listed as
@@ -68,6 +70,9 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `DISCONNECT` | Closes it once the queue drains | Orderly |
 | `ABORT` | Drops it immediately | Not orderly |
 | `LISTEN ON` / `LISTEN OFF` | Answer incoming calls, or not | |
+| `LISTEN CQ` | VarAC: hear only CQ frames | Recorded as listening; this station hears everything and answers calls to its own callsigns either way |
+| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | Recorded. The short frames it means are a different air interface this modem does not have; `OK` tells the host the modem heard, which is what keeps VarAC from calling it broken |
+| `IGNOREKISSDCD ON` / `OFF` | A KISS-port detail | Heard; there is no KISS port |
 | `BW2300` | Selects the bandwidth | The only one this PHY has (ADR-0002) |
 | `BW500`, `BW2750` | — | **Refused.** See §5 |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
@@ -76,7 +81,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
 | `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
 | `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the configured level, so the operator can set drive by the rig's ALC | Bounded at 10 s. `TUNE OFF` is accepted and does nothing: a tone is bounded when it starts |
-| `VERSION` | → `VERSION Aether-HF-<version>` | |
+| `VERSION` | → `VERSION Aether HF <version>` | |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
 
 Anything else is answered `WRONG`. A client that got silence could not tell a missing feature
@@ -113,8 +118,8 @@ the request and then transmitting 2300 Hz anyway would put a station outside the
 operator chose, which is an operator's decision and sometimes a legal one.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`. The setting is remembered and reported back, and the modem answers `OK`
-because the command was understood.
+`P2P SESSION`, `CHAT`, `LISTEN CQ`. The setting is remembered and reported back, and the
+modem answers `OK` because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
 per host session: compression is negotiated with the *other station* in the connect handshake
@@ -144,7 +149,7 @@ changing as clients are tested against it, and it cannot destabilise the modem u
 | The test suite's own host client | **Passing** — setup, call, session notifications, payload both ways, second-host refusal |
 | Pat 1.0.0 | **Passing on the bench** (2026-09-14): two daemons over the simulated channel at 15 dB, Pat at both ends; a P2P B2F session — connect, SID exchange, a proposal, a message with a 6 000-byte incompressible attachment, `FF`/`FQ`, disconnect — in 84 s, the attachment byte-identical on arrival. One fix on the way: the called side's `CONNECTED` had named this station first. On the air: not yet |
 | Winlink Express | Not yet verified |
-| VarAC | Not yet verified |
+| VarAC 15.0.18 | **Talks to it; cannot operate with it yet.** Its start-up conversation is verbatim in the adapter's test: `BW500`, `CHAT ON`, `LISTEN ON`, `IGNOREKISSDCD ON`, `LISTEN CQ`, `VERSION`, `MYCALL <call> <call>-T`, `BW500` again. Three of those had come back `WRONG` and are now heard (§3). What remains is the one this modem cannot do: **VarAC's ecosystem is 500 Hz** — it disables its whole interface until `BW500` is answered `OK`, and refuses to call at 2300 Hz on a calling frequency ("you can't use a 2300/2750Hz bandwidth on a calling QRG"). VarAC support therefore needs a 500 Hz waveform (ADR-0002 anticipated one, 12 carriers), which is a Phase 2-class task, not an adapter change |
 | BPQ32 | Not yet verified |
 
 The command set here is implemented from its published behaviour, and every client differs a
@@ -163,3 +168,6 @@ this table is what the compatibility claim rests on, and it should be read as ex
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always
   answers; the setting is recorded, and the control API says so explicitly rather than
   pretending.
+* **A 500 Hz waveform.** VarAC will not operate without `BW500`, and answering `OK` while
+  transmitting 2300 Hz would put a station across four of VarAC's 500 Hz slots — so the
+  refusal stays until there is a 500 Hz mode to accept it with.

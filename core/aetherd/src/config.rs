@@ -224,6 +224,10 @@ pub struct HostSection {
     /// Command-port address. The data port is the next one up, which every client assumes.
     #[serde(default = "default_host_bind")]
     pub bind: String,
+    /// Print every line of the conversation with the host, for the first run against a
+    /// client nobody has tried yet.
+    #[serde(default)]
+    pub trace: bool,
 }
 
 fn default_host_bind() -> String {
@@ -349,6 +353,7 @@ impl Default for HostSection {
         Self {
             enabled: false,
             bind: default_host_bind(),
+            trace: false,
         }
     }
 }
@@ -626,6 +631,7 @@ impl Config {
         crate::host::HostConfig {
             enabled: self.host.enabled,
             bind: self.host.bind.clone(),
+            trace: self.host.trace,
         }
     }
 
@@ -825,6 +831,8 @@ bind = "127.0.0.1:8515"
 # be free. `VERSION` answers with Aether's name, not VARA's — see docs/spec/host-interfaces.md.
 enabled = false
 bind = "127.0.0.1:8300"
+# Print every line exchanged with the host program, for the first run against a new one.
+trace = false
 
 [log]
 # `text` for a terminal; `json` writes one object per line for a journal or a log shipper.
