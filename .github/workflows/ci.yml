@@ -89,7 +89,8 @@ jobs:
       - name: Vectors are current with the model
         run: |
           uv run python tools/make_fec_vectors.py
-          git diff --exit-code core/aether-fec/tests/data/fec_vectors.json
+          uv run python tools/make_phy_vectors.py
+          git diff --exit-code core/aether-fec/tests/data/fec_vectors.json core/aether-phy/tests/data/phy_vectors.json
 
       - name: Tests
         working-directory: core
