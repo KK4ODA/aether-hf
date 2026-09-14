@@ -46,6 +46,11 @@ jobs:
       - name: Tests (quick set)
         run: uv run pytest -m "not slow" -p no:cacheprovider
 
+      # The daemon, the shell, the installer and the model all carry the version; a release
+      # cut from a tree where they disagree is a bug report that means nothing.
+      - name: Versions agree
+        run: uv run python tools/release.py check
+
   core:
     name: core · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

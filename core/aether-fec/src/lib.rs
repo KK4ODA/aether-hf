@@ -24,8 +24,6 @@
 //! # Ok::<(), aether_fec::ldpc::FecError>(())
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/aether-fec/0.1.0")]
-
 pub mod crc;
 pub mod ldpc;
 pub mod rate_match;
