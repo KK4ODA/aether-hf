@@ -26,14 +26,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb", "appimage"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"],
+    "targets": [
+      "nsis",
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
     "publisher": "Aether HF contributors",
     "copyright": "MIT OR Apache-2.0",
     "category": "Utility",
     "shortDescription": "Open-source HF data modem",
     "longDescription": "An open-source HF ARQ data modem for amateur radio, with a public air-interface specification and a VARA-compatible host interface.",
-    "externalBin": ["binaries/aetherd"],
+    "externalBin": [
+      "binaries/aetherd"
+    ],
     "resources": {
       "../ui/": "ui/"
     },
@@ -45,9 +56,19 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libasound2t64 | libasound2"],
+        "depends": [
+          "libasound2t64 | libasound2"
+        ],
         "section": "hamradio"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGNTBEN0JENjFBODdGNjgKUldSb2Y2aGh2ZGRRSHp3WDRFbnBrQVNJNHQ1L0FHYUVOWC9JVUQ2RWhkZjFlZ3dQWTJ1c3Y2UU4K",
+      "endpoints": [
+        "https://github.com/KK4ODA/aether-hf/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -423,6 +423,8 @@ async function loadConfig() {
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
   select($("dev-ptt"), liveConfig.ptt?.port ?? "");
+  select($("update-channel"), liveConfig.update?.channel ?? "stable");
+  $("update-check").checked = liveConfig.update?.check !== false;
   writeConfig();
 }
 
@@ -473,6 +475,8 @@ function formChanges() {
     changes["ptt.port"] = port;
     changes["ptt.line"] = "rts";
   }
+  changes["update.channel"] = $("update-channel").value;
+  changes["update.check"] = $("update-check").checked;
   return changes;
 }
 

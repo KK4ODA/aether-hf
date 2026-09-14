@@ -65,8 +65,11 @@ jobs:
             if [[ "$version" == *-* ]]; then channel=beta; else channel=stable; fi
             publish=true
           else
+            # stamped as a prerelease of the *next* patch version: a prerelease sorts below
+            # its release, so "0.2.0-nightly" would never be offered to a 0.2.0 installation
             base="$(python tools/release.py check | sed -n 's/^ok: //p')"
-            version="${base}-nightly.$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)"
+            IFS=. read -r major minor patch <<< "${base%%-*}"
+            version="${major}.${minor}.$((patch + 1))-nightly.$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)"
             tag=nightly
             channel=nightly
             if [[ "${{ github.event_name }}" == "schedule" || "${{ inputs.publish_nightly }}" == "true" ]]; then

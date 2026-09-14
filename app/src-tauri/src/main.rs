@@ -18,6 +18,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod update;
+
 use std::{
     net::TcpStream,
     path::PathBuf,
@@ -26,8 +28,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::Manager as _;
+use tauri::{
+    Manager as _,
+    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt as _;
 
 /// Where the daemon listens by default. The shell does not currently offer to change it;
 /// an operator who has moved it can run the daemon themselves and the shell will attach.
@@ -40,7 +46,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The daemon this shell started, if it started one.
-struct Daemon(Mutex<Option<Child>>);
+pub struct Daemon(Mutex<Option<Child>>);
 
 /// Why the daemon could not be started, if it could not.
 struct StartupError(Option<String>);
@@ -59,22 +65,39 @@ fn main() {
             (None, Some(message))
         }
     };
+    let preferences = config_path().map_or(
+        update::Preferences {
+            channel: update::Channel::Stable,
+            check: false,
+        },
+        |path| update::preferences(&path),
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Daemon(Mutex::new(started)))
         .manage(StartupError(failure))
-        .setup(|app| {
+        .setup(move |app| {
+            install_menu(app, preferences.channel)?;
             // A packaged build has no terminal, so a daemon that would not start has to be
             // explained on screen: the panel would otherwise sit at "not connected" for ever,
             // with the reason — a sound card at the wrong rate, a serial port that is held —
             // written somewhere nobody is looking.
             if let Some(message) = &app.state::<StartupError>().0 {
                 app.dialog()
-                    .message(message)
+                    .message(format!(
+                        "{message}\n\nIf this began after an update, Help > Restore the \
+                         previous version goes back."
+                    ))
                     .title("Aether HF could not start the modem")
                     .kind(MessageDialogKind::Error)
                     .show(|_| {});
+            } else if preferences.check {
+                // quietly: a start with nothing newer should look like nothing happened
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(update::offer(handle, preferences.channel, true));
             }
             Ok(())
         })
@@ -85,6 +108,46 @@ fn main() {
         })
         .run(context)
         .expect("the desktop shell could not start");
+}
+
+/// The Help menu: updates, going back, and where things are.
+fn install_menu(app: &tauri::App, channel: update::Channel) -> tauri::Result<()> {
+    let check = MenuItemBuilder::with_id("check-updates", "Check for updates…").build(app)?;
+    let restore =
+        MenuItemBuilder::with_id("restore-previous", "Restore the previous version…").build(app)?;
+    let logs = MenuItemBuilder::with_id("open-logs", "Open the configuration folder").build(app)?;
+    let releases = MenuItemBuilder::with_id("open-releases", "Releases on GitHub").build(app)?;
+    let help = SubmenuBuilder::new(app, "Help")
+        .item(&check)
+        .item(&restore)
+        .separator()
+        .item(&logs)
+        .item(&releases)
+        .build()?;
+    let menu = MenuBuilder::new(app).item(&help).build()?;
+    app.set_menu(menu)?;
+    app.on_menu_event(move |app, event| match event.id().as_ref() {
+        "check-updates" => {
+            tauri::async_runtime::spawn(update::offer(app.clone(), channel, false));
+        }
+        "restore-previous" => update::restore_previous(app),
+        "open-logs" => {
+            if let Ok(config) = config_path()
+                && let Some(dir) = config.parent()
+            {
+                let _ = app
+                    .opener()
+                    .open_path(dir.display().to_string(), None::<&str>);
+            }
+        }
+        "open-releases" => {
+            let _ = app
+                .opener()
+                .open_url(format!("{}/releases", update::REPOSITORY), None::<&str>);
+        }
+        _ => {}
+    });
+    Ok(())
 }
 
 /// Start the daemon unless one is already listening.
@@ -266,7 +329,7 @@ fn dirs_config() -> Option<PathBuf> {
 /// It releases the transmitter when it is asked to stop. A shell that closed its window and
 /// left an orphan behind could leave a radio keyed with nothing on screen to say so, which is
 /// the worst failure this software has.
-fn stop_daemon(state: &tauri::State<'_, Daemon>) {
+pub fn stop_daemon(state: &tauri::State<'_, Daemon>) {
     let Ok(mut slot) = state.0.lock() else { return };
     let Some(mut child) = slot.take() else { return };
 

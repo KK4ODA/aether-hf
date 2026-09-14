@@ -229,6 +229,44 @@ fn default_host_bind() -> String {
     "127.0.0.1:8300".to_owned()
 }
 
+/// Which releases the desktop application offers to install.
+///
+/// Read by the shell, not the daemon: it lives here because this file is the one place a
+/// station's settings are, and the panel edits it like any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    /// Tagged releases only. Never offered a beta or a nightly.
+    #[default]
+    Stable,
+    /// Betas, and any stable release newer than the beta in hand.
+    Beta,
+    /// The rolling nightly, and anything newer on the other channels.
+    Nightly,
+}
+
+/// Automatic updates of the desktop application.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSection {
+    /// Which channel to follow.
+    #[serde(default)]
+    pub channel: UpdateChannel,
+    /// Whether to look for a newer version when the desktop application starts. Nothing is
+    /// installed without asking; this only decides whether the question is asked.
+    #[serde(default = "default_true")]
+    pub check: bool,
+}
+
+impl Default for UpdateSection {
+    fn default() -> Self {
+        Self {
+            channel: UpdateChannel::Stable,
+            check: true,
+        }
+    }
+}
+
 /// Where the daemon's log goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -295,6 +333,9 @@ pub struct Config {
     /// The log.
     #[serde(default)]
     pub log: LogSection,
+    /// Automatic updates of the desktop application.
+    #[serde(default)]
+    pub update: UpdateSection,
 }
 
 /// The shape of configuration file this version writes.
@@ -714,6 +755,13 @@ format = "text"
 # file = "aetherd.log"
 # How many recent entries the `diagnostics` bundle carries.
 keep = 500
+
+[update]
+# The desktop application looks for a newer version when it starts and asks before
+# installing one. `stable` is tagged releases only; `beta` adds the betas; `nightly` adds
+# the nightly build. A headless gateway ignores this section.
+channel = "stable"
+check = true
 "#;
 
 #[cfg(test)]

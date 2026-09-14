@@ -191,6 +191,16 @@
         </div>
 
         <div class="row">
+          <label for="update-channel">Updates</label>
+          <select id="update-channel">
+            <option value="stable">stable releases only</option>
+            <option value="beta">betas too</option>
+            <option value="nightly">nightlies too</option>
+          </select>
+          <label class="check"><input id="update-check" type="checkbox" checked /> look for a newer version when the desktop application starts</label>
+        </div>
+
+        <div class="row">
           <button id="btn-apply" class="primary">Save to the station</button>
           <button id="btn-copy">Copy as TOML</button>
           <span class="sub" id="copy-note"></span>

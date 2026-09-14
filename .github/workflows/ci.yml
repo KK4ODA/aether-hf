@@ -160,5 +160,9 @@ jobs:
         working-directory: app/src-tauri
         run: cargo build --release
 
+      - name: Tests
+        working-directory: app/src-tauri
+        run: cargo test --release
+
       - name: The panel parses
         run: node --check app/ui/app.js

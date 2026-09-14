@@ -237,6 +237,14 @@ main {
   max-width: 68ch;
 }
 
+label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
 .note.warn {
   color: var(--warn);
   border-left: 3px solid var(--warn);
