@@ -252,6 +252,45 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
+def passband_input(n: int) -> NDArray[np.complex128]:
+    """A deterministic multi-tone test signal, defined so both languages build it identically.
+
+    No RNG: a vector file that recorded only every k-th sample could not tell the Rust side
+    what the other samples were, and a filter's output at one sample depends on many."""
+    k = np.arange(n)
+    real = np.cos(2 * np.pi * 0.037 * k) + 0.5 * np.cos(2 * np.pi * 0.011 * k + 0.7)
+    imag = np.sin(2 * np.pi * 0.023 * k) - 0.3 * np.sin(2 * np.pi * 0.005 * k)
+    return 0.3 * (real + 1j * imag)
+
+
+def passband_case() -> dict[str, object]:
+    """Filter taps and a round trip through the audio front end.
+
+    The taps are a design, not a measurement: two implementations of the same window method
+    either agree to the last bit or one of them is wrong, so they are compared in full."""
+    from aether_model.phy.passband import (
+        AudioToBaseband,
+        BasebandToAudio,
+        band_limit_taps,
+        interpolation_taps,
+    )
+
+    n = 2048
+    baseband = passband_input(n)
+    audio = BasebandToAudio(WIDE_2300).process(baseband)
+    back = AudioToBaseband(WIDE_2300).process(audio)
+    return {
+        "band_limit_taps": [float(x) for x in band_limit_taps(WIDE_2300)],
+        "resample_taps": [float(x) for x in interpolation_taps(WIDE_2300)],
+        "tx_delay_samples": BasebandToAudio(WIDE_2300).tx_delay_samples,
+        "rx_delay_samples": AudioToBaseband(WIDE_2300).rx_delay_samples,
+        "n_samples": n,
+        "stride": 37,
+        "audio_out": [float(x) for x in audio[::37]],
+        "baseband_back": complex_list(back[::37]),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="core/aether-phy/tests/data/phy_vectors.json")
@@ -270,6 +309,7 @@ def main() -> int:
         "interleaver": interleaver_cases(),
         "codec": codec_cases(),
         "waveform_frames": waveform_cases(),
+        "passband": passband_case(),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

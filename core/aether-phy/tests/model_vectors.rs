@@ -20,6 +20,7 @@ use aether_phy::{
     constellation::{Constellation, NoiseVar},
     modes::{CONTROL_MODE, LONG, MODES, SHORT},
     ofdm::OfdmDemodulator,
+    passband::{AudioToBaseband, BasebandToAudio, band_limit_taps, resample_taps},
     preamble::{FrameHeader, FrameType},
     tx::FrameTransmitter,
     waveform::{Modulation, WIDE_2300},
@@ -457,5 +458,89 @@ fn whole_frames_match_the_model() {
                 );
             }
         }
+    }
+}
+
+/// The same deterministic multi-tone input the generator builds. No RNG, because a vector
+/// file that recorded only every k-th sample could not say what the others were, and a
+/// filter's output at one sample depends on many.
+fn passband_input(n: usize) -> Vec<(f64, f64)> {
+    (0..n)
+        .map(|i| {
+            let k = i as f64;
+            let tau = 2.0 * std::f64::consts::PI;
+            let real = (tau * 0.037 * k).cos() + 0.5 * (tau * 0.011 * k + 0.7).cos();
+            let imag = (tau * 0.023 * k).sin() - 0.3 * (tau * 0.005 * k).sin();
+            (0.3 * real, 0.3 * imag)
+        })
+        .collect()
+}
+
+#[test]
+fn the_audio_front_end_matches_the_model() {
+    // The filter taps are a *design*, not a measurement: two implementations of the same
+    // window method either agree to the last bit or one of them is wrong, so they are
+    // compared exactly. What flows through them is floating-point arithmetic over a hundred
+    // and forty taps, so those are compared to a tolerance.
+    let case = &vectors()["passband"];
+
+    for (name, got) in [
+        ("band_limit_taps", band_limit_taps(&WIDE_2300)),
+        ("resample_taps", resample_taps(&WIDE_2300)),
+    ] {
+        let want = case[name]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(got.len(), want.len(), "{name}: length");
+        for (index, (g, w)) in got.iter().zip(want).enumerate() {
+            let w = w.as_f64().expect("tap");
+            assert!(
+                (g - w).abs() < 1e-15,
+                "{name}: tap {index} is {g}, the model has {w}"
+            );
+        }
+    }
+
+    let mut tx = BasebandToAudio::new(WIDE_2300);
+    let mut rx = AudioToBaseband::new(WIDE_2300);
+    assert_eq!(tx.tx_delay_samples(), int(case, "tx_delay_samples"));
+    assert_eq!(rx.rx_delay_samples(), int(case, "rx_delay_samples"));
+
+    let baseband = passband_input(int(case, "n_samples"));
+    let audio = tx.process(&baseband);
+    let back = rx.process(&audio);
+    let stride = int(case, "stride");
+
+    let want_audio = case["audio_out"].as_array().expect("audio_out");
+    assert_eq!(
+        audio.len().div_ceil(stride),
+        want_audio.len(),
+        "audio length"
+    );
+    for (index, want) in want_audio.iter().enumerate() {
+        let want = want.as_f64().expect("audio sample");
+        let got = f64::from(audio[index * stride]);
+        // the model returns float32 audio, so the comparison is at single precision
+        assert!(
+            (got - want).abs() < 1e-6,
+            "audio sample {}: {got} vs {want}",
+            index * stride
+        );
+    }
+
+    let want_back = case["baseband_back"].as_array().expect("baseband_back");
+    assert_eq!(
+        back.len().div_ceil(stride),
+        want_back.len(),
+        "baseband length"
+    );
+    for (index, want) in want_back.iter().enumerate() {
+        let (wr, wi) = (want[0].as_f64().expect("re"), want[1].as_f64().expect("im"));
+        let (gr, gi) = back[index * stride];
+        assert!(
+            (gr - wr).abs() < 1e-6 && (gi - wi).abs() < 1e-6,
+            "baseband sample {}: ({gr}, {gi}) vs ({wr}, {wi})",
+            index * stride
+        );
     }
 }

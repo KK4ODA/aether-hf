@@ -19,8 +19,10 @@
 
 pub mod codec;
 pub mod constellation;
+pub mod fir;
 pub mod modes;
 pub mod ofdm;
+pub mod passband;
 pub mod preamble;
 pub mod rx;
 pub mod sync;
@@ -35,5 +37,7 @@ mod tables {
 
 pub use codec::{FrameCodec, coprime_stride};
 pub use constellation::{Complex, Constellation, NoiseVar};
+pub use fir::{Fir, Sample};
 pub use modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, PREAMBLE_SYMBOLS, SHORT};
+pub use passband::{AudioToBaseband, BasebandToAudio};
 pub use waveform::{Bandwidth, Modulation, WIDE_2300, WaveformParams};
