@@ -75,7 +75,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
 | `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
-| `TUNE <seconds>` / `TUNE OFF` | Put a carrier on the air for tuning | Bounded at 30 s; see §5 |
+| `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the configured level, so the operator can set drive by the rig's ALC | Bounded at 10 s. `TUNE OFF` is accepted and does nothing: a tone is bounded when it starts |
 | `VERSION` | → `VERSION Aether-HF-<version>` | |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
 
@@ -113,7 +113,7 @@ the request and then transmitting 2300 Hz anyway would put a station outside the
 operator chose, which is an operator's decision and sometimes a legal one.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `TUNE`. The setting is remembered and reported back, and the modem answers `OK`
+`P2P SESSION`. The setting is remembered and reported back, and the modem answers `OK`
 because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
@@ -121,9 +121,6 @@ per host session: compression is negotiated with the *other station* in the conn
 and cannot be turned on from one end alone, and whether to identify in Morse is a licence
 question for the operator rather than a runtime choice for a client. Wiring these commands to
 those settings is an open item.
-
-**`TUNE` does not key the transmitter in this version.** An operator who needs a tuning
-carrier must use their radio's own tune function.
 
 **Everything else in §3 is acted on.**
 
@@ -160,8 +157,6 @@ this table is what the compatibility claim rests on, and it should be read as ex
 
 * Field verification with Pat, then Winlink Express P2P between two instances, then VarAC and
   BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the matrix).
-* `TUNE` and `CQFRAME`, which both key a transmitter and therefore need the watchdog and the
-  busy detector in the path.
 * Compression negotiation (P3-6), which changes what `COMPRESSION` means from recorded to
   acted on.
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always

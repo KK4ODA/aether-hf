@@ -73,6 +73,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "send"
             | "listen"
             | "beacon"
+            | "tune"
             | "shutdown"
             | "config.set"
             | "ptt.test"
@@ -206,6 +207,33 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
                 ),
             ),
         },
+        "ptt.test" => {
+            let seconds = params
+                .get("duration_s")
+                .and_then(Value::as_f64)
+                .unwrap_or(1.0);
+            match station.key_test(seconds) {
+                Ok(()) => Response::ok(id, json!({ "accepted": true, "duration_s": seconds })),
+                Err(reason) => Response::failed(
+                    id,
+                    ApiError::new("refused", format!("Cannot key: {reason}."), true),
+                ),
+            }
+        }
+        "tune" => {
+            let seconds = params
+                .get("duration_s")
+                .and_then(Value::as_f64)
+                .unwrap_or(3.0);
+            match station.tune(seconds) {
+                Ok(()) => Response::ok(id, json!({ "accepted": true, "duration_s": seconds })),
+                Err(reason) => Response::failed(
+                    id,
+                    ApiError::new("refused", format!("Cannot tune: {reason}."), true),
+                ),
+            }
+        }
+        "audio.level" => Response::ok(id, level_json(&station.audio_level())),
         "disconnect" => {
             // orderly: what is queued is sent and acknowledged first
             station.disconnect();
@@ -371,6 +399,17 @@ fn status<P: Ptt>(station: &Station<P>) -> Value {
     })
 }
 
+/// A level reading, as the API reports it.
+fn level_json(reading: &crate::station::LevelReading) -> Value {
+    json!({
+        "rms_dbfs": reading.rms_dbfs,
+        "peak_dbfs": reading.peak_dbfs,
+        "clipping": reading.clipping,
+        "settled": reading.settled,
+        "advice": reading.advice(),
+    })
+}
+
 /// The numbers that change while a link is running.
 #[must_use]
 pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
@@ -392,6 +431,7 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "level_db": level(busy.level_db),
         "channel_busy": station.channel_busy(),
         "transmitting": station.transmitting(),
+        "audio": level_json(&station.audio_level()),
     })
 }
 
@@ -564,6 +604,39 @@ mod tests {
         let response = call(&mut station, "send", json!({"data": "not base64!"}));
         assert!(!response.ok);
         assert_eq!(response.error.expect("error").code, "bad_params");
+    }
+
+    #[test]
+    fn a_keying_test_is_bounded_and_refused_during_a_session() {
+        let mut station = station();
+        let long = call(&mut station, "ptt.test", json!({"duration_s": 60}));
+        assert!(!long.ok, "a minute of carrier is not a test");
+        let ok = call(&mut station, "ptt.test", json!({"duration_s": 1.0}));
+        assert!(ok.ok, "{:?}", ok.error);
+
+        let mut busy = crate::station::tests_support::connected_station();
+        let refused = call(&mut busy, "ptt.test", json!({"duration_s": 1.0}));
+        assert!(!refused.ok, "it keyed a test into the middle of a session");
+        assert_eq!(refused.error.expect("error").code, "refused");
+    }
+
+    #[test]
+    fn a_tune_tone_is_bounded() {
+        let mut station = station();
+        assert!(!call(&mut station, "tune", json!({"duration_s": 30})).ok);
+        assert!(!call(&mut station, "tune", json!({"duration_s": 0.1})).ok);
+        assert!(call(&mut station, "tune", json!({"duration_s": 2.0})).ok);
+    }
+
+    #[test]
+    fn the_level_meter_answers_before_it_has_heard_anything() {
+        // "still listening" is an answer; a number that means nothing is not
+        let mut station = station();
+        let response = call(&mut station, "audio.level", json!({}));
+        assert!(response.ok);
+        let result = response.result.expect("result");
+        assert_eq!(result["settled"], false);
+        assert_eq!(result["advice"], "Still listening.");
     }
 
     #[test]

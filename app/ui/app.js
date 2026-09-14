@@ -210,6 +210,7 @@ function applyMetrics(metrics) {
   if (metrics.transmitting !== undefined) {
     $("lamp-ptt").classList.toggle("on", metrics.transmitting === true);
   }
+  if (metrics.audio !== undefined) updateMeter(metrics.audio);
 }
 
 const COUNTER_LABELS = {
@@ -379,10 +380,13 @@ async function loadDevices() {
     }
     select.addEventListener("change", writeConfig);
   };
-  const all = devices.devices ?? [];
+  devicesSeen = { devices: devices.devices ?? [], serial_ports: devices.serial_ports ?? [] };
+  const all = devicesSeen.devices;
   fill($("dev-in"), all.filter((d) => d.input).map((d) => d.name), "system default");
   fill($("dev-out"), all.filter((d) => d.output).map((d) => d.name), "system default");
-  fill($("dev-ptt"), devices.serial_ports ?? [], "none (VOX or receive only)");
+  fill($("dev-ptt"), devicesSeen.serial_ports, "none (VOX or receive only)");
+  fillProfiles();
+  markStep(2, true);
   writeConfig();
 }
 
@@ -410,6 +414,10 @@ async function loadConfig() {
 
   // show the operator what is there now, so the form is not a blank slate over live settings
   if (!$("setup-call").value) $("setup-call").value = liveConfig.callsign ?? "";
+  if (!$("wz-call").value && liveConfig.callsign && liveConfig.callsign !== "N0CALL") {
+    $("wz-call").value = liveConfig.callsign;
+    markStep(1, true);
+  }
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
   select($("dev-ptt"), liveConfig.ptt?.port ?? "");
@@ -466,6 +474,171 @@ async function applyConfig() {
   refreshStatus();
 }
 
+// ── the setup wizard ────────────────────────────────────────────────
+
+// Known radio interfaces, by the device names they present. A profile only pre-fills the
+// form; nothing here is authoritative, and every entry can be changed afterwards.
+const PROFILES = [
+  {
+    name: "Digirig",
+    match: /USB PnP Sound Device|Digirig/i,
+    ptt: "serial",
+    line: "rts",
+    note: "Digirig keys on RTS of its own serial port.",
+  },
+  {
+    name: "Icom with USB audio (IC-7300, IC-7610, IC-9700, IC-705)",
+    match: /USB Audio CODEC/i,
+    ptt: "serial",
+    line: "rts",
+    note: "Icom's USB port carries audio and a serial port; RTS keying needs 'USB SEND' set to RTS in the rig's menu.",
+  },
+  {
+    name: "Yaesu with USB audio (FT-991A, FTDX10, FT-710)",
+    match: /USB AUDIO\s+CODEC/i,
+    ptt: "serial",
+    line: "rts",
+    note: "Yaesu's enhanced USB port carries audio and two serial ports; keying is on RTS of the standard one.",
+  },
+  {
+    name: "SignaLink USB",
+    match: /USB Audio Device|SignaLink/i,
+    ptt: "none",
+    line: "rts",
+    note: "SignaLink keys itself from the audio (VOX), so no keying line is needed.",
+  },
+  {
+    name: "Something else",
+    match: null,
+    ptt: "serial",
+    line: "rts",
+    note: "Choose the devices by hand below.",
+  },
+];
+
+let devicesSeen = { devices: [], serial_ports: [] };
+
+function fillProfiles() {
+  const select = $("wz-profile");
+  select.replaceChildren();
+  for (const [index, profile] of PROFILES.entries()) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = profile.name;
+    select.append(option);
+  }
+  // pre-select the first profile whose devices are actually present
+  const present = PROFILES.findIndex(
+    (p) => p.match && devicesSeen.devices.some((d) => p.match.test(d.name)),
+  );
+  select.value = String(present >= 0 ? present : PROFILES.length - 1);
+  applyProfile();
+}
+
+function applyProfile() {
+  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES.at(-1);
+  $("wz-profile-note").textContent = profile.note;
+  if (!profile.match) return;
+  const matching = devicesSeen.devices.filter((d) => profile.match.test(d.name));
+  const input = matching.find((d) => d.input)?.name;
+  const output = matching.find((d) => d.output)?.name;
+  if (input) select($("dev-in"), input);
+  if (output) select($("dev-out"), output);
+  if (profile.ptt === "none") {
+    $("dev-ptt").value = "";
+  } else if ($("dev-ptt").value === "" && devicesSeen.serial_ports.length === 1) {
+    // one serial port on the machine: almost certainly the interface's
+    $("dev-ptt").value = devicesSeen.serial_ports[0];
+  }
+  writeConfig();
+}
+
+function updateMeter(reading) {
+  const meter = $("wz-meter");
+  const fill = $("wz-meter-fill");
+  const peak = $("wz-meter-peak");
+  const percent = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+  if (!reading || reading.settled !== true) {
+    fill.style.width = "0%";
+    peak.style.left = "0%";
+    meter.dataset.state = "quiet";
+    meter.setAttribute("aria-valuenow", "-60");
+    $("wz-level-reading").textContent = "Still listening.";
+    return;
+  }
+  fill.style.width = `${percent(reading.rms_dbfs)}%`;
+  peak.style.left = `${percent(reading.peak_dbfs)}%`;
+  meter.setAttribute("aria-valuenow", reading.rms_dbfs.toFixed(0));
+  const advice = reading.advice ?? "";
+  meter.dataset.state = advice.startsWith("Clipping")
+    ? "hot"
+    : advice.startsWith("Almost")
+      ? "warm"
+      : advice.startsWith("Very quiet")
+        ? "quiet"
+        : "good";
+  $("wz-level-reading").textContent =
+    `${reading.rms_dbfs.toFixed(0)} dBFS RMS, peak ${reading.peak_dbfs.toFixed(0)} — ${advice}`;
+  markStep(3, advice === "Good.");
+}
+
+function markStep(number, done) {
+  const step = document.querySelector(`.step[data-step="${number}"]`);
+  if (step) step.dataset.done = String(done);
+}
+
+async function wizardSave() {
+  $("wz-save-note").textContent = "";
+  const call_ = $("wz-call").value.trim().toUpperCase();
+  if (!call_) {
+    $("wz-save-note").textContent = "A callsign is required.";
+    return;
+  }
+  $("setup-call").value = call_;
+  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES.at(-1);
+  const changes = formChanges();
+  if (profile.ptt === "none") {
+    changes["ptt.kind"] = "none";
+    delete changes["ptt.port"];
+    delete changes["ptt.line"];
+  }
+  try {
+    const answer = await call("config.set", changes);
+    const restart = answer.restart_required ?? [];
+    let note =
+      restart.length === 0
+        ? "Saved. In effect now."
+        : `Saved. Restart the daemon for: ${restart.join(", ")}.`;
+    if (profile.ptt === "serial" && $("dev-ptt").value === "") {
+      // the profile wants a keying line and none was chosen: the station is saved
+      // receive-only, which is safe, but the operator should know why the radio
+      // will not key
+      note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Keying below and save again.";
+    }
+    $("wz-save-note").textContent = note;
+    markStep(5, true);
+    log(`settings saved (${(answer.changed ?? []).join(", ")})`);
+    loadConfig();
+    refreshStatus();
+  } catch (error) {
+    $("wz-save-note").textContent = error.message;
+    log(error.message, true);
+  }
+}
+
+async function transmitTest(method, seconds, label) {
+  $("wz-tx-note").textContent = `${label}…`;
+  try {
+    await call(method, { duration_s: seconds });
+    $("wz-tx-note").textContent = `${label} — watch the radio.`;
+    markStep(4, true);
+    log(label);
+  } catch (error) {
+    $("wz-tx-note").textContent = error.message;
+    log(error.message, true);
+  }
+}
+
 // ── actions ─────────────────────────────────────────────────────────
 
 function wire() {
@@ -505,6 +678,20 @@ function wire() {
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-apply").addEventListener("click", applyConfig);
+  $("wz-profile").addEventListener("change", applyProfile);
+  $("wz-call").addEventListener("input", () => {
+    const value = $("wz-call").value.trim().toUpperCase();
+    const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);
+    markStep(1, plausible);
+    $("wz-call-note").textContent = plausible
+      ? `Will go on the air as ${value}.`
+      : "Letters, digits, - and /; up to nine characters.";
+    $("setup-call").value = value;
+    writeConfig();
+  });
+  $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));
+  $("wz-tune").addEventListener("click", () => transmitTest("tune", 3.0, "Tune tone for 3 s"));
+  $("wz-save").addEventListener("click", wizardSave);
   $("btn-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(asToml(formChanges()));

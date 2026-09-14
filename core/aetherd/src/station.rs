@@ -160,6 +160,116 @@ impl SoftFrame for PhyFrame {
     }
 }
 
+/// Something waiting to be transmitted.
+enum Outgoing {
+    /// Link-layer frames, to be modulated.
+    Frames(Vec<aether_link::TxFrame>),
+    /// Audio to play as it is: a keying test, or a tune tone.
+    Audio(Vec<f32>),
+}
+
+/// What the sound card is delivering, over the last few seconds.
+///
+/// Setup, not propagation, is what defeats most new users of an HF data mode
+/// (`COMMUNITY-CONCERNS.md`), and the audio level is the setting they get wrong most. A
+/// meter that says "too quiet", "clipping" or "good" is worth more than any amount of
+/// documentation about what a sound card mixer should look like.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelReading {
+    /// RMS over the window, in dB relative to full scale.
+    pub rms_dbfs: f64,
+    /// The loudest single sample, in dB relative to full scale.
+    pub peak_dbfs: f64,
+    /// Fraction of samples at or beyond full scale.
+    pub clipping: f64,
+    /// Whether enough audio has been seen for the reading to mean anything.
+    pub settled: bool,
+}
+
+impl LevelReading {
+    /// What an operator should do about it, in a sentence.
+    ///
+    /// The thresholds are the usual ones for a sound-card interface: clipping is never
+    /// acceptable, a peak within a few dB of full scale leaves no headroom for a stronger
+    /// station, and an RMS below about −40 dBFS is inside the card's own noise.
+    #[must_use]
+    pub fn advice(&self) -> &'static str {
+        if !self.settled {
+            "Still listening."
+        } else if self.clipping > 0.0005 {
+            "Clipping. Turn the radio's audio output or the sound card's input down."
+        } else if self.peak_dbfs > -3.0 {
+            "Almost clipping. Turn the input down a little to leave headroom."
+        } else if self.rms_dbfs < -40.0 {
+            "Very quiet. Turn the radio's audio output or the sound card's input up."
+        } else {
+            "Good."
+        }
+    }
+}
+
+/// A rolling meter over the last few seconds of captured audio.
+#[derive(Debug, Clone)]
+struct LevelMeter {
+    window: usize,
+    /// Per-block (RMS², peak, clipped count, length), newest last.
+    blocks: VecDeque<(f64, f64, usize, usize)>,
+    held: usize,
+}
+
+impl LevelMeter {
+    fn new(sample_rate: f64, seconds: f64) -> Self {
+        Self {
+            window: (sample_rate * seconds) as usize,
+            blocks: VecDeque::new(),
+            held: 0,
+        }
+    }
+
+    fn push(&mut self, audio: &[f32]) {
+        if audio.is_empty() {
+            return;
+        }
+        let mut power = 0.0f64;
+        let mut peak = 0.0f64;
+        let mut clipped = 0usize;
+        for &sample in audio {
+            let x = f64::from(sample).abs();
+            power += x * x;
+            peak = peak.max(x);
+            if x >= 0.99 {
+                clipped += 1;
+            }
+        }
+        self.blocks.push_back((power, peak, clipped, audio.len()));
+        self.held += audio.len();
+        while self.held > self.window
+            && let Some((_, _, _, length)) = self.blocks.pop_front()
+        {
+            self.held -= length;
+        }
+    }
+
+    fn reading(&self) -> LevelReading {
+        let floor = 1e-10f64;
+        let mut power = 0.0;
+        let mut peak = 0.0f64;
+        let mut clipped = 0usize;
+        for &(p, pk, c, _) in &self.blocks {
+            power += p;
+            peak = peak.max(pk);
+            clipped += c;
+        }
+        let count = self.held.max(1) as f64;
+        LevelReading {
+            rms_dbfs: 10.0 * (power / count).max(floor).log10(),
+            peak_dbfs: 20.0 * peak.max(floor).log10(),
+            clipping: clipped as f64 / count,
+            settled: self.held >= self.window / 2,
+        }
+    }
+}
+
 /// Counters a status display can show.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StationStats {
@@ -199,7 +309,8 @@ pub struct Station<P: Ptt> {
     baseband_seen: usize,
     audio_seen: usize,
     transmitting: bool,
-    pending: VecDeque<Vec<aether_link::TxFrame>>,
+    pending: VecDeque<Outgoing>,
+    meter: LevelMeter,
     delivered: Vec<u8>,
     events: Vec<String>,
     compressor: Compressor,
@@ -255,6 +366,7 @@ impl<P: Ptt> Station<P> {
             audio_seen: 0,
             transmitting: false,
             pending: VecDeque::new(),
+            meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             delivered: Vec::new(),
             events: Vec::new(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
@@ -471,14 +583,73 @@ impl<P: Ptt> Station<P> {
         let capacity = self.engine.timing().capacity(0);
         let payload =
             encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
-        self.pending.push_back(vec![aether_link::TxFrame {
-            container: Container::Data,
-            payload,
-            mode: 0,
-            rv: 0,
-        }]);
+        self.pending
+            .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+                container: Container::Data,
+                payload,
+                mode: 0,
+                rv: 0,
+            }]));
         self.stats.beacons_sent += 1;
         Ok(())
+    }
+
+    /// Key the transmitter with no audio for a few seconds, so an operator can see the rig
+    /// go into transmit and the interface's PTT light come on.
+    ///
+    /// What can be measured from here is how long the keying backend took to answer, which
+    /// is what the result reports; whether the *radio* keyed is something only the operator
+    /// can see, and the point of the test is to let them look. Bounded, refused during a
+    /// session, and subject to the busy detector like any other transmission.
+    ///
+    /// # Errors
+    /// If a session is running, or the duration is outside what is sensible for a test.
+    pub fn key_test(&mut self, seconds: f64) -> Result<(), &'static str> {
+        if self.engine.state() != State::Idle {
+            return Err("a session is running");
+        }
+        if !(0.2..=5.0).contains(&seconds) {
+            return Err("a keying test lasts between 0.2 and 5 seconds");
+        }
+        let samples = (seconds * self.config.params.audio_rate as f64) as usize;
+        self.pending.push_back(Outgoing::Audio(vec![0.0; samples]));
+        Ok(())
+    }
+
+    /// Key the transmitter and play a steady tone at the configured level, so an operator
+    /// can set their drive by watching the rig's ALC.
+    ///
+    /// This is what a radio's own "tune" button does with the difference that the audio is
+    /// this modem's, at this modem's level, through this modem's sound card — which is
+    /// exactly the path that has to be right. Bounded at ten seconds because a carrier is a
+    /// carrier, refused during a session, and subject to the busy detector.
+    ///
+    /// # Errors
+    /// If a session is running, or the duration is outside what is sensible.
+    pub fn tune(&mut self, seconds: f64) -> Result<(), &'static str> {
+        if self.engine.state() != State::Idle {
+            return Err("a session is running");
+        }
+        if !(0.5..=10.0).contains(&seconds) {
+            return Err("a tune tone lasts between 0.5 and 10 seconds");
+        }
+        let rate = self.config.params.audio_rate as f64;
+        let level = self.config.tx_level;
+        let tone = crate::cwid::CwId {
+            // a steady tone is one very long dah; the shaped edges keep it from clicking
+            wpm: 1.2 / (seconds / 3.0),
+            tone_hz: 1500.0,
+            level,
+        };
+        self.pending
+            .push_back(Outgoing::Audio(tone.audio("T", rate)));
+        Ok(())
+    }
+
+    /// The last few seconds of received audio, as levels an operator can set a sound card by.
+    #[must_use]
+    pub fn audio_level(&self) -> LevelReading {
+        self.meter.reading()
     }
 
     // ── audio ─────────────────────────────────────────────────────────
@@ -489,6 +660,7 @@ impl<P: Ptt> Station<P> {
     /// If the key had to be released and the radio refused.
     pub fn capture(&mut self, audio: &[f32]) -> Result<(), PttError> {
         self.audio_seen += audio.len();
+        self.meter.push(audio);
         let baseband = self.from_audio.process(audio);
         let now = self.now();
 
@@ -626,7 +798,9 @@ impl<P: Ptt> Station<P> {
         let mut connected = false;
         for action in self.engine.drain() {
             match action {
-                Action::Transmit { frames, .. } => self.pending.push_back(frames),
+                Action::Transmit { frames, .. } => {
+                    self.pending.push_back(Outgoing::Frames(frames));
+                }
                 Action::Deliver(bytes) => {
                     let plain = self.decompressor.push(&bytes);
                     if self.decompressor.failed() {
@@ -672,8 +846,22 @@ impl<P: Ptt> Station<P> {
             self.stats.deferred_for_busy += 1;
             return;
         }
-        let Some(frames) = self.pending.pop_front() else {
+        let Some(outgoing) = self.pending.pop_front() else {
             return;
+        };
+        let frames = match outgoing {
+            Outgoing::Frames(frames) => frames,
+            // raw audio goes out as it is, inside the same keying and lead and tail as a
+            // burst, so a keying test exercises exactly the path a transmission uses
+            Outgoing::Audio(audio) => {
+                let audio_rate = self.config.params.audio_rate as f64;
+                let lead = (self.config.key_lead_s * audio_rate) as usize;
+                let tail = (self.config.key_tail_s * audio_rate) as usize;
+                self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+                self.playback.extend(audio);
+                self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+                return;
+            }
         };
 
         let mut baseband: Vec<Complex> = Vec::new();
@@ -787,6 +975,22 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
     }
 }
 
+/// Helpers other modules' tests use to get a station in a known state.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+    use crate::ptt::NullPtt;
+
+    /// A station that is in a session, for tests of what is refused during one.
+    pub(crate) fn connected_station() -> Station<NullPtt> {
+        let mut air = super::tests::Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(30.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected(), "the test fixture could not connect");
+        air.a
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,9 +1001,9 @@ mod tests {
     /// Each station's playback becomes the other's capture, scaled and with noise added. This
     /// is the real thing end to end: the ARQ protocol over the real codec, over the real
     /// waveform, over real 48 kHz audio.
-    struct Air {
-        a: Station<NullPtt>,
-        b: Station<NullPtt>,
+    pub(crate) struct Air {
+        pub(crate) a: Station<NullPtt>,
+        pub(crate) b: Station<NullPtt>,
         block: usize,
         gain: f32,
         noise_sigma: f32,
@@ -807,7 +1011,7 @@ mod tests {
     }
 
     impl Air {
-        fn new(gain: f32, noise_sigma: f32) -> Self {
+        pub(crate) fn new(gain: f32, noise_sigma: f32) -> Self {
             let config = |call: &str| StationConfig {
                 callsign: call.to_owned(),
                 // the channel in these tests is a wire, so politeness would only slow them
@@ -841,7 +1045,7 @@ mod tests {
         }
 
         /// Run for `seconds`, or until `done` says to stop.
-        fn run(
+        pub(crate) fn run(
             &mut self,
             seconds: f64,
             mut done: impl FnMut(&Station<NullPtt>, &Station<NullPtt>) -> bool,
@@ -1094,6 +1298,125 @@ mod tests {
         air.run(30.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected());
         assert!(air.a.beacon().is_err(), "it beaconed during a session");
+    }
+
+    #[test]
+    fn a_keying_test_keys_for_the_time_asked_and_no_longer() {
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.key_test(1.0).expect("idle");
+        let block = 4096;
+        let mut out = vec![0.0f32; block];
+        let mut keyed_samples = 0usize;
+        let mut ever_keyed = false;
+        for _ in 0..60 {
+            let count = station.playback(&mut out).expect("playback");
+            if station.transmitting() {
+                ever_keyed = true;
+                keyed_samples += count;
+                assert!(
+                    out[..count].iter().all(|&x| x == 0.0),
+                    "a keying test put audio on the air"
+                );
+            }
+            station.capture(&vec![0.0f32; block]).expect("capture");
+        }
+        assert!(ever_keyed, "the test never keyed the radio");
+        assert!(!station.transmitting(), "it stayed keyed");
+        let expected = ((1.0 + station.config.key_lead_s + station.config.key_tail_s)
+            * station.config.params.audio_rate as f64) as usize;
+        assert!(
+            keyed_samples.abs_diff(expected) <= block,
+            "keyed for {keyed_samples} samples, asked for about {expected}"
+        );
+        assert_eq!(station.stats.transmissions, 1);
+    }
+
+    #[test]
+    fn a_tune_tone_is_at_the_configured_level_and_frequency() {
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                tx_level: 0.3,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.tune(2.0).expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        let mut audio: Vec<f32> = Vec::new();
+        for _ in 0..40 {
+            let count = station.playback(&mut out).expect("playback");
+            audio.extend_from_slice(&out[..count]);
+            station.capture(&vec![0.0f32; 4096]).expect("capture");
+        }
+        let peak = audio.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        assert!(
+            (peak - 0.3).abs() < 0.02,
+            "the tone peaked at {peak}, the configured level is 0.3"
+        );
+        // and it is a tone, not noise: nearly all its energy at 1500 Hz
+        let rate = 48_000.0;
+        let energy_at = |f: f64| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &x) in audio.iter().enumerate() {
+                let p = 2.0 * std::f64::consts::PI * f * i as f64 / rate;
+                re += f64::from(x) * p.cos();
+                im += f64::from(x) * p.sin();
+            }
+            re.hypot(im)
+        };
+        assert!(energy_at(1500.0) > 20.0 * energy_at(700.0));
+    }
+
+    #[test]
+    fn the_level_meter_tells_an_operator_what_to_do() {
+        let mut station = Station::new(StationConfig::default(), NullPtt::default(), 1);
+        assert_eq!(station.audio_level().advice(), "Still listening.");
+
+        let quiet: Vec<f32> = (0..48_000)
+            .map(|i| 0.001 * (i as f32 * 0.3).sin())
+            .collect();
+        for block in quiet.chunks(4096).cycle().take(60) {
+            station.capture(block).expect("capture");
+        }
+        let reading = station.audio_level();
+        assert!(reading.settled);
+        assert!(reading.rms_dbfs < -40.0, "{}", reading.rms_dbfs);
+        assert!(
+            reading.advice().starts_with("Very quiet"),
+            "{}",
+            reading.advice()
+        );
+
+        let hot: Vec<f32> = (0..48_000)
+            .map(|i| (1.2 * (i as f32 * 0.3).sin()).clamp(-1.0, 1.0))
+            .collect();
+        for block in hot.chunks(4096).cycle().take(60) {
+            station.capture(block).expect("capture");
+        }
+        let reading = station.audio_level();
+        assert!(reading.clipping > 0.0005, "{}", reading.clipping);
+        assert!(
+            reading.advice().starts_with("Clipping"),
+            "{}",
+            reading.advice()
+        );
+
+        let good: Vec<f32> = (0..48_000).map(|i| 0.25 * (i as f32 * 0.3).sin()).collect();
+        for block in good.chunks(4096).cycle().take(60) {
+            station.capture(block).expect("capture");
+        }
+        assert_eq!(station.audio_level().advice(), "Good.");
     }
 
     #[test]

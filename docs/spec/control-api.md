@@ -113,13 +113,21 @@ distinction matters to an operator watching a transfer and is why both exist.
 
 | Method | Params | Result |
 |---|---|---|
-| `devices.list` | — | input/output devices with names and default flags |
-| `ptt.test` | `duration_s` | measured key-up and key-down delay |
-| `audio.calibrate` | `mode` | measured levels, clipping, recommended setting |
+| `devices.list` | — | input/output devices with names and default flags, and serial ports |
+| `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light |
+| `tune` | `duration_s` (0.5–10) | keys and plays a steady tone at the configured transmit level, for setting drive by the rig's ALC |
+| `audio.level` | — | the last three seconds of received audio: RMS and peak in dBFS, clipping fraction, and a sentence of advice |
 
 These exist because setup, not propagation, is what defeats most new users of an HF data mode
-(`COMMUNITY-CONCERNS.md`). A modem that can measure its own PTT delay and audio level can
-lead the operator through setup instead of leaving them to guess.
+(`COMMUNITY-CONCERNS.md`). A modem that can key on demand and say whether its input is
+clipping can lead the operator through setup instead of leaving them to guess.
+
+`ptt.test` and `tune` are transmissions: they are refused during a session, held back by the
+busy detector like any other, and counted against the key-time watchdog. Neither can measure
+whether the *radio* keyed — only the operator can see that — which is why they exist: to let
+the operator look. `audio.level` is always on; it reports `settled: false` and
+"Still listening." until it has heard enough to mean anything, rather than a number that
+does not.
 
 ---
 

@@ -467,11 +467,17 @@ fn apply(
             let _ = handle.call(request("beacon", json!({})));
             true
         }
-        // Tuning is not implemented, and it would key a transmitter. Saying nothing would
-        // leave the operator believing their station had put out a carrier when it had not;
-        // the host interface specification records it as understood but not acted on.
-        HostAction::Tune(_) => {
+        // `TUNE OFF` (zero seconds) has nothing to stop: a tone is bounded when it is
+        // started, and cutting one short is not something the published interface needs.
+        HostAction::Tune(seconds) if *seconds <= 0.0 => {
             let _ = host;
+            true
+        }
+        HostAction::Tune(seconds) => {
+            // the modem bounds a tone at ten seconds; a host asking for more gets ten, and
+            // the reply already said OK because the command was understood
+            let bounded = seconds.min(10.0);
+            let _ = handle.call(request("tune", json!({ "duration_s": bounded })));
             true
         }
     }

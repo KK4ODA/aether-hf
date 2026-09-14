@@ -371,6 +371,87 @@ tbody tr:first-child td {
   color: var(--ink-faint);
 }
 
+/* ── the setup wizard ───────────────────────────────────────────── */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.step {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 12px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.step[data-done="true"] h3::after {
+  content: " ✓";
+  color: var(--live);
+}
+
+code {
+  font-family: var(--numerals);
+  font-size: 0.95em;
+}
+
+/* A level meter: the fill is the RMS, the tick the peak. It is drawn in the semantic
+ * colours because "clipping" is a state, not a choice. */
+.meter {
+  position: relative;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--panel-raised);
+  border: 1px solid var(--edge);
+  overflow: hidden;
+  max-width: 520px;
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: var(--live);
+  transition: width 120ms linear;
+}
+
+.meter[data-state="hot"] .meter-fill {
+  background: var(--hot);
+}
+
+.meter[data-state="warm"] .meter-fill {
+  background: var(--warn);
+}
+
+.meter[data-state="quiet"] .meter-fill {
+  background: var(--idle);
+}
+
+.meter-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  left: 0%;
+  background: var(--ink);
+  opacity: 0.8;
+  transition: left 120ms linear;
+}
+
 /* ── controls ───────────────────────────────────────────────────── */
 
 .row {

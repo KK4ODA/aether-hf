@@ -103,6 +103,67 @@
 
       <!-- ── setup ──────────────────────────────────────────────── -->
       <section id="panel-setup" class="panel" hidden>
+        <div class="wizard" id="wizard">
+          <ol class="steps">
+            <li class="step" data-step="1">
+              <h3>1. Callsign</h3>
+              <div class="row">
+                <label for="wz-call">Callsign</label>
+                <input id="wz-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" aria-describedby="wz-call-note" />
+                <span class="sub" id="wz-call-note">Letters, digits, <code>-</code> and <code>/</code>; up to nine characters.</span>
+              </div>
+            </li>
+            <li class="step" data-step="2">
+              <h3>2. Radio interface</h3>
+              <div class="row">
+                <label for="wz-profile">Interface</label>
+                <select id="wz-profile"></select>
+              </div>
+              <p class="sub" id="wz-profile-note">
+                Pick your interface and the devices below are filled in from what this
+                machine reports. Anything can be changed afterwards.
+              </p>
+            </li>
+            <li class="step" data-step="3">
+              <h3>3. Receive level</h3>
+              <div class="meter" id="wz-meter" role="meter" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60" aria-label="Receive level">
+                <div class="meter-fill" id="wz-meter-fill"></div>
+                <div class="meter-peak" id="wz-meter-peak"></div>
+              </div>
+              <div class="row">
+                <span class="sub" id="wz-level-reading" aria-live="polite">Still listening.</span>
+              </div>
+              <p class="sub">
+                With the radio on a quiet frequency, adjust its audio output or the sound
+                card's input until this says <strong>Good</strong>. Clipping is never
+                acceptable; too quiet leaves the signal inside the sound card's own noise.
+              </p>
+            </li>
+            <li class="step" data-step="4">
+              <h3>4. Keying and drive</h3>
+              <div class="row">
+                <button id="wz-ptt">Key for 1 s</button>
+                <button id="wz-tune">Tune tone, 3 s</button>
+                <span class="sub" id="wz-tx-note" role="status" aria-live="polite"></span>
+              </div>
+              <p class="sub">
+                <strong>Key</strong> puts the radio into transmit with no audio: watch the
+                rig and the interface's PTT light. <strong>Tune</strong> keys with a steady
+                tone at the configured level: set the drive so the rig's ALC barely moves.
+                Both refuse to run while the channel is busy or a session is up.
+              </p>
+            </li>
+            <li class="step" data-step="5">
+              <h3>5. Save</h3>
+              <div class="row">
+                <button id="wz-save" class="primary">Save these settings</button>
+                <span class="sub" id="wz-save-note" role="status" aria-live="polite"></span>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <h2>Everything, by hand</h2>
         <p class="note" id="setup-note">
           Changes are written straight to the daemon's configuration file. Some take effect
           at once; a sound card or a serial port is opened when the daemon starts, so
