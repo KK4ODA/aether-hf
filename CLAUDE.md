@@ -46,7 +46,8 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phases 0–2 are complete. **Phase 3 is complete through P3-4**, on branch `phase-2`:
+Phases 0–3 are complete and **Phase 4 is built** (P4-1…P4-6; P4-7, the human acceptance
+test, is open), all on branch `phase-2`:
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -57,12 +58,26 @@ Phases 0–2 are complete. **Phase 3 is complete through P3-4**, on branch `phas
   `rigctld` keying, the key-time watchdog, a busy detector, and the run loop. Two stations
   complete a session over real 48 kHz audio in the test suite.
 * **P3-4** — the control API of `docs/spec/control-api.md`, JSON over WebSocket and
-  `POST /v1/<method>`.
+  `POST /v1/<method>`; `config.get`/`config.set`, `ptt.test`, `tune`, `audio.level`,
+  `diagnostics`, `shutdown`.
+* **P3-5/P3-7** — the VARA-compatible host interface (`core/aetherd/src/host/`, spec in
+  `docs/spec/host-interfaces.md`), a *client* of the control API. Unverified in the field.
+* **P3-6** — deflate above the ARQ (negotiated by the connect capability byte), Morse
+  identification, beacons. **P3-8** — the gateway kit (`deploy/`, `docs/user/`).
+* **Phase 4** — `app/ui/` (the panel: no build step, ADR-0005, served by the daemon),
+  `app/src-tauri/` (the shell: supervises the daemon, attaches if one is running, asks it
+  to stop on close), the setup wizard, structured logging (`core/aetherd/src/log.rs`) and
+  the diagnostic bundle, accessibility and error-message passes.
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
-debug build — and `cargo clippy --all-targets --all-features -- -D warnings`.
+debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
+separate package (`cd app/src-tauri && cargo clippy --all-targets -- -D warnings`). To try
+the panel: `aetherd --config <file> --dry-run` with `[control] ui_dir` pointing at `app/ui`,
+then open `http://127.0.0.1:8515/`.
 
-**Next: P3-5**, the VARA-compatible TCP adapter, verified with Pat.
+**Next: Phase 5** (release infrastructure: installers that bundle the daemon and panel
+beside the shell, signed updates, channels) and the field work Phases 3–4 left open (Pat,
+Winlink Express, VarAC, BPQ32; three external hams through the wizard).
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is

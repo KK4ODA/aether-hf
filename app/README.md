@@ -12,6 +12,11 @@ Two pieces:
   backend. If a daemon is already running it attaches to that one instead of starting a
   second.
 
+The panel's Setup tab opens with a five-step wizard — callsign, interface profile, receive
+level, keying and drive, save — and keeps the raw form underneath for everything else. Its Log
+tab has a "Copy diagnostic bundle" button; that bundle (`diagnostics` in
+`docs/spec/control-api.md` §4.5) is what to paste into a bug report.
+
 ## Running from a checkout
 
 ```bash
