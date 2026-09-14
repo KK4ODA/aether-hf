@@ -42,12 +42,15 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Performance claims only with a committed benchmark curve behind them.
 - Design from public standards (3GPP, IEEE, ITU-R, MIL-STD) and open literature; never
   from VARA internals. Host-interface compatibility uses VARA's *published* command set.
-- Conventional Commits; short-lived branches; squash-merge to `main` (currently `master`).
+- Conventional Commits; short-lived branches, **fast-forwarded** into `master` (no squash:
+  the release notes are generated from the commits by git-cliff). Push after each commit.
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phases 0–5 are built and merged to `master`; **Phase 6 (field validation) is in progress on
-branch `phase-6`** — its tooling is built (P6-1…P6-5) and the air is what remains (P6-6).
+Phases 0–5 are done and on `master`, **the first release is out** (`v0.2.0-beta.2`,
+2026-09-14, signed: `TAURI_SIGNING_PRIVATE_KEY` is set), and **Phase 6 (field validation)
+is in progress** — its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the
+bench, and the air is what remains (P6-6).
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -75,16 +78,29 @@ branch `phase-6`** — its tooling is built (P6-1…P6-5) and the air is what re
   configuration `schema_version` with a migration chain and fixtures under
   `core/aetherd/tests/data/config/`, the updater (`app/src-tauri/src/update.rs`: channels,
   signed manifests, kept installers for going back), and `tools/bench_gate.py`.
-  **Cutting a release:** `python tools/release.py bump X.Y.Z`, commit, tag `vX.Y.Z`, push
-  the tag. The updater's private key is *not* in the repository; the release is signed only
-  when `TAURI_SIGNING_PRIVATE_KEY` is set as a repository secret.
+  **Cutting a release:** `python tools/release.py bump X.Y.Z[-beta.N]` (rewrites every
+  version site including `uv.lock` — the gate job runs `uv sync --locked`, and beta.1
+  failed on exactly that), commit, tag `vX.Y.Z`, push `master` and the tag, watch the
+  Release workflow. Notes cover the commits since the previous tag. A `-beta.N` tag is a
+  GitHub pre-release and also refreshes the rolling `channel-beta` release, whose
+  `latest.json` is what a `[update] channel = "beta"` installation reads — never delete
+  it. Stable uses GitHub's own *latest* release, which excludes pre-releases. The updater's
+  private key is at `~/.tauri/aether-hf.key` on the author's machine, *not* in the
+  repository.
 * **Phase 6** — session recordings (`core/aetherd/src/record.rs`, `[record]`), replay
   (`replay.rs`, `aetherd --replay`, `field/sessions/` + `tests/field.rs`), the simulated
   channel (`sim.rs`, `[sim]`; `tests/two_daemons.rs` runs two real daemons through a
   session), `tools/compare_air.py`, `docs/user/field-test.md`, `field/LOG.md`. The
   two-daemon test found two engine bugs (`PhyTiming.tx_latency_s`; `on_tx_done` retries a
   burst) — fixed in the model first, then the port. `tx_level` is a sine amplitude; the
-  waveform's RMS is `tx_level / √2`.
+  waveform's RMS is `tx_level / √2`. **The bench** (`docs/spec/host-interfaces.md` §7):
+  Pat 1.0.0 and Winlink Express 1.8.5.0 each complete a P2P B2F session with a 6 kB
+  attachment over two daemons joined by `[sim]`. Winlink Express found that `MYCALL` had
+  never reached the modem — the engine now answers to a list of callsigns
+  (`set_callsigns`, `connect(…, as_call)`, model first), the control API has
+  `callsigns.set` and `connect` takes `callsign`. VarAC talks to the adapter but needs a
+  500 Hz waveform (P7-0, ahead of FM). Host programs are driven by hand: scratch copies
+  only, never the author's real installs, and never the proprietary `VARA.exe`.
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
 debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
@@ -93,10 +109,11 @@ the panel: `aetherd --config <file> --dry-run` with `[control] ui_dir` pointing 
 then open `http://127.0.0.1:8515/`.
 
 **Next: the air** (P6-6: audio cable → ground wave → NVIS → long paths → RMS gateway
-trial, twenty logged sessions across three channel classes, recalibrate on the
-disagreements) and the human items Phases 3–5 left open (Pat, Winlink Express, VarAC,
-BPQ32 over the simulated channel; three external hams through the wizard; the first tagged
-release once the signing secret is set). Phase 7 (FM) is on the back burner by decision.
+trial, twenty logged sessions across three channel classes in `field/LOG.md`, recalibrate
+on the disagreements) and the human items still open (BPQ32 over the simulated channel;
+three external hams through the wizard with the beta installer; the next beta is what
+exercises an actual update install). Phase 7 starts with the 500 Hz waveform (P7-0); FM
+stays on the back burner by decision.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
