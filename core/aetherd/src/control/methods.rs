@@ -78,8 +78,116 @@ pub fn is_mutating(method: &str) -> bool {
     )
 }
 
+/// The configuration the daemon is running, and where it came from.
+///
+/// Held beside the station so `config.get` and `config.set` can reach it without the modem
+/// having to know what a configuration file is.
+pub struct ConfigState {
+    /// The current settings.
+    pub config: crate::config::Config,
+    /// Where they are written back to.
+    pub path: std::path::PathBuf,
+}
+
 /// Handle one request against a station.
 pub fn dispatch<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    dispatch_with(station, None, request)
+}
+
+/// Handle one request, with access to the configuration.
+pub fn dispatch_with<P: Ptt>(
+    station: &mut Station<P>,
+    settings: Option<&mut ConfigState>,
+    request: &Request,
+) -> Response {
+    match request.method.as_str() {
+        "config.get" => return config_get(settings, request.id.clone()),
+        "config.set" => return config_set(station, settings, &request.params, request.id.clone()),
+        _ => {}
+    }
+    dispatch_station(station, request)
+}
+
+fn config_get(settings: Option<&mut ConfigState>, id: Option<String>) -> Response {
+    let Some(settings) = settings else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unsupported",
+                "This daemon was started without a configuration file, so there is nothing \
+                 to read or change.",
+                false,
+            ),
+        );
+    };
+    match serde_json::to_value(&settings.config) {
+        Ok(value) => Response::ok(
+            id,
+            json!({
+                "config": value,
+                "path": settings.path.display().to_string(),
+                "live_keys": crate::config::LIVE_KEYS,
+            }),
+        ),
+        Err(error) => Response::failed(
+            id,
+            ApiError::new(
+                "internal",
+                format!("cannot read the settings: {error}"),
+                false,
+            ),
+        ),
+    }
+}
+
+fn config_set<P: Ptt>(
+    station: &mut Station<P>,
+    settings: Option<&mut ConfigState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let Some(settings) = settings else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unsupported",
+                "This daemon was started without a configuration file, so there is nothing \
+                 to change.",
+                false,
+            ),
+        );
+    };
+
+    // Merge into a copy: a refused change must leave the station running on what it had.
+    let mut candidate = settings.config.clone();
+    let changed = match candidate.merge(params) {
+        Ok(changed) => changed,
+        Err(error) => {
+            return Response::failed(id, ApiError::new("bad_params", error.to_string(), false));
+        }
+    };
+    if let Err(error) = candidate.save(&settings.path) {
+        return Response::failed(id, ApiError::new("cannot_save", error.to_string(), true));
+    }
+
+    let restart_required: Vec<&String> = changed
+        .iter()
+        .filter(|key| !crate::config::Config::is_live(key))
+        .collect();
+    station.apply_live(&candidate);
+    settings.config = candidate;
+
+    Response::ok(
+        id,
+        json!({
+            "changed": changed,
+            "restart_required": restart_required,
+            "path": settings.path.display().to_string(),
+        }),
+    )
+}
+
+fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
     let id = request.id.clone();
     let params = &request.params;
     match request.method.as_str() {

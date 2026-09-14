@@ -52,6 +52,7 @@ function connect() {
     refreshStatus();
     loadCapabilities();
     loadDevices();
+    loadConfig();
   });
 
   socket.addEventListener("message", (message) => {
@@ -385,22 +386,84 @@ async function loadDevices() {
   writeConfig();
 }
 
-function writeConfig() {
-  const call_ = $("setup-call").value.trim().toUpperCase() || "N0CALL";
-  const input = $("dev-in").value;
-  const output = $("dev-out").value;
-  const port = $("dev-ptt").value;
-  const lines = [`callsign = "${call_}"`, "", "[audio]"];
-  lines.push(input ? `input  = "${input}"` : `# input  = "…"   # system default`);
-  lines.push(output ? `output = "${output}"` : `# output = "…"   # system default`);
-  lines.push("tx_level = 0.25", "", "[ptt]");
-  if (port) {
-    lines.push(`kind = "serial"`, `port = "${port}"`, `line = "rts"`);
-  } else {
-    lines.push(`kind = "none"   # VOX, or receive only`);
+// What the daemon is actually running, as `config.get` reported it.
+let liveConfig = null;
+let liveKeys = [];
+let configPath = "";
+
+async function loadConfig() {
+  let answer;
+  try {
+    answer = await call("config.get");
+  } catch (error) {
+    // A daemon started without a configuration file says so rather than pretending; the
+    // panel then shows what it would write instead of what it would change.
+    $("setup-note").textContent = error.message;
+    $("btn-apply").disabled = true;
+    writeConfig();
+    return;
   }
-  lines.push("", "[radio]", "max_key_s = 30.0", "wait_for_clear = true");
-  $("config-out").textContent = lines.join("\n");
+  liveConfig = answer.config ?? {};
+  liveKeys = answer.live_keys ?? [];
+  configPath = answer.path ?? "";
+  $("btn-apply").disabled = false;
+
+  // show the operator what is there now, so the form is not a blank slate over live settings
+  if (!$("setup-call").value) $("setup-call").value = liveConfig.callsign ?? "";
+  select($("dev-in"), liveConfig.audio?.input ?? "");
+  select($("dev-out"), liveConfig.audio?.output ?? "");
+  select($("dev-ptt"), liveConfig.ptt?.port ?? "");
+  writeConfig();
+}
+
+function select(element, value) {
+  if ([...element.options].some((option) => option.value === value)) element.value = value;
+}
+
+function writeConfig() {
+  $("config-out").textContent = liveConfig
+    ? JSON.stringify(liveConfig, null, 2)
+    : "The daemon has no configuration file to change.";
+  $("footer-config").textContent = configPath;
+}
+
+/// Everything the form would change, as the dotted keys `config.set` takes.
+function formChanges() {
+  const port = $("dev-ptt").value;
+  const changes = {
+    "audio.input": $("dev-in").value || null,
+    "audio.output": $("dev-out").value || null,
+    "ptt.kind": port ? "serial" : "none",
+  };
+  const callsign = $("setup-call").value.trim().toUpperCase();
+  if (callsign) changes.callsign = callsign;
+  if (port) {
+    changes["ptt.port"] = port;
+    changes["ptt.line"] = "rts";
+  }
+  return changes;
+}
+
+async function applyConfig() {
+  $("apply-note").textContent = "";
+  let answer;
+  try {
+    answer = await call("config.set", formChanges());
+  } catch (error) {
+    $("apply-note").textContent = error.message;
+    $("apply-note").style.color = "var(--hot)";
+    log(error.message, true);
+    return;
+  }
+  $("apply-note").style.color = "";
+  const restart = answer.restart_required ?? [];
+  $("apply-note").textContent =
+    restart.length === 0
+      ? `Saved to ${answer.path}. In effect now.`
+      : `Saved to ${answer.path}. Restart the daemon for: ${restart.join(", ")}.`;
+  log(`settings saved (${(answer.changed ?? []).join(", ")})`);
+  loadConfig();
+  refreshStatus();
 }
 
 // ── actions ─────────────────────────────────────────────────────────
@@ -441,9 +504,10 @@ function wire() {
     if (ok) $("outgoing").value = "";
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
+  $("btn-apply").addEventListener("click", applyConfig);
   $("btn-copy").addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText($("config-out").textContent);
+      await navigator.clipboard.writeText(asToml(formChanges()));
       $("copy-note").textContent = "copied";
     } catch {
       $("copy-note").textContent = "could not copy — select it and copy by hand";
@@ -484,6 +548,34 @@ function appendReceived(text) {
   const pane = $("incoming");
   pane.textContent += text;
   pane.scrollTop = pane.scrollHeight;
+}
+
+/// The form's answers as a configuration file, for somebody editing one by hand.
+function asToml(changes) {
+  const quote = (value) => `"${value}"`;
+  const lines = [`callsign = ${quote(changes.callsign ?? "N0CALL")}`, "", "[audio]"];
+  for (const [key, name] of [
+    ["audio.input", "input"],
+    ["audio.output", "output"],
+  ]) {
+    lines.push(
+      changes[key]
+        ? `${name} = ${quote(changes[key])}`
+        : `# ${name} = "…"   # system default`,
+    );
+  }
+  lines.push("tx_level = 0.25", "", "[ptt]");
+  if (changes["ptt.port"]) {
+    lines.push(
+      `kind = "serial"`,
+      `port = ${quote(changes["ptt.port"])}`,
+      `line = ${quote(changes["ptt.line"] ?? "rts")}`,
+    );
+  } else {
+    lines.push(`kind = "none"   # VOX, or receive only`);
+  }
+  lines.push("", "[radio]", "max_key_s = 30.0", "wait_for_clear = true");
+  return lines.join("\n");
 }
 
 // ── base64, the way the control API uses it ─────────────────────────

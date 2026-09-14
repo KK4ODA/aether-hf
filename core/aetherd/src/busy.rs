@@ -124,6 +124,14 @@ impl BusyDetector {
         self.config
     }
 
+    /// Change how far above the floor counts as occupied.
+    ///
+    /// Safe to do while running: the floor estimate and its history are unaffected, only the
+    /// line drawn across them.
+    pub fn set_threshold_db(&mut self, threshold_db: f64) {
+        self.config.threshold_db = threshold_db;
+    }
+
     /// Whether the channel is occupied, as of `now`.
     #[must_use]
     pub fn busy(&self, now: f64) -> bool {

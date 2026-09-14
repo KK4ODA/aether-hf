@@ -434,6 +434,20 @@ impl<P: Ptt> Station<P> {
         self.engine.request_break();
     }
 
+    /// Apply the settings that can change without a restart.
+    ///
+    /// A sound card is opened once and a control socket is bound once, so most of a
+    /// configuration cannot be changed under a running station. These few can, and applying
+    /// them here is what makes `config.set` mean something before the next restart rather
+    /// than after it.
+    pub fn apply_live(&mut self, config: &crate::config::Config) {
+        self.config.max_key_s = config.radio.max_key_s;
+        self.config.wait_for_clear = config.radio.wait_for_clear;
+        self.config.link.max_mode = config.radio.max_mode;
+        self.ptt.max_key_s = config.radio.max_key_s;
+        self.busy.set_threshold_db(config.radio.busy_threshold_db);
+    }
+
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
     ///
     /// It is how an operator answers "can anybody hear me?" without arranging a contact

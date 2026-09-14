@@ -20,7 +20,7 @@ use aetherd::{
     config::{Config, EXAMPLE, PttConfig},
     control::{
         ControlServer, channel,
-        methods::{dispatch, metrics},
+        methods::{ConfigState, dispatch_with, metrics},
         protocol::Event,
     },
     host::HostServer,
@@ -139,6 +139,15 @@ fn run() -> Result<(), String> {
         .config
         .ok_or("no configuration; try --example-config, then --config <path>")?;
     let config = Config::load(&path).map_err(|e| e.to_string())?;
+    // Canonicalise so `config.set` writes where the operator thinks it does even when the
+    // daemon was started with a relative path — but strip Windows' extended-length prefix,
+    // which is correct and unreadable and would be shown to a human.
+    let path = path.canonicalize().map_or(path.clone(), |full| {
+        let text = full.display().to_string();
+        // the prefix is a literal backslash-backslash-question-backslash
+        text.strip_prefix("\\\\?\\")
+            .map_or_else(|| full.clone(), std::path::PathBuf::from)
+    });
 
     let station_config = StationConfig {
         callsign: config.callsign.clone(),
@@ -223,7 +232,18 @@ fn run() -> Result<(), String> {
         println!("aetherd: calling {call}");
     }
 
-    serve(&config, &mut station, audio.as_mut(), &control, &stopping)
+    let mut settings = ConfigState {
+        config: config.clone(),
+        path,
+    };
+    serve(
+        &config,
+        &mut station,
+        audio.as_mut(),
+        &control,
+        &mut settings,
+        &stopping,
+    )
 }
 
 /// The run loop: audio in, audio out, control requests answered between blocks.
@@ -234,6 +254,7 @@ fn serve(
     station: &mut Station<Box<dyn Ptt>>,
     audio: &mut dyn AudioIo,
     control: &aetherd::control::ControlChannel,
+    settings: &mut ConfigState,
     stopping: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
@@ -257,7 +278,7 @@ fn serve(
         // is single-threaded because its clock is the audio it has heard, and a connection
         // reaching in from another thread would be able to change the state mid-frame.
         for command in control.drain() {
-            let response = dispatch(station, &command.request);
+            let response = dispatch_with(station, Some(settings), &command.request);
             let _ = command.reply.send(response);
         }
 

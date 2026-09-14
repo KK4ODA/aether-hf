@@ -89,8 +89,8 @@ human-facing and may be localised.
 | Method | Params | Result |
 |---|---|---|
 | `status` | — | state, role, remote callsign, uptime, versions, capabilities |
-| `config.get` | `keys?` | the current configuration |
-| `config.set` | key/value pairs | the applied configuration; rejects unknown keys |
+| `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
+| `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
@@ -158,9 +158,30 @@ why the modem is not currently transmitting the data it was given.
 
 ---
 
+### 4.4 Changing settings
+
+`config.set` takes dotted keys — `{"radio.max_mode": 8, "audio.input": "USB Audio CODEC"}` —
+and answers with `changed` and `restart_required`.
+
+Three rules, because a settings interface that gets any of them wrong is worse than none:
+
+* **A refused change changes nothing.** The merge happens on a copy, the result is validated,
+  and only then does it replace what is running. A half-applied configuration would leave a
+  station in a state its operator never chose.
+* **The file is replaced atomically** — written beside the target and renamed over it. A
+  configuration half-written by a machine that lost power is a station that will not start,
+  and its operator would have no way to know what it used to say.
+* **What needs a restart is stated, not guessed.** A sound card is opened once and a socket is
+  bound once. `config.get` returns `live_keys`, and `config.set` reports which of the keys it
+  just changed are not among them. A setting that silently does nothing until the next restart
+  is worse than one that says so.
+
+---
+
 ## 7. Open items for v1.0
 
-* Exact `config` key set, once the daemon exists to have opinions about it.
+* `config.set` cannot yet reopen a sound card or rebind a socket; those keys are written and
+  reported as needing a restart.
 * Whether `metrics` should be pull as well as push for scripted use.
 * A capability flag for the FM PHY's differences.
 * Rate limiting and back-pressure rules for `send` on a slow link.

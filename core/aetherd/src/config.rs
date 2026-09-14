@@ -409,6 +409,99 @@ impl Config {
     }
 }
 
+/// Settings that take effect without restarting the daemon.
+///
+/// Everything else needs one: a sound card is opened once, and a control socket is bound
+/// once. Saying which is which is the difference between a setting that appears to work and
+/// one that does.
+pub const LIVE_KEYS: &[&str] = &[
+    "radio.max_key_s",
+    "radio.wait_for_clear",
+    "radio.max_mode",
+    "radio.busy_threshold_db",
+];
+
+impl Config {
+    /// Merge a JSON object of dotted keys into this configuration.
+    ///
+    /// Returns the keys that were changed. The result is validated before it is returned, so
+    /// a caller never receives a configuration it cannot run.
+    ///
+    /// # Errors
+    /// If a key is not one this version defines, a value is the wrong type, or the merged
+    /// configuration would not work.
+    pub fn merge(&mut self, changes: &serde_json::Value) -> Result<Vec<String>, ConfigError> {
+        let Some(object) = changes.as_object() else {
+            return Err(ConfigError::Invalid(
+                "changes must be an object of dotted keys, like {\"radio.max_mode\": 8}".into(),
+            ));
+        };
+
+        // Round-trip through the serialised form so the merge works on exactly the shape the
+        // file has, and so an unknown key is refused by the same `deny_unknown_fields` that
+        // refuses one in the file.
+        let mut document = serde_json::to_value(&*self)
+            .map_err(|e| ConfigError::Invalid(format!("cannot read the current settings: {e}")))?;
+
+        let mut changed = Vec::new();
+        for (key, value) in object {
+            let parts: Vec<&str> = key.split('.').collect();
+            // `split` always yields at least one part, even for an empty key, so this
+            // cannot fail; the empty name is then refused by `deny_unknown_fields` below.
+            let Some((last, path)) = parts.split_last() else {
+                return Err(ConfigError::Invalid(format!("{key} is not a setting")));
+            };
+            let mut cursor = &mut document;
+            for part in path {
+                let Some(map) = cursor.as_object_mut() else {
+                    return Err(ConfigError::Invalid(format!("{key} is not a setting")));
+                };
+                cursor = map
+                    .entry((*part).to_owned())
+                    .or_insert_with(|| serde_json::json!({}));
+            }
+            let Some(map) = cursor.as_object_mut() else {
+                return Err(ConfigError::Invalid(format!("{key} is not a setting")));
+            };
+            map.insert((*last).to_owned(), value.clone());
+            changed.push(key.clone());
+        }
+
+        let merged: Self =
+            serde_json::from_value(document).map_err(|e| ConfigError::Parse(format!("{e}")))?;
+        merged.validate()?;
+        *self = merged;
+        changed.sort();
+        Ok(changed)
+    }
+
+    /// Whether a change to this key takes effect without a restart.
+    #[must_use]
+    pub fn is_live(key: &str) -> bool {
+        LIVE_KEYS.contains(&key)
+    }
+
+    /// Write this configuration to a file, atomically.
+    ///
+    /// Written beside the target and then renamed over it: a configuration half-written by a
+    /// machine that lost power is a station that will not start, and the operator would have
+    /// no way to know what it used to say.
+    ///
+    /// # Errors
+    /// If the configuration cannot be serialised or the file cannot be replaced.
+    pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
+        self.validate()?;
+        let text = toml::to_string_pretty(self)
+            .map_err(|e| ConfigError::Invalid(format!("cannot write these settings: {e}")))?;
+        let temporary = path.with_extension("toml.new");
+        std::fs::write(&temporary, text)
+            .map_err(|e| ConfigError::Read(format!("{}: {e}", temporary.display())))?;
+        std::fs::rename(&temporary, path)
+            .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
+        Ok(())
+    }
+}
+
 /// An example file, for `aetherd --example-config`.
 pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 #
@@ -610,6 +703,72 @@ mod tests {
         // the speed is only checked when it will actually be used
         let unused = "callsign = \"W4ODA\"\n[radio]\ncw_id_wpm = 200.0\n";
         assert!(Config::parse(unused).is_ok());
+    }
+
+    #[test]
+    fn a_setting_can_be_changed_by_its_dotted_name() {
+        let mut config = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        let changed = config
+            .merge(&serde_json::json!({"radio.max_mode": 8, "audio.tx_level": 0.3}))
+            .expect("merge");
+        assert_eq!(changed, vec!["audio.tx_level", "radio.max_mode"]);
+        assert_eq!(config.radio.max_mode, 8);
+        assert!((config.audio.tx_level - 0.3).abs() < 1e-12);
+        // everything not named is left alone
+        assert_eq!(config.callsign, "W4ODA");
+        assert!(config.radio.wait_for_clear);
+    }
+
+    #[test]
+    fn a_change_that_would_not_work_is_refused_and_changes_nothing() {
+        // the station has to be left running on what it had; a half-applied configuration is
+        // worse than a refused one
+        let mut config = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        let before = config.clone();
+        for bad in [
+            serde_json::json!({"radio.max_mode": 99}),
+            serde_json::json!({"audio.sample_rate": 44100}),
+            serde_json::json!({"callsign": "NOT A CALL!"}),
+            serde_json::json!({"radio.max_key_s": 0}),
+            serde_json::json!({"radio.no_such_setting": 1}),
+            serde_json::json!({"radio.max_mode": "eight"}),
+            serde_json::json!("not an object"),
+        ] {
+            assert!(config.merge(&bad).is_err(), "accepted {bad}");
+            assert_eq!(config, before, "a refused change was partly applied: {bad}");
+        }
+    }
+
+    #[test]
+    fn which_settings_need_a_restart_is_stated_rather_than_guessed() {
+        // a sound card is opened once and a socket is bound once; a setting that silently
+        // does nothing until the next restart is worse than one that says so
+        assert!(Config::is_live("radio.max_mode"));
+        assert!(Config::is_live("radio.wait_for_clear"));
+        assert!(!Config::is_live("audio.input"));
+        assert!(!Config::is_live("ptt.port"));
+        assert!(!Config::is_live("control.bind"));
+    }
+
+    #[test]
+    fn saving_and_reloading_gives_back_the_same_configuration() {
+        let mut config = Config::parse(EXAMPLE).expect("parse");
+        config
+            .merge(&serde_json::json!({"callsign": "W4ODA", "radio.max_mode": 9}))
+            .expect("merge");
+
+        let dir = std::env::temp_dir().join(format!("aether-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("station.toml");
+        config.save(&path).expect("save");
+
+        let reloaded = Config::load(&path).expect("reload");
+        assert_eq!(reloaded, config);
+        assert!(
+            !path.with_extension("toml.new").exists(),
+            "the temporary file was left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -103,9 +103,10 @@
 
       <!-- ── setup ──────────────────────────────────────────────── -->
       <section id="panel-setup" class="panel" hidden>
-        <p class="note">
-          This version reads its configuration from a file at startup and does not change it
-          from here. Pick the devices below and it will write you the lines to paste.
+        <p class="note" id="setup-note">
+          Changes are written straight to the daemon's configuration file. Some take effect
+          at once; a sound card or a serial port is opened when the daemon starts, so
+          changing one needs a restart — you will be told which.
         </p>
 
         <div class="row">
@@ -125,12 +126,15 @@
           <input id="setup-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
         </div>
 
-        <h2>station.toml</h2>
-        <pre id="config-out" class="config"></pre>
         <div class="row">
-          <button id="btn-copy">Copy</button>
+          <button id="btn-apply" class="primary">Save to the station</button>
+          <button id="btn-copy">Copy as TOML</button>
           <span class="sub" id="copy-note"></span>
         </div>
+        <p class="note" id="apply-note"></p>
+
+        <h2>What the daemon is running</h2>
+        <pre id="config-out" class="config"></pre>
 
         <h2>What this modem can do</h2>
         <table class="modes">
@@ -159,6 +163,7 @@
 
     <footer class="bar">
       <span id="footer-version">not connected</span>
+      <span id="footer-config"></span>
       <span id="footer-endpoint"></span>
     </footer>
 
