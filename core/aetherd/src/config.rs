@@ -80,7 +80,8 @@ pub struct AudioSection {
     /// Sample rate. The waveform is built around 48 kHz and nothing resamples.
     #[serde(default = "default_rate")]
     pub sample_rate: u32,
-    /// Transmit level, as an RMS fraction of full scale.
+    /// Transmit level, as a fraction of full scale: the amplitude of a sine with the same RMS
+    /// as the data waveform. See `StationConfig::tx_level`.
     #[serde(default = "default_tx_level")]
     pub tx_level: f64,
 }
@@ -281,7 +282,8 @@ pub struct SimSection {
     /// Connect to the other daemon there.
     #[serde(default)]
     pub connect: Option<String>,
-    /// Signal to noise at this receiver, 3 kHz reference, relative to the peer's `tx_level`.
+    /// Signal to noise at this receiver, 3 kHz reference, relative to the level the peer
+    /// transmits at (its `tx_level`, taken to be the same as this station's).
     #[serde(default = "default_sim_snr")]
     pub snr_db: f64,
 }
@@ -638,7 +640,8 @@ impl Config {
         Some(crate::sim::SimConfig {
             peer,
             snr_db: self.sim.snr_db,
-            signal_rms: self.audio.tx_level,
+            // the waveform's RMS is the level over root two: see `StationConfig::tx_level`
+            signal_rms: self.audio.tx_level / std::f64::consts::SQRT_2,
             sample_rate: self.audio.sample_rate,
         })
     }
@@ -772,7 +775,9 @@ callsign = "N0CALL"
 # input = "USB Audio CODEC"
 # output = "USB Audio CODEC"
 sample_rate = 48000
-# Transmit level as a fraction of full scale, RMS. Leave headroom: the waveform has peaks.
+# Transmit level as a fraction of full scale: the amplitude of a sine with the same RMS as
+# the data waveform (which is what Tune plays). The audio's RMS is this over root two —
+# 0.25 is -15 dBFS RMS, peaks around -6 dBFS. Leave headroom: the waveform has peaks.
 tx_level = 0.25
 
 [ptt]

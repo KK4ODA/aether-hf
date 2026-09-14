@@ -53,9 +53,11 @@ pub struct StationConfig {
     pub link: LinkConfig,
     /// Busy-detector tuning.
     pub busy: BusyConfig,
-    /// Transmit audio level, as an RMS fraction of full scale. −12 dBFS by default, which
-    /// leaves headroom for the peaks an OFDM waveform has and for a sound card that is not
-    /// quite calibrated.
+    /// Transmit level, as a fraction of full scale: the amplitude of a sine that has the
+    /// same RMS as the data waveform, which is what the tune tone plays. The audio's RMS is
+    /// therefore `tx_level / √2` — 0.25 is −15 dBFS RMS with peaks around −6 dBFS — which
+    /// leaves headroom for a sound card that is not quite calibrated. Measured, not assumed:
+    /// the simulated channel's SNR is set against this.
     pub tx_level: f64,
     /// Silence played before a burst, so the radio is in transmit before the waveform starts.
     pub key_lead_s: f64,
@@ -1343,6 +1345,41 @@ mod tests {
         air.a.send(message);
         air.run(90.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received().as_slice(), message.as_slice());
+    }
+
+    #[test]
+    fn the_burst_has_the_rms_the_tx_level_documents() {
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                tx_level: 0.25,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.connect("KK4XYZ").expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        let mut audio: Vec<f32> = Vec::new();
+        for _ in 0..60 {
+            let count = station.playback(&mut out).expect("playback");
+            audio.extend_from_slice(&out[..count]);
+            station.capture(&vec![0.0f32; 4096]).expect("capture");
+        }
+        // the burst proper, without the keying lead and tail
+        let loud: Vec<f32> = audio.iter().copied().filter(|x| x.abs() > 1e-4).collect();
+        let rms = (loud.iter().map(|x| x * x).sum::<f32>() / loud.len() as f32).sqrt();
+        let expected = 0.25 / std::f32::consts::SQRT_2;
+        assert!(
+            (rms / expected - 1.0).abs() < 0.1,
+            "burst RMS {rms:.4}; tx_level / sqrt 2 is {expected:.4}"
+        );
+        let peak = loud.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(
+            peak < 0.7,
+            "peak {peak} leaves no headroom at tx_level 0.25"
+        );
     }
 
     #[test]

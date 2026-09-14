@@ -51,7 +51,8 @@ pub struct SimConfig {
     /// Signal to noise at this receiver, in a 3 kHz noise bandwidth (the project's
     /// convention), relative to `signal_rms` — the level the other end transmits at.
     pub snr_db: f64,
-    /// The RMS level the peer's waveform is assumed to arrive at: its `tx_level`.
+    /// The RMS level the peer's waveform arrives at: its `tx_level / √2`, the waveform's
+    /// RMS being 3 dB below the level a sine of that amplitude would announce.
     pub signal_rms: f64,
     /// Samples per second.
     pub sample_rate: u32,
