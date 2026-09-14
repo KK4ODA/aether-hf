@@ -282,8 +282,16 @@ class LinkEngine:
     # ── inputs ────────────────────────────────────────────────────────
 
     def on_tx_done(self, now: float) -> None:
+        """The physical layer finished a transmission at ``now`` (the last sample on the air).
+
+        Work that arrived while the transmitter was busy — an acknowledgement that came in
+        during a re-poll, data queued mid-burst — could not start a burst then, and nothing
+        else would start it later: this is the moment to try.
+        """
         self.now = max(self.now, now)
         self._tx_busy_until = min(self._tx_busy_until, now)
+        if self.state is State.CONNECTED and self.role is Role.ISS and self._waiting_for is None:
+            self._maybe_start_burst()
 
     def tick(self, now: float) -> None:
         self.now = max(self.now, now)
@@ -375,7 +383,7 @@ class LinkEngine:
             else self.timing.control_frame_s
             for f in frames
         )
-        self._tx_busy_until = self.now + dur
+        self._tx_busy_until = self.now + self.timing.tx_latency_s + dur
         self.actions.append(Transmit(frames, dur))
 
     def _control(self, kind: ControlKind, **kw: object) -> TxFrame:

@@ -267,6 +267,39 @@ impl Default for UpdateSection {
     }
 }
 
+/// A simulated channel in place of a sound card.
+///
+/// Two daemons joined by a socket, with noise at a chosen SNR: how Pat or Winlink Express is
+/// driven end to end with no radio, and the bench reference a field session is compared
+/// with. With either address set the daemon keys nothing, whatever `[ptt]` says.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimSection {
+    /// Wait for the other daemon here.
+    #[serde(default)]
+    pub listen: Option<String>,
+    /// Connect to the other daemon there.
+    #[serde(default)]
+    pub connect: Option<String>,
+    /// Signal to noise at this receiver, 3 kHz reference, relative to the peer's `tx_level`.
+    #[serde(default = "default_sim_snr")]
+    pub snr_db: f64,
+}
+
+impl Default for SimSection {
+    fn default() -> Self {
+        Self {
+            listen: None,
+            connect: None,
+            snr_db: default_sim_snr(),
+        }
+    }
+}
+
+fn default_sim_snr() -> f64 {
+    30.0
+}
+
 /// Session recordings, for field validation and for finding out what happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -351,6 +384,9 @@ pub struct Config {
     /// Session recordings.
     #[serde(default)]
     pub record: RecordSection,
+    /// A simulated channel instead of a sound card.
+    #[serde(default)]
+    pub sim: SimSection,
 }
 
 /// The shape of configuration file this version writes.
@@ -495,6 +531,11 @@ impl Config {
             return Err(ConfigError::Invalid("a callsign is required".into()));
         }
         crate::ptt::validate_callsign(&self.callsign)?;
+        if self.sim.listen.is_some() && self.sim.connect.is_some() {
+            return Err(ConfigError::Invalid(
+                "[sim] listen and connect are alternatives; set one of them".into(),
+            ));
+        }
         if self.audio.sample_rate != default_rate() {
             return Err(ConfigError::Invalid(format!(
                 "the waveform is built around {} Hz and nothing resamples; {} Hz will not work",
@@ -584,6 +625,22 @@ impl Config {
             enabled: self.host.enabled,
             bind: self.host.bind.clone(),
         }
+    }
+
+    /// The simulated channel, if the file asks for one.
+    #[must_use]
+    pub fn sim_config(&self) -> Option<crate::sim::SimConfig> {
+        let peer = match (&self.sim.listen, &self.sim.connect) {
+            (Some(address), _) => crate::sim::Peer::Listen(address.clone()),
+            (None, Some(address)) => crate::sim::Peer::Connect(address.clone()),
+            (None, None) => return None,
+        };
+        Some(crate::sim::SimConfig {
+            peer,
+            snr_db: self.sim.snr_db,
+            signal_rms: self.audio.tx_level,
+            sample_rate: self.audio.sample_rate,
+        })
     }
 
     /// Busy-detector settings in the form the detector wants.
@@ -786,6 +843,15 @@ check = true
 # on its own, which is what a gateway and field validation want.
 # dir = "recordings"                  # default: recordings/ beside this file
 auto = false
+
+[sim]
+# A simulated channel instead of a sound card: two daemons joined by a socket, with noise
+# at this SNR (3 kHz reference, relative to the other end's tx_level). One end listens and
+# the other connects; a daemon with either set keys nothing. This is how Pat or Winlink
+# Express is tried end to end with no radio.
+# listen = "127.0.0.1:8600"
+# connect = "127.0.0.1:8600"
+snr_db = 30.0
 "#;
 
 #[cfg(test)]

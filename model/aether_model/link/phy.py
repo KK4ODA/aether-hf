@@ -54,6 +54,12 @@ class PhyTiming:
     """Guard from the end of a received burst to keying up (PTT, audio latency, RX flush)."""
     detect_latency_s: float = 0.15
     """Worst-case delay from a frame's last sample to the engine hearing about it."""
+    tx_latency_s: float = 0.0
+    """Delay from the engine asking for a transmission to its first sample leaving the
+    antenna: the keying lead, and the audio the daemon keeps queued ahead of the sound card.
+    Zero for a simulator that plays what it is handed at once; a real station's is a few
+    hundred milliseconds, and an engine that does not know it under-waits for every reply
+    by that much. Found by two real daemons over a socket, not by the simulator."""
     preamble_detect_s: float | None = None
     """Delay from a frame's *first* sample to the PHY reporting its preamble via
     :meth:`~aether_model.link.engine.LinkEngine.on_preamble`. When a PHY provides that

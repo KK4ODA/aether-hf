@@ -504,10 +504,17 @@ impl LinkEngine {
 
     // ── inputs ────────────────────────────────────────────────────────
 
-    /// Tell the engine a transmission finished.
+    /// Tell the engine a transmission finished at `now` — the last sample on the air.
+    ///
+    /// Work that arrived while the transmitter was busy — an acknowledgement that came in
+    /// during a re-poll, data queued mid-burst — could not start a burst then, and nothing
+    /// else would start it later: this is the moment to try.
     pub fn on_tx_done(&mut self, now: f64) {
         self.now = self.now.max(now);
         self.tx_busy_until = self.tx_busy_until.min(now);
+        if self.state == State::Connected && self.role == Role::Iss && self.waiting_for.is_none() {
+            self.maybe_start_burst();
+        }
     }
 
     /// Advance the clock and let any due timers fire.
@@ -635,7 +642,7 @@ impl LinkEngine {
                 Container::Control => self.timing.control_frame_s,
             })
             .sum();
-        self.tx_busy_until = self.now + duration_s;
+        self.tx_busy_until = self.now + self.timing.tx_latency_s + duration_s;
         self.actions.push(Action::Transmit { frames, duration_s });
     }
 

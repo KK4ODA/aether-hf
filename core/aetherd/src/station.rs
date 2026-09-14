@@ -61,6 +61,10 @@ pub struct StationConfig {
     pub key_lead_s: f64,
     /// Silence played after a burst, before the key is released.
     pub key_tail_s: f64,
+    /// How far ahead of the audio clock the daemon keeps playback queued, in seconds. A
+    /// sample handed to the sound card now leaves it this much later; the engine's timers
+    /// are told, so a reply is waited for from when the burst really ended.
+    pub playback_lead_s: f64,
     /// Longest a single transmission may last, in seconds.
     pub max_key_s: f64,
     /// Refuse to start a transmission while the channel is occupied.
@@ -92,6 +96,7 @@ impl Default for StationConfig {
             tx_level: 0.25,
             key_lead_s: 0.1,
             key_tail_s: 0.05,
+            playback_lead_s: 0.0,
             // A burst of sixteen long frames is under twenty seconds. Thirty gives that room
             // and still stops a stuck key well inside what a transmitter and a band will
             // tolerate.
@@ -358,7 +363,8 @@ impl<P: Ptt> Station<P> {
     #[must_use]
     pub fn new(config: StationConfig, ptt: P, seed: u64) -> Self {
         let params = config.params;
-        let timing = phy_timing(params);
+        let mut timing = phy_timing(params);
+        timing.tx_latency_s = config.key_lead_s + config.playback_lead_s + config.key_tail_s;
         let link = LinkConfig {
             capabilities: offered_capabilities(config.compress),
             ..config.link.clone()
@@ -871,7 +877,8 @@ impl<P: Ptt> Station<P> {
                 );
             }
             self.ptt.unkey(now)?;
-            self.engine.on_tx_done(now);
+            // the queue drained now; the last of it leaves the sound card a backlog later
+            self.engine.on_tx_done(now + self.config.playback_lead_s);
             self.pump();
             return Ok(0);
         }
@@ -926,6 +933,14 @@ impl<P: Ptt> Station<P> {
                     cfo_hz: decoded.frame.cfo_hz,
                     decoded: decoded.ok(),
                     bytes: decoded.payload.as_ref().map_or(0, Vec::len),
+                    control: if decoded.frame.sync.frame_type == FrameType::Control {
+                        decoded
+                            .payload
+                            .as_deref()
+                            .and_then(crate::record::describe_control)
+                    } else {
+                        None
+                    },
                 });
             }
             // A beacon belongs to no session, so it is handled before anything the engine
@@ -1161,6 +1176,8 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         // PTT, the radio's own transmit delay, and the audio buffers at both ends
         turnaround_s: 0.25,
         detect_latency_s: 0.15,
+        // the station fills this in from its keying lead and the daemon's playback backlog
+        tx_latency_s: 0.0,
         // acquisition reports a frame about two preamble symbols in, plus the search block
         preamble_detect_s: Some(4.0 * params.symbol_period_s()),
         data_capacity: PAYLOAD_BYTES.to_vec(),
@@ -1299,6 +1316,33 @@ mod tests {
             got.len(),
             message.len()
         );
+    }
+
+    #[test]
+    fn a_message_sent_after_the_session_is_up_still_crosses() {
+        let message = b"Sent once the session was already connected.";
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.run(3.0, |_, _| false);
+        air.a.send(message);
+        air.run(90.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received().as_slice(), message.as_slice());
+    }
+
+    #[test]
+    fn a_message_sent_while_the_first_burst_is_on_the_air_still_crosses() {
+        // what a host does: connect, see "connected", send at once — which lands while the
+        // sending station is already keyed for its first burst of the session
+        let message = b"Queued while the transmitter was already keyed.";
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, _| a.connected());
+        air.run(10.0, |a, _| a.transmitting());
+        assert!(air.a.transmitting(), "a never keyed after connecting");
+        air.a.send(message);
+        air.run(90.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received().as_slice(), message.as_slice());
     }
 
     #[test]

@@ -179,7 +179,9 @@ fn run() -> Result<(), String> {
 
     // A dry run keys nothing, whatever the file says. Somebody checking their configuration
     // must not put a carrier on the air to find out that they had the wrong serial port.
-    let ptt: Box<dyn Ptt> = if args.dry_run {
+    // Neither does a simulated channel: there is no radio on the other end of a socket.
+    let sim = config.sim_config();
+    let ptt: Box<dyn Ptt> = if args.dry_run || sim.is_some() {
         Box::new(NullPtt::default())
     } else {
         open_ptt(&config.ptt).map_err(|e| e.to_string())?
@@ -203,6 +205,11 @@ fn run() -> Result<(), String> {
     let mut audio: Box<dyn AudioIo> = if args.dry_run {
         "dry run: audio loops back and nothing is keyed".clone_into(&mut daemon.audio);
         Box::new(Loopback::new())
+    } else if let Some(sim) = &sim {
+        let link = aetherd::sim::SimLink::open(sim)
+            .map_err(|e| format!("cannot open the simulated channel: {e}"))?;
+        daemon.audio.clone_from(&link.description);
+        Box::new(link)
     } else {
         let card = SoundCard::open(&config.audio_config()).map_err(|e| e.to_string())?;
         daemon.audio.clone_from(&card.description);
@@ -332,6 +339,7 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
     StationConfig {
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
+        playback_lead_s: PLAYBACK_BACKLOG_S,
         callsign: config.callsign.clone(),
         link: LinkConfig {
             max_mode: config.radio.max_mode,

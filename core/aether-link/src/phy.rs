@@ -65,6 +65,12 @@ pub struct PhyTiming {
     pub turnaround_s: f64,
     /// Worst-case delay from a frame's last sample to the engine hearing about it.
     pub detect_latency_s: f64,
+    /// Delay from the engine asking for a transmission to its first sample leaving the
+    /// antenna: the keying lead, and the audio the daemon keeps queued ahead of the sound
+    /// card. Zero for a simulator that plays what it is handed at once; a real station's is
+    /// a few hundred milliseconds, and an engine that does not know it under-waits for every
+    /// reply by that much. Found by two real daemons over a socket, not by the simulator.
+    pub tx_latency_s: f64,
     /// Delay from a frame's *first* sample to the PHY reporting its preamble.
     ///
     /// When a physical layer can report this, the receiver learns a burst is continuing that

@@ -8,7 +8,7 @@ from itertools import pairwise
 import pytest
 
 from aether_model.frame.modes import LONG, MODES, SHORT
-from aether_model.link.engine import LinkConfig, LinkEngine, Role, State
+from aether_model.link.engine import LinkConfig, LinkEngine, Role, State, Transmit
 from aether_model.link.frames import (
     ConnectBody,
     ControlFlags,
@@ -372,6 +372,61 @@ def test_rate_control_beats_a_fixed_conservative_mode(timing: PhyTiming) -> None
 
 
 # ── P2-2a / P2-2b ─────────────────────────────────────────────────────
+
+
+def _latent_transfer(prop_s: float, tx_latency_s: float) -> tuple[bool, int]:
+    """A transfer with real transport latency, the sender told (or not) about its own."""
+    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    t = PhyTiming(
+        data_frame_s=LONG.duration_s,
+        control_frame_s=SHORT.duration_s,
+        data_capacity=caps,
+        tx_latency_s=tx_latency_s,
+    )
+    a, b = LinkEngine("W4ODA", t, None, seed=1), LinkEngine("KK4XYZ", t, None, seed=2)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=3, prop_s=prop_s)
+    msg = b"The quick brown fox jumps over the lazy dog. " * 10
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    a.send(msg)  # once connected, as a host does
+    sim.run(until=400)
+    return sim.delivered(1) == msg, a.stats.ack_timeouts
+
+
+def test_a_sender_that_knows_its_own_latency_waits_long_enough() -> None:
+    """Two real daemons over a socket stalled on their first session: each burst left the
+    sound card a quarter of a second after the engine handed it over, so every reply was
+    waited for from too early a moment and the acknowledgement of the first poll arrived
+    just after the engine had given up on it. With ``tx_latency_s`` set to what the daemon
+    knows about itself, half a second of one-way latency costs no timeouts at all; without
+    it, the same link limps on retries."""
+    delivered, timeouts = _latent_transfer(prop_s=0.45, tx_latency_s=0.4)
+    assert delivered and timeouts == 0
+    delivered_blind, timeouts_blind = _latent_transfer(prop_s=0.45, tx_latency_s=0.0)
+    assert delivered_blind and timeouts_blind > 10
+
+
+def test_an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() -> None:
+    """The other half of the same stall: the late acknowledgement was accepted while the
+    re-poll was on the air, and the burst it should have started was dropped because the
+    transmitter was busy — and nothing tried again. ``on_tx_done`` now does."""
+    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    t = PhyTiming(
+        data_frame_s=LONG.duration_s, control_frame_s=SHORT.duration_s, data_capacity=caps
+    )
+    a, b = LinkEngine("W4ODA", t, None, seed=1), LinkEngine("KK4XYZ", t, None, seed=2)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=5)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.state is State.CONNECTED
+    # queue data while the transmitter is busy with the post-connect poll and no reply is
+    # awaited: the only thing that can start the burst is the end of that transmission
+    a._waiting_for = None  # the race the field showed, reproduced by hand
+    a._tx_busy_until = a.now + 1.0
+    a.send(b"queued while keyed")
+    assert not any(isinstance(x, Transmit) for x in a.drain())
+    a.on_tx_done(a.now + 1.0)
+    assert any(isinstance(x, Transmit) for x in a.drain()), "the queued data never went out"
 
 
 def _timing(*, start_of_frame: bool) -> PhyTiming:

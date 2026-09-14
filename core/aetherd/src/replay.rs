@@ -131,6 +131,14 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
                 cfo_hz: decoded.frame.cfo_hz,
                 decoded: decoded.ok(),
                 bytes: decoded.payload.as_ref().map_or(0, Vec::len),
+                control: if decoded.frame.sync.frame_type == FrameType::Control {
+                    decoded
+                        .payload
+                        .as_deref()
+                        .and_then(crate::record::describe_control)
+                } else {
+                    None
+                },
             });
         }
         receiver.take_preambles();
@@ -197,10 +205,10 @@ pub fn describe(frame: &FrameRecord) -> String {
         frame.rv,
         frame.snr_3k_db,
         frame.cfo_hz,
-        if frame.decoded {
-            format!("decoded {} bytes", frame.bytes)
-        } else {
-            "failed".to_owned()
+        match (&frame.control, frame.decoded) {
+            (Some(control), _) => control.clone(),
+            (None, true) => format!("decoded {} bytes", frame.bytes),
+            (None, false) => "failed".to_owned(),
         }
     )
 }

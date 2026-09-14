@@ -656,6 +656,12 @@ pub fn to_base64(bytes: &[u8]) -> String {
     encode(bytes)
 }
 
+/// The inverse, for a client reading `data` events.
+#[must_use]
+pub fn from_base64(text: &str) -> Option<Vec<u8>> {
+    decode(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

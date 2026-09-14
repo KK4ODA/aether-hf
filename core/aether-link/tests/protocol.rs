@@ -19,6 +19,7 @@ fn timing(start_of_frame: bool) -> PhyTiming {
         control_frame_s: SHORT.duration_s(),
         turnaround_s: 0.25,
         detect_latency_s: 0.15,
+        tx_latency_s: 0.0,
         preamble_detect_s: start_of_frame.then(|| 4.0 * LONG.waveform.symbol_period_s()),
         data_capacity: PAYLOAD_BYTES.to_vec(),
     }
@@ -332,5 +333,181 @@ fn an_abort_drops_the_session_locally_and_the_peer_follows() {
         sim.events(1).iter().any(|e| e.starts_with("disconnected")),
         "{:?}",
         sim.events(1)
+    );
+}
+
+/// A transfer with real transport latency, the sender told (or not) about its own.
+fn latent_transfer(prop_s: f64, tx_latency_s: f64) -> (bool, usize) {
+    let mut t = timing(false);
+    t.tx_latency_s = tx_latency_s;
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    let message: Vec<u8> = "The quick brown fox jumps over the lazy dog. "
+        .repeat(10)
+        .into_bytes();
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 20.0, 3).with_propagation(prop_s);
+    sim.run(30.0, 3.0);
+    sim.engine_mut(0).send(&message); // once connected, as a host does
+    sim.run(400.0, 3.0);
+    (
+        sim.delivered(1) == message.as_slice(),
+        sim.engine(0).stats.ack_timeouts,
+    )
+}
+
+#[test]
+fn a_sender_that_knows_its_own_latency_waits_long_enough() {
+    // Two real daemons over a socket stalled on their first session: each burst left the
+    // sound card a quarter of a second after the engine handed it over, so every reply was
+    // waited for from too early a moment, and the acknowledgement of the first poll arrived
+    // just after the engine had given up on it. Told what the daemon knows about itself,
+    // half a second of one-way latency costs no timeouts; blind, the same link limps.
+    let (delivered, timeouts) = latent_transfer(0.45, 0.4);
+    assert!(delivered && timeouts == 0, "timeouts: {timeouts}");
+    let (delivered_blind, timeouts_blind) = latent_transfer(0.45, 0.0);
+    assert!(delivered_blind, "the blind link did not even limp through");
+    assert!(timeouts_blind > 10, "timeouts: {timeouts_blind}");
+}
+
+/// A frame handed straight from one engine to another: a perfect channel, hand-timed.
+struct Wire {
+    container: aether_link::Container,
+    mode: usize,
+    rv: u8,
+    t_start: f64,
+    t_end: f64,
+    payload: Vec<u8>,
+}
+
+impl Wire {
+    fn carry(frame: &aether_link::TxFrame, t_start: f64, t: &PhyTiming) -> Self {
+        let duration = match frame.container {
+            aether_link::Container::Data => t.data_frame_s,
+            aether_link::Container::Control => t.control_frame_s,
+        };
+        Self {
+            container: frame.container,
+            mode: frame.mode,
+            rv: frame.rv,
+            t_start,
+            t_end: t_start + duration,
+            payload: frame.payload.clone(),
+        }
+    }
+}
+
+impl aether_link::SoftFrame for Wire {
+    fn container(&self) -> aether_link::Container {
+        self.container
+    }
+    fn mode(&self) -> usize {
+        self.mode
+    }
+    fn rv(&self) -> u8 {
+        self.rv
+    }
+    fn snr_db(&self) -> f64 {
+        20.0
+    }
+    fn t_start(&self) -> f64 {
+        self.t_start
+    }
+    fn t_end(&self) -> f64 {
+        self.t_end
+    }
+    fn decode(
+        &self,
+        _buffer: Option<&aether_link::HarqBuffer>,
+    ) -> (Option<Vec<u8>>, aether_link::HarqBuffer) {
+        (
+            Some(self.payload.clone()),
+            aether_link::HarqBuffer::default(),
+        )
+    }
+}
+
+/// The frames an engine wants sent, from its actions.
+fn transmitted(engine: &mut LinkEngine) -> Vec<aether_link::TxFrame> {
+    engine
+        .drain()
+        .into_iter()
+        .filter_map(|action| match action {
+            aether_link::Action::Transmit { frames, .. } => Some(frames),
+            aether_link::Action::Event { .. } | aether_link::Action::Deliver(_) => None,
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() {
+    // The other half of the same stall, timed by hand: the acknowledgement of the
+    // post-connect poll arrives just after the sender gave up on it and re-polled. It is
+    // accepted while the re-poll is on the air, and the burst it should start is refused
+    // because the transmitter is busy. Before the fix nothing tried again, and the *next*
+    // acknowledgement was ignored because nothing was being waited for: a dead session
+    // with data queued. `on_tx_done` now tries.
+    let t = timing(false);
+    let (mut a, mut b) = pair(&t, &LinkConfig::default());
+
+    // the handshake, over a perfect wire
+    a.connect("KK4XYZ").expect("idle");
+    let request = transmitted(&mut a);
+    assert_eq!(request.len(), 1);
+    b.on_frame(&Wire::carry(&request[0], 0.0, &t), t.data_frame_s);
+    let accept = transmitted(&mut b);
+    assert_eq!(accept.len(), 1);
+    let now = 2.0 * t.data_frame_s;
+    a.on_tx_done(now);
+    a.on_frame(&Wire::carry(&accept[0], t.data_frame_s, &t), now);
+    assert!(a.connected());
+    let poll = transmitted(&mut a);
+    assert_eq!(
+        poll.len(),
+        1,
+        "the sender confirms the handshake with a poll"
+    );
+    a.on_tx_done(now + t.control_frame_s);
+
+    // data arrives from the host, as it does the moment a host sees "connected"
+    a.send(b"queued while the poll was unanswered");
+    assert!(
+        transmitted(&mut a).is_empty(),
+        "nothing goes out while a reply is awaited"
+    );
+
+    // the reply is late: the sender gives up and polls again
+    let mut late = now + t.control_frame_s;
+    let repoll = loop {
+        late += 0.1;
+        a.tick(late);
+        let frames = transmitted(&mut a);
+        if !frames.is_empty() {
+            break frames;
+        }
+        assert!(late < now + 10.0, "the sender never re-polled");
+    };
+    assert_eq!(repoll[0].container, aether_link::Container::Control);
+
+    // ...and while the re-poll is on the air, the first poll's acknowledgement lands
+    b.on_frame(&Wire::carry(&poll[0], now, &t), late);
+    // the receiver answers after its turnaround, on its own clock
+    b.tick(late + t.control_frame_s + t.turnaround_s + 0.1);
+    let acks = transmitted(&mut b);
+    assert_eq!(acks.len(), 1, "the receiver acknowledges the poll");
+    a.on_frame(&Wire::carry(&acks[0], late, &t), late + 0.05);
+    assert!(
+        transmitted(&mut a).is_empty(),
+        "a burst cannot start while the re-poll is on the air"
+    );
+
+    // the re-poll finishes: the queued data has to go out now, not never
+    a.on_tx_done(late + t.control_frame_s);
+    let burst = transmitted(&mut a);
+    assert!(
+        burst
+            .iter()
+            .any(|f| f.container == aether_link::Container::Data),
+        "the queued data never went out: {burst:?}"
     );
 }

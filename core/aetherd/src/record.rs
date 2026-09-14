@@ -45,6 +45,27 @@ pub struct FrameRecord {
     pub decoded: bool,
     /// Payload length when it did.
     pub bytes: usize,
+    /// For a control frame that decoded, what it said — kind, flags, base, bitmap, mode.
+    /// Protocol, not traffic: a data frame's payload is never recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+}
+
+/// A decoded control frame in a few words, for the sidecar and the replay listing.
+#[must_use]
+pub fn describe_control(payload: &[u8]) -> Option<String> {
+    let frame = aether_link::frames::ControlFrame::decode(payload).ok()?;
+    Some(format!(
+        "{:?} session {} flags {:#04x} base {} bitmap {:#06x} mode {} snr {} #{}",
+        frame.kind,
+        frame.session,
+        frame.flags,
+        frame.base,
+        frame.bitmap,
+        frame.recommended_mode,
+        frame.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
+        frame.counter
+    ))
 }
 
 /// A recording in progress.
@@ -386,6 +407,7 @@ mod tests {
             cfo_hz: -3.0,
             decoded: true,
             bytes: 144,
+            control: None,
         });
         recording.event(12.0, "connected", "W4XYZ", "Connected");
         let summary = recording

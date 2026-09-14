@@ -20,6 +20,7 @@ pub mod log;
 pub mod ptt;
 pub mod record;
 pub mod replay;
+pub mod sim;
 pub mod station;
 
 pub use audio::{AudioConfig, AudioError, AudioIo, Loopback, SoundCard};
