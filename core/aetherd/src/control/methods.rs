@@ -98,6 +98,13 @@ pub struct DaemonState {
     pub audio: String,
     /// Captured samples dropped because the modem fell behind, since the start.
     pub dropped_audio: u64,
+    /// What the machine reports as audio devices and serial ports, for the bundle.
+    ///
+    /// A function rather than a call, because enumerating devices goes through the
+    /// platform's audio API, and on a machine with no audio service at all — a CI runner —
+    /// that has been seen to crash the process rather than return an error. The tests
+    /// substitute a list; the daemon uses [`device_inventory`].
+    pub devices: fn() -> Value,
 }
 
 impl DaemonState {
@@ -115,7 +122,23 @@ impl DaemonState {
             started: std::time::SystemTime::now(),
             audio: String::new(),
             dropped_audio: 0,
+            devices: device_inventory,
         }
+    }
+}
+
+/// The audio devices and serial ports this machine reports, or why it could not say.
+#[must_use]
+pub fn device_inventory() -> Value {
+    match crate::audio::list_devices() {
+        Ok(devices) => json!({
+            "devices": devices
+                .iter()
+                .map(|d| json!({"name": d.name, "input": d.input, "output": d.output}))
+                .collect::<Vec<_>>(),
+            "serial_ports": crate::ptt::list_serial_ports(),
+        }),
+        Err(error) => json!({ "error": error.to_string() }),
     }
 }
 
@@ -202,16 +225,11 @@ fn diagnostics<P: Ptt>(
     daemon: Option<&mut DaemonState>,
     id: Option<String>,
 ) -> Response {
-    let devices = match crate::audio::list_devices() {
-        Ok(devices) => json!({
-            "devices": devices
-                .iter()
-                .map(|d| json!({"name": d.name, "input": d.input, "output": d.output}))
-                .collect::<Vec<_>>(),
-            "serial_ports": crate::ptt::list_serial_ports(),
-        }),
-        Err(error) => json!({ "error": error.to_string() }),
-    };
+    // without the daemon's state there is nobody to ask about devices, and a bundle from a
+    // bare station is a test fixture rather than a bug report
+    let devices = daemon
+        .as_ref()
+        .map_or(Value::Null, |daemon| (daemon.devices)());
     let mut bundle = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "platform": {
@@ -718,11 +736,20 @@ mod tests {
     fn daemon() -> DaemonState {
         let mut config = crate::config::Config::parse(crate::config::EXAMPLE).expect("example");
         config.control.token = Some("hunter2".to_owned());
-        DaemonState::new(
+        let mut daemon = DaemonState::new(
             config,
             std::path::PathBuf::from("station.toml"),
             crate::log::Log::memory(50),
-        )
+        );
+        // not the machine's own: enumerating audio devices on a machine with no audio
+        // service crashes inside the platform API, and a test must not depend on a sound card
+        daemon.devices = || {
+            json!({
+                "devices": [{"name": "USB Audio CODEC", "input": true, "output": true}],
+                "serial_ports": ["COM3"],
+            })
+        };
+        daemon
     }
 
     #[test]
@@ -779,6 +806,7 @@ mod tests {
         assert_eq!(bundle["status"]["state"], "idle");
         assert_eq!(bundle["config"]["callsign"], "N0CALL");
         assert_eq!(bundle["audio"]["dropped_samples"], 7);
+        assert_eq!(bundle["devices"]["serial_ports"][0], "COM3");
         assert_eq!(bundle["log"][0]["event"], "watchdog");
         assert_eq!(bundle["log"][0]["level"], "warn");
         assert!(
