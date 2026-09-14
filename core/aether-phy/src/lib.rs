@@ -10,21 +10,29 @@
 //! stated numerical tolerance, because no two implementations of the same arithmetic are
 //! required to produce identical doubles.
 //!
+//! # What is here
+//!
+//! Everything from a payload to audio and back: the frame codec, OFDM, the preamble,
+//! acquisition, the receiver, the audio front end at 48 kHz, the impulse blanker, and a
+//! streaming receiver that takes blocks of any size and reports a frame's preamble as soon as
+//! acquisition finds it.
+//!
 //! # Not yet ported
 //!
 //! The transmitter here does not apply the ADR-0004 peak reduction the model applies by
-//! default, so it is compared against the model with that switched off. Everything else of
-//! the physical layer is here: a frame can be built, found in a stream, demodulated and
-//! decoded entirely within this crate.
+//! default, so it is compared against the model with that switched off.
 
+pub mod blanker;
 pub mod codec;
 pub mod constellation;
 pub mod fir;
+pub mod modem;
 pub mod modes;
 pub mod ofdm;
 pub mod passband;
 pub mod preamble;
 pub mod rx;
+pub mod stream;
 pub mod sync;
 pub mod tx;
 pub mod waveform;
@@ -35,9 +43,12 @@ mod tables {
     include!(concat!(env!("OUT_DIR"), "/preamble_tables.rs"));
 }
 
+pub use blanker::{BlankMode, NoiseBlanker};
 pub use codec::{FrameCodec, coprime_stride};
 pub use constellation::{Complex, Constellation, NoiseVar};
 pub use fir::{Fir, Sample};
+pub use modem::{DecodedFrame, Modem, ModemError};
 pub use modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, PREAMBLE_SYMBOLS, SHORT};
 pub use passband::{AudioToBaseband, BasebandToAudio};
+pub use stream::{PendingFrame, StreamingReceiver};
 pub use waveform::{Bandwidth, Modulation, WIDE_2300, WaveformParams};

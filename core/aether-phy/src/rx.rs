@@ -145,6 +145,14 @@ impl FrameReceiver {
         }
     }
 
+    /// How far into a symbol period the transform window is taken.
+    ///
+    /// A streaming caller needs this to know when a frame's last symbol is really complete.
+    #[must_use]
+    pub fn fft_offset(&self) -> usize {
+        self.demodulator.fft_offset()
+    }
+
     /// Where a frame starts and ends in the sample stream.
     #[must_use]
     pub fn frame_span(&self, sync: &FrameSync) -> (usize, usize) {
