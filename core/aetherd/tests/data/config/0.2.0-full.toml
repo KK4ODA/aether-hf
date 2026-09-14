@@ -1,0 +1,38 @@
+# A fully populated file as 0.2.0 wrote it after the setup wizard and a few edits by hand.
+schema_version = 1
+callsign = "KK4ODA"
+
+[audio]
+input = "FTDX10 (USB AUDIO  CODEC)"
+output = "FTDX10 (USB AUDIO  CODEC)"
+sample_rate = 48000
+tx_level = 0.2
+
+[ptt]
+kind = "serial"
+port = "COM7"
+line = "rts"
+
+[radio]
+max_key_s = 25.0
+wait_for_clear = true
+busy_threshold_db = 8.0
+max_mode = 11
+compress = true
+cw_id = true
+cw_id_wpm = 18.0
+cw_id_interval_s = 540.0
+
+[control]
+enabled = true
+bind = "127.0.0.1:8515"
+ui_dir = "C:/Program Files/Aether HF/ui"
+
+[host]
+enabled = true
+bind = "127.0.0.1:8300"
+
+[log]
+format = "json"
+file = "aetherd.log"
+keep = 300

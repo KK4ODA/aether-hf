@@ -272,6 +272,9 @@ impl Default for HostSection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Which shape of file this is. See [`SCHEMA_VERSION`].
+    #[serde(default = "first_schema")]
+    pub schema_version: u32,
     /// This station's callsign. There is no default; nobody else can supply it.
     pub callsign: String,
     /// Sound card.
@@ -292,6 +295,49 @@ pub struct Config {
     /// The log.
     #[serde(default)]
     pub log: LogSection,
+}
+
+/// The shape of configuration file this version writes.
+///
+/// A file names its shape so a later version can bring it forward. Adding a key with a
+/// default is not a new shape — `serde(default)` handles it. Renaming or moving one is, and
+/// gets a migration in [`MIGRATIONS`]: a function from the file as one version wrote it to
+/// the file as the next expects it, applied in order on the way in. The operator's file is
+/// backed up before it is rewritten, and a file from a *newer* version is refused rather
+/// than read with its unknown keys dropped — a downgrade that silently loses settings is
+/// worse than one that says so.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// The version a file is when it does not say: the first one shipped.
+const fn first_schema() -> u32 {
+    1
+}
+
+/// One step of bringing a file forward, from version `n` to `n + 1`.
+pub type Migration = fn(&mut toml::Table);
+
+/// The steps from the first schema to the current one. `MIGRATIONS[i]` takes a file at
+/// version `i + 1` to version `i + 2`; the table is empty while there is only one schema.
+pub const MIGRATIONS: &[Migration] = &[];
+
+/// Bring a parsed file forward through `migrations`, starting at `from`.
+///
+/// Returns the version it ended at. Separated from the file handling so the machinery can
+/// be tested with a made-up chain of steps while the real chain is still empty.
+fn migrate_with(table: &mut toml::Table, from: u32, migrations: &[Migration]) -> u32 {
+    let mut version = from;
+    while let Some(step) = usize::try_from(version.saturating_sub(1))
+        .ok()
+        .and_then(|index| migrations.get(index))
+    {
+        step(table);
+        version += 1;
+        table.insert(
+            "schema_version".into(),
+            toml::Value::Integer(i64::from(version)),
+        );
+    }
+    version
 }
 
 /// Why a configuration was refused.
@@ -330,20 +376,58 @@ impl Config {
     /// If the text is not valid TOML, carries a key this version does not define, or holds a
     /// value the modem cannot work with.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let config: Self =
-            toml::from_str(text).map_err(|e| ConfigError::Parse(e.message().to_owned()))?;
-        config.validate()?;
-        Ok(config)
+        Self::parse_migrating(text).map(|(config, _)| config)
     }
 
-    /// Read a configuration file.
+    /// Parse, bringing an older file forward; also says which version the text was.
+    fn parse_migrating(text: &str) -> Result<(Self, u32), ConfigError> {
+        let mut table: toml::Table =
+            toml::from_str(text).map_err(|e| ConfigError::Parse(e.message().to_owned()))?;
+        let written_at = match table.get("schema_version") {
+            None => first_schema(),
+            Some(toml::Value::Integer(n)) => u32::try_from(*n).unwrap_or(u32::MAX),
+            Some(other) => {
+                return Err(ConfigError::Parse(format!(
+                    "schema_version must be a whole number, not {other}"
+                )));
+            }
+        };
+        if written_at > SCHEMA_VERSION {
+            return Err(ConfigError::Parse(format!(
+                "this file was written by a newer aetherd (schema {written_at}; this one \
+                 reads up to {SCHEMA_VERSION}). Install that version, or start again from \
+                 `aetherd --example-config`"
+            )));
+        }
+        let reached = migrate_with(&mut table, written_at, MIGRATIONS);
+        debug_assert_eq!(reached, SCHEMA_VERSION, "the migration chain is incomplete");
+        let config: Self = toml::Value::Table(table)
+            .try_into()
+            .map_err(|e: toml::de::Error| ConfigError::Parse(e.message().to_owned()))?;
+        config.validate()?;
+        Ok((config, written_at))
+    }
+
+    /// Read a configuration file, bringing it forward if an older version wrote it.
+    ///
+    /// An older file is backed up beside itself as `<name>.bak-v<n>` and rewritten at the
+    /// current schema, so the next start reads it without a migration and the operator can
+    /// see what changed — and go back, with the backup and the previous version, if they
+    /// have to.
     ///
     /// # Errors
     /// If the file cannot be read, or its contents are refused.
     pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
-        Self::parse(&text)
+        let (config, written_at) = Self::parse_migrating(&text)?;
+        if written_at < SCHEMA_VERSION {
+            let backup = backup_path(path, written_at);
+            std::fs::write(&backup, &text)
+                .map_err(|e| ConfigError::Read(format!("{}: {e}", backup.display())))?;
+            config.save(path)?;
+        }
+        Ok(config)
     }
 
     /// Check the values against what the modem can actually do.
@@ -549,11 +633,23 @@ impl Config {
     }
 }
 
+/// Where the copy of an older file goes before it is rewritten.
+fn backup_path(path: &std::path::Path, written_at: u32) -> std::path::PathBuf {
+    let name = path.file_name().map_or_else(
+        || "station.toml".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    path.with_file_name(format!("{name}.bak-v{written_at}"))
+}
+
 /// An example file, for `aetherd --example-config`.
 pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 #
 # Only `callsign` has no default. A file with nothing else in it starts a receive-only
 # station on the default sound card, which is a good way to listen before transmitting.
+
+# The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
+schema_version = 1
 
 callsign = "N0CALL"
 
@@ -822,6 +918,137 @@ mod tests {
         assert!(
             !path.with_extension("toml.new").exists(),
             "the temporary file was left behind"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_does_not_say_its_schema_is_the_first_one() {
+        let config = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        assert_eq!(config.schema_version, 1);
+        // and it is written out saying so, so the next version can tell
+        let text = toml::to_string_pretty(&config).expect("serialise");
+        assert!(text.starts_with("schema_version = 1\n"), "{text}");
+    }
+
+    #[test]
+    fn a_file_from_a_newer_version_is_refused_not_misread() {
+        let error = Config::parse("schema_version = 99\ncallsign = \"W4ODA\"").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("newer aetherd"), "{message}");
+        assert!(message.contains("schema 99"), "{message}");
+    }
+
+    #[test]
+    fn migrations_run_in_order_from_where_the_file_is() {
+        // a made-up chain: v1 -> v2 renames a key, v2 -> v3 moves it into a table
+        fn one_to_two(table: &mut toml::Table) {
+            if let Some(value) = table.remove("call") {
+                table.insert("callsign".into(), value);
+            }
+        }
+        fn two_to_three(table: &mut toml::Table) {
+            if let Some(level) = table.remove("tx_level") {
+                let mut audio = toml::Table::new();
+                audio.insert("tx_level".into(), level);
+                table.insert("audio".into(), toml::Value::Table(audio));
+            }
+        }
+        let chain: &[Migration] = &[one_to_two, two_to_three];
+
+        let mut table: toml::Table =
+            toml::from_str("call = \"W4ODA\"\ntx_level = 0.3\n").expect("toml");
+        assert_eq!(migrate_with(&mut table, 1, chain), 3);
+        assert_eq!(table["schema_version"], toml::Value::Integer(3));
+        let config: Config = toml::Value::Table(table)
+            .try_into()
+            .expect("a current file");
+        assert_eq!(config.callsign, "W4ODA");
+        assert!((config.audio.tx_level - 0.3).abs() < 1e-9);
+
+        // a file already at v2 only takes the second step
+        let mut table: toml::Table =
+            toml::from_str("schema_version = 2\ncallsign = \"W4ODA\"\ntx_level = 0.3\n")
+                .expect("toml");
+        assert_eq!(migrate_with(&mut table, 2, chain), 3);
+        assert!(table.get("tx_level").is_none());
+
+        // and the real chain, applied to a current file, changes nothing
+        let mut table: toml::Table = toml::from_str(EXAMPLE).expect("toml");
+        let before = table.clone();
+        assert_eq!(migrate_with(&mut table, 1, MIGRATIONS), SCHEMA_VERSION);
+        assert_eq!(table, before);
+    }
+
+    #[test]
+    fn every_file_a_released_version_wrote_still_loads_with_nothing_lost() {
+        fn leaves(prefix: &str, table: &toml::Table, out: &mut Vec<(String, toml::Value)>) {
+            for (key, value) in table {
+                let name = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                match value {
+                    toml::Value::Table(inner) => leaves(&name, inner, out),
+                    other => out.push((name, other.clone())),
+                }
+            }
+        }
+        // `tests/data/config/` holds a file as each released version wrote it. A release
+        // adds its own; this test is the promise that an upgrade keeps the operator's
+        // settings. The check is that loading and saving keeps every key and value the
+        // file had — a migration may move a key, but it may not drop one.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/config");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).expect("fixture directory") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|e| e != "toml") {
+                continue;
+            }
+            seen += 1;
+            let text = std::fs::read_to_string(&path).expect("read fixture");
+            let config = Config::parse(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let written: toml::Table = toml::from_str(&text).expect("fixture toml");
+            let saved: toml::Table =
+                toml::from_str(&toml::to_string_pretty(&config).expect("write"))
+                    .expect("saved toml");
+            // every leaf the operator wrote is still there, with the same value, unless a
+            // migration moved it — and the real chain has no moves yet
+            let mut wrote = Vec::new();
+            leaves("", &written, &mut wrote);
+            let mut kept = Vec::new();
+            leaves("", &saved, &mut kept);
+            for (name, value) in &wrote {
+                let found = kept.iter().find(|(n, _)| n == name);
+                assert!(
+                    found.is_some_and(|(_, v)| v == value),
+                    "{}: {name} = {value} was lost or changed on load",
+                    path.display()
+                );
+            }
+        }
+        assert!(seen > 0, "no fixtures in {}", dir.display());
+    }
+
+    #[test]
+    fn an_older_file_is_backed_up_and_rewritten_when_loaded() {
+        // with one schema there is no older file to load; what can be checked is that a
+        // current file is loaded without being touched, and where a backup would go
+        let dir = std::env::temp_dir().join(format!("aether-mig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("station.toml");
+        std::fs::write(&path, "callsign = \"W4ODA\"\n").expect("write");
+        let config = Config::load(&path).expect("load");
+        assert_eq!(config.callsign, "W4ODA");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "callsign = \"W4ODA\"\n",
+            "a current file must not be rewritten on load"
+        );
+        assert_eq!(
+            backup_path(&path, 1).file_name().and_then(|n| n.to_str()),
+            Some("station.toml.bak-v1")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,0 +1,33 @@
+# A headless gateway on Linux, keyed through rigctld, as 0.2.0 wrote it.
+schema_version = 1
+callsign = "KK4ODA-10"
+
+[audio]
+input = "plughw:CARD=CODEC,DEV=0"
+output = "plughw:CARD=CODEC,DEV=0"
+sample_rate = 48000
+tx_level = 0.25
+
+[ptt]
+kind = "rigctld"
+address = "127.0.0.1:4532"
+
+[radio]
+max_key_s = 30.0
+wait_for_clear = true
+busy_threshold_db = 6.0
+max_mode = 13
+compress = true
+cw_id = false
+cw_id_wpm = 20.0
+cw_id_interval_s = 600.0
+
+[control]
+enabled = true
+bind = "0.0.0.0:8515"
+token = "not-a-real-token-just-a-fixture"
+ui_dir = "/usr/share/aetherd/ui"
+
+[host]
+enabled = true
+bind = "127.0.0.1:8300"

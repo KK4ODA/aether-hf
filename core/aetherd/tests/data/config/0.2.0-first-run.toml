@@ -1,0 +1,9 @@
+# What the desktop shell writes on a first run of 0.2.0: a placeholder callsign and no keying.
+callsign = "N0CALL"
+
+[ptt]
+kind = "none"
+
+[radio]
+max_key_s = 30.0
+wait_for_clear = true
