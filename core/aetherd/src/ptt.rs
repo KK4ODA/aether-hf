@@ -62,6 +62,20 @@ pub trait Ptt: Send {
     fn describe(&self) -> String;
 }
 
+impl<P: Ptt + ?Sized> Ptt for Box<P> {
+    fn key(&mut self) -> Result<(), PttError> {
+        (**self).key()
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        (**self).unkey()
+    }
+
+    fn describe(&self) -> String {
+        (**self).describe()
+    }
+}
+
 /// No keying at all: for VOX, for a receive-only station, and for tests.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullPtt {
@@ -430,4 +444,120 @@ mod tests {
     fn a_watchdog_that_can_never_fire_is_refused() {
         let _ = PttWatchdog::new(NullPtt::default(), 0.0);
     }
+}
+
+/// Which control line on a serial port keys the radio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SerialLine {
+    /// Request To Send. What most home-made and commercial interfaces use.
+    #[default]
+    Rts,
+    /// Data Terminal Ready. The other common choice.
+    Dtr,
+    /// Both together, for interfaces that wire them in parallel.
+    Both,
+}
+
+/// Keying through a serial port's RTS or DTR line.
+///
+/// This is the oldest and most common interface there is: a transistor across one of the
+/// port's handshake lines, closing the radio's PTT. The port is held open for the life of the
+/// session rather than opened per transmission, because opening a serial port asserts its
+/// control lines on some drivers — which would key the radio.
+pub struct SerialPtt {
+    path: String,
+    line: SerialLine,
+    port: Box<dyn serialport::SerialPort>,
+}
+
+impl std::fmt::Debug for SerialPtt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SerialPtt")
+            .field("path", &self.path)
+            .field("line", &self.line)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SerialPtt {
+    /// Open a port and put its keying line into receive.
+    ///
+    /// # Errors
+    /// If the port cannot be opened, or its control lines cannot be set — which on most
+    /// systems means something else already has the port.
+    pub fn open(path: &str, line: SerialLine) -> Result<Self, PttError> {
+        // the baud rate is irrelevant: nothing is ever written, only the control lines move
+        let port = serialport::new(path, 9600)
+            .timeout(std::time::Duration::from_millis(100))
+            .open()
+            .map_err(|e| PttError::Backend(format!("open {path}: {e}")))?;
+        let mut ptt = Self {
+            path: path.to_owned(),
+            line,
+            port,
+        };
+        // leave it in receive, whatever opening the port did to the lines
+        ptt.set(false)?;
+        Ok(ptt)
+    }
+
+    fn set(&mut self, keyed: bool) -> Result<(), PttError> {
+        let mut apply = |which: SerialLine| -> Result<(), PttError> {
+            let result = match which {
+                SerialLine::Rts => self.port.write_request_to_send(keyed),
+                SerialLine::Dtr => self.port.write_data_terminal_ready(keyed),
+                SerialLine::Both => unreachable!("handled by the caller"),
+            };
+            result.map_err(|e| PttError::Backend(format!("{}: {e}", self.path)))
+        };
+        match self.line {
+            SerialLine::Both => {
+                let rts = apply(SerialLine::Rts);
+                let dtr = apply(SerialLine::Dtr);
+                rts.and(dtr)
+            }
+            other => apply(other),
+        }
+    }
+}
+
+impl Ptt for SerialPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.set(true)
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.set(false)
+    }
+
+    fn describe(&self) -> String {
+        let line = match self.line {
+            SerialLine::Rts => "RTS",
+            SerialLine::Dtr => "DTR",
+            SerialLine::Both => "RTS and DTR",
+        };
+        format!("{line} on {}", self.path)
+    }
+}
+
+/// Serial ports the system offers, for an operator choosing one.
+#[must_use]
+pub fn list_serial_ports() -> Vec<String> {
+    serialport::available_ports()
+        .map(|ports| ports.into_iter().map(|port| port.port_name).collect())
+        .unwrap_or_default()
+}
+
+/// Check that a callsign is one the protocol can carry.
+///
+/// The link layer packs callsigns six bits per character into seven bytes, so anything
+/// outside `A–Z 0–9 - /` or longer than nine characters cannot go on the air at all. Better
+/// to say so when the configuration is read than when the first connection is attempted.
+///
+/// # Errors
+/// If the callsign is empty, too long, or holds a character the format has no room for.
+pub fn validate_callsign(call: &str) -> Result<(), PttError> {
+    aether_link::frames::pack_callsign(call)
+        .map(|_| ())
+        .map_err(|e| PttError::Backend(format!("callsign {call:?}: {e}")))
 }

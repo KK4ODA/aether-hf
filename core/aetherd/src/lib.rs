@@ -9,10 +9,16 @@
 //! that keep a station lawful and polite are checked in the test suite rather than on the
 //! air.
 
+pub mod audio;
 pub mod busy;
+pub mod config;
 pub mod ptt;
 pub mod station;
 
+pub use audio::{AudioConfig, AudioError, AudioIo, Loopback, SoundCard};
 pub use busy::{BusyConfig, BusyDetector};
-pub use ptt::{NullPtt, Ptt, PttError, PttWatchdog, RigctldPtt, WatchdogState};
+pub use config::{Config, ConfigError, PttConfig};
+pub use ptt::{
+    NullPtt, Ptt, PttError, PttWatchdog, RigctldPtt, SerialLine, SerialPtt, WatchdogState,
+};
 pub use station::{PhyFrame, Station, StationConfig, StationStats, phy_timing};

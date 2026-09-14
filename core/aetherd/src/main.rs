@@ -1,0 +1,273 @@
+//! The Aether HF station daemon.
+//!
+//! Reads a configuration file, opens a sound card and a keying interface, and runs the modem.
+//! What it does not yet have is a control interface — that is P3-4 — so for now it listens,
+//! answers, and can be told to call one station from the command line.
+//!
+//! # The loop
+//!
+//! One thread, driven by audio. Captured samples go into the station, which advances its
+//! clock by exactly the audio it has heard, and playback is topped up to a small backlog so
+//! the sound card never runs dry mid-burst. There is deliberately no wall clock anywhere: a
+//! station that thinks a second has passed while its sound card delivered half a second will
+//! answer bursts into the middle of them.
+
+use std::{path::PathBuf, time::Duration};
+
+use aether_link::LinkConfig;
+use aetherd::{
+    audio::{AudioIo, Loopback, SoundCard, list_devices},
+    config::{Config, EXAMPLE, PttConfig},
+    ptt::{NullPtt, Ptt, PttError, RigctldPtt, SerialPtt, list_serial_ports},
+    station::{Station, StationConfig},
+};
+
+/// How much audio to keep queued for the sound card. Enough to ride out a scheduling hiccup,
+/// short enough that keying and audio stay in step.
+const PLAYBACK_BACKLOG_S: f64 = 0.25;
+/// How long to wait when there is nothing to do. Short enough that a burst is never late by
+/// an audible amount; long enough that an idle station does not spin a core.
+const IDLE_SLEEP: Duration = Duration::from_millis(5);
+
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("aetherd: {message}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+struct Args {
+    config: Option<PathBuf>,
+    call: Option<String>,
+    dry_run: bool,
+}
+
+fn parse_args() -> Result<Option<Args>, String> {
+    let mut args = Args {
+        config: None,
+        call: None,
+        dry_run: false,
+    };
+    let mut argv = std::env::args().skip(1);
+    while let Some(arg) = argv.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(None);
+            }
+            "--version" => {
+                println!("aetherd {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--example-config" => {
+                print!("{EXAMPLE}");
+                return Ok(None);
+            }
+            "--list-devices" => {
+                let devices =
+                    list_devices().map_err(|e| format!("cannot list audio devices: {e}"))?;
+                if devices.is_empty() {
+                    println!("no audio devices");
+                }
+                for device in devices {
+                    let kind = match (device.input, device.output) {
+                        (true, true) => "in/out",
+                        (true, false) => "in",
+                        (false, true) => "out",
+                        (false, false) => "-",
+                    };
+                    println!("{:<8} {}", kind, device.name);
+                }
+                return Ok(None);
+            }
+            "--list-ports" => {
+                let ports = list_serial_ports();
+                if ports.is_empty() {
+                    println!("no serial ports");
+                }
+                for port in ports {
+                    println!("{port}");
+                }
+                return Ok(None);
+            }
+            "--dry-run" => args.dry_run = true,
+            "-c" | "--config" => {
+                args.config = Some(PathBuf::from(argv.next().ok_or("--config needs a path")?));
+            }
+            "--call" => {
+                args.call = Some(argv.next().ok_or("--call needs a callsign")?);
+            }
+            other => return Err(format!("unknown argument {other:?}; try --help")),
+        }
+    }
+    Ok(Some(args))
+}
+
+const USAGE: &str = "\
+aetherd — the Aether HF station daemon
+
+    aetherd --config station.toml [--call W4ODA] [--dry-run]
+
+  -c, --config PATH   the station configuration (required to run)
+      --call CALL     call this station once the modem is up
+      --dry-run       run the modem against an audio loopback, keying nothing
+      --list-devices  print the audio devices this machine offers
+      --list-ports    print the serial ports this machine offers
+      --example-config  print a commented configuration to start from
+      --version       print the version
+  -h, --help          print this
+";
+
+fn run() -> Result<(), String> {
+    let Some(args) = parse_args()? else {
+        return Ok(());
+    };
+    let path = args
+        .config
+        .ok_or("no configuration; try --example-config, then --config <path>")?;
+    let config = Config::load(&path).map_err(|e| e.to_string())?;
+
+    let station_config = StationConfig {
+        callsign: config.callsign.clone(),
+        link: LinkConfig {
+            max_mode: config.radio.max_mode,
+            ..LinkConfig::default()
+        },
+        busy: config.busy_config(),
+        tx_level: config.audio.tx_level,
+        max_key_s: config.radio.max_key_s,
+        wait_for_clear: config.radio.wait_for_clear,
+        ..StationConfig::default()
+    };
+
+    // A dry run keys nothing, whatever the file says. Somebody checking their configuration
+    // must not put a carrier on the air to find out that they had the wrong serial port.
+    let ptt: Box<dyn Ptt> = if args.dry_run {
+        Box::new(NullPtt::default())
+    } else {
+        open_ptt(&config.ptt).map_err(|e| e.to_string())?
+    };
+    let mut station = Station::new(station_config, ptt, seed_from_callsign(&config.callsign));
+    println!(
+        "aetherd: {} keying via {}",
+        config.callsign,
+        station.ptt_description()
+    );
+
+    let mut audio: Box<dyn AudioIo> = if args.dry_run {
+        println!("aetherd: dry run — audio loops back and nothing is keyed");
+        Box::new(Loopback::new())
+    } else {
+        let card = SoundCard::open(&config.audio_config()).map_err(|e| e.to_string())?;
+        println!("aetherd: audio {}", card.description);
+        Box::new(card)
+    };
+
+    if let Some(call) = &args.call {
+        station.connect(call).map_err(str::to_owned)?;
+        println!("aetherd: calling {call}");
+    }
+
+    let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
+    let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
+    let mut reported_drops = 0;
+
+    loop {
+        let captured = audio.capture();
+        let idle = captured.is_empty();
+        if !idle {
+            station.capture(&captured).map_err(|e| e.to_string())?;
+        }
+
+        // top the sound card up, so it never runs dry in the middle of a burst
+        let mut buffer = vec![0.0f32; block];
+        while audio.queued() < backlog {
+            let count = station.playback(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            audio.playback(&buffer[..count]);
+        }
+
+        for event in station.take_events() {
+            println!("aetherd: {event}");
+        }
+        let received = station.take_received();
+        if !received.is_empty() {
+            // no control interface yet, so what arrives goes to standard output
+            print!("{}", String::from_utf8_lossy(&received));
+        }
+
+        let dropped = audio.dropped();
+        if dropped > reported_drops {
+            eprintln!(
+                "aetherd: dropped {} audio samples — the modem is behind",
+                dropped - reported_drops
+            );
+            reported_drops = dropped;
+        }
+
+        if idle {
+            std::thread::sleep(IDLE_SLEEP);
+        }
+    }
+}
+
+fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
+    Ok(match config {
+        PttConfig::None => Box::new(NullPtt::default()),
+        PttConfig::Serial { port, line } => Box::new(SerialPtt::open(port, (*line).into())?),
+        PttConfig::Rigctld { address } => {
+            Box::new(RigctldPtt::new(address, Duration::from_millis(500)))
+        }
+    })
+}
+
+/// A seed for the backoff generator, derived from the callsign.
+///
+/// Two stations calling each other at the same instant have to desynchronise, and a fixed
+/// seed would have them back off by exactly the same amount every time. The callsign is
+/// something the two are guaranteed to differ in.
+fn seed_from_callsign(call: &str) -> u64 {
+    call.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x1000_0000_01b3)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn different_callsigns_get_different_backoff_seeds() {
+        // two stations that back off identically collide on every retry
+        let a = seed_from_callsign("W4ODA");
+        let b = seed_from_callsign("KK4XYZ");
+        assert_ne!(a, b);
+        assert_ne!(seed_from_callsign("W4ODA"), seed_from_callsign("W4ODB"));
+        assert_eq!(
+            a,
+            seed_from_callsign("W4ODA"),
+            "and the same call is stable"
+        );
+    }
+
+    #[test]
+    fn the_usage_text_mentions_every_flag_the_parser_takes() {
+        for flag in [
+            "--config",
+            "--call",
+            "--dry-run",
+            "--list-devices",
+            "--list-ports",
+            "--example-config",
+            "--version",
+            "--help",
+        ] {
+            assert!(USAGE.contains(flag), "usage does not mention {flag}");
+        }
+    }
+}

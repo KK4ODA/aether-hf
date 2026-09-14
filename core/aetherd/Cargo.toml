@@ -15,5 +15,9 @@ workspace = true
 aether-fec = { path = "../aether-fec" }
 aether-link = { path = "../aether-link" }
 aether-phy = { path = "../aether-phy" }
+cpal = "0.15"
+serde = { version = "1.0.229", features = ["derive"] }
+serialport = { version = "4", default-features = false }
+toml = "1.1.6"
 
 [dev-dependencies]
