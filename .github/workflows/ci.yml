@@ -125,13 +125,13 @@ jobs:
           components: rustfmt, clippy
 
       # Tauri on Linux renders through WebKitGTK and needs its development headers, plus the
-      # libraries its tray and icon handling link against. Windows needs nothing: WebView2 is
-      # part of the system.
-      - name: Install WebKitGTK (Linux)
+      # libraries its tray and icon handling link against; the daemon staged as its sidecar
+      # needs ALSA's. Windows needs nothing: WebView2 is part of the system.
+      - name: Install WebKitGTK and ALSA (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
