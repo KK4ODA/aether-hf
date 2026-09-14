@@ -74,6 +74,9 @@ pub fn is_mutating(method: &str) -> bool {
             | "listen"
             | "beacon"
             | "tune"
+            | "record.start"
+            | "record.stop"
+            | "record.notes"
             | "shutdown"
             | "config.set"
             | "ptt.test"
@@ -369,6 +372,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
             }
         }
         "audio.level" => Response::ok(id, level_json(&station.audio_level())),
+        "record.start" | "record.stop" | "record.notes" => record(station, request),
         "disconnect" => {
             // orderly: what is queued is sent and acknowledged first
             station.disconnect();
@@ -488,7 +492,6 @@ fn devices(id: Option<String>) -> Response {
 /// Everything a client needs to render the station's current state.
 fn status<P: Ptt>(station: &Station<P>) -> Value {
     let engine = station.engine();
-    let stats = engine.stats;
     json!({
         "state": match station.state() {
             aether_link::State::Idle => "idle",
@@ -514,20 +517,69 @@ fn status<P: Ptt>(station: &Station<P>) -> Value {
         "queued_bytes": engine.tx_pending_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
         "metrics": metrics(station),
-        "counters": {
-            "frames_sent": stats.frames_sent,
-            "frames_resent": stats.frames_resent,
-            "frames_received": stats.frames_received,
-            "frames_failed": stats.frames_failed,
-            "harq_rescues": stats.harq_rescues,
-            "bytes_delivered": stats.bytes_delivered,
-            "bursts": stats.bursts,
-            "turns": stats.turns,
-            "ack_timeouts": stats.ack_timeouts,
-            "transmissions": station.stats.transmissions,
-            "deferred_for_busy": station.stats.deferred_for_busy,
-            "watchdog_trips": station.stats.watchdog_trips,
+        "recording": station.recording().map(|(path, seconds)| json!({
+            "path": path.display().to_string(),
+            "seconds": seconds,
+        })),
+        "counters": counters(station),
+    })
+}
+
+/// The recording methods: start, stop, and the operator's notes for the next one.
+fn record<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let params = &request.params;
+    match request.method.as_str() {
+        "record.start" => {
+            let name = params.get("name").and_then(Value::as_str);
+            let notes = params.get("notes").and_then(Value::as_str);
+            match station.start_recording(name, notes) {
+                Ok(path) => Response::ok(id, json!({ "path": path.display().to_string() })),
+                Err(reason) => Response::failed(
+                    id,
+                    ApiError::new("refused", format!("Cannot record: {reason}."), true),
+                ),
+            }
+        }
+        "record.stop" => match station.stop_recording() {
+            Some(summary) => Response::ok(id, serde_json::to_value(summary).unwrap_or(Value::Null)),
+            None => Response::failed(
+                id,
+                ApiError::new("refused", "Nothing is being recorded.", false),
+            ),
         },
+        "record.notes" => {
+            // what the operator knows and the modem cannot: band, frequency, distance
+            let notes = params
+                .get("notes")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            station.set_record_notes(notes);
+            Response::ok(id, json!({ "accepted": true }))
+        }
+        _ => unreachable!("dispatched here by name"),
+    }
+}
+
+/// The counters `status` shows, which a recording's sidecar also carries at its end.
+#[must_use]
+pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
+    let stats = station.engine().stats;
+    json!({
+        "frames_sent": stats.frames_sent,
+        "frames_resent": stats.frames_resent,
+        "frames_received": stats.frames_received,
+        "frames_failed": stats.frames_failed,
+        "harq_rescues": stats.harq_rescues,
+        "bytes_delivered": stats.bytes_delivered,
+        "bursts": stats.bursts,
+        "turns": stats.turns,
+        "ack_timeouts": stats.ack_timeouts,
+        "transmissions": station.stats.transmissions,
+        "frames_detected": station.stats.frames_detected,
+        "deferred_for_busy": station.stats.deferred_for_busy,
+        "watchdog_trips": station.stats.watchdog_trips,
+        "beacons_heard": station.stats.beacons_heard,
     })
 }
 
@@ -823,6 +875,48 @@ mod tests {
         assert!(bundle["capabilities"]["modes"].is_array());
         // and it is read-only: a client limited to reading may ask for it
         assert!(!is_mutating("diagnostics"));
+    }
+
+    #[test]
+    fn a_recording_needs_a_directory_and_reports_what_it_held() {
+        let mut station = station();
+        let refused = call(&mut station, "record.start", json!({}));
+        assert!(!refused.ok, "recorded with nowhere to put it");
+        assert_eq!(refused.error.expect("error").code, "refused");
+
+        let dir = std::env::temp_dir().join(format!("aether-recapi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        station.set_recording(Some(dir.clone()), false);
+        let started = call(
+            &mut station,
+            "record.start",
+            json!({"name": "api", "notes": "40 m"}),
+        );
+        assert!(started.ok, "{:?}", started.error);
+        assert!(
+            call(&mut station, "status", json!({}))
+                .result
+                .expect("status")["recording"]
+                .is_object()
+        );
+        // a second start while one runs is refused, not silently a new file
+        assert!(!call(&mut station, "record.start", json!({})).ok);
+        station.capture(&vec![0.0f32; 48_000]).expect("capture");
+        let stopped = call(&mut station, "record.stop", json!({}));
+        assert!(stopped.ok);
+        let summary = stopped.result.expect("summary");
+        assert!((summary["seconds"].as_f64().expect("seconds") - 1.0).abs() < 1e-9);
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("api.json")).expect("sidecar"))
+                .expect("json");
+        assert_eq!(sidecar["session"]["notes"], "40 m");
+        assert_eq!(sidecar["session"]["callsign"], "W4ODA");
+        assert!(sidecar["counters"]["frames_detected"].is_number());
+        assert!(
+            !call(&mut station, "record.stop", json!({})).ok,
+            "stopped twice"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

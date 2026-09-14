@@ -85,6 +85,17 @@
           hearing you.
         </p>
 
+        <div class="row">
+          <button id="btn-record">Record</button>
+          <input id="record-notes" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
+          <span class="sub" id="record-note" role="status" aria-live="polite"></span>
+        </div>
+        <p class="note">
+          A recording is what the radio delivered, at 48 kHz, and a file beside it saying
+          what the modem made of it — every frame, its SNR, whether it decoded. It is what a
+          bug report about the air should carry, and what <code>field/</code> keeps.
+        </p>
+
         <div class="split">
           <div>
             <h2>Send</h2>
@@ -198,6 +209,10 @@
             <option value="nightly">nightlies too</option>
           </select>
           <label class="check"><input id="update-check" type="checkbox" checked /> look for a newer version when the desktop application starts</label>
+        </div>
+        <div class="row">
+          <label for="record-auto">Recording</label>
+          <label class="check"><input id="record-auto" type="checkbox" /> record every session, from connect to disconnect</label>
         </div>
 
         <div class="row">

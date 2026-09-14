@@ -72,6 +72,11 @@ pub struct StationConfig {
     /// is the default: Aether's own frames carry both callsigns, and whether that satisfies
     /// the local rules is something only the operator knows.
     pub cw_id: Option<CwId>,
+    /// Where session recordings go. `None` means recording is refused.
+    pub record_dir: Option<std::path::PathBuf>,
+    /// Record every session on its own: start when one connects, stop when it ends. For a
+    /// gateway, which nobody is watching, and for field validation, which wants all of them.
+    pub record_auto: bool,
     /// Longest a station may transmit without a Morse identifier, in seconds. Ignored when
     /// `cw_id` is `None`. Ten minutes is the common regulatory figure.
     pub cw_id_interval_s: f64,
@@ -94,6 +99,8 @@ impl Default for StationConfig {
             wait_for_clear: true,
             compress: true,
             cw_id: None,
+            record_dir: None,
+            record_auto: false,
             cw_id_interval_s: 600.0,
         }
     }
@@ -316,6 +323,10 @@ pub struct Station<P: Ptt> {
     transmitting: bool,
     pending: VecDeque<Outgoing>,
     meter: LevelMeter,
+    /// The session recording in progress, if one is.
+    recording: Option<crate::record::Recording>,
+    /// Notes the operator gave for the next automatic recording, if any.
+    record_notes: Option<String>,
     delivered: Vec<u8>,
     events: Vec<String>,
     compressor: Compressor,
@@ -372,6 +383,8 @@ impl<P: Ptt> Station<P> {
             transmitting: false,
             pending: VecDeque::new(),
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
+            recording: None,
+            record_notes: None,
             delivered: Vec::new(),
             events: Vec::new(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
@@ -543,6 +556,9 @@ impl<P: Ptt> Station<P> {
         self.playback.clear();
         self.pending.clear();
         self.transmitting = false;
+        // a recording left open would have a header from its last patch; closing it here
+        // is cheap and the sidecar gets the counters
+        self.stop_recording();
         self.ptt.unkey(self.now())
     }
 
@@ -563,6 +579,7 @@ impl<P: Ptt> Station<P> {
         self.config.link.max_mode = config.radio.max_mode;
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
+        self.config.record_auto = config.record.auto;
     }
 
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
@@ -674,6 +691,111 @@ impl<P: Ptt> Station<P> {
         self.meter.reading()
     }
 
+    /// Start recording the channel and what the modem makes of it.
+    ///
+    /// `name` overrides the time-and-callsigns name; `notes` is whatever the operator wants
+    /// the sidecar to say about the band, the frequency, the other station.
+    ///
+    /// # Errors
+    /// If recording is not configured, one is already running, or the file cannot be made.
+    pub fn start_recording(
+        &mut self,
+        name: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<std::path::PathBuf, String> {
+        let Some(dir) = self.config.record_dir.clone() else {
+            return Err("no recording directory is configured ([record] dir)".into());
+        };
+        if self.recording.is_some() {
+            return Err("a recording is already running".into());
+        }
+        let remote = self.engine.remote_call.clone();
+        let remote = (!remote.is_empty()).then_some(remote);
+        let name = name.map_or_else(
+            || crate::record::session_name(&self.config.callsign, remote.as_deref()),
+            str::to_owned,
+        );
+        let meta = serde_json::json!({
+            "callsign": self.config.callsign,
+            "remote": remote,
+            "notes": notes,
+            "max_mode": self.config.link.max_mode,
+            "compress": self.config.compress,
+            "tx_level": self.config.tx_level,
+            "wait_for_clear": self.config.wait_for_clear,
+            "state": format!("{:?}", self.engine.state()),
+        });
+        let recording = crate::record::Recording::start(
+            &dir,
+            &name,
+            u32::try_from(self.config.params.audio_rate).unwrap_or(48_000),
+            self.now(),
+            meta,
+        )
+        .map_err(|e| format!("cannot write to {}: {e}", dir.display()))?;
+        let path = recording.path().to_path_buf();
+        self.recording = Some(recording);
+        self.note("recording", &format!("started {}", path.display()));
+        Ok(path)
+    }
+
+    /// Stop the recording, if one is running, and say what it holds.
+    pub fn stop_recording(&mut self) -> Option<crate::record::Summary> {
+        let recording = self.recording.take()?;
+        let counters = crate::control::methods::counters(self);
+        match recording.finish(&counters) {
+            Ok(summary) => {
+                self.note(
+                    "recording",
+                    &format!(
+                        "stopped {} ({:.0} s, {} frames, {} decoded)",
+                        summary.wav.display(),
+                        summary.seconds,
+                        summary.frames,
+                        summary.decoded
+                    ),
+                );
+                Some(summary)
+            }
+            Err(error) => {
+                self.note("error", &format!("could not finish the recording: {error}"));
+                None
+            }
+        }
+    }
+
+    /// The recording in progress: its file and how long it is.
+    #[must_use]
+    pub fn recording(&self) -> Option<(std::path::PathBuf, f64)> {
+        self.recording
+            .as_ref()
+            .map(|r| (r.path().to_path_buf(), r.seconds()))
+    }
+
+    /// Notes for the next recording that starts on its own, when `record_auto` is on.
+    pub fn set_record_notes(&mut self, notes: Option<String>) {
+        self.record_notes = notes;
+    }
+
+    /// Where recordings go, and whether sessions record themselves.
+    pub fn set_recording(&mut self, dir: Option<std::path::PathBuf>, auto: bool) {
+        self.config.record_dir = dir;
+        self.config.record_auto = auto;
+    }
+
+    /// Report something: to whoever drains the events, and to the recording.
+    fn note(&mut self, event: &str, detail: &str) {
+        self.events.push(format!("{event}:{detail}"));
+        if let Some(recording) = &mut self.recording {
+            recording.event(
+                self.audio_seen as f64 / self.config.params.audio_rate as f64,
+                event,
+                detail,
+                &format!("{:?}", self.engine.state()),
+            );
+        }
+    }
+
     // ── audio ─────────────────────────────────────────────────────────
 
     /// Hand over audio the sound card captured.
@@ -683,6 +805,13 @@ impl<P: Ptt> Station<P> {
     pub fn capture(&mut self, audio: &[f32]) -> Result<(), PttError> {
         self.audio_seen += audio.len();
         self.meter.push(audio);
+        if let Some(recording) = &mut self.recording
+            && let Err(error) = recording.captured(audio)
+        {
+            // a full disk must not stop the modem; the recording is what is lost
+            self.note("error", &format!("recording stopped: {error}"));
+            self.recording = None;
+        }
         let baseband = self.from_audio.process(audio);
         let now = self.now();
 
@@ -711,7 +840,7 @@ impl<P: Ptt> Station<P> {
             self.transmitting = false;
             self.ptt.unkey(now)?;
             self.engine.on_tx_done(now);
-            self.events.push("watchdog:key time exceeded".to_owned());
+            self.note("watchdog", "key time exceeded");
         }
         self.pump();
         Ok(())
@@ -733,6 +862,14 @@ impl<P: Ptt> Station<P> {
         // it would hear one endless burst and never answer.
         if self.playback.is_empty() && self.transmitting {
             self.transmitting = false;
+            if let Some(recording) = &mut self.recording {
+                recording.event(
+                    now,
+                    "ptt",
+                    "released",
+                    &format!("{:?}", self.engine.state()),
+                );
+            }
             self.ptt.unkey(now)?;
             self.engine.on_tx_done(now);
             self.pump();
@@ -749,6 +886,9 @@ impl<P: Ptt> Station<P> {
             self.ptt.key(now)?;
             self.transmitting = true;
             self.stats.transmissions += 1;
+            if let Some(recording) = &mut self.recording {
+                recording.event(now, "ptt", "keyed", &format!("{:?}", self.engine.state()));
+            }
         }
         let count = out.len().min(self.playback.len());
         for slot in out.iter_mut().take(count) {
@@ -772,16 +912,32 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
+            if let Some(recording) = &mut self.recording {
+                recording.frame(crate::record::FrameRecord {
+                    t_s: now,
+                    kind: if decoded.frame.sync.frame_type == FrameType::Control {
+                        "control".into()
+                    } else {
+                        "data".into()
+                    },
+                    mode: decoded.frame.mode,
+                    rv: decoded.frame.rv,
+                    snr_3k_db: decoded.frame.snr_3k_db,
+                    cfo_hz: decoded.frame.cfo_hz,
+                    decoded: decoded.ok(),
+                    bytes: decoded.payload.as_ref().map_or(0, Vec::len),
+                });
+            }
             // A beacon belongs to no session, so it is handled before anything the engine
             // would do with it. It is reported and never answered: a channel where every
             // beacon drew a reply would be unusable.
             if let Some(caller) = beacon_callsign(&decoded) {
                 self.stats.beacons_heard += 1;
                 self.busy.mark_frame(now);
-                self.events.push(format!(
-                    "beacon:{caller} at {:.1} dB",
-                    decoded.frame.snr_3k_db
-                ));
+                self.note(
+                    "beacon",
+                    &format!("{caller} at {:.1} dB", decoded.frame.snr_3k_db),
+                );
                 continue;
             }
             let container = if decoded.frame.sync.frame_type == FrameType::Control {
@@ -826,9 +982,9 @@ impl<P: Ptt> Station<P> {
                 Action::Deliver(bytes) => {
                     let plain = self.decompressor.push(&bytes);
                     if self.decompressor.failed() {
-                        self.events.push(
-                            "error:the peer sent a compressed stream this station cannot read"
-                                .to_owned(),
+                        self.note(
+                            "error",
+                            "the peer sent a compressed stream this station cannot read",
                         );
                     }
                     self.delivered.extend_from_slice(&plain);
@@ -850,7 +1006,19 @@ impl<P: Ptt> Station<P> {
                         self.compressor = Compressor::new(false);
                         self.decompressor = Decompressor::new(false);
                     }
-                    self.events.push(format!("{name}:{detail}"));
+                    self.note(name, &detail);
+                    // a session is the unit of a field recording: one file per session,
+                    // started when it comes up and closed when it ends
+                    if self.config.record_auto {
+                        if name == "connected" {
+                            let notes = self.record_notes.take();
+                            if let Err(error) = self.start_recording(None, notes.as_deref()) {
+                                self.note("error", &format!("could not record: {error}"));
+                            }
+                        } else if name == "disconnected" {
+                            self.stop_recording();
+                        }
+                    }
                 }
             }
         }
@@ -1131,6 +1299,93 @@ mod tests {
             got.len(),
             message.len()
         );
+    }
+
+    #[test]
+    fn a_session_records_itself_when_asked_to() {
+        // the receiving station records: what it heard is the channel, and the sidecar
+        // is what its modem made of it
+        let dir = std::env::temp_dir().join(format!("aether-auto-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let message = b"Recorded for posterity, and for the regression tier.";
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.set_recording(Some(dir.clone()), true);
+        air.b.set_record_notes(Some("bench loopback".to_owned()));
+        air.a.connect("KK4XYZ").expect("idle");
+        air.a.send(message);
+        air.run(90.0, |_, b| {
+            b.engine().stats.bytes_delivered >= message.len()
+        });
+        assert!(
+            air.b.recording().is_some(),
+            "the session did not start a recording"
+        );
+        air.a.disconnect();
+        air.run(60.0, |a, b| !a.connected() && !b.connected());
+        assert!(
+            air.b.recording().is_none(),
+            "the recording did not stop with the session"
+        );
+
+        let sidecar_path = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "json"))
+            .expect("a sidecar");
+        let name = sidecar_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(name.ends_with("_KK4XYZ_W4ODA"), "{name}");
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        assert_eq!(sidecar["session"]["notes"], "bench loopback");
+        assert_eq!(sidecar["session"]["remote"], "W4ODA");
+        let frames = sidecar["frames"].as_array().expect("frames");
+        assert!(
+            frames
+                .iter()
+                .any(|f| f["decoded"] == true && f["kind"] == "data"),
+            "no decoded data frame in the sidecar"
+        );
+        let events: Vec<&str> = sidecar["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .filter_map(|e| e["event"].as_str())
+            .collect();
+        assert!(events.contains(&"ptt"), "{events:?}");
+        assert!(events.contains(&"disconnected"), "{events:?}");
+        assert!(sidecar["counters"]["frames_detected"].as_u64().unwrap() > 0);
+        let wav = crate::record::read_wav(&sidecar_path.with_extension("wav")).expect("wav");
+        assert_eq!(wav.sample_rate, 48_000);
+        let seconds = wav.samples.len() as f64 / 48_000.0;
+        assert!(
+            (seconds - sidecar["audio"]["seconds"].as_f64().unwrap()).abs() < 1e-6,
+            "the sidecar's length disagrees with the file"
+        );
+        assert!(
+            seconds > 5.0,
+            "a session this size lasts longer than {seconds} s"
+        );
+
+        // and the recording replays: the receiver, run over the file with the keyed spans
+        // muted as they were live, decodes every frame the station decoded on the day
+        let expectation = crate::replay::Expectation::from_sidecar(&sidecar_path).unwrap();
+        assert!(!expectation.muted.is_empty(), "the station never keyed?");
+        let found = crate::replay::replay(&sidecar_path.with_extension("wav"), &expectation.muted)
+            .expect("replay");
+        let verdict = crate::replay::compare(&expectation.frames, &found);
+        assert!(
+            verdict.holds(),
+            "recorded {} decoded frames but the replay decoded {} (found {})",
+            verdict.recorded,
+            verdict.replayed,
+            verdict.found
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

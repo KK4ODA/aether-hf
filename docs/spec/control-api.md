@@ -92,7 +92,7 @@ human-facing and may be localised.
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
-| `diagnostics` | — | everything a bug report needs, in one object (§4.5) |
+| `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
 what keeps this document PHY-agnostic.
@@ -127,12 +127,36 @@ These exist because setup, not propagation, is what defeats most new users of an
 (`COMMUNITY-CONCERNS.md`). A modem that can key on demand and say whether its input is
 clipping can lead the operator through setup instead of leaving them to guess.
 
-`ptt.test` and `tune` are transmissions: they are refused during a session, held back by the
-busy detector like any other, and counted against the key-time watchdog. Neither can measure
-whether the *radio* keyed — only the operator can see that — which is why they exist: to let
-the operator look. `audio.level` is always on; it reports `settled: false` and
-"Still listening." until it has heard enough to mean anything, rather than a number that
-does not.
+`ptt.test` keys at once — an SSB transmitter keyed with no audio radiates nothing, and an
+operator watching a PTT light cannot be told "accepted" and kept waiting. `tune` is a
+transmission: refused during a session and while the channel is busy (refused, not deferred,
+because a tone that starts on its own a minute later would surprise the person holding the
+drive control). Neither can measure whether the *radio* keyed — only the operator can see
+that — which is why they exist: to let the operator look. `audio.level` is always on; it
+reports `settled: false` and "Still listening." until it has heard enough to mean anything,
+rather than a number that does not. `devices.list` also reports the sample rates each device
+will run at, so a panel can say "this device is at 44.1 kHz" before the daemon refuses it.
+
+### 4.4 Recording
+
+| Method | Params | Result |
+|---|---|---|
+| `record.start` | `name` (optional), `notes` (optional) | `path` of the WAV being written |
+| `record.stop` | — | `wav`, `sidecar`, `seconds`, `frames` found, `decoded` |
+| `record.notes` | `notes` | accepted; kept for the next recording that starts on its own |
+
+A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
+delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
+(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz`, `decoded`, `bytes`), every event with
+the modem's state, when the transmitter was keyed and released, the counters at the end,
+and the `notes`. Times are seconds from the start of the file by the station's audio clock.
+The sidecar's `format` is `aether-hf-session/1`. `status` carries `recording` — the path and
+length so far — while one runs. With `[record] auto = true` every session records itself
+from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remote>`.
+
+`aetherd --replay <wav>` runs a recording back through the receiver and, with the sidecar
+beside it, fails if fewer frames decode than did on the day; `field/` is where the ones worth
+keeping live, and `core/aetherd/tests/field.rs` replays them all on every test run.
 
 ---
 
@@ -171,7 +195,7 @@ why the modem is not currently transmitting the data it was given.
 
 ---
 
-### 4.4 Changing settings
+### 4.5 Changing settings
 
 `config.set` takes dotted keys — `{"radio.max_mode": 8, "audio.input": "USB Audio CODEC"}` —
 and answers with `changed` and `restart_required`.
@@ -189,7 +213,7 @@ Three rules, because a settings interface that gets any of them wrong is worse t
   just changed are not among them. A setting that silently does nothing until the next restart
   is worse than one that says so.
 
-### 4.5 The diagnostic bundle
+### 4.6 The diagnostic bundle
 
 `diagnostics` answers the questions a maintainer asks first — what version, on what, with
 what settings, doing what — in one object, so a panel can offer a single "copy" button and an
@@ -203,11 +227,11 @@ operator can paste the result into an issue from wherever they are:
 | `status`, `capabilities` | as the methods of the same names return them |
 | `devices` | the audio devices and serial ports the machine reports |
 | `audio` | how the sound card described itself, and how many captured samples the modem has dropped |
-| `log`, `log_forgotten` | the most recent log entries (§4.6), oldest first, and how many older ones have scrolled off |
+| `log`, `log_forgotten` | the most recent log entries (§4.7), oldest first, and how many older ones have scrolled off |
 
 It contains no traffic: a `send` is logged with the *length* of its payload, never the bytes.
 
-### 4.6 The log
+### 4.7 The log
 
 Every line the daemon writes carries a UTC timestamp with milliseconds, a level (`info`,
 `warn`, `error`), an event name a machine can group on, the detail a person reads, and the

@@ -98,7 +98,14 @@ function setLink(up) {
     setLamp("lamp-ptt", false, "Transmitter off");
     setLamp("lamp-busy", false, "Channel clear");
   }
-  for (const id of ["btn-connect", "btn-disconnect", "btn-abort", "btn-beacon", "btn-send"]) {
+  for (const id of [
+    "btn-connect",
+    "btn-disconnect",
+    "btn-abort",
+    "btn-beacon",
+    "btn-send",
+    "btn-record",
+  ]) {
     $(id).disabled = !up;
   }
 }
@@ -173,6 +180,7 @@ async function refreshStatus() {
 
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
+  applyRecording(status.recording ?? null);
   $("btn-disconnect").disabled = status.state === "idle";
   $("btn-abort").disabled = status.state === "idle";
   $("btn-send").disabled = status.state !== "connected";
@@ -427,6 +435,7 @@ async function loadConfig() {
   select($("dev-ptt"), liveConfig.ptt?.port ?? "");
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
+  $("record-auto").checked = liveConfig.record?.auto === true;
   // the file's devices, not the profile's guess, are what the warning should be about
   checkRates();
   writeConfig();
@@ -486,6 +495,7 @@ function formChanges() {
   }
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
+  changes["record.auto"] = $("record-auto").checked;
   return changes;
 }
 
@@ -722,6 +732,12 @@ function wire() {
   $("btn-beacon").addEventListener("click", () =>
     act(() => call("beacon"), "beaconing"),
   );
+  $("btn-record").addEventListener("click", toggleRecording);
+  // notes typed before an automatic recording starts go with it
+  $("record-notes").addEventListener("change", () => {
+    const notes = $("record-notes").value.trim();
+    call("record.notes", { notes: notes || null }).catch(() => {});
+  });
   $("btn-send").addEventListener("click", async () => {
     const text = $("outgoing").value;
     if (!text) return;
@@ -790,6 +806,45 @@ async function copyDiagnostics() {
     }
   } catch (error) {
     note.textContent = error.message;
+  }
+}
+
+let recordingPath = null;
+
+function applyRecording(recording) {
+  recordingPath = recording?.path ?? null;
+  const button = $("btn-record");
+  button.textContent = recordingPath ? "Stop recording" : "Record";
+  button.classList.toggle("danger", Boolean(recordingPath));
+  if (recordingPath) {
+    const name = recordingPath.split(/[\\/]/).pop();
+    $("record-note").textContent = `● ${name} — ${Math.round(recording.seconds)} s`;
+  } else if ($("record-note").textContent.startsWith("●")) {
+    $("record-note").textContent = "";
+  }
+}
+
+async function toggleRecording() {
+  if (recordingPath) {
+    try {
+      const summary = await call("record.stop");
+      $("record-note").textContent =
+        `Saved ${summary.wav.split(/[\\/]/).pop()}: ${Math.round(summary.seconds)} s, ${summary.frames} frames, ${summary.decoded} decoded.`;
+      log(`recording saved: ${summary.wav}`);
+    } catch (error) {
+      $("record-note").textContent = error.message;
+    }
+    applyRecording(null);
+    refreshStatus();
+    return;
+  }
+  const notes = $("record-notes").value.trim();
+  try {
+    const started = await call("record.start", notes ? { notes } : {});
+    log(`recording ${started.path}`);
+    applyRecording({ path: started.path, seconds: 0 });
+  } catch (error) {
+    $("record-note").textContent = error.message;
   }
 }
 

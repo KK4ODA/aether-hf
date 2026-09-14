@@ -267,6 +267,18 @@ impl Default for UpdateSection {
     }
 }
 
+/// Session recordings, for field validation and for finding out what happened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RecordSection {
+    /// Where recordings go. Unset means `recordings/` beside the configuration file.
+    #[serde(default)]
+    pub dir: Option<std::path::PathBuf>,
+    /// Record every session without being asked: from connect to disconnect, one file each.
+    #[serde(default)]
+    pub auto: bool,
+}
+
 /// Where the daemon's log goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -336,6 +348,9 @@ pub struct Config {
     /// Automatic updates of the desktop application.
     #[serde(default)]
     pub update: UpdateSection,
+    /// Session recordings.
+    #[serde(default)]
+    pub record: RecordSection,
 }
 
 /// The shape of configuration file this version writes.
@@ -591,6 +606,7 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.wait_for_clear",
     "radio.max_mode",
     "radio.busy_threshold_db",
+    "record.auto",
 ];
 
 impl Config {
@@ -762,6 +778,14 @@ keep = 500
 # the nightly build. A headless gateway ignores this section.
 channel = "stable"
 check = true
+
+[record]
+# Session recordings: a 48 kHz WAV of what the radio delivered and a JSON file saying what
+# the modem made of it — every frame, its SNR, whether it decoded. `record.start` on the
+# control API (or the panel's Record button) starts one; `auto = true` records every session
+# on its own, which is what a gateway and field validation want.
+# dir = "recordings"                  # default: recordings/ beside this file
+auto = false
 "#;
 
 #[cfg(test)]

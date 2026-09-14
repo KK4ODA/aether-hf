@@ -11,7 +11,10 @@
 //! station that thinks a second has passed while its sound card delivered half a second will
 //! answer bursts into the middle of them.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use aether_link::LinkConfig;
 use aetherd::{
@@ -53,6 +56,8 @@ struct Args {
     config: Option<PathBuf>,
     call: Option<String>,
     dry_run: bool,
+    replay: Option<PathBuf>,
+    expect: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -60,6 +65,8 @@ fn parse_args() -> Result<Option<Args>, String> {
         config: None,
         call: None,
         dry_run: false,
+        replay: None,
+        expect: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -110,6 +117,16 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--call" => {
                 args.call = Some(argv.next().ok_or("--call needs a callsign")?);
             }
+            "--replay" => {
+                args.replay = Some(PathBuf::from(
+                    argv.next().ok_or("--replay needs a WAV file")?,
+                ));
+            }
+            "--expect" => {
+                args.expect = Some(PathBuf::from(
+                    argv.next().ok_or("--expect needs a session sidecar")?,
+                ));
+            }
             other => return Err(format!("unknown argument {other:?}; try --help")),
         }
     }
@@ -120,10 +137,14 @@ const USAGE: &str = "\
 aetherd — the Aether HF station daemon
 
     aetherd --config station.toml [--call W4ODA] [--dry-run]
+    aetherd --replay session.wav [--expect session.json]
 
   -c, --config PATH   the station configuration (required to run)
       --call CALL     call this station once the modem is up
       --dry-run       run the modem against an audio loopback, keying nothing
+      --replay WAV    run a recording through the receiver and list what it finds
+      --expect JSON   the recording's sidecar: mute where the transmitter was keyed,
+                      and fail if fewer frames decode than did on the day
       --list-devices  print the audio devices this machine offers
       --list-ports    print the serial ports this machine offers
       --example-config  print a commented configuration to start from
@@ -135,6 +156,9 @@ fn run() -> Result<(), String> {
     let Some(args) = parse_args()? else {
         return Ok(());
     };
+    if let Some(wav) = &args.replay {
+        return replay(wav, args.expect.as_deref());
+    }
     let path = args
         .config
         .ok_or("no configuration; try --example-config, then --config <path>")?;
@@ -161,7 +185,7 @@ fn run() -> Result<(), String> {
         open_ptt(&config.ptt).map_err(|e| e.to_string())?
     };
     let mut station = Station::new(
-        station_config(&config),
+        station_config(&config, &daemon.path),
         ptt,
         seed_from_callsign(&config.callsign),
     );
@@ -228,6 +252,45 @@ fn run() -> Result<(), String> {
     )
 }
 
+/// `--replay`: the receiver over a recording, held to its sidecar if one is given.
+fn replay(wav: &Path, expect: Option<&Path>) -> Result<(), String> {
+    use aetherd::replay::{Expectation, compare, describe};
+    // the sidecar beside the WAV is the expectation unless told otherwise
+    let beside = wav.with_extension("json");
+    let expectation = match expect {
+        Some(path) => Some(Expectation::from_sidecar(path)?),
+        None if beside.is_file() => Some(Expectation::from_sidecar(&beside)?),
+        None => None,
+    };
+    let muted = expectation.as_ref().map_or(&[][..], |e| e.muted.as_slice());
+    let found = aetherd::replay::replay(wav, muted)?;
+    for frame in &found {
+        println!("{}", describe(frame));
+    }
+    let Some(expectation) = expectation else {
+        println!(
+            "{} frames found, {} decoded (no sidecar to compare with)",
+            found.len(),
+            found.iter().filter(|f| f.decoded).count()
+        );
+        return Ok(());
+    };
+    let verdict = compare(&expectation.frames, &found);
+    println!(
+        "recorded {} decoded frames; replay found {} and decoded {}",
+        verdict.recorded, verdict.found, verdict.replayed
+    );
+    if verdict.holds() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the replay decoded {} frames where the recording decoded {}: the receiver \
+             has lost something it once had",
+            verdict.replayed, verdict.recorded
+        ))
+    }
+}
+
 /// The log, on standard output and — if asked — in a file beside the configuration.
 fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
     let mut log = Log::to_stdout(config.log.format, config.log.keep);
@@ -255,8 +318,20 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
 }
 
 /// What the station is told from the configuration file.
-fn station_config(config: &Config) -> StationConfig {
+fn station_config(config: &Config, config_path: &std::path::Path) -> StationConfig {
+    // recordings live beside the configuration unless told otherwise, and a relative
+    // directory is relative to it — the one place the operator already knows
+    let beside = config_path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let record_dir = match &config.record.dir {
+        Some(dir) if dir.is_absolute() => dir.clone(),
+        Some(dir) => beside.join(dir),
+        None => beside.join("recordings"),
+    };
     StationConfig {
+        record_dir: Some(record_dir),
+        record_auto: config.record.auto,
         callsign: config.callsign.clone(),
         link: LinkConfig {
             max_mode: config.radio.max_mode,

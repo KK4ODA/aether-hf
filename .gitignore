@@ -17,6 +17,7 @@ node_modules/
 # Audio captures and benchmark scratch output (committed golden vectors live in vectors/)
 *.wav
 !vectors/*.wav
+!field/sessions/*.wav
 *.raw
 bench-out/
 

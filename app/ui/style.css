@@ -524,6 +524,15 @@ select {
   flex: 1 1 240px;
 }
 
+/* prose, not a callsign: the notes that go into a recording */
+input#record-notes {
+  font-family: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  width: auto;
+  flex: 1 1 280px;
+}
+
 textarea {
   width: 100%;
   resize: vertical;
