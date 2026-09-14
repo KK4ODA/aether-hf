@@ -1,0 +1,96 @@
+# Field testing
+
+How a session on the air becomes a number the project can use. Phase 6 of the roadmap ends
+when there are twenty logged sessions across three channel classes and the simulator's
+throughput prediction is within 20 % of what the air delivered; every session that reaches
+`field/sessions/` is also a test the receiver has to keep passing.
+
+---
+
+## 1. Before the first session
+
+**Bench first.** Two daemons on one machine over the simulated channel, at the SNR you expect
+on the air, with the same host software you will use in the field. If it does not work on
+the bench it will not work on the air, and the bench is where the log is easy to read.
+
+```toml
+# station a                          # station b
+[sim]                                [sim]
+listen = "127.0.0.1:8600"            connect = "127.0.0.1:8600"
+snr_db = 10.0                        snr_db = 10.0
+```
+
+Both daemons key nothing with `[sim]` set. `core/aetherd/tests/two_daemons.rs` is the same
+thing as a test; `tools/compare_air.py` reads the recording it makes like any other.
+
+**Then the audio cable.** Two sound cards (or two machines) joined by a cable, no radio:
+this is the first place the real audio path — the sound cards' buffers, the daemon's
+playback backlog, the receiver's own latency — meets the protocol's timers. The engine
+knows the daemon's own latency (`PhyTiming.tx_latency_s`); the cable proves it.
+
+**Set the level.** Setup → step 3 (receive) and step 4 (tune, against the rig's ALC), on
+both stations. An overdriven card is the most common reason a mode "does not work".
+
+## 2. Recording
+
+Turn it on once and forget it:
+
+```toml
+[record]
+auto = true
+```
+
+Every session then records itself from connect to disconnect — a 48 kHz WAV of what the
+radio delivered and a JSON sidecar of what the modem made of it — under `recordings/` beside
+the configuration. Or press **Record** on the Session tab for a listening session with no
+peer. Either way, **write the notes**: the band, the frequency, the other station, the
+distance, the time of day, what the S-meter said. `record.notes` on the API, the notes field
+beside the Record button, or `record.start {"notes": ...}`. The modem can measure SNR; it
+cannot know it was 40 m at dusk over 900 km.
+
+A minute of audio is 5.8 MB. Sessions of a few minutes are the useful size.
+
+## 3. What a session should be
+
+| Step | Who | What to send |
+|---|---|---|
+| connect | the caller | — |
+| transfer | the caller, then the other way if there is time | at least 4 kB of *incompressible* data — a small photo, a `.zip` — so the link is measured and not the compressor; a text message is fine as a first check but says little about throughput |
+| disconnect | the caller | — |
+
+Both stations record. The receiving side's recording is the one the tools want (the
+frames it heard are the channel); keep both anyway.
+
+## 4. Channel class
+
+The simulator's baselines are for four classes. Write down which one the air was, from what
+you saw, not from what you hoped:
+
+| Class | What it means | How to tell |
+|---|---|---|
+| `awgn` | no fading worth the name | audio cable; ground wave at VHF-like stability; a very short skip with a steady S-meter |
+| `good` | ITU-R F.1487 Good: 0.5 ms spread, 0.1 Hz Doppler | slow, shallow fading; an S-meter that drifts |
+| `moderate` | Moderate: 1 ms, 0.5 Hz | fading you can hear as a slow flutter; the usual daytime skip |
+| `poor` | Poor: 2 ms, 1 Hz | fast, deep fading; NVIS at the wrong hour; polar or auroral paths |
+
+## 5. After
+
+```bash
+aetherd --replay recordings/<name>.wav            # does it still decode what it decoded?
+python tools/compare_air.py recordings/<name>.json --channel moderate
+```
+
+The first prints every frame and compares with the sidecar; the second puts the measured
+frame error rate per mode and the session's goodput beside the simulator's prediction at
+the same SNR, and says whether they are within 20 %.
+
+**Keep the sessions that teach something**: a path, a band, a condition the simulator does
+not reproduce; one at the edge of a mode; one that failed and should not have. Copy the
+WAV and the sidecar into `field/sessions/`, commit them together, and from then on
+`cargo test` replays them. `field/README.md` says what belongs there.
+
+## 6. The log
+
+Twenty sessions, three classes. A row per session in `field/LOG.md`: date, band, distance,
+class, both callsigns, the recording's name, the mean SNR, the goodput measured and
+predicted, and a sentence. The comparison tool prints the numbers; the sentence is yours.

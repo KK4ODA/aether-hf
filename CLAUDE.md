@@ -46,8 +46,8 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phases 0–3 are complete, **Phase 4 is built** (P4-1…P4-6; P4-7, the human acceptance test,
-is open) and **Phase 5 is built** (P5-1…P5-6; P5-7 open), all on branch `phase-2`:
+Phases 0–5 are built and merged to `master`; **Phase 6 (field validation) is in progress on
+branch `phase-6`** — its tooling is built (P6-1…P6-5) and the air is what remains (P6-6).
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -78,6 +78,13 @@ is open) and **Phase 5 is built** (P5-1…P5-6; P5-7 open), all on branch `phase
   **Cutting a release:** `python tools/release.py bump X.Y.Z`, commit, tag `vX.Y.Z`, push
   the tag. The updater's private key is *not* in the repository; the release is signed only
   when `TAURI_SIGNING_PRIVATE_KEY` is set as a repository secret.
+* **Phase 6** — session recordings (`core/aetherd/src/record.rs`, `[record]`), replay
+  (`replay.rs`, `aetherd --replay`, `field/sessions/` + `tests/field.rs`), the simulated
+  channel (`sim.rs`, `[sim]`; `tests/two_daemons.rs` runs two real daemons through a
+  session), `tools/compare_air.py`, `docs/user/field-test.md`, `field/LOG.md`. The
+  two-daemon test found two engine bugs (`PhyTiming.tx_latency_s`; `on_tx_done` retries a
+  burst) — fixed in the model first, then the port. `tx_level` is a sine amplitude; the
+  waveform's RMS is `tx_level / √2`.
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
 debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
@@ -85,10 +92,11 @@ separate package (`cd app/src-tauri && cargo clippy --all-targets -- -D warnings
 the panel: `aetherd --config <file> --dry-run` with `[control] ui_dir` pointing at `app/ui`,
 then open `http://127.0.0.1:8515/`.
 
-**Next: Phase 6** (field validation: audio cable → ground wave → NVIS → long paths → RMS
-gateway trial, every session recorded and folded into the regression tier) and the field
-work Phases 3–5 left open (Pat, Winlink Express, VarAC, BPQ32; three external hams through
-the wizard; the first tagged release once the signing secret is set).
+**Next: the air** (P6-6: audio cable → ground wave → NVIS → long paths → RMS gateway
+trial, twenty logged sessions across three channel classes, recalibrate on the
+disagreements) and the human items Phases 3–5 left open (Pat, Winlink Express, VarAC,
+BPQ32 over the simulated channel; three external hams through the wizard; the first tagged
+release once the signing secret is set). Phase 7 (FM) is on the back burner by decision.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is

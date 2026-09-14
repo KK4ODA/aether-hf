@@ -133,6 +133,11 @@ The control API is on loopback, so from the gateway itself:
 curl -s -X POST http://127.0.0.1:8515/v1/status -d '{}'
 ```
 
+A gateway should record what it does — `[record] auto = true` writes every session, from
+connect to disconnect, as a WAV and a sidecar under `recordings/` beside the configuration
+(`docs/user/field-test.md`); a day of sessions is a few hundred megabytes, so give it a disk
+or a cron job.
+
 Every log line has a UTC timestamp and the modem's state; `[log] format = "json"` in the
 configuration makes each line one JSON object, which `journalctl -o cat | jq` can filter by
 `event` or `level`. When something goes wrong, one request collects what a bug report needs

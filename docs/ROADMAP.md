@@ -602,6 +602,15 @@ tier. Compare measured throughput to simulator predictions; recalibrate the simu
 Acceptance: ≥ 20 logged sessions across ≥ 3 channel classes; simulator-vs-air throughput
 within 20 %.
 
+| ID | Task | Depends on |
+|---|---|---|
+| P6-1 ✅ | **Session recordings.** A 48 kHz WAV of what the radio delivered and a JSON sidecar of what the modem made of it — every frame with mode, RV, SNR, offset, decoded or not, control frames described; every event; keying; counters; the operator's notes. `record.start/stop/notes` on the API, a Record button on the panel, `[record] auto = true` for every session on its own. Header and sidecar refreshed every five seconds so a crash leaves files that play | P4 |
+| P6-2 ✅ | **Replay and the field regression tier.** `aetherd --replay` runs a recording through the same front end and receiver a live station uses, muted where the transmitter was keyed, and fails if fewer frames decode than did on the day. `field/sessions/` holds the recordings worth keeping; `core/aetherd/tests/field.rs` replays every one on every test run | P6-1 |
+| P6-3 ✅ | **The simulated channel and what it found.** `[sim]` joins two daemons over a socket with noise at a set SNR, paced by the clock — the bench reference and the way host software is driven with no radio. `tests/two_daemons.rs` runs two real daemons through a session. Its first run found two engine bugs the deterministic simulator could not: the engine waited for replies from when it handed a burst over rather than when it left the sound card (`PhyTiming.tx_latency_s`), and an acknowledgement accepted during a re-poll was dropped and never retried (`on_tx_done` now tries). Fixed in the model first, then the port, with tests in both that fail without them | P3-3 |
+| P6-4 ✅ | **Measured against predicted.** `tools/compare_air.py`: per-mode frame error rate and session goodput beside the benchmark curves' prediction at the same SNR, per channel class, with the 20 % verdict. Calibrating it showed `tx_level` documented 3 dB wrong (the waveform's RMS is the level over √2); the documentation, a test and the simulated channel's noise now agree with the receiver to within 0.5 dB | P6-1 |
+| P6-5 ✅ | **The protocol.** `docs/user/field-test.md`: bench first, then the cable, then the air; what a session should carry; how to name the channel class; what to keep. `field/LOG.md` is the twenty rows | — |
+| P6-6 🔁 | **The air.** Audio cable → ground wave → NVIS → 500–2 000 km → RMS gateway trial; twenty sessions across three classes; recalibrate the simulator on the disagreements. Human, and not something this repository can do for itself. Also open: driving Pat / Winlink Express / VarAC over the simulated channel (the P3-5 verification), which needs the host software installed | P6-1…P6-5 |
+
 ### Phase 7 — Aether FM foundation (after 6)
 
 Extract PHY trait boundaries proven in Phase 3; FM channel model; `aether-phy-fm` with a
