@@ -129,3 +129,74 @@ class NoiseBlanker:
             scale[hot] = threshold[hot] / mag[hot]
             y = y * scale
         return BlankerResult(y, hot)
+
+
+class StreamingBlanker:
+    """A :class:`NoiseBlanker` for a live stream (roadmap P3-3).
+
+    Blanking a live stream is not the same job as blanking a buffer, and doing it block by
+    block is wrong in a way that is easy to miss: the reference is a *local* statistic, so a
+    block that is half silence and half signal has a reference taken from the silence, and
+    the blanker removes the start of every burst it hears. Worse, *which* samples it removes
+    then depends on where the sound card happened to put its buffer boundaries — a receiver
+    whose output depends on its buffer size cannot be measured at all. Measured in the Rust
+    core's receive path at its own block size, that cost a clean frame 20 dB of SNR: the
+    blanker doing far more damage than the impulses it exists to remove.
+
+    The fix is to give the streaming path the same view the offline one has: a window centred
+    on each sample, with real signal on both sides of it. That means holding samples back
+    until their future has arrived, so this introduces a fixed latency of
+    :attr:`latency_samples` — one robust span, ≈ 57 ms at 8 kHz with the defaults. Everything
+    downstream sees a stream that is simply late by that much.
+
+    The retained history is several spans rather than one, and is only ever dropped down to a
+    segment boundary *of the stream*: :meth:`NoiseBlanker.envelope_rms` lays its segments out
+    from the start of whatever buffer it is handed, so a buffer that starts mid-segment gives
+    different medians, and the blanked output would otherwise depend on the size of the
+    blocks the sound card happened to deliver.
+    """
+
+    def __init__(self, blanker: NoiseBlanker | None = None) -> None:
+        self.blanker = blanker or NoiseBlanker()
+        self.span = max(1, self.blanker.robust_span_samples)
+        self.history = 4 * self.span
+        self._pending: ComplexArray = np.zeros(0, dtype=np.complex128)
+        self._emitted = 0
+        self._absolute = 0
+        """Stream index of ``_pending[0]``, so the segment grid stays aligned to the stream."""
+
+    @property
+    def latency_samples(self) -> int:
+        """How far behind its input the output runs."""
+        return self.span
+
+    def process(self, block: ComplexArray) -> ComplexArray:
+        """Feed a block; get back the samples whose windows are now complete."""
+        self._pending = np.concatenate((self._pending, np.asarray(block, dtype=np.complex128)))
+        if len(self._pending) < self._emitted + 2 * self.span:
+            return np.zeros(0, dtype=np.complex128)  # not enough future to judge anything new
+        result = self.blanker.process(self._pending)
+        emit_to = len(self._pending) - self.span
+        out = np.array(result.samples[self._emitted : emit_to])
+
+        wanted = max(0, emit_to - self.history)
+        keep_from = wanted - (self._absolute + wanted) % self.blanker.window
+        self._pending = self._pending[keep_from:]
+        self._absolute += keep_from
+        self._emitted = emit_to - keep_from
+        return out
+
+    def flush(self) -> ComplexArray:
+        """Emit everything still held back, judged against whatever context exists.
+
+        For the end of a recording; a live receiver never calls this."""
+        if len(self._pending) <= self._emitted:
+            self._pending = np.zeros(0, dtype=np.complex128)
+            self._emitted = 0
+            return np.zeros(0, dtype=np.complex128)
+        result = self.blanker.process(self._pending)
+        out = np.array(result.samples[self._emitted :])
+        self._absolute += len(self._pending)
+        self._pending = np.zeros(0, dtype=np.complex128)
+        self._emitted = 0
+        return out

@@ -325,8 +325,9 @@ mod tests {
     fn a_streamed_signal_is_blanked_the_same_whatever_the_block_size() {
         // This is the property the streaming wrapper exists for. Without it the reference is
         // a statistic of whatever block the sound card happened to deliver, so the start of
-        // every burst is judged against the silence in front of it and blanked — measured at
-        // 20 dB of signal-to-noise ratio on a clean channel.
+        // every burst is judged against the silence in front of it and blanked, and how much
+        // goes depends on where the buffer boundaries landed — measured at 20 dB of
+        // signal-to-noise ratio on a clean channel.
         let mut samples = noise(30_000, 0.01, 23);
         // a strong signal that starts abruptly, as a burst on a quiet channel does
         for (index, sample) in samples.iter_mut().enumerate().take(20_000).skip(8_000) {
@@ -416,8 +417,10 @@ mod tests {
 /// Blanking a live stream is not the same job as blanking a buffer, and doing it block by
 /// block is wrong in a way that is easy to miss: the reference is a *local* statistic, so a
 /// block that is half silence and half signal has a reference taken from the silence, and the
-/// blanker removes the start of every burst it hears. Measured on a clean channel at the
-/// daemon's own block size, that cost a frame 20 dB of signal-to-noise ratio — the blanker
+/// blanker removes the start of every burst it hears. Worse, *which* samples it removes then
+/// depends on where the sound card happened to put its buffer boundaries — a receiver whose
+/// output depends on its buffer size cannot be measured at all. On a clean channel at the
+/// daemon's own block size that cost a frame 20 dB of signal-to-noise ratio: the blanker
 /// doing far more damage than the impulses it exists to remove.
 ///
 /// The fix is to give the streaming path the same view the offline one has: a window centred

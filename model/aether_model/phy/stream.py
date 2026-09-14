@@ -25,7 +25,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
-from aether_model.phy.blanker import NoiseBlanker
+from aether_model.phy.blanker import NoiseBlanker, StreamingBlanker
 from aether_model.phy.passband import band_limit_taps
 from aether_model.phy.pipeline import DecodedFrame, Modem
 from aether_model.phy.sync import FrameSync
@@ -50,9 +50,14 @@ class StreamingReceiver:
     ) -> None:
         self.p = params
         self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
-        self.blanker = (blanker or NoiseBlanker()) if blank_impulses else None
-        """Impulse blanker applied to each incoming block before the band-limiting FIR
-        (P2-5) — it has to run before the filter smears an impulse into a long tail."""
+        self.blanker = StreamingBlanker(blanker or NoiseBlanker()) if blank_impulses else None
+        """Impulse blanker, applied before the band-limiting FIR (P2-5) — it has to run
+        before the filter smears an impulse into a long tail. The *streaming* wrapper is not
+        an optimisation: blanking block by block judges the start of every burst against the
+        silence in front of it and removes it, measured at 20 dB of SNR on a clean channel.
+        The wrapper holds samples back so each window can be centred, which is why the
+        indexed stream lags the input by :attr:`blanker_latency` as well as the filter's own
+        group delay."""
         self._buf = np.zeros(0, dtype=np.complex128)
         self._buf_abs0 = 0  # absolute index of buf[0]
         self._searched_abs = 0  # everything before this absolute index has been searched
@@ -62,6 +67,8 @@ class StreamingReceiver:
         self._lookback = 3 * params.symbol_samples
         self.frames_decoded = 0
         self._taps = band_limit_taps(params)
+        self.blanker_latency = self.blanker.latency_samples if self.blanker else 0
+        """Samples the blanker holds back; the indexed stream runs this far behind."""
         self._zi = np.zeros(len(self._taps) - 1, dtype=np.complex128)
         self.delay_samples = (len(self._taps) - 1) // 2
 
@@ -71,7 +78,9 @@ class StreamingReceiver:
 
     def feed(self, block: ComplexArray) -> list[DecodedFrame]:
         if self.blanker is not None:
-            block = self.blanker.process(np.asarray(block, dtype=np.complex128)).samples
+            block = self.blanker.process(np.asarray(block, dtype=np.complex128))
+        if len(block) == 0:
+            return []  # the blanker is still holding everything back
         block, self._zi = signal.lfilter(
             self._taps, [1.0], np.asarray(block, dtype=np.complex128), zi=self._zi
         )

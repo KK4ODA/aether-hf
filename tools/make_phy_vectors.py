@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import NDArray
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
@@ -291,6 +292,59 @@ def passband_case() -> dict[str, object]:
     }
 
 
+def blanker_input(n: int) -> NDArray[np.complex128]:
+    """A deterministic test signal for the blanker: silence, then a burst with peaks, with
+    impulses of known size dropped into both.
+
+    Closed form rather than random, so the Rust side can build the same samples. The burst
+    has a peaky envelope on purpose — the blanker's whole job is to tell a peak that belongs
+    to the signal from one that does not."""
+    k = np.arange(n)
+    envelope = np.where(k < n // 4, 0.02, 1.0)  # an abrupt onset, as a burst on a quiet band
+    phase = 2 * np.pi * (0.031 * k + 0.7 * np.sin(2 * np.pi * 0.0013 * k))
+    peaks = 1.0 + 0.8 * np.cos(2 * np.pi * 0.0071 * k) + 0.5 * np.cos(2 * np.pi * 0.017 * k)
+    x = envelope * peaks * np.exp(1j * phase)
+    for index, size in ((n // 8, 30.0), (n // 2, 50.0), (3 * n // 4, 8.0)):
+        x[index] = size * np.exp(1j * index)
+    return np.asarray(x, dtype=np.complex128)
+
+
+def blanker_case() -> dict[str, object]:
+    """The impulse blanker, offline and streaming.
+
+    The blanker decides which samples to throw away, so what matters is *which* — an
+    implementation that blanks a different set is a different receiver. The blanked indices
+    are therefore compared exactly, and the envelope estimate behind them to a tolerance."""
+    from aether_model.phy.blanker import NoiseBlanker, StreamingBlanker
+
+    n = 8192
+    x = blanker_input(n)
+    blanker = NoiseBlanker()
+    result = blanker.process(x)
+
+    streamed: dict[str, object] = {}
+    for block in (683, 4096):
+        sb = StreamingBlanker()
+        pieces = [sb.process(x[i : i + block]) for i in range(0, n, block)]
+        out = np.concatenate([*pieces, sb.flush()])
+        streamed[str(block)] = {
+            "latency_samples": sb.latency_samples,
+            "blanked": [int(i) for i in np.flatnonzero(out == 0)],
+        }
+
+    return {
+        "threshold_sigma": blanker.threshold_sigma,
+        "window": blanker.window,
+        "segment_span": blanker.segment_span,
+        "robust_span_samples": blanker.robust_span_samples,
+        "n_samples": n,
+        "stride": 53,
+        "envelope_rms": [float(v) for v in blanker.envelope_rms(x)[::53]],
+        "blanked": [int(i) for i in np.flatnonzero(result.blanked)],
+        "streaming": streamed,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="core/aether-phy/tests/data/phy_vectors.json")
@@ -310,6 +364,7 @@ def main() -> int:
         "codec": codec_cases(),
         "waveform_frames": waveform_cases(),
         "passband": passband_case(),
+        "blanker": blanker_case(),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

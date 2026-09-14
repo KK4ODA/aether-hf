@@ -16,6 +16,7 @@
 use std::{fs, path::PathBuf};
 
 use aether_phy::{
+    blanker::{NoiseBlanker, StreamingBlanker},
     codec::{FrameCodec, coprime_stride},
     constellation::{Constellation, NoiseVar},
     modes::{CONTROL_MODE, LONG, MODES, SHORT},
@@ -541,6 +542,111 @@ fn the_audio_front_end_matches_the_model() {
             (gr - wr).abs() < 1e-6 && (gi - wi).abs() < 1e-6,
             "baseband sample {}: ({gr}, {gi}) vs ({wr}, {wi})",
             index * stride
+        );
+    }
+}
+
+/// The same deterministic blanker input the generator builds: silence, then a burst with a
+/// peaky envelope, with impulses of known size dropped into both.
+fn blanker_input(n: usize) -> Vec<(f64, f64)> {
+    let tau = 2.0 * std::f64::consts::PI;
+    let mut out: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            let k = i as f64;
+            let envelope = if i < n / 4 { 0.02 } else { 1.0 };
+            let phase = tau * 0.7f64.mul_add((tau * 0.0013 * k).sin(), 0.031 * k);
+            let peaks =
+                0.8f64.mul_add((tau * 0.0071 * k).cos(), 1.0) + 0.5 * (tau * 0.017 * k).cos();
+            let amplitude = envelope * peaks;
+            (amplitude * phase.cos(), amplitude * phase.sin())
+        })
+        .collect();
+    for (index, size) in [(n / 8, 30.0), (n / 2, 50.0), (3 * n / 4, 8.0)] {
+        let angle = index as f64;
+        out[index] = (size * angle.cos(), size * angle.sin());
+    }
+    out
+}
+
+#[test]
+fn the_impulse_blanker_matches_the_model() {
+    // The blanker decides which samples to throw away, so what matters is *which*: an
+    // implementation that blanks a different set is a different receiver, and two stations
+    // that disagree about it will disagree about what decodes. The indices are therefore
+    // compared exactly; the envelope estimate behind them is floating point and is compared
+    // to a tolerance.
+    let case = &vectors()["blanker"];
+    let blanker = NoiseBlanker::default();
+    assert_eq!(blanker.window(), int(case, "window"));
+    assert_eq!(
+        blanker.robust_span_samples(),
+        int(case, "robust_span_samples")
+    );
+
+    let samples = blanker_input(int(case, "n_samples"));
+    let stride = int(case, "stride");
+
+    let envelope = blanker.envelope_rms(&samples);
+    let want = case["envelope_rms"].as_array().expect("envelope_rms");
+    assert_eq!(
+        envelope.len().div_ceil(stride),
+        want.len(),
+        "envelope length"
+    );
+    for (index, w) in want.iter().enumerate() {
+        let w = w.as_f64().expect("envelope sample");
+        let got = envelope[index * stride];
+        assert!(
+            (got - w).abs() < 1e-12,
+            "envelope at {}: {got} vs {w}",
+            index * stride
+        );
+    }
+
+    let result = blanker.process(&samples);
+    let blanked: Vec<usize> = result
+        .blanked
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &hot)| hot.then_some(index))
+        .collect();
+    let want: Vec<usize> = case["blanked"]
+        .as_array()
+        .expect("blanked")
+        .iter()
+        .map(|v| v.as_u64().expect("index") as usize)
+        .collect();
+    assert_eq!(blanked, want, "the offline blanker removed a different set");
+
+    for (block, expected) in case["streaming"].as_object().expect("streaming") {
+        let block: usize = block.parse().expect("block size");
+        let mut streaming = StreamingBlanker::default();
+        assert_eq!(
+            streaming.latency_samples(),
+            int(expected, "latency_samples"),
+            "block {block}: latency"
+        );
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for chunk in samples.chunks(block) {
+            out.extend(streaming.process(chunk));
+        }
+        out.extend(streaming.flush());
+        assert_eq!(out.len(), samples.len(), "block {block}: length");
+
+        let blanked: Vec<usize> = out
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &s)| (s == (0.0, 0.0)).then_some(index))
+            .collect();
+        let want: Vec<usize> = expected["blanked"]
+            .as_array()
+            .expect("blanked")
+            .iter()
+            .map(|v| v.as_u64().expect("index") as usize)
+            .collect();
+        assert_eq!(
+            blanked, want,
+            "block {block}: the streaming blanker removed a different set"
         );
     }
 }

@@ -169,3 +169,81 @@ def test_per_symbol_noise_variance_tracks_a_damaged_symbol() -> None:
     assert after[worst] / before[worst] > 3.0  # that symbol is now distrusted
     others = np.delete(after / before, worst)
     assert np.median(others) < 2.0  # the rest of the frame is not
+
+
+# ── streaming (P3-3) ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("block", [251, 683, 1024, 4096])
+def test_streaming_blanker_is_independent_of_block_size(block: int) -> None:
+    """The property the streaming wrapper exists for.
+
+    The reference is a *local* statistic, so blanking block by block judges each block
+    against itself: the start of a burst is measured against the silence in front of it and
+    removed, and how much is removed depends on where the sound card happened to put its
+    buffer boundaries. A receiver whose output depends on its buffer size is not a receiver
+    anybody can measure."""
+    from aether_model.phy.blanker import StreamingBlanker
+
+    rng = np.random.default_rng(23)
+    x = (0.01 * (rng.standard_normal(30_000) + 1j * rng.standard_normal(30_000))).astype(
+        np.complex128
+    )
+    x[8_000:20_000] = np.exp(1j * 0.7 * np.arange(8_000, 20_000))  # an abrupt burst
+    x[14_000] = 60.0  # and one genuine impulse inside it
+
+    whole = StreamingBlanker()
+    reference = np.concatenate((whole.process(x), whole.flush()))
+    assert len(reference) == len(x)
+
+    streamed = StreamingBlanker()
+    pieces = [streamed.process(x[i : i + block]) for i in range(0, len(x), block)]
+    got = np.concatenate([*pieces, streamed.flush()])
+    assert len(got) == len(x)
+    assert np.max(np.abs(got - reference)) == 0.0
+
+
+def test_streaming_blanker_holds_back_exactly_its_stated_latency() -> None:
+    from aether_model.phy.blanker import StreamingBlanker
+
+    blanker = StreamingBlanker()
+    rng = np.random.default_rng(31)
+    x = (0.01 * (rng.standard_normal(10_000) + 1j * rng.standard_normal(10_000))).astype(
+        np.complex128
+    )
+    emitted = sum(len(blanker.process(x[i : i + 1000])) for i in range(0, len(x), 1000))
+    assert emitted == len(x) - blanker.latency_samples
+    assert len(blanker.flush()) == blanker.latency_samples
+
+
+def test_blanking_block_by_block_depends_on_the_block_size() -> None:
+    """What the streaming wrapper is for, shown on a real frame rather than a synthetic one.
+
+    Applied block by block the blanker removes a different set of samples depending on where
+    the sound card happened to put its buffer boundaries, because its reference is a local
+    statistic of whatever block it was handed. A receiver whose output depends on its buffer
+    size cannot be measured, and it was worth 20 dB of SNR in the Rust core's receive path at
+    its own block size before this was fixed."""
+    from aether_model.phy.blanker import NoiseBlanker, StreamingBlanker
+    from aether_model.phy.passband import AudioToBaseband
+
+    modem = Modem(P, blank_impulses=False)
+    mode = MODES[0]
+    burst = modem.data_burst(bytes(range(modem.payload_bytes(mode))), mode)
+    baseband = np.concatenate((np.zeros(800), burst, np.zeros(4000))).astype(np.complex128)
+    x = AudioToBaseband(P).process(modem.audio(baseband))
+
+    def stateless(block: int) -> set[int]:
+        out = np.concatenate(
+            [NoiseBlanker().process(x[i : i + block]).samples for i in range(0, len(x), block)]
+        )
+        return set(np.flatnonzero(out == 0).tolist())
+
+    def streaming(block: int) -> set[int]:
+        blanker = StreamingBlanker()
+        pieces = [blanker.process(x[i : i + block]) for i in range(0, len(x), block)]
+        out = np.concatenate([*pieces, blanker.flush()])
+        return set(np.flatnonzero(out == 0).tolist())
+
+    assert stateless(683) != stateless(4096), "the bug this fixes is not being reproduced"
+    assert streaming(683) == streaming(4096)
