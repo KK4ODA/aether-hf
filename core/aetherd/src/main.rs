@@ -550,7 +550,15 @@ fn serve(
                 } else {
                     "log"
                 },
-                json!({"name": name, "detail": detail, "state": format!("{:?}", station.state())}),
+                json!({
+                    "name": name,
+                    "detail": detail,
+                    "state": format!("{:?}", station.state()),
+                    // the callsign a session runs under is whichever of the station's the
+                    // caller asked for, so a host cannot know it without being told
+                    "callsign": station.engine().my_call,
+                    "remote": station.engine().remote_call,
+                }),
             ));
         }
         let received = station.take_received();

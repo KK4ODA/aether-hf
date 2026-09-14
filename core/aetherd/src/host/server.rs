@@ -449,7 +449,14 @@ fn report_state(
             let remote = words.next().unwrap_or("").to_owned();
             let called = words.next() == Some("(irs)");
             *connected_to = Some(remote.clone());
-            let mine = host.my_call().unwrap_or("").to_owned();
+            // the modem says which of the station's callsigns the session runs under; a host
+            // that never said MYCALL is told the modem's own name
+            let mine = data["callsign"]
+                .as_str()
+                .filter(|call| !call.is_empty())
+                .or(host.my_call())
+                .unwrap_or("")
+                .to_owned();
             let (caller, callee) = if called {
                 (remote, mine.clone())
             } else {
@@ -486,8 +493,21 @@ fn apply(
 ) -> bool {
     match action {
         HostAction::None | HostAction::Listen(_) => true,
-        HostAction::Connect { to, .. } => {
-            let response = handle.call(request("connect", json!({ "remote": to })));
+        HostAction::Callsigns(calls) => {
+            // the reply already said OK, which is the truth: the modem takes the list, and
+            // when a session is up it takes effect as that session ends
+            let _ = handle.call(request("callsigns.set", json!({ "callsigns": calls })));
+            true
+        }
+        HostAction::Connect { from, to } => {
+            // CONNECT names the calling station; when it is one the host registered, the
+            // session runs under it, which is how a station with a club or tactical call
+            // besides its own chooses between them
+            let mut params = json!({ "remote": to });
+            if host.answers_to(from) {
+                params["callsign"] = json!(from);
+            }
+            let response = handle.call(request("connect", params));
             match response {
                 Ok(reply) if reply.ok => true,
                 // the modem refused: the host has to hear that the call did not happen
@@ -586,16 +606,27 @@ mod tests {
         protocol::{ControlChannel, Response},
     };
 
-    /// A stub modem: answers every request and can publish events on demand.
-    fn stub_modem(control: ControlChannel) -> (std::thread::JoinHandle<()>, Arc<AtomicBool>) {
+    /// What the stub modem was asked, in order: method and params.
+    type Seen = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// A stub modem: answers every request, remembers it, and can publish events on demand.
+    fn stub_modem(control: ControlChannel) -> (std::thread::JoinHandle<()>, Arc<AtomicBool>, Seen) {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
         let worker = std::thread::spawn(move || {
             let mut seen_connect = false;
             while !flag.load(Ordering::Relaxed) {
                 for command in control.drain() {
                     if command.request.method == "connect" {
                         seen_connect = true;
+                    }
+                    if let Ok(mut log) = log.lock() {
+                        log.push((
+                            command.request.method.clone(),
+                            command.request.params.clone(),
+                        ));
                     }
                     let _ = command
                         .reply
@@ -605,13 +636,13 @@ mod tests {
                     seen_connect = false;
                     control.publish(&Event::new(
                         "state",
-                        json!({"name": "connected", "detail": "KK4XYZ (iss)"}),
+                        json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }
         });
-        (worker, stop)
+        (worker, stop, seen)
     }
 
     struct Client {
@@ -653,9 +684,14 @@ mod tests {
         }
     }
 
-    fn server() -> (HostServer, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
+    fn server() -> (
+        HostServer,
+        std::thread::JoinHandle<()>,
+        Arc<AtomicBool>,
+        Seen,
+    ) {
         let (handle, control) = channel();
-        let (worker, stop) = stub_modem(control);
+        let (worker, stop, seen) = stub_modem(control);
         let server = HostServer::start(
             &HostConfig {
                 enabled: true,
@@ -665,14 +701,14 @@ mod tests {
             handle,
         )
         .expect("start");
-        (server, worker, stop)
+        (server, worker, stop, seen)
     }
 
     #[test]
     fn the_data_port_is_the_command_port_plus_one() {
         // every client of the published interface assumes it; a modem that put it elsewhere
         // would connect and then hang with no data
-        let (server, worker, stop) = server();
+        let (server, worker, stop, _) = server();
         assert_eq!(
             server.data_address.port(),
             server.command_address.port() + 1
@@ -683,7 +719,7 @@ mod tests {
 
     #[test]
     fn a_host_can_set_up_and_call() {
-        let (server, worker, stop) = server();
+        let (server, worker, stop, seen) = server();
         let mut client = Client::connect(&server);
 
         client.send("MYCALL W4ODA");
@@ -703,6 +739,24 @@ mod tests {
 
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");
+
+        // Winlink Express at both ends of the simulated channel: each end's MYCALL went to
+        // the adapter and no further, so the modems kept the callsigns in their
+        // configuration files, and the call to KK4ODA-2 was never answered. The host owns
+        // the operator's callsign, so MYCALL has to reach the modem, and CONNECT has to say
+        // which of them the session runs under.
+        let seen = seen.lock().expect("seen");
+        assert!(
+            seen.iter().any(|(method, params)| method == "callsigns.set"
+                && params["callsigns"] == json!(["W4ODA"])),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter().any(|(method, params)| method == "connect"
+                && params["remote"] == "KK4XYZ"
+                && params["callsign"] == "W4ODA"),
+            "{seen:?}"
+        );
     }
 
     #[test]
@@ -745,7 +799,7 @@ mod tests {
         client.send("MYCALL W4ODA");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         client.send("LISTEN ON");
-        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // the call comes whenever it comes: before or after LISTEN ON is answered
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED KK4XYZ W4ODA 2300");
         stop.store(true, Ordering::Relaxed);
@@ -813,7 +867,7 @@ mod tests {
     fn a_second_host_is_refused_rather_than_interleaved() {
         // two programs taking turns keying one transmitter is not a situation to invent
         // semantics for, and a silent hang is the worst possible answer
-        let (server, worker, stop) = server();
+        let (server, worker, stop, _) = server();
         let mut first = Client::connect(&server);
         first.send("MYCALL W4ODA");
         assert_eq!(first.expect(|l| l == "OK"), "OK");

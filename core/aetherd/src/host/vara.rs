@@ -57,6 +57,8 @@ pub enum HostAction {
     Abort,
     /// Start or stop answering calls.
     Listen(bool),
+    /// Answer to these callsigns from now on, and call as the first of them.
+    Callsigns(Vec<String>),
     /// Put a carrier on the air for tuning, for this many seconds.
     Tune(f64),
     /// Send an unproto identification frame.
@@ -255,7 +257,9 @@ impl HostState {
                 self.compression = Compression::Off;
                 HostOutcome::ok()
             }
-            ("COMPRESSION", ["TEXT"]) => {
+            // Winlink Express says `COMPRESSION ON`, which is not in the published set; it
+            // means what TEXT means, and a WRONG here is the first thing in its log
+            ("COMPRESSION", ["TEXT" | "ON"]) => {
                 self.compression = Compression::Text;
                 HostOutcome::ok()
             }
@@ -312,8 +316,8 @@ impl HostState {
         if parsed.is_empty() || !parsed.iter().all(|call| plausible_callsign(call)) {
             return HostOutcome::wrong();
         }
-        self.callsigns = parsed;
-        HostOutcome::ok()
+        self.callsigns.clone_from(&parsed);
+        HostOutcome::acting(HostAction::Callsigns(parsed))
     }
 }
 
@@ -386,10 +390,16 @@ mod tests {
     #[test]
     fn a_callsign_is_accepted_and_remembered() {
         let mut host = state();
-        assert_eq!(host.command("MYCALL W4ODA").replies, vec!["OK"]);
+        let outcome = host.command("MYCALL W4ODA");
+        assert_eq!(outcome.replies, vec!["OK"]);
         assert_eq!(host.my_call(), Some("W4ODA"));
         assert!(host.answers_to("W4ODA"));
         assert!(!host.answers_to("KK4XYZ"));
+        // the modem answers to it too: the host owns the operator's callsign
+        assert_eq!(
+            outcome.action,
+            HostAction::Callsigns(vec!["W4ODA".to_owned()])
+        );
     }
 
     #[test]
@@ -481,6 +491,10 @@ mod tests {
         assert!(host.listening && host.recorded.cq_only);
         // and the two it says that this modem genuinely cannot do stay refused
         assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
+        // Winlink Express 1.8.5's own opening line, verbatim: PUBLIC ON, CWID ON,
+        // COMPRESSION ON, BW<max>, MYCALL, LISTEN ON
+        assert_eq!(host.command("COMPRESSION ON").replies, vec!["OK"]);
+        assert_eq!(host.compression, Compression::Text);
         assert_eq!(
             host.command("MYCALL KK4ODA-1 KK4ODA-T").replies,
             vec!["OK"],

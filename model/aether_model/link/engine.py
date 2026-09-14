@@ -31,6 +31,7 @@ combine — the CRC decides, and a standalone decode is always tried as well.
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -48,6 +49,7 @@ from aether_model.link.frames import (
     decode_data,
     encode_data,
     in_window,
+    pack_callsign,
     seq_after,
     seq_distance,
 )
@@ -174,7 +176,12 @@ class LinkEngine:
         config: LinkConfig | None = None,
         seed: int | None = None,
     ) -> None:
-        self.my_call = my_call.upper()
+        self.callsigns = [my_call.upper()]
+        """The callsigns this station answers to. The first is the one it calls as unless a
+        call says otherwise; see :meth:`set_callsigns`."""
+        self.my_call = self.callsigns[0]
+        """The callsign the current (or next) session runs under: the one that was called
+        when this station answered, the one it chose when it called."""
         self.timing = timing
         self.cfg = config or LinkConfig()
         self.rng = random.Random(seed)
@@ -222,9 +229,36 @@ class LinkEngine:
 
     # ── public commands ───────────────────────────────────────────────
 
-    def connect(self, remote_call: str) -> None:
+    def set_callsigns(self, calls: Sequence[str]) -> None:
+        """Change the callsigns this station answers to; the first is the one it calls as.
+
+        The operator's callsign belongs to the host program in practice — VARA's published
+        interface has no callsign of its own, ``MYCALL`` is the only place one is ever set,
+        and clients send several when a station also answers to a club or tactical call —
+        so the engine takes a list at run time rather than one name at construction. Refused
+        while a session is up: the callsign is in every frame's addressing, and changing it
+        would orphan the peer."""
+        if self.state is not State.IDLE:
+            raise RuntimeError("a session is running")
+        cleaned = [c.strip().upper() for c in calls if c.strip()]
+        if not cleaned:
+            raise ValueError("at least one callsign is needed")
+        for call in cleaned:
+            pack_callsign(call)  # what the air interface cannot carry is refused here
+        self.callsigns = cleaned
+        self.my_call = cleaned[0]
+
+    def connect(self, remote_call: str, as_call: str | None = None) -> None:
+        """Call a station, as this station's first callsign unless ``as_call`` picks
+        another of them."""
         if self.state is not State.IDLE:
             raise RuntimeError("already in a session")
+        if as_call is None:
+            self.my_call = self.callsigns[0]
+        elif as_call.upper() in self.callsigns:
+            self.my_call = as_call.upper()
+        else:
+            raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
         self.remote_call = remote_call.upper()
         self.session = self.rng.randrange(256)
         self.state = State.CONNECTING
@@ -836,10 +870,11 @@ class LinkEngine:
             req = ConnectBody.decode(body)
         except ValueError:
             return
-        if req.dst != self.my_call:
+        if req.dst not in self.callsigns:
             return
         if self.state is State.CONNECTING and self.my_call > self.remote_call:
             return  # simultaneous call: the higher callsign keeps calling
+        self.my_call = req.dst  # answer as the callsign that was called
         self.remote_call = req.src
         self.session = header.session
         self._disarm("connect")

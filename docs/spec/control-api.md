@@ -88,7 +88,7 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, remote callsign, uptime, versions, capabilities |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
@@ -105,7 +105,8 @@ needs no token, so it must not be able to read the one that guards a network bin
 
 | Method | Params | Result |
 |---|---|---|
-| `connect` | `remote`, `bandwidth?` | session id; then `state` events |
+| `connect` | `remote`, `callsign?`, `bandwidth?` | session id; then `state` events. `callsign` picks which of the station's callsigns to call as (the first, when absent) |
+| `callsigns.set` | `callsigns` (list) | the callsigns the station answers to from now on, the first being the one it calls as, and `applied`: `false` when a session is up, in which case they take effect as it ends. Replaces `[station] callsign` for the daemon's lifetime without touching the file: a host program's `MYCALL` is the operator's callsign, and the file is what the station answers to until one says otherwise |
 | `disconnect` | — | accepted; closes after the queue drains |
 | `abort` | — | accepted; drops the session immediately |
 | `listen` | `enabled` | accepted |
@@ -164,7 +165,7 @@ keeping live, and `core/aetherd/tests/field.rs` replays them all on every test r
 
 | Event | When | Key fields |
 |---|---|---|
-| `state` | session state changes | state, role, remote |
+| `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
 | `metrics` | periodically while active | snr_db, cfo_hz, mode, throughput_bps, queued_bytes, retries |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |

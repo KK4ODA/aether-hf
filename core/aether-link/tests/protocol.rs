@@ -181,6 +181,76 @@ fn a_simultaneous_call_resolves_to_one_session() {
 }
 
 #[test]
+fn a_station_answers_to_every_callsign_it_was_given() {
+    // a host program owns the operator's callsign (MYCALL), and sends several when the
+    // station also answers to a club or tactical call; the station answers as the one that
+    // was called, so the caller sees the callsign it asked for
+    let t = timing(false);
+    let (mut a, mut b) = pair(&t, &LinkConfig::default());
+    b.set_callsigns(&["KK4XYZ", "KK4XYZ-T"]).expect("idle");
+    a.connect("KK4XYZ-T").expect("idle");
+    a.send(b"to the tactical call");
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 15.0, 5);
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), b"to the tactical call");
+    assert_eq!(sim.engine(1).my_call, "KK4XYZ-T");
+    assert!(sim.events(1).iter().any(|e| e == "connected:W4ODA (irs)"));
+    assert!(
+        sim.events(0)
+            .iter()
+            .any(|e| e == "connected:KK4XYZ-T (iss)")
+    );
+}
+
+#[test]
+fn a_call_to_somebody_else_is_not_answered() {
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.connect("KK4ABC").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 6);
+    sim.run(200.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert!(sim.events(0).iter().any(|e| e == "disconnected:no answer"));
+    assert!(!sim.events(1).iter().any(|e| e.starts_with("connected")));
+}
+
+#[test]
+fn a_station_calls_as_whichever_of_its_callsigns_the_host_named() {
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.set_callsigns(&["W4ODA", "W4ODA-1"]).expect("idle");
+    a.connect_as("KK4XYZ", Some("w4oda-1")).expect("idle");
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 15.0, 8);
+    sim.run(200.0, 3.0);
+    assert!(sim.events(1).iter().any(|e| e == "connected:W4ODA-1 (irs)"));
+    let a = sim.engine_mut(0);
+    assert!(a.connect_as("KK4XYZ", Some("N0CALL")).is_err());
+    // without a choice, the first callsign is the station's name
+    a.connect("KK4XYZ").expect("idle");
+    assert_eq!(a.my_call, "W4ODA");
+}
+
+#[test]
+fn callsigns_cannot_change_under_a_session() {
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 9);
+    sim.run(30.0, 3.0);
+    let a = sim.engine_mut(0);
+    assert!(a.connected());
+    assert_eq!(a.set_callsigns(&["W4ODA-2"]), Err("a session is running"));
+    assert_eq!(a.my_call, "W4ODA");
+    let mut idle = LinkEngine::new("N0CALL", t.clone(), LinkConfig::default(), 3);
+    assert!(idle.set_callsigns::<&str>(&[]).is_err());
+    assert!(idle.set_callsigns(&["TOOLONGCALL"]).is_err());
+    assert_eq!(idle.callsigns, vec!["N0CALL"]);
+}
+
+#[test]
 fn the_peer_sees_a_disconnect() {
     let sim = run_transfer(b"short message", 15.0, 4);
     assert!(

@@ -317,6 +317,66 @@ def test_simultaneous_connect_resolves(timing: PhyTiming) -> None:
     assert sim.delivered(1) == b"data from A" * 3
 
 
+def test_a_station_answers_to_every_callsign_it_was_given(timing: PhyTiming) -> None:
+    # a host program owns the operator's callsign (MYCALL), and sends several when the
+    # station also answers to a club or tactical call; the station answers as the one that
+    # was called, so the caller sees the callsign it asked for
+    a, b = _pair(timing)
+    b.set_callsigns(["KK4XYZ", "KK4XYZ-T"])
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=5)
+    a.connect("KK4XYZ-T")
+    a.send(b"to the tactical call")
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == b"to the tactical call"
+    assert b.my_call == "KK4XYZ-T"
+    assert "connected:W4ODA (irs)" in sim.events(1)
+    assert "connected:KK4XYZ-T (iss)" in sim.events(0)
+
+
+def test_a_call_to_somebody_else_is_not_answered(timing: PhyTiming) -> None:
+    a, b = _pair(timing)
+    b.set_callsigns(["KK4XYZ"])
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=6)
+    a.connect("KK4ABC")
+    sim.run(until=200)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert "disconnected:no answer" in sim.events(0)
+    assert not any(e.startswith("connected") for e in sim.events(1))
+
+
+def test_a_station_calls_as_whichever_of_its_callsigns_the_host_named(timing: PhyTiming) -> None:
+    a, b = _pair(timing)
+    a.set_callsigns(["W4ODA", "W4ODA-1"])
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=8)
+    a.connect("KK4XYZ", as_call="w4oda-1")
+    a.disconnect()
+    sim.run(until=200)
+    assert "connected:W4ODA-1 (irs)" in sim.events(1)
+    with pytest.raises(ValueError):
+        a.connect("KK4XYZ", as_call="N0CALL")
+    # without a choice, the first callsign is the station's name
+    a.connect("KK4XYZ")
+    assert a.my_call == "W4ODA"
+
+
+def test_callsigns_cannot_change_under_a_session(timing: PhyTiming) -> None:
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=9)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.connected
+    with pytest.raises(RuntimeError):
+        a.set_callsigns(["W4ODA-2"])
+    assert a.my_call == "W4ODA"
+    idle = LinkEngine("N0CALL", timing, seed=3)
+    with pytest.raises(ValueError):
+        idle.set_callsigns([])
+    with pytest.raises(ValueError):
+        idle.set_callsigns(["TOOLONGCALL"])
+    assert idle.callsigns == ["N0CALL"]
+
+
 def test_peer_disconnect_is_observed(timing: PhyTiming) -> None:
     a, b = _pair(timing)
     sim = TwoStationSim(a, b, snr_db=15.0, seed=4)

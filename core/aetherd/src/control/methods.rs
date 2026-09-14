@@ -72,6 +72,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "abort"
             | "send"
             | "listen"
+            | "callsigns.set"
             | "beacon"
             | "tune"
             | "record.start"
@@ -334,6 +335,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "status" => Response::ok(id, status(station)),
         "capabilities" => Response::ok(id, capabilities()),
         "connect" => connect(station, params, id),
+        "callsigns.set" => set_callsigns(station, params, id),
         "beacon" => match station.beacon() {
             Ok(()) => Response::ok(id, json!({ "accepted": true })),
             Err(reason) => Response::failed(
@@ -427,13 +429,61 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
             ),
         );
     };
-    match station.connect(remote) {
+    let as_call = params.get("callsign").and_then(Value::as_str);
+    match station.connect_as(remote, as_call) {
         Ok(()) => Response::ok(id, json!({ "session": station.engine().session() })),
         Err(reason) => Response::failed(
             id,
             ApiError::new(
-                "already_connected",
+                if reason.starts_with("not one of") {
+                    "bad_params"
+                } else {
+                    "already_connected"
+                },
                 format!("Cannot call {remote}: {reason}."),
+                false,
+            ),
+        ),
+    }
+}
+
+/// The callsigns the station answers to, from a host program or the panel.
+fn set_callsigns<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let calls: Option<Vec<String>> =
+        params
+            .get("callsigns")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            });
+    let Some(calls) = calls else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A list of callsigns is required: {\"callsigns\": [\"KK4XYZ\", \"KK4XYZ-T\"]}.",
+                false,
+            ),
+        );
+    };
+    match station.set_callsigns(&calls) {
+        Ok(applied) => Response::ok(
+            id,
+            json!({
+                "callsigns": if applied { station.callsigns().to_vec() } else { calls },
+                "applied": applied,
+            }),
+        ),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                format!(
+                    "Cannot use these callsigns: {reason}. A callsign is letters, digits, '-' and '/', at most nine characters."
+                ),
                 false,
             ),
         ),
@@ -505,6 +555,7 @@ fn status<P: Ptt>(station: &Station<P>) -> Value {
             aether_link::Role::Irs => "irs",
         },
         "callsign": engine.my_call,
+        "callsigns": engine.callsigns,
         "remote": engine.remote_call,
         "session": engine.session(),
         "mode": engine.current_mode(),

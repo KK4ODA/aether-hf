@@ -334,6 +334,8 @@ pub struct Station<P: Ptt> {
     recording: Option<crate::record::Recording>,
     /// Notes the operator gave for the next automatic recording, if any.
     record_notes: Option<String>,
+    /// Callsigns given while a session was up, to take effect when it ends.
+    pending_callsigns: Option<Vec<String>>,
     delivered: Vec<u8>,
     events: Vec<String>,
     compressor: Compressor,
@@ -393,6 +395,7 @@ impl<P: Ptt> Station<P> {
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
             record_notes: None,
+            pending_callsigns: None,
             delivered: Vec::new(),
             events: Vec::new(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
@@ -486,14 +489,57 @@ impl<P: Ptt> Station<P> {
 
     // ── commands ──────────────────────────────────────────────────────
 
-    /// Call a station.
+    /// Call a station, as this station's first callsign.
     ///
     /// # Errors
     /// If a session is already up.
     pub fn connect(&mut self, remote: &str) -> Result<(), &'static str> {
-        self.engine.connect(remote)?;
+        self.connect_as(remote, None)
+    }
+
+    /// Call a station as one of this station's callsigns.
+    ///
+    /// # Errors
+    /// If a session is already up, or the callsign is not one of this station's.
+    pub fn connect_as(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        self.engine.connect_as(remote, as_call)?;
         self.pump();
         Ok(())
+    }
+
+    /// Change the callsigns this station answers to; the first is the one it calls as.
+    ///
+    /// The configuration file names the station, and that is what it answers to until a
+    /// host program says otherwise: the operator's callsign lives in the host in practice
+    /// (Winlink Express, Pat and `VarAC` each send `MYCALL`, and none of them can be told the
+    /// modem has a callsign of its own). Given while a session is up, the change waits for
+    /// the session to end — the callsign is in every frame's addressing — and the result says
+    /// so.
+    ///
+    /// # Errors
+    /// If the list is empty or a callsign is one the air interface cannot carry.
+    pub fn set_callsigns(&mut self, calls: &[String]) -> Result<bool, &'static str> {
+        if self.engine.state() == State::Idle {
+            self.engine.set_callsigns(calls)?;
+            self.pending_callsigns = None;
+            return Ok(true);
+        }
+        // validated now, so a host is not told OK for a list the engine will refuse later
+        let mut probe = LinkEngine::new(
+            &self.engine.my_call,
+            self.engine.timing().clone(),
+            self.config.link.clone(),
+            0,
+        );
+        probe.set_callsigns(calls)?;
+        self.pending_callsigns = Some(probe.callsigns);
+        Ok(false)
+    }
+
+    /// The callsign this station runs under right now, and every one it answers to.
+    #[must_use]
+    pub fn callsigns(&self) -> &[String] {
+        &self.engine.callsigns
     }
 
     /// Queue bytes to send.
@@ -603,8 +649,7 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() != State::Idle {
             return Err("a session is running");
         }
-        let body =
-            pack_callsign(&self.config.callsign).map_err(|_| "the callsign will not pack")?;
+        let body = pack_callsign(&self.engine.my_call).map_err(|_| "the callsign will not pack")?;
         let header = DataHeader {
             kind: DataKind::Beacon,
             seq: 0,
@@ -720,11 +765,11 @@ impl<P: Ptt> Station<P> {
         let remote = self.engine.remote_call.clone();
         let remote = (!remote.is_empty()).then_some(remote);
         let name = name.map_or_else(
-            || crate::record::session_name(&self.config.callsign, remote.as_deref()),
+            || crate::record::session_name(&self.engine.my_call, remote.as_deref()),
             str::to_owned,
         );
         let meta = serde_json::json!({
-            "callsign": self.config.callsign,
+            "callsign": self.engine.my_call,
             "remote": remote,
             "notes": notes,
             "max_mode": self.config.link.max_mode,
@@ -1022,6 +1067,10 @@ impl<P: Ptt> Station<P> {
                     } else if name == "disconnected" {
                         self.compressor = Compressor::new(false);
                         self.decompressor = Decompressor::new(false);
+                        if let Some(calls) = self.pending_callsigns.take() {
+                            // validated when they were given; the engine is idle now
+                            let _ = self.engine.set_callsigns(&calls);
+                        }
                     }
                     self.note(name, &detail);
                     // a session is the unit of a field recording: one file per session,
@@ -1126,7 +1175,7 @@ impl<P: Ptt> Station<P> {
         if !due {
             return;
         }
-        let audio = cw.audio(&self.config.callsign, audio_rate);
+        let audio = cw.audio(&self.engine.my_call, audio_rate);
         if audio.is_empty() {
             return;
         }
@@ -1380,6 +1429,36 @@ mod tests {
             peak < 0.7,
             "peak {peak} leaves no headroom at tx_level 0.25"
         );
+    }
+
+    #[test]
+    fn a_host_names_the_station_and_the_name_waits_for_the_session_to_end() {
+        // Winlink Express at both ends: each end's MYCALL has to reach the modem, or a
+        // call to the name the host chose is never answered. A name given mid-session is
+        // for the next one — the current session is addressed by the old one on every
+        // frame — and the station says so.
+        let mut air = Air::new(1.0, 0.0005);
+        assert_eq!(
+            air.b
+                .set_callsigns(&["KK4XYZ-2".to_owned(), "KK4XYZ".to_owned()]),
+            Ok(true)
+        );
+        assert_eq!(air.b.callsigns(), ["KK4XYZ-2", "KK4XYZ"]);
+        air.a.connect("KK4XYZ-2").expect("idle");
+        air.a.send(b"to the name the host chose");
+        air.run(90.0, |a, _| a.connected());
+        assert_eq!(air.b.engine().my_call, "KK4XYZ-2");
+        // mid-session: accepted, applied later
+        assert_eq!(air.b.set_callsigns(&["KK4XYZ-3".to_owned()]), Ok(false));
+        assert_eq!(air.b.callsigns(), ["KK4XYZ-2", "KK4XYZ"]);
+        assert!(
+            air.b.set_callsigns(&["TOOLONGCALL".to_owned()]).is_err(),
+            "a name the air interface cannot carry is refused at once, not later"
+        );
+        air.a.disconnect();
+        air.run(60.0, |a, b| !a.connected() && !b.connected());
+        assert_eq!(air.b.callsigns(), ["KK4XYZ-3"]);
+        assert_eq!(air.b.engine().my_call, "KK4XYZ-3");
     }
 
     #[test]

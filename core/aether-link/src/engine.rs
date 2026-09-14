@@ -33,7 +33,7 @@ use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
         MAX_BURST, WINDOW, control_flags, data_capacity, decode_data, encode_data, in_window,
-        seq_after, seq_distance,
+        pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::RateController,
@@ -257,7 +257,11 @@ impl Backoff {
 
 /// One station's ARQ engine.
 pub struct LinkEngine {
-    /// This station's callsign.
+    /// The callsigns this station answers to. The first is the one it calls as unless a
+    /// call says otherwise; see [`set_callsigns`](Self::set_callsigns).
+    pub callsigns: Vec<String>,
+    /// The callsign the current (or next) session runs under: the one that was called when
+    /// this station answered, the one it chose when it called.
     pub my_call: String,
     /// The peer's callsign, once known.
     pub remote_call: String,
@@ -304,6 +308,7 @@ pub struct LinkEngine {
 impl std::fmt::Debug for LinkEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LinkEngine")
+            .field("callsigns", &self.callsigns)
             .field("my_call", &self.my_call)
             .field("remote_call", &self.remote_call)
             .field("state", &self.state)
@@ -318,6 +323,7 @@ impl LinkEngine {
     pub fn new(my_call: &str, timing: PhyTiming, config: LinkConfig, seed: u64) -> Self {
         let recommended = config.initial_mode;
         Self {
+            callsigns: vec![my_call.to_ascii_uppercase()],
             my_call: my_call.to_ascii_uppercase(),
             remote_call: String::new(),
             stats: LinkStats::default(),
@@ -441,14 +447,69 @@ impl LinkEngine {
 
     // ── commands ──────────────────────────────────────────────────────
 
-    /// Call a station.
+    /// Change the callsigns this station answers to; the first is the one it calls as.
+    ///
+    /// The operator's callsign belongs to the host program in practice — VARA's published
+    /// interface has no callsign of its own, `MYCALL` is the only place one is ever set, and
+    /// clients send several when a station also answers to a club or tactical call — so the
+    /// engine takes a list at run time rather than one name at construction.
+    ///
+    /// # Errors
+    /// While a session is up (the callsign is in every frame's addressing, and changing it
+    /// would orphan the peer), when the list is empty, or when a callsign is one the air
+    /// interface cannot carry.
+    pub fn set_callsigns<S: AsRef<str>>(&mut self, calls: &[S]) -> Result<(), &'static str> {
+        if self.state != State::Idle {
+            return Err("a session is running");
+        }
+        let cleaned: Vec<String> = calls
+            .iter()
+            .map(|call| call.as_ref().trim().to_ascii_uppercase())
+            .filter(|call| !call.is_empty())
+            .collect();
+        if cleaned.is_empty() {
+            return Err("at least one callsign is needed");
+        }
+        if cleaned.iter().any(|call| pack_callsign(call).is_err()) {
+            return Err("a callsign the air interface cannot carry");
+        }
+        self.my_call.clone_from(&cleaned[0]);
+        self.callsigns = cleaned;
+        Ok(())
+    }
+
+    /// Call a station, as this station's first callsign.
     ///
     /// # Errors
     /// If a session is already up.
     pub fn connect(&mut self, remote_call: &str) -> Result<(), &'static str> {
+        self.connect_as(remote_call, None)
+    }
+
+    /// Call a station as whichever of this station's callsigns the caller names, or the
+    /// first of them.
+    ///
+    /// # Errors
+    /// If a session is already up, or `as_call` is not one of this station's callsigns.
+    pub fn connect_as(
+        &mut self,
+        remote_call: &str,
+        as_call: Option<&str>,
+    ) -> Result<(), &'static str> {
         if self.state != State::Idle {
             return Err("already in a session");
         }
+        let mine = match as_call {
+            None => self.callsigns[0].clone(),
+            Some(call) => {
+                let call = call.to_ascii_uppercase();
+                if !self.callsigns.contains(&call) {
+                    return Err("not one of this station's callsigns");
+                }
+                call
+            }
+        };
+        self.my_call = mine;
         self.remote_call = remote_call.to_ascii_uppercase();
         self.session = (self.backoff.next_unit() * 256.0) as u8;
         self.state = State::Connecting;
@@ -1333,12 +1394,13 @@ impl LinkEngine {
         let Ok(request) = ConnectBody::decode(body) else {
             return;
         };
-        if request.dst != self.my_call {
+        if !self.callsigns.contains(&request.dst) {
             return;
         }
         if self.state == State::Connecting && self.my_call > self.remote_call {
             return; // simultaneous call: the higher callsign keeps calling
         }
+        self.my_call = request.dst; // answer as the callsign that was called
         self.remote_call = request.src;
         self.session = header.session;
         self.disarm(Timer::Connect);
