@@ -413,6 +413,22 @@ impl<P: Ptt> Station<P> {
         self.pump();
     }
 
+    /// Stop transmitting and release the radio, now.
+    ///
+    /// For shutdown. A gateway is stopped by a service manager sending a signal, and a
+    /// station whose process is killed mid-burst leaves the transmitter keyed until somebody
+    /// notices — which on an unattended station could be a very long time. Whatever else
+    /// fails on the way out, the key has to come up.
+    ///
+    /// # Errors
+    /// If the radio refuses to release. The local state is cleared either way.
+    pub fn shut_down(&mut self) -> Result<(), PttError> {
+        self.playback.clear();
+        self.pending.clear();
+        self.transmitting = false;
+        self.ptt.unkey(self.now())
+    }
+
     /// As the receiving station, demand the sending role.
     pub fn request_break(&mut self) {
         self.engine.request_break();

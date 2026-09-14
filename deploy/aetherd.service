@@ -1,0 +1,62 @@
+# systemd unit for an unattended Aether HF gateway.
+#
+# Install:
+#   sudo useradd --system --home /var/lib/aetherd --create-home --groups audio,dialout aetherd
+#   sudo install -m 0755 aetherd /usr/local/bin/aetherd
+#   sudo install -d -o aetherd -g aetherd /etc/aetherd /var/lib/aetherd
+#   sudo install -m 0640 -o aetherd -g aetherd station.toml /etc/aetherd/station.toml
+#   sudo install -m 0644 aetherd.service /etc/systemd/system/aetherd.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now aetherd
+#
+# The `audio` group is for the sound card and `dialout` for a serial keying line. A gateway
+# needs both and nothing else; it does not need and must not have root.
+
+[Unit]
+Description=Aether HF modem
+Documentation=https://github.com/KK4ODA/aether-hf
+After=sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aetherd
+Group=aetherd
+SupplementaryGroups=audio dialout
+ExecStart=/usr/local/bin/aetherd --config /etc/aetherd/station.toml
+
+# The daemon catches this and releases the transmitter before exiting. Give it time to: a
+# station killed mid-burst leaves the radio keyed until somebody notices, which on an
+# unattended gateway can be a very long time.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+Restart=on-failure
+RestartSec=5s
+
+# Audio is not soft real-time by accident. Without this the modem is descheduled mid-burst on
+# a busy machine and drops captured samples, which looks exactly like a bad band.
+Nice=-5
+
+# It reads one configuration file, writes one state directory, talks to a sound card and a
+# serial port, and listens on loopback. Everything else is closed off.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+StateDirectory=aetherd
+ConfigurationDirectory=aetherd
+DeviceAllow=char-alsa rw
+DeviceAllow=char-ttyS rw
+DeviceAllow=char-ttyUSB rw
+
+[Install]
+WantedBy=multi-user.target

@@ -182,6 +182,18 @@ fn run() -> Result<(), String> {
         Box::new(card)
     };
 
+    // A gateway is stopped by its service manager sending a signal. Whatever else happens on
+    // the way out, the transmitter has to be released: a station killed mid-burst would
+    // otherwise sit there keyed until somebody noticed, which on an unattended station could
+    // be a very long time.
+    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&stopping);
+    if let Err(error) = ctrlc::set_handler(move || {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }) {
+        eprintln!("aetherd: cannot catch a stop signal ({error}); the radio may stay keyed");
+    }
+
     let (handle, control) = channel();
     let _server = if config.control.enabled {
         let server = ControlServer::start(&config.control_config(), handle.clone())
@@ -211,7 +223,7 @@ fn run() -> Result<(), String> {
         println!("aetherd: calling {call}");
     }
 
-    serve(&config, &mut station, audio.as_mut(), &control)
+    serve(&config, &mut station, audio.as_mut(), &control, &stopping)
 }
 
 /// The run loop: audio in, audio out, control requests answered between blocks.
@@ -222,6 +234,7 @@ fn serve(
     station: &mut Station<Box<dyn Ptt>>,
     audio: &mut dyn AudioIo,
     control: &aetherd::control::ControlChannel,
+    stopping: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
     let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
@@ -230,6 +243,16 @@ fn serve(
     let mut last_keyed = false;
 
     loop {
+        if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            println!("aetherd: stopping");
+            // Report the failure but do not return on it: there is nothing left to try, and
+            // exiting quietly would hide a radio that is still keyed.
+            if let Err(error) = station.shut_down() {
+                eprintln!("aetherd: the radio would not release: {error}");
+            }
+            return Ok(());
+        }
+
         // Control requests are answered from this thread, between audio blocks. The modem
         // is single-threaded because its clock is the audio it has heard, and a connection
         // reaching in from another thread would be able to change the state mid-frame.
