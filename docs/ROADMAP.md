@@ -578,6 +578,22 @@ channels, settings migration tests, rollback, SBOM, code signing (SignPath/Azure
 regression gate. Acceptance: an upgrade from N−1 to N with settings preserved and a
 forced-failure rollback both demonstrated in CI.
 
+| ID | Task | Depends on |
+|---|---|---|
+| P5-1 ✅ | **One version number.** `tools/release.py check` fails when the daemon, the shell, the installer and the model disagree; `bump X.Y.Z` rewrites all five files and both lockfiles. CI runs the check; the release pipeline runs it against the tag | — |
+| P5-2 ✅ | **The installer bundles the daemon and the panel.** `tools/stage_daemon.py` puts `aetherd` where Tauri's bundler picks it up as a sidecar; the panel is a bundled resource the shell locates through Tauri's own resolver. Per-user NSIS installer (no administrator), `.deb`, AppImage. Verified end to end on Windows: install, run, the sidecar starts and serves the bundled panel, uninstall. The first packaged run found the 44.1 kHz trap (a USB codec's Windows default format), so `devices.list` reports sample rates, the wizard warns before saving, the daemon's refusal names the device and the setting, and a daemon that fails to start is explained in a message box instead of a panel that says "not connected" for ever | P4-3 |
+| P5-3 ✅ | **The release pipeline** (`.github/workflows/release.yml`): from a tag, the daemon for x86_64 and aarch64 Linux (built on Ubuntu 22.04 so it runs on a Raspberry Pi's Debian 12) and Windows, the desktop application for Windows and Linux, an SPDX SBOM, SHA-256 sums, and release notes from Conventional Commits (`cliff.toml`). `vX.Y.Z` is stable, `vX.Y.Z-beta.N` a prerelease, and a nightly runs on a schedule from the default branch into one rolling prerelease. Signed for the updater when `TAURI_SIGNING_PRIVATE_KEY` is set; a branch push saying `[dry-run]` builds everything without publishing (two dry runs green on all five targets) | P5-1, P5-2 |
+| P5-4 ✅ | **Settings migration.** The configuration names its schema; an older file is brought forward through an ordered chain on load, backed up beside itself first, and rewritten; a newer file is refused with a message rather than read with keys dropped. `core/aetherd/tests/data/config/` holds files as each released version wrote them, and a test loads every one and checks no key or value is lost — the upgrade promise CI demonstrates from now on | — |
+| P5-5 ✅ | **Signed updates and a way back.** The shell checks on start (on the channel `[update] channel` names, set from the panel) and asks before installing; stable never sees a prerelease; every installer it installs is kept locally and *Help > Restore the previous version* runs the kept one without a network. The Ed25519 public key is in `tauri.conf.json`; the private key is on the maintainer's machine and has to be added as a repository secret before the first signed release | P5-3 |
+| P5-6 ✅ | **Benchmark regression gate.** `tools/bench_gate.py`: a seeded AWGN sweep of four modes compared with `bench/baselines/gate_awgn.csv` at the 10 % frame-error point; the release pipeline refuses to publish if any mode lost more than 0.3 dB. Measuring the baseline showed QAM16-1/2 0.4 dB behind the pre-ADR-0004 table (`bench/README.md`); recorded there as an open question rather than hidden in a wider tolerance | P5-3 |
+| P5-7 🔁 | **Open.** Windows Authenticode signing through an open-source signing service (until then `docs/user/install.md` explains the SmartScreen warning); the first actual tagged release, which needs the signing secret in place; real icons; an MSI alongside NSIS if anyone asks for one | P5-5 |
+
+Acceptance as written asks for an N−1 → N upgrade and a forced-failure rollback demonstrated
+in CI. The upgrade half is the fixture test in P5-4 (it will have real N−1 files once there
+is an N−1). The rollback half is exercised by hand — the kept-installer path is a native
+installer run, which a runner without a desktop cannot drive — and stays a release-checklist
+item in `docs/user/install.md` until it can be automated.
+
 ### Phase 6 — Field validation (weeks 36–48, overlapping)
 
 Local audio-cable tests → two stations ground-wave → NVIS → 500–2 000 km paths → RMS

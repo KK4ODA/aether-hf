@@ -1,7 +1,10 @@
 # Benchmarks
 
-`baselines/` holds committed results that every DSP change is compared against (CI will
-fail a PR that regresses a curve by more than 0.3 dB once `tools/bench` exists in full).
+`baselines/` holds committed results that every DSP change is compared against. The release
+pipeline runs `tools/bench_gate.py` — the seeded AWGN sweep in `gate_awgn.csv`, four modes,
+thirty frames a point — and refuses to publish if any mode's 10 % frame-error point has
+moved up by more than 0.3 dB. Regenerate that baseline (`--regenerate`) only after a
+deliberate change to the waveform, and say why in the commit.
 
 | File | Produced by | What |
 |---|---|---|
@@ -11,6 +14,7 @@ fail a PR that regresses a curve by more than 0.3 dB once `tools/bench` exists i
 | `link_throughput.csv` | `python tools/bench_link.py --bytes 16000 --trials 3` | end-to-end link goodput vs SNR per channel: a whole session (connect, 16 kB, disconnect) with adaptive rate |
 | `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking |
 | `phy_fer_awgn14.csv` | `python tools/bench_phy.py --channels awgn --modes 0,1,...,13 --frames 30` | AWGN FER for **every** mode — the source of the rate controller's threshold table (`tools/update_rate_table.py`) |
+| `gate_awgn.csv` | `python tools/bench_gate.py --regenerate` (AWGN, modes 0, 4, 8, 13, 30 frames) | the release gate's baseline, measured with the current air interface including ADR-0004 peak reduction and the P2-5 blanker. Against `phy_fer_awgn14.csv` (measured before both) modes 0, 4 and 13 are within 0.01 dB and **QAM16-1/2 is 0.4 dB worse** (5 of 30 frames fail at 6 dB where the older sweep had none) — at the edge of what 30 frames resolve, most likely the 7 dB clipping target's cost on 16-QAM, and worth a full-grid look; the rate controller's margin absorbs it meanwhile |
 | `impulsive.csv` | `python tools/bench_impulsive.py --frames 10 --modes 0,4,10` | FER vs impulsive-noise rate, with each P2-5 defence on and off |
 | `chanest.csv` | `python tools/bench_chanest.py --frames 16 --snr-offsets 0,2` | linear vs Wiener channel estimation (the P2-6 decision) |
 | `papr.csv` | `python tools/bench_papr.py` | PAPR / EVM / splatter per reduction technique, delivered SNR through a saturating PA, and end-to-end decoding (ADR-0004) |

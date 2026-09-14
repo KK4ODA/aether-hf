@@ -34,10 +34,10 @@ in [`docs/COMMUNITY-CONCERNS.md`](docs/COMMUNITY-CONCERNS.md).
 |---|---|---|
 | 0 — Audit & stabilization | tooling, strict tests, CI, calibrated simulator, ADRs | done |
 | 1 — Core HF modem | real LDPC (3GPP TS 38.212), OFDM TX/RX, sync, end-to-end loopback, benchmarks, golden vectors | **done in the Python model** (`phase-1` branch) |
-| 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR study | |
-| 3 — Application integration | Rust core, `aetherd`, PTT/CAT, VARA-compatible TCP, Pat/VarAC/Winlink verification, Pi gateway build | |
-| 4 — Desktop application | Tauri GUI, setup wizard, diagnostics | |
-| 5 — Release infrastructure | signed installers, auto-update, nightly/beta/stable | |
+| 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR study | **done in the model** |
+| 3 — Application integration | Rust core, `aetherd`, PTT/CAT, VARA-compatible TCP, Pat/VarAC/Winlink verification, Pi gateway build | **built** (`phase-2` branch); field verification open |
+| 4 — Desktop application | Tauri GUI, setup wizard, diagnostics | **built**; usability test open |
+| 5 — Release infrastructure | signed installers, auto-update, nightly/beta/stable | built: `docs/user/install.md` |
 | 6 — Field validation | recorded on-air sessions folded back into the test suite | |
 | 7 — Aether FM foundation | FM PHY on the same link layer | |
 
@@ -54,14 +54,20 @@ rationale: [`docs/ROADMAP.md` §4](docs/ROADMAP.md#4-recommended-target-architec
 ## Repository layout
 
 ```
-docs/          AUDIT.md · ROADMAP.md · COMMUNITY-CONCERNS.md · adr/ (decisions) · spec/ (later)
-model/         Python reference model: aether_model/{channel,waveform,fec,phy,frame,hal} + tests/
-               (protocol/ and host/ are legacy stubs until Phases 2–3 replace them)
-tools/         bench_ldpc.py · bench_phy.py · make_vectors.py · extract_nr_ldpc_tables.py · audit probes
-bench/         committed baseline curves
+docs/          AUDIT.md · ROADMAP.md · COMMUNITY-CONCERNS.md · adr/ (decisions) · spec/ (public
+               air interface, control API, host interfaces) · user/ (install, gateway kit,
+               frequency plan)
+model/         Python reference model: aether_model/{channel,waveform,fec,phy,frame,link,hal} + tests/
+core/          the shipped Rust workspace: aether-fec · aether-phy · aether-link · aetherd
+app/           ui/ (the station panel, no build step) · src-tauri/ (the desktop shell)
+deploy/        systemd unit for a gateway
+tools/         benchmarks · vector generators · release.py · stage_daemon.py · bench_gate.py
+bench/         committed baseline curves, including the release gate's
 vectors/       golden test vectors (TX bit-exact, RX must decode)
-core/ app/     Rust workspace and Tauri app — created in Phase 3 / 4
 ```
+
+**Installing it:** [`docs/user/install.md`](docs/user/install.md). **Running a gateway:**
+[`docs/user/gateway-kit.md`](docs/user/gateway-kit.md).
 
 ## Working on the model
 

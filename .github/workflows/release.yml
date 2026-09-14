@@ -257,10 +257,34 @@ jobs:
           path: aether-hf-*.spdx.json
           retention-days: 7
 
+  # ── the modem has not got worse ────────────────────────────────────────────────────
+  gate:
+    name: benchmark gate
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync (locked)
+        run: uv sync --locked
+
+      # A fixed, seeded AWGN sweep of four modes, compared with the committed baseline at
+      # the 10 % frame-error point: no mode may have lost more than 0.3 dB. The full grid
+      # is a forty-minute job and lives in bench/README.md; this is the part of it that
+      # runs on every release.
+      - name: No mode has lost more than 0.3 dB
+        run: uv run python tools/bench_gate.py
+
   # ── the release itself ─────────────────────────────────────────────────────────────
   publish:
     name: publish · ${{ needs.plan.outputs.channel }}
-    needs: [plan, daemon, desktop, sbom]
+    needs: [plan, daemon, desktop, sbom, gate]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     env:

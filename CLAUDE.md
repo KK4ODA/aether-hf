@@ -46,8 +46,8 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phases 0–3 are complete and **Phase 4 is built** (P4-1…P4-6; P4-7, the human acceptance
-test, is open), all on branch `phase-2`:
+Phases 0–3 are complete, **Phase 4 is built** (P4-1…P4-6; P4-7, the human acceptance test,
+is open) and **Phase 5 is built** (P5-1…P5-6; P5-7 open), all on branch `phase-2`:
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -68,6 +68,16 @@ test, is open), all on branch `phase-2`:
   `app/src-tauri/` (the shell: supervises the daemon, attaches if one is running, asks it
   to stop on close), the setup wizard, structured logging (`core/aetherd/src/log.rs`) and
   the diagnostic bundle, accessibility and error-message passes.
+* **Phase 5** — `tools/release.py` (one version number; `check` in CI, `bump` for a
+  release), `tools/stage_daemon.py` (the daemon as a Tauri sidecar), the release pipeline
+  (`.github/workflows/release.yml`: tags → installers, gateway tarballs, SBOM, checksums,
+  notes; nightly on a schedule; `[dry-run]` in a commit message builds without publishing),
+  configuration `schema_version` with a migration chain and fixtures under
+  `core/aetherd/tests/data/config/`, the updater (`app/src-tauri/src/update.rs`: channels,
+  signed manifests, kept installers for going back), and `tools/bench_gate.py`.
+  **Cutting a release:** `python tools/release.py bump X.Y.Z`, commit, tag `vX.Y.Z`, push
+  the tag. The updater's private key is *not* in the repository; the release is signed only
+  when `TAURI_SIGNING_PRIVATE_KEY` is set as a repository secret.
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
 debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
@@ -75,9 +85,10 @@ separate package (`cd app/src-tauri && cargo clippy --all-targets -- -D warnings
 the panel: `aetherd --config <file> --dry-run` with `[control] ui_dir` pointing at `app/ui`,
 then open `http://127.0.0.1:8515/`.
 
-**Next: Phase 5** (release infrastructure: installers that bundle the daemon and panel
-beside the shell, signed updates, channels) and the field work Phases 3–4 left open (Pat,
-Winlink Express, VarAC, BPQ32; three external hams through the wizard).
+**Next: Phase 6** (field validation: audio cable → ground wave → NVIS → long paths → RMS
+gateway trial, every session recorded and folded into the regression tier) and the field
+work Phases 3–5 left open (Pat, Winlink Express, VarAC, BPQ32; three external hams through
+the wizard; the first tagged release once the signing secret is set).
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
