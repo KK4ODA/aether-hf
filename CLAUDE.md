@@ -55,8 +55,15 @@ rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2
 (start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
 P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default), a fully measured 14-mode
 rate table, P2-6 (Wiener channel estimation built and benchmarked — **not adopted**, the
-default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete**, and Phase 3 has started: P3-1 (Rust workspace + `aether-fec`,
-bit-exact with the model) is done. Next: P3-2, porting the PHY, frame codec and ARQ.
+default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete.** Phase 3: P3-1 done (`aether-fec`, bit-exact with the model);
+P3-2 in progress — `aether-phy` (waveform, constellations, modes, frame codec, OFDM,
+preamble, transmitter) and `aether-link` (frame formats, rate control) are ported and
+cross-validated. Remaining in P3-2: the receiver and the ARQ engine.
+
+Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
+generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
+wrong** — regenerate only for a deliberate model change. Integer quantities are compared for
+equality; floating-point ones to a tolerance carried in the vector file.
 
 `docs/spec/air-interface.md` is public and its numeric tables are generated —
 run `python tools/make_spec.py` after any waveform, mode or constant change, or

@@ -535,7 +535,7 @@ Acceptance: §7.4 Poor-channel and protocol gates met; ADR-0004 recorded; specs 
 | ID | Task | Depends on |
 |---|---|---|
 | P3-1 ✅ | Rust workspace (`core/`) per ADR-0001, with `aether-fec` ported first: TS 38.212 CRCs, LDPC BG1/BG2 encode + layered decode, rate matching with HARQ-IR. Base-graph tables are generated at build time from the model's JSON, so both implementations share one source of truth; `tools/make_fec_vectors.py` + `tests/model_vectors.rs` prove them **bit-exact**. CI runs fmt, clippy `-D warnings`, tests on Linux + Windows, and fails if the vectors drift from the model | P1-9, P0-5 |
-| P3-2 | Port PHY + frame codec + ARQ to core; cross-validate bit-exact with the model | P3-1 |
+| P3-2 🔄 | Port PHY + frame codec + ARQ to core, cross-validated against the model. Done: waveform, constellations, mode table, frame codec, OFDM, preamble, transmitter (`aether-phy`); link frame formats and rate control (`aether-link`). Remaining: the receiver (acquisition, channel estimation, equalisation) and the ARQ engine | P3-1 |
 | P3-3 | `aetherd`: audio (cpal/WASAPI), PTT backends (RTS/DTR, CM108, CAT via rigctld/flrig/native), PTT watchdog (max key time), busy detector | P3-2 |
 | P3-4 | Native control API (WebSocket/REST) with token auth off-loopback | P3-3 |
 | P3-5 | VARA-compatible TCP adapter — full public command set; verify with **Pat** (open source) end-to-end through the simulator backend, then Winlink Express P2P between two instances | P3-4 |
