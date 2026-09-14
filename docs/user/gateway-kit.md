@@ -133,6 +133,16 @@ The control API is on loopback, so from the gateway itself:
 curl -s -X POST http://127.0.0.1:8515/v1/status -d '{}'
 ```
 
+Every log line has a UTC timestamp and the modem's state; `[log] format = "json"` in the
+configuration makes each line one JSON object, which `journalctl -o cat | jq` can filter by
+`event` or `level`. When something goes wrong, one request collects what a bug report needs
+— version, platform, settings with the token taken out, the state of the link, the devices
+the machine reports, and the last few hundred log lines, and none of your traffic:
+
+```bash
+curl -s -X POST http://127.0.0.1:8515/v1/diagnostics -d '{}' > aether-diagnostics.json
+```
+
 To watch from elsewhere, forward the port over SSH rather than opening it:
 
 ```bash

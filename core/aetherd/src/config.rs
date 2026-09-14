@@ -229,6 +229,36 @@ fn default_host_bind() -> String {
     "127.0.0.1:8300".to_owned()
 }
 
+/// Where the daemon's log goes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LogSection {
+    /// `text` for a terminal, `json` (one object per line) for a journal or a log shipper.
+    #[serde(default)]
+    pub format: crate::log::Format,
+    /// Also append to this file. Standard output is always written; a packaged desktop
+    /// daemon has no terminal, so without a file nothing it says survives the session.
+    #[serde(default)]
+    pub file: Option<std::path::PathBuf>,
+    /// How many recent entries to keep in memory for the `diagnostics` bundle.
+    #[serde(default = "default_log_keep")]
+    pub keep: usize,
+}
+
+impl Default for LogSection {
+    fn default() -> Self {
+        Self {
+            format: crate::log::Format::Text,
+            file: None,
+            keep: default_log_keep(),
+        }
+    }
+}
+
+fn default_log_keep() -> usize {
+    500
+}
+
 impl Default for HostSection {
     fn default() -> Self {
         Self {
@@ -259,6 +289,9 @@ pub struct Config {
     /// The VARA-compatible host interface.
     #[serde(default)]
     pub host: HostSection,
+    /// The log.
+    #[serde(default)]
+    pub log: LogSection,
 }
 
 /// Why a configuration was refused.
@@ -577,6 +610,14 @@ bind = "127.0.0.1:8515"
 # be free. `VERSION` answers with Aether's name, not VARA's — see docs/spec/host-interfaces.md.
 enabled = false
 bind = "127.0.0.1:8300"
+
+[log]
+# `text` for a terminal; `json` writes one object per line for a journal or a log shipper.
+format = "text"
+# Also append to a file. A desktop shell has no terminal, so this is where its story goes.
+# file = "aetherd.log"
+# How many recent entries the `diagnostics` bundle carries.
+keep = 500
 "#;
 
 #[cfg(test)]

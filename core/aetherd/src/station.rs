@@ -165,7 +165,12 @@ enum Outgoing {
     /// Link-layer frames, to be modulated.
     Frames(Vec<aether_link::TxFrame>),
     /// Audio to play as it is: a keying test, or a tune tone.
-    Audio(Vec<f32>),
+    Audio {
+        samples: Vec<f32>,
+        /// Whether it is silence. Keying an SSB transmitter with no audio puts nothing on
+        /// the air, so a keying test need not wait for the channel; a tone must.
+        silent: bool,
+    },
 }
 
 /// What the sound card is delivering, over the last few seconds.
@@ -597,10 +602,11 @@ impl<P: Ptt> Station<P> {
     /// Key the transmitter with no audio for a few seconds, so an operator can see the rig
     /// go into transmit and the interface's PTT light come on.
     ///
-    /// What can be measured from here is how long the keying backend took to answer, which
-    /// is what the result reports; whether the *radio* keyed is something only the operator
-    /// can see, and the point of the test is to let them look. Bounded, refused during a
-    /// session, and subject to the busy detector like any other transmission.
+    /// Whether the *radio* keyed is something only the operator can see, and the point of
+    /// the test is to let them look — so it keys now, not when the channel next clears: an
+    /// SSB transmitter keyed with no audio radiates nothing, and an operator watching a PTT
+    /// light cannot be told "accepted" and then kept waiting. Bounded, and refused during a
+    /// session.
     ///
     /// # Errors
     /// If a session is running, or the duration is outside what is sensible for a test.
@@ -612,7 +618,10 @@ impl<P: Ptt> Station<P> {
             return Err("a keying test lasts between 0.2 and 5 seconds");
         }
         let samples = (seconds * self.config.params.audio_rate as f64) as usize;
-        self.pending.push_back(Outgoing::Audio(vec![0.0; samples]));
+        self.pending.push_back(Outgoing::Audio {
+            samples: vec![0.0; samples],
+            silent: true,
+        });
         Ok(())
     }
 
@@ -622,16 +631,27 @@ impl<P: Ptt> Station<P> {
     /// This is what a radio's own "tune" button does with the difference that the audio is
     /// this modem's, at this modem's level, through this modem's sound card — which is
     /// exactly the path that has to be right. Bounded at ten seconds because a carrier is a
-    /// carrier, refused during a session, and subject to the busy detector.
+    /// carrier, and refused during a session or while the channel is busy — refused rather
+    /// than deferred, because an operator with a hand on the drive control is waiting for
+    /// it now, and a tone that starts on its own a minute later would surprise them.
     ///
     /// # Errors
-    /// If a session is running, or the duration is outside what is sensible.
+    /// If a session is running, the channel is not known to be clear, or the duration is
+    /// outside what is sensible.
     pub fn tune(&mut self, seconds: f64) -> Result<(), &'static str> {
         if self.engine.state() != State::Idle {
             return Err("a session is running");
         }
         if !(0.5..=10.0).contains(&seconds) {
             return Err("a tune tone lasts between 0.5 and 10 seconds");
+        }
+        if self.config.wait_for_clear && !self.busy.settled() {
+            return Err(
+                "the busy detector is still learning the noise floor; try again in a few seconds",
+            );
+        }
+        if self.config.wait_for_clear && !self.channel_clear(self.now()) {
+            return Err("the channel is busy");
         }
         let rate = self.config.params.audio_rate as f64;
         let level = self.config.tx_level;
@@ -641,8 +661,10 @@ impl<P: Ptt> Station<P> {
             tone_hz: 1500.0,
             level,
         };
-        self.pending
-            .push_back(Outgoing::Audio(tone.audio("T", rate)));
+        self.pending.push_back(Outgoing::Audio {
+            samples: tone.audio("T", rate),
+            silent: false,
+        });
         Ok(())
     }
 
@@ -839,10 +861,12 @@ impl<P: Ptt> Station<P> {
 
     /// Render the next queued burst into playable audio, if the channel allows.
     fn start_pending(&mut self, now: f64) {
-        if self.pending.is_empty() {
+        let Some(next) = self.pending.front() else {
             return;
-        }
-        if self.config.wait_for_clear && !self.channel_clear(now) {
+        };
+        // silence radiates nothing, so a keying test does not wait for the channel
+        let radiates = !matches!(next, Outgoing::Audio { silent: true, .. });
+        if radiates && self.config.wait_for_clear && !self.channel_clear(now) {
             self.stats.deferred_for_busy += 1;
             return;
         }
@@ -853,12 +877,12 @@ impl<P: Ptt> Station<P> {
             Outgoing::Frames(frames) => frames,
             // raw audio goes out as it is, inside the same keying and lead and tail as a
             // burst, so a keying test exercises exactly the path a transmission uses
-            Outgoing::Audio(audio) => {
+            Outgoing::Audio { samples, .. } => {
                 let audio_rate = self.config.params.audio_rate as f64;
                 let lead = (self.config.key_lead_s * audio_rate) as usize;
                 let tail = (self.config.key_tail_s * audio_rate) as usize;
                 self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-                self.playback.extend(audio);
+                self.playback.extend(samples);
                 self.playback.extend(std::iter::repeat_n(0.0f32, tail));
                 return;
             }
@@ -1337,6 +1361,34 @@ mod tests {
             "keyed for {keyed_samples} samples, asked for about {expected}"
         );
         assert_eq!(station.stats.transmissions, 1);
+    }
+
+    #[test]
+    fn a_keying_test_keys_now_and_a_tune_waits_for_the_channel() {
+        // a fresh station has not learned the noise floor yet, so anything that radiates
+        // is held; a keying test radiates nothing and must not be
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: true,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert!(!station.busy.settled());
+        assert!(
+            station.tune(1.0).is_err(),
+            "a tone went out before the channel was known to be clear"
+        );
+        station.key_test(0.5).expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        station.playback(&mut out).expect("playback");
+        assert!(
+            station.transmitting(),
+            "the keying test waited for a busy detector that has nothing to say about silence"
+        );
+        assert_eq!(station.stats.deferred_for_busy, 0);
     }
 
     #[test]

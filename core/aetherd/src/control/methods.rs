@@ -80,15 +80,43 @@ pub fn is_mutating(method: &str) -> bool {
     )
 }
 
-/// The configuration the daemon is running, and where it came from.
+/// What the daemon knows that the modem does not: its configuration and where it came
+/// from, its log, and how the audio has been behaving.
 ///
-/// Held beside the station so `config.get` and `config.set` can reach it without the modem
-/// having to know what a configuration file is.
-pub struct ConfigState {
+/// Held beside the station so `config.get`, `config.set` and `diagnostics` can reach it
+/// without the modem having to know what a configuration file or a log is.
+pub struct DaemonState {
     /// The current settings.
     pub config: crate::config::Config,
     /// Where they are written back to.
     pub path: std::path::PathBuf,
+    /// The log, with its ring of recent entries.
+    pub log: crate::log::Log,
+    /// When the daemon started, for the bundle's own clock.
+    pub started: std::time::SystemTime,
+    /// What the audio is running on, as the sound card described itself.
+    pub audio: String,
+    /// Captured samples dropped because the modem fell behind, since the start.
+    pub dropped_audio: u64,
+}
+
+impl DaemonState {
+    /// A state for a daemon running from a file.
+    #[must_use]
+    pub fn new(
+        config: crate::config::Config,
+        path: std::path::PathBuf,
+        log: crate::log::Log,
+    ) -> Self {
+        Self {
+            config,
+            path,
+            log,
+            started: std::time::SystemTime::now(),
+            audio: String::new(),
+            dropped_audio: 0,
+        }
+    }
 }
 
 /// Handle one request against a station.
@@ -96,22 +124,37 @@ pub fn dispatch<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response
     dispatch_with(station, None, request)
 }
 
-/// Handle one request, with access to the configuration.
+/// Handle one request, with access to the daemon's own state.
 pub fn dispatch_with<P: Ptt>(
     station: &mut Station<P>,
-    settings: Option<&mut ConfigState>,
+    daemon: Option<&mut DaemonState>,
     request: &Request,
 ) -> Response {
     match request.method.as_str() {
-        "config.get" => return config_get(settings, request.id.clone()),
-        "config.set" => return config_set(station, settings, &request.params, request.id.clone()),
+        "config.get" => return config_get(daemon, request.id.clone()),
+        "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
+        "diagnostics" => return diagnostics(station, daemon, request.id.clone()),
         _ => {}
     }
     dispatch_station(station, request)
 }
 
-fn config_get(settings: Option<&mut ConfigState>, id: Option<String>) -> Response {
-    let Some(settings) = settings else {
+/// The configuration as a client may see it: with the secrets taken out.
+///
+/// A loopback client needs no token, so it must not be able to read the one that guards a
+/// network bind — the point of the token is that reaching the port is not enough.
+fn redacted(config: &crate::config::Config) -> Result<Value, serde_json::Error> {
+    let mut value = serde_json::to_value(config)?;
+    if let Some(token) = value.pointer_mut("/control/token")
+        && !token.is_null()
+    {
+        *token = Value::String("<set>".to_owned());
+    }
+    Ok(value)
+}
+
+fn config_get(daemon: Option<&mut DaemonState>, id: Option<String>) -> Response {
+    let Some(daemon) = daemon else {
         return Response::failed(
             id,
             ApiError::new(
@@ -122,12 +165,12 @@ fn config_get(settings: Option<&mut ConfigState>, id: Option<String>) -> Respons
             ),
         );
     };
-    match serde_json::to_value(&settings.config) {
+    match redacted(&daemon.config) {
         Ok(value) => Response::ok(
             id,
             json!({
                 "config": value,
-                "path": settings.path.display().to_string(),
+                "path": daemon.path.display().to_string(),
                 "live_keys": crate::config::LIVE_KEYS,
             }),
         ),
@@ -142,13 +185,79 @@ fn config_get(settings: Option<&mut ConfigState>, id: Option<String>) -> Respons
     }
 }
 
+/// Milliseconds since the Unix epoch, for a `SystemTime`.
+fn unix_ms(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Everything a bug report needs, in one object.
+///
+/// The questions a maintainer asks first are "what version, what platform, what settings,
+/// what was it doing", and the operator is rarely at the station when they are asked. This
+/// answers all of them at once, with the secrets out and the recent log in, so the panel can
+/// offer one "copy" button and an issue can be filed from a phone.
+fn diagnostics<P: Ptt>(
+    station: &Station<P>,
+    daemon: Option<&mut DaemonState>,
+    id: Option<String>,
+) -> Response {
+    let devices = match crate::audio::list_devices() {
+        Ok(devices) => json!({
+            "devices": devices
+                .iter()
+                .map(|d| json!({"name": d.name, "input": d.input, "output": d.output}))
+                .collect::<Vec<_>>(),
+            "serial_ports": crate::ptt::list_serial_ports(),
+        }),
+        Err(error) => json!({ "error": error.to_string() }),
+    };
+    let mut bundle = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        },
+        "generated": crate::log::rfc3339(unix_ms(std::time::SystemTime::now())),
+        "status": status(station),
+        "capabilities": capabilities(),
+        "devices": devices,
+        "config": Value::Null,
+        "path": Value::Null,
+        "log": Value::Array(Vec::new()),
+    });
+    if let Some(daemon) = daemon
+        && let Some(object) = bundle.as_object_mut()
+    {
+        object.insert(
+            "config".into(),
+            redacted(&daemon.config).unwrap_or(Value::Null),
+        );
+        object.insert("path".into(), json!(daemon.path.display().to_string()));
+        object.insert(
+            "started".into(),
+            json!(crate::log::rfc3339(unix_ms(daemon.started))),
+        );
+        object.insert(
+            "audio".into(),
+            json!({
+                "description": daemon.audio,
+                "dropped_samples": daemon.dropped_audio,
+            }),
+        );
+        object.insert("log".into(), json!(daemon.log.recent()));
+        object.insert("log_forgotten".into(), json!(daemon.log.forgotten()));
+    }
+    Response::ok(id, bundle)
+}
+
 fn config_set<P: Ptt>(
     station: &mut Station<P>,
-    settings: Option<&mut ConfigState>,
+    daemon: Option<&mut DaemonState>,
     params: &Value,
     id: Option<String>,
 ) -> Response {
-    let Some(settings) = settings else {
+    let Some(settings) = daemon else {
         return Response::failed(
             id,
             ApiError::new(
@@ -604,6 +713,83 @@ mod tests {
         let response = call(&mut station, "send", json!({"data": "not base64!"}));
         assert!(!response.ok);
         assert_eq!(response.error.expect("error").code, "bad_params");
+    }
+
+    fn daemon() -> DaemonState {
+        let mut config = crate::config::Config::parse(crate::config::EXAMPLE).expect("example");
+        config.control.token = Some("hunter2".to_owned());
+        DaemonState::new(
+            config,
+            std::path::PathBuf::from("station.toml"),
+            crate::log::Log::memory(50),
+        )
+    }
+
+    #[test]
+    fn the_token_never_leaves_the_daemon() {
+        let mut station = station();
+        let mut daemon = daemon();
+        let request = |method: &str| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params: json!({}),
+            token: None,
+        };
+        for method in ["config.get", "diagnostics"] {
+            let response = dispatch_with(&mut station, Some(&mut daemon), &request(method));
+            assert!(response.ok, "{method}");
+            let text = serde_json::to_string(&response.result).expect("json");
+            assert!(
+                !text.contains("hunter2"),
+                "{method} leaked the token: {text}"
+            );
+            assert_eq!(
+                response.result.expect("result")["config"]["control"]["token"],
+                "<set>"
+            );
+        }
+    }
+
+    #[test]
+    fn a_diagnostic_bundle_has_what_a_bug_report_needs() {
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.audio = "loopback".to_owned();
+        daemon.dropped_audio = 7;
+        daemon.log.record(
+            crate::log::Level::Warn,
+            "watchdog",
+            "key time exceeded",
+            "Idle",
+        );
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &Request {
+                id: Some("1".into()),
+                method: "diagnostics".to_owned(),
+                params: json!({}),
+                token: None,
+            },
+        );
+        assert!(response.ok);
+        let bundle = response.result.expect("result");
+        assert_eq!(bundle["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(bundle["platform"]["os"], std::env::consts::OS);
+        assert_eq!(bundle["status"]["state"], "idle");
+        assert_eq!(bundle["config"]["callsign"], "N0CALL");
+        assert_eq!(bundle["audio"]["dropped_samples"], 7);
+        assert_eq!(bundle["log"][0]["event"], "watchdog");
+        assert_eq!(bundle["log"][0]["level"], "warn");
+        assert!(
+            bundle["generated"]
+                .as_str()
+                .expect("generated")
+                .ends_with('Z')
+        );
+        assert!(bundle["capabilities"]["modes"].is_array());
+        // and it is read-only: a client limited to reading may ask for it
+        assert!(!is_mutating("diagnostics"));
     }
 
     #[test]

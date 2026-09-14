@@ -677,6 +677,7 @@ function wire() {
     if (ok) $("outgoing").value = "";
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
+  $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   $("btn-apply").addEventListener("click", applyConfig);
   $("wz-profile").addEventListener("change", applyProfile);
   $("wz-call").addEventListener("input", () => {
@@ -717,6 +718,25 @@ async function act(operation, description) {
 }
 
 // ── panes ───────────────────────────────────────────────────────────
+
+async function copyDiagnostics() {
+  const note = $("diagnostics-note");
+  note.textContent = "Collecting…";
+  try {
+    const bundle = await call("diagnostics");
+    const text = JSON.stringify(bundle, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      note.textContent = `Copied ${(text.length / 1024).toFixed(0)} kB to the clipboard.`;
+    } catch {
+      // no clipboard (a plain http page in some browsers): show it, so it can be selected
+      $("log").textContent = text;
+      note.textContent = "The clipboard is not available here; the bundle is shown below.";
+    }
+  } catch (error) {
+    note.textContent = error.message;
+  }
+}
 
 function log(message, bad = false) {
   const line = document.createElement("div");

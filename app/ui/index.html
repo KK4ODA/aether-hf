@@ -148,9 +148,11 @@
               </div>
               <p class="sub">
                 <strong>Key</strong> puts the radio into transmit with no audio: watch the
-                rig and the interface's PTT light. <strong>Tune</strong> keys with a steady
-                tone at the configured level: set the drive so the rig's ALC barely moves.
-                Both refuse to run while the channel is busy or a session is up.
+                rig and the interface's PTT light. It keys at once — an SSB transmitter with
+                no audio radiates nothing. <strong>Tune</strong> keys with a steady tone at
+                the configured level: set the drive so the rig's ALC barely moves. A tone is a
+                transmission, so it is refused while the channel is busy, and both are refused
+                during a session.
               </p>
             </li>
             <li class="step" data-step="5">
@@ -216,8 +218,14 @@
       <section id="panel-log" class="panel" hidden>
         <div class="row">
           <button id="btn-clear-log">Clear</button>
-          <span class="sub">Newest last.</span>
+          <button id="btn-diagnostics">Copy diagnostic bundle</button>
+          <span class="sub" id="diagnostics-note" role="status" aria-live="polite">Newest last.</span>
         </div>
+        <p class="sub">
+          The bundle is what to paste into a bug report: version, platform, settings with the
+          token taken out, the state of the link, the devices this machine reports, and the
+          daemon's last few hundred log lines. It never contains your traffic.
+        </p>
         <pre id="log" class="received" aria-live="polite"></pre>
       </section>
     </main>

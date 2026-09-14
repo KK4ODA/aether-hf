@@ -1,8 +1,7 @@
 //! The Aether HF station daemon.
 //!
-//! Reads a configuration file, opens a sound card and a keying interface, and runs the modem.
-//! What it does not yet have is a control interface — that is P3-4 — so for now it listens,
-//! answers, and can be told to call one station from the command line.
+//! Reads a configuration file, opens a sound card and a keying interface, and runs the modem,
+//! with the control API and the VARA-compatible host interface listening beside it.
 //!
 //! # The loop
 //!
@@ -20,10 +19,11 @@ use aetherd::{
     config::{Config, EXAMPLE, PttConfig},
     control::{
         ControlServer, channel,
-        methods::{ConfigState, dispatch_with, metrics},
+        methods::{DaemonState, dispatch_with, is_mutating, metrics},
         protocol::Event,
     },
     host::HostServer,
+    log::{Level, Log},
     ptt::{NullPtt, Ptt, PttError, RigctldPtt, SerialPtt, list_serial_ports},
     station::{Station, StationConfig},
 };
@@ -149,7 +149,114 @@ fn run() -> Result<(), String> {
             .map_or_else(|| full.clone(), std::path::PathBuf::from)
     });
 
-    let station_config = StationConfig {
+    // The log comes up before anything that can fail loudly, so that what fails is on record.
+    let log = open_log(&config, &path)?;
+    let mut daemon = DaemonState::new(config.clone(), path, log);
+
+    // A dry run keys nothing, whatever the file says. Somebody checking their configuration
+    // must not put a carrier on the air to find out that they had the wrong serial port.
+    let ptt: Box<dyn Ptt> = if args.dry_run {
+        Box::new(NullPtt::default())
+    } else {
+        open_ptt(&config.ptt).map_err(|e| e.to_string())?
+    };
+    let mut station = Station::new(
+        station_config(&config),
+        ptt,
+        seed_from_callsign(&config.callsign),
+    );
+    daemon.log.record(
+        Level::Info,
+        "ptt",
+        &format!(
+            "{} keying via {}",
+            config.callsign,
+            station.ptt_description()
+        ),
+        "Idle",
+    );
+
+    let mut audio: Box<dyn AudioIo> = if args.dry_run {
+        "dry run: audio loops back and nothing is keyed".clone_into(&mut daemon.audio);
+        Box::new(Loopback::new())
+    } else {
+        let card = SoundCard::open(&config.audio_config()).map_err(|e| e.to_string())?;
+        daemon.audio.clone_from(&card.description);
+        Box::new(card)
+    };
+    daemon
+        .log
+        .record(Level::Info, "audio", &daemon.audio, "Idle");
+
+    // A gateway is stopped by its service manager sending a signal. Whatever else happens on
+    // the way out, the transmitter has to be released: a station killed mid-burst would
+    // otherwise sit there keyed until somebody noticed, which on an unattended station could
+    // be a very long time.
+    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&stopping);
+    if let Err(error) = ctrlc::set_handler(move || {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }) {
+        daemon.log.record(
+            Level::Error,
+            "daemon",
+            &format!("cannot catch a stop signal ({error}); the radio may stay keyed on exit"),
+            "Idle",
+        );
+    }
+
+    let (handle, control) = channel();
+    let _servers = start_servers(&config, handle, &mut daemon)?;
+
+    if let Some(call) = &args.call {
+        station.connect(call).map_err(str::to_owned)?;
+        daemon.log.record(
+            Level::Info,
+            "connect",
+            &format!("calling {call}"),
+            "Connecting",
+        );
+    }
+
+    serve(
+        &config,
+        &mut station,
+        audio.as_mut(),
+        &control,
+        &mut daemon,
+        &stopping,
+    )
+}
+
+/// The log, on standard output and — if asked — in a file beside the configuration.
+fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
+    let mut log = Log::to_stdout(config.log.format, config.log.keep);
+    if let Some(file) = &config.log.file {
+        // relative to the configuration file, which is the one place the operator knows
+        let file = if file.is_relative() {
+            path.parent().map_or(file.clone(), |dir| dir.join(file))
+        } else {
+            file.clone()
+        };
+        log.also_to_file(&file)
+            .map_err(|e| format!("cannot open the log file {}: {e}", file.display()))?;
+    }
+    log.record(
+        Level::Info,
+        "daemon",
+        &format!(
+            "aetherd {} starting from {}",
+            env!("CARGO_PKG_VERSION"),
+            path.display()
+        ),
+        "Idle",
+    );
+    Ok(log)
+}
+
+/// What the station is told from the configuration file.
+fn station_config(config: &Config) -> StationConfig {
+    StationConfig {
         callsign: config.callsign.clone(),
         link: LinkConfig {
             max_mode: config.radio.max_mode,
@@ -166,84 +273,133 @@ fn run() -> Result<(), String> {
         }),
         cw_id_interval_s: config.radio.cw_id_interval_s,
         ..StationConfig::default()
-    };
-
-    // A dry run keys nothing, whatever the file says. Somebody checking their configuration
-    // must not put a carrier on the air to find out that they had the wrong serial port.
-    let ptt: Box<dyn Ptt> = if args.dry_run {
-        Box::new(NullPtt::default())
-    } else {
-        open_ptt(&config.ptt).map_err(|e| e.to_string())?
-    };
-    let mut station = Station::new(station_config, ptt, seed_from_callsign(&config.callsign));
-    println!(
-        "aetherd: {} keying via {}",
-        config.callsign,
-        station.ptt_description()
-    );
-
-    let mut audio: Box<dyn AudioIo> = if args.dry_run {
-        println!("aetherd: dry run — audio loops back and nothing is keyed");
-        Box::new(Loopback::new())
-    } else {
-        let card = SoundCard::open(&config.audio_config()).map_err(|e| e.to_string())?;
-        println!("aetherd: audio {}", card.description);
-        Box::new(card)
-    };
-
-    // A gateway is stopped by its service manager sending a signal. Whatever else happens on
-    // the way out, the transmitter has to be released: a station killed mid-burst would
-    // otherwise sit there keyed until somebody noticed, which on an unattended station could
-    // be a very long time.
-    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let flag = std::sync::Arc::clone(&stopping);
-    if let Err(error) = ctrlc::set_handler(move || {
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-    }) {
-        eprintln!("aetherd: cannot catch a stop signal ({error}); the radio may stay keyed");
     }
+}
 
-    let (handle, control) = channel();
-    let _server = if config.control.enabled {
+/// The control API and, if asked for, the VARA-compatible host interface. Held for as long
+/// as the daemon runs: dropping them closes the ports.
+fn start_servers(
+    config: &Config,
+    handle: aetherd::control::ControlHandle,
+    daemon: &mut DaemonState,
+) -> Result<(Option<ControlServer>, Option<HostServer>), String> {
+    let control = if config.control.enabled {
         let server = ControlServer::start(&config.control_config(), handle.clone())
             .map_err(|e| e.to_string())?;
-        println!("aetherd: control interface on ws://{}/v1", server.address);
+        daemon.log.record(
+            Level::Info,
+            "control",
+            &format!("listening on ws://{}/v1", server.address),
+            "Idle",
+        );
         Some(server)
     } else {
-        println!("aetherd: control interface disabled");
+        daemon
+            .log
+            .record(Level::Info, "control", "disabled", "Idle");
         None
     };
 
-    let _host = if config.host.enabled {
+    let host = if config.host.enabled {
         let server = HostServer::start(&config.host_config(), handle).map_err(|e| e.to_string())?;
-        println!(
-            "aetherd: host interface on {} (data {}) — it reports itself as {}",
-            server.command_address,
-            server.data_address,
-            aetherd::host::vara::version_string()
+        daemon.log.record(
+            Level::Info,
+            "host",
+            &format!(
+                "listening on {} (data {}), reporting itself as {}",
+                server.command_address,
+                server.data_address,
+                aetherd::host::vara::version_string()
+            ),
+            "Idle",
         );
         Some(server)
     } else {
         None
     };
+    Ok((control, host))
+}
 
-    if let Some(call) = &args.call {
-        station.connect(call).map_err(str::to_owned)?;
-        println!("aetherd: calling {call}");
+/// Answer what clients have asked since the last audio block.
+///
+/// Control requests are answered from the modem's thread, between blocks. The modem is
+/// single-threaded because its clock is the audio it has heard, and a connection reaching
+/// in from another thread would be able to change the state mid-frame.
+fn answer_commands(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+    stopping: &std::sync::atomic::AtomicBool,
+) {
+    for command in control.drain() {
+        // `shutdown` is the daemon's to answer, not the station's: it runs the same path a
+        // stop signal does, so a supervisor that cannot send a signal — the desktop shell
+        // on Windows — still gets the transmitter released properly.
+        let response = if command.request.method == "shutdown" {
+            stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            aetherd::control::protocol::Response::ok(
+                command.request.id.clone(),
+                json!({ "stopping": true }),
+            )
+        } else {
+            dispatch_with(station, Some(daemon), &command.request)
+        };
+        // What a client asked for, and whether it got it, is most of what a bug report
+        // needs. Reads are not logged: a panel polls, and the ring would hold nothing else.
+        if is_mutating(&command.request.method) {
+            daemon.log.record(
+                if response.ok {
+                    Level::Info
+                } else {
+                    Level::Warn
+                },
+                "control",
+                &describe(&command.request, &response),
+                &state_name(station),
+            );
+        }
+        let _ = command.reply.send(response);
     }
+}
 
-    let mut settings = ConfigState {
-        config: config.clone(),
-        path,
+/// A request and its answer, in one line, with the payload of a `send` left out.
+fn describe(
+    request: &aetherd::control::Request,
+    response: &aetherd::control::protocol::Response,
+) -> String {
+    let params = if request.method == "send" {
+        // the bytes are the operator's traffic, and they do not belong in a bug report
+        request
+            .params
+            .get("data")
+            .and_then(|d| d.as_str())
+            .map_or_else(String::new, |data| {
+                format!("{{\"data\": <{} base64 chars>}}", data.len())
+            })
+    } else {
+        request.params.to_string()
     };
-    serve(
-        &config,
-        &mut station,
-        audio.as_mut(),
-        &control,
-        &mut settings,
-        &stopping,
-    )
+    match &response.error {
+        None => format!("{} {params}: ok", request.method),
+        Some(error) => format!(
+            "{} {params}: {} ({})",
+            request.method, error.message, error.code
+        ),
+    }
+}
+
+/// The modem's state, as the log records it.
+fn state_name(station: &Station<Box<dyn Ptt>>) -> String {
+    format!("{:?}", station.state())
+}
+
+/// How much a station event matters, from its name.
+fn level_of(name: &str) -> Level {
+    match name {
+        "error" => Level::Error,
+        "watchdog" | "timeout" | "failed" => Level::Warn,
+        _ => Level::Info,
+    }
 }
 
 /// The run loop: audio in, audio out, control requests answered between blocks.
@@ -254,7 +410,7 @@ fn serve(
     station: &mut Station<Box<dyn Ptt>>,
     audio: &mut dyn AudioIo,
     control: &aetherd::control::ControlChannel,
-    settings: &mut ConfigState,
+    daemon: &mut DaemonState,
     stopping: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
@@ -265,33 +421,24 @@ fn serve(
 
     loop {
         if stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            println!("aetherd: stopping");
+            daemon
+                .log
+                .record(Level::Info, "daemon", "stopping", &state_name(station));
             // Report the failure but do not return on it: there is nothing left to try, and
             // exiting quietly would hide a radio that is still keyed.
             if let Err(error) = station.shut_down() {
+                daemon.log.record(
+                    Level::Error,
+                    "ptt",
+                    &format!("the radio would not release: {error}"),
+                    &state_name(station),
+                );
                 eprintln!("aetherd: the radio would not release: {error}");
             }
             return Ok(());
         }
 
-        // Control requests are answered from this thread, between audio blocks. The modem
-        // is single-threaded because its clock is the audio it has heard, and a connection
-        // reaching in from another thread would be able to change the state mid-frame.
-        for command in control.drain() {
-            // `shutdown` is the daemon's to answer, not the station's: it runs the same
-            // path a stop signal does, so a supervisor that cannot send a signal — the
-            // desktop shell on Windows — still gets the transmitter released properly.
-            let response = if command.request.method == "shutdown" {
-                stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-                aetherd::control::protocol::Response::ok(
-                    command.request.id.clone(),
-                    json!({ "stopping": true }),
-                )
-            } else {
-                dispatch_with(station, Some(settings), &command.request)
-            };
-            let _ = command.reply.send(response);
-        }
+        answer_commands(station, control, daemon, stopping);
 
         let captured = audio.capture();
         let idle = captured.is_empty();
@@ -310,8 +457,10 @@ fn serve(
         }
 
         for event in station.take_events() {
-            println!("aetherd: {event}");
             let (name, detail) = event.split_once(':').unwrap_or(("log", event.as_str()));
+            daemon
+                .log
+                .record(level_of(name), name, detail, &state_name(station));
             control.publish(&Event::new(
                 if name == "connected" || name == "disconnected" || name == "role" {
                     "state"
@@ -341,16 +490,28 @@ fn serve(
         let keyed = station.transmitting();
         if keyed != last_keyed {
             last_keyed = keyed;
+            daemon.log.record(
+                Level::Info,
+                "ptt",
+                if keyed { "keyed" } else { "released" },
+                &state_name(station),
+            );
             control.publish(&Event::new("ptt", json!({ "on": keyed })));
         }
 
         let dropped = audio.dropped();
         if dropped > reported_drops {
-            eprintln!(
-                "aetherd: dropped {} audio samples — the modem is behind",
-                dropped - reported_drops
+            daemon.log.record(
+                Level::Warn,
+                "audio",
+                &format!(
+                    "dropped {} captured samples: the modem is behind",
+                    dropped - reported_drops
+                ),
+                &state_name(station),
             );
             reported_drops = dropped;
+            daemon.dropped_audio = dropped as u64;
         }
 
         if idle {

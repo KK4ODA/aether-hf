@@ -92,9 +92,14 @@ human-facing and may be localised.
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
+| `diagnostics` | — | everything a bug report needs, in one object (§4.5) |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
 what keeps this document PHY-agnostic.
+
+`config.get` and `diagnostics` return the configuration **with the secrets taken out**:
+`control.token` comes back as the string `<set>` when one is configured. A loopback client
+needs no token, so it must not be able to read the one that guards a network bind.
 
 ### 4.2 Session
 
@@ -183,6 +188,45 @@ Three rules, because a settings interface that gets any of them wrong is worse t
   bound once. `config.get` returns `live_keys`, and `config.set` reports which of the keys it
   just changed are not among them. A setting that silently does nothing until the next restart
   is worse than one that says so.
+
+### 4.5 The diagnostic bundle
+
+`diagnostics` answers the questions a maintainer asks first — what version, on what, with
+what settings, doing what — in one object, so a panel can offer a single "copy" button and an
+operator can paste the result into an issue from wherever they are:
+
+| Key | Contents |
+|---|---|
+| `version`, `platform` | the daemon's version; `os` and `arch` |
+| `generated`, `started` | RFC 3339 UTC timestamps for the bundle and for the daemon's start |
+| `config`, `path` | the running configuration (secrets redacted) and the file it came from |
+| `status`, `capabilities` | as the methods of the same names return them |
+| `devices` | the audio devices and serial ports the machine reports |
+| `audio` | how the sound card described itself, and how many captured samples the modem has dropped |
+| `log`, `log_forgotten` | the most recent log entries (§4.6), oldest first, and how many older ones have scrolled off |
+
+It contains no traffic: a `send` is logged with the *length* of its payload, never the bytes.
+
+### 4.6 The log
+
+Every line the daemon writes carries a UTC timestamp with milliseconds, a level (`info`,
+`warn`, `error`), an event name a machine can group on, the detail a person reads, and the
+modem's state at the time. On a terminal it looks like
+
+```
+2026-09-14T11:11:25.900Z info  ptt: keyed (Idle)
+```
+
+and with `[log] format = "json"` in the configuration each line is one object with the keys
+`ts`, `level`, `event`, `detail` and `state`, for a journal or a log shipper. `[log] file`
+appends the same lines to a file — a packaged desktop daemon has no terminal, so without it
+nothing the daemon says survives the session. The last `[log] keep` entries (default 500)
+are held in memory for `diagnostics`.
+
+What is logged: the daemon's start and stop; what the audio and keying are running on; every
+*mutating* control request with its outcome (reads are not logged — a panel polls, and the
+ring would hold nothing else); every keying and release of the transmitter; every session
+event the modem reports; dropped audio; and anything that failed.
 
 ---
 

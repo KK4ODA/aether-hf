@@ -16,6 +16,7 @@ pub mod config;
 pub mod control;
 pub mod cwid;
 pub mod host;
+pub mod log;
 pub mod ptt;
 pub mod station;
 
