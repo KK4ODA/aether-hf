@@ -150,6 +150,36 @@ impl Default for RadioSection {
     }
 }
 
+/// The control interface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlSection {
+    /// Whether to listen at all.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Address to listen on. Loopback unless the operator says otherwise, and any other
+    /// address requires a token.
+    #[serde(default = "default_bind")]
+    pub bind: String,
+    /// Bearer token, required for a non-loopback bind.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+fn default_bind() -> String {
+    "127.0.0.1:8515".to_owned()
+}
+
+impl Default for ControlSection {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            bind: default_bind(),
+            token: None,
+        }
+    }
+}
+
 /// A whole configuration file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -165,6 +195,9 @@ pub struct Config {
     /// Limits.
     #[serde(default)]
     pub radio: RadioSection,
+    /// The control interface.
+    #[serde(default)]
+    pub control: ControlSection,
 }
 
 /// Why a configuration was refused.
@@ -253,6 +286,18 @@ impl Config {
                 aether_link::AWGN_THRESHOLD_DB.len()
             )));
         }
+        // The control interface can key a transmitter, so an address the network can reach
+        // is refused here rather than started open and warned about.
+        if self.control.enabled
+            && !crate::control::server::is_loopback(&self.control.bind)
+            && self.control.token.is_none()
+        {
+            return Err(ConfigError::Invalid(format!(
+                "control.bind is {}, which is reachable from the network, and this interface \
+                 can key a transmitter. Set control.token, or bind to 127.0.0.1.",
+                self.control.bind
+            )));
+        }
         Ok(())
     }
 
@@ -264,6 +309,15 @@ impl Config {
             output: self.audio.output.clone(),
             sample_rate: self.audio.sample_rate,
             ..AudioConfig::default()
+        }
+    }
+
+    /// Control-interface settings in the form the server wants.
+    #[must_use]
+    pub fn control_config(&self) -> crate::control::ControlConfig {
+        crate::control::ControlConfig {
+            bind: self.control.bind.clone(),
+            token: self.control.token.clone(),
         }
     }
 
@@ -311,6 +365,14 @@ wait_for_clear = true
 busy_threshold_db = 6.0
 # The fastest mode this station will use, 0 to 13.
 max_mode = 13
+
+[control]
+# The modem's own interface: JSON over WebSocket at ws://<bind>/v1, or POST /v1/<method>.
+enabled = true
+# Loopback needs no token. Any other address does, and the daemon refuses to start without
+# one rather than leaving a transmitter open to the network.
+bind = "127.0.0.1:8515"
+# token = "a long random string"
 "#;
 
 #[cfg(test)]
@@ -401,6 +463,28 @@ mod tests {
                 "accepted a setting that cannot work: {text}"
             );
         }
+    }
+
+    #[test]
+    fn a_control_bind_the_network_can_reach_needs_a_token() {
+        let open = "callsign = \"W4ODA\"\n[control]\nbind = \"0.0.0.0:8515\"\n";
+        let error = Config::parse(open).expect_err("an open control bind was accepted");
+        assert!(matches!(error, ConfigError::Invalid(_)), "{error}");
+        assert!(
+            error.to_string().contains("127.0.0.1"),
+            "the message does not say what to do instead: {error}"
+        );
+
+        let with_token =
+            "callsign = \"W4ODA\"\n[control]\nbind = \"0.0.0.0:8515\"\ntoken = \"secret\"\n";
+        assert!(Config::parse(with_token).is_ok(), "a token should allow it");
+
+        let disabled =
+            "callsign = \"W4ODA\"\n[control]\nenabled = false\nbind = \"0.0.0.0:8515\"\n";
+        assert!(
+            Config::parse(disabled).is_ok(),
+            "a bind that is never listened on is not a risk"
+        );
     }
 
     #[test]

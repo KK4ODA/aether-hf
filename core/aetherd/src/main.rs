@@ -18,9 +18,15 @@ use aether_link::LinkConfig;
 use aetherd::{
     audio::{AudioIo, Loopback, SoundCard, list_devices},
     config::{Config, EXAMPLE, PttConfig},
+    control::{
+        ControlServer, channel,
+        methods::{dispatch, metrics},
+        protocol::Event,
+    },
     ptt::{NullPtt, Ptt, PttError, RigctldPtt, SerialPtt, list_serial_ports},
     station::{Station, StationConfig},
 };
+use serde_json::json;
 
 /// How much audio to keep queued for the sound card. Enough to ride out a scheduling hiccup,
 /// short enough that keying and audio stay in step.
@@ -28,6 +34,9 @@ const PLAYBACK_BACKLOG_S: f64 = 0.25;
 /// How long to wait when there is nothing to do. Short enough that a burst is never late by
 /// an audible amount; long enough that an idle station does not spin a core.
 const IDLE_SLEEP: Duration = Duration::from_millis(5);
+/// How often to push link metrics to a listening client. Often enough to watch a transfer,
+/// rare enough that a client that only wants state changes is not flooded.
+const METRICS_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -166,16 +175,49 @@ fn run() -> Result<(), String> {
         Box::new(card)
     };
 
+    let (handle, control) = channel();
+    let _server = if config.control.enabled {
+        let server =
+            ControlServer::start(&config.control_config(), handle).map_err(|e| e.to_string())?;
+        println!("aetherd: control interface on ws://{}/v1", server.address);
+        Some(server)
+    } else {
+        println!("aetherd: control interface disabled");
+        None
+    };
+
     if let Some(call) = &args.call {
         station.connect(call).map_err(str::to_owned)?;
         println!("aetherd: calling {call}");
     }
 
+    serve(&config, &mut station, audio.as_mut(), &control)
+}
+
+/// The run loop: audio in, audio out, control requests answered between blocks.
+///
+/// Never returns; the daemon is stopped from outside.
+fn serve(
+    config: &Config,
+    station: &mut Station<Box<dyn Ptt>>,
+    audio: &mut dyn AudioIo,
+    control: &aetherd::control::ControlChannel,
+) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
     let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
     let mut reported_drops = 0;
+    let mut last_metrics = std::time::Instant::now();
+    let mut last_state = String::new();
 
     loop {
+        // Control requests are answered from this thread, between audio blocks. The modem
+        // is single-threaded because its clock is the audio it has heard, and a connection
+        // reaching in from another thread would be able to change the state mid-frame.
+        for command in control.drain() {
+            let response = dispatch(station, &command.request);
+            let _ = command.reply.send(response);
+        }
+
         let captured = audio.capture();
         let idle = captured.is_empty();
         if !idle {
@@ -194,11 +236,35 @@ fn run() -> Result<(), String> {
 
         for event in station.take_events() {
             println!("aetherd: {event}");
+            let (name, detail) = event.split_once(':').unwrap_or(("log", event.as_str()));
+            control.publish(&Event::new(
+                if name == "connected" || name == "disconnected" || name == "role" {
+                    "state"
+                } else {
+                    "log"
+                },
+                json!({"name": name, "detail": detail, "state": format!("{:?}", station.state())}),
+            ));
         }
         let received = station.take_received();
         if !received.is_empty() {
-            // no control interface yet, so what arrives goes to standard output
+            control.publish(&Event::new(
+                "data",
+                json!({"data": aetherd::control::methods::to_base64(&received)}),
+            ));
+            // with no client attached there is still somewhere for it to go
             print!("{}", String::from_utf8_lossy(&received));
+        }
+
+        // metrics are the operator's window into the link, so they go out while it runs
+        if control.subscriber_count() > 0 && last_metrics.elapsed() >= METRICS_INTERVAL {
+            last_metrics = std::time::Instant::now();
+            control.publish(&Event::new("metrics", metrics(station)));
+        }
+        let state = format!("{:?}", station.state());
+        if state != last_state {
+            last_state = state;
+            control.publish(&Event::new("ptt", json!({"on": station.transmitting()})));
         }
 
         let dropped = audio.dropped();
