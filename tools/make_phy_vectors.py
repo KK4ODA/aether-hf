@@ -29,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.codec import FrameCodec, coprime_stride
 from aether_model.frame.modes import CONTROL_MODE, LONG, MODES, SHORT
 from aether_model.phy.constellation import constellation
+from aether_model.phy.ofdm import OfdmDemodulator
+from aether_model.phy.preamble import FrameHeader, FrameType
+from aether_model.phy.tx import FrameTransmitter
 from aether_model.waveform import WIDE_2300, Modulation
 
 MODULATIONS = [
@@ -191,6 +194,64 @@ def codec_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
+def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
+    """Whole frames, compared at the carrier level rather than sample by sample.
+
+    Demodulating the transmitter's own output checks the preamble, pilot placement, the mode
+    and RV chips, the IFFT scaling and the windowing all at once, in a form small enough to
+    commit. A strided set of time samples goes with it so a scaling or windowing error that
+    somehow cancelled at the carriers would still show up.
+
+    Peak reduction (ADR-0004) is switched off: the Rust transmitter does not implement it
+    yet, and comparing against a model that does would be comparing two different waveforms.
+    """
+    tx = FrameTransmitter(WIDE_2300, papr_reduction=False)
+    dem = OfdmDemodulator(WIDE_2300)
+    period = WIDE_2300.symbol_samples
+    out = []
+    rng = np.random.default_rng(31337)
+    cases = [
+        (MODES[0], LONG, FrameType.DATA, 0),
+        (MODES[4], LONG, FrameType.DATA, 1),
+        (MODES[13], LONG, FrameType.DATA, 3),
+        (CONTROL_MODE, SHORT, FrameType.CONTROL, 0),
+    ]
+    for mode, layout, frame_type, rv in cases:
+        codec = FrameCodec(mode, layout)
+        payload = rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8).tobytes()
+        qam = codec.encode(payload, rv)
+        header = (
+            FrameHeader(FrameType.DATA, mode.index, rv)
+            if frame_type is FrameType.DATA
+            else FrameHeader(FrameType.CONTROL)
+        )
+        waveform = tx.baseband(header, layout, qam)
+        # carrier values of every symbol but the last (which has no successor to overlap)
+        carriers = [
+            complex_list(dem.carriers(waveform, i * period))
+            for i in range(layout.total_symbols - 1)
+        ]
+        power = float(np.mean(np.abs(waveform) ** 2))
+        peak = float(np.max(np.abs(waveform) ** 2))
+        out.append(
+            {
+                "mode": mode.index,
+                "mode_name": mode.name,
+                "layout": layout.name,
+                "frame_type": frame_type.name,
+                "rv": rv,
+                "payload": payload.hex(),
+                "n_samples": len(waveform),
+                "mean_power": power,
+                "papr_db": float(10 * np.log10(peak / power)),
+                "stride": 97,
+                "strided_samples": complex_list(waveform[::97]),
+                "carriers": carriers,
+            }
+        )
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="core/aether-phy/tests/data/phy_vectors.json")
@@ -208,6 +269,7 @@ def main() -> int:
         "constellations": constellation_cases(),
         "interleaver": interleaver_cases(),
         "codec": codec_cases(),
+        "waveform_frames": waveform_cases(),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

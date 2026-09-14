@@ -24,6 +24,10 @@ similar_names = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+# carrier and bin indices are bounded by the FFT size (200), so the signed/unsigned
+# conversions between them cannot wrap; spelling out try_from at each use would add noise
+# without adding a check that could ever fire
+cast_possible_wrap = "allow"
 
 [profile.release]
 lto = "thin"

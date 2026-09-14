@@ -19,6 +19,9 @@ use aether_phy::{
     codec::{FrameCodec, coprime_stride},
     constellation::{Constellation, NoiseVar},
     modes::{CONTROL_MODE, LONG, MODES, SHORT},
+    ofdm::OfdmDemodulator,
+    preamble::{FrameHeader, FrameType},
+    tx::FrameTransmitter,
     waveform::{Modulation, WIDE_2300},
 };
 use serde_json::Value;
@@ -346,5 +349,113 @@ fn a_frame_survives_the_full_round_trip_for_every_mode() {
             .decode(&symbols, NoiseVar::Uniform(0.004), 0, None)
             .expect("decode");
         assert_eq!(decoded.as_deref(), Some(&payload[..]), "{}", mode.name());
+    }
+}
+
+#[test]
+fn whole_frames_match_the_model() {
+    // The strongest check of the physical layer: build the same frame the model builds and
+    // compare it at the carrier level, which exercises the preamble, pilot placement, the
+    // mode and RV chips, the transform scaling and the windowing together. A strided set of
+    // time samples goes with it, so a scaling or windowing error that happened to cancel at
+    // the carriers would still be caught.
+    //
+    // ADR-0004 peak reduction is off on both sides; the Rust transmitter does not implement
+    // it yet, and comparing against a model that does would compare two different waveforms.
+    let doc = vectors();
+    let cases = doc["waveform_frames"].as_array().expect("waveform frames");
+    assert!(!cases.is_empty());
+
+    let tx = FrameTransmitter::default();
+    let demodulator = OfdmDemodulator::new(WIDE_2300);
+    let period = WIDE_2300.symbol_samples();
+
+    for case in cases {
+        let label = format!(
+            "{} rv{} ({})",
+            case["mode_name"].as_str().unwrap_or("?"),
+            int(case, "rv"),
+            case["layout"].as_str().unwrap_or("?")
+        );
+        let (mode, layout) = match case["layout"].as_str().expect("layout") {
+            "long" => (MODES[int(case, "mode")], LONG),
+            "short" => (CONTROL_MODE, SHORT),
+            other => panic!("unknown layout {other}"),
+        };
+        let rv = int(case, "rv") as u8;
+        let header = match case["frame_type"].as_str().expect("frame type") {
+            "DATA" => FrameHeader::new(FrameType::Data, mode.index, rv).expect("header"),
+            "CONTROL" => FrameHeader::control(),
+            other => panic!("unknown frame type {other}"),
+        };
+
+        let codec = FrameCodec::new(mode, layout).expect("codec");
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let qam = codec.encode(&payload, rv).expect("encode");
+        let waveform = tx.baseband(&header, &layout, &qam).expect("baseband");
+
+        assert_eq!(
+            waveform.len(),
+            int(case, "n_samples"),
+            "{label}: sample count"
+        );
+
+        let power: f64 = waveform
+            .iter()
+            .map(|&(re, im)| re * re + im * im)
+            .sum::<f64>()
+            / waveform.len() as f64;
+        assert!(
+            (power - float(case, "mean_power")).abs() < 1e-9,
+            "{label}: mean power {power} vs {}",
+            float(case, "mean_power")
+        );
+        let peak = waveform
+            .iter()
+            .map(|&(re, im)| re * re + im * im)
+            .fold(0.0, f64::max);
+        let papr = 10.0 * (peak / power).log10();
+        assert!(
+            (papr - float(case, "papr_db")).abs() < 1e-6,
+            "{label}: PAPR"
+        );
+
+        // strided time samples
+        let stride = int(case, "stride");
+        let expected_samples = case["strided_samples"].as_array().expect("strided samples");
+        for (index, want) in expected_samples.iter().enumerate() {
+            let got = waveform[index * stride];
+            let (wr, wi) = (want[0].as_f64().expect("re"), want[1].as_f64().expect("im"));
+            assert!(
+                (got.0 - wr).abs() < 1e-9 && (got.1 - wi).abs() < 1e-9,
+                "{label}: sample {} ({}, {}) vs ({wr}, {wi})",
+                index * stride,
+                got.0,
+                got.1
+            );
+        }
+
+        // carrier values of every symbol the demodulator can reach
+        let expected_carriers = case["carriers"].as_array().expect("carriers");
+        for (symbol, want_symbol) in expected_carriers.iter().enumerate() {
+            let got = demodulator
+                .carriers(&waveform, symbol * period)
+                .expect("in range");
+            let want = want_symbol.as_array().expect("carrier values");
+            assert_eq!(
+                got.len(),
+                want.len(),
+                "{label}: symbol {symbol} carrier count"
+            );
+            for (carrier, (g, w)) in got.iter().zip(want).enumerate() {
+                let (wr, wi) = (w[0].as_f64().expect("re"), w[1].as_f64().expect("im"));
+                assert!(
+                    (g.0 - wr).abs() < 1e-9 && (g.1 - wi).abs() < 1e-9,
+                    "{label}: symbol {symbol} carrier {carrier}: ({}, {}) vs ({wr}, {wi})",
+                    g.0,
+                    g.1
+                );
+            }
+        }
     }
 }
