@@ -15,6 +15,12 @@
 //!
 //! If a daemon is already listening, the shell attaches to that one instead of starting a
 //! second. Two modems on one sound card is not a situation to invent behaviour for.
+//!
+//! While the window is open the shell watches the daemon it started. A daemon that exits
+//! asking to be started again (status 75, which is how the panel applies a setting that
+//! needs a restart) is started again on the file it just wrote; one that stops for any other
+//! reason is explained on screen, because the panel would otherwise sit at "not connected"
+//! with the reason written in a log nobody is looking at.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -45,8 +51,20 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to let the daemon finish releasing the radio before killing it.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The exit status with which the daemon asks to be started again (`RESTART_EXIT_CODE` in
+/// `aetherd`; `EX_TEMPFAIL`). Any other exit is a stop, or a failure.
+const RESTART_EXIT_CODE: i32 = 75;
+
+/// How often the supervisor looks at the daemon it started.
+const WATCH_INTERVAL: Duration = Duration::from_millis(250);
+
 /// The daemon this shell started, if it started one.
 pub struct Daemon(Mutex<Option<Child>>);
+
+/// What the daemon needs to be started, kept so it can be started again.
+struct Launch {
+    resources: Option<PathBuf>,
+}
 
 /// Why the daemon could not be started, if it could not.
 struct StartupError(Option<String>);
@@ -58,6 +76,9 @@ fn main() {
     // every layout it produces, which is the reason to ask it rather than guess.
     let resources =
         tauri::utils::platform::resource_dir(context.package_info(), &tauri::Env::default()).ok();
+    let launch = Launch {
+        resources: resources.clone(),
+    };
     let (started, failure) = match ensure_daemon(resources.as_deref()) {
         Ok(child) => (child, None),
         Err(message) => {
@@ -79,8 +100,10 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Daemon(Mutex::new(started)))
         .manage(StartupError(failure))
+        .manage(launch)
         .setup(move |app| {
             install_menu(app, preferences.channel)?;
+            watch_daemon(app.handle().clone());
             // A packaged build has no terminal, so a daemon that would not start has to be
             // explained on screen: the panel would otherwise sit at "not connected" for ever,
             // with the reason — a sound card at the wrong rate, a serial port that is held —
@@ -162,6 +185,8 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
     let config = config_path()?;
     let mut command = Command::new(&binary);
     command.arg("--config").arg(&config);
+    // so the daemon can tell the panel a restart is something it can do for the operator
+    command.env("AETHERD_SUPERVISED", "1");
     if let Some(ui) = ui_dir(resources) {
         command.env("AETHER_UI_DIR", ui);
     }
@@ -202,6 +227,73 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
         "{} started but never answered on {CONTROL}",
         binary.display()
     ))
+}
+
+/// Keep an eye on the daemon this shell started, for as long as the window is open.
+///
+/// Started again when it asks to be; explained when it stops on its own. A daemon that
+/// `stop_daemon` took out of the slot is not watched, so closing the window never starts
+/// one. The child is polled rather than waited on: a thread blocked in `wait()` would hold
+/// the slot's lock against `stop_daemon`.
+fn watch_daemon(app: tauri::AppHandle) {
+    std::thread::Builder::new()
+        .name("aether-daemon-watch".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(WATCH_INTERVAL);
+                let exited = {
+                    let daemon = app.state::<Daemon>();
+                    let Ok(mut slot) = daemon.0.lock() else {
+                        return;
+                    };
+                    let Some(child) = slot.as_mut() else { continue };
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            *slot = None;
+                            status
+                        }
+                        Ok(None) => continue,
+                        Err(_) => return,
+                    }
+                };
+                if exited.code() == Some(RESTART_EXIT_CODE) {
+                    let resources = app.state::<Launch>().resources.clone();
+                    match ensure_daemon(resources.as_deref()) {
+                        Ok(child) => {
+                            if let Ok(mut slot) = app.state::<Daemon>().0.lock() {
+                                *slot = child;
+                            }
+                        }
+                        Err(message) => explain(&app, &message),
+                    }
+                } else {
+                    let said = config_path()
+                        .map(|config| tail_of(&daemon_log_path(&config), 12))
+                        .unwrap_or_default();
+                    explain(
+                        &app,
+                        &if said.is_empty() {
+                            format!("The modem daemon stopped ({exited}) without saying why.")
+                        } else {
+                            format!("The modem daemon stopped ({exited}):\n\n{said}")
+                        },
+                    );
+                }
+            }
+        })
+        .ok();
+}
+
+/// A daemon that stopped, or would not start again, explained on screen.
+fn explain(app: &tauri::AppHandle, message: &str) {
+    app.dialog()
+        .message(format!(
+            "{message}\n\nFix the setting it names if it names one, then start Aether HF \
+             again. Help > Open the configuration folder has the log."
+        ))
+        .title("Aether HF lost the modem")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 /// Where the daemon's own output is kept: beside the configuration, which is the one place

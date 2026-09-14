@@ -88,11 +88,12 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks) |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
 | `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
+| `shutdown` | `restart?` | `stopping`; the transmitter is released on the way out. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
 what keeps this document PHY-agnostic.
@@ -209,10 +210,13 @@ Three rules, because a settings interface that gets any of them wrong is worse t
 * **The file is replaced atomically** — written beside the target and renamed over it. A
   configuration half-written by a machine that lost power is a station that will not start,
   and its operator would have no way to know what it used to say.
-* **What needs a restart is stated, not guessed.** A sound card is opened once and a socket is
-  bound once. `config.get` returns `live_keys`, and `config.set` reports which of the keys it
-  just changed are not among them. A setting that silently does nothing until the next restart
-  is worse than one that says so.
+* **What needs a restart is stated, not guessed — and done, when somebody can.** A sound card
+  is opened once and a socket is bound once. `config.get` returns `live_keys`, and `config.set`
+  reports which of the keys it just changed are not among them. A setting that silently does
+  nothing until the next restart is worse than one that says so. When `status.supervised` is
+  true a client may then ask `shutdown {"restart": true}` and the daemon is back on the new
+  file in a few seconds; the panel does exactly that, and from a terminal, where nobody would
+  start it again, it says what to restart instead.
 
 ### 4.6 The diagnostic bundle
 

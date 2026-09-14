@@ -109,6 +109,11 @@ pub struct DaemonState {
     /// that has been seen to crash the process rather than return an error. The tests
     /// substitute a list; the daemon uses [`device_inventory`].
     pub devices: fn() -> Value,
+    /// Whether a supervisor — the desktop shell, systemd — will start this daemon again
+    /// when it exits asking to be restarted. `AETHERD_SUPERVISED=1` in the environment says
+    /// so; a daemon run from a terminal has nobody to do it, and the panel must not offer
+    /// what would only stop the modem.
+    pub supervised: bool,
 }
 
 impl DaemonState {
@@ -127,6 +132,7 @@ impl DaemonState {
             audio: String::new(),
             dropped_audio: 0,
             devices: device_inventory,
+            supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
         }
     }
 }
@@ -169,6 +175,13 @@ pub fn dispatch_with<P: Ptt>(
         "config.get" => return config_get(daemon, request.id.clone()),
         "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
         "diagnostics" => return diagnostics(station, daemon, request.id.clone()),
+        // whether a restart is something the panel can do for the operator is the
+        // daemon's to know, not the station's
+        "status" => {
+            let mut result = status(station);
+            result["supervised"] = json!(daemon.as_ref().is_some_and(|d| d.supervised));
+            return Response::ok(request.id.clone(), result);
+        }
         _ => {}
     }
     dispatch_station(station, request)

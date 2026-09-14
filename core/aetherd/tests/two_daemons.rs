@@ -112,7 +112,10 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = call(self.control, "shutdown", &json!({}));
+        // one that has already exited — asked to restart, say — has nothing left to stop
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = call(self.control, "shutdown", &json!({}));
+        }
         let deadline = Instant::now() + Duration::from_secs(5);
         while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
@@ -180,6 +183,28 @@ fn assert_recorded(dir: &Path, stations: &str) {
             .is_some_and(|f| f.iter().any(|x| x["decoded"] == true)),
         "{stations}: the recording has no decoded frame"
     );
+}
+
+#[test]
+fn a_daemon_asked_to_restart_exits_asking_for_it() {
+    // the desktop shell and systemd start the daemon again on this status and on no other:
+    // a setting that needs a restart is applied that way, without the operator knowing
+    // there was a restart to do
+    let dir = std::env::temp_dir().join(format!("aether-restart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let mut daemon = Daemon::start(&dir, "r", "W4ODA", "listen = \"127.0.0.1:0\"");
+    wait_for_port(daemon.control, "the daemon");
+    assert_eq!(
+        daemon.status()["supervised"],
+        false,
+        "nothing set AETHERD_SUPERVISED"
+    );
+    let answer = daemon.call("shutdown", &json!({ "restart": true }));
+    assert_eq!(answer["result"]["restart"], true, "{answer}");
+    let status = daemon.child.wait().expect("exit status");
+    assert_eq!(status.code(), Some(75), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

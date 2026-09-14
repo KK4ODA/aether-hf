@@ -151,6 +151,9 @@ function setState(key, name, detail) {
   $("state-detail").textContent = detail;
 }
 
+// The status the panel last saw: whether a restart is something it can do for the operator.
+let lastStatus = null;
+
 async function refreshStatus() {
   let status;
   try {
@@ -158,6 +161,7 @@ async function refreshStatus() {
   } catch {
     return;
   }
+  lastStatus = status;
   const [name, detail] = STATE_TEXT[status.state] ?? ["Unknown", ""];
   const who = status.remote ? ` with ${status.remote}` : "";
   const role = { iss: " — sending", irs: " — receiving" }[status.role] ?? "";
@@ -433,6 +437,12 @@ async function loadConfig() {
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
   select($("dev-ptt"), liveConfig.ptt?.port ?? "");
+  // the file's capture device says which interface this station is, better than a guess
+  // from whatever else is plugged in; the operator's own choice is left alone
+  if (!profileChosen && $("wz-profile").options.length > 0) {
+    $("wz-profile").value = String(guessProfile());
+    $("wz-profile-note").textContent = PROFILES[Number($("wz-profile").value)]?.note ?? "";
+  }
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
   $("record-auto").checked = liveConfig.record?.auto === true;
@@ -511,14 +521,33 @@ async function applyConfig() {
     return;
   }
   $("apply-note").style.color = "";
-  const restart = answer.restart_required ?? [];
-  $("apply-note").textContent =
-    restart.length === 0
-      ? `Saved to ${answer.path}. In effect now.`
-      : `Saved to ${answer.path}. Restart the daemon for: ${restart.join(", ")}.`;
+  $("apply-note").textContent = `Saved to ${answer.path}. ${await applied(answer)}`;
   log(`settings saved (${(answer.changed ?? []).join(", ")})`);
   loadConfig();
   refreshStatus();
+}
+
+/// What a save's answer means for the operator, having done the restart when there is one
+/// to do and somebody to do it.
+///
+/// A sound card, a serial port and the callsign are taken on when the modem starts, so a
+/// change to one is on the file and not in the modem until it starts again. Under the
+/// desktop shell (or systemd) the daemon can ask to be started again and it happens in a
+/// few seconds, with the panel reconnecting by itself; from a terminal there is nobody to
+/// do it, and the note says so instead of pretending.
+async function applied(answer) {
+  const restart = answer.restart_required ?? [];
+  if (restart.length === 0) return "In effect now.";
+  if (lastStatus?.supervised !== true) {
+    return `Restart the daemon for: ${restart.join(", ")}.`;
+  }
+  try {
+    await call("shutdown", { restart: true });
+  } catch (error) {
+    return `Restart the daemon for: ${restart.join(", ")} (it would not restart itself: ${error.message}).`;
+  }
+  log(`the modem is restarting to apply ${restart.join(", ")}`);
+  return `The modem is restarting to apply: ${restart.join(", ")}.`;
 }
 
 // ── the setup wizard ────────────────────────────────────────────────
@@ -565,8 +594,15 @@ const PROFILES = [
 
 let devicesSeen = { devices: [], serial_ports: [] };
 
+// Whether the operator has picked an interface themselves. The list is rebuilt whenever
+// the machine's devices are listed again — a device event, a reconnect — and a rebuild
+// that guessed afresh each time snapped a chosen Yaesu back to the Icom that was also
+// plugged in.
+let profileChosen = false;
+
 function fillProfiles() {
   const select = $("wz-profile");
+  const before = select.value;
   select.replaceChildren();
   for (const [index, profile] of PROFILES.entries()) {
     const option = document.createElement("option");
@@ -574,12 +610,27 @@ function fillProfiles() {
     option.textContent = profile.name;
     select.append(option);
   }
-  // pre-select the first profile whose devices are actually present
+  if (profileChosen && before !== "") {
+    select.value = before;
+    $("wz-profile-note").textContent = PROFILES[Number(before)]?.note ?? "";
+    return;
+  }
+  select.value = String(guessProfile());
+  applyProfile();
+}
+
+/// The interface to pre-select: the one the configured capture device belongs to when the
+/// file names one, else the first whose devices are present, else "something else".
+function guessProfile() {
+  const configured = liveConfig?.audio?.input;
+  if (configured) {
+    const owner = PROFILES.findIndex((p) => p.match && p.match.test(configured));
+    if (owner >= 0) return owner;
+  }
   const present = PROFILES.findIndex(
     (p) => p.match && devicesSeen.devices.some((d) => p.match.test(d.name)),
   );
-  select.value = String(present >= 0 ? present : PROFILES.length - 1);
-  applyProfile();
+  return present >= 0 ? present : PROFILES.length - 1;
 }
 
 function applyProfile() {
@@ -652,11 +703,7 @@ async function wizardSave() {
   }
   try {
     const answer = await call("config.set", changes);
-    const restart = answer.restart_required ?? [];
-    let note =
-      restart.length === 0
-        ? "Saved. In effect now."
-        : `Saved. Restart the daemon for: ${restart.join(", ")}.`;
+    let note = `Saved. ${await applied(answer)}`;
     if (profile.ptt === "serial" && $("dev-ptt").value === "") {
       // the profile wants a keying line and none was chosen: the station is saved
       // receive-only, which is safe, but the operator should know why the radio
@@ -750,7 +797,10 @@ function wire() {
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   $("btn-apply").addEventListener("click", applyConfig);
-  $("wz-profile").addEventListener("change", applyProfile);
+  $("wz-profile").addEventListener("change", () => {
+    profileChosen = true;
+    applyProfile();
+  });
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);

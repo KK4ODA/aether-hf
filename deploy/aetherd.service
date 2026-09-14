@@ -23,6 +23,9 @@ User=aetherd
 Group=aetherd
 SupplementaryGroups=audio dialout
 ExecStart=/usr/local/bin/aetherd --config /etc/aetherd/station.toml
+# Tells the daemon a restart is something it can ask for (status.supervised), which is how
+# the panel applies a setting that needs one.
+Environment=AETHERD_SUPERVISED=1
 
 # The daemon catches this and releases the transmitter before exiting. Give it time to: a
 # station killed mid-burst leaves the radio keyed until somebody notices, which on an
@@ -32,6 +35,8 @@ TimeoutStopSec=15s
 
 Restart=on-failure
 RestartSec=5s
+# Exit status 75 is the daemon asking to be started again on a configuration it just wrote.
+RestartForceExitStatus=75
 
 # Audio is not soft real-time by accident. Without this the modem is descheduled mid-burst on
 # a busy machine and drops captured samples, which looks exactly like a bad band.

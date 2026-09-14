@@ -134,6 +134,18 @@
                 Pick your interface and the devices below are filled in from what this
                 machine reports. Anything can be changed afterwards.
               </p>
+              <div class="row">
+                <label for="dev-in">Capture</label>
+                <select id="dev-in"></select>
+              </div>
+              <div class="row">
+                <label for="dev-out">Playback</label>
+                <select id="dev-out"></select>
+              </div>
+              <div class="row">
+                <label for="dev-ptt">Keying</label>
+                <select id="dev-ptt"></select>
+              </div>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
             </li>
             <li class="step" data-step="3">
@@ -180,22 +192,11 @@
         <h2>Everything, by hand</h2>
         <p class="note" id="setup-note">
           Changes are written straight to the daemon's configuration file. Some take effect
-          at once; a sound card or a serial port is opened when the daemon starts, so
-          changing one needs a restart — you will be told which.
+          at once; a sound card, a serial port or the callsign is taken on when the modem
+          starts, so changing one restarts it — a few seconds, and the panel comes back by
+          itself. The devices are in step 2 above.
         </p>
 
-        <div class="row">
-          <label for="dev-in">Capture</label>
-          <select id="dev-in"></select>
-        </div>
-        <div class="row">
-          <label for="dev-out">Playback</label>
-          <select id="dev-out"></select>
-        </div>
-        <div class="row">
-          <label for="dev-ptt">Keying</label>
-          <select id="dev-ptt"></select>
-        </div>
         <div class="row">
           <label for="setup-call">Callsign</label>
           <input id="setup-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />

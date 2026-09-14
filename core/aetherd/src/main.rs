@@ -42,14 +42,31 @@ const IDLE_SLEEP: Duration = Duration::from_millis(5);
 /// rare enough that a client that only wants state changes is not flooded.
 const METRICS_INTERVAL: Duration = Duration::from_millis(500);
 
+/// The exit status that asks a supervisor to start the daemon again.
+///
+/// A setting that needs a restart — the sound card, the keying port, the callsign's
+/// section — should not need the operator to know that: the panel asks the daemon to stop
+/// this way, and the desktop shell or systemd (`RestartForceExitStatus=`) starts it again on
+/// the file it just wrote. 75 is `EX_TEMPFAIL` in `sysexits.h`, "try again later", which is
+/// exactly the request.
+const RESTART_EXIT_CODE: u8 = 75;
+
 fn main() -> std::process::ExitCode {
     match run() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(Exit::Done) => std::process::ExitCode::SUCCESS,
+        Ok(Exit::Restart) => std::process::ExitCode::from(RESTART_EXIT_CODE),
         Err(message) => {
             eprintln!("aetherd: {message}");
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// How a run ended: quietly, or asking to be started again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exit {
+    Done,
+    Restart,
 }
 
 struct Args {
@@ -152,12 +169,12 @@ aetherd — the Aether HF station daemon
   -h, --help          print this
 ";
 
-fn run() -> Result<(), String> {
+fn run() -> Result<Exit, String> {
     let Some(args) = parse_args()? else {
-        return Ok(());
+        return Ok(Exit::Done);
     };
     if let Some(wav) = &args.replay {
-        return replay(wav, args.expect.as_deref());
+        return replay(wav, args.expect.as_deref()).map(|()| Exit::Done);
     }
     let path = args
         .config
@@ -224,6 +241,7 @@ fn run() -> Result<(), String> {
     // otherwise sit there keyed until somebody noticed, which on an unattended station could
     // be a very long time.
     let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let restarting = std::sync::atomic::AtomicBool::new(false);
     let flag = std::sync::Arc::clone(&stopping);
     if let Err(error) = ctrlc::set_handler(move || {
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -256,7 +274,13 @@ fn run() -> Result<(), String> {
         &control,
         &mut daemon,
         &stopping,
-    )
+        &restarting,
+    )?;
+    Ok(if restarting.load(std::sync::atomic::Ordering::SeqCst) {
+        Exit::Restart
+    } else {
+        Exit::Done
+    })
 }
 
 /// `--replay`: the receiver over a recording, held to its sidecar if one is given.
@@ -403,6 +427,15 @@ fn start_servers(
     Ok((control, host))
 }
 
+/// What the log says on the way out: a stop, or a stop that asked for a start.
+fn stop_reason(restarting: &std::sync::atomic::AtomicBool) -> &'static str {
+    if restarting.load(std::sync::atomic::Ordering::SeqCst) {
+        "stopping to be started again"
+    } else {
+        "stopping"
+    }
+}
+
 /// Answer what clients have asked since the last audio block.
 ///
 /// Control requests are answered from the modem's thread, between blocks. The modem is
@@ -413,16 +446,22 @@ fn answer_commands(
     control: &aetherd::control::ControlChannel,
     daemon: &mut DaemonState,
     stopping: &std::sync::atomic::AtomicBool,
+    restarting: &std::sync::atomic::AtomicBool,
 ) {
     for command in control.drain() {
         // `shutdown` is the daemon's to answer, not the station's: it runs the same path a
         // stop signal does, so a supervisor that cannot send a signal — the desktop shell
-        // on Windows — still gets the transmitter released properly.
+        // on Windows — still gets the transmitter released properly. `restart: true` is the
+        // same stop with a different exit status, for a supervisor to act on.
         let response = if command.request.method == "shutdown" {
+            let restart = command.request.params["restart"].as_bool().unwrap_or(false);
             stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+            if restart {
+                restarting.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             aetherd::control::protocol::Response::ok(
                 command.request.id.clone(),
-                json!({ "stopping": true }),
+                json!({ "stopping": true, "restart": restart, "supervised": daemon.supervised }),
             )
         } else {
             dispatch_with(station, Some(daemon), &command.request)
@@ -495,6 +534,7 @@ fn serve(
     control: &aetherd::control::ControlChannel,
     daemon: &mut DaemonState,
     stopping: &std::sync::atomic::AtomicBool,
+    restarting: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
     let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
@@ -504,9 +544,12 @@ fn serve(
 
     loop {
         if stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            daemon
-                .log
-                .record(Level::Info, "daemon", "stopping", &state_name(station));
+            daemon.log.record(
+                Level::Info,
+                "daemon",
+                stop_reason(restarting),
+                &state_name(station),
+            );
             // Report the failure but do not return on it: there is nothing left to try, and
             // exiting quietly would hide a radio that is still keyed.
             if let Err(error) = station.shut_down() {
@@ -521,7 +564,7 @@ fn serve(
             return Ok(());
         }
 
-        answer_commands(station, control, daemon, stopping);
+        answer_commands(station, control, daemon, stopping, restarting);
 
         let captured = audio.capture();
         let idle = captured.is_empty();
