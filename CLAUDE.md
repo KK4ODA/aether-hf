@@ -46,21 +46,23 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phase 1 is complete in the model; Phase 2 is in progress on branch `phase-2`. Done:
-P2-3 low-SNR acquisition (PMF-FFT bank in `phy/sync.py`, frame type by preamble sequence,
-mode + RV by pilot-symbol chips; 100 % at −5 dB); P2-1 ARQ engine + session FSM
-(`aether_model/link/`, PHY-agnostic, event-driven) with two harnesses — a lossy-pipe sim
-(`link/sim.py`) and a two-modem harness over the real PHY (`link/harness.py`); P2-2
-rate-control hysteresis and the `tools/bench_link.py` goodput benchmark, plus P2-2a
-(start-of-frame signal, +13 %) and P2-2b (margin learns the channel, +29 % on Moderate).
-P2-4 PAPR reduction (ADR-0004: clip-and-filter in the TX, +1.0…+1.7 dB). P2-5 impulsive-noise defence (`phy/blanker.py`, on by default), a fully measured 14-mode
-rate table, P2-6 (Wiener channel estimation built and benchmarked — **not adopted**, the
-default stays linear; see `bench/README.md`) and P2-7 specs. **Phase 2 is complete.** Phase 3: P3-1 done (`aether-fec`, bit-exact with the model);
-P3-2 in progress — `aether-phy` is **complete** (waveform, constellations, modes, frame
-codec, OFDM, preamble, transmitter, receiver, acquisition: a frame can be built, found in a
-stream, demodulated and decoded entirely in Rust) and `aether-link` has frame formats and
-rate control. Remaining in P3-2: the ARQ engine. Run the Rust tests with
-`cargo test --release` — the acquisition search is ~20x slower in a debug build.
+Phases 0–2 are complete. **Phase 3 is complete through P3-4**, on branch `phase-2`:
+
+* **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
+  rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
+  transmitter, receiver, acquisition, the 48 kHz audio front end, the impulse blanker, the
+  streaming receiver and ADR-0004 peak reduction) and `aether-link` (frame formats, rate
+  control, the ARQ engine, a lossy-pipe two-station simulator).
+* **P3-3** — `core/aetherd/`: cpal audio behind an `AudioIo` trait, serial RTS/DTR and
+  `rigctld` keying, the key-time watchdog, a busy detector, and the run loop. Two stations
+  complete a session over real 48 kHz audio in the test suite.
+* **P3-4** — the control API of `docs/spec/control-api.md`, JSON over WebSocket and
+  `POST /v1/<method>`.
+
+Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
+debug build — and `cargo clippy --all-targets --all-features -- -D warnings`.
+
+**Next: P3-5**, the VARA-compatible TCP adapter, verified with Pat.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is

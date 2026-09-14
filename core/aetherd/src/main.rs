@@ -23,6 +23,7 @@ use aetherd::{
         methods::{dispatch, metrics},
         protocol::Event,
     },
+    host::HostServer,
     ptt::{NullPtt, Ptt, PttError, RigctldPtt, SerialPtt, list_serial_ports},
     station::{Station, StationConfig},
 };
@@ -177,12 +178,25 @@ fn run() -> Result<(), String> {
 
     let (handle, control) = channel();
     let _server = if config.control.enabled {
-        let server =
-            ControlServer::start(&config.control_config(), handle).map_err(|e| e.to_string())?;
+        let server = ControlServer::start(&config.control_config(), handle.clone())
+            .map_err(|e| e.to_string())?;
         println!("aetherd: control interface on ws://{}/v1", server.address);
         Some(server)
     } else {
         println!("aetherd: control interface disabled");
+        None
+    };
+
+    let _host = if config.host.enabled {
+        let server = HostServer::start(&config.host_config(), handle).map_err(|e| e.to_string())?;
+        println!(
+            "aetherd: host interface on {} (data {}) — it reports itself as {}",
+            server.command_address,
+            server.data_address,
+            aetherd::host::vara::version_string()
+        );
+        Some(server)
+    } else {
         None
     };
 
@@ -207,7 +221,7 @@ fn serve(
     let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
     let mut reported_drops = 0;
     let mut last_metrics = std::time::Instant::now();
-    let mut last_state = String::new();
+    let mut last_keyed = false;
 
     loop {
         // Control requests are answered from this thread, between audio blocks. The modem
@@ -261,10 +275,12 @@ fn serve(
             last_metrics = std::time::Instant::now();
             control.publish(&Event::new("metrics", metrics(station)));
         }
-        let state = format!("{:?}", station.state());
-        if state != last_state {
-            last_state = state;
-            control.publish(&Event::new("ptt", json!({"on": station.transmitting()})));
+        // `ptt` reports the transmitter, not the session: a host uses it to know when the
+        // radio is keyed, and a state change is a different thing entirely
+        let keyed = station.transmitting();
+        if keyed != last_keyed {
+            last_keyed = keyed;
+            control.publish(&Event::new("ptt", json!({ "on": keyed })));
         }
 
         let dropped = audio.dropped();

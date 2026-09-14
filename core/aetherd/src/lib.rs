@@ -13,6 +13,7 @@ pub mod audio;
 pub mod busy;
 pub mod config;
 pub mod control;
+pub mod host;
 pub mod ptt;
 pub mod station;
 
@@ -20,6 +21,7 @@ pub use audio::{AudioConfig, AudioError, AudioIo, Loopback, SoundCard};
 pub use busy::{BusyConfig, BusyDetector};
 pub use config::{Config, ConfigError, PttConfig};
 pub use control::{ControlHandle, ControlServer};
+pub use host::{HostConfig, HostServer};
 pub use ptt::{
     NullPtt, Ptt, PttError, PttWatchdog, RigctldPtt, SerialLine, SerialPtt, WatchdogState,
 };

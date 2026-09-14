@@ -180,6 +180,32 @@ impl Default for ControlSection {
     }
 }
 
+/// The VARA-compatible host interface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostSection {
+    /// Whether to listen at all. Off by default: a station that has not been asked to accept
+    /// commands from other software should not be accepting them.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Command-port address. The data port is the next one up, which every client assumes.
+    #[serde(default = "default_host_bind")]
+    pub bind: String,
+}
+
+fn default_host_bind() -> String {
+    "127.0.0.1:8300".to_owned()
+}
+
+impl Default for HostSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_host_bind(),
+        }
+    }
+}
+
 /// A whole configuration file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -198,6 +224,9 @@ pub struct Config {
     /// The control interface.
     #[serde(default)]
     pub control: ControlSection,
+    /// The VARA-compatible host interface.
+    #[serde(default)]
+    pub host: HostSection,
 }
 
 /// Why a configuration was refused.
@@ -321,6 +350,15 @@ impl Config {
         }
     }
 
+    /// Host-interface settings in the form the adapter wants.
+    #[must_use]
+    pub fn host_config(&self) -> crate::host::HostConfig {
+        crate::host::HostConfig {
+            enabled: self.host.enabled,
+            bind: self.host.bind.clone(),
+        }
+    }
+
     /// Busy-detector settings in the form the detector wants.
     #[must_use]
     pub fn busy_config(&self) -> BusyConfig {
@@ -373,6 +411,13 @@ enabled = true
 # one rather than leaving a transmitter open to the network.
 bind = "127.0.0.1:8515"
 # token = "a long random string"
+
+[host]
+# The VARA-compatible host interface, so Winlink Express, Pat, VarAC and BPQ32 can use this
+# station. Off unless asked for. The data port is the command port plus one, and both have to
+# be free. `VERSION` answers with Aether's name, not VARA's — see docs/spec/host-interfaces.md.
+enabled = false
+bind = "127.0.0.1:8300"
 "#;
 
 #[cfg(test)]
@@ -485,6 +530,17 @@ mod tests {
             Config::parse(disabled).is_ok(),
             "a bind that is never listened on is not a risk"
         );
+    }
+
+    #[test]
+    fn the_host_interface_is_off_until_it_is_asked_for() {
+        // it lets other software key this radio; that is not a default
+        let config = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        assert!(!config.host.enabled);
+        assert_eq!(config.host.bind, "127.0.0.1:8300");
+
+        let on = Config::parse("callsign = \"W4ODA\"\n[host]\nenabled = true\n").expect("parse");
+        assert!(on.host.enabled);
     }
 
     #[test]
