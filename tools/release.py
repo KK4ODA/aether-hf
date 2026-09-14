@@ -1,7 +1,7 @@
 """The one version number, and the places it has to agree.
 
     python tools/release.py check [--tag vX.Y.Z]
-    python tools/release.py bump X.Y.Z[-beta.N]
+    python tools/release.py bump X.Y.Z[-beta.N] [--no-lock]
 
 A release is cut from a tag, and everything the tag builds — the daemon, the desktop shell,
 the installer, the reference model — has to say the same version, or a bug report saying
@@ -25,7 +25,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$")
+# X.Y.Z, X.Y.Z-beta.N, or the nightly stamp X.Y.Z-nightly.YYYYMMDD.<short sha>
+SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+|-nightly\.\d{8}\.[0-9a-f]{7,})?$")
 
 # (file, pattern with one group around the version, how to read it back)
 SITES: list[tuple[Path, str]] = [
@@ -78,7 +79,7 @@ def check(tag: str | None) -> int:
     return 0
 
 
-def bump(version: str) -> int:
+def bump(version: str, refresh_locks: bool = True) -> int:
     if not SEMVER.match(version):
         sys.exit(f"{version!r} is not a version like 0.3.0 or 0.3.0-beta.1")
     for path, pattern in SITES:
@@ -89,13 +90,15 @@ def bump(version: str) -> int:
         path.write_text(new, encoding="utf-8", newline="\n")
         print(f"{path.relative_to(ROOT).as_posix()} -> {version}")
     # Cargo.lock records the workspace's own versions; refresh them without touching the
-    # dependency versions, and without the network
-    for manifest_dir in (ROOT / "core", ROOT / "app" / "src-tauri"):
-        subprocess.run(
-            ["cargo", "update", "--workspace", "--offline"],
-            cwd=manifest_dir,
-            check=True,
-        )
+    # dependency versions, and without the network. A nightly build skips this: the stamp
+    # is never committed, and cargo corrects the lockfile on its own during the build.
+    if refresh_locks:
+        for manifest_dir in (ROOT / "core", ROOT / "app" / "src-tauri"):
+            subprocess.run(
+                ["cargo", "update", "--workspace", "--offline"],
+                cwd=manifest_dir,
+                check=True,
+            )
     # the tauri.conf.json schema field is checked by the bundler, so re-validate it parses
     json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
     return 0
@@ -108,10 +111,11 @@ def main() -> int:
     check_p.add_argument("--tag", help="a git tag like v0.3.0 the tree must match")
     bump_p = sub.add_parser("bump", help="set the version everywhere")
     bump_p.add_argument("version")
+    bump_p.add_argument("--no-lock", action="store_true", help="leave the Cargo.lock files alone")
     args = parser.parse_args()
     if args.command == "check":
         return check(args.tag)
-    return bump(args.version)
+    return bump(args.version, refresh_locks=not args.no_lock)
 
 
 if __name__ == "__main__":

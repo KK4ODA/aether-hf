@@ -1,0 +1,318 @@
+name: Release
+
+# A release is cut from a tag: `vX.Y.Z` is stable, `vX.Y.Z-beta.N` is a prerelease on the
+# beta channel. The nightly channel is the same pipeline run from the default branch on a
+# schedule (or by hand with "publish" ticked), stamped with a version that sorts after the
+# stable one, and published to one rolling prerelease that is replaced every time.
+#
+# Every run builds everything; only tagged runs and nightlies publish. Running it by hand
+# without "publish" is the dry run: the same artifacts, kept for a week, no release.
+
+on:
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_nightly:
+        description: "Publish the result to the rolling nightly prerelease"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      channel: ${{ steps.plan.outputs.channel }}
+      tag: ${{ steps.plan.outputs.tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide what this run is
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+            # the tree must say what the tag says, or the binaries lie about themselves
+            python tools/release.py check --tag "$tag"
+            version="${tag#v}"
+            if [[ "$version" == *-* ]]; then channel=beta; else channel=stable; fi
+            publish=true
+          else
+            base="$(python tools/release.py check | sed -n 's/^ok: //p')"
+            version="${base}-nightly.$(date -u +%Y%m%d).$(git rev-parse --short=7 HEAD)"
+            tag=nightly
+            channel=nightly
+            if [[ "${{ github.event_name }}" == "schedule" || "${{ inputs.publish_nightly }}" == "true" ]]; then
+              publish=true
+            else
+              publish=false
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "$channel $version (tag $tag, publish=$publish)"
+
+  # ── the daemon on its own, for gateways ────────────────────────────────────────────
+  daemon:
+    name: daemon · ${{ matrix.triple }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the oldest supported runners, so the binaries run on the oldest glibc in the
+          # field: Debian 12 on a Raspberry Pi is the case that matters
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            triple: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ALSA headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Stamp the nightly version
+        if: needs.plan.outputs.channel == 'nightly'
+        run: python tools/release.py bump ${{ needs.plan.outputs.version }} --no-lock
+
+      - name: Build
+        working-directory: core
+        run: cargo build --release -p aetherd
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.plan.outputs.version }}"
+          triple="${{ matrix.triple }}"
+          name="aetherd-${version}-${triple}"
+          mkdir -p "dist/$name"
+          if [[ "$triple" == *windows* ]]; then
+            cp core/target/release/aetherd.exe "dist/$name/"
+          else
+            cp core/target/release/aetherd "dist/$name/"
+            cp deploy/aetherd.service "dist/$name/"
+          fi
+          cp -r app/ui "dist/$name/ui"
+          cp LICENSE-MIT LICENSE-APACHE docs/user/gateway-kit.md docs/user/frequency-plan.md "dist/$name/"
+          if [[ "$triple" == *windows* ]]; then
+            python -c "import shutil; shutil.make_archive('dist/$name', 'zip', 'dist', '$name')"
+          else
+            python -c "import shutil; shutil.make_archive('dist/$name', 'gztar', 'dist', '$name')"
+          fi
+          rm -r "dist/$name"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.triple }}
+          path: dist/*
+          retention-days: 7
+
+  # ── the desktop application ────────────────────────────────────────────────────────
+  desktop:
+    name: desktop · ${{ matrix.triple }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WebKitGTK and ALSA (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 libasound2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core
+            app/src-tauri
+
+      - name: Stamp the nightly version
+        if: needs.plan.outputs.channel == 'nightly'
+        run: python tools/release.py bump ${{ needs.plan.outputs.version }} --no-lock
+
+      - name: Build and stage the daemon
+        run: python tools/stage_daemon.py
+
+      # The updater artifacts (the installer's Ed25519 signature) are made only when the
+      # signing key is present; a fork without the secret still gets an installer.
+      - name: Build the shell and bundle it
+        shell: bash
+        working-directory: app/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          config='{}'
+          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            config='{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; the installer will not be signed for the updater"
+          fi
+          npx --yes @tauri-apps/cli@^2 build --bundles ${{ matrix.bundles }} --config "$config"
+
+      # Space-free names: GitHub rewrites spaces in asset names to dots, and a URL that has
+      # to be guessed is not a URL the updater manifest can point at.
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find app/src-tauri/target/release/bundle -type f \
+            \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.sig' \) \
+            -print0 | while IFS= read -r -d '' file; do
+              base="$(basename "$file")"
+              mv "$file" "dist/${base/Aether HF_/aether-hf_}"
+            done
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.triple }}
+          path: dist/*
+          retention-days: 7
+
+  # ── what went into it ──────────────────────────────────────────────────────────────
+  sbom:
+    name: sbom
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Software bill of materials (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: aether-hf-${{ needs.plan.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: aether-hf-*.spdx.json
+          retention-days: 7
+
+  # ── the release itself ─────────────────────────────────────────────────────────────
+  publish:
+    name: publish · ${{ needs.plan.outputs.channel }}
+    needs: [plan, daemon, desktop, sbom]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          # a tag gets the commits since the previous tag; a nightly gets what is unreleased
+          args: ${{ needs.plan.outputs.channel == 'nightly' && '--unreleased --strip all' || '--latest --strip all' }}
+        env:
+          OUTPUT: notes.md
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * | tee SHA256SUMS
+
+      # The manifest exists only when the installers were signed; an unsigned release is
+      # still a release, it just cannot be offered by the updater.
+      - name: Updater manifest
+        continue-on-error: true
+        run: |
+          python tools/make_update_manifest.py \
+            --version "$VERSION" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${TAG}" \
+            --assets dist --notes notes.md --out dist/latest.json
+
+      # The nightly release is replaced, not accumulated: one prerelease, always the newest
+      - name: Replace the previous nightly
+        if: env.CHANNEL == 'nightly'
+        run: gh release delete nightly --cleanup-tag --yes || true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.CHANNEL == 'nightly' && format('Nightly {0}', env.VERSION) || format('Aether HF {0}', env.VERSION) }}
+          body_path: notes.md
+          prerelease: ${{ env.CHANNEL != 'stable' }}
+          make_latest: ${{ env.CHANNEL == 'stable' }}
+          files: dist/*
+          fail_on_unmatched_files: true
+
+      # The beta channel's endpoint is one rolling release that only ever holds the newest
+      # beta's manifest, so a beta installation finds the next beta and a stable one never
+      # sees it: stable reads `releases/latest`, which GitHub keeps clear of prereleases.
+      - name: Point the beta channel at this release
+        if: env.CHANNEL == 'beta' && hashFiles('dist/latest.json') != ''
+        run: |
+          gh release view channel-beta > /dev/null 2>&1 \
+            || gh release create channel-beta --prerelease --title "Beta channel" \
+                 --notes "The updater manifest for the beta channel. The releases themselves are the vX.Y.Z-beta.N tags."
+          gh release upload channel-beta dist/latest.json --clobber

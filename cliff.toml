@@ -1,0 +1,35 @@
+# git-cliff configuration: release notes from Conventional Commits.
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+header = ""
+body = """
+{% if version %}## {{ version | trim_start_matches(pat="v") }} — {{ timestamp | date(format="%Y-%m-%d") }}{% else %}## Unreleased{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | trim }}{% if commit.breaking %} **(breaking)**{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+# the order here is the order in the notes; the leading HTML comments sort the groups
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->New" },
+  { message = "^fix", group = "<!-- 1 -->Fixed" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^docs", group = "<!-- 3 -->Documentation" },
+  { message = "^build|^ci", group = "<!-- 4 -->Build and release" },
+  { message = "^refactor|^test|^chore|^style", group = "<!-- 5 -->Internal" },
+]
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
