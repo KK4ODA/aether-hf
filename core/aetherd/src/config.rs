@@ -381,12 +381,26 @@ impl Config {
     }
 
     /// Control-interface settings in the form the server wants.
+    ///
+    /// The panel directory comes from the file if it says; otherwise from `AETHER_UI_DIR`,
+    /// which is how the desktop shell points a daemon it started at the panel it ships with;
+    /// otherwise a `ui` directory beside the binary, which is how a package lays it out. A
+    /// daemon that cannot find one still runs — it just answers `/` with a 404.
     #[must_use]
     pub fn control_config(&self) -> crate::control::ControlConfig {
+        let ui_dir = self
+            .control
+            .ui_dir
+            .clone()
+            .or_else(|| std::env::var_os("AETHER_UI_DIR").map(std::path::PathBuf::from))
+            .or_else(|| {
+                let beside = std::env::current_exe().ok()?.parent()?.join("ui");
+                beside.is_dir().then_some(beside)
+            });
         crate::control::ControlConfig {
             bind: self.control.bind.clone(),
             token: self.control.token.clone(),
-            ui_dir: self.control.ui_dir.clone(),
+            ui_dir,
         }
     }
 

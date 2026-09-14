@@ -278,7 +278,18 @@ fn serve(
         // is single-threaded because its clock is the audio it has heard, and a connection
         // reaching in from another thread would be able to change the state mid-frame.
         for command in control.drain() {
-            let response = dispatch_with(station, Some(settings), &command.request);
+            // `shutdown` is the daemon's to answer, not the station's: it runs the same
+            // path a stop signal does, so a supervisor that cannot send a signal — the
+            // desktop shell on Windows — still gets the transmitter released properly.
+            let response = if command.request.method == "shutdown" {
+                stopping.store(true, std::sync::atomic::Ordering::SeqCst);
+                aetherd::control::protocol::Response::ok(
+                    command.request.id.clone(),
+                    json!({ "stopping": true }),
+                )
+            } else {
+                dispatch_with(station, Some(settings), &command.request)
+            };
             let _ = command.reply.send(response);
         }
 

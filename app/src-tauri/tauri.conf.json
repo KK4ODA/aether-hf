@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aether HF",
+  "version": "0.1.0",
+  "identifier": "org.aetherhf.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Aether HF",
+        "width": 1000,
+        "height": 720,
+        "minWidth": 560,
+        "minHeight": 460,
+        "resizable": true,
+        "url": "http://127.0.0.1:8515/"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:8515 http://127.0.0.1:8515",
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "deb", "appimage"],
+    "icon": ["icons/icon.png"],
+    "shortDescription": "Open-source HF data modem",
+    "longDescription": "An open-source HF ARQ data modem for amateur radio, with a public air-interface specification and a VARA-compatible host interface.",
+    "externalBin": [],
+    "resources": []
+  }
+}

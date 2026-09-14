@@ -1,0 +1,26 @@
+# A standalone package rather than a member of the `core/` workspace: it lives in `app/`,
+# it ships on its own schedule, and its dependency tree (a webview) has nothing to do with
+# the modem's.
+[package]
+name = "aether-app"
+description = "Aether HF desktop shell: supervises the daemon and shows the station panel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/KK4ODA/aether-hf"
+authors = ["Aether HF contributors"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

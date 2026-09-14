@@ -73,6 +73,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "send"
             | "listen"
             | "beacon"
+            | "shutdown"
             | "config.set"
             | "ptt.test"
     )
