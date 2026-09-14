@@ -27,6 +27,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aetherd"
+version = "0.1.0"
+dependencies = [
+ "aether-fec",
+ "aether-link",
+ "aether-phy",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

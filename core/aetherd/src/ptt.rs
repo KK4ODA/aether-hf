@@ -1,0 +1,433 @@
+//! Keying the transmitter, and the watchdog that will not let it stay keyed.
+//!
+//! A [`Ptt`] is anything that can put a radio into transmit and take it out again. The
+//! backends differ only in how they say it: a serial line's RTS or DTR, a sound-card
+//! interface's GPIO, a rig-control daemon over TCP, or nothing at all when the operator is
+//! using VOX.
+//!
+//! # The watchdog is not optional
+//!
+//! Software that keys a transmitter can fail while it is keyed — a panic, a deadlock, a
+//! dropped USB device, an operating system that stops scheduling the audio thread. What is
+//! on the air then is a carrier, on a shared band, for as long as nobody notices. Amateur
+//! transmitters are also not rated for continuous duty at full power, so a stuck key can
+//! destroy a finals stage as well as a band.
+//!
+//! [`PttWatchdog`] therefore wraps every backend and enforces a maximum key time in one
+//! place, and a trip **latches**: after it fires, keying is refused until something calls
+//! [`unkey`](PttWatchdog::unkey). A runaway loop that keeps asking to transmit is exactly the
+//! failure this exists to contain, so it must not be able to re-key by asking again. Nothing
+//! here depends on a backend behaving; the latch is enforced on this side of the trait.
+
+/// Anything that went wrong keying a radio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PttError {
+    /// The backend refused or the device is gone.
+    Backend(String),
+    /// The watchdog has tripped and has not been cleared.
+    WatchdogTripped,
+}
+
+impl core::fmt::Display for PttError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Backend(message) => write!(f, "ptt backend: {message}"),
+            Self::WatchdogTripped => {
+                write!(
+                    f,
+                    "ptt watchdog tripped; release the key before transmitting again"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for PttError {}
+
+/// Something that can key a transmitter.
+pub trait Ptt: Send {
+    /// Put the radio into transmit.
+    ///
+    /// # Errors
+    /// If the backend refuses or the device is gone.
+    fn key(&mut self) -> Result<(), PttError>;
+
+    /// Take the radio out of transmit.
+    ///
+    /// # Errors
+    /// If the backend refuses or the device is gone.
+    fn unkey(&mut self) -> Result<(), PttError>;
+
+    /// What this backend is, for a log line or a status display.
+    fn describe(&self) -> String;
+}
+
+/// No keying at all: for VOX, for a receive-only station, and for tests.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullPtt {
+    /// Whether `key` was the last thing called.
+    pub keyed: bool,
+}
+
+impl Ptt for NullPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.keyed = true;
+        Ok(())
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.keyed = false;
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        "none (vox or receive only)".to_owned()
+    }
+}
+
+/// Keying through `rigctld`, Hamlib's rig-control daemon, over TCP.
+///
+/// The protocol is a line at a time: `T 1` to key, `T 0` to release, and a reply of
+/// `RPRT <code>` where zero means it worked. Using the daemon rather than linking Hamlib
+/// keeps this crate free of a C dependency and lets the operator point at a rig control
+/// program they already have running and already trust with their radio.
+#[derive(Debug)]
+pub struct RigctldPtt {
+    address: String,
+    timeout: std::time::Duration,
+    stream: Option<std::net::TcpStream>,
+}
+
+impl RigctldPtt {
+    /// Point at a running `rigctld`, conventionally `127.0.0.1:4532`.
+    #[must_use]
+    pub fn new(address: &str, timeout: std::time::Duration) -> Self {
+        Self {
+            address: address.to_owned(),
+            timeout,
+            stream: None,
+        }
+    }
+
+    fn connect(&mut self) -> Result<&mut std::net::TcpStream, PttError> {
+        if self.stream.is_none() {
+            let address: std::net::SocketAddr = self
+                .address
+                .parse()
+                .map_err(|e| PttError::Backend(format!("bad address {}: {e}", self.address)))?;
+            let stream = std::net::TcpStream::connect_timeout(&address, self.timeout)
+                .map_err(|e| PttError::Backend(format!("connect {}: {e}", self.address)))?;
+            stream
+                .set_read_timeout(Some(self.timeout))
+                .and_then(|()| stream.set_write_timeout(Some(self.timeout)))
+                .map_err(|e| PttError::Backend(format!("timeouts: {e}")))?;
+            self.stream = Some(stream);
+        }
+        Ok(self.stream.as_mut().expect("just connected"))
+    }
+
+    fn command(&mut self, line: &str) -> Result<(), PttError> {
+        use std::io::{BufRead, BufReader, Write};
+
+        let result = (|| -> Result<(), PttError> {
+            let stream = self.connect()?;
+            stream
+                .write_all(line.as_bytes())
+                .map_err(|e| PttError::Backend(format!("write: {e}")))?;
+            let mut reply = String::new();
+            let mut reader = BufReader::new(
+                stream
+                    .try_clone()
+                    .map_err(|e| PttError::Backend(format!("clone: {e}")))?,
+            );
+            reader
+                .read_line(&mut reply)
+                .map_err(|e| PttError::Backend(format!("read: {e}")))?;
+            // `RPRT 0` is success; anything else is the rig or the daemon saying no
+            match reply.trim().strip_prefix("RPRT ") {
+                Some("0") => Ok(()),
+                Some(code) => Err(PttError::Backend(format!("rigctld returned {code}"))),
+                None => Err(PttError::Backend(format!(
+                    "unexpected reply {:?}",
+                    reply.trim()
+                ))),
+            }
+        })();
+        if result.is_err() {
+            self.stream = None; // drop it so the next attempt reconnects
+        }
+        result
+    }
+}
+
+impl Ptt for RigctldPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.command("T 1\n")
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.command("T 0\n")
+    }
+
+    fn describe(&self) -> String {
+        format!("rigctld at {}", self.address)
+    }
+}
+
+/// What a watchdog poll found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchdogState {
+    /// Not transmitting.
+    Idle,
+    /// Transmitting, within the limit.
+    Keyed,
+    /// The limit was exceeded just now and the key was released.
+    Tripped,
+}
+
+/// A maximum key time, enforced over any backend.
+///
+/// A trip latches: keying is refused until [`unkey`](Self::unkey) is called. See the module
+/// documentation for why that is the safe behaviour rather than an inconvenient one.
+#[derive(Debug)]
+pub struct PttWatchdog<P: Ptt> {
+    inner: P,
+    /// Longest a single transmission may last, in seconds.
+    pub max_key_s: f64,
+    keyed_since: Option<f64>,
+    tripped: bool,
+    /// How many times the watchdog has fired since the daemon started.
+    pub trips: usize,
+}
+
+impl<P: Ptt> PttWatchdog<P> {
+    /// Wrap a backend with a maximum key time.
+    ///
+    /// # Panics
+    /// If `max_key_s` is not positive. A watchdog that can never fire is not a watchdog, and
+    /// a configuration that asks for one is a mistake worth refusing loudly.
+    #[must_use]
+    pub fn new(inner: P, max_key_s: f64) -> Self {
+        assert!(max_key_s > 0.0, "the maximum key time must be positive");
+        Self {
+            inner,
+            max_key_s,
+            keyed_since: None,
+            tripped: false,
+            trips: 0,
+        }
+    }
+
+    /// Whether the transmitter is keyed.
+    #[must_use]
+    pub fn is_keyed(&self) -> bool {
+        self.keyed_since.is_some()
+    }
+
+    /// Whether the watchdog has fired and not yet been cleared.
+    #[must_use]
+    pub fn is_tripped(&self) -> bool {
+        self.tripped
+    }
+
+    /// How long the current transmission has been running.
+    #[must_use]
+    pub fn keyed_for(&self, now: f64) -> f64 {
+        self.keyed_since.map_or(0.0, |since| (now - since).max(0.0))
+    }
+
+    /// What the backend is.
+    pub fn describe(&self) -> String {
+        self.inner.describe()
+    }
+
+    /// Key the transmitter.
+    ///
+    /// Keying while already keyed does not restart the clock — a burst that is transmitted as
+    /// several calls is still one transmission as far as the radio is concerned, and letting
+    /// each call reset the limit would defeat the whole thing.
+    ///
+    /// # Errors
+    /// If the watchdog has tripped and not been cleared, or the backend refuses.
+    pub fn key(&mut self, now: f64) -> Result<(), PttError> {
+        if self.tripped {
+            return Err(PttError::WatchdogTripped);
+        }
+        if self.keyed_since.is_some() {
+            return Ok(());
+        }
+        self.inner.key()?;
+        self.keyed_since = Some(now);
+        Ok(())
+    }
+
+    /// Release the transmitter, and clear a trip.
+    ///
+    /// # Errors
+    /// If the backend refuses. The watchdog state is cleared either way: a backend that
+    /// cannot be told to stop is a reason to report loudly, not a reason to stay latched into
+    /// believing the radio is still ours to key.
+    pub fn unkey(&mut self, _now: f64) -> Result<(), PttError> {
+        let result = self.inner.unkey();
+        self.keyed_since = None;
+        self.tripped = false;
+        result
+    }
+
+    /// Check the clock; release the key if the limit has been passed.
+    ///
+    /// The run loop calls this every time round, whatever else it is doing.
+    ///
+    /// # Errors
+    /// If the key had to be released and the backend refused.
+    pub fn poll(&mut self, now: f64) -> Result<WatchdogState, PttError> {
+        let Some(since) = self.keyed_since else {
+            return Ok(WatchdogState::Idle);
+        };
+        if now - since < self.max_key_s {
+            return Ok(WatchdogState::Keyed);
+        }
+        let result = self.inner.unkey();
+        self.keyed_since = None;
+        self.tripped = true;
+        self.trips += 1;
+        result.map(|()| WatchdogState::Tripped)
+    }
+
+    /// The backend, for a caller that needs to look at it.
+    pub fn inner(&self) -> &P {
+        &self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A backend that counts what it was asked to do, and can be told to refuse.
+    #[derive(Debug, Default)]
+    struct FakePtt {
+        keyed: bool,
+        keys: usize,
+        unkeys: usize,
+        refuse: bool,
+    }
+
+    impl Ptt for FakePtt {
+        fn key(&mut self) -> Result<(), PttError> {
+            if self.refuse {
+                return Err(PttError::Backend("refused".into()));
+            }
+            self.keys += 1;
+            self.keyed = true;
+            Ok(())
+        }
+
+        fn unkey(&mut self) -> Result<(), PttError> {
+            if self.refuse {
+                return Err(PttError::Backend("refused".into()));
+            }
+            self.unkeys += 1;
+            self.keyed = false;
+            Ok(())
+        }
+
+        fn describe(&self) -> String {
+            "fake".to_owned()
+        }
+    }
+
+    #[test]
+    fn a_normal_transmission_is_left_alone() {
+        let mut ptt = PttWatchdog::new(FakePtt::default(), 30.0);
+        ptt.key(0.0).expect("key");
+        assert_eq!(ptt.poll(10.0), Ok(WatchdogState::Keyed));
+        ptt.unkey(12.0).expect("unkey");
+        assert_eq!(ptt.poll(60.0), Ok(WatchdogState::Idle));
+        assert!(!ptt.inner().keyed);
+        assert_eq!(ptt.trips, 0);
+    }
+
+    #[test]
+    fn the_key_is_released_when_the_limit_passes() {
+        let mut ptt = PttWatchdog::new(FakePtt::default(), 30.0);
+        ptt.key(0.0).expect("key");
+        assert_eq!(ptt.poll(29.9), Ok(WatchdogState::Keyed));
+        assert_eq!(ptt.poll(30.1), Ok(WatchdogState::Tripped));
+        assert!(!ptt.inner().keyed, "the radio is still transmitting");
+        assert!(!ptt.is_keyed());
+        assert_eq!(ptt.trips, 1);
+    }
+
+    #[test]
+    fn a_trip_latches_until_the_key_is_released() {
+        // the failure this exists to contain is a loop that keeps asking to transmit, so
+        // asking again must not be enough to get back on the air
+        let mut ptt = PttWatchdog::new(FakePtt::default(), 10.0);
+        ptt.key(0.0).expect("key");
+        assert_eq!(ptt.poll(11.0), Ok(WatchdogState::Tripped));
+        assert_eq!(ptt.key(11.1), Err(PttError::WatchdogTripped));
+        assert_eq!(ptt.key(20.0), Err(PttError::WatchdogTripped));
+        assert!(!ptt.inner().keyed);
+        assert_eq!(ptt.inner().keys, 1, "it keyed again behind the latch");
+
+        ptt.unkey(21.0).expect("release");
+        ptt.key(21.1).expect("and now it may transmit");
+        assert!(ptt.inner().keyed);
+    }
+
+    #[test]
+    fn keying_again_does_not_restart_the_clock() {
+        // a burst sent as several calls is one transmission to the radio; if each call reset
+        // the limit, a steady stream of them would never trip it
+        let mut ptt = PttWatchdog::new(FakePtt::default(), 10.0);
+        ptt.key(0.0).expect("key");
+        for t in [2.0, 4.0, 6.0, 8.0] {
+            ptt.key(t).expect("still keyed");
+        }
+        assert_eq!(ptt.inner().keys, 1, "it keyed the radio more than once");
+        assert_eq!(ptt.poll(10.5), Ok(WatchdogState::Tripped));
+    }
+
+    #[test]
+    fn a_backend_that_will_not_release_still_clears_the_state() {
+        // if the device is gone there is nothing more this side can do about the carrier;
+        // what it must not do is keep believing the radio is still ours to key
+        let mut ptt = PttWatchdog::new(FakePtt::default(), 5.0);
+        ptt.key(0.0).expect("key");
+        ptt.inner.refuse = true;
+        let result = ptt.unkey(1.0);
+        assert!(matches!(result, Err(PttError::Backend(_))));
+        assert!(!ptt.is_keyed());
+        assert!(!ptt.is_tripped());
+    }
+
+    #[test]
+    fn a_failed_key_leaves_the_watchdog_idle() {
+        let mut ptt = PttWatchdog::new(
+            FakePtt {
+                refuse: true,
+                ..FakePtt::default()
+            },
+            5.0,
+        );
+        assert!(ptt.key(0.0).is_err());
+        assert!(!ptt.is_keyed(), "a refused key must not start the clock");
+        assert_eq!(ptt.poll(100.0), Ok(WatchdogState::Idle));
+    }
+
+    #[test]
+    fn the_null_backend_keys_nothing() {
+        let mut ptt = NullPtt::default();
+        ptt.key().expect("key");
+        assert!(ptt.keyed);
+        ptt.unkey().expect("unkey");
+        assert!(!ptt.keyed);
+    }
+
+    #[test]
+    #[should_panic(expected = "the maximum key time must be positive")]
+    fn a_watchdog_that_can_never_fire_is_refused() {
+        let _ = PttWatchdog::new(NullPtt::default(), 0.0);
+    }
+}
