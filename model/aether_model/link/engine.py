@@ -80,6 +80,10 @@ class LinkConfig:
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
     max_combines: int = 4
     """HARQ buffers are reset after this many failed combines (guards a wrong inference)."""
+    capabilities: int = 0
+    """Capability bits offered in the connect handshake. What they mean is the caller's
+    business; the link layer carries them and reports what the peer offered. Bit 0 is stream
+    compression (deflate, RFC 1951) — see ``docs/spec/air-interface.md``."""
 
 
 class State(Enum):
@@ -212,6 +216,9 @@ class LinkEngine:
         self._ack_counter = 0
         self._break_requested = False
         self._confirmed = False
+        self.peer_capabilities = 0
+        """Capability bits the peer offered. Zero until a session is up, which is the safe
+        reading: a station that has not said it can do something cannot be assumed to."""
 
     # ── public commands ───────────────────────────────────────────────
 
@@ -382,7 +389,7 @@ class LinkEngine:
 
     def _send_connect(self, kind: DataKind) -> None:
         src, dst = self.my_call, self.remote_call
-        body = ConnectBody(src, dst).encode()
+        body = ConnectBody(src, dst, caps=self.cfg.capabilities).encode()
         cap = self.timing.capacity(0)
         if cap < CONNECT_BODY_BYTES + 5:
             raise ValueError("mode 0 too small for a connect frame")
@@ -829,6 +836,7 @@ class LinkEngine:
         self.session = header.session
         self._disarm("connect")
         self._reset_transfer_state()
+        self.peer_capabilities = req.caps
         self.state = State.CONNECTED
         self.role = Role.IRS
         self._confirmed = False
@@ -847,6 +855,7 @@ class LinkEngine:
         if ack.dst != self.my_call:
             return
         self._disarm("connect")
+        self.peer_capabilities = ack.caps
         self.state = State.CONNECTED
         self.role = Role.ISS
         self._confirmed = True
@@ -880,6 +889,7 @@ class LinkEngine:
         self._ack_counter = 0
         self._break_requested = False
         self._confirmed = False
+        self.peer_capabilities = 0
         self.rate = RateController()
         for name in ("ack", "wait", "keepalive", "link"):
             self._disarm(name)

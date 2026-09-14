@@ -36,6 +36,7 @@ use aether_phy::{
 
 use crate::{
     busy::{BusyConfig, BusyDetector},
+    compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
 };
 
@@ -62,6 +63,9 @@ pub struct StationConfig {
     pub max_key_s: f64,
     /// Refuse to start a transmission while the channel is occupied.
     pub wait_for_clear: bool,
+    /// Offer stream compression in the connect handshake. Used only if the peer offers it
+    /// too; a station that cannot decompress must never be sent a compressed stream.
+    pub compress: bool,
 }
 
 impl Default for StationConfig {
@@ -79,6 +83,7 @@ impl Default for StationConfig {
             // tolerate.
             max_key_s: 30.0,
             wait_for_clear: true,
+            compress: true,
         }
     }
 }
@@ -155,6 +160,10 @@ pub struct StationStats {
     pub deferred_for_busy: usize,
     /// Times the key-time watchdog fired.
     pub watchdog_trips: usize,
+    /// Application bytes handed to the compressor this session.
+    pub bytes_before_compression: usize,
+    /// Bytes the compressor produced, which is what the link actually carries.
+    pub bytes_after_compression: usize,
 }
 
 /// One station: link engine, physical layer, radio.
@@ -176,6 +185,10 @@ pub struct Station<P: Ptt> {
     pending: VecDeque<Vec<aether_link::TxFrame>>,
     delivered: Vec<u8>,
     events: Vec<String>,
+    compressor: Compressor,
+    decompressor: Decompressor,
+    /// Application bytes waiting for a session to negotiate compression.
+    outbound: Vec<u8>,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -200,7 +213,11 @@ impl<P: Ptt> Station<P> {
     pub fn new(config: StationConfig, ptt: P, seed: u64) -> Self {
         let params = config.params;
         let timing = phy_timing(params);
-        let engine = LinkEngine::new(&config.callsign, timing, config.link.clone(), seed);
+        let link = LinkConfig {
+            capabilities: offered_capabilities(config.compress),
+            ..config.link.clone()
+        };
+        let engine = LinkEngine::new(&config.callsign, timing, link, seed);
         let busy = BusyDetector::new(BusyConfig {
             fs: params.fs_baseband,
             ..config.busy
@@ -221,6 +238,12 @@ impl<P: Ptt> Station<P> {
             pending: VecDeque::new(),
             delivered: Vec::new(),
             events: Vec::new(),
+            // Nothing is compressed until a session negotiates it. Before that the two ends
+            // have not agreed on anything, and a guess would produce a stream the peer
+            // cannot read.
+            compressor: Compressor::new(false),
+            decompressor: Decompressor::new(false),
+            outbound: Vec::new(),
             stats: StationStats::default(),
             config,
         }
@@ -264,6 +287,18 @@ impl<P: Ptt> Station<P> {
         self.busy.busy(self.now())
     }
 
+    /// Bytes the application has queued that are not yet with the link layer.
+    #[must_use]
+    pub fn queued_bytes(&self) -> usize {
+        self.outbound.len() + self.engine.tx_pending_bytes()
+    }
+
+    /// How many delivered bytes are waiting to be taken.
+    #[must_use]
+    pub fn received_len(&self) -> usize {
+        self.delivered.len()
+    }
+
     /// Bytes received and delivered, taken out of the buffer.
     pub fn take_received(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.delivered)
@@ -304,9 +339,46 @@ impl<P: Ptt> Station<P> {
     }
 
     /// Queue bytes to send.
+    ///
+    /// Bytes handed over before a session exists are held here, not compressed: whether the
+    /// stream is compressed at all is settled by the connect handshake, and anything put on
+    /// the wire before that would be read by the peer under the wrong assumption. An
+    /// application is entitled to queue a message and then call — in fact that is the natural
+    /// way to use it — so this is the normal path and not an edge case.
+    ///
+    /// Once a session is up the bytes are compressed here, above the ARQ, if it negotiated
+    /// compression. One call is one flush, so handing over a whole message compresses far
+    /// better than writing it a few bytes at a time — see [`compress`](crate::compress).
     pub fn send(&mut self, data: &[u8]) {
-        self.engine.send(data);
+        self.outbound.extend_from_slice(data);
+        if self.connected() {
+            self.flush_outbound();
+        }
         self.pump();
+    }
+
+    /// Push whatever the application has queued through the compressor and into the engine.
+    fn flush_outbound(&mut self) {
+        if self.outbound.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.outbound);
+        let wire = self.compressor.push(&pending);
+        self.stats.bytes_before_compression = self.compressor.bytes_in;
+        self.stats.bytes_after_compression = self.compressor.bytes_out;
+        self.engine.send(&wire);
+    }
+
+    /// Whether this session is compressing.
+    #[must_use]
+    pub fn compressing(&self) -> bool {
+        self.compressor.active()
+    }
+
+    /// How much smaller compression has made this session's traffic, as a fraction.
+    #[must_use]
+    pub fn compression_saving(&self) -> f64 {
+        self.compressor.saving()
     }
 
     /// Close the session once everything queued has been acknowledged.
@@ -456,12 +528,43 @@ impl<P: Ptt> Station<P> {
 
     /// Take what the engine has decided and act on it.
     fn pump(&mut self) {
+        let mut connected = false;
         for action in self.engine.drain() {
             match action {
                 Action::Transmit { frames, .. } => self.pending.push_back(frames),
-                Action::Deliver(bytes) => self.delivered.extend_from_slice(&bytes),
-                Action::Event { name, detail } => self.events.push(format!("{name}:{detail}")),
+                Action::Deliver(bytes) => {
+                    let plain = self.decompressor.push(&bytes);
+                    if self.decompressor.failed() {
+                        self.events.push(
+                            "error:the peer sent a compressed stream this station cannot read"
+                                .to_owned(),
+                        );
+                    }
+                    self.delivered.extend_from_slice(&plain);
+                }
+                Action::Event { name, detail } => {
+                    // A session is where compression is agreed, so both coders are built the
+                    // moment one comes up and thrown away when it ends: their state is the
+                    // stream's history, and carrying it into the next session would make the
+                    // first bytes undecodable.
+                    if name == "connected" {
+                        let agreed = negotiated(
+                            offered_capabilities(self.config.compress),
+                            self.engine.peer_capabilities(),
+                        );
+                        self.compressor = Compressor::new(agreed);
+                        self.decompressor = Decompressor::new(agreed);
+                        connected = true;
+                    } else if name == "disconnected" {
+                        self.compressor = Compressor::new(false);
+                        self.decompressor = Decompressor::new(false);
+                    }
+                    self.events.push(format!("{name}:{detail}"));
+                }
             }
+        }
+        if connected {
+            self.flush_outbound();
         }
     }
 
@@ -665,6 +768,83 @@ mod tests {
             got.len(),
             message.len()
         );
+    }
+
+    #[test]
+    fn a_compressed_message_crosses_the_air_and_is_smaller_on_it() {
+        // the whole point of P3-6: fewer bytes on a link that carries a few hundred a second
+        let message: Vec<u8> = [
+            "MID: A1B2C3D4E5F6",
+            "From: W4ODA",
+            "To: KK4XYZ",
+            "Subject: Net check-in",
+            "",
+            "Checked in to the Thursday evening net on 40 metres. Conditions were poor",
+            "for the first half hour and improved after sunset. Fourteen stations were",
+            "logged, three of them portable. No traffic to pass this week.",
+            "",
+            "73 de W4ODA",
+        ]
+        .join("\r\n")
+        .into_bytes();
+        let message = message.as_slice();
+
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(20.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.compressing() && air.b.compressing(),
+            "both stations offered compression, so both should be using it"
+        );
+
+        let expected = message.len();
+        air.a.send(message);
+        air.run(180.0, |_, b| b.received_len() >= expected);
+        let got = air.b.take_received();
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            String::from_utf8_lossy(message)
+        );
+        // 21 % on a message this short, measured; `compress` covers the longer case where
+        // the coder has history and does better than twice as well
+        assert!(
+            air.a.compression_saving() > 0.20,
+            "only {:.1} % was saved",
+            100.0 * air.a.compression_saving()
+        );
+        assert!(
+            air.a.stats.bytes_after_compression < message.len(),
+            "{} bytes went on the air for a {}-byte message",
+            air.a.stats.bytes_after_compression,
+            message.len()
+        );
+    }
+
+    #[test]
+    fn a_station_with_compression_off_is_never_sent_a_compressed_stream() {
+        // the negotiation exists so a station that cannot decompress is never handed one
+        let plain = StationConfig {
+            callsign: "KK4XYZ".to_owned(),
+            wait_for_clear: false,
+            compress: false,
+            ..StationConfig::default()
+        };
+        let mut air = Air::new(1.0, 0.0005);
+        air.b = Station::new(plain, NullPtt::default(), 2);
+
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(20.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        assert!(
+            !air.a.compressing(),
+            "the caller compressed to a station that said it could not decompress"
+        );
+        assert!(!air.b.compressing());
+
+        let message = b"plain text, because one end cannot do better";
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received(), message);
     }
 
     #[test]

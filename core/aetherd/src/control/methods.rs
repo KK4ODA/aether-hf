@@ -220,6 +220,8 @@ fn status<P: Ptt>(station: &Station<P>) -> Value {
         "mode": engine.current_mode(),
         "transmitting": station.transmitting(),
         "channel_busy": station.channel_busy(),
+        "compressing": station.compressing(),
+        "compression_saving": station.compression_saving(),
         "uptime_s": station.now(),
         "ptt": station.ptt_description(),
         "queued_bytes": engine.tx_pending_bytes(),

@@ -121,6 +121,10 @@ pub struct RadioSection {
     /// constellations, or a band where they never work.
     #[serde(default = "default_max_mode")]
     pub max_mode: usize,
+    /// Offer payload compression in the connect handshake. Used only if the peer offers it
+    /// too, so leaving it on costs nothing when talking to a station that cannot.
+    #[serde(default = "default_true")]
+    pub compress: bool,
 }
 
 fn default_max_key() -> f64 {
@@ -146,6 +150,7 @@ impl Default for RadioSection {
             wait_for_clear: default_true(),
             busy_threshold_db: default_busy_threshold(),
             max_mode: default_max_mode(),
+            compress: default_true(),
         }
     }
 }
@@ -403,6 +408,9 @@ wait_for_clear = true
 busy_threshold_db = 6.0
 # The fastest mode this station will use, 0 to 13.
 max_mode = 13
+# Offer payload compression. Used only if the other station offers it too, so leaving this on
+# costs nothing when talking to one that cannot.
+compress = true
 
 [control]
 # The modem's own interface: JSON over WebSocket at ws://<bind>/v1, or POST /v1/<method>.

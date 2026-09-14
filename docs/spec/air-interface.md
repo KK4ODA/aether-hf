@@ -265,7 +265,30 @@ a two-way handshake in DATA-container frames carrying both callsigns, with rando
 backoff so two stations calling each other simultaneously desynchronise instead of colliding
 on every retry.
 
-### 7.3 Ordering rule
+### 7.3 Capability negotiation
+
+The connect request and its acceptance each carry a one-byte capability field. A capability is
+used only if **both** stations offered it: a station that has not said it can do something
+cannot be assumed to, and the only safe reading of a missing bit is that the feature is
+unavailable. Unknown bits are ignored, so a later version can add one without breaking an
+earlier one.
+
+| Bit | Meaning |
+|---|---|
+| 0 | Stream compression: deflate, RFC 1951 |
+| 1–7 | Reserved, must be zero |
+
+**Compression is applied to the payload byte stream, above the ARQ, not to individual
+frames.** A frame is 26 bytes on the slowest mode, and a compressor with no history makes a
+block that size larger rather than smaller. The link layer already delivers bytes in order and
+exactly once, which is precisely what a stream decompressor needs; selective repeat, HARQ and
+retransmission all happen underneath and are invisible to it.
+
+The sender flushes the coder (a deflate *sync flush*) at the end of each application write, so
+nothing is left sitting in the compressor waiting for input that may never arrive. A receiver
+therefore never has to wait for more data to decode what it already has.
+
+### 7.4 Ordering rule
 
 The ISS composes every burst as **unacknowledged frames in ascending sequence order, then new
 frames**. This is required, not advisory: it is what allows the IRS to infer the sequence

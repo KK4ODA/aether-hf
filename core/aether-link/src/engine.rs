@@ -70,6 +70,9 @@ pub struct LinkConfig {
     pub bursts_before_turn: usize,
     /// HARQ buffers are reset after this many failed combines, which bounds a wrong guess.
     pub max_combines: usize,
+    /// Capability bits offered in the connect handshake. What they mean is the caller's
+    /// business; the link layer carries them and reports what the peer offered.
+    pub capabilities: u8,
 }
 
 impl Default for LinkConfig {
@@ -88,6 +91,7 @@ impl Default for LinkConfig {
             max_mode: 13,
             bursts_before_turn: 3,
             max_combines: 4,
+            capabilities: 0,
         }
     }
 }
@@ -294,6 +298,7 @@ pub struct LinkEngine {
     ack_history: Vec<AckSnapshot>,
     ack_counter: u8,
     break_requested: bool,
+    peer_capabilities: u8,
 }
 
 impl std::fmt::Debug for LinkEngine {
@@ -349,6 +354,7 @@ impl LinkEngine {
             ack_history: Vec::new(),
             ack_counter: 0,
             break_requested: false,
+            peer_capabilities: 0,
         }
     }
 
@@ -370,6 +376,15 @@ impl LinkEngine {
     #[must_use]
     pub fn session(&self) -> u8 {
         self.session
+    }
+
+    /// Capability bits the peer offered in the connect handshake.
+    ///
+    /// Zero until a session is up, which is the safe reading: a station that has not said it
+    /// can do something must be assumed not to be able to.
+    #[must_use]
+    pub fn peer_capabilities(&self) -> u8 {
+        self.peer_capabilities
     }
 
     /// Whether a session is up.
@@ -675,7 +690,7 @@ impl LinkEngine {
         let body = ConnectBody {
             src: self.my_call.clone(),
             dst: self.remote_call.clone(),
-            caps: 0,
+            caps: self.config.capabilities,
             version: 1,
         };
         let Ok(encoded) = body.encode() else { return };
@@ -1319,6 +1334,7 @@ impl LinkEngine {
         self.session = header.session;
         self.disarm(Timer::Connect);
         self.reset_transfer_state();
+        self.peer_capabilities = request.caps;
         self.state = State::Connected;
         self.role = Role::Irs;
         self.arm(Timer::Link, self.config.link_timeout_s);
@@ -1341,6 +1357,7 @@ impl LinkEngine {
             return;
         }
         self.disarm(Timer::Connect);
+        self.peer_capabilities = accept.caps;
         self.state = State::Connected;
         self.role = Role::Iss;
         self.arm(Timer::Link, self.config.link_timeout_s);
@@ -1378,6 +1395,7 @@ impl LinkEngine {
         self.ack_history.clear();
         self.ack_counter = 0;
         self.break_requested = false;
+        self.peer_capabilities = 0;
         self.rate = RateController::default();
         for timer in [Timer::Ack, Timer::Wait, Timer::Keepalive, Timer::Link] {
             self.disarm(timer);

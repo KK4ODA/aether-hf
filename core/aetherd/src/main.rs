@@ -150,6 +150,7 @@ fn run() -> Result<(), String> {
         tx_level: config.audio.tx_level,
         max_key_s: config.radio.max_key_s,
         wait_for_clear: config.radio.wait_for_clear,
+        compress: config.radio.compress,
         ..StationConfig::default()
     };
 

@@ -431,3 +431,35 @@ def test_margin_decays_freely_before_anything_is_learned() -> None:
     for _ in range(3):
         rc.observe(10.0, ok=6, failed=0, mode=0)
     assert rc.margin_db < RateController().margin_db - 2 * rc.down_step_db
+
+
+# ── capability negotiation (P3-6) ─────────────────────────────────────
+
+
+def test_capabilities_are_exchanged_in_the_connect_handshake(timing: PhyTiming) -> None:
+    """The handshake carries a capability byte both ways, which is how compression is agreed.
+
+    The link layer does not interpret the bits — that is the caller's business — but it has
+    to carry them, and each station has to be able to read what the other offered."""
+    a = LinkEngine("W4ODA", timing, LinkConfig(capabilities=0b101), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=0b011), seed=2)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=200)
+    assert a.connected and b.connected
+    assert a.peer_capabilities == 0b011
+    assert b.peer_capabilities == 0b101
+    # what both offered is the intersection; nothing is negotiated on one side's word alone
+    assert a.peer_capabilities & a.cfg.capabilities == 0b001
+
+
+def test_capabilities_are_forgotten_when_a_session_ends(timing: PhyTiming) -> None:
+    """A station that has not said what it can do must be assumed to do nothing: carrying a
+    previous peer's capabilities into the next session would be exactly the wrong default."""
+    a, b = _pair(timing, LinkConfig(capabilities=0b111))
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=4)
+    a.connect("KK4XYZ")
+    sim.run(until=200)
+    assert b.peer_capabilities == 0b111
+    b.abort()
+    assert b.peer_capabilities == 0
