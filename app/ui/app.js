@@ -45,14 +45,16 @@ function connect() {
   $("footer-endpoint").textContent = url;
   socket = new WebSocket(url);
 
-  socket.addEventListener("open", () => {
+  socket.addEventListener("open", async () => {
     reconnectDelay = 500;
     setLink(true);
     log("connected to the modem");
     refreshStatus();
     loadCapabilities();
-    loadDevices();
-    loadConfig();
+    // devices first: the configuration selects among them, and a profile's guess must not
+    // overwrite what the file says
+    await loadDevices();
+    await loadConfig();
   });
 
   socket.addEventListener("message", (message) => {
@@ -425,6 +427,8 @@ async function loadConfig() {
   select($("dev-ptt"), liveConfig.ptt?.port ?? "");
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
+  // the file's devices, not the profile's guess, are what the warning should be about
+  checkRates();
   writeConfig();
 }
 
@@ -437,8 +441,13 @@ function select(element, value) {
 // where it can be fixed, rather than let the daemon refuse to start later.
 function rateProblem(name, direction) {
   if (!name) return "";
-  const device = devicesSeen.devices.find((d) => d.name === name);
-  const rates = device?.[direction === "capture" ? "input_rates" : "output_rates"] ?? [];
+  // Windows lists a USB codec twice under one name, once as a capture endpoint and once
+  // as playback, so the entry that matters is the one facing the right way
+  const capture = direction === "capture";
+  const device = devicesSeen.devices.find(
+    (d) => d.name === name && (capture ? d.input : d.output),
+  );
+  const rates = device?.[capture ? "input_rates" : "output_rates"] ?? [];
   if (rates.length === 0 || rates.includes(48000)) return "";
   return `${name} ${direction === "capture" ? "captures" : "plays"} at ${rates.join(" or ")} Hz, and the modem needs 48000 Hz. On Windows: Settings > System > Sound > the device > Advanced, set the format to 48000 Hz, then reload this page.`;
 }
