@@ -6,11 +6,14 @@ name: Release
 # stable one, and published to one rolling prerelease that is replaced every time.
 #
 # Every run builds everything; only tagged runs and nightlies publish. Running it by hand
-# without "publish" is the dry run: the same artifacts, kept for a week, no release.
+# without "publish" is the dry run: the same artifacts, kept for a week, no release. A push
+# to a branch whose commit message says `[dry-run]` does the same, which is how a change to
+# this pipeline is tried before it is trusted with a tag.
 
 on:
   push:
     tags: ["v*"]
+    branches: [master, main, "phase-*"]
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -33,6 +36,11 @@ env:
 jobs:
   plan:
     name: plan
+    # a branch push runs the pipeline only when asked; everything else depends on this job
+    if: >-
+      github.ref_type == 'tag'
+      || github.event_name != 'push'
+      || contains(github.event.head_commit.message, '[dry-run]')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.plan.outputs.version }}
