@@ -624,6 +624,28 @@ commands.
 
 ---
 
+### Phase 8 — Aether on a phone (after the air; the box before the app)
+
+VARA's other limit besides its licence is that it lives on a Windows PC. The obvious analogy
+— a phone talking to a KISS TNC the way APRS apps talk to a Mobilinkd — does not apply: KISS
+is a *frame* interface to a modem that makes its own sound, and Aether **is** the modem. So a
+mobile Aether puts the modem in one of two places, and the first is mostly built already.
+
+The two share one design rule: **the phone application talks to the control API of
+`docs/spec/control-api.md`, wherever the modem runs.** Built for the box, the same
+application works unchanged when the modem later runs inside the phone.
+
+| ID | Task | Depends on |
+|---|---|---|
+| P8-1 | **The Aether TNC box.** `aetherd` headless on a Raspberry Pi Zero 2 W / Pi 4 (the gateway kit's target already) with a Digirig or the rig's USB codec and keying, on a battery, and the phone as the *application*: the panel is already served by the daemon and already works at phone width, and the VARA-compatible port is what the mobile Winlink clients that speak to a networked VARA modem connect to. Deliverables: a Pi image as a release target (the daemon archive plus first-boot configuration and the wizard over the panel), a **Bluetooth transport** for the control and host interfaces (RFCOMM/SPP beside TCP, so no Wi-Fi is needed in the field — this is what makes it feel like a Mobilinkd), power measurements, and `docs/user/mobile.md` | P6-6, P3-8 |
+| P8-2 | **A phone application for the box.** Thin: the panel's screens as a native or Tauri 2 mobile app over the control API — connect, session, setup, log, recordings — plus what a phone adds: a station list, notifications when a call comes in, and hand-off to a mail client. Android first; iOS follows once the Bluetooth transport is settled, since iOS constrains what a browser tab may hold open | P8-1 |
+| P8-3 | **The modem inside the phone.** The Rust core already cross-compiles (it is built for aarch64 Linux); the DSP is well within any current phone. What is new is the I/O: audio through USB-C to a Digirig Mobile or an IC-705/FTDX10 codec (Android's USB audio class; `cpal` over Oboe/AAudio, with the latency and backgrounding behaviour measured, not assumed), keying through a USB-serial driver in user space or VOX, and the same application from P8-2 talking to the daemon in-process. Android is achievable; iOS has no user-space serial, so keying there is VOX or CAT over Bluetooth, and that decides whether it is worth doing at all | P8-2 |
+
+Acceptance: a Winlink session from a phone with no PC involved — first with the box, then
+with the phone alone on Android — logged in `field/LOG.md` like any other.
+
+---
+
 ## 14. Next 20 concrete tasks for Claude Code (in order)
 
 1. **P0-1** Add `pyproject.toml`, lockfile, `LICENSE-MIT`/`LICENSE-APACHE`, ruff/mypy/pre-commit, pytest config.
