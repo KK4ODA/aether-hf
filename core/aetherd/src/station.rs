@@ -367,6 +367,9 @@ const THROUGHPUT_WINDOW_S: f64 = 30.0;
 /// The most constellation points kept from a frame, for the display.
 const CONSTELLATION_POINTS: usize = 1024;
 
+/// The most frame reports held between two calls of `take_frame_reports`.
+const MAX_UNTAKEN_REPORTS: usize = 1024;
+
 /// Counters a status display can show.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StationStats {
@@ -1348,6 +1351,10 @@ impl<P: Ptt> Station<P> {
         let step = frame.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
         self.last_symbols = frame.symbols.iter().step_by(step).copied().collect();
         self.last_frame = Some(report.clone());
+        // bounded, for a station nobody drains: a test harness, or a client that never asks
+        if self.reports.len() >= MAX_UNTAKEN_REPORTS {
+            self.reports.remove(0);
+        }
         self.reports.push(report);
         // the burst may go on: the next frame's preamble is a symbol or two away
         self.rx_until = self.rx_until.max(now + 0.5);
