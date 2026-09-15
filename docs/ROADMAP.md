@@ -620,7 +620,7 @@ commands.
 
 | ID | Task | Depends on |
 |---|---|---|
-| P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree | P6-6 |
+| P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | P6-6 |
 
 ---
 

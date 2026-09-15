@@ -140,9 +140,11 @@ def report(sidecar: Path, channel: str | None, baselines: Path, simulate: bool) 
     session = document.get("session", {})
     counters = document.get("counters") or {}
     seconds = float(document["audio"]["seconds"])
+    frequency = session.get("frequency_hz")
+    where = f"{frequency / 1e6:.4f} MHz" if frequency else "frequency not recorded"
     print(
         f"{sidecar.name}: {session.get('callsign')} with {session.get('remote')}, "
-        f"{seconds:.0f} s, notes: {session.get('notes') or '-'}"
+        f"{seconds:.0f} s, {where}, notes: {session.get('notes') or '-'}"
     )
 
     if not data:

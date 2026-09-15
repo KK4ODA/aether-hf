@@ -363,6 +363,7 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
     StationConfig {
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
+        record_notes: config.record.notes.clone(),
         playback_lead_s: PLAYBACK_BACKLOG_S,
         callsign: config.callsign.clone(),
         link: LinkConfig {

@@ -61,6 +61,15 @@ pub trait Ptt: Send {
 
     /// What this backend is, for a log line or a status display.
     fn describe(&self) -> String;
+
+    /// The radio's frequency in hertz, when this backend has a way to ask.
+    ///
+    /// A recording that says what frequency it was made on is worth far more to the field
+    /// log than one that does not, and an operator who left the station running all day
+    /// is not there to write it down. A keying line cannot ask; `rigctld` can.
+    fn frequency_hz(&mut self) -> Option<u64> {
+        None
+    }
 }
 
 impl<P: Ptt + ?Sized> Ptt for Box<P> {
@@ -70,6 +79,10 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
 
     fn unkey(&mut self) -> Result<(), PttError> {
         (**self).unkey()
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        (**self).frequency_hz()
     }
 
     fn describe(&self) -> String {
@@ -147,6 +160,35 @@ impl RigctldPtt {
         Ok(self.stream.as_mut().expect("just connected"))
     }
 
+    /// Ask a question and take the one-line answer, or nothing.
+    fn query(&mut self, line: &str) -> Option<String> {
+        use std::io::{BufRead, BufReader, Write};
+
+        let result = (|| -> Result<String, PttError> {
+            let stream = self.connect()?;
+            stream
+                .write_all(line.as_bytes())
+                .map_err(|e| PttError::Backend(format!("write: {e}")))?;
+            let mut reply = String::new();
+            let mut reader = BufReader::new(
+                stream
+                    .try_clone()
+                    .map_err(|e| PttError::Backend(format!("clone: {e}")))?,
+            );
+            reader
+                .read_line(&mut reply)
+                .map_err(|e| PttError::Backend(format!("read: {e}")))?;
+            if reply.trim().starts_with("RPRT") {
+                return Err(PttError::Backend(format!("rigctld said {}", reply.trim())));
+            }
+            Ok(reply)
+        })();
+        if result.is_err() {
+            self.stream = None;
+        }
+        result.ok()
+    }
+
     fn command(&mut self, line: &str) -> Result<(), PttError> {
         use std::io::{BufRead, BufReader, Write};
 
@@ -192,6 +234,12 @@ impl Ptt for RigctldPtt {
 
     fn describe(&self) -> String {
         format!("rigctld at {}", self.address)
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        // `f` is get_freq: one line holding the frequency in hertz, or `RPRT <n>` when the
+        // rig cannot say. Best effort: a recording without a frequency is still a recording.
+        self.query("f\n").and_then(|line| line.trim().parse().ok())
     }
 }
 
@@ -318,6 +366,11 @@ impl<P: Ptt> PttWatchdog<P> {
     /// The backend, for a caller that needs to look at it.
     pub fn inner(&self) -> &P {
         &self.inner
+    }
+
+    /// The backend, for a caller that needs to ask it something.
+    pub fn inner_mut(&mut self) -> &mut P {
+        &mut self.inner
     }
 }
 

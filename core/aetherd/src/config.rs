@@ -316,6 +316,10 @@ pub struct RecordSection {
     /// Record every session without being asked: from connect to disconnect, one file each.
     #[serde(default)]
     pub auto: bool,
+    /// What every automatic recording says about the station — band, antenna, whatever the
+    /// operator would have written down had they been at the radio when the call came.
+    #[serde(default)]
+    pub notes: String,
 }
 
 /// Where the daemon's log goes.
@@ -674,6 +678,7 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.max_mode",
     "radio.busy_threshold_db",
     "record.auto",
+    "record.notes",
 ];
 
 impl Config {
@@ -718,8 +723,14 @@ impl Config {
             let Some(map) = cursor.as_object_mut() else {
                 return Err(ConfigError::Invalid(format!("{key} is not a setting")));
             };
-            map.insert((*last).to_owned(), value.clone());
-            changed.push(key.clone());
+            // Only a value that differs is a change. The panel sends its whole form, and a
+            // save that merely repeated the sound card's name used to count as a change to
+            // it — and, once a change to it meant a restart, restarted the modem for
+            // nothing every time a level or a note was saved.
+            let before = map.insert((*last).to_owned(), value.clone());
+            if before.as_ref() != Some(value) {
+                changed.push(key.clone());
+            }
         }
 
         let merged: Self =
@@ -857,6 +868,10 @@ check = true
 # on its own, which is what a gateway and field validation want.
 # dir = "recordings"                  # default: recordings/ beside this file
 auto = false
+# What every automatic recording says about the station: the band, the antenna, the
+# frequency when there is no rig control to ask (with [ptt] kind = "rigctld" the frequency
+# is asked for and recorded on its own).
+notes = ""
 
 [sim]
 # A simulated channel instead of a sound card: two daemons joined by a socket, with noise
@@ -1020,6 +1035,22 @@ mod tests {
         // everything not named is left alone
         assert_eq!(config.callsign, "W4ODA");
         assert!(config.radio.wait_for_clear);
+    }
+
+    #[test]
+    fn repeating_a_setting_is_not_a_change() {
+        // the panel sends its whole form on every save; only what differs is reported, or
+        // a restart-needing key that did not move would restart the modem for nothing
+        let mut config = Config::parse(EXAMPLE).expect("example");
+        let same = config.audio.input.clone();
+        let changed = config
+            .merge(&serde_json::json!({
+                "audio.input": same,
+                "callsign": config.callsign.clone(),
+                "radio.max_mode": 8,
+            }))
+            .expect("merge");
+        assert_eq!(changed, vec!["radio.max_mode"]);
     }
 
     #[test]

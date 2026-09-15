@@ -131,21 +131,30 @@
                 <select id="wz-profile"></select>
               </div>
               <p class="sub" id="wz-profile-note">
-                Pick your interface and the devices below are filled in from what this
-                machine reports. Anything can be changed afterwards.
+                Pick your interface and the three device lists below are filled in from what
+                this machine reports. Any of them can be changed by hand.
               </p>
+              <h4 class="sub-heading">The three devices the modem uses</h4>
               <div class="row">
                 <label for="dev-in">Capture</label>
                 <select id="dev-in"></select>
               </div>
+              <p class="sub">The sound card input the radio's receive audio arrives on.</p>
               <div class="row">
                 <label for="dev-out">Playback</label>
                 <select id="dev-out"></select>
               </div>
+              <p class="sub">The sound card output the radio transmits from.</p>
               <div class="row">
                 <label for="dev-ptt">Keying</label>
                 <select id="dev-ptt"></select>
               </div>
+              <p class="sub">
+                The serial port whose RTS line puts the radio into transmit. A radio's USB
+                connection often shows two ports: the one described as <em>Standard</em> (Yaesu)
+                or the rig's own CI-V/CAT port (Icom) is the one that keys. Choose
+                <em>none</em> for a VOX interface such as a SignaLink, or to listen only.
+              </p>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
             </li>
             <li class="step" data-step="3">
@@ -221,6 +230,25 @@
           <label for="record-auto">Recording</label>
           <label class="check"><input id="record-auto" type="checkbox" /> record every session, from connect to disconnect</label>
         </div>
+        <div class="row">
+          <label for="record-standing">Recording notes</label>
+          <input id="record-standing" type="text" class="prose" placeholder="What every automatic recording should say: band, antenna, dial frequency" aria-describedby="record-standing-note" />
+        </div>
+        <p class="sub" id="record-standing-note">
+          Written into every recording that starts on its own, for the day you leave the
+          station listening and a friend calls in. With <code>rigctld</code> keying the dial
+          frequency is asked for and recorded as well.
+        </p>
+        <div class="row">
+          <label for="host-enabled">Host programs</label>
+          <label class="check"><input id="host-enabled" type="checkbox" /> let Winlink Express, Pat, VarAC or BPQ32 use this station, on port</label>
+          <input id="host-port" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
+        </div>
+        <p class="sub">
+          The VARA-compatible interface: point the program's TNC settings at
+          <code>127.0.0.1</code> and this port (the data port is the next number up). Off
+          until you turn it on; the modem restarts when you change it.
+        </p>
 
         <div class="row">
           <button id="btn-apply" class="primary">Save to the station</button>

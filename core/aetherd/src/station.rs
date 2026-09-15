@@ -83,6 +83,9 @@ pub struct StationConfig {
     /// Record every session on its own: start when one connects, stop when it ends. For a
     /// gateway, which nobody is watching, and for field validation, which wants all of them.
     pub record_auto: bool,
+    /// What every recording that starts on its own should say about the station: the band,
+    /// the antenna, whatever the operator would have written down had they been there.
+    pub record_notes: String,
     /// Longest a station may transmit without a Morse identifier, in seconds. Ignored when
     /// `cw_id` is `None`. Ten minutes is the common regulatory figure.
     pub cw_id_interval_s: f64,
@@ -108,6 +111,7 @@ impl Default for StationConfig {
             cw_id: None,
             record_dir: None,
             record_auto: false,
+            record_notes: String::new(),
             cw_id_interval_s: 600.0,
         }
     }
@@ -649,6 +653,7 @@ impl<P: Ptt> Station<P> {
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
+        self.config.record_notes.clone_from(&config.record.notes);
     }
 
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
@@ -806,10 +811,14 @@ impl<P: Ptt> Station<P> {
             || crate::record::session_name(&self.engine.my_call, remote.as_deref()),
             str::to_owned,
         );
+        // the rig's frequency, when the keying backend can ask for it: the one fact about a
+        // recording nobody can reconstruct afterwards
+        let frequency_hz = self.ptt.inner_mut().frequency_hz();
         let meta = serde_json::json!({
             "callsign": self.engine.my_call,
             "remote": remote,
             "notes": notes,
+            "frequency_hz": frequency_hz,
             "max_mode": self.config.link.max_mode,
             "compress": self.config.compress,
             "tx_level": self.config.tx_level,
@@ -868,10 +877,12 @@ impl<P: Ptt> Station<P> {
         self.record_notes = notes;
     }
 
-    /// Where recordings go, and whether sessions record themselves.
-    pub fn set_recording(&mut self, dir: Option<std::path::PathBuf>, auto: bool) {
+    /// Where recordings go, whether sessions record themselves, and what every such
+    /// recording says about the station.
+    pub fn set_recording(&mut self, dir: Option<std::path::PathBuf>, auto: bool, notes: &str) {
         self.config.record_dir = dir;
         self.config.record_auto = auto;
+        notes.clone_into(&mut self.config.record_notes);
     }
 
     /// Report something: to whoever drains the events, and to the recording.
@@ -1119,7 +1130,12 @@ impl<P: Ptt> Station<P> {
                     // started when it comes up and closed when it ends
                     if self.config.record_auto {
                         if name == "connected" {
-                            let notes = self.record_notes.take();
+                            // a note given for the next recording wins; otherwise the
+                            // standing one, which is what an unattended station has
+                            let notes = self.record_notes.take().or_else(|| {
+                                (!self.config.record_notes.is_empty())
+                                    .then(|| self.config.record_notes.clone())
+                            });
                             if let Err(error) = self.start_recording(None, notes.as_deref()) {
                                 self.note("error", &format!("could not record: {error}"));
                             }
@@ -1547,6 +1563,38 @@ mod tests {
         assert_eq!(air.b.engine().my_call, "KK4XYZ-3");
     }
 
+    /// A second session with no note of its own gets the standing note: what an unattended
+    /// station has to say about itself.
+    fn second_session_carries_the_standing_note(air: &mut Air, dir: &std::path::Path) {
+        air.run(60.0, |a, b| {
+            a.engine().state() == State::Idle && b.engine().state() == State::Idle
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.a.send(b"second session");
+        air.run(60.0, |a, _| a.connected());
+        air.a.disconnect();
+        air.run(60.0, |a, b| !a.connected() && !b.connected());
+        let standing: Vec<serde_json::Value> = std::fs::read_dir(dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+            .map(|p| serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
+            .filter(|s: &serde_json::Value| {
+                s["session"]["notes"] == "40 m dipole, the standing note"
+            })
+            .collect();
+        assert_eq!(
+            standing.len(),
+            1,
+            "the second recording did not carry the standing note"
+        );
+        assert!(
+            standing[0]["session"]["frequency_hz"].is_null(),
+            "a keying line cannot know the frequency, and must not pretend to"
+        );
+    }
+
     #[test]
     fn a_session_records_itself_when_asked_to() {
         // the receiving station records: what it heard is the channel, and the sidecar
@@ -1555,7 +1603,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let message = b"Recorded for posterity, and for the regression tier.";
         let mut air = Air::new(1.0, 0.0005);
-        air.b.set_recording(Some(dir.clone()), true);
+        air.b
+            .set_recording(Some(dir.clone()), true, "40 m dipole, the standing note");
         air.b.set_record_notes(Some("bench loopback".to_owned()));
         air.a.connect("KK4XYZ").expect("idle");
         air.a.send(message);
@@ -1632,6 +1681,7 @@ mod tests {
             verdict.found
         );
         let _ = std::fs::remove_dir_all(&dir);
+        second_session_carries_the_standing_note(&mut air, &dir);
     }
 
     #[test]

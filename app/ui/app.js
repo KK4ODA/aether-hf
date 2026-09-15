@@ -462,6 +462,9 @@ async function loadConfig() {
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
   $("record-auto").checked = liveConfig.record?.auto === true;
+  $("record-standing").value = liveConfig.record?.notes ?? "";
+  $("host-enabled").checked = liveConfig.host?.enabled === true;
+  $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
   // the file's devices, not the profile's guess, are what the warning should be about
   checkRates();
   writeConfig();
@@ -505,6 +508,12 @@ function writeConfig() {
   $("footer-config").textContent = configPath;
 }
 
+/// The port of a `host:port` address, or nothing.
+function portOf(address) {
+  const port = Number(String(address ?? "").split(":").pop());
+  return Number.isInteger(port) && port > 0 ? port : null;
+}
+
 /// Everything the form would change, as the dotted keys `config.set` takes.
 function formChanges() {
   const port = $("dev-ptt").value;
@@ -522,7 +531,13 @@ function formChanges() {
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
+  changes["record.notes"] = $("record-standing").value.trim();
   changes["audio.tx_level"] = txLevel();
+  changes["host.enabled"] = $("host-enabled").checked;
+  const hostPort = Number($("host-port").value);
+  if (Number.isInteger(hostPort) && hostPort > 0 && hostPort < 65535) {
+    changes["host.bind"] = `127.0.0.1:${hostPort}`;
+  }
   return changes;
 }
 
@@ -603,11 +618,11 @@ const PROFILES = [
     note: "SignaLink keys itself from the audio (VOX), so no keying line is needed.",
   },
   {
-    name: "Something else",
+    name: "Manual — I will pick the three devices below myself",
     match: null,
     ptt: "serial",
     line: "rts",
-    note: "Choose the devices by hand below.",
+    note: "Nothing is filled in for you: choose Capture, Playback and Keying in the three lists directly below.",
   },
 ];
 

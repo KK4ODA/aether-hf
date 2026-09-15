@@ -962,7 +962,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("aether-recapi-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        station.set_recording(Some(dir.clone()), false);
+        station.set_recording(Some(dir.clone()), false, "");
         let started = call(
             &mut station,
             "record.start",
