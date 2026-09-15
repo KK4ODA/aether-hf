@@ -736,7 +736,7 @@ fn unix_ms_now() -> u64 {
 
 /// What a frame says about who sent it, for the stations-heard list.
 ///
-/// A frame with a callsign in it — a beacon, a connect request, an answer — names its
+/// A frame with a callsign in it — a beacon, a connect request, an answer, a probe — names its
 /// sender outright. A data or control frame names nobody, but during a session one
 /// with the session's id is the other station's, which the station attributes on the
 /// way here. Anything else is heard and not counted: a frame from nobody is not a
@@ -751,7 +751,8 @@ fn sighting_of(
     let (activity, detail) = match frame.kind {
         "beacon" => (Activity::Beacon, None),
         "connect" => (Activity::Calling, frame.to.clone()),
-        "answer" => (Activity::Answering, frame.to.clone()),
+        "answer" | "probe-answer" => (Activity::Answering, frame.to.clone()),
+        "probe" => (Activity::Probing, frame.to.clone()),
         _ => (Activity::Connected, None),
     };
     Some(Sighting {

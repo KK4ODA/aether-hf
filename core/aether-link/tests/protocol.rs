@@ -293,6 +293,139 @@ fn a_call_stating_another_bandwidth_is_not_answered() {
 }
 
 #[test]
+fn a_probe_is_answered_with_the_snr_it_arrived_at() {
+    // "can you hear me, and how well?" without a session: the probed station answers
+    // with the SNR the probe arrived at, and the prober reports both directions
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.probe("KK4XYZ", None).expect("idle");
+    assert_eq!(a.probe("KK4XYZ", None), Err("a probe is already out"));
+    let mut sim = TwoStationSim::new(a, b, 15.0, 21);
+    sim.run(60.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert!(
+        sim.events(1).iter().any(|e| e == "probed:W4ODA at 15.0 dB"),
+        "{:?}",
+        sim.events(1)
+    );
+    assert!(
+        sim.events(0)
+            .iter()
+            .any(|e| e == "probe:KK4XYZ hears us at 15 dB, heard at 15.0 dB"),
+        "{:?}",
+        sim.events(0)
+    );
+    let (sent, replies, answered) = (
+        sim.engine(0).stats.probes_sent,
+        sim.engine(0).stats.probe_replies,
+        sim.engine(1).stats.probes_answered,
+    );
+    assert_eq!((sent, replies, answered), (1, 1, 1));
+    // the question can be asked again, and a session can follow
+    sim.engine_mut(0).probe("KK4XYZ", None).expect("answered");
+    sim.run(120.0, 3.0);
+    assert_eq!(sim.engine(0).stats.probe_replies, 2);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(b"after the probe");
+    sim.engine_mut(0).disconnect();
+    sim.run(400.0, 3.0);
+    assert_eq!(sim.delivered(1), b"after the probe");
+}
+
+#[test]
+fn a_probe_to_nobody_reports_no_answer() {
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.probe("N0BODY", None).expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 22);
+    sim.run(60.0, 3.0);
+    assert!(
+        sim.events(0).iter().any(|e| e == "probe:N0BODY: no answer"),
+        "{:?}",
+        sim.events(0)
+    );
+    assert!(!sim.events(1).iter().any(|e| e.starts_with("probed")));
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    // and once it has timed out, another may go
+    sim.engine_mut(0).probe("KK4XYZ", None).expect("free again");
+    sim.run(120.0, 3.0);
+    assert_eq!(sim.engine(0).stats.probe_replies, 1);
+}
+
+#[test]
+fn a_probe_is_not_answered_during_a_session_or_in_another_bandwidth() {
+    use aether_link::frames::{DataHeader, DataKind, ProbeBody, encode_data, with_bandwidth};
+    use aether_link::{Action, Container, SimFrame};
+    let t = timing(false);
+    let probe_from = |call: &str, to: &str, caps: u8| {
+        let body = ProbeBody {
+            src: call.to_owned(),
+            dst: to.to_owned(),
+            snr_db: None,
+            caps,
+        }
+        .encode()
+        .expect("body");
+        let header = DataHeader {
+            kind: DataKind::Probe,
+            seq: 0,
+            session: 0,
+        };
+        let payload = encode_data(&header, &body, t.capacity(0)).expect("fits");
+        SimFrame::decoded(Container::Data, 0, 12.0, 0.0, 1.0, payload)
+    };
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    // a session up: a third station's probe is left alone
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 23);
+    sim.run(40.0, 3.0);
+    assert!(sim.engine(1).connected());
+    let now = sim.t;
+    sim.engine_mut(1)
+        .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
+    assert_eq!(sim.engine(1).stats.probes_answered, 0);
+    assert!(sim.engine_mut(1).drain().is_empty());
+    // idle, but the probe claims another bandwidth: ignored, and said so
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    let now = sim.t;
+    sim.engine_mut(1)
+        .on_frame(&probe_from("N0CALL", "KK4XYZ", with_bandwidth(0, 500)), now);
+    assert_eq!(sim.engine(1).stats.probes_answered, 0);
+    let actions = sim.engine_mut(1).drain();
+    assert!(
+        actions.iter().any(|action| matches!(
+            action,
+            Action::Event { name: "ignored", detail } if detail.contains("N0CALL")
+        )),
+        "{actions:?}"
+    );
+    // and one for somebody else is nobody's business
+    sim.engine_mut(1)
+        .on_frame(&probe_from("N0CALL", "W1AW", 0), now);
+    assert_eq!(sim.engine(1).stats.probes_answered, 0);
+    assert!(sim.engine_mut(1).drain().is_empty());
+    // while one addressed to it, in its bandwidth, is answered
+    sim.engine_mut(1)
+        .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
+    assert_eq!(sim.engine(1).stats.probes_answered, 1);
+    let actions = sim.engine_mut(1).drain();
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Transmit { .. }))
+    );
+    // a station in a session may not probe
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    assert_eq!(
+        sim.engine_mut(0).probe("KK4XYZ", None),
+        Err("already in a session")
+    );
+}
+
+#[test]
 fn the_rate_controller_steps_the_table_the_phy_hands_it() {
     use aether_link::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, usable_modes_of};
     // a PHY with its own mode table — the 500 Hz waveform — hands its thresholds over, and

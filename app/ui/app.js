@@ -107,6 +107,7 @@ function setLink(up) {
     "btn-disconnect",
     "btn-abort",
     "btn-beacon",
+    "btn-probe",
     "btn-send",
     "btn-record",
   ]) {
@@ -140,10 +141,21 @@ function onEvent(frame) {
       break;
     case "log":
       log(`${data.name}: ${data.detail}`, data.name === "error");
+      // the probe's answer, or its absence, where the button is
+      if (data.name === "probe") noteProbe(data.detail ?? "");
       break;
     default:
       log(`${frame.event}: ${JSON.stringify(data)}`);
   }
+}
+
+// The probe's report is the modem's own sentence — "KK4XYZ hears us at 12 dB, heard at
+// 14.0 dB" or "KK4XYZ: no answer" — shown as it is, beside the button that asked.
+function noteProbe(detail) {
+  const line = $("probe-result");
+  const unanswered = detail.endsWith("no answer");
+  line.textContent = unanswered ? `${detail} — try again, or change band` : detail;
+  line.dataset.state = unanswered ? "warn" : "ok";
 }
 
 // ── status ──────────────────────────────────────────────────────────
@@ -209,6 +221,7 @@ async function refreshStatus() {
 
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
+  $("btn-probe").disabled = status.state !== "idle";
   applyRecording(status.recording ?? null);
   $("btn-disconnect").disabled = status.state === "idle";
   $("btn-abort").disabled = status.state === "idle";
@@ -620,6 +633,7 @@ let heardSort = { key: "last_heard_ms", direction: -1 };
 const ACTIVITY_TEXT = {
   beacon: "beacon",
   calling: "calling",
+  probing: "probing",
   answering: "answering",
   connected: "session",
 };
@@ -1003,6 +1017,9 @@ const COUNTER_LABELS = {
   transmissions: ["Transmissions", "Times the radio was keyed"],
   deferred_for_busy: ["Held for busy", "Transmissions held back for a busy channel"],
   watchdog_trips: ["Watchdog trips", "Times the key-time watchdog released the key"],
+  probes_sent: ["Probes sent", "Probes this station sent"],
+  probe_replies: ["Probes answered", "Of the probes sent, how many drew an answer"],
+  probes_answered: ["Probes taken", "Probes from other stations this one answered"],
 };
 
 function renderCounters(counters) {
@@ -1766,6 +1783,17 @@ function wire() {
   $("btn-beacon").addEventListener("click", () =>
     act(() => call("beacon"), "beaconing"),
   );
+  $("btn-probe").addEventListener("click", async () => {
+    const remote = $("remote").value.trim().toUpperCase();
+    if (!remote) {
+      $("remote").focus();
+      return;
+    }
+    $("probe-result").textContent = `Probing ${remote}…`;
+    delete $("probe-result").dataset.state;
+    const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
+    if (!ok) $("probe-result").textContent = "";
+  });
   $("btn-record").addEventListener("click", toggleRecording);
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {

@@ -101,7 +101,7 @@ from BPSK ⅕ at 2 300 Hz, ten from QPSK ½ at 500 Hz, and a mode index means no
 the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
 restart; `[radio] answer_only` (live) makes the station take calls and make none — what
 §97.221(c) allows an unattended station at 500 Hz outside the automatic sub-bands, and
-what `connect` and `beacon` are refused with while it is set.
+what `connect`, `beacon` and `probe` are refused with while it is set.
 
 `config.get` and `diagnostics` return the configuration **with the secrets taken out**:
 `control.token` comes back as the string `<set>` when one is configured. A loopback client
@@ -115,6 +115,8 @@ needs no token, so it must not be able to read the one that guards a network bin
 | `callsigns.set` | `callsigns` (list) | the callsigns the station answers to from now on, the first being the one it calls as, and `applied`: `false` when a session is up, in which case they take effect as it ends. Replaces `[station] callsign` for the daemon's lifetime without touching the file: a host program's `MYCALL` is the operator's callsign, and the file is what the station answers to until one says otherwise |
 | `disconnect` | — | accepted; closes after the queue drains |
 | `abort` | — | accepted; drops the session immediately |
+| `beacon` | — | accepted; one frame with this station's callsign, addressed to nobody, at the most robust mode. Refused during a session and on an answer-only station |
+| `probe` | `remote`, `callsign?` | accepted; one frame asking `remote` whether it hears this station, and how well (ADR-0006). The answer, or its absence, arrives as a `log` event named `probe`: `<call> hears us at <x> dB, heard at <y> dB` — the SNR the other station measured on the probe, and the SNR this one measured on the answer — or `<call>: no answer` after one frame's turnaround. One probe out at a time (`not_idle`, retryable); refused during a session and on an answer-only station, which answers probes and sends none. The other end reports a probe it answered as a `log` event named `probed` |
 | `listen` | `enabled` | accepted |
 | `send` | `data` (base64) | bytes accepted into the queue |
 
@@ -153,7 +155,7 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 | `record.start` | `name` (optional), `notes` (optional) | `path` of the WAV being written |
 | `record.stop` | — | `wav`, `sidecar`, `seconds`, `frames` found, `decoded` |
 | `record.notes` | `notes` | accepted; kept for the next recording that starts on its own. Without one, an automatic recording carries the standing `[record] notes` from the configuration (a live key) — what an unattended station has to say about its band and antenna |
-| `heard.list` | — | `stations`: every station heard, most recent first — `callsign`, `first_heard_ms` and `last_heard_ms` (Unix milliseconds), `count`, `snr_db` (last) and `best_snr_db`, `frequency_hz` (when the radio could say), `mode`, `activity` (`beacon`, `calling`, `answering`, `connected`), `detail` (whom it was calling or answering) and `connected` (whether a session with it has ever been up from here); `limit` (200) and the `path` of the file the list lives in |
+| `heard.list` | — | `stations`: every station heard, most recent first — `callsign`, `first_heard_ms` and `last_heard_ms` (Unix milliseconds), `count`, `snr_db` (last) and `best_snr_db`, `frequency_hz` (when the radio could say), `mode`, `activity` (`beacon`, `calling`, `probing`, `answering`, `connected`), `detail` (whom it was calling, probing or answering) and `connected` (whether a session with it has ever been up from here); `limit` (200) and the `path` of the file the list lives in |
 | `heard.clear` | — | `cleared`: how many were forgotten |
 
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
@@ -186,7 +188,7 @@ was on. Each change goes out as a `heard` event.
 |---|---|---|
 | `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
 | `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `channel_busy`, `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
-| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`), `mode`, `rv`, `snr_db`, `cfo_hz`, `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz`, `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |

@@ -86,8 +86,9 @@ anywhere data is permitted, but it may never call, beacon or start a session on 
 That is a design constraint on the 500 Hz waveform rather than a footnote: an Aether
 station running unattended at 500 Hz outside the segments must be answer-only, and the
 daemon has a setting for exactly that — `[radio] answer_only = true` (Setup → Misc modem
-settings → *answer only*), under which it takes calls and refuses to make one or to
-beacon. At 2.3 kHz there is no such allowance; the segments above are the whole of it.
+settings → *answer only*), under which it takes calls and refuses to make one, to
+beacon or to probe (it answers probes, which is a response too). At 2.3 kHz there is no
+such allowance; the segments above are the whole of it.
 
 If the mode gets enough operators for these to matter, they should be agreed publicly and
 recorded here with whoever agreed them — not asserted by the software's authors.

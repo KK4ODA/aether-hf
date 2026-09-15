@@ -65,6 +65,16 @@ pub enum DataKind {
     /// callsign. It is how an operator answers "can anybody hear me?" without arranging a
     /// contact first, which on HF is most of what a new station needs to know.
     Beacon,
+    /// A beacon with a destination (P7-1): "can *you* hear me, and how well?" — sent
+    /// outside any session, answered with a [`ProbeAck`](Self::ProbeAck) carrying the SNR
+    /// the answering station measured on it, so both operators see both directions of
+    /// the path without arranging a contact. The one thing a receiver cannot measure is
+    /// how it is heard; this is how it asks.
+    Probe,
+    /// The answer to a probe: the probed station's callsign, the prober's, and the SNR the
+    /// probe arrived at. Answering is a *response* in the sense of §97.221(c), so a
+    /// station that may only answer may answer this too; sending a probe is a call.
+    ProbeAck,
 }
 
 impl DataKind {
@@ -74,6 +84,8 @@ impl DataKind {
             Self::ConnectReq => 1,
             Self::ConnectAck => 2,
             Self::Beacon => 3,
+            Self::Probe => 4,
+            Self::ProbeAck => 5,
         }
     }
 
@@ -83,6 +95,8 @@ impl DataKind {
             1 => Some(Self::ConnectReq),
             2 => Some(Self::ConnectAck),
             3 => Some(Self::Beacon),
+            4 => Some(Self::Probe),
+            5 => Some(Self::ProbeAck),
             _ => None,
         }
     }
@@ -359,6 +373,80 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// Bytes a connect body occupies.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 2;
 
+/// The SNR byte shared by the CONTROL frame and the probe body: signed whole decibels
+/// (3 kHz reference), clamped to ±40, [`SNR_UNKNOWN`] for "not measured".
+///
+/// Ties round to even, matching the reference model. Rust's `round` goes half away from
+/// zero and Python's goes half to even, so an SNR of exactly 12.5 would otherwise be
+/// reported as 13 dB by one station and 12 dB by the other. Harmless for rate control,
+/// but the two would disagree byte for byte, and a wire format that two correct
+/// implementations encode differently is a bug.
+#[must_use]
+pub fn snr_byte(snr_db: Option<f64>) -> u8 {
+    match snr_db {
+        None => SNR_UNKNOWN,
+        Some(value) => {
+            let clamped = value.round_ties_even().clamp(-40.0, 40.0) as i32;
+            (clamped as i8) as u8
+        }
+    }
+}
+
+/// The SNR an [`snr_byte`] carries, `None` for "not measured".
+#[must_use]
+pub fn snr_from_byte(byte: u8) -> Option<f64> {
+    (byte != SNR_UNKNOWN).then(|| f64::from(byte as i8))
+}
+
+/// Body of a probe or its answer: who is asking whom, the SNR the answer reports, and the
+/// capability bits (the bandwidth the frame was sent in, so a probe in another bandwidth
+/// than it arrived in is ignored like a connect request would be).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeBody {
+    /// The station asking (a probe) or answering (an answer).
+    pub src: String,
+    /// The station asked, or the one being answered.
+    pub dst: String,
+    /// An answer: the SNR (3 kHz) the probe arrived at, whole decibels. A probe: `None`.
+    pub snr_db: Option<f64>,
+    /// Capability bits, as the connect body's.
+    pub caps: u8,
+}
+
+/// Bytes a probe body occupies.
+pub const PROBE_BODY_BYTES: usize = 2 * CALL_BYTES + 2;
+
+impl ProbeBody {
+    /// Serialise it.
+    ///
+    /// # Errors
+    /// If either callsign cannot be packed.
+    pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
+        let mut out = Vec::with_capacity(PROBE_BODY_BYTES);
+        out.extend_from_slice(&pack_callsign(&self.src)?);
+        out.extend_from_slice(&pack_callsign(&self.dst)?);
+        out.push(snr_byte(self.snr_db));
+        out.push(self.caps);
+        Ok(out)
+    }
+
+    /// Parse it.
+    ///
+    /// # Errors
+    /// If the body is short or a callsign is malformed.
+    pub fn decode(body: &[u8]) -> Result<Self, FrameError> {
+        if body.len() < PROBE_BODY_BYTES {
+            return Err(FrameError::TooShort);
+        }
+        Ok(Self {
+            src: unpack_callsign(&body[..CALL_BYTES])?,
+            dst: unpack_callsign(&body[CALL_BYTES..2 * CALL_BYTES])?,
+            snr_db: snr_from_byte(body[2 * CALL_BYTES]),
+            caps: body[2 * CALL_BYTES + 1],
+        })
+    }
+}
+
 impl ConnectBody {
     /// Serialise it.
     ///
@@ -417,18 +505,7 @@ impl ControlFrame {
     /// Serialise into exactly [`CONTROL_BYTES`] bytes.
     #[must_use]
     pub fn encode(&self) -> [u8; CONTROL_BYTES] {
-        let snr = match self.snr_db {
-            None => SNR_UNKNOWN,
-            Some(value) => {
-                // Ties round to even, matching the reference model. Rust's `round` goes half
-                // away from zero and Python's goes half to even, so an SNR of exactly 12.5
-                // would otherwise be reported as 13 dB by one station and 12 dB by the other.
-                // Harmless for rate control, but the two would disagree byte for byte, and a
-                // wire format that two correct implementations encode differently is a bug.
-                let clamped = value.round_ties_even().clamp(-40.0, 40.0) as i32;
-                (clamped as i8) as u8
-            }
-        };
+        let snr = snr_byte(self.snr_db);
         [
             (self.kind.to_bits() << 4) | (self.flags & 0x0F),
             self.session,
@@ -450,12 +527,7 @@ impl ControlFrame {
         }
         let kind_bits = payload[0] >> 4;
         let kind = ControlKind::from_bits(kind_bits).ok_or(FrameError::UnknownKind(kind_bits))?;
-        let raw_snr = payload[5];
-        let snr_db = if raw_snr == SNR_UNKNOWN {
-            None
-        } else {
-            Some(f64::from(raw_snr as i8))
-        };
+        let snr_db = snr_from_byte(payload[5]);
         Ok(Self {
             kind,
             session: payload[1],

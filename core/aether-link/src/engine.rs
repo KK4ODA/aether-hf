@@ -32,8 +32,8 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, WINDOW, bandwidth_code, control_flags, data_capacity, decode_data, encode_data,
-        in_window, pack_callsign, seq_after, seq_distance,
+        MAX_BURST, ProbeBody, WINDOW, bandwidth_code, control_flags, data_capacity, decode_data,
+        encode_data, in_window, pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{RateConfig, RateController},
@@ -168,6 +168,12 @@ pub struct LinkStats {
     pub bytes_delivered: usize,
     /// Payload bytes the peer acknowledged: what has actually crossed, seen from the sender.
     pub bytes_acked: usize,
+    /// Probes this station sent.
+    pub probes_sent: usize,
+    /// Probes from other stations this one answered.
+    pub probes_answered: usize,
+    /// Answers to this station's own probes that arrived.
+    pub probe_replies: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +210,7 @@ enum Timer {
     Ack,
     Wait,
     Keepalive,
+    Probe,
 }
 
 /// What the receiving station has asked for in its last acknowledgement.
@@ -296,6 +303,8 @@ pub struct LinkEngine {
     disc_requested: bool,
     disc_tries: usize,
     connect_tries: usize,
+    /// The station a probe of ours is out to, until it answers or the timer fires.
+    probing: Option<String>,
     waiting_for: Option<Waiting>,
     // receiving side
     rx_base: u8,
@@ -371,6 +380,7 @@ impl LinkEngine {
             disc_requested: false,
             disc_tries: 0,
             connect_tries: 0,
+            probing: None,
             waiting_for: None,
             rx_base: 0,
             rx_buffer: Vec::new(),
@@ -554,6 +564,46 @@ impl LinkEngine {
         self.connect_tries = 0;
         self.reset_transfer_state();
         self.send_connect(DataKind::ConnectReq);
+        Ok(())
+    }
+
+    /// Ask a station whether it hears this one, and how well, without a session.
+    ///
+    /// One PROBE frame, at the most robust mode, as whichever of this station's callsigns
+    /// the caller names (or the first of them); the answer, if it comes, arrives as a
+    /// `probe` event naming both directions of the path — the SNR the other station
+    /// measured on our probe, and the SNR we measured on its answer. A probe that goes
+    /// unanswered within one frame's turnaround is reported as such; the operator asks again
+    /// if they want, so there are no retries to fill a channel with.
+    ///
+    /// # Errors
+    /// If a session is up, a probe is already out, or `as_call` is not one of this
+    /// station's callsigns.
+    pub fn probe(&mut self, remote_call: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        if self.state != State::Idle {
+            return Err("already in a session");
+        }
+        if self.probing.is_some() {
+            return Err("a probe is already out");
+        }
+        let mine = match as_call {
+            None => self.callsigns[0].clone(),
+            Some(call) => {
+                let call = call.to_ascii_uppercase();
+                if !self.callsigns.contains(&call) {
+                    return Err("not one of this station's callsigns");
+                }
+                call
+            }
+        };
+        self.my_call = mine;
+        let remote = remote_call.to_ascii_uppercase();
+        self.stats.probes_sent += 1;
+        self.send_probe(DataKind::Probe, &remote, None);
+        self.probing = Some(remote);
+        let wait = self.response_wait(self.timing.data_frame_s, 0.0);
+        let delay = self.tx_busy_until - self.now + wait;
+        self.arm(Timer::Probe, delay);
         Ok(())
     }
 
@@ -746,6 +796,14 @@ impl LinkEngine {
                     self.send_poll();
                 }
             }
+            Timer::Probe => {
+                if let Some(remote) = self.probing.take() {
+                    self.actions.push(Action::Event {
+                        name: "probe",
+                        detail: format!("{remote}: no answer"),
+                    });
+                }
+            }
         }
     }
 
@@ -857,6 +915,31 @@ impl LinkEngine {
             return;
         }
         self.send_connect(DataKind::ConnectReq);
+    }
+
+    /// A probe (`snr_db` absent) or its answer (the SNR the probe arrived at), outside
+    /// any session: session 0, sequence 0, the most robust mode.
+    fn send_probe(&mut self, kind: DataKind, remote: &str, snr_db: Option<f64>) {
+        let body = ProbeBody {
+            src: self.my_call.clone(),
+            dst: remote.to_owned(),
+            snr_db,
+            caps: self.config.capabilities,
+        };
+        let Ok(encoded) = body.encode() else { return };
+        let capacity = self.timing.capacity(0);
+        let header = DataHeader {
+            kind,
+            seq: 0,
+            session: 0,
+        };
+        let payload = encode_data(&header, &encoded, capacity).expect("probe body fits");
+        self.transmit(vec![TxFrame {
+            container: Container::Data,
+            payload,
+            mode: 0,
+            rv: 0,
+        }]);
     }
 
     fn wait_for(&mut self, what: Waiting, response_s: f64, responder_delay: f64) {
@@ -1100,7 +1183,7 @@ impl LinkEngine {
         if matches!(self.state, State::Idle | State::Connecting) {
             let (payload, _) = frame.decode(None);
             if let Some(payload) = payload {
-                self.on_connect_payload(&payload);
+                self.on_connect_payload(&payload, frame.snr_db());
             }
             return;
         }
@@ -1263,7 +1346,9 @@ impl LinkEngine {
             }
             // a beacon belongs to nobody's session; it is reported by the caller and
             // never enters the sequence-numbered stream
-            DataKind::ConnectAck | DataKind::Beacon => return,
+            DataKind::ConnectAck | DataKind::Beacon | DataKind::Probe | DataKind::ProbeAck => {
+                return;
+            }
             DataKind::Data => {}
         }
 
@@ -1445,15 +1530,69 @@ impl LinkEngine {
 
     // ── connection handling ───────────────────────────────────────────
 
-    fn on_connect_payload(&mut self, payload: &[u8]) {
+    /// A decoded DATA container outside a session: a call, an answer, or a probe and its
+    /// answer; `snr_db` is what the frame arrived at, which a probe is answered with.
+    fn on_connect_payload(&mut self, payload: &[u8], snr_db: f64) {
         let Ok((header, body)) = decode_data(payload) else {
             return;
         };
         match header.kind {
             DataKind::ConnectReq => self.handle_connect_req(header, &body),
             DataKind::ConnectAck => self.handle_connect_ack(header, &body),
+            DataKind::Probe => self.handle_probe(&body, snr_db),
+            DataKind::ProbeAck => self.handle_probe_ack(&body, snr_db),
             DataKind::Data | DataKind::Beacon => {}
         }
+    }
+
+    fn handle_probe(&mut self, body: &[u8], snr_db: f64) {
+        let Ok(request) = ProbeBody::decode(body) else {
+            return;
+        };
+        if !self.callsigns.contains(&request.dst) {
+            return;
+        }
+        if bandwidth_code(request.caps) != bandwidth_code(self.config.capabilities) {
+            self.actions.push(Action::Event {
+                name: "ignored",
+                detail: format!("{} probes in another bandwidth", request.src),
+            });
+            return;
+        }
+        if self.state != State::Idle {
+            return; // a session's frames matter more than a question from outside it
+        }
+        // answer as the callsign that was probed, with the SNR the probe arrived at — the
+        // one number the prober cannot measure for itself
+        self.my_call = request.dst;
+        self.stats.probes_answered += 1;
+        self.actions.push(Action::Event {
+            name: "probed",
+            detail: format!("{} at {snr_db:.1} dB", request.src),
+        });
+        self.send_probe(DataKind::ProbeAck, &request.src, Some(snr_db));
+    }
+
+    fn handle_probe_ack(&mut self, body: &[u8], snr_db: f64) {
+        let Ok(answer) = ProbeBody::decode(body) else {
+            return;
+        };
+        if answer.dst != self.my_call || self.probing.as_deref() != Some(answer.src.as_str()) {
+            return;
+        }
+        self.disarm(Timer::Probe);
+        self.probing = None;
+        self.stats.probe_replies += 1;
+        let theirs = answer
+            .snr_db
+            .map_or_else(|| "?".to_owned(), |value| format!("{value:.0}"));
+        self.actions.push(Action::Event {
+            name: "probe",
+            detail: format!(
+                "{} hears us at {theirs} dB, heard at {snr_db:.1} dB",
+                answer.src
+            ),
+        });
     }
 
     fn handle_connect_req(&mut self, header: DataHeader, body: &[u8]) {

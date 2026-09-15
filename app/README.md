@@ -16,8 +16,10 @@ The panel's tabs: **Status** is the dashboard (state, mode, SNR and what the oth
 hears you at, throughput and the session's account, tuning offset, receive level, the SNR
 of every frame over the last ten minutes, the channel level against the noise floor, when
 the key was down and when a burst was arriving, and the counters); **Session** is the
-call, keying and drive, recording, send and receive; **Stations** is everyone heard —
-beacons, calls, answers and session partners, with when, how strong and what they were
+call (with **Probe**: does the station in Call hear you, and how well — one frame, one
+answer, both directions of the path, no session), keying and drive, recording, send
+and receive; **Stations** is everyone heard —
+beacons, calls, probes, answers and session partners, with when, how strong and what they were
 doing, sortable, kept by the modem in `heard.json` beside its configuration; **Diagnostics**
 is the constellation of the last frame, a spectrum and waterfall of the received audio,
 the rate controller's readings, the host program's connection and a table of the last sixty

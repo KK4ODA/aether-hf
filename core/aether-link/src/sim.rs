@@ -52,6 +52,32 @@ pub struct SimFrame {
     thresholds: [f64; 14],
 }
 
+impl SimFrame {
+    /// A frame that decodes: a test's way of handing an engine a frame of its own making
+    /// (a probe from a third station, say) at a stated SNR.
+    #[must_use]
+    pub fn decoded(
+        container: Container,
+        mode: usize,
+        snr_db: f64,
+        t_start: f64,
+        t_end: f64,
+        payload: Vec<u8>,
+    ) -> Self {
+        Self {
+            container,
+            mode,
+            rv: 0,
+            snr_db,
+            t_start,
+            t_end,
+            payload,
+            draw: 0.0,
+            thresholds: AWGN_THRESHOLD_DB,
+        }
+    }
+}
+
 impl SoftFrame for SimFrame {
     fn container(&self) -> Container {
         self.container
@@ -375,7 +401,7 @@ impl TwoStationSim {
     /// reached. Returns the final simulation time.
     pub fn run(&mut self, until: f64, idle_gap: f64) -> f64 {
         for who in 0..2 {
-            self.pump(who, 0.0);
+            self.pump(who, self.t);
         }
         let mut last = 0.0;
         while self.t < until {

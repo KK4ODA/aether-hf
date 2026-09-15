@@ -130,6 +130,11 @@ and cannot be turned on from one end alone, and whether to identify in Morse is 
 question for the operator rather than a runtime choice for a client. Wiring these commands to
 those settings is an open item.
 
+**Not a command here**: `PING` / `PINGACK`. VARA's published command set has none (that
+vocabulary is ARDOP's host protocol), and VarAC's ping is a short session over `CONNECT`,
+which works as it is. Aether's own link probe (ADR-0006) is reached through the control
+API's `probe` and the panel's Probe button, not through this adapter.
+
 **Everything else in §3 is acted on.**
 
 ---

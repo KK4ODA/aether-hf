@@ -15,8 +15,8 @@ use std::{fs, path::PathBuf};
 
 use aether_link::{
     frames::{
-        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, decode_data, encode_data,
-        pack_callsign, unpack_callsign,
+        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, ProbeBody, decode_data,
+        encode_data, pack_callsign, unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, RateController,
@@ -54,6 +54,8 @@ fn data_kind(name: &str) -> DataKind {
         "CONNECT_REQ" => DataKind::ConnectReq,
         "CONNECT_ACK" => DataKind::ConnectAck,
         "BEACON" => DataKind::Beacon,
+        "PROBE" => DataKind::Probe,
+        "PROBE_ACK" => DataKind::ProbeAck,
         other => panic!("unknown data kind {other}"),
     }
 }
@@ -186,6 +188,34 @@ fn connect_bodies_match_the_model() {
             body.dst
         );
         assert_eq!(ConnectBody::decode(&expected).expect("decode"), body);
+    }
+}
+
+#[test]
+fn probe_bodies_match_the_model() {
+    for case in vectors()["probe_bodies"].as_array().expect("probe bodies") {
+        let body = ProbeBody {
+            src: case["src"].as_str().expect("src").to_owned(),
+            dst: case["dst"].as_str().expect("dst").to_owned(),
+            snr_db: case["snr_db"].as_f64(),
+            caps: int(case, "caps") as u8,
+        };
+        let expected = from_hex(case["encoded"].as_str().expect("encoded"));
+        let label = format!("{} > {} at {:?}", body.src, body.dst, body.snr_db);
+        assert_eq!(body.encode().expect("encode"), expected, "{label}");
+        let decoded = ProbeBody::decode(&expected).expect("decode");
+        assert_eq!(
+            (&decoded.src, &decoded.dst, decoded.caps),
+            (&body.src, &body.dst, body.caps)
+        );
+        // the SNR is quantised to a signed byte, so compare against what the model read back
+        match (decoded.snr_db, case["decoded_snr_db"].as_f64()) {
+            (None, None) => {}
+            (Some(got), Some(want)) => {
+                assert!((got - want).abs() < 1e-12, "{label}: SNR {got} vs {want}");
+            }
+            (got, want) => panic!("{label}: SNR presence differs, {got:?} vs {want:?}"),
+        }
     }
 }
 

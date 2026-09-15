@@ -19,7 +19,7 @@ pub mod sim;
 pub use engine::{Action, LinkConfig, LinkEngine, LinkStats, Role, State};
 pub use frames::{
     CONTROL_BYTES, ConnectBody, ControlFrame, ControlKind, DATA_HEADER, DataHeader, DataKind,
-    FrameError, WINDOW,
+    FrameError, ProbeBody, WINDOW,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};

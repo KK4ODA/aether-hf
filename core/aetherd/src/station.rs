@@ -25,7 +25,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use aether_link::{
     Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
     frames::{
-        ConnectBody, DataHeader, DataKind, decode_data, encode_data, pack_callsign,
+        ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
         unpack_callsign, with_bandwidth,
     },
     rate::PAYLOAD_BYTES,
@@ -327,7 +327,8 @@ impl LevelMeter {
 pub struct FrameReport {
     /// Station time, seconds.
     pub t_s: f64,
-    /// `data`, `control`, `beacon`, `connect` (a request) or `answer`.
+    /// `data`, `control`, `beacon`, `connect` (a request), `answer`, `probe` or
+    /// `probe-answer`.
     pub kind: &'static str,
     /// Mode index.
     pub mode: usize,
@@ -906,6 +907,25 @@ impl<P: Ptt> Station<P> {
         Ok(())
     }
 
+    /// Ask a station whether it hears this one, and how well, without a session
+    /// (ADR-0006): one probe frame, one answer carrying the SNR the probe arrived at,
+    /// and a `probe` event with both directions of the path — or `no answer`.
+    ///
+    /// Sending a probe is a call, so an answer-only station may not; answering one is a
+    /// response, which it may, and does on its own.
+    ///
+    /// # Errors
+    /// If the station is answer-only, a session is up, a probe is already out, or the
+    /// callsign is not one of this station's.
+    pub fn probe(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        if self.config.answer_only {
+            return Err("this station is answer-only: it answers probes and sends none");
+        }
+        self.engine.probe(remote, as_call)?;
+        self.pump();
+        Ok(())
+    }
+
     /// Key the transmitter with no audio for a few seconds, so an operator can see the rig
     /// go into transmit and the interface's PTT light come on.
     ///
@@ -1363,6 +1383,17 @@ impl<P: Ptt> Station<P> {
                     if let Ok(connect) = ConnectBody::decode(&body) {
                         report.from = Some(connect.src);
                         report.to = Some(connect.dst);
+                    }
+                }
+                DataKind::Probe | DataKind::ProbeAck => {
+                    report.kind = if header.kind == DataKind::Probe {
+                        "probe"
+                    } else {
+                        "probe-answer"
+                    };
+                    if let Ok(probe) = ProbeBody::decode(&body) {
+                        report.from = Some(probe.src);
+                        report.to = Some(probe.dst);
                     }
                 }
                 DataKind::Data => report.from = ours(header.session),
@@ -2514,6 +2545,84 @@ mod tests {
         air.run(40.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected(), "the answer-only station answered");
         assert_eq!(air.a.role(), Role::Irs);
+    }
+
+    #[test]
+    fn a_probe_over_real_audio_reports_both_directions() {
+        // "can you hear me, and how well?": the answer carries the SNR the probe arrived
+        // at, the prober measures the answer, and both frames are reported with their
+        // callsigns — no session, and nothing left running afterwards
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(30.0, |a, _| a.engine().stats.probe_replies > 0);
+        assert_eq!(air.a.engine().stats.probe_replies, 1, "no answer arrived");
+        assert_eq!(air.b.engine().stats.probes_answered, 1);
+        let events = air.a.take_events();
+        let report = events
+            .iter()
+            .find(|e| e.starts_with("probe:KK4XYZ hears us at "))
+            .unwrap_or_else(|| panic!("no probe report: {events:?}"));
+        let words: Vec<&str> = report.split(' ').collect();
+        let theirs: f64 = words[4].parse().expect("their reading");
+        let ours: f64 = words[8].parse().expect("our reading");
+        // a quiet loopback: both ends hear well, and within a few dB of each other
+        assert!(theirs > 15.0 && ours > 15.0, "{report}");
+        assert!((theirs - ours).abs() < 6.0, "{report}");
+        assert!(
+            air.b
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("probed:W4ODA at ")),
+            "the probed station did not report it"
+        );
+        let kinds: Vec<(&str, Option<String>, Option<String>)> = air
+            .b
+            .take_frame_reports()
+            .into_iter()
+            .map(|r| (r.kind, r.from, r.to))
+            .collect();
+        assert!(
+            kinds.contains(&("probe", Some("W4ODA".into()), Some("KK4XYZ".into()))),
+            "{kinds:?}"
+        );
+        assert!(
+            air.a
+                .take_frame_reports()
+                .iter()
+                .any(|r| r.kind == "probe-answer"
+                    && r.from.as_deref() == Some("KK4XYZ")
+                    && r.to.as_deref() == Some("W4ODA")),
+            "the answer was not reported"
+        );
+        assert_eq!(air.a.state(), State::Idle);
+        assert_eq!(air.b.state(), State::Idle);
+        // an answer-only station answers probes and sends none
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            answer_only: true,
+            ..config
+        });
+        assert_eq!(
+            air.a.probe("KK4XYZ", None),
+            Err("this station is answer-only: it answers probes and sends none")
+        );
+        air.b = Station::new(
+            StationConfig {
+                callsign: "N0CALL".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            3,
+        );
+        air.b
+            .probe("W4ODA", None)
+            .expect("a station that may call, probes");
+        air.run(30.0, |_, b| b.engine().stats.probe_replies > 0);
+        assert_eq!(
+            air.a.engine().stats.probes_answered,
+            1,
+            "the answer-only station did not answer"
+        );
     }
 
     #[test]

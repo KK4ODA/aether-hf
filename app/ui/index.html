@@ -125,14 +125,18 @@
           <button id="btn-connect" class="primary">Connect</button>
           <button id="btn-disconnect">Disconnect</button>
           <button id="btn-abort" class="danger">Abort</button>
+          <button id="btn-probe">Probe</button>
           <button id="btn-beacon">Beacon</button>
         </div>
         <p class="note" id="session-note">
           <strong>Disconnect</strong> finishes sending what is queued and then closes.
-          <strong>Abort</strong> does not. <strong>Beacon</strong> puts this station's
+          <strong>Abort</strong> does not. <strong>Probe</strong> asks the station in
+          Call whether it hears you, and how well, without a session: one frame, one
+          answer, both directions of the path. <strong>Beacon</strong> puts this station's
           callsign on the air once, addressed to nobody, so anyone listening can report
           hearing you.
         </p>
+        <p class="note" id="probe-result" role="status" aria-live="polite"></p>
 
         <div class="card">
           <h3>Keying and drive</h3>
@@ -191,7 +195,7 @@
           <button id="btn-heard-clear" class="push-right">Forget all</button>
         </div>
         <p class="sub">
-          Every station whose frame carried a callsign — a beacon, a call, an answer, or the
+          Every station whose frame carried a callsign — a beacon, a call, a probe, an answer, or the
           other end of a session — with when it was heard, how strong, and what it was doing.
           Click a heading to sort; <strong>Call</strong> puts the callsign on the Session
           tab. The list is the modem's, kept beside its configuration, so it survives a
@@ -216,7 +220,7 @@
             <tbody id="heard"></tbody>
           </table>
         </div>
-        <p class="empty" id="heard-empty">Nobody yet. Stations appear here as soon as a beacon, a call, an answer or a session is heard.</p>
+        <p class="empty" id="heard-empty">Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.</p>
       </section>
 
       <!-- ── diagnostics ────────────────────────────────────────── -->

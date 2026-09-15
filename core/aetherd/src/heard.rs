@@ -26,8 +26,10 @@ pub enum Activity {
     Beacon,
     /// A connect request, addressed to somebody.
     Calling,
-    /// An answer to a connect request.
+    /// An answer to a connect request, or to a probe.
     Answering,
+    /// A probe (ADR-0006), addressed to somebody.
+    Probing,
     /// The other end of a session with this station.
     Connected,
 }

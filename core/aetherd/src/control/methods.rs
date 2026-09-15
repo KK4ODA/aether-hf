@@ -74,6 +74,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "listen"
             | "callsigns.set"
             | "beacon"
+            | "probe"
             | "tune"
             | "record.start"
             | "record.stop"
@@ -409,6 +410,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "spectrum" => Response::ok(id, spectrum(station)),
         "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, params, id),
+        "probe" => probe(station, params, id),
         "callsigns.set" => set_callsigns(station, params, id),
         "beacon" => match station.beacon() {
             Ok(()) => Response::ok(id, json!({ "accepted": true })),
@@ -522,6 +524,38 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
                 },
                 format!("Cannot call {remote}: {reason}."),
                 false,
+            ),
+        ),
+    }
+}
+
+/// A probe (ADR-0006): the question a session would answer, without the session.
+fn probe<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let Some(remote) = params.get("remote").and_then(Value::as_str) else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A callsign to probe is required: {\"remote\": \"KK4XYZ\"}.",
+                false,
+            ),
+        );
+    };
+    let as_call = params.get("callsign").and_then(Value::as_str);
+    match station.probe(remote, as_call) {
+        Ok(()) => Response::ok(id, json!({ "accepted": true })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                if reason.starts_with("not one of") {
+                    "bad_params"
+                } else {
+                    "not_idle"
+                },
+                format!(
+                    "Cannot probe {remote}: {reason}. The answer, or its absence, is reported as a probe event."
+                ),
+                reason.contains("already out"),
             ),
         ),
     }
@@ -714,6 +748,9 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "deferred_for_busy": station.stats.deferred_for_busy,
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_heard": station.stats.beacons_heard,
+        "probes_sent": stats.probes_sent,
+        "probes_answered": stats.probes_answered,
+        "probe_replies": stats.probe_replies,
     })
 }
 
@@ -971,6 +1008,25 @@ mod tests {
         ] {
             assert!(caps.get(key).is_some(), "capabilities is missing {key}");
         }
+    }
+
+    #[test]
+    fn probe_needs_a_callsign_and_goes_out_once_at_a_time() {
+        let mut station = station();
+        let missing = call(&mut station, "probe", json!({}));
+        assert_eq!(missing.error.expect("refused").code, "bad_params");
+        let first = call(&mut station, "probe", json!({"remote": "KK4XYZ"}));
+        assert!(first.ok, "{:?}", first.error);
+        assert_eq!(station.engine().stats.probes_sent, 1);
+        // one at a time: the second is refused, and told to try again later
+        let second = call(&mut station, "probe", json!({"remote": "KK4XYZ"}));
+        let error = second.error.expect("refused");
+        assert_eq!(error.code, "not_idle");
+        assert!(error.retryable, "{error:?}");
+        assert!(is_mutating("probe"));
+        let counters = counters(&station);
+        assert_eq!(counters["probes_sent"], 1);
+        assert_eq!(counters["probe_replies"], 0);
     }
 
     #[test]

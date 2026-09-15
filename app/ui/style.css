@@ -411,6 +411,16 @@ h2 {
   max-width: 72ch;
 }
 
+#probe-result:empty {
+  display: none;
+}
+#probe-result[data-state="ok"] {
+  color: var(--text);
+}
+#probe-result[data-state="warn"] {
+  color: var(--warn);
+}
+
 .note.warn {
   color: var(--status-warning);
   border-left: 3px solid var(--status-warning);
