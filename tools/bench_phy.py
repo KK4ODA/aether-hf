@@ -2,6 +2,12 @@
 
     python tools/bench_phy.py [--channels awgn,good,moderate,poor] [--modes 0,2,4,6,8,10,13]
                               [--frames 30] [--step 1.0] [--out bench/baselines/phy_fer.csv]
+                              [--bandwidth 2300|500]
+
+``--bandwidth 500`` sweeps the narrow air interface (its own ten-mode table, P7-0); the
+default output for it is ``bench/baselines/phy_fer_500.csv``. SNR stays referenced to
+3 kHz for both, so the two tables are comparable as an operator would compare them: the
+same transmitter power into the same noise.
 
 For every (channel, mode) the SNR (3 kHz reference) is swept upward in ``step`` dB from an
 estimated starting point until the FER drops below 5 % (or the sweep exceeds 12 dB).
@@ -26,9 +32,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.channel import make_channel
-from aether_model.frame.modes import LONG, MODES
+from aether_model.frame.modes import AirInterface, air_interface
 from aether_model.phy.pipeline import Modem
-from aether_model.waveform import WIDE_2300
+from aether_model.waveform import WAVEFORMS, Bandwidth
 
 # Rough AWGN thresholds (3 kHz SNR) per mode, used only to pick where a sweep starts.
 _START_AWGN = {
@@ -47,13 +53,32 @@ _START_AWGN = {
     12: 13,
     13: 15,
 }
+# The narrow table starts where the wide table's same (modulation, rate) starts, less the
+# ≈ 6.8 dB a 500 Hz signal gains per carrier at the same 3 kHz-referenced SNR, and a little.
+_START_AWGN_NARROW = {
+    0: -9,
+    1: -8,
+    2: -6,
+    3: -4,
+    4: -4,
+    5: -1,
+    6: 0,
+    7: 4,
+    8: 6,
+    9: 7,
+}
 _FADING_OFFSET = {"awgn": 0.0, "good": 2.0, "moderate": 3.0, "poor": 4.0}
+
+
+def start_snr(air: AirInterface, mode_idx: int, channel: str) -> float:
+    table = _START_AWGN if air.params.bandwidth is Bandwidth.WIDE_2300 else _START_AWGN_NARROW
+    return float(table[mode_idx] + _FADING_OFFSET.get(channel, 4.0))
 
 
 def run_point(
     modem: Modem, channel: str, mode_idx: int, snr_db: float, frames: int, seed0: int
 ) -> dict[str, float | int | str]:
-    mode = MODES[mode_idx]
+    mode = modem.modes[mode_idx]
     n_payload = modem.payload_bytes(mode)
     acquired = decoded = 0
     snr_est: list[float] = []
@@ -66,7 +91,7 @@ def run_point(
         ch = make_channel(
             channel,
             snr_db=snr_db,
-            fs=WIDE_2300.fs_baseband,
+            fs=modem.p.fs_baseband,
             seed=seed0 + i,
             signal_power=1.0,
             cfo_hz=float(rng.uniform(-100, 100)),
@@ -91,7 +116,7 @@ def run_point(
         "acquired": acquired,
         "decoded": decoded,
         "fer": round(fer, 4),
-        "throughput_bps": round(8 * n_payload * (1 - fer) / LONG.duration_s),
+        "throughput_bps": round(8 * n_payload * (1 - fer) / modem.air.long.duration_s),
         "mean_reported_snr_db": round(float(np.mean(snr_est)), 2) if snr_est else "",
         "seconds": round(time.perf_counter() - t0, 1),
     }
@@ -100,20 +125,31 @@ def run_point(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--channels", default="awgn,good,moderate,poor")
-    ap.add_argument("--modes", default="0,2,4,6,8,10,13")
+    ap.add_argument("--modes", default=None, help="mode indices; default: every mode")
     ap.add_argument("--frames", type=int, default=30)
     ap.add_argument("--step", type=float, default=1.0)
     ap.add_argument("--max-span", type=float, default=12.0)
     ap.add_argument("--seed", type=int, default=7000)
-    ap.add_argument("--out", default="bench/baselines/phy_fer.csv")
+    ap.add_argument("--bandwidth", type=int, default=2300, choices=(2300, 500))
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    modem = Modem(WIDE_2300)
+    params = WAVEFORMS[Bandwidth(args.bandwidth)]
+    modem = Modem(params)
+    air = air_interface(params)
+    out_default = (
+        "bench/baselines/phy_fer.csv"
+        if args.bandwidth == 2300
+        else ("bench/baselines/phy_fer_500.csv")
+    )
+    modes_default = (
+        "0,2,4,6,8,10,13" if args.bandwidth == 2300 else ",".join(str(m.index) for m in air.modes)
+    )
     rows: list[dict[str, float | int | str]] = []
     for channel in args.channels.split(","):
-        for mode_s in args.modes.split(","):
+        for mode_s in (args.modes or modes_default).split(","):
             mode_idx = int(mode_s)
-            start = _START_AWGN[mode_idx] + _FADING_OFFSET.get(channel, 4.0)
+            start = start_snr(air, mode_idx, channel)
             snr = float(start)
             good_points = 0
             while snr <= start + args.max_span:
@@ -129,7 +165,7 @@ def main() -> int:
                 if good_points >= 2:
                     break
                 snr += args.step
-    out = Path(args.out)
+    out = Path(args.out or out_default)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))

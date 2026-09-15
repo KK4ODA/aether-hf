@@ -32,7 +32,9 @@ Raspberry Pi gateway as happily as on a Windows desktop.
   off) and Pat (`varahf`) talk to the daemon's VARA-compatible port. What each client sends,
   what is verified and what is not is in
   [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md). VarAC talks to it but
-  cannot operate yet: its ecosystem is 500 Hz, and this modem has one bandwidth, 2300 Hz.
+  cannot operate yet: its ecosystem is 500 Hz, and the shipped modem has one bandwidth,
+  2300 Hz. The 500 Hz waveform is built and measured in the reference model
+  (`docs/spec/air-interface.md` §2.3, §4.1); the port to the daemon is what is next.
 * **Gateway:** the `aetherd-…` archive and [`docs/user/gateway-kit.md`](docs/user/gateway-kit.md)
   (headless install, systemd unit, cross-compiling for ARM64). An Aether gateway must not be
   listed as a VARA gateway.
@@ -61,7 +63,7 @@ distilled from how the community received Mercury, the other VARA alternative, i
 | 4 — Desktop application | station panel, Tauri shell, setup wizard, diagnostics, accessibility | done; the three-ham usability test is open |
 | 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — `0.2.0-beta.2` |
 | 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air | **in progress**: tooling done, the air open (`field/LOG.md`) |
-| 7 — The 500 Hz waveform and the link probe | the bandwidth P2P contacts are made in (VarAC's calling frequencies), the bandwidth in the connect handshake, an answer-only unattended mode, and a two-way SNR probe | **next** |
+| 7 — The 500 Hz waveform and the link probe | the bandwidth P2P contacts are made in (VarAC's calling frequencies), the bandwidth in the connect handshake, an answer-only unattended mode, and a two-way SNR probe | **in progress**: the waveform, its mode table, its curves and the handshake are in the model; the port is next |
 | 9 — The modem's second rung | a faster start, modes below 200 bit/s, an audio-level A/B bench against VARA HF, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | next, interleaved with 7 |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to over Bluetooth or Wi-Fi, then a phone app, then the modem inside the phone | back burner |
 | 10 — Aether FM foundation | an FM PHY on the same link layer | back burner |

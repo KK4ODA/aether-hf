@@ -169,7 +169,21 @@ then open `http://127.0.0.1:8515/`.
 first, and the **500 Hz waveform first of all** (P7-0: model numerology and curves →
 bandwidth in the connect handshake → port, `BW500`, answer-only unattended mode → VarAC on
 the bench and the air) because P2P contacts and VarAC's calling frequencies are 500 Hz and
-on-air testing with other stations needs it; then P7-1 the link probe (PING/PINGACK), P9-2
+on-air testing with other stations needs it. **P7-0a/b are done in the model** (2026-09-15):
+`frame/modes.py` has `AirInterface` (`WIDE`, `NARROW`; `air_interface(params)`), the
+narrow table (ten modes from QPSK ½ — the slowest that carries a 7-byte control frame on
+8 data carriers; mode 0 reaches −5 dB like the wide floor because 12 carriers carry
+≈ 6.8 dB more per carrier), 32 chips × 40 sequences at |ρ| ≤ 0.25, acquisition threshold
+0.56 (noise max 0.549 at 500 Hz vs 0.348 wide), the same SC seeds (orthogonal at length
+6), the bandwidth bits (1–2) of the capability byte checked in the handshake, and
+`PhyTiming.mode_threshold_db` so the engine steps whichever table the PHY hands it;
+`tests/test_narrow.py`, spec §2.3/§4.1 (`make_spec.py` blocks `waveform500`, `layouts500`,
+`modes500`), ADR-0002 amendment, `bench_phy.py --bandwidth 500` →
+`bench/baselines/phy_fer_500.csv`, `update_rate_table.py --bandwidth 500`. **P7-0c, the
+port, is next**: carrier map/chips/threshold per bandwidth in `aether-phy`, the narrow
+table and thresholds in `aether-link` (`RateController` from `PhyTiming`), `[radio]
+bandwidth` in `aetherd`, `BW500` `OK`, the answer-only unattended mode; then P7-0d VarAC
+over `[sim]`. Then P7-1 the link probe (PING/PINGACK), P9-2
 the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate

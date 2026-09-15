@@ -20,14 +20,16 @@ import numpy as np
 from numpy.typing import NDArray
 
 from aether_model.channel import make_channel
-from aether_model.frame.modes import LONG, MODES, SHORT
+from aether_model.frame.modes import air_interface
 from aether_model.link.engine import LinkEngine
+from aether_model.link.frames import with_bandwidth
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
+from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
 from aether_model.link.sim import TwoStationSim
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameType
 from aether_model.phy.rx import ReceivedFrame
-from aether_model.waveform import WIDE_2300, WaveformParams
+from aether_model.waveform import WIDE_2300, Bandwidth, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
 
@@ -52,6 +54,12 @@ class RealSoftFrame:
         return payload, llr
 
 
+def bandwidth_capabilities(params: WaveformParams = WIDE_2300, caps: int = 0) -> int:
+    """``caps`` with the bandwidth bits of ``params`` set — what a station puts in its
+    :attr:`~aether_model.link.engine.LinkConfig.capabilities` for the waveform it runs."""
+    return with_bandwidth(caps, params.bandwidth.hz)
+
+
 def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) -> PhyTiming:
     """Timing and per-mode capacities for the real waveform.
 
@@ -60,14 +68,19 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
     (P2-3), plus a symbol of slack for block-boundary latency in the streaming receiver.
     Pass ``start_of_frame=False`` to model a PHY that cannot report preambles.
     """
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    air = air_interface(params)
+    caps = {m.index: m.payload_bytes(air.long) for m in air.modes}
+    thresholds = (
+        AWGN_THRESHOLD_DB if params.bandwidth is Bandwidth.WIDE_2300 else NARROW_AWGN_THRESHOLD_DB
+    )
     return PhyTiming(
-        data_frame_s=LONG.duration_s,
-        control_frame_s=SHORT.duration_s,
+        data_frame_s=air.long.duration_s,
+        control_frame_s=air.short.duration_s,
         turnaround_s=0.25,
         detect_latency_s=0.15,
         preamble_detect_s=4 * params.symbol_period_s if start_of_frame else None,
         data_capacity=caps,
+        mode_threshold_db=dict(thresholds),
     )
 
 
@@ -93,10 +106,13 @@ class PhyBridge:
         self._rng = np.random.default_rng(seed)
         self.rendered = 0
         self.detected = 0
+        self.modes_sent: list[int] = []
+        """The mode of every DATA frame rendered, in order — what the rate controller did."""
 
     def _burst(self, frame: TxFrame) -> ComplexArray:
         if frame.container is Container.DATA:
-            return self.modem.data_burst(frame.payload, MODES[frame.mode], frame.rv)
+            self.modes_sent.append(frame.mode)
+            return self.modem.data_burst(frame.payload, self.modem.modes[frame.mode], frame.rv)
         return self.modem.control_burst(frame.payload, frame.rv)
 
     def factory(

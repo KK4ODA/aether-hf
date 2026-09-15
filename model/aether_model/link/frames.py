@@ -160,6 +160,30 @@ def data_capacity(phy_payload_bytes: int) -> int:
     return phy_payload_bytes - DATA_HEADER
 
 
+CAP_COMPRESSION = 0x01
+"""Capability bit 0: stream compression (deflate) — offered, and used only if both offer."""
+CAP_BANDWIDTH_SHIFT = 1
+CAP_BANDWIDTH_MASK = 0x03 << CAP_BANDWIDTH_SHIFT
+"""Capability bits 1–2: the bandwidth of the waveform the frame was sent in. Not a
+negotiation — a receiver knows the waveform from having decoded the frame — but a
+statement, so a station can refuse a request that claims a bandwidth other than the one
+it arrived in, and a station listening in more than one answers in the one it was called
+in. A session lives its whole life in one bandwidth."""
+BANDWIDTH_CODES: dict[int, int] = {2300: 0, 500: 1, 2750: 2}
+"""Bandwidth in hertz → the code in the capability byte (3 is reserved)."""
+
+
+def bandwidth_code(caps: int) -> int:
+    """The bandwidth code stated in a capability byte."""
+    return (caps & CAP_BANDWIDTH_MASK) >> CAP_BANDWIDTH_SHIFT
+
+
+def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
+    """A capability byte with the bandwidth bits set for ``bandwidth_hz``."""
+    code = BANDWIDTH_CODES[bandwidth_hz]
+    return (caps & ~CAP_BANDWIDTH_MASK & 0xFF) | (code << CAP_BANDWIDTH_SHIFT)
+
+
 @dataclass(frozen=True)
 class ConnectBody:
     """Body of CONNECT_REQ / CONNECT_ACK: who is calling whom, and what they can do."""
@@ -167,7 +191,8 @@ class ConnectBody:
     src: str
     dst: str
     caps: int = 0
-    """Capability bits (reserved: compression, bandwidth options)."""
+    """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
+    (bits 1–2, :func:`bandwidth_code`)."""
     version: int = 1
 
     def encode(self) -> bytes:

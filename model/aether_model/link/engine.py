@@ -45,6 +45,7 @@ from aether_model.link.frames import (
     ControlKind,
     DataHeader,
     DataKind,
+    bandwidth_code,
     data_capacity,
     decode_data,
     encode_data,
@@ -54,7 +55,7 @@ from aether_model.link.frames import (
     seq_distance,
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
-from aether_model.link.rate import RateController
+from aether_model.link.rate import RateController, usable_modes
 
 # ── configuration, actions, states ────────────────────────────────────
 
@@ -85,7 +86,9 @@ class LinkConfig:
     capabilities: int = 0
     """Capability bits offered in the connect handshake. What they mean is the caller's
     business; the link layer carries them and reports what the peer offered. Bit 0 is stream
-    compression (deflate, RFC 1951) — see ``docs/spec/air-interface.md``."""
+    compression (deflate, RFC 1951); bits 1–2 state the bandwidth this station transmits in
+    (:func:`~aether_model.link.frames.with_bandwidth`), and a request or answer stating
+    another is ignored — see ``docs/spec/air-interface.md`` §7.3."""
 
 
 class State(Enum):
@@ -194,7 +197,7 @@ class LinkEngine:
         self.now = 0.0
         self.actions: list[Action] = []
         self.stats = LinkStats()
-        self.rate = RateController()
+        self.rate = self._rate_controller()
         self._deadlines: dict[str, float] = {}
         self._tx_busy_until = 0.0
         self._last_peer_frame = 0.0
@@ -902,6 +905,12 @@ class LinkEngine:
             return
         if req.dst not in self.callsigns:
             return
+        if bandwidth_code(req.caps) != bandwidth_code(self.cfg.capabilities):
+            # a call that says it was made in another bandwidth than this station's: the
+            # frame decoded, so the claim is wrong, or the station is not set up for the
+            # bandwidth it was called in — either way not a session to start
+            self.actions.append(Event("ignored", f"{req.src} calls in another bandwidth"))
+            return
         if self.state is State.CONNECTING and self.my_call > self.remote_call:
             return  # simultaneous call: the higher callsign keeps calling
         self.my_call = req.dst  # answer as the callsign that was called
@@ -927,6 +936,9 @@ class LinkEngine:
             return
         if ack.dst != self.my_call:
             return
+        if bandwidth_code(ack.caps) != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(Event("ignored", f"{ack.src} answers in another bandwidth"))
+            return
         self._disarm("connect")
         self.peer_capabilities = ack.caps
         self.state = State.CONNECTED
@@ -940,6 +952,16 @@ class LinkEngine:
             self._send_burst()
         else:
             self._send_poll()  # confirms the handshake and fetches the first ACK
+
+    def _rate_controller(self) -> RateController:
+        """A fresh controller for the PHY's mode table: its thresholds when the timing
+        carries them, the wide waveform's otherwise; its capacities decide which modes
+        another mode beats on both counts and are never recommended."""
+        thresholds = self.timing.mode_threshold_db
+        if thresholds is None:
+            return RateController()
+        payload = self.timing.data_capacity or {m: 0 for m in thresholds}
+        return RateController(thresholds=dict(thresholds), modes=usable_modes(thresholds, payload))
 
     def _reset_transfer_state(self) -> None:
         self._records.clear()
@@ -964,7 +986,7 @@ class LinkEngine:
         self._break_requested = False
         self._confirmed = False
         self.peer_capabilities = 0
-        self.rate = RateController()
+        self.rate = self._rate_controller()
         for name in ("ack", "wait", "keepalive", "link"):
             self._disarm(name)
 

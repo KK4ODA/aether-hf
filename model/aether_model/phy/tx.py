@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import MODES, FrameLayout
+from aether_model.frame.modes import FrameLayout, air_interface
 from aether_model.phy.ofdm import OfdmModulator
 from aether_model.phy.papr import ClipAndFilter, clip_target_db
 from aether_model.phy.passband import BasebandToAudio
@@ -26,6 +26,7 @@ ComplexArray = NDArray[np.complex128]
 class FrameTransmitter:
     def __init__(self, params: WaveformParams = WIDE_2300, papr_reduction: bool = True) -> None:
         self.p = params
+        self.air = air_interface(params)
         self.mod = OfdmModulator(params)
         self.pre = preamble(params)
         self.n_data = len(self.mod.cmap.data_carriers)
@@ -71,7 +72,7 @@ class FrameTransmitter:
         x = self.mod.modulate(self.symbol_values(header, layout, qam))
         if not self.papr_reduction:
             return x
-        target = clip_target_db(MODES[header.mode].modulation.bits_per_symbol)
+        target = clip_target_db(self.air.modes[header.mode].modulation.bits_per_symbol)
         return self._clipper(target).process(x)
 
     def burst(

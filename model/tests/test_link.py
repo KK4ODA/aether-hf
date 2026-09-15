@@ -10,16 +10,19 @@ import pytest
 from aether_model.frame.modes import LONG, MODES, SHORT
 from aether_model.link.engine import LinkConfig, LinkEngine, Role, State, Transmit
 from aether_model.link.frames import (
+    CAP_COMPRESSION,
     ConnectBody,
     ControlFlags,
     ControlFrame,
     ControlKind,
     DataHeader,
     DataKind,
+    bandwidth_code,
     decode_data,
     encode_data,
     pack_callsign,
     unpack_callsign,
+    with_bandwidth,
 )
 from aether_model.link.phy import PhyTiming
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
@@ -376,6 +379,33 @@ def test_the_sender_learns_how_the_other_station_hears_it(timing: PhyTiming) -> 
     assert a.peer_snr_db is None
 
 
+def test_a_call_stating_another_bandwidth_is_not_answered(timing: PhyTiming) -> None:
+    # the bandwidth bits are a statement of the waveform the frame was sent in; a station
+    # set up for 2 300 Hz that is called by a frame claiming 500 Hz leaves it alone
+    assert bandwidth_code(with_bandwidth(0, 500)) == 1
+    assert bandwidth_code(with_bandwidth(CAP_COMPRESSION, 2300)) == 0
+    assert with_bandwidth(CAP_COMPRESSION, 500) == CAP_COMPRESSION | 0x02
+    a = LinkEngine("W4ODA", timing, LinkConfig(capabilities=with_bandwidth(0, 500)), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=with_bandwidth(0, 2300)), seed=2)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=6)
+    a.connect("KK4XYZ")
+    sim.run(until=200)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert any(e.startswith("ignored:W4ODA calls in another bandwidth") for e in sim.events(1))
+    assert "disconnected:no answer" in sim.events(0)
+    # and two stations that agree connect as before
+    a, b = _pair(timing, LinkConfig(capabilities=with_bandwidth(0, 500)))
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=6)
+    a.connect("KK4XYZ")
+    a.send(b"at five hundred hertz")
+    sim.run(until=40)
+    assert a.connected and b.connected
+    assert bandwidth_code(b.peer_capabilities) == 1
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == b"at five hundred hertz"
+
+
 def test_a_call_to_somebody_else_is_not_answered(timing: PhyTiming) -> None:
     a, b = _pair(timing)
     b.set_callsigns(["KK4XYZ"])
@@ -630,16 +660,18 @@ def test_capabilities_are_exchanged_in_the_connect_handshake(timing: PhyTiming) 
 
     The link layer does not interpret the bits — that is the caller's business — but it has
     to carry them, and each station has to be able to read what the other offered."""
-    a = LinkEngine("W4ODA", timing, LinkConfig(capabilities=0b101), seed=1)
-    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=0b011), seed=2)
+    # bits 1–2 are the bandwidth and have to agree (see the test above); the rest are
+    # whatever the caller means by them
+    a = LinkEngine("W4ODA", timing, LinkConfig(capabilities=0b01001), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=0b10001), seed=2)
     sim = TwoStationSim(a, b, snr_db=15.0, seed=3)
     a.connect("KK4XYZ")
     sim.run(until=200)
     assert a.connected and b.connected
-    assert a.peer_capabilities == 0b011
-    assert b.peer_capabilities == 0b101
+    assert a.peer_capabilities == 0b10001
+    assert b.peer_capabilities == 0b01001
     # what both offered is the intersection; nothing is negotiated on one side's word alone
-    assert a.peer_capabilities & a.cfg.capabilities == 0b001
+    assert a.peer_capabilities & a.cfg.capabilities == 0b00001
 
 
 def test_capabilities_are_forgotten_when_a_session_ends(timing: PhyTiming) -> None:

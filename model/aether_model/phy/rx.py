@@ -36,12 +36,10 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import LONG, PREAMBLE_SYMBOLS, SHORT, FrameLayout
+from aether_model.frame.modes import LONG, PREAMBLE_SYMBOLS, SHORT, FrameLayout, air_interface
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import (
     FrameType,
-    chip_hypothesis,
-    mode_chip_sequences,
     preamble,
 )
 from aether_model.phy.sync import FrameSync
@@ -84,8 +82,11 @@ class ReceivedFrame:
     ``chip_runner_up`` if the CRC fails."""
 
 
-def layout_for(header_type: FrameType) -> FrameLayout:
-    return LONG if header_type is FrameType.DATA else SHORT
+def layout_for(header_type: FrameType, params: WaveformParams = WIDE_2300) -> FrameLayout:
+    """The layout a frame of this type has on this waveform."""
+    if params is WIDE_2300:
+        return LONG if header_type is FrameType.DATA else SHORT
+    return air_interface(params).layout_for(header_type is FrameType.DATA)
 
 
 class FrameReceiver:
@@ -134,7 +135,7 @@ class FrameReceiver:
         self.data_c = self.cmap.data_carriers
 
     def frame_span(self, sync: FrameSync) -> tuple[int, int]:
-        layout = layout_for(sync.header.frame_type)
+        layout = layout_for(sync.header.frame_type, self.p)
         return sync.start, sync.start + layout.samples
 
     def receive(
@@ -142,7 +143,7 @@ class FrameReceiver:
     ) -> ReceivedFrame:
         """Demodulate and equalize one frame. ``hypothesis`` (a chip-sequence index)
         overrides chip-based (mode, rv) detection — used for the runner-up retry."""
-        layout = layout_for(sync.header.frame_type)
+        layout = layout_for(sync.header.frame_type, self.p)
         start, end = self.frame_span(sync)
         if end + self.dem.fft_offset > len(x):
             raise ValueError("frame runs past the end of the buffer")
@@ -212,13 +213,13 @@ class FrameReceiver:
                 z_parts.append(raw[s_i, dc] * np.conj(h_est))
             z = np.concatenate(z_parts)
             z /= max(float(np.linalg.norm(z)), 1e-12)
-            seqs = mode_chip_sequences(self.pre.n_chips)
+            seqs = self.pre.sequences
             n_used = len(z)
             metrics = np.array([abs(np.vdot(seq[:n_used], z)) for seq in seqs]) / np.sqrt(n_used)
             order = np.argsort(metrics)[::-1]
             best, runner_up = int(order[0]), int(order[1])
             confidence = float(metrics[order[0]] / max(metrics[order[1]], 1e-12))
-            mode_idx, rv = chip_hypothesis(best if hypothesis is None else hypothesis)
+            mode_idx, rv = self.pre.chip_hypothesis(best if hypothesis is None else hypothesis)
 
         # 4. known carrier values per symbol, then channel estimates
         known = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)

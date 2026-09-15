@@ -23,10 +23,13 @@ Stages, on band-limited complex baseband at ``fs_baseband``:
    essentially error-free wherever the frame is detectable. The mode of a DATA frame is
    read later by the receiver from the pilot-symbol chips (see :mod:`preamble`).
 
-Candidates are the local maxima of the bank statistic above ``min_timing_peak``. The
-statistic's noise maximum over 60 s of band-limited noise is ≈ 0.32; the default threshold
-of 0.36 gave no false alarms in that test. The occasional false alarm at the margin costs
-only a failed CRC, which is why the threshold is set for sensitivity rather than purity.
+Candidates are the local maxima of the bank statistic above ``min_timing_peak``, which
+defaults to the air interface's ``acquisition_threshold``:
+the statistic's noise maximum over 60 s of band-limited noise is ≈ 0.35 at 2 300 Hz and
+≈ 0.55 at 500 Hz (a fifth of the degrees of freedom in a preamble's span), and the
+thresholds 0.36 and 0.56 gave no false alarms in that test. The occasional false alarm at
+the margin costs only a failed CRC, which is why they are set for sensitivity rather than
+purity.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
-from aether_model.frame.modes import LONG, SHORT
+from aether_model.frame.modes import air_interface
 from aether_model.phy.ofdm import OfdmDemodulator, OfdmModulator
 from aether_model.phy.passband import band_limit_taps
 from aether_model.phy.preamble import FrameHeader, FrameType, preamble
@@ -74,13 +77,16 @@ class FrameDetector:
         self,
         params: WaveformParams = WIDE_2300,
         *,
-        min_timing_peak: float = 0.36,
+        min_timing_peak: float | None = None,
         max_cfo_hz: float = 300.0,
         max_candidates: int = 16,
         min_gap_samples: int | None = None,
     ) -> None:
         self.p = params
-        self.min_timing_peak = min_timing_peak
+        self.air = air_interface(params)
+        self.min_timing_peak = (
+            self.air.acquisition_threshold if min_timing_peak is None else min_timing_peak
+        )
         self.max_cfo_hz = max_cfo_hz
         self.max_candidates = max_candidates
         self._band_taps = band_limit_taps(params)
@@ -209,6 +215,6 @@ class FrameDetector:
             )
             # Nothing else can start inside this frame (strong data symbols correlate with
             # the reference at ≈ 0.3–0.4, which the threshold does not exclude).
-            span = (LONG if header.frame_type is FrameType.DATA else SHORT).samples
+            span = self.air.layout_for(header.frame_type is FrameType.DATA).samples
             mask[max(0, start - self.min_gap) : min(len(mask), start + span)] = False
         return sorted(found, key=lambda f: f.start)

@@ -68,6 +68,12 @@ class PhyTiming:
     ended, which costs roughly a quarter of the air time (see ``bench/README.md``)."""
     data_capacity: dict[int, int] | None = None
     """PHY payload bytes per DATA-container mode index (mode → bytes)."""
+    mode_threshold_db: dict[int, float] | None = None
+    """Minimum usable SNR (3 kHz, AWGN) per mode index, as the PHY's own benchmark measured
+    it — what the rate controller steps along. ``None`` means the wide waveform's table
+    (:data:`~aether_model.link.rate.AWGN_THRESHOLD_DB`); a PHY with another mode table —
+    the 500 Hz waveform, P7-0 — hands its own here, and the engine never knows which air
+    it is on."""
 
     def capacity(self, mode: int) -> int:
         if self.data_capacity is None:

@@ -19,8 +19,9 @@ Companion documents: `control-api.md` (how an application drives a modem),
 
 Aether HF is an ARQ data mode for amateur HF: an OFDM physical layer in a 2.3 kHz SSB
 channel, a 3GPP-derived LDPC code, and a selective-repeat ARQ with hybrid retransmission.
-This version specifies the **WIDE_2300** bandwidth. Narrower and wider variants reuse
-everything here with a different carrier count.
+This version specifies two bandwidths on one numerology: **WIDE_2300** (§2–§4) and
+**NARROW_500** (§2.3, §4.1), which reuses everything here with twelve carriers instead of
+fifty-seven and its own mode table. A wider 2.75 kHz variant is reserved (§11).
 
 It is an independent design. It is built from public standards (3GPP TS 38.212, ITU-R
 F.1487, IEEE literature) and its own measurements; it is not compatible with, and contains
@@ -53,7 +54,8 @@ are big-endian.
 | Passband centre | 1500 Hz | audio |
 | Full pilot symbols | every 8th data symbol | all carriers known |
 | Preamble | 2 symbols | two identical Schmidl-Cox symbols |
-| Mode/RV chips | 168 | 4 x 14 sequences |
+| Mode/RV chips | 168 | 4 x 14 sequences, pairwise |correlation| <= 0.2 |
+| Acquisition threshold | 0.36 | normalised matched-filter peak |
 <!-- END:waveform -->
 
 The subcarrier spacing is set by the worst Doppler the mode targets, and the cyclic prefix by
@@ -73,6 +75,57 @@ Active subcarriers are centred on the passband centre frequency. Every 4th carri
 from and including both edges, is a **comb pilot**; the rest carry data. Pilots take their
 values from a fixed Zadoff–Chu sequence, chosen for its flat spectrum and low peak-to-average
 ratio.
+
+### 2.3 The 500 Hz waveform
+
+The narrow waveform is the same numerology — the same sample rates, FFT, subcarrier
+spacing, cyclic prefix, window and symbol period — with **twelve** active carriers centred
+on the same passband centre, so it occupies 480 Hz. It exists because a 500 Hz signal is
+what most HF peer-to-peer traffic is made with, and because it puts the transmitter's power
+into a fifth of the band: at the same 3 kHz-referenced SNR each carrier has ≈ 6.8 dB more
+signal-to-noise than a wide carrier, which is what lets its most robust mode be QPSK ½ and
+still reach the wide waveform's floor. The comb pilots follow the same rule (every 4th
+carrier and both edges: carriers 0, 4, 8 and 11), leaving eight data carriers.
+
+<!-- BEGIN:waveform500 -->
+| Parameter | Value | Notes |
+|---|---|---|
+| Baseband sample rate | 8000 Hz | complex |
+| Audio sample rate | 48000 Hz | interpolation x6 |
+| FFT size N | 200 | subcarriers in the transform |
+| Subcarrier spacing | 40 Hz | fs / N |
+| Useful symbol time | 25.0 ms | 1 / spacing |
+| Cyclic prefix | 48 samples (6.0 ms) | before windowing |
+| Window taper | 8 samples | raised cosine; effective CP 5.0 ms |
+| Symbol period | 248 samples (31.00 ms) | CP + N |
+| Symbol rate | 32.26 Bd |  |
+| Active subcarriers | 12 | centred on the passband centre |
+| Comb pilots | 4 | every 4th, both edges |
+| Data subcarriers | 8 | per ordinary symbol |
+| Occupied bandwidth | 480 Hz | active carriers x spacing |
+| Passband centre | 1500 Hz | audio |
+| Full pilot symbols | every 8th data symbol | all carriers known |
+| Preamble | 2 symbols | two identical Schmidl-Cox symbols |
+| Mode/RV chips | 32 | 4 x 10 sequences, pairwise |correlation| <= 0.25 |
+| Acquisition threshold | 0.56 | normalised matched-filter peak |
+<!-- END:waveform500 -->
+
+The frame layouts keep their symbol counts, so a narrow frame lasts exactly as long as a
+wide one and a link layer's timers do not know which waveform is under them:
+
+<!-- BEGIN:layouts500 -->
+| Layout | Symbols | Duration | Samples (8 kHz) | Full pilot symbols | QAM slots |
+|---|---|---|---|---|---|
+| LONG | 2 + 32 = 34 | 1054 ms | 8432 | 0, 8, 16, 24 | 224 |
+| SHORT | 2 + 12 = 14 | 434 ms | 3472 | 0, 8 | 80 |
+<!-- END:layouts500 -->
+
+The preamble uses the same PN seeds drawn to the six even carriers (the two frame types come
+out orthogonal at that length). The mode and redundancy version ride on the 32 data-carrier
+chips of the four full pilot symbols; with 40 (mode, RV) pairs to tell apart the sequences
+are held to a pairwise correlation of 0.25 rather than 0.2. The acquisition threshold is
+higher (§ constants) because band-limited noise has a fifth of the degrees of freedom in a
+preamble's span, and so are the signal peaks by about as much.
 
 ### 2.2 Peak reduction
 
@@ -161,6 +214,30 @@ interpolated (`bench/baselines/phy_fer_awgn14.csv`).
 
 Modes are ordered from most robust to fastest. A mode that another mode beats on *both*
 payload and threshold is never selected by the rate controller; mode 7 is in that position.
+
+---
+
+### 4.1 Modes at 500 Hz
+
+The narrow table has ten modes. It starts at QPSK ½ — the slowest mode whose SHORT frame
+carries a seven-byte control frame and whose LONG frame carries a connection request — and
+its indices are its own: mode 4 at 500 Hz is 16-QAM ½, not the wide table's QPSK ½. A
+station knows which table applies from the waveform the frame arrived in.
+
+<!-- BEGIN:modes500 -->
+| Mode | Name | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | QPSK-1/2 | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.5 |
+| 1 | QPSK-2/3 | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -4.0 |
+| 2 | PSK8-1/2 | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.5 |
+| 3 | PSK8-2/3 | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.0 |
+| 4 | QAM16-1/2 | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -1.0 |
+| 5 | QAM16-2/3 | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
+| 6 | QAM16-3/4 | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.0 |
+| 7 | QAM64-2/3 | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +7.0 |
+| 8 | QAM64-3/4 | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.5 |
+| 9 | QAM64-5/6 | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.0 |
+<!-- END:modes500 -->
 
 ---
 
@@ -285,7 +362,14 @@ earlier one.
 | Bit | Meaning |
 |---|---|
 | 0 | Stream compression: deflate, RFC 1951 |
-| 1–7 | Reserved, must be zero |
+| 1–2 | Bandwidth of the waveform this frame was sent in: 0 = 2 300 Hz, 1 = 500 Hz, 2 = 2 750 Hz (reserved), 3 = reserved |
+| 3–7 | Reserved, must be zero |
+
+The bandwidth bits are not negotiated: a frame's waveform is a physical fact the receiver
+already knows from having decoded it, and the bits state it so a station can refuse a
+request whose stated bandwidth is not the one it arrived in, and so a station that listens
+in more than one bandwidth answers in the one it was called in. Both stations of a session
+use one bandwidth for its whole life.
 
 **Compression is applied to the payload byte stream, above the ARQ, not to individual
 frames.** A frame is 26 bytes on the slowest mode, and a compressor with no history makes a
@@ -360,8 +444,8 @@ These are simulator figures. No on-air measurements exist yet, and none should b
 
 ## 11. Open items for v1.0
 
-* A spreading or repetition mode below the current −5 dB floor.
-* Narrow (500 Hz) and wide (2.75 kHz) bandwidth variants.
+* A spreading or repetition mode below the current −5 dB floor, at 500 Hz first.
+* The wide (2.75 kHz) bandwidth variant.
 * Compression negotiation, CW identification, beacon and ping datagrams.
 * Formal test vectors published alongside this document; the reference vectors in `vectors/`
   serve that purpose today but are not yet a normative part of the specification.

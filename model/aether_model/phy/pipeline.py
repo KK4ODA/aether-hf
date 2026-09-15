@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from aether_model.frame.codec import FrameCodec
-from aether_model.frame.modes import CONTROL_MODE, LONG, MODES, SHORT, FrameLayout, Mode
+from aether_model.frame.modes import FrameLayout, Mode, air_interface
 from aether_model.phy.blanker import NoiseBlanker
 from aether_model.phy.preamble import FrameHeader, FrameType
 from aether_model.phy.rx import FrameReceiver, ReceivedFrame
@@ -48,6 +48,8 @@ class Modem:
         blanker: NoiseBlanker | None = None,
     ) -> None:
         self.p = params
+        self.air = air_interface(params)
+        """The layouts and modes of this waveform (the wide or the narrow table)."""
         self.tx = FrameTransmitter(params)
         self.detector = FrameDetector(params)
         self.rx = FrameReceiver(params)
@@ -55,25 +57,31 @@ class Modem:
         """Impulse blanker run ahead of band-limiting (P2-5). On by default: measured to cost
         a clean channel nothing at any mode while removing impulsive noise that otherwise
         takes the link to 100 % frame errors."""
-        self._codecs: dict[tuple[int, str], FrameCodec] = {}
+        self._codecs: dict[tuple[int, str, int], FrameCodec] = {}
 
     def codec(self, mode: Mode, layout: FrameLayout) -> FrameCodec:
-        key = (mode.index, layout.name)
+        key = (mode.index, layout.name, layout.waveform.bandwidth.value)
         if key not in self._codecs:
             self._codecs[key] = FrameCodec(mode, layout)
         return self._codecs[key]
 
     # ── transmit ──────────────────────────────────────────────────────
 
+    @property
+    def modes(self) -> tuple[Mode, ...]:
+        return self.air.modes
+
     def data_burst(self, payload: bytes, mode: Mode, rv: int = 0) -> ComplexArray:
-        codec = self.codec(mode, LONG)
+        long = self.air.long
+        codec = self.codec(mode, long)
         return self.tx.baseband(
-            FrameHeader(FrameType.DATA, mode.index, rv), LONG, codec.encode(payload, rv)
+            FrameHeader(FrameType.DATA, mode.index, rv), long, codec.encode(payload, rv)
         )
 
     def control_burst(self, payload: bytes, rv: int = 0) -> ComplexArray:
-        codec = self.codec(CONTROL_MODE, SHORT)
-        return self.tx.baseband(FrameHeader(FrameType.CONTROL), SHORT, codec.encode(payload, rv))
+        short = self.air.short
+        codec = self.codec(self.air.control_mode, short)
+        return self.tx.baseband(FrameHeader(FrameType.CONTROL), short, codec.encode(payload, rv))
 
     def audio(self, baseband: ComplexArray, level: float = 0.25) -> NDArray[np.float32]:
         """48 kHz float32 audio of a baseband burst at RMS ``level`` (default −12 dBFS)."""
@@ -81,9 +89,9 @@ class Modem:
 
     def payload_bytes(self, mode: Mode | None = None) -> int:
         return (
-            self.codec(mode, LONG).payload_bytes
+            self.codec(mode, self.air.long).payload_bytes
             if mode
-            else self.codec(CONTROL_MODE, SHORT).payload_bytes
+            else self.codec(self.air.control_mode, self.air.short).payload_bytes
         )
 
     # ── receive ───────────────────────────────────────────────────────
@@ -100,7 +108,7 @@ class Modem:
         """Decode a demodulated frame with the RV it announced, optionally soft-combining
         with ``buffer`` (HARQ-IR). Returns ``(payload or None, llr buffer)``."""
         control = frame.sync.header.frame_type is FrameType.CONTROL
-        mode = CONTROL_MODE if control else MODES[frame.mode]
+        mode = self.air.control_mode if control else self.air.modes[frame.mode]
         return self.codec(mode, frame.layout).decode(
             frame.symbols, frame.noise_var, rv=frame.rv, buffer=buffer
         )
@@ -111,15 +119,15 @@ class Modem:
         frame = self.rx.receive(x, sync)
         if sync.header.frame_type is FrameType.CONTROL:
             payload, _ = self.decode_frame(frame, buffer)
-            return DecodedFrame(payload, frame, CONTROL_MODE)
-        mode = MODES[frame.mode]
+            return DecodedFrame(payload, frame, self.air.control_mode)
+        mode = self.air.modes[frame.mode]
         payload, _ = self.decode_frame(frame, buffer)
         if payload is None and frame.mode_confidence < MODE_RETRY_CONFIDENCE:
             # the chip metric was close: try the runner-up (mode, rv) before giving up
             alt = self.rx.receive(x, sync, hypothesis=frame.chip_runner_up)
             payload, _ = self.decode_frame(alt, buffer)
             if payload is not None:
-                return DecodedFrame(payload, alt, MODES[alt.mode])
+                return DecodedFrame(payload, alt, self.air.modes[alt.mode])
         return DecodedFrame(payload, frame, mode)
 
     def decode_buffer(self, x: ComplexArray, max_frames: int = 4) -> list[DecodedFrame]:

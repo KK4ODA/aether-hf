@@ -116,3 +116,58 @@ soft-combine a retransmission with a first transmission whose payload, and there
 sequence number, it never decoded. Measured: (mode, RV) read correctly in 36/36 frames at
 the combining thresholds; QPSK ½ decodes from RV0 + RV1 at −1 dB (single-shot threshold
 ≈ +2 dB) and 16-QAM ¾ at +6 dB (single-shot ≈ +10 dB).
+
+## Amendments (2026-09-15, Phase 7 / P7-0 — the 500 Hz waveform)
+
+The narrow bandwidth this ADR anticipated ("500 Hz: 12 carriers") is now built in the
+model (`frame/modes.py`: `NARROW`, `NARROW_MODES`; `tests/test_narrow.py`), ahead of the
+Rust port (P7-0c). It exists because peer-to-peer HF traffic and VarAC's calling
+frequencies are 500 Hz, and because the plan's 30 m slot allows nothing wider. What was
+decided, and why:
+
+- **One numerology, two carrier counts.** The narrow waveform keeps the sample rates, FFT,
+  40 Hz spacing, 6 ms prefix, window and 31 ms symbol, with **12** active carriers (480 Hz)
+  on the same passband centre. The comb-pilot rule is unchanged (every 4th carrier and both
+  edges: 0, 4, 8, 11), leaving **8 data carriers**. The frame layouts keep their symbol
+  counts — LONG 2 + 32, SHORT 2 + 12 — so a narrow frame lasts exactly as long as a wide
+  one and the link layer's timers (`PhyTiming`) do not change. Sparser pilots and longer
+  frames for the narrow waveform are P9-3's experiment, not this decision.
+- **Its own mode table, ten modes from QPSK ½.** With eight data carriers a SHORT frame has
+  80 QAM slots, and a seven-byte control frame (56 + 24 CRC = 80 bits) fits at nothing
+  slower than QPSK ½ — which then carries exactly the wide control frame's 7 bytes, and 25
+  bytes in a LONG frame (a connect request needs 21). That is affordable because a 500 Hz
+  signal puts the transmitter's power into a fifth of the band: at the same 3 kHz-referenced
+  SNR each carrier has 10·log₁₀(57/12) ≈ 6.8 dB more signal-to-noise than a wide one, so
+  QPSK ½ at 500 Hz reaches the wide table's BPSK ⅕ floor. Measured: **mode 0 decodes
+  100 % at −5 dB and 70 % at −6 dB (3 kHz), against the wide floor's 100 % at −5 dB and
+  ~50 % at −6 dB.** The table runs QPSK ½ · ⅔, 8-PSK ½ · ⅔, 16-QAM ½ · ⅔ · ¾,
+  64-QAM ⅔ · ¾ · ⅚: 190 to 1 040 bit/s net. Its indices are its own (narrow mode 4 is
+  16-QAM ½); a receiver knows which table applies from the waveform the frame arrived in.
+  Modes below QPSK ½ — repetition or spreading to reach −10 dB — are P9-4.
+- **Chips: 32, 40 sequences at |ρ| ≤ 0.25.** The four full pilot symbols of a LONG frame
+  give 4 × 8 = 32 chips; 56 sequences of 32 do not exist at any useful bound, 40 (ten modes
+  × four RVs) do at 0.25. The metric keeps a 15 dB processing gain, which at the narrow
+  floor is still a reliable decision. Each air interface indexes its chip set by its own
+  mode count (`Preamble.chip_index`); the wide set is the P2-3 set, bit for bit.
+- **Preamble: the same seeds, six even carriers.** `SC_SEEDS` drawn to length 6 come out
+  orthogonal, so the frame-type decision keeps its separation.
+- **Acquisition threshold 0.56** (wide: 0.36), each set just above the bank statistic's
+  maximum over 60 s of band-limited noise (0.549 and 0.348). Narrow band-limited noise
+  has a fifth of the degrees of freedom in a preamble's span, so its normalised peaks run
+  higher — and so do the signal's, by about as much (0.57–0.68 at −5 dB against
+  0.42–0.50), which is why the floors coincide. Measured: acquisition 100 % at −6 dB,
+  90 % at −7 dB, 80 % at −8 dB.
+- **The bandwidth is stated in the connect handshake** (capability bits 1–2; §7.3 of the
+  air-interface spec): not negotiated — the receiver knows the waveform from having
+  decoded the frame — but stated, so a request claiming another bandwidth than it arrived
+  in is ignored, and a station listening in more than one bandwidth answers in the one it
+  was called in. A session lives its whole life in one bandwidth.
+- **The rate controller reads its thresholds from the PHY** (`PhyTiming.mode_threshold_db`)
+  rather than a module constant, so the engine steps whichever table the air under it has.
+  The narrow AWGN thresholds are in `link/rate.py` (`NARROW_AWGN_THRESHOLD_DB`), measured
+  by `tools/bench_phy.py --bandwidth 500` into `bench/baselines/phy_fer_500.csv` and
+  written by `tools/update_rate_table.py --bandwidth 500 --apply`.
+- **What the port has to do (P7-0c):** the same carrier map, chip set and threshold per
+  bandwidth in `aether-phy`; the narrow mode table and thresholds in `aether-link`;
+  `aetherd` running the waveform its configuration names (`[radio] bandwidth`), the host
+  adapter answering `BW500` `OK`, and the §97.221(c) answer-only unattended mode.

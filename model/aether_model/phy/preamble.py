@@ -35,15 +35,22 @@ from functools import cache
 import numpy as np
 from numpy.typing import NDArray
 
+from aether_model.frame.modes import air_interface
 from aether_model.phy.ofdm import carrier_map
 from aether_model.waveform import WIDE_2300, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
 
 SC_SEEDS = {0: 4649, 1: 7919}
-"""PN seeds of the Schmidl–Cox sequence per frame type (fixed by the air-interface spec)."""
+"""PN seeds of the Schmidl–Cox sequence per frame type (fixed by the air-interface spec).
+The same seeds serve every bandwidth: the sequence is drawn to the length of the even
+carriers — 29 at 2 300 Hz, 6 at 500 Hz — and the two frame types stay separated at both
+(orthogonal at length 6; the constructor checks)."""
 MODE_CHIP_SEED = 20260913
 N_MODES = 14
+"""Most modes any air interface may signal; the wide table uses all fourteen, the narrow
+one its first ten. Each air interface's chip sequences are indexed by *its* mode count
+(:meth:`Preamble.chip_index`)."""
 N_RV = 4
 """Redundancy versions signalled per frame (TS 38.212 rate matching has four)."""
 MAX_PILOT_SYMBOLS = 4
@@ -69,15 +76,16 @@ class FrameHeader:
             raise ValueError(f"redundancy version must be 0 … {N_RV - 1}")
 
 
-def chip_index(mode: int, rv: int) -> int:
-    """Index of the chip sequence carrying (mode, rv). RV 0 uses the first 14 sequences,
-    so RV-0 frames are unchanged from the P2-3 air interface (golden vectors hold)."""
-    return rv * N_MODES + mode
+def chip_index(mode: int, rv: int, n_modes: int = N_MODES) -> int:
+    """Index of the chip sequence carrying (mode, rv). RV 0 uses the first ``n_modes``
+    sequences, so RV-0 frames are unchanged from the P2-3 air interface (golden vectors
+    hold)."""
+    return rv * n_modes + mode
 
 
-def chip_hypothesis(index: int) -> tuple[int, int]:
+def chip_hypothesis(index: int, n_modes: int = N_MODES) -> tuple[int, int]:
     """Inverse of :func:`chip_index`: ``(mode, rv)``."""
-    return index % N_MODES, index // N_MODES
+    return index % n_modes, index // n_modes
 
 
 def _pn(seed: int, n: int) -> ComplexArray:
@@ -106,15 +114,21 @@ def _select_pn_set(length: int, count: int, seed: int, max_corr: float) -> list[
 
 
 @cache
-def mode_chip_sequences(n_chips: int) -> tuple[ComplexArray, ...]:
-    """One ±1 sequence of ``n_chips`` per (rv, mode) pair (:func:`chip_index` order),
-    pairwise |correlation| ≤ 0.2."""
-    return tuple(_select_pn_set(n_chips, N_RV * N_MODES, MODE_CHIP_SEED, 0.2))
+def mode_chip_sequences(
+    n_chips: int, count: int = N_RV * N_MODES, max_corr: float = 0.2
+) -> tuple[ComplexArray, ...]:
+    """``count`` ±1 sequences of ``n_chips``, one per (rv, mode) pair (:func:`chip_index`
+    order), pairwise |correlation| ≤ ``max_corr``. The wide waveform's 56 sequences of
+    168 chips at 0.2 are the P2-3 set, unchanged; the narrow waveform's 40 of 32 chips
+    hold at 0.25 (56 of 32 do not, at any bound worth having)."""
+    return tuple(_select_pn_set(n_chips, count, MODE_CHIP_SEED, max_corr))
 
 
 class Preamble:
     def __init__(self, params: WaveformParams = WIDE_2300) -> None:
         self.p = params
+        self.air = air_interface(params)
+        self.n_modes = self.air.n_modes
         self.cmap = carrier_map(params)
         n = self.cmap.n_carriers
         self.even = np.flatnonzero(self.cmap.bins % 2 == 0)
@@ -131,6 +145,21 @@ class Preamble:
         self.n_data = len(self.cmap.data_carriers)
         self.n_chips = MAX_PILOT_SYMBOLS * self.n_data
 
+    @property
+    def sequences(self) -> tuple[ComplexArray, ...]:
+        """This air interface's (rv, mode) chip sequences, :meth:`chip_index` order."""
+        return mode_chip_sequences(
+            self.n_chips, N_RV * self.n_modes, self.air.chip_correlation_bound
+        )
+
+    def chip_index(self, mode: int, rv: int) -> int:
+        if not 0 <= mode < self.n_modes:
+            raise ValueError(f"mode index must be 0 … {self.n_modes - 1} at {self.air.name}")
+        return chip_index(mode, rv, self.n_modes)
+
+    def chip_hypothesis(self, index: int) -> tuple[int, int]:
+        return chip_hypothesis(index, self.n_modes)
+
     def sc_values(self, frame_type: FrameType = FrameType.DATA) -> ComplexArray:
         """Carrier values of each Schmidl–Cox symbol (unit mean power over active carriers)."""
         return self._sc[frame_type].copy()
@@ -141,7 +170,7 @@ class Preamble:
 
     def mode_chips(self, mode: int, pilot_symbol_index: int, rv: int = 0) -> ComplexArray:
         """Chips (±1) for the data carriers of the given full pilot symbol of a DATA frame."""
-        seq = mode_chip_sequences(self.n_chips)[chip_index(mode, rv)]
+        seq = self.sequences[self.chip_index(mode, rv)]
         a = pilot_symbol_index * self.n_data
         if a + self.n_data > len(seq):
             raise ValueError("more pilot symbols than the chip sequence covers")

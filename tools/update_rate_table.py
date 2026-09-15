@@ -1,7 +1,7 @@
 """Regenerate the rate controller's AWGN threshold table from a PHY sweep (roadmap P2-2b).
 
     python tools/update_rate_table.py [--csv bench/baselines/phy_fer_awgn14.csv]
-                                      [--fer 0.10] [--apply]
+                                      [--fer 0.10] [--apply] [--bandwidth 2300|500]
 
 ``link/rate.py`` picks modes from a table of minimum usable SNR per mode. Any entry that is
 interpolated rather than measured is a guess the rate controller will act on as if it were
@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import MODES
+from aether_model.frame.modes import MODES, NARROW_MODES
 
 ROOT = Path(__file__).resolve().parents[1]
 RATE_PY = ROOT / "model" / "aether_model" / "link" / "rate.py"
@@ -58,14 +58,23 @@ def thresholds(csv_path: Path, target_fer: float) -> tuple[dict[int, float], set
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--csv", default="bench/baselines/phy_fer_awgn14.csv")
+    ap.add_argument("--csv", default=None)
     ap.add_argument("--fer", type=float, default=0.10)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--bandwidth", type=int, default=2300, choices=(2300, 500))
     args = ap.parse_args()
 
-    measured, unresolved = thresholds(Path(args.csv), args.fer)
+    # the narrow table is its own literal, with its own sweep and its own modes
+    narrow = args.bandwidth == 500
+    name = "NARROW_AWGN_THRESHOLD_DB" if narrow else "AWGN_THRESHOLD_DB"
+    modes = NARROW_MODES if narrow else MODES
+    csv_path = Path(
+        args.csv
+        or ("bench/baselines/phy_fer_500.csv" if narrow else "bench/baselines/phy_fer_awgn14.csv")
+    )
+    measured, unresolved = thresholds(csv_path, args.fer)
     current = re.search(
-        r"AWGN_THRESHOLD_DB: dict\[int, float\] = \{(.*?)\n\}",
+        rf"\n{name}: dict\[int, float\] = \{{(.*?)\n\}}",
         RATE_PY.read_text(encoding="utf-8"),
         re.S,
     )
@@ -77,7 +86,7 @@ def main() -> int:
 
     print(f"{'mode':>4} {'name':<12} {'old':>7} {'measured':>9} {'shift':>7}")
     lines = []
-    for mode in MODES:
+    for mode in modes:
         i = mode.index
         if i in measured:
             value = round(measured[i], 1)
@@ -90,11 +99,15 @@ def main() -> int:
     if unresolved:
         print(f"\nnever reached FER <= {args.fer:.2f} in the sweep: {sorted(unresolved)}")
 
-    block = "AWGN_THRESHOLD_DB: dict[int, float] = {\n" + "\n".join(lines) + "\n}"
+    block = f"{name}: dict[int, float] = {{\n" + "\n".join(lines) + "\n}"
     if args.apply:
         text = RATE_PY.read_text(encoding="utf-8")
         text = re.sub(
-            r"AWGN_THRESHOLD_DB: dict\[int, float\] = \{.*?\n\}", block, text, count=1, flags=re.S
+            rf"\n{name}: dict\[int, float\] = \{{.*?\n\}}",
+            "\n" + block,
+            text,
+            count=1,
+            flags=re.S,
         )
         RATE_PY.write_text(text, encoding="utf-8", newline="\n")
         print(f"\nrewrote {RATE_PY.relative_to(ROOT)}")

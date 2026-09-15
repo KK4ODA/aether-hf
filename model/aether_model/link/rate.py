@@ -20,6 +20,7 @@ Modes that another mode beats on *both* throughput and threshold are never recom
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 AWGN_THRESHOLD_DB: dict[int, float] = {
@@ -62,8 +63,41 @@ PAYLOAD_BYTES: dict[int, float] = {
 }
 
 
+NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
+    0: -5.5,
+    1: -4.0,
+    2: -2.5,
+    3: 0.0,
+    4: -1.0,
+    5: 2.0,
+    6: 3.0,
+    7: 7.0,
+    8: 8.5,
+    9: 10.0,
+}
+"""The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
+as an operator would compare them. **Provisional until the sweep lands**: these are the
+wide table's entries for the same (modulation, rate) less the ≈ 6.8 dB a 500 Hz signal
+gains per carrier — ``tools/update_rate_table.py --bandwidth 500 --apply`` replaces them
+with ``bench/baselines/phy_fer_500.csv``'s measurements."""
+
+NARROW_PAYLOAD_BYTES: dict[int, float] = {
+    0: 25,
+    1: 34,
+    2: 39,
+    3: 53,
+    4: 53,
+    5: 71,
+    6: 81,
+    7: 109,
+    8: 123,
+    9: 137,
+}
+
+
 def usable_modes(
-    thresholds: dict[int, float] = AWGN_THRESHOLD_DB, payload: dict[int, float] = PAYLOAD_BYTES
+    thresholds: Mapping[int, float] = AWGN_THRESHOLD_DB,
+    payload: Mapping[int, float] = PAYLOAD_BYTES,
 ) -> list[int]:
     """Modes on the throughput/threshold Pareto front, ascending."""
     out = []

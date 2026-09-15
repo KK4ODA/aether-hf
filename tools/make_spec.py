@@ -23,17 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.frame.modes import (
     LONG,
-    MODES,
+    NARROW,
     PAYLOAD_CRC,
     PREAMBLE_SYMBOLS,
-    SHORT,
+    WIDE,
+    AirInterface,
     FrameLayout,
 )
 from aether_model.link.frames import CALL_BYTES, CONTROL_BYTES, DATA_HEADER, WINDOW
-from aether_model.link.rate import AWGN_THRESHOLD_DB
+from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
 from aether_model.phy.papr import CLIP_TARGET_DB, CLIP_TARGET_DENSE_DB
-from aether_model.phy.preamble import MODE_CHIP_SEED, N_MODES, N_RV, SC_SEEDS, preamble
-from aether_model.waveform import WIDE_2300 as P
+from aether_model.phy.preamble import MODE_CHIP_SEED, N_RV, SC_SEEDS, preamble
 
 SPEC = Path(__file__).resolve().parents[1] / "docs" / "spec" / "air-interface.md"
 
@@ -44,7 +44,8 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
-def waveform_block() -> str:
+def waveform_block(air: AirInterface = WIDE) -> str:
+    P = air.params
     pre = preamble(P)
     rows = [
         ["Baseband sample rate", f"{P.fs_baseband:.0f} Hz", "complex"],
@@ -75,14 +76,24 @@ def waveform_block() -> str:
             "all carriers known",
         ],
         ["Preamble", f"{PREAMBLE_SYMBOLS} symbols", "two identical Schmidl-Cox symbols"],
-        ["Mode/RV chips", f"{pre.n_chips}", f"{N_RV} x {N_MODES} sequences"],
+        [
+            "Mode/RV chips",
+            f"{pre.n_chips}",
+            f"{N_RV} x {air.n_modes} sequences, pairwise |correlation| <= "
+            f"{air.chip_correlation_bound}",
+        ],
+        [
+            "Acquisition threshold",
+            f"{air.acquisition_threshold}",
+            "normalised matched-filter peak",
+        ],
     ]
     return _table(["Parameter", "Value", "Notes"], rows)
 
 
-def layout_block() -> str:
+def layout_block(air: AirInterface = WIDE) -> str:
     rows = []
-    for layout in (LONG, SHORT):
+    for layout in (air.long, air.short):
         rows.append(
             [
                 layout.name.upper(),
@@ -99,9 +110,10 @@ def layout_block() -> str:
     )
 
 
-def mode_block(layout: FrameLayout = LONG) -> str:
+def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
+    thresholds = AWGN_THRESHOLD_DB if air is WIDE else NARROW_AWGN_THRESHOLD_DB
     rows = []
-    for m in MODES:
+    for m in air.modes:
         rows.append(
             [
                 str(m.index),
@@ -114,7 +126,7 @@ def mode_block(layout: FrameLayout = LONG) -> str:
                 str(m.coded_bits(layout)),
                 str(m.payload_bytes(layout)),
                 f"{m.net_bit_rate(layout):.0f}",
-                f"{AWGN_THRESHOLD_DB[m.index]:+.1f}",
+                f"{thresholds[m.index]:+.1f}",
             ]
         )
     return _table(
@@ -160,6 +172,9 @@ BLOCKS = {
     "layouts": layout_block,
     "modes": mode_block,
     "constants": constants_block,
+    "waveform500": lambda: waveform_block(NARROW),
+    "layouts500": lambda: layout_block(NARROW),
+    "modes500": lambda: mode_block(NARROW.long, NARROW),
 }
 
 
