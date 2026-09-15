@@ -61,7 +61,8 @@ pub struct StationConfig {
     pub tx_level: f64,
     /// Silence played before a burst, so the radio is in transmit before the waveform starts.
     pub key_lead_s: f64,
-    /// Silence played after a burst, before the key is released.
+    /// Silence played after a burst, before the key is released — on top of the playback
+    /// lead, which the tail always covers: see [`Station::new`].
     pub key_tail_s: f64,
     /// How far ahead of the audio clock the daemon keeps playback queued, in seconds. A
     /// sample handed to the sound card now leaves it this much later; the engine's timers
@@ -381,7 +382,15 @@ impl<P: Ptt> Station<P> {
     /// # Panics
     /// If the configured maximum key time is not positive.
     #[must_use]
-    pub fn new(config: StationConfig, ptt: P, seed: u64) -> Self {
+    pub fn new(mut config: StationConfig, ptt: P, seed: u64) -> Self {
+        // The key is released when this station's queue runs dry, and at that moment the
+        // sound card still holds a playback lead's worth of what was queued last. Unless
+        // the tail of silence is at least that long, what the card is still holding is
+        // the end of the burst, and the radio drops out of transmit with the last fifth
+        // of a second of every frame still to play — seen on a rig's meters as a spike as
+        // the transmission ends, and on the air as a frame nobody can decode. The bench
+        // never showed it: the simulated channel carries audio whether keyed or not.
+        config.key_tail_s += config.playback_lead_s;
         let params = config.params;
         let mut timing = phy_timing(params);
         timing.tx_latency_s = config.key_lead_s + config.playback_lead_s + config.key_tail_s;
@@ -974,8 +983,9 @@ impl<P: Ptt> Station<P> {
                 );
             }
             self.ptt.unkey(now)?;
-            // the queue drained now; the last of it leaves the sound card a backlog later
-            self.engine.on_tx_done(now + self.config.playback_lead_s);
+            // the queue drained now, and what the sound card still holds is the tail's
+            // silence: the burst itself has already left
+            self.engine.on_tx_done(now);
             self.pump();
             return Ok(0);
         }
@@ -1491,6 +1501,54 @@ mod tests {
         assert!(
             peak < 0.7,
             "peak {peak} leaves no headroom at tx_level 0.25"
+        );
+    }
+
+    #[test]
+    fn the_key_outlasts_what_the_sound_card_still_holds() {
+        // the first on-air attempt: a spike on the rig's meters at the end of every burst,
+        // because the key dropped while the card still held the last quarter second of it
+        let lead = 0.25;
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                playback_lead_s: lead,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let rate = station.config.params.audio_rate as f64;
+        station.tune(1.0).expect("idle");
+        let mut out = vec![0.0f32; 960];
+        let mut handed = 0usize;
+        let mut last_signal = None;
+        let mut released = None;
+        for _ in 0..200 {
+            let count = station.playback(&mut out).expect("playback");
+            if let Some(offset) = out[..count].iter().rposition(|x| x.abs() > 1e-4) {
+                last_signal = Some(handed + offset);
+            }
+            handed += count;
+            if released.is_none() && last_signal.is_some() && !station.transmitting() {
+                released = Some(handed);
+            }
+            station.capture(&vec![0.0f32; 960]).expect("capture");
+        }
+        let (last_signal, released) = (last_signal.expect("a tone"), released.expect("a release"));
+        // silence handed to the card after the last of the tone and before the release:
+        // at least the lead, or the release comes while the card still holds the tone
+        let silence_s = (released - last_signal) as f64 / rate;
+        assert!(
+            silence_s >= lead,
+            "the key was released with {:.3} s of the burst still in the sound card",
+            lead - silence_s
+        );
+        assert!(
+            (silence_s - station.config.key_tail_s).abs() < 0.03,
+            "{silence_s:.3} s of silence for a tail of {:.3} s",
+            station.config.key_tail_s
         );
     }
 
