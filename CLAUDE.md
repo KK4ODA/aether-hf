@@ -47,10 +47,11 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
 
 ## Current phase
-Phases 0–5 are done and on `master`, **the first release is out** (`v0.2.0-beta.2`,
-2026-09-14, signed: `TAURI_SIGNING_PRIVATE_KEY` is set), and **Phase 6 (field validation)
-is in progress** — its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the
-bench, and the air is what remains (P6-6).
+Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
+`beta.9` on 2026-09-14, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs the
+beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
+its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
+on-air attempt found two bugs (below), and the air is what remains (P6-6).
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -102,6 +103,22 @@ bench, and the air is what remains (P6-6).
   500 Hz waveform (P7-0, ahead of FM). Host programs are driven by hand: scratch copies
   only, never the author's real installs, and never the proprietary `VARA.exe`.
 
+* **The first on-air attempt** (a video of the rig's scope, 2026-09-14) found two bugs the
+  bench cannot: the key was released while the sound card still held the last quarter
+  second of the burst (the tail now covers the playback lead; `the_key_outlasts…` test),
+  and a burst held back by the busy detector left the engine's timers running, so retries
+  went out in pairs (`on_tx_delayed`, model first; the station also stays deaf to its own
+  tail for a lead after unkey). Lesson: the simulated channel carries audio whether the
+  radio is keyed or not, so anything about keying, latency or the busy detector needs a
+  real rig or a paced loopback.
+* **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
+  independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
+  colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
+  bundler's icons and the panel's mark, favicon and splash logo from it. The shell starts
+  the daemon `CREATE_NO_WINDOW` and asks Tauri for a dark title bar. Phase 8 (`docs/ROADMAP.md`)
+  is Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
+  app, then the modem in the phone — one application over the control API for all three.
+
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
 debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
 separate package (`cd app/src-tauri && cargo clippy --all-targets -- -D warnings`). To try
@@ -111,9 +128,15 @@ then open `http://127.0.0.1:8515/`.
 **Next: the air** (P6-6: audio cable → ground wave → NVIS → long paths → RMS gateway
 trial, twenty logged sessions across three channel classes in `field/LOG.md`, recalibrate
 on the disagreements) and the human items still open (BPQ32 over the simulated channel;
-three external hams through the wizard with the beta installer; the next beta is what
-exercises an actual update install). Phase 7 starts with the 500 Hz waveform (P7-0); FM
-stays on the back burner by decision.
+three external hams through the wizard with the beta installer). Phase 7 starts with the
+500 Hz waveform (P7-0); FM stays on the back burner by decision; Phase 8 is the phone.
+
+**Never run an installer or the packaged app from a Claude session on the author's
+machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
+one (files there can be stale copies), but the Desktop and Start-menu folders are real:
+a silent NSIS install rewrote the author's shortcuts to a scratch directory once. Inspect
+an installer by extracting it, not by running it; the real install is
+`C:\Users\Facundo\AppData\Local\Aether HF\`, updated in place by the updater.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
 generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
