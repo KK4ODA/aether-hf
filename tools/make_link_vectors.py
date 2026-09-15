@@ -28,6 +28,7 @@ from aether_model.link.frames import (
     ControlKind,
     DataHeader,
     DataKind,
+    ProbeBody,
     encode_data,
     pack_callsign,
 )
@@ -84,6 +85,33 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
                 "caps": caps,
                 "version": version,
                 "encoded": body.encode().hex(),
+            }
+        )
+    return out
+
+
+def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
+    # the SNR byte follows the control frame's convention: whole dB, ties to even,
+    # clamped to +/-40, 0x7F for "not measured" (what a PROBE always says)
+    out = []
+    for src, dst, snr, caps in (
+        ("W4ODA", "KK4XYZ", None, 0),
+        ("KK4XYZ", "W4ODA", 12.5, 0b010),
+        ("M0ABC", "VK2DEF/P", -7.4, 0b001),
+        ("A1", "9Z9ZZZ9ZZ", 200.0, 0b011),
+        ("N0CALL", "W1AW", -200.0, 0b100),
+        ("N0CALL", "W1AW", 0.0, 255),
+    ):
+        body = ProbeBody(src, dst, snr, caps=caps)
+        decoded = ProbeBody.decode(body.encode())
+        out.append(
+            {
+                "src": src,
+                "dst": dst,
+                "snr_db": snr,
+                "caps": caps,
+                "encoded": body.encode().hex(),
+                "decoded_snr_db": decoded.snr_db,
             }
         )
     return out
@@ -188,6 +216,7 @@ def main() -> int:
         "callsigns": callsign_cases(),
         "data_frames": data_frame_cases(),
         "connect_bodies": connect_body_cases(),
+        "probe_bodies": probe_body_cases(),
         "control_frames": control_frame_cases(),
         "rate_traces": rate_trace_cases(),
     }

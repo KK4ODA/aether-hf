@@ -8,3 +8,6 @@ context → decision → alternatives considered → consequences.
 | [0001](0001-language-and-stack.md) | Python reference model, Rust production core, Tauri desktop shell | accepted |
 | [0002](0002-waveform-parameters.md) | Aether HF v1 waveform — OFDM numerology and starting parameters | accepted (starting point) |
 | [0003](0003-fec-family.md) | FEC = 3GPP TS 38.212 LDPC BG2 with rate matching | accepted |
+| [0004](0004-papr-reduction.md) | Peak-to-average power reduction | accepted |
+| [0005](0005-front-end-without-a-build-step.md) | The front-end is plain ES modules, with no build step | accepted (amends 0001 §3) |
+| [0006](0006-link-probe.md) | The link probe — a beacon with a destination, answered with the SNR heard | accepted |

@@ -307,8 +307,9 @@ soft-combines them; a header that changed would make the combination meaningless
 no burst length or position appears here — the receiver derives a frame's position in its
 burst from its air time, and the end of a burst from the silence that follows.
 
-Kinds: `DATA`, `CONNECT_REQ`, `CONNECT_ACK` (callsigns do not fit in a control frame), and
-`BEACON`.
+Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in a control
+frame), `BEACON` (3), `PROBE` (4) and `PROBE_ACK` (5). A receiver ignores a kind it does
+not know, which is what lets a kind be added.
 
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
 id of zero and a body that is one packed callsign. It is how an operator answers "can anybody
@@ -317,6 +318,28 @@ to know. A receiver reports the callsign and the SNR it measured and does nothin
 beacon is never answered on the air, because a channel where every beacon drew a reply would
 be unusable. It is sent at the most robust mode, because the whole point is to be heard by
 somebody who cannot yet hear anything else.
+
+A `PROBE` frame is a beacon with a destination: "can *you* hear me, and how well?" It is
+sent outside any session (session id zero, sequence zero, the most robust mode) with this
+body:
+
+| Offset | Field |
+|---|---|
+| 0–6 | source callsign, packed |
+| 7–13 | destination callsign, packed |
+| 14 | measured SNR, as the CONTROL frame's byte: signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured (a `PROBE` always says 0x7F) |
+| 15 | capability byte (§7.3): the bandwidth the frame was sent in |
+
+A station that is addressed by a probe, is idle, and finds the probe's stated bandwidth to
+be its own answers with one `PROBE_ACK` — the same body with the callsigns swapped and the
+SNR it measured on the probe in the SNR byte. The prober then has the two numbers that
+describe a path, one from each end, and reports them; a probe that draws no answer within
+one data frame's turnaround is reported as unanswered, and there are no retries — the
+operator asks again, so a probe can never fill a channel by itself. A station in a
+session ignores probes (the session's frames matter more), and a station never answers a
+probe addressed to somebody else. Answering is a *response* in the sense of
+§97.221(c), so a station restricted to answering may answer a probe; sending one is a
+call, and it may not.
 
 CONTROL container:
 

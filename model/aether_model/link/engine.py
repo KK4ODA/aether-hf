@@ -45,6 +45,7 @@ from aether_model.link.frames import (
     ControlKind,
     DataHeader,
     DataKind,
+    ProbeBody,
     bandwidth_code,
     data_capacity,
     decode_data,
@@ -168,6 +169,11 @@ class LinkStats:
     bytes_delivered: int = 0
     # payload bytes the peer acknowledged: what has actually crossed, seen from the sender
     bytes_acked: int = 0
+    probes_sent: int = 0
+    probes_answered: int = 0
+    """Probes from other stations this one answered."""
+    probe_replies: int = 0
+    """Answers to this station's own probes that arrived."""
 
 
 # ── the engine ────────────────────────────────────────────────────────
@@ -219,6 +225,8 @@ class LinkEngine:
         self._disc_requested = False
         self._disc_tries = 0
         self._connect_tries = 0
+        self._probing: str | None = None
+        """The station a probe of ours is out to, until it answers or the timer fires."""
         self._waiting_for: str | None = None  # "ack" | "poll" | "turn" | "disc" | "connect"
         # receiving side
         self._rx_base = 0
@@ -274,6 +282,30 @@ class LinkEngine:
         self._connect_tries = 0
         self._reset_transfer_state()
         self._send_connect(DataKind.CONNECT_REQ)
+
+    def probe(self, remote_call: str, as_call: str | None = None) -> None:
+        """Ask a station whether it hears this one, and how well, without a session.
+
+        One PROBE frame, at the most robust mode; the answer, if it comes, arrives as a
+        ``probe`` event naming both directions of the path — the SNR the other station
+        measured on our probe, and the SNR we measured on its answer. A probe that goes
+        unanswered within one frame's turnaround is reported as such; the operator asks
+        again if they want, so there are no retries to fill a channel with."""
+        if self.state is not State.IDLE:
+            raise RuntimeError("already in a session")
+        if self._probing is not None:
+            raise RuntimeError("a probe is already out")
+        if as_call is None:
+            self.my_call = self.callsigns[0]
+        elif as_call.upper() in self.callsigns:
+            self.my_call = as_call.upper()
+        else:
+            raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
+        self._probing = remote_call.upper()
+        self.stats.probes_sent += 1
+        self._send_probe(DataKind.PROBE, self._probing, None)
+        wait = self._response_wait(self.timing.data_frame_s)
+        self._arm("probe", self._tx_busy_until - self.now + wait)
 
     def disconnect(self) -> None:
         """Orderly close: finish sending every queued byte, get it acknowledged, then
@@ -422,6 +454,10 @@ class LinkEngine:
             self._end_session("link timeout")
         elif name == "connect":
             self._retry_connect()
+        elif name == "probe":
+            if self._probing is not None:
+                self.actions.append(Event("probe", f"{self._probing}: no answer"))
+            self._probing = None
         elif name == "ack":
             self._send_ack()
         elif name == "wait":
@@ -468,6 +504,14 @@ class LinkEngine:
             span = (1 + self._connect_tries) * self.timing.data_frame_s
             wait = self._response_wait(self.timing.data_frame_s) + self.rng.uniform(0.0, span)
             self._arm("connect", self._tx_busy_until - self.now + wait)
+
+    def _send_probe(self, kind: DataKind, remote: str, snr_db: float | None) -> None:
+        """A PROBE (``snr_db`` absent) or a PROBE_ACK (the SNR the probe arrived at),
+        outside any session: session 0, sequence 0, the most robust mode."""
+        body = ProbeBody(self.my_call, remote, snr_db, caps=self.cfg.capabilities).encode()
+        cap = self.timing.capacity(0)
+        payload = encode_data(DataHeader(kind, 0, 0), body, cap)
+        self._transmit([TxFrame(Container.DATA, payload, mode=0, rv=0)])
 
     def _retry_connect(self) -> None:
         if self.state is not State.CONNECTING:
@@ -897,6 +941,44 @@ class LinkEngine:
             self._handle_connect_req(header, body)
         elif header.kind is DataKind.CONNECT_ACK:
             self._handle_connect_ack(header, body)
+        elif header.kind is DataKind.PROBE:
+            self._handle_probe(body, frame)
+        elif header.kind is DataKind.PROBE_ACK:
+            self._handle_probe_ack(body, frame)
+
+    def _handle_probe(self, body: bytes, frame: SoftFrame) -> None:
+        try:
+            req = ProbeBody.decode(body)
+        except ValueError:
+            return
+        if req.dst not in self.callsigns:
+            return
+        if bandwidth_code(req.caps) != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(Event("ignored", f"{req.src} probes in another bandwidth"))
+            return
+        if self.state is not State.IDLE:
+            return  # a session's frames matter more than a question from outside it
+        # answer as the callsign that was probed, with the SNR the probe arrived at —
+        # the one number the prober cannot measure for itself
+        self.my_call = req.dst
+        self.stats.probes_answered += 1
+        self.actions.append(Event("probed", f"{req.src} at {frame.snr_db:.1f} dB"))
+        self._send_probe(DataKind.PROBE_ACK, req.src, frame.snr_db)
+
+    def _handle_probe_ack(self, body: bytes, frame: SoftFrame) -> None:
+        try:
+            ack = ProbeBody.decode(body)
+        except ValueError:
+            return
+        if self._probing is None or ack.dst != self.my_call or ack.src != self._probing:
+            return
+        self._disarm("probe")
+        self._probing = None
+        self.stats.probe_replies += 1
+        theirs = "?" if ack.snr_db is None else f"{ack.snr_db:.0f}"
+        self.actions.append(
+            Event("probe", f"{ack.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB")
+        )
 
     def _handle_connect_req(self, header: DataHeader, body: bytes) -> None:
         try:

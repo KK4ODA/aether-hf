@@ -17,6 +17,7 @@ from aether_model.link.frames import (
     ControlKind,
     DataHeader,
     DataKind,
+    ProbeBody,
     bandwidth_code,
     decode_data,
     encode_data,
@@ -89,6 +90,17 @@ def test_data_frame_is_identical_across_retransmissions() -> None:
 def test_connect_body_round_trip() -> None:
     body = ConnectBody("W4ODA", "KK4XYZ", caps=0b101, version=1)
     assert ConnectBody.decode(body.encode()) == body
+
+
+def test_probe_body_round_trips_and_clamps_its_snr() -> None:
+    probe = ProbeBody("W4ODA", "KK4XYZ", None, caps=0b10)
+    assert ProbeBody.decode(probe.encode()) == probe
+    assert len(probe.encode()) == 16
+    for snr, expect in [(-7.4, -7.0), (12.5, 12.0), (13.5, 14.0), (200.0, 40.0), (-200.0, -40.0)]:
+        ack = ProbeBody("KK4XYZ", "W4ODA", snr, caps=0)
+        assert ProbeBody.decode(ack.encode()).snr_db == expect, snr
+    # a whole-decibel byte, 0x7F meaning "not measured", as the control frame's SNR byte
+    assert ProbeBody.decode(b"\0" * 14 + bytes([0x7F, 0])).snr_db is None
 
 
 def test_control_frame_round_trip() -> None:
@@ -377,6 +389,86 @@ def test_the_sender_learns_how_the_other_station_hears_it(timing: PhyTiming) -> 
     sim.run(until=300)
     assert a.state is State.IDLE
     assert a.peer_snr_db is None
+
+
+def test_a_probe_is_answered_with_the_snr_it_arrived_at(timing: PhyTiming) -> None:
+    # "can you hear me, and how well?" without a session: the probed station answers with
+    # the SNR the probe arrived at, and the prober reports both directions of the path
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=21)
+    a.probe("KK4XYZ")
+    sim.run(until=60)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert "probed:W4ODA at 15.0 dB" in sim.events(1)
+    assert "probe:KK4XYZ hears us at 15 dB, heard at 15.0 dB" in sim.events(0)
+    assert (a.stats.probes_sent, a.stats.probe_replies, b.stats.probes_answered) == (1, 1, 1)
+    # the question can be asked again, and a session can follow
+    a.probe("KK4XYZ")
+    sim.run(until=120)
+    assert a.stats.probe_replies == 2
+    a.connect("KK4XYZ")
+    a.send(b"after the probe")
+    a.disconnect()
+    sim.run(until=400)
+    assert sim.delivered(1) == b"after the probe"
+
+
+def test_a_probe_to_nobody_reports_no_answer(timing: PhyTiming) -> None:
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=22)
+    a.probe("N0BODY")
+    with pytest.raises(RuntimeError):
+        a.probe("KK4XYZ")  # one at a time
+    sim.run(until=60)
+    assert "probe:N0BODY: no answer" in sim.events(0)
+    assert not any(e.startswith("probed") for e in sim.events(1))
+    assert a.state is State.IDLE
+    # and once it is answered or timed out, another may go
+    a.probe("KK4XYZ")
+    sim.run(until=120)
+    assert a.stats.probe_replies == 1
+
+
+def test_a_probe_is_not_answered_during_a_session_or_in_another_bandwidth(
+    timing: PhyTiming,
+) -> None:
+    from aether_model.link.frames import DataHeader, encode_data
+    from aether_model.link.phy import Container
+    from aether_model.link.sim import SimFrame
+
+    def probe_from(call: str, to: str, caps: int = 0) -> SimFrame:
+        body = ProbeBody(call, to, None, caps=caps).encode()
+        payload = encode_data(DataHeader(DataKind.PROBE, 0, 0), body, timing.capacity(0))
+        return SimFrame(Container.DATA, 0, 0, 12.0, 0.0, 1.0, payload, 0.0)
+
+    a, b = _pair(timing)
+    # a session up: a third station's probe is left alone
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=23)
+    a.connect("KK4XYZ")
+    sim.run(until=40)
+    assert b.connected
+    before = len(b.actions)
+    b.on_frame(probe_from("N0CALL", "KK4XYZ"), b.now)
+    assert b.stats.probes_answered == 0
+    assert len(b.actions) == before
+    # idle, but the probe claims another bandwidth: ignored, and said so
+    a.disconnect()
+    sim.run(until=300)
+    assert b.state is State.IDLE
+    b.on_frame(probe_from("N0CALL", "KK4XYZ", caps=with_bandwidth(0, 500)), b.now)
+    assert b.stats.probes_answered == 0
+    assert any(e.name == "ignored" and "N0CALL" in e.detail for e in b.actions)
+    # and one for somebody else is nobody's business
+    b.on_frame(probe_from("N0CALL", "W1AW"), b.now)
+    assert b.stats.probes_answered == 0
+    # while one addressed to it, in its bandwidth, is answered
+    b.on_frame(probe_from("N0CALL", "KK4XYZ"), b.now)
+    assert b.stats.probes_answered == 1
+    assert any(isinstance(x, Transmit) for x in b.actions)
+    # a station in a session may not probe; one that is probing may not either
+    with pytest.raises(RuntimeError):
+        a.connect("KK4XYZ")
+        a.probe("KK4XYZ")
 
 
 def test_a_call_stating_another_bandwidth_is_not_answered(timing: PhyTiming) -> None:

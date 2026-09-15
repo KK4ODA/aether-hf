@@ -173,5 +173,7 @@ this table is what the compatibility claim rests on, and it should be read as ex
   pretending.
 * **VarAC over the 500 Hz waveform.** The waveform exists and `BW500` is answered `OK` by a
   station running it; what remains is the bench (two VarAC instances over `[sim]`, both
-  daemons at 500 Hz) and the air. VarAC also pings before it calls (`PING`/`PINGACK`),
-  which is roadmap P7-1.
+  daemons at 500 Hz) and the air. VarAC's "ping" is a short session — connect, exchange
+  the reports, disconnect — over the `CONNECT` the adapter already serves; VARA's
+  published command set has no `PING` (that vocabulary is ARDOP's), so the adapter has
+  none either. Aether's own probe (ADR-0006) is reached through the control API.

@@ -49,6 +49,24 @@ def test_real_phy_harq_ir_rescue_below_threshold(timing: object) -> None:
     assert b.stats.harq_rescues > 0
 
 
+def test_real_phy_probe_reports_both_directions(timing: object) -> None:
+    """A probe over the real modem: the answer carries the SNR the probe arrived at, and
+    the prober measures the answer — two readings of one path, no session."""
+    a = LinkEngine("W4ODA", timing, seed=1)
+    b = LinkEngine("KK4XYZ", timing, seed=2)
+    sim = two_modem_sim(a, b, channel="awgn", snr_db=8.0, seed=9)
+    a.probe("KK4XYZ")
+    sim.run(until=60)
+    reports = [e for e in sim.events(0) if e.startswith("probe:")]
+    assert len(reports) == 1, sim.events(0)
+    words = reports[0].split()
+    # "probe:KK4XYZ hears us at <x> dB, heard at <y> dB"
+    theirs, ours = float(words[4]), float(words[8])
+    assert abs(theirs - 8.0) < 3.0 and abs(ours - 8.0) < 3.0, reports
+    assert any(e.startswith("probed:W4ODA at") for e in sim.events(1))
+    assert a.state is State.IDLE and b.state is State.IDLE
+
+
 @pytest.mark.slow
 def test_real_phy_transfer_on_poor_channel(timing: object) -> None:
     """ITU Poor at +12 dB with adaptive rate: the transfer must still complete bit-exact."""

@@ -59,6 +59,15 @@ class DataKind(Enum):
     """Unproto: sent outside any session, addressed to nobody, carrying this station's
     callsign. It is how an operator answers "can anybody hear me?" without arranging a
     contact first, which on HF is most of what a new station needs to know."""
+    PROBE = 4
+    """A beacon with a destination (P7-1): "can *you* hear me, and how well?" — sent outside
+    any session, answered with a PROBE_ACK carrying the SNR the answering station measured
+    on it, so both operators see both directions of the path without arranging a contact.
+    The one thing a receiver cannot measure is how it is heard; this is how it asks."""
+    PROBE_ACK = 5
+    """The answer to a PROBE: the probed station's callsign, the prober's, and the SNR the
+    probe arrived at. Answering is a *response* in the sense of §97.221(c), so a station
+    that may only answer may answer this too; sending a probe is a call, and may not."""
 
 
 class DataFlags(IntFlag):
@@ -211,6 +220,45 @@ class ConnectBody:
 
 
 CONNECT_BODY_BYTES = 2 * CALL_BYTES + 2
+
+
+@dataclass(frozen=True)
+class ProbeBody:
+    """Body of PROBE / PROBE_ACK: who is asking whom, the SNR the answer reports, and the
+    capability bits (the bandwidth the frame was sent in, so a probe in another bandwidth
+    than it arrived in is ignored like a connect request would be)."""
+
+    src: str
+    dst: str
+    snr_db: float | None = None
+    """PROBE_ACK: the SNR (3 kHz) the probe arrived at, as the control frame carries it —
+    whole decibels, ties to even, clamped to −40 … +40; PROBE: absent."""
+    caps: int = 0
+
+    def encode(self) -> bytes:
+        snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
+        return (
+            pack_callsign(self.src)
+            + pack_callsign(self.dst)
+            + (snr & 0xFF).to_bytes(1, "big")
+            + bytes([self.caps])
+        )
+
+    @classmethod
+    def decode(cls, body: bytes) -> ProbeBody:
+        if len(body) < PROBE_BODY_BYTES:
+            raise ValueError("short probe body")
+        raw = body[2 * CALL_BYTES]
+        snr = None if raw == SNR_UNKNOWN else float(raw - 256 if raw >= 128 else raw)
+        return cls(
+            src=unpack_callsign(body[:CALL_BYTES]),
+            dst=unpack_callsign(body[CALL_BYTES : 2 * CALL_BYTES]),
+            snr_db=snr,
+            caps=body[2 * CALL_BYTES + 1],
+        )
+
+
+PROBE_BODY_BYTES = 2 * CALL_BYTES + 2
 
 
 # ── CONTROL container ─────────────────────────────────────────────────

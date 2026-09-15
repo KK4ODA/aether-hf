@@ -82,7 +82,11 @@ appropriate for Aether.
 ## 4. Deliberately not added
 
 * **PING as an air frame** — it needs a frame format, an ADR and the model first; it is on
-  the roadmap as P7-1 with the answer-only rule already worked out.
+  the roadmap as P7-1 with the answer-only rule already worked out. *Later the same day:*
+  ADR-0006 and the model. A search for VARA's `PING`/`PINGACK` on the command port found
+  no public source for it — the vocabulary is ARDOP's, and VarAC's ping is a short session
+  over `CONNECT` — so the rows above that cite it describe VarAC's behaviour, not a VARA
+  modem command.
 * **A registration display** — there is nothing to register.
 * **Chat features** — they belong to the host program; the adapter is where VARA Chat, VarAC,
   Pat and Winlink Express plug in.

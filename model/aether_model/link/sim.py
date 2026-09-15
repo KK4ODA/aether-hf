@@ -206,7 +206,7 @@ class TwoStationSim:
         """Advance until both engines have been idle for ``idle_gap`` seconds or ``until``
         is reached. Returns the final simulation time."""
         for who in (0, 1):
-            self._pump(who, 0.0)
+            self._pump(who, self.t)
         last = 0.0
         while self.t < until:
             nq = self._q[0].t if self._q else math.inf
