@@ -108,9 +108,12 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   second of the burst (the tail now covers the playback lead; `the_key_outlasts…` test),
   and a burst held back by the busy detector left the engine's timers running, so retries
   went out in pairs (`on_tx_delayed`, model first; the station also stays deaf to its own
-  tail for a lead after unkey). Lesson: the simulated channel carries audio whether the
-  radio is keyed or not, so anything about keying, latency or the busy detector needs a
-  real rig or a paced loopback.
+  tail for a lead after unkey). A second video confirmed both fixed: clean burst ends,
+  single frames, the widening backoff. The wideband flash the FTDX10's scope shows after
+  every transmission is the rig's receiver recovering from its own RF — it follows a plain
+  tune tone too and not a silent keying — so it is not a modem artefact; do not chase it.
+  Lesson: the simulated channel carries audio whether the radio is keyed or not, so
+  anything about keying, latency or the busy detector needs a real rig or a paced loopback.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
   colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
@@ -129,7 +132,12 @@ then open `http://127.0.0.1:8515/`.
 trial, twenty logged sessions across three channel classes in `field/LOG.md`, recalibrate
 on the disagreements) and the human items still open (BPQ32 over the simulated channel;
 three external hams through the wizard with the beta installer). Phase 7 starts with the
-500 Hz waveform (P7-0); FM stays on the back burner by decision; Phase 8 is the phone.
+500 Hz waveform (P7-0); FM stays on the back burner by decision; Phase 8 is the phone;
+Phase 9 is the modem's second rung — an audio-level A/B bench against the author's
+registered VARA first (`tools/channel_cable.py`, to be written), then a faster start from
+the connect frames' SNR, the deferred pilot/prefix/2750 Hz experiments, modes below
+200 bit/s (500 Hz waveform as their home) and time diversity — each only with a curve on
+Good, Moderate and Poor.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
