@@ -31,6 +31,16 @@ knows the daemon's own latency (`PhyTiming.tx_latency_s`); the cable proves it.
 **Set the level.** Setup → step 3 (receive) and step 4 (tune, against the rig's ALC), on
 both stations. An overdriven card is the most common reason a mode "does not work".
 
+**The rig's AGC.** FAST or AUTO, or OFF with the RF gain set so the band noise sits well
+above the sound card's own floor. The busy detector learns the noise floor from the
+quiet, steady moments of the last five seconds; a receiver's AGC cuts its gain the
+instant something strong appears anywhere in its passband and lets it back over the
+next half second, and the detector is built to see through that ramp (an FTDX10 on
+AUTO recovers at 40–55 dB/s). A SLOW setting recovers gently enough to look like a
+genuine drop in the noise, and the floor on the Status tab will follow the AGC down
+for a few seconds after every strong adjacent signal. `tools/floor_trace.py` replays a
+recording through the detector and lists every such dip, with its depth and length.
+
 ## 2. Recording
 
 Turn it on once and forget it:

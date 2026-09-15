@@ -17,6 +17,27 @@
 //! A window of a few seconds is long enough to see between syllables of speech and between
 //! the frames of a digital burst, and short enough to follow a fade.
 //!
+//! The minimum is taken only over blocks where the level was **steady** — the raw block
+//! powers within 3 dB over the last 200 ms. A receiver's AGC cuts its gain in a millisecond when
+//! something strong appears anywhere in its passband (an adjacent station, a crash outside
+//! the audio filter, nothing this detector can see) and lets it back over the next half
+//! second; a two-minute recording of an idle band through an FTDX10 on AGC AUTO showed
+//! seven such dips of 4–18 dB, and a plain minimum held each one for the whole window,
+//! which drew the noise floor as a train of square pits on the panel and put the busy
+//! threshold a decibel above the real noise. Noise is stationary and the gaps in a signal
+//! are stationary at the floor; a gain transient is a step down and a ramp back, and is
+//! never steady — so the gate keeps the theory and drops the artefact. It is judged on the
+//! raw block powers, not the smoothed level: the smoother turns a step-and-ramp into a
+//! rounded valley whose bottom looks steady for a few blocks, and lags a burst's end by
+//! half a dozen blocks, which would hide a short gap. The price is that a gap shorter than
+//! 200 ms does not show the floor — which is no worse than before, since the smoothed
+//! level the old minimum was taken over needed about that long to fall to the floor after
+//! a burst, and the ARQ turnarounds of the modes on the band exceed it. When no block in the window was steady, the floor learned before is
+//! held: a channel that has been busy for five seconds without a quiet moment is still
+//! measured against the noise that was there before it. A receiver whose AGC recovers
+//! slower than about 15 dB/s (a SLOW setting) ramps gently enough to pass the gate, and
+//! its dips will show; the field notes say which settings to use.
+//!
 //! On top of that:
 //!
 //! * a **hangover** keeps the channel marked busy for a moment after the power drops, so the
@@ -69,8 +90,9 @@ pub struct BusyDetector {
     config: BusyConfig,
     block_samples: usize,
     window_blocks: usize,
-    /// Smoothed power per block, newest last, capped at `window_blocks`.
-    history: std::collections::VecDeque<f64>,
+    /// Raw power per block and whether the level was steady when it was measured, newest
+    /// last, capped at `window_blocks`.
+    history: std::collections::VecDeque<(f64, bool)>,
     partial: Vec<Complex>,
     smoothed: f64,
     busy_until: f64,
@@ -88,6 +110,15 @@ const FLOOR: f64 = 1e-20;
 /// One-pole smoothing of the block power, in blocks. Two blocks is 50 ms: long enough to ride
 /// out a single noisy measurement, short enough to catch the start of a burst.
 const SMOOTHING: f64 = 2.0;
+/// How many blocks the level must have been steady over for a block to count toward the
+/// floor: 200 ms. A receiver's AGC recovers at 40–55 dB/s on the rig this was measured
+/// on, and holds the cut gain for about 100 ms first; eight blocks see through both, with
+/// room for a slower rig.
+const STEADY_BLOCKS: usize = 8;
+/// How much the raw block power may vary over those blocks and still count as steady, in
+/// dB. HF noise over 200 ms stayed within it two blocks in three on the recording; an AGC
+/// ramp of 15 dB/s or faster crosses it.
+const STEADY_RANGE_DB: f64 = 3.0;
 
 impl BusyDetector {
     /// Build a detector.
@@ -190,7 +221,21 @@ impl BusyDetector {
             } else {
                 self.smoothed + (power - self.smoothed) / SMOOTHING
             };
-            self.history.push_back(self.smoothed);
+            // steady: the last few blocks, this one included, stayed within a few dB
+            let steady = self.history.len() + 1 >= STEADY_BLOCKS && {
+                let recent = self
+                    .history
+                    .iter()
+                    .rev()
+                    .take(STEADY_BLOCKS - 1)
+                    .map(|&(block, _)| block)
+                    .chain(std::iter::once(power));
+                let (low, high) = recent.fold((f64::INFINITY, 0.0_f64), |(lo, hi), p| {
+                    (lo.min(p), hi.max(p))
+                });
+                high <= low.max(FLOOR) * 10f64.powf(STEADY_RANGE_DB / 10.0)
+            };
+            self.history.push_back((power, steady));
             if self.history.len() > self.window_blocks {
                 self.history.pop_front();
             }
@@ -198,11 +243,22 @@ impl BusyDetector {
             let floor = self
                 .history
                 .iter()
-                .copied()
-                .fold(f64::INFINITY, f64::min)
-                .max(FLOOR);
+                .filter(|&&(_, steady)| steady)
+                .map(|&(power, _)| power)
+                .fold(f64::INFINITY, f64::min);
             self.level_db = 10.0 * self.smoothed.max(FLOOR).log10();
-            self.floor_db = 10.0 * floor.log10();
+            if floor.is_finite() {
+                self.floor_db = 10.0 * floor.max(FLOOR).log10();
+            } else if self.floor_db == f64::NEG_INFINITY {
+                // nothing steady yet: the plain minimum, until there is
+                let lowest = self
+                    .history
+                    .iter()
+                    .map(|&(power, _)| power)
+                    .fold(f64::INFINITY, f64::min)
+                    .max(FLOOR);
+                self.floor_db = 10.0 * lowest.log10();
+            }
             if self.level_db - self.floor_db >= self.config.threshold_db {
                 self.busy_until = self.busy_until.max(now + self.config.hang_s);
             }
@@ -297,6 +353,94 @@ mod tests {
                 "sigma {sigma}: missed a signal 20 dB up"
             );
         }
+    }
+
+    /// Feed `seconds` of noise whose amplitude follows `gain(t)`, block by block.
+    fn feed_shaped(
+        detector: &mut BusyDetector,
+        seconds: f64,
+        sigma: f64,
+        seed: u64,
+        t0: f64,
+        gain: impl Fn(f64) -> f64,
+    ) -> f64 {
+        let fs = detector.config().fs;
+        let block = detector.config().block_s;
+        let per_block = (block * fs) as usize;
+        let blocks = (seconds / block) as usize;
+        let mut now = t0;
+        for index in 0..blocks {
+            let g = gain(index as f64 * block);
+            let samples = noise(per_block, sigma * g, seed.wrapping_add(index as u64));
+            now += block;
+            detector.push(&samples, now);
+        }
+        now
+    }
+
+    #[test]
+    fn a_receiver_gain_dip_does_not_pull_the_floor_down() {
+        // what an FTDX10 on AGC AUTO did seven times in two minutes of an idle band: the
+        // gain cut 4–18 dB in a millisecond by something outside the audio passband, held
+        // for about 100 ms, and let back at 40–55 dB/s. A plain minimum held each dip for
+        // the whole window and drew square pits on the panel; the busy threshold sat a
+        // decibel above the real noise for five seconds after each one.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let now = feed(&mut detector, 8.0, 0.01, 11, 0.0);
+        let floor_before = detector.floor_db;
+        let level_before = detector.level_db;
+        assert!((level_before - floor_before).abs() < 2.0);
+        // −18 dB for 100 ms, then back at 50 dB/s: 0.46 s of ramp
+        let dip = |t: f64| -> f64 {
+            let db = if t < 0.1 {
+                -18.0
+            } else {
+                (-18.0 + 50.0 * (t - 0.1)).min(0.0)
+            };
+            10f64.powf(db / 20.0)
+        };
+        let now = feed_shaped(&mut detector, 0.6, 0.01, 12, now, dip);
+        let now = feed(&mut detector, 1.0, 0.01, 13, now);
+        assert!(
+            (detector.floor_db - floor_before).abs() < 1.0,
+            "the gain dip moved the floor from {floor_before:.1} to {:.1} dB",
+            detector.floor_db
+        );
+        assert!(
+            !detector.busy(now),
+            "an idle channel read busy after a gain dip: {:.1} dB over the floor",
+            detector.excess_db()
+        );
+        // and a real drop in the noise — another band, another antenna — is followed
+        let now = feed(&mut detector, 6.0, 0.001, 14, now);
+        assert!(
+            detector.floor_db < floor_before - 15.0,
+            "the floor did not follow a quieter band: {:.1} dB",
+            detector.floor_db
+        );
+        assert!(!detector.busy(now));
+    }
+
+    #[test]
+    fn the_floor_is_still_learned_in_the_gaps_of_a_busy_channel() {
+        // somebody else's ARQ session: bursts 20 dB up with turnarounds of a fifth of a
+        // second, for longer than the window. The floor must come from the gaps, and the
+        // channel must read busy throughout
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let now = feed(&mut detector, 6.0, 0.01, 21, 0.0);
+        let floor_before = detector.floor_db;
+        let mut now = now;
+        for burst in 0..8u64 {
+            now = feed(&mut detector, 1.0, 0.1, 100 + burst, now);
+            assert!(detector.busy(now), "burst {burst} read clear");
+            now = feed(&mut detector, 0.2, 0.01, 200 + burst, now);
+            assert!(detector.busy(now), "the gap after burst {burst} read clear");
+        }
+        assert!(
+            (detector.floor_db - floor_before).abs() < 1.5,
+            "the floor crept from {floor_before:.1} to {:.1} dB under the bursts",
+            detector.floor_db
+        );
     }
 
     #[test]
