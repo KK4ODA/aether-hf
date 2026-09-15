@@ -681,6 +681,17 @@ pub const LIVE_KEYS: &[&str] = &[
     "record.notes",
 ];
 
+/// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
+/// the panel sends whole numbers as integers and the file round-trips them as floats, and a
+/// "change" between the two once restarted the modem on every save.
+fn same_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        // exact on purpose: the question is whether the same number was written twice
+        (Some(x), Some(y)) => x.to_bits() == y.to_bits() || (x - y).abs() < f64::EPSILON,
+        _ => a == b,
+    }
+}
+
 impl Config {
     /// Merge a JSON object of dotted keys into this configuration.
     ///
@@ -728,7 +739,7 @@ impl Config {
             // it — and, once a change to it meant a restart, restarted the modem for
             // nothing every time a level or a note was saved.
             let before = map.insert((*last).to_owned(), value.clone());
-            if before.as_ref() != Some(value) {
+            if !before.as_ref().is_some_and(|old| same_value(old, value)) {
                 changed.push(key.clone());
             }
         }
@@ -1095,6 +1106,11 @@ mod tests {
             }))
             .expect("merge");
         assert_eq!(changed, vec!["radio.max_mode"]);
+        // a whole number sent as an integer is the float the file holds
+        let changed = config
+            .merge(&serde_json::json!({"radio.cw_id_wpm": 20, "radio.max_key_s": 30}))
+            .expect("merge");
+        assert!(changed.is_empty(), "{changed:?}");
     }
 
     #[test]

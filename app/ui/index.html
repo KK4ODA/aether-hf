@@ -67,16 +67,14 @@
         </div>
 
         <figure class="chart">
-          <figcaption>
-            Channel level against the learned noise floor, last two minutes
-          </figcaption>
+          <figcaption>Channel level vs noise floor, last two minutes</figcaption>
           <canvas id="chart" width="900" height="180" role="img" aria-label="Channel level chart; the current reading is in Signal above noise"></canvas>
         </figure>
 
-        <table class="counters">
-          <caption>Since the daemon started</caption>
-          <tbody id="counters"></tbody>
-        </table>
+        <section class="counters" aria-labelledby="counters-title">
+          <h2 id="counters-title">Counters</h2>
+          <div class="pills" id="counters"></div>
+        </section>
       </section>
 
       <!-- ── session ────────────────────────────────────────────── -->
@@ -95,6 +93,28 @@
           callsign on the air once, addressed to nobody, so anyone listening can report
           hearing you.
         </p>
+
+        <div class="card">
+          <h3>Keying and drive</h3>
+          <div class="row">
+            <button id="wz-ptt">Key for 1 s</button>
+            <button id="wz-tune" aria-pressed="false">Tune tone, 10 s</button>
+            <span class="sub" id="wz-tx-note" role="status" aria-live="polite"></span>
+          </div>
+          <div class="row">
+            <label for="tx-level">Transmit level</label>
+            <input id="tx-level" type="range" min="-34" max="0" step="1" value="-12" aria-describedby="tx-level-reading" />
+            <span class="sub numerals" id="tx-level-reading" aria-live="polite">−12 dB</span>
+          </div>
+          <p class="sub">
+            <strong>Key</strong> puts the radio into transmit with no audio: watch the rig
+            and the interface's PTT light. <strong>Tune</strong> keys with a steady tone at
+            the transmit level; the level follows the slider while it plays, so set the
+            rig's ALC by ear and eye, then press the button again to stop. Both are refused
+            during a session, and a tone is refused while the channel is busy. The level is
+            saved when the slider is released.
+          </p>
+        </div>
 
         <div class="row">
           <button id="btn-record">Record</button>
@@ -142,20 +162,20 @@
                 <select id="wz-profile"></select>
               </div>
               <p class="sub" id="wz-profile-note">
-                Pick your interface and the three device lists below are filled in from what
-                this machine reports. Any of them can be changed by hand.
+                Pick your interface and the device lists below are filled in from what this
+                machine reports. Any of them can be changed by hand.
               </p>
-              <h4 class="sub-heading">The three devices the modem uses</h4>
+              <h4 class="sub-heading">Modem devices</h4>
               <div class="row">
                 <label for="dev-in">Capture</label>
                 <select id="dev-in"></select>
               </div>
-              <p class="sub">The sound card input the radio's receive audio arrives on.</p>
+              <p class="sub">Sound card input carrying the radio's receive audio.</p>
               <div class="row">
                 <label for="dev-out">Playback</label>
                 <select id="dev-out"></select>
               </div>
-              <p class="sub">The sound card output the radio transmits from.</p>
+              <p class="sub">Sound card output feeding the radio's transmit audio.</p>
               <div class="row">
                 <label for="dev-ptt">Keying</label>
                 <select id="dev-ptt"></select>
@@ -167,12 +187,11 @@
                 <input id="ptt-address" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
               </div>
               <p class="sub">
-                How the radio is put into transmit: a serial port's RTS (or DTR) line, or
-                Hamlib's <code>rigctld</code> over the network, which also lets the modem read
-                the dial frequency into recordings. A radio's USB connection often shows two
-                ports: the one described as <em>Standard</em> (Yaesu) or the rig's own CI-V/CAT
-                port (Icom) is the one that keys. Choose <em>none</em> for a VOX interface such
-                as a SignaLink, or to listen only.
+                The serial port whose RTS (or DTR) line keys the radio, or Hamlib's
+                <code>rigctld</code> over the network, which also records the dial frequency.
+                A radio's USB connection often shows two ports: Yaesu's <em>Standard</em> port
+                or Icom's CI-V/CAT port is the one that keys. Choose <em>none</em> for a VOX
+                interface such as a SignaLink, or to listen only.
               </p>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
             </li>
@@ -189,124 +208,93 @@
                 With the radio on a quiet frequency, adjust its audio output or the sound
                 card's input until this says <strong>Good</strong>. Clipping is never
                 acceptable; too quiet leaves the signal inside the sound card's own noise.
+                Keying and the tune tone are on the Session tab.
               </p>
             </li>
             <li class="step" data-step="4">
-              <h3>4. Keying and drive</h3>
+              <h3>4. Misc modem settings</h3>
               <div class="row">
-                <button id="wz-ptt">Key for 1 s</button>
-                <button id="wz-tune" aria-pressed="false">Tune tone, 10 s</button>
-                <span class="sub" id="wz-tx-note" role="status" aria-live="polite"></span>
+                <label for="radio-max-mode">Fastest mode</label>
+                <select id="radio-max-mode"></select>
+                <label class="check"><input id="radio-compress" type="checkbox" checked /> compress payload when the other station can too</label>
               </div>
               <div class="row">
-                <label for="tx-level">Transmit level</label>
-                <input id="tx-level" type="range" min="-34" max="0" step="1" value="-12" aria-describedby="tx-level-reading" />
-                <span class="sub numerals" id="tx-level-reading" aria-live="polite">−12 dB</span>
+                <label for="radio-wait">Busy channel</label>
+                <label class="check"><input id="radio-wait" type="checkbox" checked /> wait for a clear channel before calling; busy is</label>
+                <input id="radio-busy-db" type="text" inputmode="decimal" class="port" value="6" aria-label="Busy threshold in dB above the noise floor" />
+                <span class="sub">dB above the noise floor</span>
               </div>
-              <p class="sub">
-                <strong>Key</strong> puts the radio into transmit with no audio: watch the
-                rig and the interface's PTT light. It keys at once — an SSB transmitter with
-                no audio radiates nothing. <strong>Tune</strong> keys with a steady tone at
-                the transmit level and the level follows the slider while it plays: set it so
-                the rig's ALC barely moves, then press the button again to stop. A tone is a
-                transmission, so it is refused while the channel is busy, and both are refused
-                during a session. The level is saved as you release the slider.
-              </p>
+              <div class="row">
+                <label for="radio-max-key">Longest key</label>
+                <input id="radio-max-key" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
+                <span class="sub">seconds; the watchdog releases the key past this and stays released until asked again</span>
+              </div>
+              <div class="row">
+                <label for="radio-cwid">Morse ID</label>
+                <label class="check"><input id="radio-cwid" type="checkbox" /> identify in Morse after a transmission, every</label>
+                <input id="radio-cwid-interval" type="text" inputmode="decimal" class="port" value="600" aria-label="Seconds between Morse identifications" />
+                <span class="sub">s at</span>
+                <input id="radio-cwid-wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
+                <span class="sub">wpm — off by default; Aether's frames carry both callsigns, and whether that satisfies your licence is your call</span>
+              </div>
             </li>
             <li class="step" data-step="5">
-              <h3>5. Save</h3>
+              <h3>5. Application settings</h3>
+              <div class="row">
+                <label for="update-channel">Updates</label>
+                <select id="update-channel">
+                  <option value="stable">stable releases only</option>
+                  <option value="beta">betas too</option>
+                  <option value="nightly">nightlies too</option>
+                </select>
+                <label class="check"><input id="update-check" type="checkbox" checked /> look for a newer version when the desktop application starts</label>
+              </div>
+              <div class="row">
+                <label for="record-auto">Recording</label>
+                <label class="check"><input id="record-auto" type="checkbox" /> record every session, from connect to disconnect</label>
+              </div>
+              <div class="row">
+                <label for="record-standing">Recording notes</label>
+                <input id="record-standing" type="text" class="prose" placeholder="What every automatic recording should say: band, antenna, dial frequency" aria-describedby="record-standing-note" />
+              </div>
+              <p class="sub" id="record-standing-note">
+                Written into every recording that starts on its own, for the day you leave the
+                station listening and a friend calls in. With <code>rigctld</code> keying the dial
+                frequency is recorded as well.
+              </p>
+              <div class="row">
+                <label for="host-enabled">Host programs</label>
+                <label class="check"><input id="host-enabled" type="checkbox" /> let Winlink Express, Pat, VarAC or BPQ32 use this station, on port</label>
+                <input id="host-port" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
+              </div>
+              <p class="sub">
+                The VARA-compatible interface: point the program's TNC settings at
+                <code>127.0.0.1</code> and this port (the data port is the next number up). Off
+                until you turn it on; the modem restarts when you change it.
+              </p>
+            </li>
+            <li class="step" data-step="6">
+              <h3>6. Save</h3>
               <div class="row">
                 <button id="wz-save" class="primary">Save these settings</button>
+                <button id="btn-copy">Copy as TOML</button>
+                <span class="sub" id="copy-note"></span>
                 <span class="sub" id="wz-save-note" role="status" aria-live="polite"></span>
               </div>
+              <p class="sub" id="setup-note">
+                Settings are written to the modem's configuration file. Most take effect at
+                once; a sound card, a serial port or the callsign is taken on when the modem
+                starts, so changing one restarts it — a few seconds, and the panel comes back
+                by itself.
+              </p>
             </li>
           </ol>
         </div>
 
-        <h2>Everything, by hand</h2>
-        <p class="note" id="setup-note">
-          Changes are written straight to the daemon's configuration file. Some take effect
-          at once; a sound card, a serial port or the callsign is taken on when the modem
-          starts, so changing one restarts it — a few seconds, and the panel comes back by
-          itself. The devices are in step 2 above.
-        </p>
-
-        <div class="row">
-          <label for="setup-call">Callsign</label>
-          <input id="setup-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
-        </div>
-
-        <h4 class="sub-heading">On the air</h4>
-        <div class="row">
-          <label for="radio-max-mode">Fastest mode</label>
-          <select id="radio-max-mode"></select>
-          <label class="check"><input id="radio-compress" type="checkbox" checked /> compress payload when the other station can too</label>
-        </div>
-        <div class="row">
-          <label for="radio-wait">Busy channel</label>
-          <label class="check"><input id="radio-wait" type="checkbox" checked /> wait for a clear channel before calling; busy is</label>
-          <input id="radio-busy-db" type="text" inputmode="decimal" class="port" value="6" aria-label="Busy threshold in dB above the noise floor" />
-          <span class="sub">dB above the noise floor</span>
-        </div>
-        <div class="row">
-          <label for="radio-max-key">Longest key</label>
-          <input id="radio-max-key" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
-          <span class="sub">seconds; the watchdog releases the key past this and stays released until asked again</span>
-        </div>
-        <div class="row">
-          <label for="radio-cwid">Morse ID</label>
-          <label class="check"><input id="radio-cwid" type="checkbox" /> identify in Morse after a transmission, every</label>
-          <input id="radio-cwid-interval" type="text" inputmode="decimal" class="port" value="600" aria-label="Seconds between Morse identifications" />
-          <span class="sub">s at</span>
-          <input id="radio-cwid-wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
-          <span class="sub">wpm — off by default; Aether's frames carry both callsigns, and whether that satisfies your licence is your call</span>
-        </div>
-
-        <h4 class="sub-heading">The application</h4>
-        <div class="row">
-          <label for="update-channel">Updates</label>
-          <select id="update-channel">
-            <option value="stable">stable releases only</option>
-            <option value="beta">betas too</option>
-            <option value="nightly">nightlies too</option>
-          </select>
-          <label class="check"><input id="update-check" type="checkbox" checked /> look for a newer version when the desktop application starts</label>
-        </div>
-        <div class="row">
-          <label for="record-auto">Recording</label>
-          <label class="check"><input id="record-auto" type="checkbox" /> record every session, from connect to disconnect</label>
-        </div>
-        <div class="row">
-          <label for="record-standing">Recording notes</label>
-          <input id="record-standing" type="text" class="prose" placeholder="What every automatic recording should say: band, antenna, dial frequency" aria-describedby="record-standing-note" />
-        </div>
-        <p class="sub" id="record-standing-note">
-          Written into every recording that starts on its own, for the day you leave the
-          station listening and a friend calls in. With <code>rigctld</code> keying the dial
-          frequency is asked for and recorded as well.
-        </p>
-        <div class="row">
-          <label for="host-enabled">Host programs</label>
-          <label class="check"><input id="host-enabled" type="checkbox" /> let Winlink Express, Pat, VarAC or BPQ32 use this station, on port</label>
-          <input id="host-port" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
-        </div>
-        <p class="sub">
-          The VARA-compatible interface: point the program's TNC settings at
-          <code>127.0.0.1</code> and this port (the data port is the next number up). Off
-          until you turn it on; the modem restarts when you change it.
-        </p>
-
-        <div class="row">
-          <button id="btn-apply" class="primary">Save to the station</button>
-          <button id="btn-copy">Copy as TOML</button>
-          <span class="sub" id="copy-note"></span>
-        </div>
-        <p class="note" id="apply-note"></p>
-
-        <h2>What the daemon is running</h2>
+        <h2>Running configuration</h2>
         <pre id="config-out" class="config"></pre>
 
-        <h2>What this modem can do</h2>
+        <h2>Mode table</h2>
         <table class="modes">
           <caption class="sr-only">Modes, slowest first</caption>
           <thead>

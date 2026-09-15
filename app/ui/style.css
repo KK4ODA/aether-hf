@@ -578,13 +578,49 @@ tbody tr:hover {
   background: var(--surface-2);
 }
 
-.counters td:first-child {
-  color: var(--text-2);
+.counters h2 {
+  margin: 0 0 var(--s2);
 }
 
-.counters td.num {
+.pills {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.pill {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: 5px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+
+.pill .k {
+  font-size: 11px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill .v {
+  font: 500 13px/1.2 var(--numerals);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
-  width: 9ch;
+  flex: none;
+}
+
+.pill[data-state="error"] {
+  border-color: var(--status-error);
+}
+
+.pill[data-state="error"] .v {
+  color: var(--status-error);
 }
 
 .modes tbody tr[data-usable="false"] {
@@ -603,7 +639,8 @@ tbody tr:hover {
   counter-reset: step;
 }
 
-.step {
+.step,
+.card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -611,6 +648,13 @@ tbody tr:hover {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
+}
+
+.card h3 {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .step h3 {
@@ -819,6 +863,26 @@ textarea {
   font-family: var(--numerals);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+/* what goes out and what came in, side by side and the same size */
+.split textarea,
+.split .received {
+  height: 15em;
+  min-height: 15em;
+  max-height: 15em;
+  margin: 0;
+}
+
+.split > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.split h2 {
+  margin-top: 0;
 }
 
 button {

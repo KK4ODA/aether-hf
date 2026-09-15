@@ -227,36 +227,40 @@ function applyMetrics(metrics) {
   if (metrics.audio !== undefined) updateMeter(metrics.audio);
 }
 
+// Short enough for a pill; the long form is the pill's tooltip.
 const COUNTER_LABELS = {
-  frames_sent: "Frames sent",
-  frames_resent: "Of those, retransmitted",
-  frames_received: "Frames received",
-  frames_failed: "Frames that did not decode",
-  harq_rescues: "Recovered by combining",
-  bytes_delivered: "Payload bytes delivered",
-  bursts: "Bursts",
-  turns: "Turns taken",
-  ack_timeouts: "Acknowledgements missed",
-  transmissions: "Transmissions",
-  deferred_for_busy: "Held back for a busy channel",
-  watchdog_trips: "Key-time watchdog trips",
+  frames_sent: ["Frames sent", "Data frames put on the air"],
+  frames_resent: ["Retransmitted", "Of the frames sent, how many were retransmissions"],
+  frames_received: ["Frames received", "Frames decoded from the other station"],
+  frames_failed: ["Failed to decode", "Frames detected that did not decode"],
+  harq_rescues: ["HARQ rescues", "Frames recovered by combining retransmissions"],
+  bytes_delivered: ["Bytes delivered", "Payload bytes handed to the application"],
+  bursts: ["Bursts", "Bursts sent"],
+  turns: ["Turns", "Times the sending role changed hands"],
+  ack_timeouts: ["ACKs missed", "Acknowledgements that never arrived in time"],
+  transmissions: ["Transmissions", "Times the radio was keyed"],
+  deferred_for_busy: ["Held for busy", "Transmissions held back for a busy channel"],
+  watchdog_trips: ["Watchdog trips", "Times the key-time watchdog released the key"],
 };
 
 function renderCounters(counters) {
-  const body = $("counters");
-  body.replaceChildren();
-  for (const [key, label] of Object.entries(COUNTER_LABELS)) {
+  const box = $("counters");
+  box.replaceChildren();
+  for (const [key, [label, long]] of Object.entries(COUNTER_LABELS)) {
     const value = counters[key];
     if (value === undefined) continue;
-    const row = document.createElement("tr");
-    const name = document.createElement("td");
+    const pill = document.createElement("div");
+    pill.className = "pill";
+    pill.title = long;
+    const name = document.createElement("span");
+    name.className = "k";
     name.textContent = label;
-    const number = document.createElement("td");
-    number.className = "num";
+    const number = document.createElement("span");
+    number.className = "v";
     number.textContent = String(value);
-    if (key === "watchdog_trips" && value > 0) number.style.color = "var(--status-error)";
-    row.append(name, number);
-    body.append(row);
+    if (key === "watchdog_trips" && value > 0) pill.dataset.state = "error";
+    pill.append(name, number);
+    box.append(pill);
   }
 }
 
@@ -336,18 +340,6 @@ function drawChart() {
       else ctx.lineTo(x(index), at);
     });
   };
-
-  // the level, with a faint fill down to the floor so the margin reads as an area
-  ctx.save();
-  path((p) => p.level);
-  for (let index = history.length - 1; index >= 0; index--) {
-    ctx.lineTo(x(index), y(history[index].floor));
-  }
-  ctx.closePath();
-  ctx.globalAlpha = 0.14;
-  ctx.fillStyle = accent;
-  ctx.fill();
-  ctx.restore();
 
   ctx.strokeStyle = floorInk;
   ctx.lineWidth = 1.25;
@@ -490,20 +482,19 @@ async function loadConfig() {
     // A daemon started without a configuration file says so rather than pretending; the
     // panel then shows what it would write instead of what it would change.
     $("setup-note").textContent = error.message;
-    $("btn-apply").disabled = true;
+    $("wz-save").disabled = true;
     writeConfig();
     return;
   }
   liveConfig = answer.config ?? {};
   liveKeys = answer.live_keys ?? [];
   configPath = answer.path ?? "";
-  $("btn-apply").disabled = false;
+  $("wz-save").disabled = false;
   setupNoteAtRest ??= $("setup-note").textContent;
   $("setup-note").textContent = setupNoteAtRest;
   showTxLevel(liveConfig.audio?.tx_level ?? 0.25);
 
   // show the operator what is there now, so the form is not a blank slate over live settings
-  if (!$("setup-call").value) $("setup-call").value = liveConfig.callsign ?? "";
   if (!$("wz-call").value && liveConfig.callsign && liveConfig.callsign !== "N0CALL") {
     $("wz-call").value = liveConfig.callsign;
     markStep(1, true);
@@ -619,7 +610,7 @@ function formChanges() {
     "audio.output": $("dev-out").value || null,
     ...keyingChanges(),
   };
-  const callsign = $("setup-call").value.trim().toUpperCase();
+  const callsign = $("wz-call").value.trim().toUpperCase();
   if (callsign) changes.callsign = callsign;
   changes["radio.max_mode"] = Number($("radio-max-mode").value);
   changes["radio.compress"] = $("radio-compress").checked;
@@ -645,24 +636,6 @@ function formChanges() {
     changes["host.bind"] = `127.0.0.1:${hostPort}`;
   }
   return changes;
-}
-
-async function applyConfig() {
-  $("apply-note").textContent = "";
-  let answer;
-  try {
-    answer = await call("config.set", formChanges());
-  } catch (error) {
-    $("apply-note").textContent = error.message;
-    $("apply-note").style.color = "var(--status-error)";
-    log(error.message, true);
-    return;
-  }
-  $("apply-note").style.color = "";
-  $("apply-note").textContent = `Saved to ${answer.path}. ${await applied(answer)}`;
-  log(`settings saved (${(answer.changed ?? []).join(", ")})`);
-  loadConfig();
-  refreshStatus();
 }
 
 /// What a save's answer means for the operator, having done the restart when there is one
@@ -724,11 +697,11 @@ const PROFILES = [
     note: "SignaLink keys itself from the audio (VOX), so no keying line is needed.",
   },
   {
-    name: "Manual — I will pick the three devices below myself",
+    name: "Manual — pick the modem devices below yourself",
     match: null,
     ptt: "serial",
     line: "rts",
-    note: "Nothing is filled in for you: choose Capture, Playback and Keying in the three lists directly below.",
+    note: "Nothing is filled in for you: choose Capture, Playback and Keying under Modem devices below.",
   },
 ];
 
@@ -837,7 +810,6 @@ async function wizardSave() {
     $("wz-save-note").textContent = "A callsign is required.";
     return;
   }
-  $("setup-call").value = call_;
   const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES.at(-1);
   const changes = formChanges();
   if (profile.ptt === "none") {
@@ -856,7 +828,7 @@ async function wizardSave() {
       note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Keying below and save again.";
     }
     $("wz-save-note").textContent = note;
-    markStep(5, true);
+    markStep(6, true);
     log(`settings saved (${(answer.changed ?? []).join(", ")})`);
     loadConfig();
     refreshStatus();
@@ -871,7 +843,6 @@ async function transmitTest(method, seconds, label) {
   try {
     await call(method, { duration_s: seconds });
     $("wz-tx-note").textContent = `${label} — watch the radio.`;
-    markStep(4, true);
     log(label);
     return true;
   } catch (error) {
@@ -1002,7 +973,6 @@ function wire() {
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
-  $("btn-apply").addEventListener("click", applyConfig);
   $("wz-profile").addEventListener("change", () => {
     profileChosen = true;
     applyProfile();
@@ -1014,7 +984,6 @@ function wire() {
     $("wz-call-note").textContent = plausible
       ? `Will go on the air as ${value}.`
       : "Letters, digits, - and /; up to nine characters.";
-    $("setup-call").value = value;
     writeConfig();
   });
   $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));
@@ -1031,7 +1000,6 @@ function wire() {
     }
     setTimeout(() => ($("copy-note").textContent = ""), 3000);
   });
-  $("setup-call").addEventListener("input", writeConfig);
 }
 
 async function act(operation, description) {
