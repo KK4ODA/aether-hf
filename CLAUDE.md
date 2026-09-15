@@ -48,7 +48,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.16` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.17` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
 on-air attempt found two bugs (below), and the air is what remains (P6-6).
@@ -114,6 +114,17 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   tune tone too and not a silent keying — so it is not a modem artefact; do not chase it.
   Lesson: the simulated channel carries audio whether the radio is keyed or not, so
   anything about keying, latency or the busy detector needs a real rig or a paced loopback.
+* **The busy detector's floor and the rig's AGC** (beta.17): a two-minute idle-band
+  recording through the FTDX10 on AGC AUTO showed the floor drawn as square pits — seven
+  gain dips of 4–18 dB (a step down in a millisecond, ~100 ms hold, a 40–55 dB/s ramp back,
+  triggered outside the audio passband: no spike, no zeros), each held by the plain
+  five-second minimum for the whole window, so the busy threshold sat a decibel above the
+  noise 9 % of the time. `busy.rs` now takes the minimum only over *steady* blocks (raw
+  block powers within 3 dB over 200 ms; hold the last floor when none) — noise and a
+  signal's gaps are steady, a gain transient never is. `tools/floor_trace.py` replays a
+  recording through the detector and lists every dip; the field notes say AGC FAST/AUTO or
+  OFF (SLOW ramps slowly enough to pass the gate). Recordings made from the Session tab's
+  Record button land in `%APPDATA%ether-hfecordings\` on the author's machine.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
   colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
