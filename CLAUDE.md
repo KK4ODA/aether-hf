@@ -124,7 +124,8 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   signal's gaps are steady, a gain transient never is. `tools/floor_trace.py` replays a
   recording through the detector and lists every dip; the field notes say AGC FAST/AUTO or
   OFF (SLOW ramps slowly enough to pass the gate). Recordings made from the Session tab's
-  Record button land in `%APPDATA%ether-hfecordings\` on the author's machine.
+  Record button land in `%APPDATA%ether-hf
+ecordings\` on the author's machine.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
   colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
@@ -233,7 +234,11 @@ SNR history across a reload.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
-one (files there can be stale copies), but the Desktop and Start-menu folders are real:
+one — `%LOCALAPPDATA%` written from a session physically lands in
+`AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\`, invisible to the author in
+Explorer, and files there can be stale copies — so **bench material the author must open
+goes under `C:\Dev\AetherBench\`** (the VarAC scratch copies are there); the Desktop and
+Start-menu folders are real:
 a silent NSIS install rewrote the author's shortcuts to a scratch directory once. Inspect
 an installer by extracting it, not by running it; the real install is
 `C:\Users\Facundo\AppData\Local\Aether HF\`, updated in place by the updater.

@@ -61,6 +61,8 @@ pub enum HostAction {
     Callsigns(Vec<String>),
     /// Put a carrier on the air for tuning, for this many seconds.
     Tune(f64),
+    /// Report the transmit level (`TUNE ?`), which the modem answers with `TUNE <dB>`.
+    TuneLevel,
     /// Send an unproto identification frame.
     CqFrame,
 }
@@ -146,7 +148,7 @@ pub struct HostState {
 
 /// What a host asked for that changes nothing here — heard, so the host is not told the
 /// modem is broken, and kept, so the control API can say what was asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Recorded {
     /// `CHAT ON`: `VarAC` asks for it on every start, and the short frames it means are a
     /// different air interface this modem does not have.
@@ -154,6 +156,9 @@ pub struct Recorded {
     /// `LISTEN CQ`: hear only CQ frames. This station hears everything and answers calls to
     /// its own callsigns either way.
     pub cq_only: bool,
+    /// `DRIVELEVEL <n>`: the transmit level a host would set, on a scale VARA does not
+    /// publish. Kept as the host said it; the drive stays the operator's `audio.tx_level`.
+    pub drive_level: Option<String>,
 }
 
 impl Default for HostState {
@@ -192,6 +197,27 @@ impl HostState {
     #[must_use]
     pub fn answers_to(&self, call: &str) -> bool {
         self.callsigns.iter().any(|mine| mine == call)
+    }
+
+    /// The `TUNE` family: `ON` is `VarAC`'s TUNE button, a tone until `TUNE OFF` — which
+    /// here means the ten seconds the modem allows a tone at all; `?` is what `VarAC`
+    /// asks after every connection, to keep a level per band, and is answered with the
+    /// line `TUNE <dB>` rather than `OK`; a number of seconds is this modem's own.
+    fn tune(what: &str) -> HostOutcome {
+        match what {
+            "OFF" => HostOutcome::acting(HostAction::Tune(0.0)),
+            "ON" => HostOutcome::acting(HostAction::Tune(10.0)),
+            "?" => HostOutcome {
+                replies: Vec::new(),
+                action: HostAction::TuneLevel,
+            },
+            seconds => match seconds.parse::<f64>() {
+                Ok(value) if (0.0..=30.0).contains(&value) => {
+                    HostOutcome::acting(HostAction::Tune(value))
+                }
+                _ => HostOutcome::wrong(),
+            },
+        }
     }
 
     /// Handle one command line from the host.
@@ -290,13 +316,13 @@ impl HostState {
             ("CQFRAME", _) => HostOutcome::acting(HostAction::CqFrame),
             ("VERSION", []) => HostOutcome::just(&format!("VERSION {}", version_string())),
             ("BUFFER", []) => HostOutcome::just(&format!("BUFFER {}", self.buffer)),
-            ("TUNE", ["OFF"]) => HostOutcome::acting(HostAction::Tune(0.0)),
-            ("TUNE", [seconds]) => match seconds.parse::<f64>() {
-                Ok(value) if (0.0..=30.0).contains(&value) => {
-                    HostOutcome::acting(HostAction::Tune(value))
-                }
-                _ => HostOutcome::wrong(),
-            },
+            ("TUNE", [what]) => Self::tune(what),
+            // the level VarAC would set back; recorded, because the scale VARA uses for
+            // it is not published and a wrong guess would change the operator's drive
+            ("DRIVELEVEL", [level]) => {
+                self.recorded.drive_level = Some((*level).to_owned());
+                HostOutcome::ok()
+            }
             // The station runs one bandwidth, chosen in its configuration (2300 or 500 Hz).
             // A host asking for that one is answered `OK`; one asking for another is refused,
             // because accepting and then transmitting the configured bandwidth anyway would
@@ -334,7 +360,7 @@ impl HostState {
 }
 
 /// An unsolicited line the modem sends the host.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Notification {
     /// Transmit started or stopped.
     Ptt(bool),
@@ -359,6 +385,18 @@ pub enum Notification {
     /// The station's callsign is usable; sent so a client does not warn about a speed limit
     /// it does not have. Aether is free software and has no registration.
     Registered(String),
+    /// The SNR a frame from the other station arrived at, in dB (3 kHz reference), during
+    /// a session. `VarAC` builds its signal reports from these — the report it sends on
+    /// connecting, the one a ping exists to fetch — and without them a ping never ends.
+    SignalToNoise(f64),
+    /// The link speed, as the published interface states it: the mode in use and its
+    /// net bit rate. Sent when the mode changes during a session.
+    BitRate {
+        /// The mode index, which VARA calls the speed level.
+        mode: usize,
+        /// Net payload bits per second at that mode.
+        bps: u64,
+    },
 }
 
 impl Notification {
@@ -385,6 +423,14 @@ impl Notification {
             Self::IAmAlive => out.push_str("IAMALIVE"),
             Self::Registered(call) => {
                 let _ = write!(out, "REGISTERED {call}");
+            }
+            // a whole number: every client parses this line, and an integer is what all of
+            // them accept
+            Self::SignalToNoise(db) => {
+                let _ = write!(out, "SN {}", db.round() as i64);
+            }
+            Self::BitRate { mode, bps } => {
+                let _ = write!(out, "BITRATE ({mode}) {bps} BPS");
             }
         }
         out
@@ -576,6 +622,13 @@ mod tests {
         let mut host = state();
         assert_eq!(host.command("TUNE 5").action, HostAction::Tune(5.0));
         assert_eq!(host.command("TUNE OFF").action, HostAction::Tune(0.0));
+        // VarAC's TUNE button, and its question after every connection
+        assert_eq!(host.command("TUNE ON").action, HostAction::Tune(10.0));
+        let asked = host.command("TUNE ?");
+        assert_eq!(asked.action, HostAction::TuneLevel);
+        assert!(asked.replies.is_empty(), "{:?}", asked.replies);
+        assert_eq!(host.command("DRIVELEVEL 50").replies, vec!["OK"]);
+        assert_eq!(host.recorded.drive_level.as_deref(), Some("50"));
         // an unbounded tune is a stuck carrier by another name
         assert_eq!(host.command("TUNE 600").replies, vec!["WRONG"]);
         assert_eq!(host.command("TUNE forever").replies, vec!["WRONG"]);
@@ -604,6 +657,12 @@ mod tests {
         assert_eq!(Notification::Busy(true).line(), "BUSY ON");
         assert_eq!(Notification::Disconnected.line(), "DISCONNECTED");
         assert_eq!(Notification::Buffer(42).line(), "BUFFER 42");
+        assert_eq!(Notification::SignalToNoise(12.4).line(), "SN 12");
+        assert_eq!(Notification::SignalToNoise(-2.6).line(), "SN -3");
+        assert_eq!(
+            Notification::BitRate { mode: 6, bps: 1234 }.line(),
+            "BITRATE (6) 1234 BPS"
+        );
         assert_eq!(Notification::IAmAlive.line(), "IAMALIVE");
         assert_eq!(
             Notification::Connected {

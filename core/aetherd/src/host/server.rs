@@ -338,15 +338,28 @@ fn serve_commands(
     let mut host = HostState::default();
     // the bandwidth the station runs decides which `BW<n>` is accepted and what
     // `CONNECTED` reports; asked once, when the host connects
-    if let Some(hz) = handle
+    let capabilities = handle
         .call(request("capabilities", json!({})))
         .ok()
         .and_then(|response| response.result)
-        .and_then(|result| result["bandwidth_hz"].as_u64())
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(hz) = capabilities["bandwidth_hz"]
+        .as_u64()
         .and_then(|hz| u32::try_from(hz).ok())
     {
         host.bandwidth_hz = hz;
     }
+    // the net bit rate of each mode, for the BITRATE line a host shows as the link speed
+    let bit_rates: Vec<u64> = capabilities["modes"]
+        .as_array()
+        .map(|modes| {
+            modes
+                .iter()
+                .map(|mode| mode["net_bit_rate"].as_f64().unwrap_or(0.0).round() as u64)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut last_mode: Option<usize> = None;
     let events = handle.subscribe();
     let mut last_keepalive = std::time::Instant::now();
     let mut connected_to: Option<String> = None;
@@ -358,6 +371,14 @@ fn serve_commands(
         // the published interface terminates every line with a carriage return
         writer.write_all(format!("{line}\r").as_bytes()).is_ok()
     };
+
+    // A host that has just attached is told the queue is empty. VarAC sends nothing on
+    // the data port until it has heard how full the modem's buffer is, and a modem that
+    // only reported changes never told it — found on the bench, where a ping sat for
+    // ninety seconds with both ends waiting for the other
+    if !say(&mut writer, &Notification::Buffer(0).line()) {
+        return;
+    }
 
     while running.load(Ordering::Relaxed) {
         // ── commands from the host ────────────────────────────────────
@@ -414,7 +435,32 @@ fn serve_commands(
                         return;
                     }
                 }
+                // the other station's frames, as they arrive: the SNR each was received
+                // at is what a host builds its signal reports from
+                "frame" => {
+                    let from_peer = connected_to
+                        .as_deref()
+                        .is_some_and(|remote| event.data["from"].as_str() == Some(remote));
+                    if from_peer
+                        && event.data["decoded"].as_bool() == Some(true)
+                        && let Some(snr) = event.data["snr_db"].as_f64()
+                        && !say(&mut writer, &Notification::SignalToNoise(snr).line())
+                    {
+                        return;
+                    }
+                }
                 "metrics" => {
+                    // the link speed, as a host displays it: the mode the sender is using
+                    if let Some(mode) = event.data["mode"].as_u64().map(|m| m as usize)
+                        && connected_to.is_some()
+                        && last_mode != Some(mode)
+                    {
+                        last_mode = Some(mode);
+                        let bps = bit_rates.get(mode).copied().unwrap_or(0);
+                        if !say(&mut writer, &Notification::BitRate { mode, bps }.line()) {
+                            return;
+                        }
+                    }
                     if let Some(queued) = event.data["queued_bytes"].as_u64() {
                         let queued = queued as usize;
                         if queued != host.buffer {
@@ -424,7 +470,13 @@ fn serve_commands(
                             }
                         }
                     }
-                    let now_busy = event.data["channel_busy"].as_bool().unwrap_or(false);
+                    // During a session the channel is the session's: the detector marks
+                    // it busy at every frame of the other station, and a host that honours
+                    // DCD (VarAC with Ignore DCD off, which holds "busy" for ten seconds
+                    // after each) would never find a moment to hand its data over. The
+                    // modem does the turn-taking, so a session reads as a clear channel.
+                    let now_busy = connected_to.is_none()
+                        && event.data["channel_busy"].as_bool().unwrap_or(false);
                     if now_busy != busy.swap(now_busy, Ordering::Relaxed)
                         && !say(&mut writer, &Notification::Busy(now_busy).line())
                     {
@@ -555,6 +607,24 @@ fn apply(
             let _ = handle.call(request("tune", json!({ "duration_s": bounded })));
             true
         }
+        // the transmit level as decibels below full scale, the one scale a sine amplitude
+        // has an honest reading on
+        HostAction::TuneLevel => {
+            let level = handle
+                .call(request("config.get", json!({})))
+                .ok()
+                .filter(|reply| reply.ok)
+                .and_then(|reply| reply.result)
+                .and_then(|result| result["config"]["audio"]["tx_level"].as_f64())
+                .filter(|level: &f64| *level > 0.0);
+            match level {
+                Some(level) => say(
+                    writer,
+                    &format!("TUNE {}", (20.0 * f64::log10(level)).round() as i64),
+                ),
+                None => say(writer, "WRONG"),
+            }
+        }
     }
 }
 
@@ -644,9 +714,15 @@ mod tests {
                             command.request.params.clone(),
                         ));
                     }
+                    // the one request the adapter reads a value from: the transmit level
+                    let result = if command.request.method == "config.get" {
+                        json!({ "config": { "audio": { "tx_level": 0.25 } } })
+                    } else {
+                        json!({})
+                    };
                     let _ = command
                         .reply
-                        .send(Response::ok(command.request.id.clone(), json!({})));
+                        .send(Response::ok(command.request.id.clone(), result));
                 }
                 if seen_connect {
                     seen_connect = false;
@@ -654,6 +730,21 @@ mod tests {
                         "state",
                         json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
                     ));
+                    // the peer's answer, then a third station's beacon, then one of the
+                    // peer's frames that did not decode: one SN line among the three
+                    // the other station's frame marks the channel busy: not reported while
+                    // the session is up
+                    control.publish(&Event::new(
+                        "metrics",
+                        json!({"queued_bytes": 0, "channel_busy": true, "mode": 0}),
+                    ));
+                    for frame in [
+                        json!({"kind": "answer", "decoded": true, "from": "KK4XYZ", "to": "W4ODA", "snr_db": 12.4}),
+                        json!({"kind": "beacon", "decoded": true, "from": "N0CALL", "snr_db": 3.0}),
+                        json!({"kind": "data", "decoded": false, "from": "KK4XYZ", "snr_db": -1.0}),
+                    ] {
+                        control.publish(&Event::new("frame", frame));
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -737,6 +828,8 @@ mod tests {
     fn a_host_can_set_up_and_call() {
         let (server, worker, stop, seen) = server();
         let mut client = Client::connect(&server);
+        // the first thing a host hears is that the queue is empty; VarAC waits for it
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
 
         client.send("MYCALL W4ODA");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
@@ -747,11 +840,26 @@ mod tests {
         client.send("VERSION");
         let version = client.expect(|l| l.starts_with("VERSION"));
         assert!(version.contains("Aether"), "{version}");
+        // VarAC asks the transmit level after every connection: a sine amplitude of 0.25
+        // is 12 dB below full scale
+        client.send("TUNE ?");
+        assert_eq!(client.expect(|l| l.starts_with("TUNE")), "TUNE -12");
 
         client.send("CONNECT W4ODA KK4XYZ");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED W4ODA KK4XYZ 2300");
+        // the peer's frames arrive as SN lines — whole decibels — and nobody else's do,
+        // nor an undecoded one: VarAC's signal reports, and its ping, are built from them
+        assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 12");
+        std::thread::sleep(Duration::from_millis(100));
+        client.send("BUFFER");
+        let next = client
+            .expect(|l| l.starts_with("SN") || l.starts_with("BUFFER") || l.starts_with("BUSY"));
+        assert_eq!(
+            next, "BUFFER 0",
+            "a stranger's or an undecoded frame, or the session's own busy channel, was reported"
+        );
 
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");

@@ -80,7 +80,9 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
 | `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
-| `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, so the operator can set drive by the rig's ALC | Bounded at 10 s. `TUNE OFF` cuts a tone short; the level follows `audio.tx_level` live, so the drive can be set while the tone plays |
+| `TUNE ON` / `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, so the operator can set drive by the rig's ALC | Bounded at 10 s, which is what `TUNE ON` (VarAC's TUNE button) gets. `TUNE OFF` cuts a tone short; the level follows `audio.tx_level` live, so the drive can be set while the tone plays |
+| `TUNE ?` | → `TUNE <dB>`: the transmit level, in decibels below full scale (`20 log₁₀ audio.tx_level`) | VarAC asks after every connection, to keep a level per band. The scale VARA answers on is not published; decibels below full scale is the one a sine amplitude has an honest reading on |
+| `DRIVELEVEL <n>` | The transmit level a host would set | Recorded, not acted on: the scale is not published, and a wrong guess would change the operator's drive. Setting the drive is the operator's, in Setup |
 | `VERSION` | → `VERSION Aether HF <version>` | |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
 
@@ -96,11 +98,13 @@ Unsolicited, at any time.
 | Line | When |
 |---|---|
 | `PTT ON` / `PTT OFF` | The transmitter was keyed or released |
-| `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel |
+| `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel — outside a session. While a session is up the channel is the session's and reads `BUSY OFF`: the detector marks it busy at every frame of the other station, and a host that honours DCD (VarAC with *Ignore DCD* off holds "busy" for ten seconds after each) would never find a moment to hand its data over; the modem does the turn-taking |
 | `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
 | `DISCONNECTED` | A session ended |
-| `BUFFER <bytes>` | The number of payload bytes still to send changed |
+| `BUFFER <bytes>` | The number of payload bytes still to send changed — and `BUFFER 0` once, as the first line a host hears when it attaches. VarAC sends nothing on the data port until it has heard how full the modem's buffer is (found on the bench: a ping sat for ninety seconds with both ends waiting) |
+| `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |
 | `REGISTERED <call>` | Sent before `CONNECTED` |
+| `SN <dB>` | A frame from the other station decoded, during a session: the SNR it arrived at, whole decibels, 3 kHz reference. VarAC builds its signal reports from these — the report it sends on connecting, and the one a ping exists to fetch — so without them a ping never ends (found on the bench) |
 | `IAMALIVE` | Every 10 s, so a quiet host knows the modem is there |
 
 `REGISTERED` exists because some clients warn their user about a speed limit unless the modem
