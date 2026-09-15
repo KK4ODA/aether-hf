@@ -48,8 +48,8 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.9` on 2026-09-14, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs the
-beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
+`beta.11` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
 on-air attempt found two bugs (below), and the air is what remains (P6-6).
 
@@ -118,8 +118,17 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
   colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
   bundler's icons and the panel's mark, favicon and splash logo from it. The shell starts
-  the daemon `CREATE_NO_WINDOW` and asks Tauri for a dark title bar. Phase 8 (`docs/ROADMAP.md`)
-  is Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
+  the daemon `CREATE_NO_WINDOW` and asks Tauri for a dark title bar. The panel's tabs are
+  Status (readings, chart, counters as pills), Session (call, keying and drive, record,
+  send/receive), Setup (one numbered flow: callsign, radio interface and modem devices,
+  receive level, misc modem settings, application settings, save), Log and Help; the
+  desktop shell's native Help *menu* keeps updates and the version restore. The author's
+  wording rule: plain names ("Modem devices", "Counters"), never "the three devices the
+  modem uses". Keying is a serial line (RTS/DTR/both), **CAT on the radio's own port**
+  (`[ptt] kind = "cat"`: Yaesu `TX2;`/`TX0;`, Kenwood `TX;`/`RX;`, Icom CI-V `1C 00` at
+  the rig's address; `CatProtocol` in `ptt.rs` is pure and tested), or `rigctld`; CAT and
+  rigctld also put the dial frequency into recordings. Phase 8 (`docs/ROADMAP.md`) is
+  Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
   app, then the modem in the phone — one application over the control API for all three.
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
