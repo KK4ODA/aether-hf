@@ -621,6 +621,7 @@ commands.
 | ID | Task | Depends on |
 |---|---|---|
 | P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | P6-6 |
+| P7-1 | **A link probe (VARA's PING).** The one user-facing thing the VARA HF / VARA Chat benchmark found that the dashboard could not give without a new air frame: a short unproto exchange that reports the SNR in *both* directions without a session — the caller sends a probe addressed to a station, the station answers with the SNR it heard, and the caller's panel shows both. It is a beacon with a destination and an answer, so the §97.221(c) rule that shapes P7-0 (an unattended 500 Hz station may only answer) holds for it too. Model first, an ADR for the frame, `PING`/`PINGACK` in the host adapter (`host-interfaces.md` §3–4), and a Probe button beside Beacon on the Session tab | P6-6 |
 
 ---
 

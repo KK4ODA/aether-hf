@@ -48,7 +48,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.11` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.14` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
 on-air attempt found two bugs (below), and the air is what remains (P6-6).
@@ -130,6 +130,28 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   rigctld also put the dial frequency into recordings. Phase 8 (`docs/ROADMAP.md`) is
   Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
   app, then the modem in the phone — one application over the control API for all three.
+* **The dashboard, the stations heard and the updates window** (beta.14, after a benchmark
+  against VARA HF / VARA Chat's public feature set): the Status tab reads the modem's own
+  telemetry — `metrics` grew `snr_db`/`cfo_hz` (the last frame), `peer_snr_db` (what the
+  other station reports hearing us at, from its ACKs: `LinkEngine::peer_snr_db`, model
+  first), `rate_snr_db`/`margin_db`, `receiving`, `throughput_bps` (bytes acknowledged
+  or delivered, `LinkStats::bytes_acked`, model first) and `link` (the session's account);
+  a `frame` event per received frame (`FrameReport` in `station.rs`: kind, mode, RV, SNR,
+  CFO, confidence, decoded, and the callsigns a beacon/connect/answer carries or the
+  session implies); `spectrum` and `constellation` are *polled* methods (`spectrum.rs`,
+  rustfft on the last 4096 captured samples; the last frame's equalised symbols) so nobody
+  pays for a display they are not looking at; `heard.rs` is the bounded (200) stations-heard
+  list, persisted to `heard.json` beside the configuration (`heard.list`/`heard.clear`,
+  `heard` events); `status.host` says whether a host program is attached. The panel
+  gained Stations and Diagnostics tabs and a Compact toggle. The updater is a window of the
+  shell's own (`app/ui/update.html`, `update.rs` `Phase`/`View`, `update_*` commands,
+  `capabilities/updater.json`, `withGlobalTauri`); on Windows the NSIS installer relaunches
+  the shell, so "complete" is shown by the next start from `update-note.json`. Found on the
+  way: a DATA body one byte short of a full frame cannot be encoded (partial needs two
+  length bytes) — the engine now leaves that byte for the next frame (model first;
+  `a_message_one_byte_short_of_a_full_frame_still_crosses` in both suites). Not built,
+  by decision: VARA's PING (a new air frame — a Phase 7 item with an ADR), a registration
+  display (nothing to register), and VarAC-style chat features (the host program's job).
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
 debug build — and `cargo clippy --all-targets --all-features -- -D warnings`; the shell is a
