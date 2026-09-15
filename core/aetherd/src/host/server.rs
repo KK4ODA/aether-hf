@@ -437,12 +437,11 @@ fn serve_commands(
                 }
                 // the other station's frames, as they arrive: the SNR each was received
                 // at is what a host builds its signal reports from
+                // every decoded frame, as a modem that reports what it hears: the SNR of
+                // the call that brings a session up arrives before CONNECTED, which is
+                // when VarAC builds its opening signal report
                 "frame" => {
-                    let from_peer = connected_to
-                        .as_deref()
-                        .is_some_and(|remote| event.data["from"].as_str() == Some(remote));
-                    if from_peer
-                        && event.data["decoded"].as_bool() == Some(true)
+                    if event.data["decoded"].as_bool() == Some(true)
                         && let Some(snr) = event.data["snr_db"].as_f64()
                         && !say(&mut writer, &Notification::SignalToNoise(snr).line())
                     {
@@ -853,16 +852,17 @@ mod tests {
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED W4ODA KK4XYZ 2300");
-        // the peer's frames arrive as SN lines — whole decibels — and nobody else's do,
-        // nor an undecoded one: VarAC's signal reports, and its ping, are built from them
+        // every decoded frame arrives as an SN line — whole decibels — and an undecoded
+        // one does not: VarAC's signal reports, and its ping, are built from them
         assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 12");
+        assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 3");
         std::thread::sleep(Duration::from_millis(100));
         client.send("BUFFER");
         let next = client
             .expect(|l| l.starts_with("SN") || l.starts_with("BUFFER") || l.starts_with("BUSY"));
         assert_eq!(
             next, "BUFFER 0",
-            "a stranger's or an undecoded frame, or the session's own busy channel, was reported"
+            "an undecoded frame, or the session's own busy channel, was reported"
         );
 
         stop.store(true, Ordering::Relaxed);

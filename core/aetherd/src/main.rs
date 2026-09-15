@@ -583,6 +583,11 @@ fn serve(
             audio.playback(&buffer[..count]);
         }
 
+        // frames before the state they produced: a host learns the SNR of the frame that
+        // brought a session up (SN) before it hears CONNECTED, which is the order a modem
+        // that reports frames as it decodes them gives, and what VarAC builds its
+        // opening signal report from
+        report_frames(station, control, daemon, &mut heard_changed_at);
         for event in station.take_events() {
             let (name, detail) = event.split_once(':').unwrap_or(("log", event.as_str()));
             daemon
@@ -605,7 +610,6 @@ fn serve(
                 }),
             ));
         }
-        report_frames(station, control, daemon, &mut heard_changed_at);
         let received = station.take_received();
         if !received.is_empty() {
             control.publish(&Event::new(
