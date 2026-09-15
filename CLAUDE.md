@@ -48,7 +48,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.15` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.16` on 2026-09-14/15, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
 on-air attempt found two bugs (below), and the air is what remains (P6-6).
@@ -156,7 +156,7 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   way: a DATA body one byte short of a full frame cannot be encoded (partial needs two
   length bytes) — the engine now leaves that byte for the next frame (model first;
   `a_message_one_byte_short_of_a_full_frame_still_crosses` in both suites). Not built,
-  by decision: VARA's PING (a new air frame — a Phase 7 item with an ADR), a registration
+  by decision: a probe frame (built the next day as P7-1, ADR-0006), a registration
   display (nothing to register), and VarAC-style chat features (the host program's job).
 
 Run the Rust tests with `cargo test --release --workspace` — acquisition is ~20x slower in a
@@ -196,9 +196,21 @@ adapter answers `BW<n>` `OK` only for the bandwidth the station runs (learned fr
 `capabilities` at connect) and reports it in `CONNECTED`, sidecars carry `bandwidth_hz`
 and replay uses it; `two_daemons.rs` completes a 500 Hz session; the panel's Setup step
 4 has the bandwidth and the answer-only rule. Positions in a Rust `decode_buffer` are
-72 samples behind the input (the band filter's group delay) by design. **P7-0d is
-next**: VarAC over `[sim]` at 500 Hz (it pings first — P7-1 may be needed for it).
-Then P7-1 the link probe (PING/PINGACK), P9-2
+72 samples behind the input (the band filter's group delay) by design. **P7-1, the
+link probe, is done** (ADR-0006, beta.16): `PROBE`/`PROBE_ACK` DATA kinds 4/5 with a
+sixteen-byte body (both callsigns, the CONTROL frame's SNR byte — `snr_byte` /
+`snr_from_byte` in `frames.rs` — and the capability byte), one frame and one answer,
+no retries, answered only by an idle station addressed in its own bandwidth;
+`LinkEngine::probe(remote, as_call)` (model first), events `probe:<call> hears us at
+<x> dB, heard at <y> dB` / `probe:<call>: no answer` / `probed:<call> at <y> dB`,
+stats `probes_sent`/`probes_answered`/`probe_replies`; `aetherd` refuses `probe` on an
+answer-only station (answering is a §97.221(c) response and stays allowed), reports
+`probe`/`probe-answer` frames, lists a prober as `probing`; control API `probe
+{remote, callsign?}`; the panel's Probe button beside Beacon shows the modem's own
+sentence. **The VARA adapter has no PING**: a web search found no public source for a
+VARA `PING`/`PINGACK` command (that vocabulary is ARDOP's), and VarAC's ping is a short
+session over `CONNECT`, which already works — so **P7-0d, VarAC over `[sim]` at 500 Hz,
+does not wait on anything** and is next. Then P9-2
 the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
