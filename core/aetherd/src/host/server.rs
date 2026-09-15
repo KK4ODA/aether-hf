@@ -531,9 +531,13 @@ fn report_state(
             } else {
                 (mine.clone(), remote)
             };
-            // a client that thinks the modem is speed-limited warns its user about it; this
-            // one is free software and has no such limit, so say so before the session
-            say(writer, &Notification::Registered(mine).line())
+            // the called side hears PENDING first, as it would from any modem: the engine
+            // answers a call in one step, so the two arrive together
+            (!called || say(writer, &Notification::Pending.line()))
+                // a client that thinks the modem is speed-limited warns its user about it;
+                // this one is free software and has no such limit, so say so before the
+                // session
+                && say(writer, &Notification::Registered(mine).line())
                 && say(
                     writer,
                     &Notification::Connected {
@@ -924,6 +928,8 @@ mod tests {
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         client.send("LISTEN ON");
         // the call comes whenever it comes: before or after LISTEN ON is answered
+        let pending = client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED"));
+        assert_eq!(pending, "PENDING", "the called side hears PENDING first");
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED KK4XYZ W4ODA 2300");
         stop.store(true, Ordering::Relaxed);

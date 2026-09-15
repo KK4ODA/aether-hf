@@ -376,6 +376,9 @@ pub enum Notification {
         /// The bandwidth in use, in hertz.
         bandwidth_hz: u32,
     },
+    /// An incoming call is being answered: sent to the called side before `CONNECTED`,
+    /// which is the order every client expects the two in.
+    Pending,
     /// The session ended.
     Disconnected,
     /// How many payload bytes the modem still has to send.
@@ -416,6 +419,7 @@ impl Notification {
             } => {
                 let _ = write!(out, "CONNECTED {caller} {called} {bandwidth_hz}");
             }
+            Self::Pending => out.push_str("PENDING"),
             Self::Disconnected => out.push_str("DISCONNECTED"),
             Self::Buffer(bytes) => {
                 let _ = write!(out, "BUFFER {bytes}");
@@ -656,6 +660,7 @@ mod tests {
         assert_eq!(Notification::Ptt(false).line(), "PTT OFF");
         assert_eq!(Notification::Busy(true).line(), "BUSY ON");
         assert_eq!(Notification::Disconnected.line(), "DISCONNECTED");
+        assert_eq!(Notification::Pending.line(), "PENDING");
         assert_eq!(Notification::Buffer(42).line(), "BUFFER 42");
         assert_eq!(Notification::SignalToNoise(12.4).line(), "SN 12");
         assert_eq!(Notification::SignalToNoise(-2.6).line(), "SN -3");
