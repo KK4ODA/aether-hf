@@ -22,15 +22,22 @@
       </h1>
       <div class="indicators" role="group" aria-label="Indicators">
         <span class="lamp" id="lamp-ptt" role="img" aria-label="Transmitter off" title="Transmitter">TX</span>
+        <span class="lamp" id="lamp-rx" role="img" aria-label="Nothing arriving" title="A burst is arriving">RX</span>
         <span class="lamp" id="lamp-busy" role="img" aria-label="Channel clear" title="Channel occupancy">BUSY</span>
         <span class="lamp" id="lamp-link" role="status" aria-label="Not connected to the modem" title="Connection to the modem">LINK</span>
       </div>
-      <div class="callsign" id="callsign">—</div>
+      <div class="head-right">
+        <span class="dial" id="dial" hidden title="Dial frequency, from the radio"></span>
+        <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
+        <div class="callsign" id="callsign">—</div>
+      </div>
     </header>
 
     <nav class="tabs" role="tablist" aria-label="Panels">
       <button class="tab" role="tab" id="tab-status" data-panel="status" aria-selected="true" aria-controls="panel-status">Status</button>
       <button class="tab" role="tab" id="tab-session" data-panel="session" aria-selected="false" aria-controls="panel-session" tabindex="-1">Session</button>
+      <button class="tab" role="tab" id="tab-stations" data-panel="stations" aria-selected="false" aria-controls="panel-stations" tabindex="-1">Stations <span class="tab-count" id="heard-count" hidden>0</span></button>
+      <button class="tab" role="tab" id="tab-diagnostics" data-panel="diagnostics" aria-selected="false" aria-controls="panel-diagnostics" tabindex="-1">Diagnostics</button>
       <button class="tab" role="tab" id="tab-setup" data-panel="setup" aria-selected="false" aria-controls="panel-setup" tabindex="-1">Setup</button>
       <button class="tab" role="tab" id="tab-log" data-panel="log" aria-selected="false" aria-controls="panel-log" tabindex="-1">Log</button>
       <button class="tab" role="tab" id="tab-help" data-panel="help" aria-selected="false" aria-controls="panel-help" tabindex="-1">Help</button>
@@ -44,32 +51,64 @@
           <div class="state-detail" id="state-detail">Not connected to a modem.</div>
         </div>
 
-        <div class="grid">
+        <div class="grid" id="readings-link">
           <div class="reading">
             <div class="label">Mode</div>
             <div class="value" id="v-mode">—</div>
             <div class="sub" id="v-mode-name"></div>
           </div>
           <div class="reading">
+            <div class="label">SNR</div>
+            <div class="value" id="v-snr">—</div>
+            <div class="sub" id="v-snr-sub">no frame heard yet</div>
+          </div>
+          <div class="reading">
+            <div class="label">Throughput</div>
+            <div class="value" id="v-throughput">—</div>
+            <div class="sub" id="v-bytes">no session</div>
+          </div>
+          <div class="reading">
+            <div class="label">Session</div>
+            <div class="value" id="v-session">—</div>
+            <div class="sub" id="v-session-sub">no session</div>
+          </div>
+        </div>
+        <div class="grid" id="readings-channel">
+          <div class="reading">
             <div class="label">Signal above noise</div>
             <div class="value" id="v-excess">—</div>
             <div class="sub" id="v-floor"></div>
           </div>
           <div class="reading">
-            <div class="label">Queued</div>
-            <div class="value" id="v-queued">—</div>
-            <div class="sub">bytes still to send</div>
+            <div class="label">Tuning</div>
+            <div class="value" id="v-cfo">—</div>
+            <div class="sub" id="v-cfo-sub">offset of the last frame</div>
           </div>
           <div class="reading">
-            <div class="label">Compression</div>
-            <div class="value" id="v-compress">—</div>
-            <div class="sub" id="v-compress-sub"></div>
+            <div class="label">Receive level</div>
+            <div class="value" id="v-rx-level">—</div>
+            <div class="sub" id="v-rx-level-sub"></div>
+          </div>
+          <div class="reading">
+            <div class="label">Queued</div>
+            <div class="value" id="v-queued">—</div>
+            <div class="sub" id="v-compress-sub">bytes still to send</div>
           </div>
         </div>
 
-        <figure class="chart">
-          <figcaption>Channel level vs noise floor, last two minutes</figcaption>
-          <canvas id="chart" width="900" height="180" role="img" aria-label="Channel level chart; the current reading is in Signal above noise"></canvas>
+        <div class="charts">
+          <figure class="chart">
+            <figcaption>SNR by frame, last ten minutes</figcaption>
+            <canvas id="chart-snr" width="450" height="180" role="img" aria-label="SNR of every frame heard; the current reading is in SNR"></canvas>
+          </figure>
+          <figure class="chart">
+            <figcaption>Channel level vs noise floor, last two minutes</figcaption>
+            <canvas id="chart" width="450" height="180" role="img" aria-label="Channel level chart; the current reading is in Signal above noise"></canvas>
+          </figure>
+        </div>
+        <figure class="chart activity">
+          <figcaption>Transmit and receive, last two minutes</figcaption>
+          <canvas id="chart-activity" width="900" height="22" role="img" aria-label="When this station transmitted and when a burst arrived"></canvas>
         </figure>
 
         <section class="counters" aria-labelledby="counters-title">
@@ -142,6 +181,120 @@
             <pre id="incoming" class="received" role="log" aria-label="Received text"></pre>
           </div>
         </div>
+      </section>
+
+      <!-- ── stations heard ─────────────────────────────────────── -->
+      <section id="panel-stations" class="panel" role="tabpanel" aria-labelledby="tab-stations" hidden>
+        <div class="row">
+          <h2 class="inline">Stations heard</h2>
+          <span class="sub" id="heard-note" role="status" aria-live="polite"></span>
+          <button id="btn-heard-clear" class="push-right">Forget all</button>
+        </div>
+        <p class="sub">
+          Every station whose frame carried a callsign — a beacon, a call, an answer, or the
+          other end of a session — with when it was heard, how strong, and what it was doing.
+          Click a heading to sort; <strong>Call</strong> puts the callsign on the Session
+          tab. The list is the modem's, kept beside its configuration, so it survives a
+          restart; it holds the 200 most recent.
+        </p>
+        <div class="table-scroll">
+          <table class="heard" id="heard-table" aria-describedby="heard-note">
+            <thead>
+              <tr>
+                <th scope="col"><button class="sort" data-sort="callsign">Callsign</button></th>
+                <th scope="col"><button class="sort" data-sort="last_heard_ms" aria-sort="descending">Last heard</button></th>
+                <th scope="col"><button class="sort" data-sort="first_heard_ms">First heard</button></th>
+                <th scope="col" class="num"><button class="sort" data-sort="snr_db">SNR</button></th>
+                <th scope="col" class="num"><button class="sort" data-sort="best_snr_db">Best</button></th>
+                <th scope="col" class="num"><button class="sort" data-sort="frequency_hz">Dial</button></th>
+                <th scope="col" class="num"><button class="sort" data-sort="mode">Mode</button></th>
+                <th scope="col"><button class="sort" data-sort="activity">Activity</button></th>
+                <th scope="col" class="num"><button class="sort" data-sort="count">Frames</button></th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="heard"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="heard-empty">Nobody yet. Stations appear here as soon as a beacon, a call, an answer or a session is heard.</p>
+      </section>
+
+      <!-- ── diagnostics ────────────────────────────────────────── -->
+      <section id="panel-diagnostics" class="panel" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+        <div class="scopes">
+          <figure class="chart">
+            <figcaption>Constellation <span class="numerals" id="const-caption"></span></figcaption>
+            <canvas id="chart-constellation" width="240" height="240" role="img" aria-label="Equalised constellation of the last frame"></canvas>
+          </figure>
+          <div class="scope-stack">
+            <figure class="chart">
+              <figcaption>Spectrum, 0–4 kHz <span class="numerals" id="spectrum-caption"></span></figcaption>
+              <canvas id="chart-spectrum" width="600" height="110" role="img" aria-label="Spectrum of the received audio"></canvas>
+            </figure>
+            <figure class="chart">
+              <figcaption>Waterfall</figcaption>
+              <canvas id="chart-waterfall" width="600" height="110" role="img" aria-label="Waterfall of the received audio, newest at the bottom"></canvas>
+            </figure>
+          </div>
+        </div>
+
+        <div class="grid" id="readings-receiver">
+          <div class="reading">
+            <div class="label">Rate control</div>
+            <div class="value" id="d-rate">—</div>
+            <div class="sub" id="d-rate-sub">smoothed SNR · margin</div>
+          </div>
+          <div class="reading">
+            <div class="label">They hear you at</div>
+            <div class="value" id="d-peer">—</div>
+            <div class="sub">from the last acknowledgement</div>
+          </div>
+          <div class="reading">
+            <div class="label">Mode confidence</div>
+            <div class="value" id="d-confidence">—</div>
+            <div class="sub">of the last frame; below 1.3 is a guess</div>
+          </div>
+          <div class="reading">
+            <div class="label">Busy detector</div>
+            <div class="value" id="d-busy">—</div>
+            <div class="sub" id="d-busy-sub">level · floor</div>
+          </div>
+          <div class="reading">
+            <div class="label">Host program</div>
+            <div class="value" id="d-host">—</div>
+            <div class="sub" id="d-host-sub"></div>
+          </div>
+          <div class="reading">
+            <div class="label">Audio</div>
+            <div class="value" id="d-audio">—</div>
+            <div class="sub" id="d-audio-sub">RMS · peak · clipping</div>
+          </div>
+        </div>
+
+        <section aria-labelledby="frames-title">
+          <h2 id="frames-title">Frames, newest first</h2>
+          <div class="table-scroll">
+            <table class="frames">
+              <thead>
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">Kind</th>
+                  <th scope="col">From → to</th>
+                  <th scope="col" class="num">Mode</th>
+                  <th scope="col" class="num">RV</th>
+                  <th scope="col" class="num">SNR</th>
+                  <th scope="col" class="num">Offset</th>
+                  <th scope="col" class="num">Conf.</th>
+                  <th scope="col">Decoded</th>
+                  <th scope="col" class="num">Bytes</th>
+                  <th scope="col">Control</th>
+                </tr>
+              </thead>
+              <tbody id="frames"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="frames-empty">No frame heard yet.</p>
+        </section>
       </section>
 
       <!-- ── setup ──────────────────────────────────────────────── -->
@@ -372,6 +525,17 @@
             <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
           </ol>
+        </div>
+
+        <div class="card">
+          <h3>Reading the panel</h3>
+          <ul class="help-steps">
+            <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
+            <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
+            <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps above the mode's threshold.</li>
+            <li><strong>Signal above noise</strong> and the level chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
+            <li><strong>Stations</strong> lists everyone whose frame carried a callsign; <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window.</li>
+          </ul>
         </div>
 
         <div class="card">

@@ -112,6 +112,11 @@ fn main() {
         |path| update::preferences(&path),
     );
 
+    let updater = update::Updater::new(
+        preferences.channel,
+        &context.package_info().version.to_string(),
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -122,8 +127,18 @@ fn main() {
         })
         .manage(StartupError(failure))
         .manage(launch)
+        .manage(updater)
+        .invoke_handler(tauri::generate_handler![
+            update::update_view,
+            update::update_check,
+            update::update_install,
+            update::update_restart,
+            update::update_close,
+            update::update_open,
+            update::update_restore,
+        ])
         .setup(move |app| {
-            install_menu(app, preferences.channel)?;
+            install_menu(app)?;
             watch_daemon(app.handle().clone());
             // A packaged build has no terminal, so a daemon that would not start has to be
             // explained on screen: the panel would otherwise sit at "not connected" for ever,
@@ -138,15 +153,21 @@ fn main() {
                     .title("Aether HF could not start the modem")
                     .kind(MessageDialogKind::Error)
                     .show(|_| {});
+            } else if update::after_start(app.handle()) {
+                // the previous start installed something, and the window is saying how
+                // that went; a second window offering the next one can wait for the menu
             } else if preferences.check {
                 // quietly: a start with nothing newer should look like nothing happened
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(update::offer(handle, preferences.channel, true));
+                tauri::async_runtime::spawn(update::check(handle, true));
             }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
+            // the panel's window closing is the shell closing; the updater's is not
+            if let tauri::WindowEvent::Destroyed = event
+                && window.label() == "main"
+            {
                 stop_daemon(&window.state::<Daemon>());
             }
         })
@@ -155,7 +176,7 @@ fn main() {
 }
 
 /// The Help menu: updates, going back, and where things are.
-fn install_menu(app: &tauri::App, channel: update::Channel) -> tauri::Result<()> {
+fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     let check = MenuItemBuilder::with_id("check-updates", "Check for updates…").build(app)?;
     let restore =
         MenuItemBuilder::with_id("restore-previous", "Restore the previous version…").build(app)?;
@@ -172,7 +193,7 @@ fn install_menu(app: &tauri::App, channel: update::Channel) -> tauri::Result<()>
     app.set_menu(menu)?;
     app.on_menu_event(move |app, event| match event.id().as_ref() {
         "check-updates" => {
-            tauri::async_runtime::spawn(update::offer(app.clone(), channel, false));
+            tauri::async_runtime::spawn(update::check(app.clone(), false));
         }
         "restore-previous" => update::restore_previous(app),
         "open-logs" => {

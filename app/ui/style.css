@@ -187,6 +187,51 @@ header.bar {
   background: var(--surface);
 }
 
+.head-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.head-right .callsign {
+  margin-left: 0;
+}
+
+/* the dial frequency, when the radio can say: read like a rig's display */
+.dial {
+  font: 500 13px/1 var(--numerals);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-3);
+  padding: 5px 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+button.ghost[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── lamps: operational state, filled when lit and named always ──── */
 
 .indicators {
@@ -238,6 +283,10 @@ header.bar {
   background: var(--status-busy);
 }
 
+#lamp-rx.on {
+  background: var(--status-rx);
+}
+
 #lamp-link.on {
   background: var(--status-link);
 }
@@ -259,6 +308,7 @@ header.bar {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0 var(--s4);
   background: var(--bg-2);
@@ -281,6 +331,24 @@ header.bar {
 
 .tab:hover {
   color: var(--text);
+}
+
+.tab-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: 600 10px/14px var(--numerals);
+  text-align: center;
+  vertical-align: 1px;
+}
+
+.tab[aria-selected="true"] .tab-count {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .tab[aria-selected="true"] {
@@ -512,6 +580,229 @@ canvas {
   background: var(--plot-bg);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
+}
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--s3);
+}
+
+.chart.activity canvas {
+  height: 22px;
+}
+
+/* the diagnostics scopes: the constellation is square, the two spectra stack beside it */
+.scopes {
+  display: grid;
+  grid-template-columns: minmax(200px, 264px) 1fr;
+  gap: var(--s3);
+  align-items: start;
+}
+
+.scope-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+#chart-constellation {
+  height: auto;
+  aspect-ratio: 1;
+  max-width: 100%;
+}
+
+#chart-spectrum,
+#chart-waterfall {
+  height: 110px;
+}
+
+.chart figcaption .numerals {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text-2);
+  margin-left: var(--s2);
+}
+
+h2.inline {
+  margin: 0;
+}
+
+.push-right {
+  margin-left: auto;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.table-scroll table {
+  margin: 0;
+}
+
+.empty {
+  margin: 0;
+  padding: var(--s4);
+  text-align: center;
+  color: var(--text-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+}
+
+.empty[hidden] {
+  display: none;
+}
+
+/* sortable headings are buttons that look like headings */
+button.sort {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  padding-right: 12px;
+  position: relative;
+}
+
+button.sort::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+button.sort[aria-sort="descending"]::after {
+  border-top: 5px solid var(--accent);
+  opacity: 1;
+}
+
+button.sort[aria-sort="ascending"]::after {
+  border-bottom: 5px solid var(--accent);
+  opacity: 1;
+}
+
+button.sort:hover,
+button.sort:focus-visible {
+  color: var(--text);
+}
+
+button.sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.heard td,
+.frames td {
+  white-space: nowrap;
+}
+
+.heard .call {
+  font: 600 12.5px/1.3 var(--numerals);
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.heard button.small,
+.frames button.small {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* activity, colour-coded like the lamps and named in words as well */
+.act {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.act[data-activity="connected"] {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.act[data-activity="calling"] {
+  color: var(--status-tx);
+}
+
+.act[data-activity="answering"] {
+  color: var(--status-rx);
+}
+
+.frames tr[data-decoded="false"] td {
+  color: var(--text-3);
+}
+
+.frames td.bad {
+  color: var(--status-error);
+}
+
+/* ── compact: the state strip and four readings, nothing else ────── */
+
+body.compact .tabs,
+body.compact footer.bar,
+body.compact #readings-channel,
+body.compact .charts,
+body.compact .chart.activity,
+body.compact .counters,
+body.compact .panel:not(#panel-status) {
+  display: none;
+}
+
+body.compact main {
+  padding: var(--s3) var(--s3);
+}
+
+body.compact #panel-status {
+  gap: var(--s2);
+}
+
+body.compact .state-strip {
+  padding: var(--s2) var(--s3);
+}
+
+body.compact .state-name {
+  font-size: 15px;
+}
+
+body.compact #readings-link {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+body.compact .reading {
+  padding: 6px 10px 6px;
+}
+
+body.compact .reading .value {
+  font-size: 20px;
+}
+
+body.compact .reading .sub {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  body.compact #readings-link {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ── tables ─────────────────────────────────────────────────────── */
@@ -1103,6 +1394,14 @@ footer.bar {
 
   .reading .value {
     font-size: 22px;
+  }
+
+  .scopes {
+    grid-template-columns: 1fr;
+  }
+
+  #chart-constellation {
+    max-width: 264px;
   }
 }
 

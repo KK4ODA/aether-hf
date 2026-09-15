@@ -12,10 +12,24 @@ Two pieces:
   backend. If a daemon is already running it attaches to that one instead of starting a
   second.
 
-The panel's Setup tab opens with a five-step wizard — callsign, interface profile, receive
-level, keying and drive, save — and keeps the raw form underneath for everything else. Its Log
-tab has a "Copy diagnostic bundle" button; that bundle (`diagnostics` in
-`docs/spec/control-api.md` §4.5) is what to paste into a bug report.
+The panel's tabs: **Status** is the dashboard (state, mode, SNR and what the other station
+hears you at, throughput and the session's account, tuning offset, receive level, the SNR
+of every frame over the last ten minutes, the channel level against the noise floor, when
+the key was down and when a burst was arriving, and the counters); **Session** is the
+call, keying and drive, recording, send and receive; **Stations** is everyone heard —
+beacons, calls, answers and session partners, with when, how strong and what they were
+doing, sortable, kept by the modem in `heard.json` beside its configuration; **Diagnostics**
+is the constellation of the last frame, a spectrum and waterfall of the received audio,
+the rate controller's readings, the host program's connection and a table of the last sixty
+frames; **Setup** is one numbered flow; **Log** has the "Copy diagnostic bundle" button —
+that bundle (`diagnostics` in `docs/spec/control-api.md` §4.6) is what to paste into a bug
+report; **Help** explains the readings. **Compact**, in the header, shrinks the panel to
+the state and four readings for a small window beside a logging program.
+
+Every reading is the modem's own (`metrics` and `frame` events, and the `spectrum`,
+`constellation` and `heard.list` methods of the control API); the panel draws and never
+computes. The spectrum and constellation are polled only while the Diagnostics tab is on
+screen, so a gateway nobody is watching pays nothing for them.
 
 ## Running from a checkout
 
@@ -63,3 +77,18 @@ of the way (`.splash` in the stylesheet, `splash()` in `app.js`). The artwork li
 `Logos/`; `python tools/make_icons.py` cuts the icon tile out of its black surround and
 writes `src-tauri/icons/` (every size the bundler wants, including the `.ico`) and the
 panel's `mark.png`, `favicon.png` and `logo.png`.
+
+## Updates
+
+Help › Check for updates opens the shell's own window (`ui/update.html`, `update.js`,
+`update.css`; bundled into the binary, so it works while the modem is stopped and the
+network is down). It shows the version you have, the version on offer and its release
+notes, and one phase at a time — checking, available, downloading with progress,
+installing, restart required — or what went wrong and what to do about it. On Windows the
+installer relaunches the shell, so "updated to …" is shown by the next start, which finds
+the note the install left (`update-note.json` beside the kept installers in
+`%LOCALAPPDATA%\aether-hf\`); if the version running is still the old one, the window says
+the update did not install rather than nothing. The page talks to the shell through Tauri's
+IPC (`withGlobalTauri`, the `updater` window's capability in `src-tauri/capabilities/`),
+which the panel's window — served by the daemon — does not have. Opened in a browser
+instead, `update.html?demo=<phase>` shows what each phase looks like.

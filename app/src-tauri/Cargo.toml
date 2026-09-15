@@ -34,3 +34,7 @@ toml = "1"
 semver = "1"
 # `tauri::generate_context!` embeds the plugin configuration as JSON and needs this in scope
 serde_json = "1"
+# the updater window's view, and the note one start leaves for the next
+serde = { version = "1", features = ["derive"] }
+# the release date, as the updater plugin carries it
+time = { version = "0.3", features = ["formatting"] }

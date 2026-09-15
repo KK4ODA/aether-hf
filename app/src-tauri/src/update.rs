@@ -10,16 +10,35 @@
 //! half is built into this binary (`plugins.updater.pubkey` in `tauri.conf.json`). The
 //! updater refuses anything the key did not sign, so a compromised download host cannot
 //! hand out a modem that keys somebody's radio.
+//!
+//! # The window
+//!
+//! What the operator sees is a window of the shell's own (`app/ui/update.html`, bundled
+//! with the panel and served from the binary, so it works while the modem is stopped and the
+//! network is down): the version they have, the version on offer, the release notes, and one
+//! phase at a time — checking, available, downloading with progress, installing, restart
+//! required, complete — or what went wrong and what to do about it. The shell keeps the
+//! [`View`] and pushes every change to the window as an `update` event; the window asks for
+//! it once on load and acts through the `update_*` commands. On Windows the installer
+//! relaunches the shell, so "complete" is shown by the *next* start, which finds the note
+//! this one left ([`after_start`]).
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
-use tauri::{AppHandle, Manager as _};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter as _, Manager as _};
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt as _;
 use tauri_plugin_updater::{Update, UpdaterExt as _};
 
 /// Where the releases are.
 pub const REPOSITORY: &str = "https://github.com/KK4ODA/aether-hf";
+
+/// The window's label, which its capability names.
+const WINDOW: &str = "updater";
 
 /// Which releases to offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +49,16 @@ pub enum Channel {
     Beta,
     /// The rolling nightly, and anything newer on the other channels.
     Nightly,
+}
+
+impl Channel {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Nightly => "nightly",
+        }
+    }
 }
 
 /// What the station's configuration says about updates.
@@ -92,11 +121,155 @@ fn newer(candidate: &str, current: &str) -> bool {
     }
 }
 
-/// Look for a newer version on the channel and, if there is one, ask.
+// ── what the window shows ───────────────────────────────────────────
+
+/// One phase of an update, as the window shows it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "phase", rename_all = "kebab-case")]
+pub enum Phase {
+    /// Asking the channel.
+    Checking,
+    /// Nothing newer.
+    UpToDate,
+    /// A newer version, waiting for a yes.
+    Available {
+        /// Its version.
+        version: String,
+        /// Its release notes, Markdown as the release carries them.
+        notes: String,
+        /// When it was published, RFC 3339, if the manifest says.
+        date: Option<String>,
+    },
+    /// The installer is coming down.
+    Downloading {
+        /// Its version.
+        version: String,
+        /// Bytes so far.
+        downloaded: u64,
+        /// Bytes in all, when the server said.
+        total: Option<u64>,
+    },
+    /// The modem is stopping and the installer is starting.
+    Installing {
+        /// Its version.
+        version: String,
+    },
+    /// Installed; this process has to be started again to run it.
+    RestartRequired {
+        /// Its version.
+        version: String,
+    },
+    /// This start is the first of a version an earlier start installed.
+    Complete {
+        /// The version now running.
+        version: String,
+        /// Its notes, kept from the offer.
+        notes: String,
+        /// The version it replaced.
+        from: String,
+    },
+    /// An earlier start began installing a version that is not the one running now.
+    Incomplete {
+        /// The version that did not arrive.
+        version: String,
+    },
+    /// Something went wrong.
+    Error {
+        /// What, in a sentence, with what to do about it.
+        message: String,
+        /// Whether trying again is worth offering.
+        retry: bool,
+    },
+}
+
+/// Everything the window renders.
+#[derive(Debug, Clone, Serialize)]
+pub struct View {
+    /// The phase and its details.
+    #[serde(flatten)]
+    pub phase: Phase,
+    /// The version running.
+    pub current: String,
+    /// The channel followed.
+    pub channel: &'static str,
+    /// Whether an earlier version is kept on this machine to go back to.
+    pub can_restore: bool,
+}
+
+/// The shell's side of the window: the view it shows and the update it holds.
+pub struct Updater {
+    channel: Channel,
+    view: Mutex<View>,
+    pending: Mutex<Option<Update>>,
+}
+
+impl Updater {
+    /// Fresh, following `channel`.
+    #[must_use]
+    pub fn new(channel: Channel, current: &str) -> Self {
+        Self {
+            channel,
+            view: Mutex::new(View {
+                phase: Phase::UpToDate,
+                current: current.to_owned(),
+                channel: channel.name(),
+                can_restore: previous_installer(current).is_some(),
+            }),
+            pending: Mutex::new(None),
+        }
+    }
+}
+
+/// Set the phase and tell the window.
+fn show(app: &AppHandle, phase: Phase) {
+    let state = app.state::<Updater>();
+    let view = {
+        let Ok(mut view) = state.view.lock() else {
+            return;
+        };
+        view.phase = phase;
+        view.can_restore = previous_installer(&view.current).is_some();
+        view.clone()
+    };
+    let _ = app.emit_to(WINDOW, "update", &view);
+}
+
+/// Open the window, or bring it to the front if it is open.
+fn open_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return;
+    }
+    let built =
+        tauri::WebviewWindowBuilder::new(app, WINDOW, tauri::WebviewUrl::App("update.html".into()))
+            .title("Aether HF updates")
+            .inner_size(600.0, 560.0)
+            .min_inner_size(440.0, 380.0)
+            .resizable(true)
+            .theme(Some(tauri::Theme::Dark))
+            .build();
+    if let Err(error) = built {
+        // the window could not be made: the one thing left is a native box
+        app.dialog()
+            .message(format!("Could not open the updates window: {error}"))
+            .title("Aether HF updates")
+            .kind(MessageDialogKind::Error)
+            .show(|_| {});
+    }
+}
+
+/// Look for a newer version on the channel and, if there is one, offer it in the window.
 ///
-/// `quiet` is the start-up check: nothing newer means nothing said. From the menu, nothing
-/// newer is an answer worth giving.
-pub async fn offer(app: AppHandle, channel: Channel, quiet: bool) {
+/// `quiet` is the start-up check: nothing newer means nothing said, and a channel that
+/// cannot be reached means the same — a start with the network down should look like
+/// nothing happened. From the menu the window opens first and says what it finds.
+pub async fn check(app: AppHandle, quiet: bool) {
+    let channel = app.state::<Updater>().channel;
+    if !quiet {
+        show(&app, Phase::Checking);
+        open_window(&app);
+    }
     let mut best: Option<Update> = None;
     let mut failures = Vec::new();
     for endpoint in endpoints(channel) {
@@ -131,56 +304,121 @@ pub async fn offer(app: AppHandle, channel: Channel, quiet: bool) {
     }
 
     let Some(update) = best else {
-        if !quiet {
-            let text = if failures.is_empty() {
-                format!(
-                    "You have the newest version, {}.",
-                    app.package_info().version
-                )
-            } else {
-                format!("Could not check for updates:\n\n{}", failures.join("\n"))
-            };
-            app.dialog()
-                .message(text)
-                .title("Aether HF updates")
-                .kind(MessageDialogKind::Info)
-                .show(|_| {});
+        if quiet {
+            return;
+        }
+        if failures.is_empty() {
+            show(&app, Phase::UpToDate);
+        } else {
+            show(
+                &app,
+                Phase::Error {
+                    message: format!(
+                        "Could not check for updates: {}. Check the network and try again; \
+                         the releases page always has the newest version.",
+                        failures.join("; ")
+                    ),
+                    retry: true,
+                },
+            );
         }
         return;
     };
 
-    let notes = update
-        .body
-        .as_deref()
-        .map_or(String::new(), |body| format!("\n\n{}", body.trim()));
-    let text = format!(
-        "Aether HF {} is available; you have {}.{notes}\n\nInstall it now? The modem will \
-         stop, the update will install, and Aether HF will start again. The version you \
-         have now is kept, and Help > Restore the previous version brings it back.",
-        update.version, update.current_version
+    let phase = Phase::Available {
+        version: update.version.clone(),
+        notes: update.body.clone().unwrap_or_default().trim().to_owned(),
+        date: update.date.and_then(|d| {
+            d.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        }),
+    };
+    if let Ok(mut pending) = app.state::<Updater>().pending.lock() {
+        *pending = Some(update);
+    }
+    show(&app, phase);
+    open_window(&app);
+}
+
+/// Bring the installer down, reporting progress to the window ten times a second.
+async fn download(app: &AppHandle, update: &Update) -> Result<Vec<u8>, String> {
+    let version = update.version.clone();
+    show(
+        app,
+        Phase::Downloading {
+            version: version.clone(),
+            downloaded: 0,
+            total: None,
+        },
     );
-    let handle = app.clone();
-    app.dialog()
-        .message(text)
-        .title("A newer Aether HF")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Install and restart".into(),
-            "Not now".into(),
-        ))
-        .show(move |yes| {
-            if yes {
-                tauri::async_runtime::spawn(install(handle, update));
-            }
-        });
+    let mut downloaded: u64 = 0;
+    let mut reported = std::time::Instant::now();
+    let bytes = update
+        .download(
+            |chunk, total| {
+                downloaded += chunk as u64;
+                // ten times a second is a progress bar; every chunk is a flicker
+                if reported.elapsed() >= std::time::Duration::from_millis(100) {
+                    reported = std::time::Instant::now();
+                    show(
+                        app,
+                        Phase::Downloading {
+                            version: version.clone(),
+                            downloaded,
+                            total,
+                        },
+                    );
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "The download did not complete: {error}. Nothing was changed; try again \
+                 when the network is back."
+            )
+        })?;
+    show(
+        app,
+        Phase::Downloading {
+            version: update.version.clone(),
+            downloaded: bytes.len() as u64,
+            total: Some(bytes.len() as u64),
+        },
+    );
+    Ok(bytes)
 }
 
 /// Download, keep a copy, stop the modem, install, restart.
-async fn install(app: AppHandle, update: Update) {
-    let bytes = match update.download(|_, _| {}, || {}).await {
+async fn install(app: AppHandle) {
+    let Some(update) = app
+        .state::<Updater>()
+        .pending
+        .lock()
+        .ok()
+        .and_then(|pending| pending.clone())
+    else {
+        show(
+            &app,
+            Phase::Error {
+                message: "There is no update waiting to be installed. Check again.".into(),
+                retry: true,
+            },
+        );
+        return;
+    };
+    let version = update.version.clone();
+    let bytes = match download(&app, &update).await {
         Ok(bytes) => bytes,
-        Err(error) => {
-            report(&app, format!("The download did not complete: {error}"));
+        Err(message) => {
+            show(
+                &app,
+                Phase::Error {
+                    message,
+                    retry: true,
+                },
+            );
             return;
         }
     };
@@ -188,31 +426,206 @@ async fn install(app: AppHandle, update: Update) {
     // keep it before installing, when the bytes are certainly still here.
     if let Some(dir) = rollback_dir() {
         let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(installer_name(&update.version)), &bytes);
+        let _ = std::fs::write(dir.join(installer_name(&version)), &bytes);
     }
+    show(
+        &app,
+        Phase::Installing {
+            version: version.clone(),
+        },
+    );
     // The daemon's binary is about to be replaced, and a file in use cannot be. Stopping it
     // here also releases the transmitter properly, which a replaced binary would not — and
     // the installer is not started until the file really is free.
     crate::stop_daemon(&app.state::<crate::Daemon>());
     if let Err(error) = crate::release_daemon_binary(std::time::Duration::from_secs(15)) {
-        report(&app, format!("The update did not install: {error}"));
+        show(
+            &app,
+            Phase::Error {
+                message: format!("The update did not install: {error}"),
+                retry: true,
+            },
+        );
         return;
     }
+    // the next start finds this and says the update is complete — or that it is not
+    let _ = Note {
+        installing: version.clone(),
+        from: app.package_info().version.to_string(),
+        notes: update.body.clone().unwrap_or_default(),
+        at: unix_now(),
+    }
+    .write();
+    // On Windows this runs the installer and exits the process; the installer starts the
+    // new version. Elsewhere it returns, and the new version needs a restart.
     if let Err(error) = update.install(bytes) {
-        report(&app, format!("The update did not install: {error}"));
+        let _ = Note::remove();
+        show(
+            &app,
+            Phase::Error {
+                message: format!(
+                    "The update did not install: {error}. The version you have is unchanged."
+                ),
+                retry: true,
+            },
+        );
         return;
     }
+    show(&app, Phase::RestartRequired { version });
+}
+
+// ── the note one start leaves for the next ──────────────────────────
+
+/// What an install in progress writes down, for the start that follows it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Note {
+    installing: String,
+    from: String,
+    notes: String,
+    at: u64,
+}
+
+impl Note {
+    fn path() -> Option<PathBuf> {
+        rollback_dir().and_then(|dir| dir.parent().map(|p| p.join("update-note.json")))
+    }
+
+    fn write(&self) -> std::io::Result<()> {
+        let path = Self::path().ok_or_else(|| std::io::Error::other("no data directory"))?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let text = serde_json::to_string(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, text)
+    }
+
+    fn read() -> Option<Self> {
+        let text = std::fs::read_to_string(Self::path()?).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn remove() -> std::io::Result<()> {
+        match Self::path() {
+            Some(path) if path.exists() => std::fs::remove_file(path),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// What the previous start left behind, and what this one should say about it.
+///
+/// A note naming the version now running means the update went through: say so, once,
+/// with its notes. A note naming another version means it did not — the installer was
+/// cancelled, or failed — and the operator should hear that rather than wonder why nothing
+/// changed. A note older than a day is stale and says nothing.
+fn verdict(note: &Note, current: &str, now: u64) -> Option<Phase> {
+    if now.saturating_sub(note.at) > 24 * 3600 {
+        return None;
+    }
+    if note.installing == current {
+        Some(Phase::Complete {
+            version: current.to_owned(),
+            notes: note.notes.trim().to_owned(),
+            from: note.from.clone(),
+        })
+    } else if note.from == current {
+        Some(Phase::Incomplete {
+            version: note.installing.clone(),
+        })
+    } else {
+        None
+    }
+}
+
+/// On start: if the previous start was installing something, say how that went.
+///
+/// Returns whether a window was opened, so the start-up check can stay quiet.
+pub fn after_start(app: &AppHandle) -> bool {
+    let Some(note) = Note::read() else {
+        return false;
+    };
+    let _ = Note::remove();
+    let current = app.package_info().version.to_string();
+    let Some(phase) = verdict(&note, &current, unix_now()) else {
+        return false;
+    };
+    show(app, phase);
+    open_window(app);
+    true
+}
+
+// ── the window's commands ───────────────────────────────────────────
+//
+// Tauri hands a command its handle and its state by value; that is the shape it wants.
+
+/// What the window shows; asked for once when the page loads.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_view(state: tauri::State<'_, Updater>) -> Result<View, String> {
+    state
+        .view
+        .lock()
+        .map(|view| view.clone())
+        .map_err(|_| "the updater's state is poisoned".to_owned())
+}
+
+/// Look again.
+#[tauri::command]
+pub fn update_check(app: AppHandle) {
+    tauri::async_runtime::spawn(check(app, false));
+}
+
+/// Install what is on offer.
+#[tauri::command]
+pub fn update_install(app: AppHandle) {
+    tauri::async_runtime::spawn(install(app));
+}
+
+/// Start this process again, on the version just installed.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_restart(app: AppHandle) {
+    crate::stop_daemon(&app.state::<crate::Daemon>());
     app.restart();
 }
 
-/// Say what went wrong, in a box.
-fn report(app: &AppHandle, text: String) {
-    app.dialog()
-        .message(text)
-        .title("Aether HF updates")
-        .kind(MessageDialogKind::Error)
-        .show(|_| {});
+/// Close the window.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_close(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.close();
+    }
 }
+
+/// Open a page of the repository in the browser — the releases page, or a link in the
+/// notes. Only the repository's own pages, so a note cannot send anybody anywhere else.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_open(app: AppHandle, url: Option<String>) -> Result<(), String> {
+    let target = url.unwrap_or_else(|| format!("{REPOSITORY}/releases"));
+    if !target.starts_with(REPOSITORY) && !target.starts_with("https://github.com/KK4ODA/") {
+        return Err("only the project's own pages open from here".to_owned());
+    }
+    app.opener()
+        .open_url(target, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Go back to the version before this one, from the window.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn update_restore(app: AppHandle) {
+    restore_previous(&app);
+}
+
+// ── kept installers ─────────────────────────────────────────────────
 
 /// What an installer is called in the rollback directory. The version is in the name, so
 /// the directory itself is the record of what has been installed.
@@ -331,6 +744,15 @@ fn run_installer(app: &AppHandle, installer: &Path) {
     }
 }
 
+/// Say what went wrong, in a box: for the paths that run without the window.
+fn report(app: &AppHandle, text: String) {
+    app.dialog()
+        .message(text)
+        .title("Aether HF updates")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +830,67 @@ mod tests {
         let p = preferences(&dir.join("missing.toml"));
         assert_eq!(p.channel, Channel::Stable);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_next_start_reads_the_note_the_install_left() {
+        let note = Note {
+            installing: "0.2.0-beta.14".into(),
+            from: "0.2.0-beta.13".into(),
+            notes: "## What's new\n- a dashboard\n".into(),
+            at: 1_000_000,
+        };
+        // the version now running is the one installed: complete, with its notes
+        match verdict(&note, "0.2.0-beta.14", 1_000_100) {
+            Some(Phase::Complete {
+                version,
+                notes,
+                from,
+            }) => {
+                assert_eq!(version, "0.2.0-beta.14");
+                assert_eq!(from, "0.2.0-beta.13");
+                assert!(notes.starts_with("## What's new"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // still the old version: the install did not happen, and the operator hears so
+        match verdict(&note, "0.2.0-beta.13", 1_000_100) {
+            Some(Phase::Incomplete { version }) => assert_eq!(version, "0.2.0-beta.14"),
+            other => panic!("{other:?}"),
+        }
+        // some third version, or a note from last week: nothing to say
+        assert!(verdict(&note, "0.3.0", 1_000_100).is_none());
+        assert!(verdict(&note, "0.2.0-beta.14", 1_000_000 + 2 * 24 * 3600).is_none());
+    }
+
+    #[test]
+    fn the_view_serialises_flat_for_the_window() {
+        let view = View {
+            phase: Phase::Downloading {
+                version: "0.3.0".into(),
+                downloaded: 10,
+                total: Some(100),
+            },
+            current: "0.2.0".into(),
+            channel: "beta",
+            can_restore: false,
+        };
+        let json = serde_json::to_value(&view).expect("json");
+        assert_eq!(json["phase"], "downloading");
+        assert_eq!(json["version"], "0.3.0");
+        assert_eq!(json["downloaded"], 10);
+        assert_eq!(json["current"], "0.2.0");
+        assert_eq!(json["channel"], "beta");
+        let json = serde_json::to_value(View {
+            phase: Phase::RestartRequired {
+                version: "0.3.0".into(),
+            },
+            current: "0.2.0".into(),
+            channel: "stable",
+            can_restore: true,
+        })
+        .expect("json");
+        assert_eq!(json["phase"], "restart-required");
+        assert_eq!(json["can_restore"], true);
     }
 }

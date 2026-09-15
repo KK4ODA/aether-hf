@@ -13,17 +13,19 @@
         "title": "Aether HF",
         "width": 1000,
         "height": 720,
-        "minWidth": 560,
-        "minHeight": 460,
+        "minWidth": 420,
+        "minHeight": 300,
         "resizable": true,
         "theme": "Dark",
-        "url": "http://127.0.0.1:8515/"
+        "url": "http://127.0.0.1:8515/",
+        "label": "main"
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:8515 http://127.0.0.1:8515",
       "dangerousDisableAssetCspModification": false
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,

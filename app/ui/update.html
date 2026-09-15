@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aether HF updates</title>
+    <link rel="icon" href="favicon.png" type="image/png" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="update.css" />
+  </head>
+  <body class="updater">
+    <header class="bar">
+      <h1 class="brand">
+        <img class="brand-mark" src="mark.png" alt="" width="22" height="22" />
+        <span>Aether <span class="brand-hf">HF</span></span>
+      </h1>
+      <span class="updater-title">Updates</span>
+      <span class="chip" id="channel" title="The release channel this installation follows, from Setup → Application settings">—</span>
+    </header>
+
+    <main class="updater-main" aria-live="polite">
+      <section class="phase" id="phase" data-phase="checking">
+        <div class="phase-head">
+          <span class="phase-mark" aria-hidden="true"></span>
+          <div>
+            <h2 class="phase-title" id="title">Checking for updates…</h2>
+            <p class="phase-text" id="text">Asking the release channel.</p>
+          </div>
+        </div>
+
+        <div class="versions" id="versions">
+          <div class="version">
+            <span class="label">You have</span>
+            <span class="numerals" id="current">—</span>
+          </div>
+          <div class="version-arrow" id="arrow" hidden aria-hidden="true">→</div>
+          <div class="version" id="offered-box" hidden>
+            <span class="label" id="offered-label">Available</span>
+            <span class="numerals" id="offered">—</span>
+          </div>
+        </div>
+
+        <div class="progress" id="progress" hidden role="progressbar" aria-label="Download" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-fill" id="progress-fill"></div>
+          <span class="progress-text numerals" id="progress-text"></span>
+        </div>
+
+        <div class="notes" id="notes" hidden>
+          <h3 id="notes-title">What's new</h3>
+          <div class="notes-body" id="notes-body"></div>
+        </div>
+
+        <p class="fineprint" id="fineprint" hidden></p>
+      </section>
+    </main>
+
+    <footer class="updater-actions" id="actions">
+      <button id="btn-releases" class="ghost">Releases on GitHub</button>
+      <span class="push-right"></span>
+      <button id="btn-restore" hidden>Restore the previous version…</button>
+      <button id="btn-check" hidden>Check again</button>
+      <button id="btn-later" hidden>Not now</button>
+      <button id="btn-install" class="primary" hidden>Install and restart</button>
+      <button id="btn-restart" class="primary" hidden>Restart now</button>
+      <button id="btn-close" hidden>Close</button>
+    </footer>
+
+    <script src="update.js"></script>
+  </body>
+</html>

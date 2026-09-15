@@ -1,0 +1,320 @@
+/* Aether HF — the updates window.
+ *
+ * The same tokens as the panel (style.css), one column, one phase at a time. The phase's
+ * colour is a semantic status: link for "you are current" and "complete", accent for the
+ * offer and the work in progress, warning for a restart, error for a failure. */
+
+body.updater {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.updater-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.chip {
+  margin-left: auto;
+  font: 600 10.5px/1 var(--numerals);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.updater-main {
+  flex: 1;
+  padding: var(--s4);
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.phase {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-height: 0;
+}
+
+.phase-head {
+  display: flex;
+  gap: var(--s3);
+  align-items: flex-start;
+}
+
+.phase-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--status-idle);
+  box-shadow: 0 0 0 4px var(--surface-2);
+  transition: background var(--t-fast);
+}
+
+.phase[data-phase="checking"] .phase-mark,
+.phase[data-phase="downloading"] .phase-mark,
+.phase[data-phase="installing"] .phase-mark {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.phase[data-phase="available"] .phase-mark {
+  background: var(--accent);
+}
+
+.phase[data-phase="up-to-date"] .phase-mark,
+.phase[data-phase="complete"] .phase-mark {
+  background: var(--status-link);
+}
+
+.phase[data-phase="restart-required"] .phase-mark,
+.phase[data-phase="incomplete"] .phase-mark {
+  background: var(--status-warning);
+}
+
+.phase[data-phase="error"] .phase-mark {
+  background: var(--status-error);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.phase-title {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.phase-text {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  max-width: 60ch;
+}
+
+/* the two versions, side by side, the arrow between them */
+.versions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  min-width: 160px;
+}
+
+.version .label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.version .numerals {
+  font: 500 16px/1.3 var(--numerals);
+  color: var(--text);
+}
+
+.version-arrow {
+  color: var(--text-3);
+  font-size: 18px;
+}
+
+.progress {
+  position: relative;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--plot-bg);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.progress[data-indeterminate="true"] .progress-fill {
+  width: 30%;
+  animation: slide 1.4s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+.progress-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text);
+  mix-blend-mode: difference;
+}
+
+/* the release notes: Markdown as git-cliff writes it, rendered small and quiet */
+.notes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.notes h3 {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.notes-body {
+  overflow: auto;
+  padding: 10px 14px;
+  min-height: 80px;
+  max-height: 44vh;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notes-body h1,
+.notes-body h2,
+.notes-body h3,
+.notes-body h4 {
+  margin: 10px 0 4px;
+  padding: 0;
+  border: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+.notes-body h3,
+.notes-body h4 {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.notes-body h1:first-child,
+.notes-body h2:first-child,
+.notes-body h3:first-child {
+  margin-top: 0;
+}
+
+.notes-body ul {
+  margin: 2px 0 8px;
+  padding-left: 18px;
+}
+
+.notes-body li {
+  margin: 2px 0;
+}
+
+.notes-body p {
+  margin: 4px 0 8px;
+}
+
+.notes-body code {
+  font-size: 11.5px;
+}
+
+.notes-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.notes-body a:hover {
+  text-decoration: underline;
+}
+
+.notes-body .hash {
+  color: var(--text-3);
+  font: 11px var(--numerals);
+}
+
+.fineprint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  max-width: 64ch;
+}
+
+.updater-actions {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  flex-wrap: wrap;
+}
+
+.updater-actions .push-right {
+  flex: 1;
+}
+
+@media (max-width: 480px) {
+  .updater-main {
+    padding: var(--s3);
+  }
+
+  .version {
+    min-width: 0;
+    flex: 1;
+  }
+}
