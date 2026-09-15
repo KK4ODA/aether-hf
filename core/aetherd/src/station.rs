@@ -24,7 +24,9 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use aether_link::{
     Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
-    frames::{DataHeader, DataKind, decode_data, encode_data, pack_callsign, unpack_callsign},
+    frames::{
+        ConnectBody, DataHeader, DataKind, decode_data, encode_data, pack_callsign, unpack_callsign,
+    },
     rate::PAYLOAD_BYTES,
 };
 use aether_phy::{
@@ -40,6 +42,7 @@ use crate::{
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
+    spectrum::{Spectrum, SpectrumAnalyser},
 };
 
 /// How a station is set up.
@@ -305,6 +308,65 @@ impl LevelMeter {
     }
 }
 
+/// What the physical layer made of one frame: for a display, for the list of stations
+/// heard, and for a recording's sidecar.
+///
+/// The callsigns are read off the frame itself where it carries them — a beacon, a
+/// connect request or its answer — and otherwise attributed to the other end of the
+/// session when the frame belongs to it (same session id). A frame from nobody this
+/// station can name has neither.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameReport {
+    /// Station time, seconds.
+    pub t_s: f64,
+    /// `data`, `control`, `beacon`, `connect` (a request) or `answer`.
+    pub kind: &'static str,
+    /// Mode index.
+    pub mode: usize,
+    /// Redundancy version.
+    pub rv: u8,
+    /// SNR, dB, 3 kHz reference.
+    pub snr_db: f64,
+    /// Carrier offset removed, hertz — positive means the other station is high.
+    pub cfo_hz: f64,
+    /// How sure the receiver was of the mode chips (below about 1.3 is a guess).
+    pub confidence: f64,
+    /// Whether the payload decoded.
+    pub decoded: bool,
+    /// Payload bytes, when it did.
+    pub bytes: usize,
+    /// Who sent it, when the frame says or the session implies.
+    pub from: Option<String>,
+    /// Who it was addressed to, when the frame says.
+    pub to: Option<String>,
+    /// A control frame's fields, spelled out.
+    pub control: Option<String>,
+}
+
+/// A session's account, kept from the moment it comes up to the moment it ends.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkAccount {
+    /// Station time when the session came up.
+    pub started_s: f64,
+    /// Application bytes handed to the link this session, before compression.
+    pub bytes_sent: usize,
+    /// Application bytes delivered this session, after decompression.
+    pub bytes_received: usize,
+}
+
+/// The dial frequency, asked of the radio now and then rather than on every frame.
+#[derive(Debug, Clone, Copy, Default)]
+struct FrequencyCache {
+    value: Option<u64>,
+    next_ask_s: f64,
+}
+
+/// How far back the throughput reading looks, seconds.
+const THROUGHPUT_WINDOW_S: f64 = 30.0;
+
+/// The most constellation points kept from a frame, for the display.
+const CONSTELLATION_POINTS: usize = 1024;
+
 /// Counters a status display can show.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StationStats {
@@ -367,6 +429,23 @@ pub struct Station<P: Ptt> {
     pending_callsigns: Option<Vec<String>>,
     delivered: Vec<u8>,
     events: Vec<String>,
+    /// Frames the physical layer reported since a client last took them.
+    reports: Vec<FrameReport>,
+    /// The last frame, and its equalised constellation, for the diagnostics display.
+    last_frame: Option<FrameReport>,
+    last_symbols: Vec<Complex>,
+    /// What the sound card is delivering, for the spectrum display.
+    spectrum: SpectrumAnalyser,
+    /// Until when a burst is known to be arriving: a preamble was found and its frame
+    /// has not finished, or a frame just finished and the next may follow.
+    rx_until: f64,
+    /// The session's account, while one is up.
+    link: Option<LinkAccount>,
+    /// Bytes that crossed the air, with when, for the throughput reading.
+    moved: VecDeque<(f64, usize)>,
+    /// The engine's acknowledged-plus-delivered count when `moved` was last fed.
+    crossed: usize,
+    frequency: FrequencyCache,
     compressor: Compressor,
     decompressor: Decompressor,
     /// Application bytes waiting for a session to negotiate compression.
@@ -438,6 +517,15 @@ impl<P: Ptt> Station<P> {
             pending_callsigns: None,
             delivered: Vec::new(),
             events: Vec::new(),
+            reports: Vec::new(),
+            last_frame: None,
+            last_symbols: Vec::new(),
+            spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
+            rx_until: f64::NEG_INFINITY,
+            link: None,
+            moved: VecDeque::new(),
+            crossed: 0,
+            frequency: FrequencyCache::default(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
             // have not agreed on anything, and a guess would produce a stream the peer
             // cannot read.
@@ -508,6 +596,86 @@ impl<P: Ptt> Station<P> {
     /// Events reported since the last call, as `name:detail`.
     pub fn take_events(&mut self) -> Vec<String> {
         std::mem::take(&mut self.events)
+    }
+
+    /// The waveform this station runs.
+    #[must_use]
+    pub fn params(&self) -> WaveformParams {
+        self.config.params
+    }
+
+    /// Frames reported since the last call.
+    pub fn take_frame_reports(&mut self) -> Vec<FrameReport> {
+        std::mem::take(&mut self.reports)
+    }
+
+    /// The last frame the physical layer found, decoded or not.
+    #[must_use]
+    pub fn last_frame(&self) -> Option<&FrameReport> {
+        self.last_frame.as_ref()
+    }
+
+    /// The last frame's equalised constellation, thinned to at most
+    /// [`CONSTELLATION_POINTS`] points, with the frame it came from.
+    #[must_use]
+    pub fn constellation(&self) -> Option<(&FrameReport, &[Complex])> {
+        self.last_frame
+            .as_ref()
+            .map(|frame| (frame, self.last_symbols.as_slice()))
+    }
+
+    /// A spectrum of the last window of captured audio, once one has been heard.
+    #[must_use]
+    pub fn spectrum(&self) -> Option<Spectrum> {
+        self.spectrum.compute()
+    }
+
+    /// Whether a burst is arriving right now.
+    #[must_use]
+    pub fn receiving(&self) -> bool {
+        !self.transmitting && self.now() < self.rx_until
+    }
+
+    /// The session's account, while one is up.
+    #[must_use]
+    pub fn link(&self) -> Option<LinkAccount> {
+        self.link
+    }
+
+    /// Payload bytes that crossed the air in either direction — acknowledged by the
+    /// other station, or received from it — over the last [`THROUGHPUT_WINDOW_S`] seconds
+    /// of the session, as bits per second. Zero when no session is up.
+    #[must_use]
+    pub fn throughput_bps(&self) -> f64 {
+        let Some(link) = self.link else { return 0.0 };
+        let now = self.now();
+        let since = now - THROUGHPUT_WINDOW_S;
+        let bytes: usize = self
+            .moved
+            .iter()
+            .filter(|(t, _)| *t >= since)
+            .map(|(_, n)| n)
+            .sum();
+        let span = (now - link.started_s).clamp(1.0, THROUGHPUT_WINDOW_S);
+        bytes as f64 * 8.0 / span
+    }
+
+    /// The dial frequency, when the keying interface can ask the radio.
+    ///
+    /// Asked at most every ten seconds — every minute after the radio did not answer —
+    /// and never while transmitting, so a display that polls does not turn into a
+    /// stream of CAT traffic; a station keyed by a serial line has no answer at all.
+    pub fn frequency_hz(&mut self) -> Option<u64> {
+        let now = self.now();
+        if self.transmitting || now < self.frequency.next_ask_s {
+            return self.frequency.value;
+        }
+        let answer = self.ptt.inner_mut().frequency_hz();
+        self.frequency.next_ask_s = now + if answer.is_some() { 10.0 } else { 60.0 };
+        if answer.is_some() {
+            self.frequency.value = answer;
+        }
+        self.frequency.value
     }
 
     /// The link engine, for a status display.
@@ -607,6 +775,9 @@ impl<P: Ptt> Station<P> {
             return;
         }
         let pending = std::mem::take(&mut self.outbound);
+        if let Some(link) = &mut self.link {
+            link.bytes_sent += pending.len();
+        }
         let wire = self.compressor.push(&pending);
         self.stats.bytes_before_compression = self.compressor.bytes_in;
         self.stats.bytes_after_compression = self.compressor.bytes_out;
@@ -930,6 +1101,7 @@ impl<P: Ptt> Station<P> {
     pub fn capture(&mut self, audio: &[f32]) -> Result<(), PttError> {
         self.audio_seen += audio.len();
         self.meter.push(audio);
+        self.spectrum.push(audio);
         if let Some(recording) = &mut self.recording
             && let Err(error) = recording.captured(audio)
         {
@@ -1050,6 +1222,7 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
+            self.report(&decoded, now);
             if let Some(recording) = &mut self.recording {
                 recording.frame(crate::record::FrameRecord {
                     t_s: now,
@@ -1112,9 +1285,95 @@ impl<P: Ptt> Station<P> {
             // before the frame itself arrives, and it marks the channel busy at an SNR far
             // below anything a power measurement would catch
             self.busy.mark_frame(now);
+            self.rx_until = self.rx_until.max(now + LONG.duration_s());
             self.engine.on_preamble(pending.sync.start as f64 / fs, now);
         }
         self.pump();
+    }
+
+    /// Describe a frame for the displays, and keep its constellation.
+    fn report(&mut self, decoded: &aether_phy::DecodedFrame, now: f64) {
+        let frame = &decoded.frame;
+        let control = frame.sync.frame_type == FrameType::Control;
+        let payload = decoded.payload.as_deref();
+        let mut report = FrameReport {
+            t_s: now,
+            kind: if control { "control" } else { "data" },
+            mode: frame.mode,
+            rv: frame.rv,
+            snr_db: frame.snr_3k_db,
+            cfo_hz: frame.cfo_hz,
+            confidence: frame.mode_confidence,
+            decoded: decoded.ok(),
+            bytes: payload.map_or(0, <[u8]>::len),
+            from: None,
+            to: None,
+            control: None,
+        };
+        // a frame that belongs to the session is the other station's; one with another
+        // session id is somebody else's business and stays unattributed
+        let ours = |session: u8| {
+            (self.engine.connected() && session == self.engine.session())
+                .then(|| self.engine.remote_call.clone())
+        };
+        if control {
+            if let Some(payload) = payload {
+                report.control = crate::record::describe_control(payload);
+                if let Ok(control) = aether_link::frames::ControlFrame::decode(payload) {
+                    report.from = ours(control.session);
+                }
+            }
+        } else if let Some((header, body)) = payload.and_then(|p| decode_data(p).ok()) {
+            match header.kind {
+                DataKind::Beacon => {
+                    report.kind = "beacon";
+                    report.from = unpack_callsign(&body).ok();
+                }
+                DataKind::ConnectReq | DataKind::ConnectAck => {
+                    report.kind = if header.kind == DataKind::ConnectReq {
+                        "connect"
+                    } else {
+                        "answer"
+                    };
+                    if let Ok(connect) = ConnectBody::decode(&body) {
+                        report.from = Some(connect.src);
+                        report.to = Some(connect.dst);
+                    }
+                }
+                DataKind::Data => report.from = ours(header.session),
+            }
+        }
+        // the constellation, thinned evenly so a long frame costs a display no more
+        // than a short one
+        let step = frame.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
+        self.last_symbols = frame.symbols.iter().step_by(step).copied().collect();
+        self.last_frame = Some(report.clone());
+        self.reports.push(report);
+        // the burst may go on: the next frame's preamble is a symbol or two away
+        self.rx_until = self.rx_until.max(now + 0.5);
+    }
+
+    /// Note what crossed the air since last time, for the throughput reading: payload
+    /// bytes the other station acknowledged, and payload bytes received from it — the
+    /// engine's own counters, so a burst that was sent but never acknowledged counts for
+    /// nothing, exactly as it should.
+    fn account(&mut self) {
+        let stats = self.engine.stats;
+        let crossed = stats.bytes_acked + stats.bytes_delivered;
+        let bytes = crossed.saturating_sub(self.crossed);
+        self.crossed = crossed;
+        if bytes == 0 || self.link.is_none() {
+            return;
+        }
+        let now = self.now();
+        self.moved.push_back((now, bytes));
+        while self
+            .moved
+            .front()
+            .is_some_and(|(t, _)| *t < now - THROUGHPUT_WINDOW_S)
+        {
+            self.moved.pop_front();
+        }
     }
 
     /// Take what the engine has decided and act on it.
@@ -1133,6 +1392,9 @@ impl<P: Ptt> Station<P> {
                             "the peer sent a compressed stream this station cannot read",
                         );
                     }
+                    if let Some(link) = &mut self.link {
+                        link.bytes_received += plain.len();
+                    }
                     self.delivered.extend_from_slice(&plain);
                 }
                 Action::Event { name, detail } => {
@@ -1147,8 +1409,16 @@ impl<P: Ptt> Station<P> {
                         );
                         self.compressor = Compressor::new(agreed);
                         self.decompressor = Decompressor::new(agreed);
+                        self.link = Some(LinkAccount {
+                            started_s: self.now(),
+                            bytes_sent: 0,
+                            bytes_received: 0,
+                        });
+                        self.moved.clear();
                         connected = true;
                     } else if name == "disconnected" {
+                        self.link = None;
+                        self.moved.clear();
                         self.compressor = Compressor::new(false);
                         self.decompressor = Decompressor::new(false);
                         if let Some(calls) = self.pending_callsigns.take() {
@@ -1180,6 +1450,7 @@ impl<P: Ptt> Station<P> {
         if connected {
             self.flush_outbound();
         }
+        self.account();
     }
 
     /// Render the next queued burst into playable audio, if the channel allows.
@@ -1949,6 +2220,159 @@ mod tests {
         assert_eq!(air.b.stats.transmissions, 0, "it answered a beacon");
         assert_eq!(air.b.state(), State::Idle);
         assert_eq!(air.a.state(), State::Idle);
+    }
+
+    #[test]
+    fn every_frame_is_reported_with_what_the_receiver_made_of_it() {
+        // the readings a panel shows come from the receiver's own estimates, frame by
+        // frame: a beacon names its sender outright, and once a session is up the frames
+        // with its id are the other station's
+        let mut air = Air::new(1.0, 0.0005);
+        assert!(air.b.last_frame().is_none());
+        assert!(air.b.constellation().is_none());
+        air.a.beacon().expect("idle");
+        air.run(30.0, |_, b| b.stats.beacons_heard > 0);
+        let reports = air.b.take_frame_reports();
+        let beacon = reports
+            .iter()
+            .find(|r| r.kind == "beacon")
+            .expect("the beacon was reported");
+        assert_eq!(beacon.from.as_deref(), Some("W4ODA"));
+        assert_eq!(beacon.to, None);
+        assert!(beacon.decoded);
+        assert!(beacon.snr_db > 20.0, "a wire reads {} dB", beacon.snr_db);
+        assert!(
+            beacon.cfo_hz.abs() < 5.0,
+            "a wire has no offset: {}",
+            beacon.cfo_hz
+        );
+        assert!(beacon.confidence >= 1.0);
+        let (last, points) = air.b.constellation().expect("a frame was heard");
+        assert_eq!(last, beacon);
+        assert!(!points.is_empty() && points.len() <= CONSTELLATION_POINTS);
+        // decoded on a wire, the points sit on their constellation: none is near the origin
+        assert!(points.iter().all(|(i, q)| i.hypot(*q) > 0.2));
+        assert!(
+            air.b.take_frame_reports().is_empty(),
+            "reports are taken once"
+        );
+
+        // a session: its frames carry no callsign, and are attributed by their session id
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(30.0, |a, b| a.connected() && b.connected());
+        air.a.take_frame_reports();
+        air.b.take_frame_reports();
+        air.a.send(&[0x5a; 300]);
+        air.run(120.0, |_, b| b.received_len() >= 300);
+        let on_b = air.b.take_frame_reports();
+        let data: Vec<_> = on_b.iter().filter(|r| r.kind == "data").collect();
+        assert!(!data.is_empty());
+        assert!(
+            data.iter().all(|r| r.from.as_deref() == Some("W4ODA")),
+            "{data:?}"
+        );
+        let on_a = air.a.take_frame_reports();
+        let acks: Vec<_> = on_a.iter().filter(|r| r.kind == "control").collect();
+        assert!(!acks.is_empty());
+        assert!(acks.iter().all(|r| r.from.as_deref() == Some("KK4XYZ")));
+        assert!(
+            acks.iter()
+                .all(|r| r.control.as_deref().is_some_and(|c| c.starts_with("Ack")))
+        );
+    }
+
+    #[test]
+    fn a_session_keeps_its_account_and_its_throughput() {
+        let mut air = Air::new(1.0, 0.0005);
+        assert!(air.a.link().is_none());
+        assert!(air.a.throughput_bps().abs() < f64::EPSILON);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(30.0, |a, b| a.connected() && b.connected());
+        let link = air.a.link().expect("a session is up");
+        assert_eq!(link.bytes_sent, 0);
+        assert!(link.started_s > 0.0 && link.started_s <= air.a.now());
+        // the connect frames themselves are reported, with both callsigns
+        let reports = air.b.take_frame_reports();
+        let request = reports
+            .iter()
+            .find(|r| r.kind == "connect")
+            .expect("the request was heard by the called station");
+        assert_eq!(request.from.as_deref(), Some("W4ODA"));
+        assert_eq!(request.to.as_deref(), Some("KK4XYZ"));
+        let answer = air
+            .a
+            .take_frame_reports()
+            .into_iter()
+            .find(|r| r.kind == "answer")
+            .expect("the answer was heard by the caller");
+        assert_eq!(answer.from.as_deref(), Some("KK4XYZ"));
+        assert_eq!(answer.to.as_deref(), Some("W4ODA"));
+
+        air.a.send(&[0x33; 500]);
+        air.run(120.0, |_, b| b.received_len() >= 500);
+        assert_eq!(air.a.link().expect("still up").bytes_sent, 500);
+        assert_eq!(air.b.link().expect("still up").bytes_received, 500);
+        assert_eq!(air.b.link().expect("still up").bytes_sent, 0);
+        // the reading counts what crossed the air: 500 repeated bytes compress to a few
+        // dozen, so it is small, and it is not zero
+        let bps = air.b.throughput_bps();
+        assert!(bps > 0.0 && bps < 20_000.0, "{bps} bit/s");
+        assert!(
+            air.b.link().expect("still up").started_s < air.b.now(),
+            "the session has lasted a while"
+        );
+
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        assert!(air.a.link().is_none(), "the account ends with the session");
+        assert!(air.a.throughput_bps().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_receiving_lamp_follows_a_burst() {
+        let mut air = Air::new(1.0, 0.0005);
+        assert!(!air.b.receiving());
+        air.a.beacon().expect("idle");
+        let mut lit = false;
+        air.run(30.0, |_, b| {
+            lit |= b.receiving();
+            b.stats.beacons_heard > 0
+        });
+        assert!(lit, "the lamp never lit while the beacon arrived");
+        air.run(3.0, |_, _| false);
+        assert!(!air.b.receiving(), "the lamp stayed lit after the burst");
+    }
+
+    #[test]
+    fn a_spectrum_is_available_once_a_window_of_audio_was_heard() {
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert!(station.spectrum().is_none());
+        let fs = WIDE_2300.audio_rate as f64;
+        let tone: Vec<f32> = (0..8192)
+            .map(|n| 0.3 * (std::f64::consts::TAU * 1500.0 * f64::from(n) / fs).sin() as f32)
+            .collect();
+        station.capture(&tone).expect("capture");
+        let spectrum = station.spectrum().expect("a window was heard");
+        let peak = spectrum
+            .bins_db
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i as f64 * spectrum.bin_hz)
+            .expect("bins");
+        assert!(
+            (peak - 1500.0).abs() < 2.0 * spectrum.bin_hz,
+            "peak at {peak} Hz"
+        );
     }
 
     #[test]

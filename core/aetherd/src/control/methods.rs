@@ -81,6 +81,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "shutdown"
             | "config.set"
             | "ptt.test"
+            | "heard.clear"
     )
 }
 
@@ -114,6 +115,21 @@ pub struct DaemonState {
     /// so; a daemon run from a terminal has nobody to do it, and the panel must not offer
     /// what would only stop the modem.
     pub supervised: bool,
+    /// The stations heard, kept in a file beside the configuration.
+    pub heard: crate::heard::HeardList,
+    /// The host interface, when one is listening.
+    pub host: Option<HostStatus>,
+}
+
+/// The host (VARA-compatible) interface, as `status` reports it.
+#[derive(Debug, Clone)]
+pub struct HostStatus {
+    /// Where the command port listens.
+    pub command_address: String,
+    /// Where the data port listens.
+    pub data_address: String,
+    /// Whether a host program is connected right now.
+    pub connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DaemonState {
@@ -126,13 +142,28 @@ impl DaemonState {
     ) -> Self {
         Self {
             config,
-            path,
             log,
             started: std::time::SystemTime::now(),
             audio: String::new(),
             dropped_audio: 0,
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
+            heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
+            host: None,
+            path,
+        }
+    }
+
+    /// The host interface, as `status` reports it.
+    fn host_json(&self) -> Value {
+        match &self.host {
+            Some(host) => json!({
+                "enabled": true,
+                "command_address": host.command_address,
+                "data_address": host.data_address,
+                "connected": host.connected.load(std::sync::atomic::Ordering::Relaxed),
+            }),
+            None => json!({ "enabled": false, "connected": false }),
         }
     }
 }
@@ -177,9 +208,30 @@ pub fn dispatch_with<P: Ptt>(
         "diagnostics" => return diagnostics(station, daemon, request.id.clone()),
         // whether a restart is something the panel can do for the operator is the
         // daemon's to know, not the station's
+        "heard.list" => {
+            let stations = daemon
+                .as_ref()
+                .map_or_else(Vec::new, |d| d.heard.stations().to_vec());
+            return Response::ok(
+                request.id.clone(),
+                json!({
+                    "stations": stations,
+                    "limit": crate::heard::LIMIT,
+                    "path": daemon.as_ref().and_then(|d| d.heard.path()).map(|p| p.display().to_string()),
+                }),
+            );
+        }
+        "heard.clear" => {
+            let cleared = daemon.map_or(0, |d| d.heard.clear());
+            return Response::ok(request.id.clone(), json!({ "cleared": cleared }));
+        }
         "status" => {
             let mut result = status(station);
             result["supervised"] = json!(daemon.as_ref().is_some_and(|d| d.supervised));
+            result["host"] = daemon.as_ref().map_or_else(
+                || json!({ "enabled": false, "connected": false }),
+                |d| d.host_json(),
+            );
             // which installation this daemon runs from: a shell that finds one already
             // listening decides from this whether it is its own to stop
             result["binary"] = json!(
@@ -253,7 +305,7 @@ fn unix_ms(time: std::time::SystemTime) -> u64 {
 /// answers all of them at once, with the secrets out and the recent log in, so the panel can
 /// offer one "copy" button and an issue can be filed from a phone.
 fn diagnostics<P: Ptt>(
-    station: &Station<P>,
+    station: &mut Station<P>,
     daemon: Option<&mut DaemonState>,
     id: Option<String>,
 ) -> Response {
@@ -354,6 +406,8 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
     match request.method.as_str() {
         "status" => Response::ok(id, status(station)),
         "capabilities" => Response::ok(id, capabilities()),
+        "spectrum" => Response::ok(id, spectrum(station)),
+        "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, params, id),
         "callsigns.set" => set_callsigns(station, params, id),
         "beacon" => match station.beacon() {
@@ -566,9 +620,11 @@ fn devices(id: Option<String>) -> Response {
 }
 
 /// Everything a client needs to render the station's current state.
-fn status<P: Ptt>(station: &Station<P>) -> Value {
+fn status<P: Ptt>(station: &mut Station<P>) -> Value {
+    let frequency_hz = station.frequency_hz();
     let engine = station.engine();
     json!({
+        "frequency_hz": frequency_hz,
         "state": match station.state() {
             aether_link::State::Idle => "idle",
             aether_link::State::Connecting => "connecting",
@@ -593,6 +649,7 @@ fn status<P: Ptt>(station: &Station<P>) -> Value {
         "ptt": station.ptt_description(),
         "queued_bytes": engine.tx_pending_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
+        "link": link_json(station),
         "metrics": metrics(station),
         "recording": station.recording().map(|(path, seconds)| json!({
             "path": path.display().to_string(),
@@ -685,6 +742,8 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
             Value::Null
         }
     };
+    let (rate_snr_db, margin_db) = station.engine().rate_readings();
+    let last = station.last_frame();
     json!({
         "mode": station.engine().current_mode(),
         "queued_bytes": station.engine().tx_pending_bytes(),
@@ -692,8 +751,86 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "level_db": level(busy.level_db),
         "channel_busy": station.channel_busy(),
         "transmitting": station.transmitting(),
+        "receiving": station.receiving(),
         "audio": level_json(&station.audio_level()),
+        // the last frame the receiver found: its SNR is the reading an operator calls
+        // "the SNR", its offset is what the other station's dial is off by
+        "snr_db": last.map(|f| f.snr_db),
+        "cfo_hz": last.map(|f| f.cfo_hz),
+        "last_frame_s": last.map(|f| f.t_s),
+        // what the other station reports hearing this one at
+        "peer_snr_db": station.engine().peer_snr_db(),
+        // the rate controller's own view: the smoothed SNR it acts on and its margin
+        "rate_snr_db": rate_snr_db,
+        "margin_db": margin_db,
+        "throughput_bps": station.throughput_bps(),
+        "link": link_json(station),
     })
+}
+
+/// The session's account, or null when no session is up.
+fn link_json<P: Ptt>(station: &Station<P>) -> Value {
+    match station.link() {
+        Some(link) => json!({
+            "started_s": link.started_s,
+            "seconds": station.now() - link.started_s,
+            "remote": station.engine().remote_call,
+            "bytes_sent": link.bytes_sent,
+            "bytes_received": link.bytes_received,
+        }),
+        None => Value::Null,
+    }
+}
+
+/// One frame, as the `frame` event and the `constellation` method report it.
+#[must_use]
+pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
+    json!({
+        "t_s": frame.t_s,
+        "kind": frame.kind,
+        "mode": frame.mode,
+        "rv": frame.rv,
+        "snr_db": frame.snr_db,
+        "cfo_hz": frame.cfo_hz,
+        "confidence": frame.confidence,
+        "decoded": frame.decoded,
+        "bytes": frame.bytes,
+        "from": frame.from,
+        "to": frame.to,
+        "control": frame.control,
+    })
+}
+
+/// A spectrum of what the sound card is delivering, for the panel to draw.
+///
+/// Polled rather than streamed: it costs a transform per call and nothing otherwise,
+/// so a gateway with nobody watching pays nothing. `bins_db` is empty until a whole
+/// window of audio has been heard.
+fn spectrum<P: Ptt>(station: &Station<P>) -> Value {
+    let params = station.params();
+    let spectrum = station.spectrum();
+    let half = params.bandwidth.hz() as f64 / 2.0;
+    json!({
+        "bin_hz": spectrum.as_ref().map_or(0.0, |s| s.bin_hz),
+        "bins_db": spectrum.as_ref().map_or(&[][..], |s| s.bins_db.as_slice()),
+        // where this modem's signal sits, so the display can mark its edges
+        "passband_hz": [params.centre_hz - half, params.centre_hz + half],
+        "transmitting": station.transmitting(),
+    })
+}
+
+/// The last frame's equalised constellation, with the frame it came from.
+fn constellation<P: Ptt>(station: &Station<P>) -> Value {
+    match station.constellation() {
+        Some((frame, symbols)) => json!({
+            "frame": frame_json(frame),
+            "points": symbols
+                .iter()
+                .map(|(i, q)| [(*i * 1000.0).round() / 1000.0, (*q * 1000.0).round() / 1000.0])
+                .collect::<Vec<_>>(),
+        }),
+        None => json!({ "frame": Value::Null, "points": [] }),
+    }
 }
 
 /// What this modem can do, so a client discovers the mode table instead of hard-coding it.
@@ -873,6 +1010,111 @@ mod tests {
         assert_eq!(response.error.expect("error").code, "bad_params");
     }
 
+    #[test]
+    fn the_displays_read_the_modem_and_never_a_guess() {
+        let mut station = station();
+        // nothing heard: the spectrum has no bins and the constellation no points, and a
+        // client can tell that from a quiet channel
+        let response = call(&mut station, "spectrum", json!({}));
+        assert!(response.ok);
+        let result = response.result.expect("result");
+        assert_eq!(result["bins_db"].as_array().map(Vec::len), Some(0));
+        let width =
+            result["passband_hz"][1].as_f64().unwrap() - result["passband_hz"][0].as_f64().unwrap();
+        assert!((width - 2300.0).abs() < 1e-9, "{width}");
+        let response = call(&mut station, "constellation", json!({}));
+        assert!(response.ok);
+        let result = response.result.expect("result");
+        assert!(result["frame"].is_null());
+        assert_eq!(result["points"].as_array().map(Vec::len), Some(0));
+        let response = call(&mut station, "status", json!({}));
+        let result = response.result.expect("result");
+        assert!(result["link"].is_null(), "no session, no account");
+        assert!(result["metrics"]["snr_db"].is_null(), "no frame, no SNR");
+        assert_eq!(result["metrics"]["receiving"], false);
+        assert_eq!(result["metrics"]["throughput_bps"], 0.0);
+        assert!(
+            result["frequency_hz"].is_null(),
+            "a null keying line cannot ask"
+        );
+        assert_eq!(result["host"]["enabled"], false);
+
+        // a window of a tone: the spectrum has it
+        let fs = aether_phy::waveform::WIDE_2300.audio_rate as f64;
+        let tone: Vec<f32> = (0..8192)
+            .map(|n| 0.3 * (std::f64::consts::TAU * 1000.0 * f64::from(n) / fs).sin() as f32)
+            .collect();
+        station.capture(&tone).expect("capture");
+        let result = call(&mut station, "spectrum", json!({}))
+            .result
+            .expect("result");
+        let bins = result["bins_db"].as_array().expect("bins");
+        assert!(!bins.is_empty());
+        let bin_hz = result["bin_hz"].as_f64().expect("bin_hz");
+        let peak = bins
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.as_f64().unwrap().total_cmp(&b.1.as_f64().unwrap()))
+            .map(|(i, _)| i as f64 * bin_hz)
+            .expect("peak");
+        assert!((peak - 1000.0).abs() < 2.0 * bin_hz, "peak at {peak} Hz");
+        assert!(
+            !is_mutating("spectrum") && !is_mutating("constellation") && !is_mutating("heard.list")
+        );
+        assert!(is_mutating("heard.clear"));
+    }
+
+    #[test]
+    fn the_stations_heard_are_listed_and_forgotten() {
+        let mut station = station();
+        let mut daemon = daemon();
+        let request = |method: &str| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params: json!({}),
+            token: None,
+        };
+        let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
+        let result = response.result.expect("result");
+        assert_eq!(result["stations"].as_array().map(Vec::len), Some(0));
+        assert_eq!(result["limit"], crate::heard::LIMIT);
+        daemon.heard.note(crate::heard::Sighting {
+            callsign: "W4TGA".to_owned(),
+            at_ms: 1_700_000_000_000,
+            snr_db: 7.5,
+            mode: Some(2),
+            frequency_hz: Some(7_101_000),
+            activity: crate::heard::Activity::Beacon,
+            detail: None,
+        });
+        let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
+        let result = response.result.expect("result");
+        let stations = result["stations"].as_array().expect("stations");
+        assert_eq!(stations.len(), 1);
+        assert_eq!(stations[0]["callsign"], "W4TGA");
+        assert_eq!(stations[0]["activity"], "beacon");
+        assert_eq!(stations[0]["frequency_hz"], 7_101_000);
+        assert_eq!(stations[0]["best_snr_db"], 7.5);
+        let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.clear"));
+        assert_eq!(response.result.expect("result")["cleared"], 1);
+        let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
+        assert_eq!(
+            response.result.expect("result")["stations"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+        // without the daemon's state there is no list, and the answer is an empty one
+        let response = dispatch(&mut station, &request("heard.list"));
+        assert!(response.ok);
+        assert_eq!(
+            response.result.expect("result")["stations"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
     fn daemon() -> DaemonState {
         let mut config = crate::config::Config::parse(crate::config::EXAMPLE).expect("example");
         config.control.token = Some("hunter2".to_owned());
@@ -881,6 +1123,8 @@ mod tests {
             std::path::PathBuf::from("station.toml"),
             crate::log::Log::memory(50),
         );
+        // and no file under the working directory for the stations heard
+        daemon.heard = crate::heard::HeardList::open(None);
         // not the machine's own: enumerating audio devices on a machine with no audio
         // service crashes inside the platform API, and a test must not depend on a sound card
         daemon.devices = || {

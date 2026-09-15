@@ -22,7 +22,7 @@ use aetherd::{
     config::{Config, EXAMPLE, PttConfig},
     control::{
         ControlServer, channel,
-        methods::{DaemonState, dispatch_with, is_mutating, metrics},
+        methods::{DaemonState, HostStatus, dispatch_with, frame_json, is_mutating, metrics},
         protocol::Event,
     },
     host::HostServer,
@@ -41,6 +41,9 @@ const IDLE_SLEEP: Duration = Duration::from_millis(5);
 /// How often to push link metrics to a listening client. Often enough to watch a transfer,
 /// rare enough that a client that only wants state changes is not flooded.
 const METRICS_INTERVAL: Duration = Duration::from_millis(500);
+/// How long a changed list of stations heard waits before it is written. A burst
+/// of frames is one write, not one per frame.
+const HEARD_SAVE_DELAY: Duration = Duration::from_secs(5);
 
 /// The exit status that asks a supervisor to start the daemon again.
 ///
@@ -410,6 +413,11 @@ fn start_servers(
 
     let host = if config.host.enabled {
         let server = HostServer::start(&config.host_config(), handle).map_err(|e| e.to_string())?;
+        daemon.host = Some(HostStatus {
+            command_address: server.command_address.to_string(),
+            data_address: server.data_address.to_string(),
+            connected: std::sync::Arc::clone(&server.connected),
+        });
         daemon.log.record(
             Level::Info,
             "host",
@@ -542,26 +550,11 @@ fn serve(
     let mut reported_drops = 0;
     let mut last_metrics = std::time::Instant::now();
     let mut last_keyed = false;
+    let mut heard_changed_at: Option<std::time::Instant> = None;
 
     loop {
         if stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            daemon.log.record(
-                Level::Info,
-                "daemon",
-                stop_reason(restarting),
-                &state_name(station),
-            );
-            // Report the failure but do not return on it: there is nothing left to try, and
-            // exiting quietly would hide a radio that is still keyed.
-            if let Err(error) = station.shut_down() {
-                daemon.log.record(
-                    Level::Error,
-                    "ptt",
-                    &format!("the radio would not release: {error}"),
-                    &state_name(station),
-                );
-                eprintln!("aetherd: the radio would not release: {error}");
-            }
+            stop(station, daemon, restarting);
             return Ok(());
         }
 
@@ -605,6 +598,7 @@ fn serve(
                 }),
             ));
         }
+        report_frames(station, control, daemon, &mut heard_changed_at);
         let received = station.take_received();
         if !received.is_empty() {
             control.publish(&Event::new(
@@ -653,6 +647,115 @@ fn serve(
             std::thread::sleep(IDLE_SLEEP);
         }
     }
+}
+
+/// The way out: the log says why, the stations heard are written, the radio is released.
+fn stop(
+    station: &mut Station<Box<dyn Ptt>>,
+    daemon: &mut DaemonState,
+    restarting: &std::sync::atomic::AtomicBool,
+) {
+    daemon.log.record(
+        Level::Info,
+        "daemon",
+        stop_reason(restarting),
+        &state_name(station),
+    );
+    if let Err(error) = daemon.heard.save() {
+        daemon.log.record(
+            Level::Warn,
+            "heard",
+            &format!("the stations heard were not saved: {error}"),
+            &state_name(station),
+        );
+    }
+    // Report the failure but do not return on it: there is nothing left to try, and
+    // exiting quietly would hide a radio that is still keyed.
+    if let Err(error) = station.shut_down() {
+        daemon.log.record(
+            Level::Error,
+            "ptt",
+            &format!("the radio would not release: {error}"),
+            &state_name(station),
+        );
+        eprintln!("aetherd: the radio would not release: {error}");
+    }
+}
+
+/// Every frame the physical layer found goes out as it is, decoded or not: a display
+/// plots them, and the ones with a callsign in them join the stations heard — which is
+/// written a few seconds after it last changed, so a burst of frames is one write.
+fn report_frames(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+    heard_changed_at: &mut Option<std::time::Instant>,
+) {
+    let frames = station.take_frame_reports();
+    if !frames.is_empty() {
+        let frequency_hz = station.frequency_hz();
+        let at_ms = unix_ms_now();
+        for frame in &frames {
+            control.publish(&Event::new("frame", frame_json(frame)));
+            if let Some(sighting) = sighting_of(frame, at_ms, frequency_hz) {
+                let entry = daemon.heard.note(sighting);
+                heard_changed_at.get_or_insert_with(std::time::Instant::now);
+                control.publish(&Event::new(
+                    "heard",
+                    serde_json::to_value(&entry).unwrap_or(serde_json::Value::Null),
+                ));
+            }
+        }
+    }
+    if heard_changed_at.is_some_and(|at| at.elapsed() >= HEARD_SAVE_DELAY) {
+        *heard_changed_at = None;
+        if let Err(error) = daemon.heard.save() {
+            daemon.log.record(
+                Level::Warn,
+                "heard",
+                &format!("the stations heard were not saved: {error}"),
+                &state_name(station),
+            );
+        }
+    }
+}
+
+/// Milliseconds since the Unix epoch, now.
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// What a frame says about who sent it, for the stations-heard list.
+///
+/// A frame with a callsign in it — a beacon, a connect request, an answer — names its
+/// sender outright. A data or control frame names nobody, but during a session one
+/// with the session's id is the other station's, which the station attributes on the
+/// way here. Anything else is heard and not counted: a frame from nobody is not a
+/// station.
+fn sighting_of(
+    frame: &aetherd::station::FrameReport,
+    at_ms: u64,
+    frequency_hz: Option<u64>,
+) -> Option<aetherd::heard::Sighting> {
+    use aetherd::heard::{Activity, Sighting};
+    let callsign = frame.from.clone()?;
+    let (activity, detail) = match frame.kind {
+        "beacon" => (Activity::Beacon, None),
+        "connect" => (Activity::Calling, frame.to.clone()),
+        "answer" => (Activity::Answering, frame.to.clone()),
+        _ => (Activity::Connected, None),
+    };
+    Some(Sighting {
+        callsign,
+        at_ms,
+        snr_db: frame.snr_db,
+        mode: (frame.kind != "control").then_some(frame.mode),
+        frequency_hz,
+        activity,
+        detail,
+    })
 }
 
 fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {

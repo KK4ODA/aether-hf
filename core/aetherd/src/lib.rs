@@ -15,12 +15,14 @@ pub mod compress;
 pub mod config;
 pub mod control;
 pub mod cwid;
+pub mod heard;
 pub mod host;
 pub mod log;
 pub mod ptt;
 pub mod record;
 pub mod replay;
 pub mod sim;
+pub mod spectrum;
 pub mod station;
 
 pub use audio::{AudioConfig, AudioError, AudioIo, Loopback, SoundCard};

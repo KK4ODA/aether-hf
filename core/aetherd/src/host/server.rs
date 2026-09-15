@@ -83,6 +83,9 @@ pub struct HostServer {
     /// The data port.
     pub data_address: std::net::SocketAddr,
     running: Arc<AtomicBool>,
+    /// Whether a host program holds the command port right now. Shared with the status
+    /// display, which is how an operator sees that Winlink Express or Pat is attached.
+    pub connected: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for HostServer {
@@ -130,6 +133,7 @@ impl HostServer {
         let running = Arc::new(AtomicBool::new(true));
         let pipe: Arc<Mutex<DataPipe>> = Arc::new(Mutex::new(DataPipe::default()));
         let busy = Arc::new(AtomicBool::new(false));
+        let connected = Arc::new(AtomicBool::new(false));
 
         spawn_data_loop(data, Arc::clone(&pipe), Arc::clone(&running))?;
         spawn_command_loop(
@@ -138,6 +142,7 @@ impl HostServer {
             pipe,
             busy,
             Arc::clone(&running),
+            Arc::clone(&connected),
             config.trace,
         )?;
 
@@ -145,6 +150,7 @@ impl HostServer {
             command_address,
             data_address,
             running,
+            connected,
         })
     }
 }
@@ -272,12 +278,12 @@ fn spawn_command_loop(
     pipe: Arc<Mutex<DataPipe>>,
     busy: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    taken: Arc<AtomicBool>,
     trace: bool,
 ) -> Result<(), HostError> {
     std::thread::Builder::new()
         .name("aetherd-host-cmd".to_owned())
         .spawn(move || {
-            let taken = Arc::new(AtomicBool::new(false));
             for stream in listener.incoming() {
                 if !running.load(Ordering::Relaxed) {
                     return;

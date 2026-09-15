@@ -88,7 +88,7 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's) |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `frequency_hz` (the dial, when the keying interface can ask the radio), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
@@ -124,6 +124,8 @@ distinction matters to an operator watching a transfer and is why both exist.
 | `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light |
 | `tune` | `duration_s` (0.5–10, or 0 to stop) | keys and plays a steady tone at the transmit level, for setting drive by the rig's ALC. `audio.tx_level` is live and is applied as audio leaves, so the level can be moved while the tone plays; `0` cuts the tone short, and nothing but a tone is ever cut |
 | `audio.level` | — | the last three seconds of received audio: RMS and peak in dBFS, clipping fraction, and a sentence of advice |
+| `spectrum` | — | the last window of captured audio transformed: `bin_hz`, `bins_db` (dBFS per bin from 0 Hz to 4 kHz; empty until a window has been heard), `passband_hz` (where this modem's signal sits), `transmitting`. Polled, not streamed: it costs one transform per call and nothing otherwise |
+| `constellation` | — | the last frame's equalised symbols as `points` (`[i, q]` pairs, thinned to at most 1024) and the `frame` they came from, as the `frame` event describes it |
 
 These exist because setup, not propagation, is what defeats most new users of an HF data mode
 (`COMMUNITY-CONCERNS.md`). A modem that can key on demand and say whether its input is
@@ -139,13 +141,15 @@ reports `settled: false` and "Still listening." until it has heard enough to mea
 rather than a number that does not. `devices.list` also reports the sample rates each device
 will run at, so a panel can say "this device is at 44.1 kHz" before the daemon refuses it.
 
-### 4.4 Recording
+### 4.4 Recording and the stations heard
 
 | Method | Params | Result |
 |---|---|---|
 | `record.start` | `name` (optional), `notes` (optional) | `path` of the WAV being written |
 | `record.stop` | — | `wav`, `sidecar`, `seconds`, `frames` found, `decoded` |
 | `record.notes` | `notes` | accepted; kept for the next recording that starts on its own. Without one, an automatic recording carries the standing `[record] notes` from the configuration (a live key) — what an unattended station has to say about its band and antenna |
+| `heard.list` | — | `stations`: every station heard, most recent first — `callsign`, `first_heard_ms` and `last_heard_ms` (Unix milliseconds), `count`, `snr_db` (last) and `best_snr_db`, `frequency_hz` (when the radio could say), `mode`, `activity` (`beacon`, `calling`, `answering`, `connected`), `detail` (whom it was calling or answering) and `connected` (whether a session with it has ever been up from here); `limit` (200) and the `path` of the file the list lives in |
+| `heard.clear` | — | `cleared`: how many were forgotten |
 
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
@@ -162,6 +166,13 @@ from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remo
 beside it, fails if fewer frames decode than did on the day; `field/` is where the ones worth
 keeping live, and `core/aetherd/tests/field.rs` replays them all on every test run.
 
+The stations heard are every frame that carried a callsign — a beacon, a connect request or
+its answer overheard between any two stations — and every frame of a session with the
+station at the other end. One entry per callsign, at most 200, the one heard longest ago
+making room for a new one; kept in `heard.json` beside the configuration and written a few
+seconds after it changed, so a station left listening overnight can say in the morning who
+was on. Each change goes out as a `heard` event.
+
 ---
 
 ## 5. Events
@@ -169,7 +180,9 @@ keeping live, and `core/aetherd/tests/field.rs` replays them all on every test r
 | Event | When | Key fields |
 |---|---|---|
 | `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
-| `metrics` | periodically while active | snr_db, cfo_hz, mode, throughput_bps, queued_bytes, retries |
+| `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `channel_busy`, `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`), `mode`, `rv`, `snr_db`, `cfo_hz`, `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `heard` | a station was heard | the entry as `heard.list` reports it |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |
 | `busy` | channel busy detector changes | busy |
@@ -177,11 +190,23 @@ keeping live, and `core/aetherd/tests/field.rs` replays them all on every test r
 | `log` | notable events | level, message |
 
 `metrics` is the operator's window into the link. `snr_db` is referenced to 3 kHz, like every
-SNR in this project; `mode` is the index into the table returned by `capabilities`.
+SNR in this project; `mode` is the index into the table returned by `capabilities`. Every
+reading is the modem's own — the receiver's per-frame estimates, the rate controller's
+state, the acknowledgements' reports — never something a client re-derived from audio.
 
-Optional high-rate streams — constellation points and spectrum — are subscribed to explicitly
-(`subscribe` with a stream name and a rate limit) so a client that does not display them
-never pays for them.
+The two displays that would be high-rate streams — the spectrum and the constellation — are
+methods to poll (`spectrum`, `constellation`, §4.3) rather than events to subscribe to: a
+client that draws them asks at the rate it draws, and a client that does not never pays
+for them, with no subscription state for the daemon to keep. (An earlier draft of this
+section promised a `subscribe` method; polling turned out to need nothing it would have
+added.)
+
+### 4.8 The session's account
+
+`link` is null while no session is up, and otherwise `started_s` (station time), `seconds`
+(how long it has been up), `remote`, `bytes_sent` and `bytes_received` — application bytes
+before compression and after decompression, which is what the operator handed over and got,
+not what went on the air. It is carried by `status` and by every `metrics` event.
 
 ---
 
