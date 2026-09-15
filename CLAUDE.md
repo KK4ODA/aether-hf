@@ -129,7 +129,13 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   the rig's address; `CatProtocol` in `ptt.rs` is pure and tested), or `rigctld`; CAT and
   rigctld also put the dial frequency into recordings. Phase 8 (`docs/ROADMAP.md`) is
   Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
-  app, then the modem in the phone — one application over the control API for all three.
+  app, then the modem in the phone — one application over the control API for all three
+  (back burner). **Releases:** every tag so far is a `-beta.N` pre-release, and GitHub
+  gives the "Latest" badge and `releases/latest` only to a non-pre-release — which is
+  deliberate (`prerelease`/`make_latest` in `release.yml` keyed on the channel), because
+  `releases/latest/download/latest.json` is what a stable-channel installation reads and
+  it must never point at a beta. The first `vX.Y.Z` tag gets the badge; do not mark a beta
+  as latest by hand.
 * **The dashboard, the stations heard and the updates window** (beta.14, after a benchmark
   against VARA HF / VARA Chat's public feature set): the Status tab reads the modem's own
   telemetry — `metrics` grew `snr_db`/`cfo_hz` (the last frame), `peer_snr_db` (what the
@@ -159,16 +165,19 @@ separate package (`cd app/src-tauri && cargo clippy --all-targets -- -D warnings
 the panel: `aetherd --config <file> --dry-run` with `[control] ui_dir` pointing at `app/ui`,
 then open `http://127.0.0.1:8515/`.
 
-**Next: the air** (P6-6: audio cable → ground wave → NVIS → long paths → RMS gateway
-trial, twenty logged sessions across three channel classes in `field/LOG.md`, recalibrate
-on the disagreements) and the human items still open (BPQ32 over the simulated channel;
-three external hams through the wizard with the beta installer). Phase 7 starts with the
-500 Hz waveform (P7-0); FM stays on the back burner by decision; Phase 8 is the phone;
-Phase 9 is the modem's second rung — an audio-level A/B bench against the author's
-registered VARA first (`tools/channel_cable.py`, to be written), then a faster start from
-the connect frames' SNR, the deferred pilot/prefix/2750 Hz experiments, modes below
-200 bit/s (500 Hz waveform as their home) and time diversity — each only with a curve on
-Good, Moderate and Poor.
+**Priorities (decided 2026-09-15, `docs/ROADMAP.md` §13 "Priorities" and §14):** the modem
+first, and the **500 Hz waveform first of all** (P7-0: model numerology and curves →
+bandwidth in the connect handshake → port, `BW500`, answer-only unattended mode → VarAC on
+the bench and the air) because P2P contacts and VarAC's calling frequencies are 500 Hz and
+on-air testing with other stations needs it; then P7-1 the link probe (PING/PINGACK), P9-2
+the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
+author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
+P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
+and Poor. The air (P6-6) runs alongside: cable → ground wave now at 2300 Hz, P2P after
+P7-0; twenty logged sessions in `field/LOG.md`. **Back burner by decision: Aether FM (now
+Phase 10) and the phone (Phase 8).** Human items still open: BPQ32 over `[sim]`, three
+external hams through the wizard, Authenticode signing. Small: CM108 keying, the panel's
+SNR history across a reload.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -611,21 +611,46 @@ within 20 %.
 | P6-5 ✅ | **The protocol.** `docs/user/field-test.md`: bench first, then the cable, then the air; what a session should carry; how to name the channel class; what to keep. `field/LOG.md` is the twenty rows | — |
 | P6-6 🔁 | **The air.** Audio cable → ground wave → NVIS → 500–2 000 km → RMS gateway trial; twenty sessions across three classes; recalibrate the simulator on the disagreements. Human, and not something this repository can do for itself. Bench row 0 is in `field/LOG.md`: the Pat session measured 686 bit/s against 1 059 predicted for the same session size with a real station's latency — the rest is B2F's own round trips, which the simulator's single transfer does not model. VarAC 15.0.18 was tried over `[sim]`: it talks to the adapter (three of its start-up commands were `WRONG` and are now heard; its `VERSION` parser wants three words, which the reply now is) but its ecosystem is 500 Hz — it disables its interface until `BW500` is `OK` and refuses to call at 2300 Hz on a calling frequency — so VarAC needs a 500 Hz waveform (P7-0). **Winlink Express 1.8.5.0 passes the bench too**: two instances over `[sim]`, a P2P message with a 6 kB incompressible attachment byte-identical on arrival, 854 bit/s measured against 1 049 predicted (0.81). It found the bug the Pat bench could not: Pat's `MYCALL` happened to match the daemons' configured callsigns, Winlink Express's did not, and `MYCALL` had never reached the modem — now it does, in the model and the core (`callsigns.set`, `connect` with `callsign`). Both benches are rows in `field/LOG.md` | P6-1…P6-5 |
 
-### Phase 7 — Aether FM foundation (after 6)
+### Priorities from 2026-09-15 — what is left, in order
 
-Extract PHY trait boundaries proven in Phase 3; FM channel model; `aether-phy-fm` with a
-single-carrier QPSK/GMSK waveform; KISS/AGW adapters; reuse everything else. Acceptance:
-FM PHY passes the same harness contracts as HF; Pat/Winlink FM session via VARA-FM-style
-commands.
+Decided with the author after beta.14. **Aether FM and the phone are on the back burner**;
+the modem itself comes first, and the 500 Hz waveform comes first of all, because it is the
+bandwidth P2P contacts are made in — VarAC's calling frequencies are 500 Hz and it refuses
+anything else there — so on-air testing with other stations needs it before it needs
+anything else. Every item is model first, benchmark curve second, port third; the air
+(P6-6) runs alongside all of it and each item wants a row in `field/LOG.md`.
 
-| ID | Task | Depends on |
+| Order | Item | Why now |
 |---|---|---|
-| P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | P6-6 |
-| P7-1 | **A link probe (VARA's PING).** The one user-facing thing the VARA HF / VARA Chat benchmark found that the dashboard could not give without a new air frame: a short unproto exchange that reports the SNR in *both* directions without a session — the caller sends a probe addressed to a station, the station answers with the SNR it heard, and the caller's panel shows both. It is a beacon with a destination and an answer, so the §97.221(c) rule that shapes P7-0 (an unattended 500 Hz station may only answer) holds for it too. Model first, an ADR for the frame, `PING`/`PINGACK` in the host adapter (`host-interfaces.md` §3–4), and a Probe button beside Beacon on the Session tab | P6-6 |
+| 1 | **P7-0** the 500 Hz waveform | P2P and the calling frequencies; the plan's 30 m slot; the home of the sub-200 bit/s floor |
+| 2 | **P7-1** the link probe (PING / PINGACK) | VarAC and VARA Chat probe before they call; shares P7-0's answer-only rule; the dashboard already shows both SNRs |
+| 3 | **P9-2** a faster start from the connect frames' SNR | small, model-first, a measurable win on every short session |
+| 4 | **P9-4** modes below 200 bit/s | the floor, at 500 Hz; the second reason P7-0 comes first |
+| 5 | **P9-1** the A/B bench against registered VARA at the audio level | the tool can be built any time; the runs need the author's evening; it is what licenses "comparable" |
+| 6 | **P9-3** sparser pilots, a short prefix, 2 750 Hz | the top end; the 2 750 Hz piece shares P7-0's handshake work |
+| 7 | **P9-5** time diversity | after the floor exists to measure it against |
+| — | **P6-6** the air | continuous: cable → ground wave now at 2 300 Hz; P2P with VarAC users once P7-0 is out |
+
+Small things for the gaps between: CM108/GPIO keying (the DRA and AllStar interfaces;
+one more `ptt.rs` backend), BPQ32 over `[sim]` (human), three hams through the wizard
+(human), Authenticode signing (needs a certificate), the panel's SNR history surviving a
+reload. **Back burner:** Phase 10 (Aether FM) and Phase 8 (the phone).
 
 ---
 
-### Phase 8 — Aether on a phone (after the air; the box before the app)
+### Phase 7 — The 500 Hz waveform and the link probe (next)
+
+The bandwidth P2P contacts are made in, and the probe those contacts start with. The FM
+foundation this phase was first named for is Phase 10 now.
+
+| ID | Task | Depends on |
+|---|---|---|
+| P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | — (moved ahead of the air on 2026-09-15) |
+| P7-1 | **A link probe (VARA's PING).** The one user-facing thing the VARA HF / VARA Chat benchmark found that the dashboard could not give without a new air frame: a short unproto exchange that reports the SNR in *both* directions without a session — the caller sends a probe addressed to a station, the station answers with the SNR it heard, and the caller's panel shows both. It is a beacon with a destination and an answer, so the §97.221(c) rule that shapes P7-0 (an unattended 500 Hz station may only answer) holds for it too. Model first, an ADR for the frame, `PING`/`PINGACK` in the host adapter (`host-interfaces.md` §3–4), and a Probe button beside Beacon on the Session tab | P7-0 |
+
+---
+
+### Phase 8 — Aether on a phone (back burner, by decision on 2026-09-15; the box before the app)
 
 VARA's other limit besides its licence is that it lives on a Windows PC. The obvious analogy
 — a phone talking to a KISS TNC the way APRS apps talk to a Mobilinkd — does not apply: KISS
@@ -647,7 +672,7 @@ with the phone alone on Android — logged in `field/LOG.md` like any other.
 
 ---
 
-### Phase 9 — The modem's second rung (once the first is measured on the air)
+### Phase 9 — The modem's second rung (next, interleaved with Phase 7 in the order above)
 
 The first modem was built to be *comparable*: robust choices everywhere ADR-0002 had a choice
 (25 % pilot overhead, a 6 ms cyclic prefix, mode 0 for every first burst). Each of those was
@@ -674,26 +699,38 @@ reproduce with the tool; every adopted change has its curve committed and its AD
 
 ---
 
-## 14. Next 20 concrete tasks for Claude Code (in order)
+### Phase 10 — Aether FM foundation (back burner, by decision on 2026-09-15)
 
-1. **P0-1** Add `pyproject.toml`, lockfile, `LICENSE-MIT`/`LICENSE-APACHE`, ruff/mypy/pre-commit, pytest config.
-2. **P0-4** Rewrite `README.md` to reflect audited status; link `docs/AUDIT.md` and `docs/ROADMAP.md`; add `CLAUDE.md`.
-3. **P0-3** Convert `test_ofdm_loopback.py` and `test_conformance.py` into strict pytest modules; every relaxed threshold becomes `xfail(strict=True)` citing the audit.
-4. **P0-2** GitHub Actions CI on Windows + Ubuntu running lint + tests.
-5. **P0-6** Fix `dsp/channel.py`: continuous fading generator, 2σ Doppler, F.1487 table, 3 kHz SNR, CFO/SRO/PA-clip impairments, statistical tests.
-6. **P0-5** Write ADR-0001 (stack), ADR-0002 (waveform targets from §5.2), ADR-0003 (FEC = TS 38.212 BG2); regenerate `constants.py`; delete `fec/ldpc.py` and the contradictory comments.
-7. **P1-2** Fix Gray labelling and vectorize the demapper; tests for Gray property and LLR sign; remove 32/128/256-QAM.
-8. **P1-1a** Implement TS 38.212 BG2 encoder + rate matching; test `H·c = 0` on 1 000 blocks per (K, rate); cross-check against Sionna.
-9. **P1-1b** Vectorized layered min-sum decoder; BLER-vs-Es/N0 curves committed as baselines.
-10. **P1-3** Frame codec: header, CRC-16/24, row-column + BICM interleaver, mode table; round-trip tests.
-11. **P1-4** OFDM TX rewrite: edge pilots, scattered grid, windowed OLA, TX filter, passband + 48 k resampler; EVM = 0 test.
-12. **P1-5** Preamble/sync rewrite (S&C + UW); timing/CFO/SRO accuracy tests across ±250 Hz, ±200 ppm, 0 dB.
-13. **P1-6** Streaming OFDM RX with tracking and LS/2-D equalizer; noise-variance estimator.
-14. **P1-7** End-to-end loopback + `tools/bench` runner; FER/throughput curves for all modes on AWGN/Good/Moderate/Poor.
-15. **P1-8** Audio HAL for the model (sounddevice, WAV, simulator); virtual-cable loopback test on Windows.
-16. **P1-9** Golden vectors v0 in `vectors/`.
-17. **P2-1** ✅ ARQ engine + session FSM + two-modem harness; protocol tests (`test_link.py`, `test_link_harness.py`).
-18. **P2-3** Low-SNR modes and robust control frames; connect-probability benchmark.
-19. **Phase 3** Rust core port (P3-1, P3-2) per ADR-0001.
-19. **P2-7** Draft `docs/spec/air-interface.md` v0.1 and `control-api.md` v0.1 from the working model.
-20. **P3-1** Scaffold the production core per ADR-0001 and port the FEC against golden vectors.
+Extract PHY trait boundaries proven in Phase 3; FM channel model; `aether-phy-fm` with a
+single-carrier QPSK/GMSK waveform; KISS/AGW adapters; reuse everything else (§11).
+Acceptance: FM PHY passes the same harness contracts as HF; Pat/Winlink FM session via
+VARA-FM-style commands. Nothing here is scheduled until the HF modem's second rung is
+measured on the air.
+
+---
+
+## 14. Next concrete tasks for Claude Code (in order, from 2026-09-15)
+
+The Phase 0–5 list this section used to hold is done; the history is in the commits.
+
+1. **P7-0a** The 500 Hz numerology in the model: `WaveformParams` for `Narrow500` (12
+   carriers per ADR-0002), the pilot grid and prefix for it, `make_spec.py` tables, and the
+   mode table it carries — with the AWGN/Good/Moderate/Poor curves committed before a
+   single line of the port.
+2. **P7-0b** The bandwidth in the connect handshake (model first): a station calls in the
+   bandwidth it was asked for, answers in the bandwidth it was called in, and the two agree
+   before the first data frame. ADR-0002 amendment.
+3. **P7-0c** The port: `aether-phy` and `aether-link` cross-validated against the model's
+   vectors; `aetherd` selecting the waveform per session; `BW500` answered `OK`;
+   `[radio] bandwidth` and the panel's choice; the answer-only unattended mode for
+   §97.221(c) with `docs/user/frequency-plan.md` updated.
+4. **P7-0d** VarAC through the adapter at 500 Hz over `[sim]`, as a `host-interfaces.md`
+   §7 row, then on the air with a VarAC station.
+5. **P7-1** The link probe: frame format (ADR), model, port, `PING`/`PINGACK` in the
+   adapter, a Probe button beside Beacon, both SNRs on the dashboard.
+6. **P9-2** The faster start from the connect frames' SNR, with its bench number.
+7. **P9-4** The floor: modes below 200 bit/s at 500 Hz, with their curves.
+8. **P9-1** `tools/channel_cable.py` and the A/B protocol; the runs when the author can.
+9. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor.
+10. Between any two of the above: CM108 keying; the panel's SNR history across a reload;
+    whatever the air finds.
