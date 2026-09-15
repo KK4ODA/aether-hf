@@ -212,6 +212,9 @@ Three rules, because a settings interface that gets any of them wrong is worse t
 * **The file is replaced atomically** — written beside the target and renamed over it. A
   configuration half-written by a machine that lost power is a station that will not start,
   and its operator would have no way to know what it used to say.
+* **A change of `ptt.kind` takes the old kind's fields with it.** `port` and `line` belong to
+  a serial port, `address` to `rigctld`; a client cannot remove a key, only say which kind it
+  wants now, so the merge drops what the new kind has no use for.
 * **What needs a restart is stated, not guessed — and done, when somebody can.** A sound card
   is opened once and a socket is bound once. `config.get` returns `live_keys`, and `config.set`
   reports which of the keys it just changed are not among them. A setting that silently does

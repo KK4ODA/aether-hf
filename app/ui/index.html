@@ -148,12 +148,20 @@
               <div class="row">
                 <label for="dev-ptt">Keying</label>
                 <select id="dev-ptt"></select>
+                <select id="ptt-line" aria-label="Serial line that keys">
+                  <option value="rts">RTS line</option>
+                  <option value="dtr">DTR line</option>
+                  <option value="both">RTS and DTR</option>
+                </select>
+                <input id="ptt-address" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
               </div>
               <p class="sub">
-                The serial port whose RTS line puts the radio into transmit. A radio's USB
-                connection often shows two ports: the one described as <em>Standard</em> (Yaesu)
-                or the rig's own CI-V/CAT port (Icom) is the one that keys. Choose
-                <em>none</em> for a VOX interface such as a SignaLink, or to listen only.
+                How the radio is put into transmit: a serial port's RTS (or DTR) line, or
+                Hamlib's <code>rigctld</code> over the network, which also lets the modem read
+                the dial frequency into recordings. A radio's USB connection often shows two
+                ports: the one described as <em>Standard</em> (Yaesu) or the rig's own CI-V/CAT
+                port (Icom) is the one that keys. Choose <em>none</em> for a VOX interface such
+                as a SignaLink, or to listen only.
               </p>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
             </li>
@@ -217,6 +225,33 @@
           <input id="setup-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
         </div>
 
+        <h4 class="sub-heading">On the air</h4>
+        <div class="row">
+          <label for="radio-max-mode">Fastest mode</label>
+          <select id="radio-max-mode"></select>
+          <label class="check"><input id="radio-compress" type="checkbox" checked /> compress payload when the other station can too</label>
+        </div>
+        <div class="row">
+          <label for="radio-wait">Busy channel</label>
+          <label class="check"><input id="radio-wait" type="checkbox" checked /> wait for a clear channel before calling; busy is</label>
+          <input id="radio-busy-db" type="text" inputmode="decimal" class="port" value="6" aria-label="Busy threshold in dB above the noise floor" />
+          <span class="sub">dB above the noise floor</span>
+        </div>
+        <div class="row">
+          <label for="radio-max-key">Longest key</label>
+          <input id="radio-max-key" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
+          <span class="sub">seconds; the watchdog releases the key past this and stays released until asked again</span>
+        </div>
+        <div class="row">
+          <label for="radio-cwid">Morse ID</label>
+          <label class="check"><input id="radio-cwid" type="checkbox" /> identify in Morse after a transmission, every</label>
+          <input id="radio-cwid-interval" type="text" inputmode="decimal" class="port" value="600" aria-label="Seconds between Morse identifications" />
+          <span class="sub">s at</span>
+          <input id="radio-cwid-wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
+          <span class="sub">wpm — off by default; Aether's frames carry both callsigns, and whether that satisfies your licence is your call</span>
+        </div>
+
+        <h4 class="sub-heading">The application</h4>
         <div class="row">
           <label for="update-channel">Updates</label>
           <select id="update-channel">

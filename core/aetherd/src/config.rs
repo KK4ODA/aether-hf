@@ -733,6 +733,17 @@ impl Config {
             }
         }
 
+        // A change of keying kind takes the old kind's fields with it: `port` and `line`
+        // belong to a serial port and `address` to rigctld, the tagged enum refuses a mix,
+        // and a client cannot remove a key — it can only say which kind it wants now.
+        if object.contains_key("ptt.kind")
+            && let Some(ptt) = document
+                .get_mut("ptt")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            ptt.retain(|field, _| field == "kind" || object.contains_key(&format!("ptt.{field}")));
+        }
+
         let merged: Self =
             serde_json::from_value(document).map_err(|e| ConfigError::Parse(format!("{e}")))?;
         merged.validate()?;
@@ -1035,6 +1046,39 @@ mod tests {
         // everything not named is left alone
         assert_eq!(config.callsign, "W4ODA");
         assert!(config.radio.wait_for_clear);
+    }
+
+    #[test]
+    fn changing_the_keying_kind_leaves_the_old_kind_behind() {
+        // the panel says `ptt.kind = "rigctld"` with an address; the serial port and line
+        // of the kind before must not survive to make the file invalid
+        let mut config = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"serial\"\nport = \"COM7\"\nline = \"dtr\"\n",
+        )
+        .expect("parse");
+        config
+            .merge(&serde_json::json!({"ptt.kind": "rigctld", "ptt.address": "127.0.0.1:4532"}))
+            .expect("rigctld");
+        assert_eq!(
+            config.ptt,
+            PttConfig::Rigctld {
+                address: "127.0.0.1:4532".into()
+            }
+        );
+        config
+            .merge(&serde_json::json!({"ptt.kind": "serial", "ptt.port": "COM3"}))
+            .expect("serial again");
+        assert_eq!(
+            config.ptt,
+            PttConfig::Serial {
+                port: "COM3".into(),
+                line: SerialLineConfig::Rts
+            }
+        );
+        config
+            .merge(&serde_json::json!({"ptt.kind": "none"}))
+            .expect("none");
+        assert_eq!(config.ptt, PttConfig::None);
     }
 
     #[test]

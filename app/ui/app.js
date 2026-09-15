@@ -343,6 +343,21 @@ window.addEventListener("resize", drawChart);
 
 // ── capabilities and devices ────────────────────────────────────────
 
+/// The fastest-mode list, from the mode table the modem reports.
+function fillModes() {
+  const select = $("radio-max-mode");
+  if (select.options.length === modeTable.length && modeTable.length > 0) return;
+  const before = select.value;
+  select.replaceChildren();
+  for (const mode of modeTable) {
+    const option = document.createElement("option");
+    option.value = String(mode.index);
+    option.textContent = `${mode.index} — ${mode.name}`;
+    select.append(option);
+  }
+  if (before) select.value = before;
+}
+
 async function loadCapabilities() {
   let caps;
   try {
@@ -351,6 +366,7 @@ async function loadCapabilities() {
     return;
   }
   modeTable = caps.modes ?? [];
+  fillModes();
   const usable = new Set(caps.usable_modes ?? []);
   const body = $("modes");
   body.replaceChildren();
@@ -402,12 +418,17 @@ async function loadDevices() {
   // description is how an operator tells them apart, so it goes next to the name
   fill(
     $("dev-ptt"),
-    devicesSeen.serial_ports.map((p) => ({
-      name: p.name,
-      label: p.description ? `${p.name} — ${p.description}` : p.name,
-    })),
+    [
+      ...devicesSeen.serial_ports.map((p) => ({
+        name: p.name,
+        label: p.description ? `${p.name} — ${p.description}` : p.name,
+      })),
+      { name: "rigctld", label: "rigctld — Hamlib rig control over the network" },
+    ],
     "none (VOX or receive only)",
   );
+  $("dev-ptt").addEventListener("change", showKeyingFields);
+  showKeyingFields();
   $("dev-in").addEventListener("change", checkRates);
   $("dev-out").addEventListener("change", checkRates);
   fillProfiles();
@@ -452,7 +473,21 @@ async function loadConfig() {
   }
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
-  select($("dev-ptt"), liveConfig.ptt?.port ?? "");
+  const ptt = liveConfig.ptt ?? {};
+  select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
+  select($("ptt-line"), ptt.line ?? "rts");
+  if (ptt.address) $("ptt-address").value = ptt.address;
+  showKeyingFields();
+  const radio = liveConfig.radio ?? {};
+  fillModes();
+  select($("radio-max-mode"), String(radio.max_mode ?? 13));
+  $("radio-compress").checked = radio.compress !== false;
+  $("radio-wait").checked = radio.wait_for_clear !== false;
+  $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
+  $("radio-max-key").value = String(radio.max_key_s ?? 30);
+  $("radio-cwid").checked = radio.cw_id === true;
+  $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
+  $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
   // the file's capture device says which interface this station is, better than a guess
   // from whatever else is plugged in; the operator's own choice is left alone
   if (!profileChosen && $("wz-profile").options.length > 0) {
@@ -508,6 +543,32 @@ function writeConfig() {
   $("footer-config").textContent = configPath;
 }
 
+/// The line and address fields belong to one keying method each; show the one that applies.
+function showKeyingFields() {
+  const chosen = $("dev-ptt").value;
+  $("ptt-line").hidden = chosen === "" || chosen === "rigctld";
+  $("ptt-address").hidden = chosen !== "rigctld";
+}
+
+/// The keying settings as the file takes them: one kind, and only that kind's fields.
+function keyingChanges() {
+  const chosen = $("dev-ptt").value;
+  if (chosen === "") return { "ptt.kind": "none" };
+  if (chosen === "rigctld") {
+    return {
+      "ptt.kind": "rigctld",
+      "ptt.address": $("ptt-address").value.trim() || "127.0.0.1:4532",
+    };
+  }
+  return { "ptt.kind": "serial", "ptt.port": chosen, "ptt.line": $("ptt-line").value };
+}
+
+/// A number typed into a field, or nothing when it is not one.
+function numberIn(id) {
+  const value = Number($(id).value);
+  return Number.isFinite(value) ? value : null;
+}
+
 /// The port of a `host:port` address, or nothing.
 function portOf(address) {
   const port = Number(String(address ?? "").split(":").pop());
@@ -516,18 +577,26 @@ function portOf(address) {
 
 /// Everything the form would change, as the dotted keys `config.set` takes.
 function formChanges() {
-  const port = $("dev-ptt").value;
   const changes = {
     "audio.input": $("dev-in").value || null,
     "audio.output": $("dev-out").value || null,
-    "ptt.kind": port ? "serial" : "none",
+    ...keyingChanges(),
   };
   const callsign = $("setup-call").value.trim().toUpperCase();
   if (callsign) changes.callsign = callsign;
-  if (port) {
-    changes["ptt.port"] = port;
-    changes["ptt.line"] = "rts";
+  changes["radio.max_mode"] = Number($("radio-max-mode").value);
+  changes["radio.compress"] = $("radio-compress").checked;
+  changes["radio.wait_for_clear"] = $("radio-wait").checked;
+  for (const [id, key] of [
+    ["radio-busy-db", "radio.busy_threshold_db"],
+    ["radio-max-key", "radio.max_key_s"],
+    ["radio-cwid-interval", "radio.cw_id_interval_s"],
+    ["radio-cwid-wpm", "radio.cw_id_wpm"],
+  ]) {
+    const value = numberIn(id);
+    if (value !== null) changes[key] = value;
   }
+  changes["radio.cw_id"] = $("radio-cwid").checked;
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
@@ -738,6 +807,7 @@ async function wizardSave() {
     changes["ptt.kind"] = "none";
     delete changes["ptt.port"];
     delete changes["ptt.line"];
+    delete changes["ptt.address"];
   }
   try {
     const answer = await call("config.set", changes);
@@ -784,13 +854,20 @@ async function transmitTest(method, seconds, label) {
 const TUNE_SECONDS = 10;
 let tuneTimer = null;
 
+// The exact level the slider was last set from, so a save that did not touch the slider
+// sends the file's own number back rather than a rounded cousin of it.
+let txLevelShown = { level: 0.25, db: -12 };
+
 function txLevel() {
-  return Number(10 ** (Number($("tx-level").value) / 20).toFixed(4));
+  const db = Number($("tx-level").value);
+  if (db === txLevelShown.db) return txLevelShown.level;
+  return Number(10 ** (db / 20).toFixed(4));
 }
 
 function showTxLevel(level) {
-  const db = Math.round(20 * Math.log10(Math.max(level, 1e-3)));
-  $("tx-level").value = String(Math.max(-34, Math.min(0, db)));
+  const db = Math.max(-34, Math.min(0, Math.round(20 * Math.log10(Math.max(level, 1e-3)))));
+  txLevelShown = { level, db };
+  $("tx-level").value = String(db);
   $("tx-level-reading").textContent = `${db === 0 ? "" : "−"}${Math.abs(db)} dB`;
 }
 
@@ -1033,8 +1110,10 @@ function asToml(changes) {
         : `# ${name} = "…"   # system default`,
     );
   }
-  lines.push("tx_level = 0.25", "", "[ptt]");
-  if (changes["ptt.port"]) {
+  lines.push(`tx_level = ${changes["audio.tx_level"] ?? 0.25}`, "", "[ptt]");
+  if (changes["ptt.kind"] === "rigctld") {
+    lines.push(`kind = "rigctld"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:4532")}`);
+  } else if (changes["ptt.port"]) {
     lines.push(
       `kind = "serial"`,
       `port = ${quote(changes["ptt.port"])}`,

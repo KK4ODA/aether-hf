@@ -543,6 +543,17 @@ input.port {
   letter-spacing: normal;
 }
 
+input.address {
+  font-family: var(--numerals);
+  width: 16ch;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+#ptt-line {
+  flex: 0 1 12ch;
+}
+
 .sub-heading {
   margin: 14px 0 4px;
   font-size: 12px;
