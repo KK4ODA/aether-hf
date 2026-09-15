@@ -169,6 +169,9 @@ async function refreshStatus() {
 
   $("callsign").textContent = status.callsign || "—";
   $("footer-version").textContent = `aetherd ${status.version} · ptt: ${status.ptt}`;
+  $("help-daemon").textContent = `aetherd ${status.version}`;
+  $("help-callsign").textContent = status.callsign || "—";
+  $("help-ptt").textContent = status.ptt;
   setLamp("lamp-ptt", status.transmitting === true, status.transmitting ? "Transmitter keyed" : "Transmitter off");
   setLamp("lamp-busy", status.channel_busy === true, status.channel_busy ? "Channel busy" : "Channel clear");
 
@@ -457,6 +460,8 @@ async function loadDevices() {
     "none (VOX or receive only)",
   );
   $("dev-ptt").addEventListener("change", showKeyingFields);
+  $("ptt-line").addEventListener("change", showKeyingFields);
+  $("ptt-protocol").addEventListener("change", showKeyingFields);
   showKeyingFields();
   $("dev-in").addEventListener("change", checkRates);
   $("dev-out").addEventListener("change", checkRates);
@@ -489,6 +494,10 @@ async function loadConfig() {
   liveConfig = answer.config ?? {};
   liveKeys = answer.live_keys ?? [];
   configPath = answer.path ?? "";
+  $("help-config").textContent = configPath || "—";
+  $("help-dir").textContent = configPath
+    ? configPath.replace(/[\\/][^\\/]*$/, "")
+    : "—";
   $("wz-save").disabled = false;
   setupNoteAtRest ??= $("setup-note").textContent;
   $("setup-note").textContent = setupNoteAtRest;
@@ -503,8 +512,13 @@ async function loadConfig() {
   select($("dev-out"), liveConfig.audio?.output ?? "");
   const ptt = liveConfig.ptt ?? {};
   select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
-  select($("ptt-line"), ptt.line ?? "rts");
+  select($("ptt-line"), ptt.kind === "cat" ? "cat" : (ptt.line ?? "rts"));
   if (ptt.address) $("ptt-address").value = ptt.address;
+  if (ptt.kind === "cat") {
+    select($("ptt-protocol"), ptt.protocol ?? "yaesu");
+    $("ptt-baud").value = String(ptt.baud ?? 38400);
+    if (ptt.civ_address != null) $("ptt-civ").value = ptt.civ_address.toString(16).toUpperCase();
+  }
   showKeyingFields();
   const radio = liveConfig.radio ?? {};
   fillModes();
@@ -571,11 +585,15 @@ function writeConfig() {
   $("footer-config").textContent = configPath;
 }
 
-/// The line and address fields belong to one keying method each; show the one that applies.
+/// The line, address and CAT fields belong to one keying method each; show what applies.
 function showKeyingFields() {
   const chosen = $("dev-ptt").value;
-  $("ptt-line").hidden = chosen === "" || chosen === "rigctld";
+  const onPort = chosen !== "" && chosen !== "rigctld";
+  $("ptt-line").hidden = !onPort;
   $("ptt-address").hidden = chosen !== "rigctld";
+  const cat = onPort && $("ptt-line").value === "cat";
+  $("cat-row").hidden = !cat;
+  $("civ-fields").hidden = !cat || $("ptt-protocol").value !== "icom";
 }
 
 /// The keying settings as the file takes them: one kind, and only that kind's fields.
@@ -587,6 +605,21 @@ function keyingChanges() {
       "ptt.kind": "rigctld",
       "ptt.address": $("ptt-address").value.trim() || "127.0.0.1:4532",
     };
+  }
+  if ($("ptt-line").value === "cat") {
+    const protocol = $("ptt-protocol").value;
+    const changes = {
+      "ptt.kind": "cat",
+      "ptt.port": chosen,
+      "ptt.protocol": protocol,
+      "ptt.baud": numberIn("ptt-baud") ?? 38400,
+      "ptt.source": "data",
+    };
+    if (protocol === "icom") {
+      const address = parseInt($("ptt-civ").value.trim().replace(/^0x/i, ""), 16);
+      if (Number.isInteger(address)) changes["ptt.civ_address"] = address;
+    }
+    return changes;
   }
   return { "ptt.kind": "serial", "ptt.port": chosen, "ptt.line": $("ptt-line").value };
 }
@@ -687,7 +720,7 @@ const PROFILES = [
     line: "rts",
     // the CP2105 bridge's two ports: the Enhanced one is CAT, the Standard one keys
     port: /Standard COM Port/i,
-    note: "Yaesu's USB port is two serial ports: the Enhanced one is CAT, the Standard one keys on RTS — that one is chosen when it can be told apart. The rig's PTT select for the mode in use (RPTT SELECT / DATA PTT SELECT) must be RTS.",
+    note: "Yaesu's USB port is two serial ports: the Standard one keys on RTS (chosen here when it can be told apart; the rig's PTT select for the mode must be RTS), or pick the Enhanced one with 'CAT command' to key over CAT and record the frequency.",
   },
   {
     name: "SignaLink USB",
@@ -814,9 +847,9 @@ async function wizardSave() {
   const changes = formChanges();
   if (profile.ptt === "none") {
     changes["ptt.kind"] = "none";
-    delete changes["ptt.port"];
-    delete changes["ptt.line"];
-    delete changes["ptt.address"];
+    for (const key of Object.keys(changes)) {
+      if (key.startsWith("ptt.") && key !== "ptt.kind") delete changes[key];
+    }
   }
   try {
     const answer = await call("config.set", changes);
@@ -1118,6 +1151,14 @@ function asToml(changes) {
   lines.push(`tx_level = ${changes["audio.tx_level"] ?? 0.25}`, "", "[ptt]");
   if (changes["ptt.kind"] === "rigctld") {
     lines.push(`kind = "rigctld"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:4532")}`);
+  } else if (changes["ptt.kind"] === "cat") {
+    lines.push(
+      `kind = "cat"`,
+      `port = ${quote(changes["ptt.port"])}`,
+      `protocol = ${quote(changes["ptt.protocol"])}`,
+      `baud = ${changes["ptt.baud"]}`,
+    );
+    if (changes["ptt.civ_address"] != null) lines.push(`civ_address = ${changes["ptt.civ_address"]}`);
   } else if (changes["ptt.port"]) {
     lines.push(
       `kind = "serial"`,

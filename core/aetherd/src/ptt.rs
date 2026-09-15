@@ -378,6 +378,51 @@ impl<P: Ptt> PttWatchdog<P> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cat_commands_are_the_published_ones() {
+        let yaesu = CatProtocol::Yaesu { data: true };
+        assert_eq!(yaesu.keying(true), b"TX2;");
+        assert_eq!(yaesu.keying(false), b"TX0;");
+        assert_eq!(CatProtocol::Yaesu { data: false }.keying(true), b"TX1;");
+        assert_eq!(CatProtocol::Kenwood.keying(true), b"TX;");
+        assert_eq!(CatProtocol::Kenwood.keying(false), b"RX;");
+        let icom = CatProtocol::Icom { address: 0x94 };
+        assert_eq!(
+            icom.keying(true),
+            [0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x01, 0xFD]
+        );
+        assert_eq!(
+            icom.keying(false),
+            [0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0x00, 0xFD]
+        );
+        assert_eq!(icom.frequency_query(), [0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD]);
+        assert!(!icom.keying_accepted(&[0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD]));
+        assert!(icom.keying_accepted(&[0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD]));
+    }
+
+    #[test]
+    fn a_frequency_answer_is_read_in_each_dialect() {
+        let yaesu = CatProtocol::Yaesu { data: true };
+        assert_eq!(yaesu.parse_frequency(b"FA014107000;"), Some(14_107_000));
+        assert_eq!(
+            CatProtocol::Kenwood.parse_frequency(b"FA00007101000;"),
+            Some(7_101_000)
+        );
+        assert_eq!(yaesu.parse_frequency(b"?;"), None);
+        // 14.107000 MHz as CI-V BCD, least significant byte first: 00 70 10 14 00
+        let icom = CatProtocol::Icom { address: 0x94 };
+        assert_eq!(
+            icom.parse_frequency(&[
+                0xFE, 0xFE, 0xE0, 0x94, 0x03, 0x00, 0x70, 0x10, 0x14, 0x00, 0xFD
+            ]),
+            Some(14_107_000)
+        );
+        assert_eq!(
+            icom.parse_frequency(&[0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD]),
+            None
+        );
+    }
+
     /// A backend that counts what it was asked to do, and can be told to refuse.
     #[derive(Debug, Default)]
     struct FakePtt {
@@ -516,6 +561,255 @@ pub enum SerialLine {
     Dtr,
     /// Both together, for interfaces that wire them in parallel.
     Both,
+}
+
+/// A radio's command set, as bytes on the wire: the published CAT protocols.
+///
+/// Pure functions, so what goes down the port is tested without a port. The commands are
+/// the manufacturers' own: Yaesu's ASCII CAT (`TX2;` keys with the DATA input selected,
+/// `TX1;` with the microphone, `TX0;` releases; `FA;` asks the VFO-A frequency), Kenwood's
+/// (`TX;`, `RX;`, `FA;`), and Icom's CI-V frames (`FE FE <rig> <controller> 1C 00 <01|00> FD`
+/// to key, `03` to ask the frequency, which comes back as little-endian BCD).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatProtocol {
+    /// Yaesu ASCII CAT; `data` says whether keying selects the DATA input or the mic.
+    Yaesu {
+        /// Transmit from the DATA/USB input rather than the microphone.
+        data: bool,
+    },
+    /// Kenwood's ASCII protocol, which Elecraft speaks too.
+    Kenwood,
+    /// Icom CI-V, addressed to one radio.
+    Icom {
+        /// The radio's CI-V address.
+        address: u8,
+    },
+}
+
+/// The controller's own CI-V address; `E0` is what every rig-control program uses.
+const CIV_CONTROLLER: u8 = 0xE0;
+
+impl CatProtocol {
+    /// The bytes that put the radio into transmit, or take it out.
+    #[must_use]
+    pub fn keying(self, keyed: bool) -> Vec<u8> {
+        match self {
+            Self::Yaesu { data } => match (keyed, data) {
+                (false, _) => b"TX0;".to_vec(),
+                (true, true) => b"TX2;".to_vec(),
+                (true, false) => b"TX1;".to_vec(),
+            },
+            Self::Kenwood => {
+                if keyed {
+                    b"TX;".to_vec()
+                } else {
+                    b"RX;".to_vec()
+                }
+            }
+            Self::Icom { address } => vec![
+                0xFE,
+                0xFE,
+                address,
+                CIV_CONTROLLER,
+                0x1C,
+                0x00,
+                u8::from(keyed),
+                0xFD,
+            ],
+        }
+    }
+
+    /// The bytes that ask for the operating frequency.
+    #[must_use]
+    pub fn frequency_query(self) -> Vec<u8> {
+        match self {
+            Self::Yaesu { .. } | Self::Kenwood => b"FA;".to_vec(),
+            Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x03, 0xFD],
+        }
+    }
+
+    /// The frequency in hertz from the radio's answer, if the answer is one.
+    #[must_use]
+    pub fn parse_frequency(self, reply: &[u8]) -> Option<u64> {
+        match self {
+            Self::Yaesu { .. } | Self::Kenwood => {
+                // `FA014107000;` on a Yaesu, `FA00014107000;` on a Kenwood: the digits
+                // between the command and the terminator are the frequency in hertz
+                let text = std::str::from_utf8(reply).ok()?;
+                let start = text.find("FA")? + 2;
+                let digits: String = text[start..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                if digits.is_empty() {
+                    return None;
+                }
+                digits.parse().ok()
+            }
+            Self::Icom { address } => {
+                // FE FE E0 <rig> 03 <bcd × 5, least significant byte first> FD
+                let start = reply
+                    .windows(5)
+                    .position(|w| w == [0xFE, 0xFE, CIV_CONTROLLER, address, 0x03])?;
+                let data = &reply[start + 5..];
+                let end = data.iter().position(|&b| b == 0xFD)?;
+                let bcd = &data[..end];
+                if bcd.len() < 4 {
+                    return None;
+                }
+                let mut hz: u64 = 0;
+                for &byte in bcd.iter().rev() {
+                    let (high, low) = (u64::from(byte >> 4), u64::from(byte & 0x0F));
+                    if high > 9 || low > 9 {
+                        return None;
+                    }
+                    hz = hz * 100 + high * 10 + low;
+                }
+                Some(hz)
+            }
+        }
+    }
+
+    /// Whether the radio answers a keying command at all, so a missing answer means
+    /// something. Yaesu and Kenwood radios say nothing on success; an Icom always answers
+    /// `FB` (done) or `FA` (refused).
+    #[must_use]
+    pub fn acknowledges_keying(self) -> bool {
+        matches!(self, Self::Icom { .. })
+    }
+
+    /// Whether a CI-V answer says the command was carried out.
+    #[must_use]
+    pub fn keying_accepted(self, reply: &[u8]) -> bool {
+        match self {
+            Self::Icom { address } => reply
+                .windows(6)
+                .any(|w| w == [0xFE, 0xFE, CIV_CONTROLLER, address, 0xFB, 0xFD]),
+            _ => true,
+        }
+    }
+}
+
+/// Keying a radio with its own commands over its CAT port.
+pub struct CatPtt {
+    path: String,
+    protocol: CatProtocol,
+    port: Box<dyn serialport::SerialPort>,
+}
+
+impl std::fmt::Debug for CatPtt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CatPtt")
+            .field("path", &self.path)
+            .field("protocol", &self.protocol)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CatPtt {
+    /// Open the port at the radio's CAT rate and make sure the radio is receiving.
+    ///
+    /// # Errors
+    /// If the port cannot be opened, or the radio refuses the first command.
+    pub fn open(path: &str, baud: u32, protocol: CatProtocol) -> Result<Self, PttError> {
+        let port = serialport::new(path, baud)
+            .timeout(std::time::Duration::from_millis(300))
+            .open()
+            .map_err(|e| {
+                PttError::Backend(format!(
+                    "cannot open the CAT port {path} ({e}). `aetherd --list-ports` shows what \
+                     is there; a port that exists but will not open is usually held by another \
+                     program, such as a rig-control or logging one"
+                ))
+            })?;
+        let mut ptt = Self {
+            path: path.to_owned(),
+            protocol,
+            port,
+        };
+        ptt.set(false)?;
+        Ok(ptt)
+    }
+
+    fn set(&mut self, keyed: bool) -> Result<(), PttError> {
+        use std::io::{Read as _, Write as _};
+
+        let command = self.protocol.keying(keyed);
+        self.port
+            .write_all(&command)
+            .and_then(|()| self.port.flush())
+            .map_err(|e| PttError::Backend(format!("{}: {e}", self.path)))?;
+        if !self.protocol.acknowledges_keying() {
+            return Ok(());
+        }
+        let mut reply = [0u8; 32];
+        let mut got = Vec::new();
+        // the answer is a few bytes; read until the terminator or the timeout
+        while !got.contains(&0xFD) {
+            match self.port.read(&mut reply) {
+                Ok(0) => break,
+                Ok(n) => got.extend_from_slice(&reply[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                Err(e) => return Err(PttError::Backend(format!("{}: {e}", self.path))),
+            }
+        }
+        if self.protocol.keying_accepted(&got) {
+            Ok(())
+        } else {
+            Err(PttError::Backend(format!(
+                "{}: the radio did not accept the keying command (answer {:02X?}); check the \
+                 CI-V address and rate",
+                self.path, got
+            )))
+        }
+    }
+
+    fn ask(&mut self, query: &[u8]) -> Option<Vec<u8>> {
+        use std::io::{Read as _, Write as _};
+
+        self.port.write_all(query).ok()?;
+        self.port.flush().ok()?;
+        let mut reply = [0u8; 64];
+        let mut got = Vec::new();
+        let done = |got: &[u8]| match self.protocol {
+            CatProtocol::Icom { .. } => got.contains(&0xFD),
+            _ => got.contains(&b';'),
+        };
+        while !done(&got) {
+            match self.port.read(&mut reply) {
+                Ok(n) if n > 0 => got.extend_from_slice(&reply[..n]),
+                // nothing more, or the timeout: what has arrived is the answer
+                _ => break,
+            }
+        }
+        (!got.is_empty()).then_some(got)
+    }
+}
+
+impl Ptt for CatPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.set(true)
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.set(false)
+    }
+
+    fn describe(&self) -> String {
+        let which = match self.protocol {
+            CatProtocol::Yaesu { data: true } => "Yaesu CAT (data input)",
+            CatProtocol::Yaesu { data: false } => "Yaesu CAT (mic input)",
+            CatProtocol::Kenwood => "Kenwood CAT",
+            CatProtocol::Icom { .. } => "Icom CI-V",
+        };
+        format!("{which} on {}", self.path)
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        let query = self.protocol.frequency_query();
+        let reply = self.ask(&query)?;
+        self.protocol.parse_frequency(&reply)
+    }
 }
 
 /// Keying through a serial port's RTS or DTR line.

@@ -662,6 +662,25 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
         PttConfig::Rigctld { address } => {
             Box::new(RigctldPtt::new(address, Duration::from_millis(500)))
         }
+        PttConfig::Cat {
+            port,
+            protocol,
+            baud,
+            civ_address,
+            source,
+        } => {
+            let protocol = match protocol {
+                aetherd::config::CatProtocol::Yaesu => aetherd::ptt::CatProtocol::Yaesu {
+                    data: *source == aetherd::config::CatSource::Data,
+                },
+                aetherd::config::CatProtocol::Kenwood => aetherd::ptt::CatProtocol::Kenwood,
+                aetherd::config::CatProtocol::Icom => aetherd::ptt::CatProtocol::Icom {
+                    // validated to be present when the protocol is Icom
+                    address: civ_address.unwrap_or(0x00),
+                },
+            };
+            Box::new(aetherd::ptt::CatPtt::open(port, *baud, protocol)?)
+        }
     })
 }
 

@@ -38,10 +38,60 @@ pub enum PttConfig {
         #[serde(default = "default_rigctld")]
         address: String,
     },
+    /// The radio's own command set — CAT — over its serial port.
+    ///
+    /// The port that carries CAT is usually the one a rig-control program would want too,
+    /// and a radio keyed this way needs no second port and no control line wired to
+    /// anything. The protocols are the manufacturers' published ones.
+    Cat {
+        /// Device path: `COM6`, `/dev/ttyUSB0`.
+        port: String,
+        /// Whose command set the radio speaks.
+        protocol: CatProtocol,
+        /// The port's speed, as set in the radio's menu (CAT RATE, CI-V baud rate).
+        #[serde(default = "default_cat_baud")]
+        baud: u32,
+        /// Icom only: the radio's CI-V address (0x94 for an IC-7300, 0xA4 for an IC-705,
+        /// 0xA2 for an IC-9700 — the rig's menu shows it).
+        #[serde(default)]
+        civ_address: Option<u8>,
+        /// Yaesu only: which modulation input the radio transmits from when keyed this
+        /// way — `data` (the USB or DATA jack, which is where the modem's audio is) or
+        /// `mic`.
+        #[serde(default)]
+        source: CatSource,
+    },
 }
 
 fn default_rigctld() -> String {
     "127.0.0.1:4532".to_owned()
+}
+
+fn default_cat_baud() -> u32 {
+    38_400
+}
+
+/// A radio's command set, for keying and asking the frequency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatProtocol {
+    /// Yaesu's ASCII CAT (FT-991A, FTDX10, FT-710, FTDX101 and the like): `TX2;` / `TX0;`.
+    Yaesu,
+    /// Kenwood's, which Elecraft also speaks: `TX;` / `RX;`.
+    Kenwood,
+    /// Icom's CI-V binary frames: command `1C 00`.
+    Icom,
+}
+
+/// Which input a Yaesu radio transmits from when keyed over CAT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatSource {
+    /// The DATA / USB input, where a modem's audio arrives.
+    #[default]
+    Data,
+    /// The microphone.
+    Mic,
 }
 
 /// Which serial control line keys the radio.
@@ -542,6 +592,26 @@ impl Config {
             return Err(ConfigError::Invalid("a callsign is required".into()));
         }
         crate::ptt::validate_callsign(&self.callsign)?;
+        if let PttConfig::Cat {
+            protocol,
+            civ_address,
+            baud,
+            ..
+        } = &self.ptt
+        {
+            if *protocol == CatProtocol::Icom && civ_address.is_none() {
+                return Err(ConfigError::Invalid(
+                    "[ptt] protocol = \"icom\" needs civ_address, the radio's CI-V address \
+                     (0x94 for an IC-7300, 0xA4 for an IC-705, 0xA2 for an IC-9700)"
+                        .into(),
+                ));
+            }
+            if *baud == 0 {
+                return Err(ConfigError::Invalid(
+                    "[ptt] baud must be a serial rate".into(),
+                ));
+            }
+        }
         if self.sim.listen.is_some() && self.sim.connect.is_some() {
             return Err(ConfigError::Invalid(
                 "[sim] listen and connect are alternatives; set one of them".into(),
@@ -825,6 +895,12 @@ tx_level = 0.25
 # kind = "serial"                     # a serial control line
 # port = "COM3"                       # `aetherd --list-ports` shows what is there
 # line = "rts"                        # rts | dtr | both
+# kind = "cat"                        # the radio's own commands over its CAT port
+# port = "COM6"
+# protocol = "yaesu"                  # yaesu | kenwood | icom
+# baud = 38400                        # the rate set in the radio's menu
+# civ_address = 148                   # icom only: the CI-V address (0x94 = 148)
+# source = "data"                     # yaesu only: transmit from data | mic
 kind = "rigctld"                      # Hamlib's rig control daemon
 address = "127.0.0.1:4532"
 
@@ -1090,6 +1166,43 @@ mod tests {
             .merge(&serde_json::json!({"ptt.kind": "none"}))
             .expect("none");
         assert_eq!(config.ptt, PttConfig::None);
+    }
+
+    #[test]
+    fn cat_keying_is_read_and_checked() {
+        let config = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"cat\"\nport = \"COM6\"\nprotocol = \"yaesu\"\n",
+        )
+        .expect("yaesu");
+        assert_eq!(
+            config.ptt,
+            PttConfig::Cat {
+                port: "COM6".into(),
+                protocol: CatProtocol::Yaesu,
+                baud: 38_400,
+                civ_address: None,
+                source: CatSource::Data,
+            }
+        );
+        // an Icom without its address cannot be spoken to
+        let error = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"cat\"\nport = \"COM4\"\nprotocol = \"icom\"\n",
+        )
+        .expect_err("icom without an address");
+        assert!(error.to_string().contains("civ_address"), "{error}");
+        let config = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"cat\"\nport = \"COM4\"\nprotocol = \"icom\"\nciv_address = 148\nbaud = 19200\n",
+        )
+        .expect("icom");
+        assert!(matches!(
+            config.ptt,
+            PttConfig::Cat {
+                protocol: CatProtocol::Icom,
+                civ_address: Some(0x94),
+                baud: 19_200,
+                ..
+            }
+        ));
     }
 
     #[test]

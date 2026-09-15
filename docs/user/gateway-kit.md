@@ -16,7 +16,7 @@ and the mode needs stations that do not.
 |---|---|
 | Machine | Anything from a Raspberry Pi 4 upwards. The modem uses well under one core at 8 kHz. |
 | Sound card | A radio interface: Digirig, SignaLink, a rig with USB audio built in. |
-| Keying | A serial control line (most interfaces), or `rigctld` if you already run Hamlib. |
+| Keying | A serial control line (most interfaces), the radio's own CAT commands on its CAT port (`[ptt] kind = "cat"`: Yaesu, Kenwood/Elecraft, Icom CI-V — which also records the dial frequency), or `rigctld` if you already run Hamlib. |
 | Radio | Anything that will pass 2.3 kHz of audio and key from an external interface. |
 
 Two things that are not obvious and cost people days:

@@ -844,7 +844,7 @@ input.address {
 }
 
 #ptt-line {
-  flex: 0 1 13ch;
+  flex: 0 1 16ch;
 }
 
 /* prose, not a callsign: the notes that go into a recording */
@@ -980,6 +980,57 @@ button[aria-pressed="true"] {
 
 .log-line.bad {
   color: var(--status-error);
+}
+
+/* ── help ───────────────────────────────────────────────────────── */
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px var(--s4);
+  align-items: baseline;
+  font-size: 12.5px;
+}
+
+.kv > span:nth-child(odd) {
+  color: var(--text-2);
+}
+
+.kv > :nth-child(even) {
+  min-width: 0;
+  word-break: break-all;
+}
+
+.kv a {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.kv a:hover {
+  text-decoration: underline;
+}
+
+.help-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  max-width: 76ch;
+}
+
+.help-steps strong,
+.help-steps em {
+  color: var(--text);
+}
+
+#civ-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── footer ─────────────────────────────────────────────────────── */

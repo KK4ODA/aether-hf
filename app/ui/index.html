@@ -33,6 +33,7 @@
       <button class="tab" role="tab" id="tab-session" data-panel="session" aria-selected="false" aria-controls="panel-session" tabindex="-1">Session</button>
       <button class="tab" role="tab" id="tab-setup" data-panel="setup" aria-selected="false" aria-controls="panel-setup" tabindex="-1">Setup</button>
       <button class="tab" role="tab" id="tab-log" data-panel="log" aria-selected="false" aria-controls="panel-log" tabindex="-1">Log</button>
+      <button class="tab" role="tab" id="tab-help" data-panel="help" aria-selected="false" aria-controls="panel-help" tabindex="-1">Help</button>
     </nav>
 
     <main>
@@ -179,19 +180,40 @@
               <div class="row">
                 <label for="dev-ptt">Keying</label>
                 <select id="dev-ptt"></select>
-                <select id="ptt-line" aria-label="Serial line that keys">
+                <select id="ptt-line" aria-label="How the port keys the radio">
                   <option value="rts">RTS line</option>
                   <option value="dtr">DTR line</option>
                   <option value="both">RTS and DTR</option>
+                  <option value="cat">CAT command</option>
                 </select>
                 <input id="ptt-address" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
               </div>
+              <div class="row" id="cat-row" hidden>
+                <label for="ptt-protocol">CAT</label>
+                <select id="ptt-protocol" aria-label="CAT protocol">
+                  <option value="yaesu">Yaesu (FT-991A, FTDX10, FT-710, FTDX101)</option>
+                  <option value="kenwood">Kenwood / Elecraft</option>
+                  <option value="icom">Icom CI-V</option>
+                </select>
+                <span class="sub">at</span>
+                <input id="ptt-baud" type="text" inputmode="numeric" class="port" value="38400" aria-label="CAT baud rate" />
+                <span class="sub">baud</span>
+                <span id="civ-fields" hidden>
+                  <span class="sub">CI-V address</span>
+                  <input id="ptt-civ" type="text" class="port" value="94" aria-label="CI-V address in hex" />
+                  <span class="sub">hex</span>
+                </span>
+              </div>
               <p class="sub">
-                The serial port whose RTS (or DTR) line keys the radio, or Hamlib's
-                <code>rigctld</code> over the network, which also records the dial frequency.
-                A radio's USB connection often shows two ports: Yaesu's <em>Standard</em> port
-                or Icom's CI-V/CAT port is the one that keys. Choose <em>none</em> for a VOX
-                interface such as a SignaLink, or to listen only.
+                A serial port keys the radio through its RTS or DTR line, or by the radio's own
+                <em>CAT command</em> on the CAT port — which needs no second port and also
+                records the dial frequency. The rate is the one in the radio's menu; an Icom
+                also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios
+                keyed over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> is the
+                other way to both. A radio's USB connection often shows two ports: Yaesu's
+                <em>Enhanced</em> port carries CAT and its <em>Standard</em> port the RTS line;
+                Icom's single port carries both. Choose <em>none</em> for a VOX interface such
+                as a SignaLink, or to listen only.
               </p>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
             </li>
@@ -323,6 +345,51 @@
           daemon's last few hundred log lines. It never contains your traffic.
         </p>
         <pre id="log" class="received" role="log" aria-label="Log"></pre>
+      </section>
+
+      <!-- ── help ───────────────────────────────────────────────── -->
+      <section id="panel-help" class="panel" role="tabpanel" aria-labelledby="tab-help" hidden>
+        <div class="card">
+          <h3>About</h3>
+          <div class="kv">
+            <span>Modem</span><span class="numerals" id="help-daemon">—</span>
+            <span>Callsign</span><span class="numerals" id="help-callsign">—</span>
+            <span>Keying</span><span id="help-ptt">—</span>
+            <span>Configuration</span><span class="numerals" id="help-config">—</span>
+            <span>Log and recordings</span><span class="numerals" id="help-dir">—</span>
+          </div>
+          <p class="sub">
+            The desktop application's own <strong>Help</strong> menu, above this panel, checks
+            for updates, restores the previous version, and opens the configuration folder.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>Getting on the air</h3>
+          <ol class="help-steps">
+            <li><strong>Setup</strong>: callsign, the radio interface and its three devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
+            <li><strong>Session → Keying and drive</strong>: <em>Key for 1 s</em> should light the rig's transmit indicator; the <em>Tune tone</em> with the level slider sets the drive so the ALC barely moves.</li>
+            <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
+            <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <h3>Where to read more</h3>
+          <div class="kv">
+            <span>Releases and installers</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/releases" target="_blank" rel="noopener">github.com/KK4ODA/aether-hf/releases</a>
+            <span>Installing and setting up</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/install.md" target="_blank" rel="noopener">docs/user/install.md</a>
+            <span>Where to operate</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener">docs/user/frequency-plan.md</a>
+            <span>The field-test protocol</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener">docs/user/field-test.md</a>
+            <span>Host programs</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener">docs/spec/host-interfaces.md</a>
+            <span>A gateway</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener">docs/user/gateway-kit.md</a>
+            <span>Bugs and ideas</span><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener">github.com/KK4ODA/aether-hf/issues</a>
+          </div>
+          <p class="sub">
+            A bug report about the air should carry the diagnostic bundle from the Log tab and,
+            if there is one, the session's recording.
+          </p>
+        </div>
       </section>
     </main>
 
