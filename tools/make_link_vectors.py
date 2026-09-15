@@ -31,7 +31,13 @@ from aether_model.link.frames import (
     encode_data,
     pack_callsign,
 )
-from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
+from aether_model.link.rate import (
+    AWGN_THRESHOLD_DB,
+    NARROW_AWGN_THRESHOLD_DB,
+    NARROW_PAYLOAD_BYTES,
+    RateController,
+    usable_modes,
+)
 
 
 def callsign_cases() -> list[dict]:  # type: ignore[type-arg]
@@ -170,6 +176,15 @@ def main() -> int:
         "Frame encodings are exact; the rate-controller traces are compared value by value.",
         "awgn_thresholds": [float(AWGN_THRESHOLD_DB[m]) for m in sorted(AWGN_THRESHOLD_DB)],
         "usable_modes": [int(m) for m in usable_modes()],
+        "narrow_awgn_thresholds": [
+            float(NARROW_AWGN_THRESHOLD_DB[m]) for m in sorted(NARROW_AWGN_THRESHOLD_DB)
+        ],
+        "narrow_payload_bytes": [
+            int(NARROW_PAYLOAD_BYTES[m]) for m in sorted(NARROW_PAYLOAD_BYTES)
+        ],
+        "narrow_usable_modes": [
+            int(m) for m in usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES)
+        ],
         "callsigns": callsign_cases(),
         "data_frames": data_frame_cases(),
         "connect_bodies": connect_body_cases(),

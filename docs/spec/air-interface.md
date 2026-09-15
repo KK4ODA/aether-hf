@@ -227,16 +227,16 @@ station knows which table applies from the waveform the frame arrived in.
 <!-- BEGIN:modes500 -->
 | Mode | Name | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 0 | QPSK-1/2 | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.5 |
-| 1 | QPSK-2/3 | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -4.0 |
-| 2 | PSK8-1/2 | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.5 |
-| 3 | PSK8-2/3 | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.0 |
-| 4 | QAM16-1/2 | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -1.0 |
-| 5 | QAM16-2/3 | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
-| 6 | QAM16-3/4 | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.0 |
-| 7 | QAM64-2/3 | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +7.0 |
-| 8 | QAM64-3/4 | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.5 |
-| 9 | QAM64-5/6 | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.0 |
+| 0 | QPSK-1/2 | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
+| 1 | QPSK-2/3 | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.5 |
+| 2 | PSK8-1/2 | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
+| 3 | PSK8-2/3 | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.6 |
+| 4 | QAM16-1/2 | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
+| 5 | QAM16-2/3 | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +1.9 |
+| 6 | QAM16-3/4 | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.6 |
+| 7 | QAM64-2/3 | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
+| 8 | QAM64-3/4 | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
+| 9 | QAM64-5/6 | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
 <!-- END:modes500 -->
 
 ---
@@ -437,6 +437,20 @@ rate), and end-to-end link goodput with adaptive rate control:
 | QPSK 1/2 | +1.4 | +8.7 | +8.5 | +6.0 |
 | Goodput at +12 dB | 1696 bps | 859 | 819 | 1034 |
 | Goodput at +20 dB | 2106 bps | 1696 | 1565 | 1745 |
+
+At 500 Hz (`bench/baselines/phy_fer_500.csv`), the same reference — the same transmitter
+power into the same noise:
+
+| | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| Most robust narrow mode (QPSK ½) | −5.2 dB | +4.0 | +1.0 | +1.0 |
+| 16-QAM ½ | −0.1 | +9.0 | +6.0 | +9.5 |
+| Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +23 | > +27 |
+| Best single-mode throughput at +12 dB | 1040 bps | 533 | 634 | 413 |
+
+The narrow floor equals the wide floor on AWGN, because twelve carriers carry ≈ 6.8 dB
+more per carrier than fifty-seven; on the fading channels a fifth of the frequency
+diversity costs it about 2 dB on ITU Good.
 
 These are simulator figures. No on-air measurements exist yet, and none should be inferred.
 

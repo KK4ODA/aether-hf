@@ -64,22 +64,23 @@ PAYLOAD_BYTES: dict[int, float] = {
 
 
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -5.5,
-    1: -4.0,
-    2: -2.5,
-    3: 0.0,
-    4: -1.0,
-    5: 2.0,
-    6: 3.0,
-    7: 7.0,
-    8: 8.5,
-    9: 10.0,
+    0: -5.2,
+    1: -3.5,
+    2: -2.1,
+    3: 0.6,
+    4: -0.1,
+    5: 1.9,
+    6: 3.6,
+    7: 6.9,
+    8: 8.8,
+    9: 10.4,
 }
 """The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
-as an operator would compare them. **Provisional until the sweep lands**: these are the
-wide table's entries for the same (modulation, rate) less the ≈ 6.8 dB a 500 Hz signal
-gains per carrier — ``tools/update_rate_table.py --bandwidth 500 --apply`` replaces them
-with ``bench/baselines/phy_fer_500.csv``'s measurements."""
+as an operator would compare them: the same transmitter power into the same noise. Every
+entry is measured (``bench/baselines/phy_fer_500.csv``, ``tools/bench_phy.py --bandwidth
+500``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). The floor is
+where the design put it — QPSK ½ at −5.2 dB against the wide table's BPSK ⅕ at −5.1 —
+because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven."""
 
 NARROW_PAYLOAD_BYTES: dict[int, float] = {
     0: 25,

@@ -14,6 +14,7 @@ deliberate change to the waveform, and say why in the commit.
 | `link_throughput.csv` | `python tools/bench_link.py --bytes 16000 --trials 3` | end-to-end link goodput vs SNR per channel: a whole session (connect, 16 kB, disconnect) with adaptive rate |
 | `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking |
 | `phy_fer_awgn14.csv` | `python tools/bench_phy.py --channels awgn --modes 0,1,...,13 --frames 30` | AWGN FER for **every** mode — the source of the rate controller's threshold table (`tools/update_rate_table.py`) |
+| `phy_fer_500.csv` | `python tools/bench_phy.py --bandwidth 500 --frames 30` (2026-09-15) | the **500 Hz waveform** (P7-0): FER / throughput vs SNR (3 kHz) for all ten narrow modes on AWGN, Good, Moderate and Poor — the source of the narrow rate table (`tools/update_rate_table.py --bandwidth 500`) |
 | `gate_awgn.csv` | `python tools/bench_gate.py --regenerate` (AWGN, modes 0, 4, 8, 13, 30 frames) | the release gate's baseline, measured with the current air interface including ADR-0004 peak reduction and the P2-5 blanker. Against `phy_fer_awgn14.csv` (measured before both) modes 0, 4 and 13 are within 0.01 dB and QAM16-1/2 read 0.4 dB worse. A re-sweep of modes 6–10 settled it: 6, 7, 9 and 10 are unchanged to 0.02 dB, and mode 8 differs by two frames out of thirty at 6 dB (25 decode now, 27 before) — the 10 % crossing of the old sweep sat exactly on that grid point, so two frames move the interpolated threshold by 0.4 dB. Measurement resolution, not a change in the waveform: the other 16-QAM modes share the 7 dB clipping target and did not move |
 | `impulsive.csv` | `python tools/bench_impulsive.py --frames 10 --modes 0,4,10` | FER vs impulsive-noise rate, with each P2-5 defence on and off |
 | `chanest.csv` | `python tools/bench_chanest.py --frames 16 --snr-offsets 0,2` | linear vs Wiener channel estimation (the P2-6 decision) |
@@ -56,6 +57,38 @@ detector (P2-3) is what moves BPSK 1/5 on AWGN from −3.3 dB (acquisition-limit
 to −5.2 dB — the LDPC code, not acquisition, is now the floor. The high modes and the
 fading columns are essentially unchanged from Phase 1, as expected: only the low-SNR
 acquisition path changed.
+
+## PHY, the 500 Hz waveform (`phy_fer_500.csv`, P7-0, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
+
+The narrow waveform (`docs/spec/air-interface.md` §2.3; ADR-0002's P7-0 amendment) at the
+same 3 kHz-referenced SNR as the wide one — the same transmitter power into the same noise,
+which is how an operator compares them. Minimum usable SNR for FER ≤ 10 %, interpolated:
+
+| Narrow mode | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| 0 QPSK 1/2 | −5.2 | +4.0 | +1.0 | +1.0 |
+| 1 QPSK 2/3 | −3.5 | +5.5 | +3.0 | +6.0 |
+| 2 8-PSK 1/2 | −2.1 | +7.0 | +6.3 | +5.0 |
+| 3 8-PSK 2/3 | +0.6 | +10.0 | +7.0 | > +16 |
+| 4 16-QAM 1/2 | −0.1 | +9.0 | +6.0 | +9.5 |
+| 5 16-QAM 2/3 | +1.9 | +12.0 | +9.5 | > +19 |
+| 6 16-QAM 3/4 | +3.6 | +14.0 | +10.0 | > +20 |
+| 7 64-QAM 2/3 | +6.9 | +17.0 | +14.0 | > +24 |
+| 8 64-QAM 3/4 | +8.8 | +19.0 | > +22 | > +26 |
+| 9 64-QAM 5/6 | +10.4 | +21.0 | > +23 | > +27 |
+
+What the table says. **The floor landed where the design put it**: QPSK ½ on twelve
+carriers decodes at −5.2 dB on AWGN, the wide table's BPSK ⅕ at −5.2 — the ≈ 6.8 dB a
+500 Hz signal gains per carrier pays for the four rate steps. The AWGN thresholds sit
+6.4–7.1 dB below the wide table's for the same (modulation, rate) — 6.8 dB less the
+narrow waveform's heavier pilot fraction (4 of 12 carriers against 15 of 57). **On fading
+channels it gives some of that back**: twelve carriers over 480 Hz have a fifth of the
+frequency diversity, so a fade takes more of the frame with it — mode 0 needs +4.0 dB on
+Good against the wide floor's +2.0, and the top modes never reach 10 % FER on Poor within
+the sweep, where 16-QAM ¾ at 2 300 Hz does not either. This is the trade the narrow
+waveform is, and P9-5 (time diversity) is the answer to it. Peak throughput: 1 040 bit/s
+(64-QAM ⅚) on AWGN from +10.4 dB; the best single mode reaches 901 bit/s on Good and
+867 on Moderate at +20 dB, and 413 bit/s on Poor at +12.
 
 ## PHY, Phase 1 air interface (`phy_fer_phase1_uw.csv`, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
 

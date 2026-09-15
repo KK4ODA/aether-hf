@@ -138,9 +138,13 @@ decided, and why:
   bytes in a LONG frame (a connect request needs 21). That is affordable because a 500 Hz
   signal puts the transmitter's power into a fifth of the band: at the same 3 kHz-referenced
   SNR each carrier has 10·log₁₀(57/12) ≈ 6.8 dB more signal-to-noise than a wide one, so
-  QPSK ½ at 500 Hz reaches the wide table's BPSK ⅕ floor. Measured: **mode 0 decodes
-  100 % at −5 dB and 70 % at −6 dB (3 kHz), against the wide floor's 100 % at −5 dB and
-  ~50 % at −6 dB.** The table runs QPSK ½ · ⅔, 8-PSK ½ · ⅔, 16-QAM ½ · ⅔ · ¾,
+  QPSK ½ at 500 Hz reaches the wide table's BPSK ⅕ floor. Measured
+  (`bench/baselines/phy_fer_500.csv`, `bench/README.md`): **QPSK ½ at 500 Hz needs
+  −5.2 dB on AWGN, the wide table's BPSK ⅕ −5.2 dB**; every narrow AWGN threshold sits
+  6.4–7.1 dB below the wide table's for the same (modulation, rate). On the fading
+  channels a fifth of the frequency diversity costs about 2 dB on ITU Good (+4.0 against
+  +2.0 at the floor) and the top modes do not reach 10 % FER on Poor — the trade this
+  waveform is, and what P9-5 (time diversity) is for. The table runs QPSK ½ · ⅔, 8-PSK ½ · ⅔, 16-QAM ½ · ⅔ · ¾,
   64-QAM ⅔ · ¾ · ⅚: 190 to 1 040 bit/s net. Its indices are its own (narrow mode 4 is
   16-QAM ½); a receiver knows which table applies from the waveform the frame arrived in.
   Modes below QPSK ½ — repetition or spreading to reach −10 dB — are P9-4.
