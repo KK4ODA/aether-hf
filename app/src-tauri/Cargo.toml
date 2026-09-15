@@ -4,7 +4,7 @@
 [package]
 name = "aether-app"
 description = "Aether HF desktop shell: supervises the daemon and shows the station panel"
-version = "0.2.0-beta.12"
+version = "0.2.0-beta.13"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
