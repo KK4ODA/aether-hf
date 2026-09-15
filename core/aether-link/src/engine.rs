@@ -166,6 +166,8 @@ pub struct LinkStats {
     pub turns: usize,
     /// Payload bytes delivered to the application.
     pub bytes_delivered: usize,
+    /// Payload bytes the peer acknowledged: what has actually crossed, seen from the sender.
+    pub bytes_acked: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +289,9 @@ pub struct LinkEngine {
     bursts_since_turn: usize,
     peer_request: PeerRequest,
     recommended: usize,
+    /// The SNR the peer measured on this station's last burst, carried in its ACK:
+    /// the one number an operator cannot get from their own receiver.
+    peer_snr_db: Option<f64>,
     turn_tries: usize,
     disc_requested: bool,
     disc_tries: usize,
@@ -346,6 +351,7 @@ impl LinkEngine {
             bursts_since_turn: 0,
             peer_request: PeerRequest::None,
             recommended,
+            peer_snr_db: None,
             turn_tries: 0,
             disc_requested: false,
             disc_tries: 0,
@@ -382,6 +388,22 @@ impl LinkEngine {
     #[must_use]
     pub fn session(&self) -> u8 {
         self.session
+    }
+
+    /// The SNR the peer last reported hearing this station at, in dB (3 kHz reference),
+    /// once an acknowledgement has carried one this session.
+    #[must_use]
+    pub fn peer_snr_db(&self) -> Option<f64> {
+        self.peer_snr_db
+    }
+
+    /// What the rate controller has measured of the other station's signal: the
+    /// smoothed SNR of the bursts received this session, and the margin it is keeping
+    /// over a mode's threshold. For a diagnostics display; the mode itself is
+    /// [`current_mode`](Self::current_mode).
+    #[must_use]
+    pub fn rate_readings(&self) -> (Option<f64>, f64) {
+        (self.rate.snr_db(), self.rate.margin_db())
     }
 
     /// Capability bits the peer offered in the connect handshake.
@@ -962,7 +984,13 @@ impl LinkEngine {
             && self.outstanding() < WINDOW
             && !self.tx_queue.is_empty()
         {
-            let take = capacity.min(self.tx_queue.len());
+            let mut take = capacity.min(self.tx_queue.len());
+            // A body one byte short of full is the one length the container cannot carry:
+            // it is partial, so it needs its two length bytes, and then it no longer fits.
+            // Leave one more byte for the next frame instead of failing on the air.
+            if take + 1 == capacity {
+                take -= 1;
+            }
             let body: Vec<u8> = self.tx_queue.drain(..take).collect();
             let seq = self.tx_next;
             self.records.push(TxRecord {
@@ -1007,6 +1035,7 @@ impl LinkEngine {
         for record in &mut self.records {
             if !record.acked && record.tx_count > 0 && ack.received(record.seq) {
                 record.acked = true;
+                self.stats.bytes_acked += record.body.len();
             }
         }
         while self.tx_base != self.tx_next {
@@ -1021,6 +1050,9 @@ impl LinkEngine {
             self.tx_base = seq_after(self.tx_base, 1);
         }
         self.recommended = usize::from(ack.recommended_mode).min(self.config.max_mode);
+        if ack.snr_db.is_some() {
+            self.peer_snr_db = ack.snr_db;
+        }
         self.peer_request = if ack.flags & control_flags::BREAK != 0 {
             PeerRequest::Break
         } else if ack.flags & control_flags::WANT_TX != 0 {
@@ -1472,6 +1504,7 @@ impl LinkEngine {
         self.bursts_since_turn = 0;
         self.peer_request = PeerRequest::None;
         self.recommended = self.config.initial_mode;
+        self.peer_snr_db = None;
         self.turn_tries = 0;
         self.disc_tries = 0;
         self.disc_requested = false;

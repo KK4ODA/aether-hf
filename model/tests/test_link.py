@@ -235,6 +235,9 @@ def test_connect_transfer_disconnect_clean_channel(timing: PhyTiming) -> None:
     sim = _run_transfer(timing, msg, snr_db=15.0, seed=7)
     a, b = sim.st[0].engine, sim.st[1].engine
     assert sim.delivered(1) == msg
+    # what the sender saw acknowledged is what the receiver delivered
+    assert a.stats.bytes_acked == len(msg)
+    assert b.stats.bytes_delivered == len(msg)
     assert a.state is State.IDLE and b.state is State.IDLE
     assert "connected:KK4XYZ (iss)" in sim.events(0)
     assert any(e.startswith("disconnected") for e in sim.events(0))
@@ -332,6 +335,45 @@ def test_a_station_answers_to_every_callsign_it_was_given(timing: PhyTiming) -> 
     assert b.my_call == "KK4XYZ-T"
     assert "connected:W4ODA (irs)" in sim.events(1)
     assert "connected:KK4XYZ-T (iss)" in sim.events(0)
+
+
+def test_a_message_one_byte_short_of_a_full_frame_still_crosses(timing: PhyTiming) -> None:
+    # the DATA container carries a full body with no length, or a partial body with two
+    # length bytes; a body one byte short of full is neither, and the sender must not try
+    # to build it — the modem raised on exactly this length mid-session
+    from aether_model.link.frames import data_capacity
+
+    a, b = _pair(timing)
+    cap = data_capacity(timing.capacity(LinkConfig().initial_mode))
+    for length in (cap - 1, cap, cap + 1, 2 * cap - 1):
+        a, b = _pair(timing)
+        message = bytes(range(256)) * (length // 256 + 1)
+        message = message[:length]
+        sim = TwoStationSim(a, b, snr_db=15.0, seed=11)
+        a.connect("KK4XYZ")
+        a.send(message)
+        a.disconnect()
+        sim.run(until=600)
+        assert sim.delivered(1) == message, length
+
+
+def test_the_sender_learns_how_the_other_station_hears_it(timing: PhyTiming) -> None:
+    # every acknowledgement carries the SNR the receiver measured on the burst, and the
+    # sender keeps the last one: it is the one number an operator cannot read off their
+    # own receiver, and the one a panel shows as "they hear you at"
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=9)
+    a.connect("KK4XYZ")
+    a.send(bytes([0x5A]) * 400)
+    sim.run(until=40)
+    assert a.state is State.CONNECTED
+    assert a.peer_snr_db is not None
+    assert abs(a.peer_snr_db - 15.0) < 3.0
+    # and the report belongs to the session: it is gone when the session is
+    a.disconnect()
+    sim.run(until=300)
+    assert a.state is State.IDLE
+    assert a.peer_snr_db is None
 
 
 def test_a_call_to_somebody_else_is_not_answered(timing: PhyTiming) -> None:

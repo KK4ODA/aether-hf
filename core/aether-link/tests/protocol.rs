@@ -51,6 +51,9 @@ fn a_session_connects_transfers_and_closes_on_a_clean_channel() {
         .into_bytes();
     let sim = run_transfer(&message, 15.0, 7);
     assert_eq!(sim.delivered(1), message.as_slice());
+    // what the sender saw acknowledged is what the receiver delivered
+    assert_eq!(sim.engine(0).stats.bytes_acked, message.len());
+    assert_eq!(sim.engine(1).stats.bytes_delivered, message.len());
     assert_eq!(sim.engine(0).state(), State::Idle);
     assert_eq!(sim.engine(1).state(), State::Idle);
     assert!(
@@ -201,6 +204,46 @@ fn a_station_answers_to_every_callsign_it_was_given() {
             .iter()
             .any(|e| e == "connected:KK4XYZ-T (iss)")
     );
+}
+
+#[test]
+fn a_message_one_byte_short_of_a_full_frame_still_crosses() {
+    // the DATA container carries a full body with no length, or a partial body with two
+    // length bytes; a body one byte short of full is neither, and the sender must not try
+    // to build it — the modem panicked on exactly this length mid-session
+    let t = timing(false);
+    let capacity =
+        aether_link::frames::data_capacity(t.capacity(LinkConfig::default().initial_mode));
+    for length in [capacity - 1, capacity, capacity + 1, 2 * capacity - 1] {
+        let message: Vec<u8> = (0..length).map(|i| (i % 256) as u8).collect();
+        let sim = run_transfer(&message, 15.0, 11);
+        assert_eq!(sim.delivered(1), message.as_slice(), "{length} bytes");
+    }
+}
+
+#[test]
+fn the_sender_learns_how_the_other_station_hears_it() {
+    // every acknowledgement carries the SNR the receiver measured on the burst, and the
+    // sender keeps the last one: it is the one number an operator cannot read off their
+    // own receiver, and the one a panel shows as "they hear you at"
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&[0x5a; 400]);
+    let mut sim = TwoStationSim::new(a, b, 15.0, 9);
+    sim.run(40.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    let heard_at = sim.engine(0).peer_snr_db().expect("an ACK carried the SNR");
+    assert!((heard_at - 15.0).abs() < 3.0, "{heard_at}");
+    // the receiving side has measured the same channel for its rate controller
+    let (snr, margin) = sim.engine(1).rate_readings();
+    assert!(snr.is_some_and(|s| (s - 15.0).abs() < 3.0), "{snr:?}");
+    assert!(margin > 0.0);
+    // and the report belongs to the session: it is gone when the session is
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(0).peer_snr_db(), None);
 }
 
 #[test]

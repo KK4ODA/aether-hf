@@ -163,6 +163,8 @@ class LinkStats:
     bursts: int = 0
     turns: int = 0
     bytes_delivered: int = 0
+    # payload bytes the peer acknowledged: what has actually crossed, seen from the sender
+    bytes_acked: int = 0
 
 
 # ── the engine ────────────────────────────────────────────────────────
@@ -207,6 +209,9 @@ class LinkEngine:
         self._peer_wants_tx = False
         self._peer_break = False
         self._recommended = self.cfg.initial_mode
+        # the SNR the peer measured on our last burst, carried in its ACK: the
+        # one number an operator cannot get from their own receiver
+        self.peer_snr_db: float | None = None
         self._turn_tries = 0
         self._disc_requested = False
         self._disc_tries = 0
@@ -571,8 +576,14 @@ class LinkEngine:
             and self._outstanding() < WINDOW
             and self._tx_queue
         ):
-            body = bytes(self._tx_queue[:cap])
-            del self._tx_queue[:cap]
+            take = min(cap, len(self._tx_queue))
+            # A body one byte short of full is the one length the container cannot carry:
+            # it is partial, so it needs its two length bytes, and then it no longer fits.
+            # Leave one more byte for the next frame instead of failing on the air.
+            if take == cap - 1:
+                take -= 1
+            body = bytes(self._tx_queue[:take])
+            del self._tx_queue[:take]
             rec = _TxRecord(self._tx_next, DataKind.DATA, body, mode)
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
@@ -599,10 +610,13 @@ class LinkEngine:
         for s, rec in list(self._records.items()):
             if not rec.acked and rec.tx_count and ack.received(s):
                 rec.acked = True
+                self.stats.bytes_acked += len(rec.body)
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
             del self._records[self._tx_base]
             self._tx_base = seq_after(self._tx_base)
         self._recommended = max(0, min(self.cfg.max_mode, ack.recommended_mode))
+        if ack.snr_db is not None:
+            self.peer_snr_db = ack.snr_db
         self._peer_wants_tx = bool(ack.flags & ControlFlags.WANT_TX)
         self._peer_break = bool(ack.flags & ControlFlags.BREAK)
         self._waiting_for = None
@@ -935,6 +949,7 @@ class LinkEngine:
         self._bursts_since_turn = 0
         self._peer_wants_tx = self._peer_break = False
         self._recommended = self.cfg.initial_mode
+        self.peer_snr_db = None
         self._turn_tries = self._disc_tries = 0
         self._disc_requested = False
         self._waiting_for = None

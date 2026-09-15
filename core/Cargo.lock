@@ -42,6 +42,7 @@ dependencies = [
  "cpal",
  "ctrlc",
  "flate2",
+ "rustfft",
  "serde",
  "serde_json",
  "serialport",
