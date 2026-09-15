@@ -180,6 +180,13 @@ pub fn dispatch_with<P: Ptt>(
         "status" => {
             let mut result = status(station);
             result["supervised"] = json!(daemon.as_ref().is_some_and(|d| d.supervised));
+            // which installation this daemon runs from: a shell that finds one already
+            // listening decides from this whether it is its own to stop
+            result["binary"] = json!(
+                std::env::current_exe()
+                    .ok()
+                    .map(|p| p.display().to_string())
+            );
             return Response::ok(request.id.clone(), result);
         }
         _ => {}

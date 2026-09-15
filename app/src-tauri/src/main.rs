@@ -30,7 +30,10 @@ use std::{
     net::TcpStream,
     path::PathBuf,
     process::{Child, Command},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -58,8 +61,17 @@ const RESTART_EXIT_CODE: i32 = 75;
 /// How often the supervisor looks at the daemon it started.
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
-/// The daemon this shell started, if it started one.
-pub struct Daemon(Mutex<Option<Child>>);
+/// The daemon this shell is responsible for.
+///
+/// Usually one it started. Failing that, one it found listening that runs from this same
+/// installation — left behind by a shell that was killed, or by an installer's relaunch —
+/// which it *adopts*: stopped on close and before an installer, exactly as if it had been
+/// started here. A daemon from anywhere else (a gateway service, a checkout) is attached
+/// to and left alone.
+pub struct Daemon {
+    child: Mutex<Option<Child>>,
+    adopted: AtomicBool,
+}
 
 /// What the daemon needs to be started, kept so it can be started again.
 struct Launch {
@@ -86,6 +98,12 @@ fn main() {
             (None, Some(message))
         }
     };
+    // one already listening that runs from this installation is ours to look after; the
+    // first two updates after a relaunch both failed on a daemon nobody owned
+    let adopted = started.is_none()
+        && failure.is_none()
+        && daemon_binary_on_port()
+            .is_some_and(|running| daemon_path().is_ok_and(|ours| same_file(&running, &ours)));
     let preferences = config_path().map_or(
         update::Preferences {
             channel: update::Channel::Stable,
@@ -98,7 +116,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(Daemon(Mutex::new(started)))
+        .manage(Daemon {
+            child: Mutex::new(started),
+            adopted: AtomicBool::new(adopted),
+        })
         .manage(StartupError(failure))
         .manage(launch)
         .setup(move |app| {
@@ -252,7 +273,7 @@ fn watch_daemon(app: tauri::AppHandle) {
                 std::thread::sleep(WATCH_INTERVAL);
                 let exited = {
                     let daemon = app.state::<Daemon>();
-                    let Ok(mut slot) = daemon.0.lock() else {
+                    let Ok(mut slot) = daemon.child.lock() else {
                         return;
                     };
                     let Some(child) = slot.as_mut() else { continue };
@@ -269,7 +290,7 @@ fn watch_daemon(app: tauri::AppHandle) {
                     let resources = app.state::<Launch>().resources.clone();
                     match ensure_daemon(resources.as_deref()) {
                         Ok(child) => {
-                            if let Ok(mut slot) = app.state::<Daemon>().0.lock() {
+                            if let Ok(mut slot) = app.state::<Daemon>().child.lock() {
                                 *slot = child;
                             }
                         }
@@ -431,8 +452,20 @@ fn dirs_config() -> Option<PathBuf> {
 /// left an orphan behind could leave a radio keyed with nothing on screen to say so, which is
 /// the worst failure this software has.
 pub fn stop_daemon(state: &tauri::State<'_, Daemon>) {
-    let Ok(mut slot) = state.0.lock() else { return };
-    let Some(mut child) = slot.take() else { return };
+    let Ok(mut slot) = state.child.lock() else {
+        return;
+    };
+    let Some(mut child) = slot.take() else {
+        // not started here, but ours: ask it to stop and wait for the port to go quiet
+        if state.adopted.swap(false, Ordering::SeqCst) {
+            ask_to_stop();
+            let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+            while reachable() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        return;
+    };
 
     // Ask over the control API rather than killing: a killed process never runs its
     // shutdown path, and with `rigctld` keying that is a rig left in transmit with nothing
@@ -517,6 +550,38 @@ fn stop_stray_daemons(binary: &std::path::Path) {
     let _ = Command::new("pkill")
         .args(["-f", &binary.display().to_string()])
         .status();
+}
+
+/// The executable the daemon on the control port runs from, if one answers and says.
+fn daemon_binary_on_port() -> Option<PathBuf> {
+    use std::io::{Read as _, Write as _};
+    let address = CONTROL.parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(500)))
+        .ok()?;
+    stream
+        .write_all(
+            b"POST /v1/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+              Content-Length: 2\r\nConnection: close\r\n\r\n{}",
+        )
+        .ok()?;
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let (_, body) = response.split_once("\r\n\r\n")?;
+    let reply: serde_json::Value = serde_json::from_str(body).ok()?;
+    reply["result"]["binary"].as_str().map(PathBuf::from)
+}
+
+/// Whether two paths name one file, allowing for case and the `\\?\` prefix on Windows.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy()),
+    }
 }
 
 /// `POST /v1/shutdown`, hand-written so the shell carries no HTTP client of its own.
