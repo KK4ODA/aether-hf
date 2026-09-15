@@ -453,6 +453,72 @@ pub fn stop_daemon(state: &tauri::State<'_, Daemon>) {
     let _ = child.wait();
 }
 
+/// Make sure no daemon is left holding its binary before an installer replaces it.
+///
+/// `stop_daemon` handles the one this shell started. This handles the rest: a daemon the
+/// shell attached to rather than started, one whose process is still winding down after it
+/// answered the stop, and a copy left behind by something else — any of them keeps
+/// `aetherd.exe` open, and an installer that meets an open file stops with a dialog nobody
+/// wants to see ("Error opening file for writing", seen on two updates in a row). The test
+/// is the one the installer applies: can the file be opened for writing.
+///
+/// # Errors
+/// If, after asking, waiting and finally stopping a stray daemon by force, the file is
+/// still held — with what to do about it.
+pub fn release_daemon_binary(patience: Duration) -> Result<(), String> {
+    let binary = daemon_path()?;
+    let writable =
+        |path: &std::path::Path| std::fs::OpenOptions::new().write(true).open(path).is_ok();
+    let deadline = Instant::now() + patience;
+    let mut asked = false;
+    let mut forced = false;
+    while Instant::now() < deadline {
+        if !reachable() && writable(&binary) {
+            return Ok(());
+        }
+        if !asked {
+            // a daemon this shell does not own is still asked politely, so it releases the
+            // transmitter on its way out
+            ask_to_stop();
+            asked = true;
+        } else if !forced && Instant::now() + Duration::from_secs(3) > deadline {
+            forced = true;
+            stop_stray_daemons(&binary);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(format!(
+        "{} is still in use, so the installer cannot replace it. Close every copy of Aether \
+         HF (the Task Manager lists aetherd.exe), then run the update again.",
+        binary.display()
+    ))
+}
+
+/// Stop any `aetherd` process running from this installation, by force: the last resort
+/// before an installer that would fail anyway. Matched by path, so a daemon installed
+/// elsewhere — a gateway's — is left alone.
+#[cfg(windows)]
+fn stop_stray_daemons(binary: &std::path::Path) {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let script = format!(
+        "Get-Process aetherd -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{}' }} \
+         | Stop-Process -Force",
+        binary.display().to_string().replace('\'', "''")
+    );
+    let _ = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(windows))]
+fn stop_stray_daemons(binary: &std::path::Path) {
+    let _ = Command::new("pkill")
+        .args(["-f", &binary.display().to_string()])
+        .status();
+}
+
 /// `POST /v1/shutdown`, hand-written so the shell carries no HTTP client of its own.
 fn ask_to_stop() {
     use std::io::Write as _;

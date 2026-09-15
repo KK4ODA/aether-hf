@@ -191,8 +191,13 @@ async fn install(app: AppHandle, update: Update) {
         let _ = std::fs::write(dir.join(installer_name(&update.version)), &bytes);
     }
     // The daemon's binary is about to be replaced, and a file in use cannot be. Stopping it
-    // here also releases the transmitter properly, which a replaced binary would not.
+    // here also releases the transmitter properly, which a replaced binary would not — and
+    // the installer is not started until the file really is free.
     crate::stop_daemon(&app.state::<crate::Daemon>());
+    if let Err(error) = crate::release_daemon_binary(std::time::Duration::from_secs(15)) {
+        report(&app, format!("The update did not install: {error}"));
+        return;
+    }
     if let Err(error) = update.install(bytes) {
         report(&app, format!("The update did not install: {error}"));
         return;
@@ -303,6 +308,10 @@ pub fn restore_previous(app: &AppHandle) {
 /// Run a kept installer over this installation, and get out of its way.
 fn run_installer(app: &AppHandle, installer: &Path) {
     crate::stop_daemon(&app.state::<crate::Daemon>());
+    if let Err(error) = crate::release_daemon_binary(std::time::Duration::from_secs(15)) {
+        report(app, format!("Could not go back: {error}"));
+        return;
+    }
     if cfg!(windows) {
         // the installer replaces the files this process is running from, so this process
         // has to be gone; NSIS waits for it
