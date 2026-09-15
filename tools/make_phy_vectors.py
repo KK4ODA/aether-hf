@@ -28,7 +28,16 @@ from numpy.typing import NDArray
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.frame.codec import FrameCodec, coprime_stride
-from aether_model.frame.modes import CONTROL_MODE, LONG, MODES, SHORT
+from aether_model.frame.modes import (
+    CONTROL_MODE,
+    LONG,
+    MODES,
+    NARROW_CONTROL_MODE,
+    NARROW_LONG,
+    NARROW_MODES,
+    NARROW_SHORT,
+    SHORT,
+)
 from aether_model.phy.constellation import constellation
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import FrameHeader, FrameType
@@ -207,21 +216,33 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
     pass compares the modulator alone; the reduced one compares the clipper as well, and its
     recorded peak-to-average ratio is what says the two clippers reached the same place.
     """
-    transmitters = {
-        False: FrameTransmitter(WIDE_2300, papr_reduction=False),
-        True: FrameTransmitter(WIDE_2300, papr_reduction=True),
-    }
-    dem = OfdmDemodulator(WIDE_2300)
-    period = WIDE_2300.symbol_samples
     out = []
     rng = np.random.default_rng(31337)
+    # the wide cases first, unchanged, so the wide vectors stay what they were; then the
+    # narrow waveform's (P7-0), which the port must reproduce just as exactly
     cases = [
         (MODES[0], LONG, FrameType.DATA, 0),
         (MODES[4], LONG, FrameType.DATA, 1),
         (MODES[13], LONG, FrameType.DATA, 3),
         (CONTROL_MODE, SHORT, FrameType.CONTROL, 0),
+        (NARROW_MODES[0], NARROW_LONG, FrameType.DATA, 0),
+        (NARROW_MODES[4], NARROW_LONG, FrameType.DATA, 2),
+        (NARROW_MODES[9], NARROW_LONG, FrameType.DATA, 1),
+        (NARROW_CONTROL_MODE, NARROW_SHORT, FrameType.CONTROL, 0),
     ]
+    transmitters_by_params: dict = {}
     for mode, layout, frame_type, rv in cases:
+        params = layout.waveform
+        if params not in transmitters_by_params:
+            transmitters_by_params[params] = (
+                {
+                    False: FrameTransmitter(params, papr_reduction=False),
+                    True: FrameTransmitter(params, papr_reduction=True),
+                },
+                OfdmDemodulator(params),
+            )
+        transmitters, dem = transmitters_by_params[params]
+        period = params.symbol_samples
         codec = FrameCodec(mode, layout)
         payload = rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8).tobytes()
         qam = codec.encode(payload, rv)
@@ -241,6 +262,7 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
             peak = float(np.max(np.abs(waveform) ** 2))
             out.append(
                 {
+                    "bandwidth_hz": params.bandwidth.hz,
                     "mode": mode.index,
                     "mode_name": mode.name,
                     "layout": layout.name,

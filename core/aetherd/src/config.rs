@@ -156,8 +156,11 @@ impl Default for AudioSection {
 }
 
 /// Limits that keep a station lawful and polite.
+///
+/// Each flag is a key of the `[radio]` table as the operator writes it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RadioSection {
     /// Longest a single transmission may last, in seconds.
     #[serde(default = "default_max_key")]
@@ -168,8 +171,20 @@ pub struct RadioSection {
     /// How far above the learned noise floor counts as occupied, in dB.
     #[serde(default = "default_busy_threshold")]
     pub busy_threshold_db: f64,
+    /// The waveform's bandwidth in hertz: 2300, the default, or 500 — the bandwidth
+    /// peer-to-peer contacts are made in and the only one 30 m allows. Both stations of a
+    /// session use the same one; a call in the other bandwidth is not heard.
+    #[serde(default = "default_bandwidth")]
+    pub bandwidth: u32,
+    /// Answer calls but never make one, and never beacon. An automatically controlled
+    /// station may use 500 Hz outside the §97.221(b) sub-bands only to *respond* to a
+    /// station under local or remote control (§97.221(c)), so this is how an unattended
+    /// station is left on such a frequency; `docs/user/frequency-plan.md` says which.
+    #[serde(default)]
+    pub answer_only: bool,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
-    /// constellations, or a band where they never work.
+    /// constellations, or a band where they never work. Indexes the mode table of the
+    /// bandwidth in use: fourteen modes at 2300 Hz, ten at 500 Hz.
     #[serde(default = "default_max_mode")]
     pub max_mode: usize,
     /// Offer payload compression in the connect handshake. Used only if the peer offers it
@@ -213,12 +228,30 @@ fn default_max_mode() -> usize {
     13
 }
 
+fn default_bandwidth() -> u32 {
+    2300
+}
+
+impl RadioSection {
+    /// The waveform the bandwidth names, if this version has it.
+    #[must_use]
+    pub fn params(&self) -> Option<aether_phy::waveform::WaveformParams> {
+        match self.bandwidth {
+            2300 => Some(aether_phy::waveform::WIDE_2300),
+            500 => Some(aether_phy::waveform::NARROW_500),
+            _ => None,
+        }
+    }
+}
+
 impl Default for RadioSection {
     fn default() -> Self {
         Self {
             max_key_s: default_max_key(),
             wait_for_clear: default_true(),
             busy_threshold_db: default_busy_threshold(),
+            bandwidth: default_bandwidth(),
+            answer_only: false,
             max_mode: default_max_mode(),
             compress: default_true(),
             cw_id: false,
@@ -643,10 +676,18 @@ impl Config {
                 "max_key_s must be positive: a watchdog that can never fire is not one".into(),
             ));
         }
-        if self.radio.max_mode >= aether_link::AWGN_THRESHOLD_DB.len() {
+        let Some(params) = self.radio.params() else {
             return Err(ConfigError::Invalid(format!(
-                "max_mode must be below {}, the number of modes this version defines",
-                aether_link::AWGN_THRESHOLD_DB.len()
+                "bandwidth must be 2300 or 500, not {}: those are the waveforms this version \
+                 has",
+                self.radio.bandwidth
+            )));
+        };
+        let modes = aether_phy::modes::air_interface(params).n_modes();
+        if self.radio.max_mode >= modes {
+            return Err(ConfigError::Invalid(format!(
+                "max_mode must be below {modes}, the number of modes at {} Hz",
+                self.radio.bandwidth
             )));
         }
         // The control interface can key a transmitter, so an address the network can reach
@@ -746,6 +787,7 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.max_key_s",
     "radio.wait_for_clear",
     "radio.max_mode",
+    "radio.answer_only",
     "radio.busy_threshold_db",
     "record.auto",
     "record.notes",
@@ -912,7 +954,13 @@ max_key_s = 30.0
 # answers: the peer is waiting, and silence only makes it retransmit.
 wait_for_clear = true
 busy_threshold_db = 6.0
-# The fastest mode this station will use, 0 to 13.
+# The waveform: 2300 Hz, or 500 Hz — the bandwidth peer-to-peer contacts are made in and
+# the only one 30 m allows. Both stations of a session use the same one.
+bandwidth = 2300
+# Answer calls but never make one, and never beacon: how an unattended station is left on
+# a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).
+answer_only = false
+# The fastest mode this station will use: 0 to 13 at 2300 Hz, 0 to 9 at 500 Hz.
 max_mode = 13
 # Offer payload compression. Used only if the other station offers it too, so leaving this on
 # costs nothing when talking to one that cannot.
@@ -1061,6 +1109,9 @@ mod tests {
         for text in [
             "callsign = \"W4ODA\"\n[radio]\nmax_key_s = 0.0\n",
             "callsign = \"W4ODA\"\n[radio]\nmax_mode = 14\n",
+            // the narrow table has ten modes, and 2750 Hz is not a waveform yet
+            "callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\nmax_mode = 10\n",
+            "callsign = \"W4ODA\"\n[radio]\nbandwidth = 2750\n",
             "callsign = \"W4ODA\"\n[audio]\ntx_level = 0.0\n",
             "callsign = \"W4ODA\"\n[audio]\ntx_level = 2.0\n",
         ] {
@@ -1252,6 +1303,16 @@ mod tests {
         // does nothing until the next restart is worse than one that says so
         assert!(Config::is_live("radio.max_mode"));
         assert!(Config::is_live("radio.wait_for_clear"));
+        assert!(Config::is_live("radio.answer_only"));
+        // the waveform is the modem: a change to it is a restart
+        assert!(!Config::is_live("radio.bandwidth"));
+        let narrow =
+            Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\nmax_mode = 9\n")
+                .expect("a narrow station");
+        assert_eq!(
+            narrow.radio.params(),
+            Some(aether_phy::waveform::NARROW_500)
+        );
         assert!(!Config::is_live("audio.input"));
         assert!(!Config::is_live("ptt.port"));
         assert!(!Config::is_live("control.bind"));

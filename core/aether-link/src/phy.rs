@@ -79,6 +79,11 @@ pub struct PhyTiming {
     pub preamble_detect_s: Option<f64>,
     /// Payload bytes per data frame, indexed by mode.
     pub data_capacity: Vec<usize>,
+    /// Minimum usable SNR (3 kHz, AWGN) per mode, as the PHY's own benchmark measured it —
+    /// what the rate controller steps along. Empty means the wide waveform's table
+    /// ([`crate::rate::AWGN_THRESHOLD_DB`]); a PHY with another mode table — the 500 Hz
+    /// waveform — hands its own here, and the engine never knows which air it is on.
+    pub mode_threshold_db: Vec<f64>,
 }
 
 impl PhyTiming {

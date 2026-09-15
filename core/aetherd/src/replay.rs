@@ -39,6 +39,9 @@ pub struct Expectation {
     pub frames: Vec<FrameRecord>,
     /// When its transmitter was keyed, which is when its receiver was deaf.
     pub muted: Vec<Muted>,
+    /// The waveform the station ran, in hertz: 2300 for a sidecar from before the
+    /// narrow waveform existed, which never said.
+    pub bandwidth_hz: u32,
 }
 
 impl Expectation {
@@ -81,19 +84,32 @@ impl Expectation {
                 until_s: f64::INFINITY,
             });
         }
-        Ok(Self { frames, muted })
+        let bandwidth_hz = document["session"]["bandwidth_hz"]
+            .as_u64()
+            .and_then(|hz| u32::try_from(hz).ok())
+            .unwrap_or(2300);
+        Ok(Self {
+            frames,
+            muted,
+            bandwidth_hz,
+        })
     }
 }
 
-/// Run a recording through the receiver.
+/// Run a recording through the receiver, in the waveform it was made with.
 ///
 /// Returns every frame found, in the sidecar's terms, with `t_s` relative to the start of
 /// the recording.
 ///
 /// # Errors
-/// If the file cannot be read, or is not at the modem's sample rate.
-pub fn replay(wav: &Path, muted: &[Muted]) -> Result<Vec<FrameRecord>, String> {
-    let params: WaveformParams = WIDE_2300;
+/// If the file cannot be read, is not at the modem's sample rate, or names a bandwidth
+/// this version has no waveform for.
+pub fn replay(wav: &Path, muted: &[Muted], bandwidth_hz: u32) -> Result<Vec<FrameRecord>, String> {
+    let params: WaveformParams = match bandwidth_hz {
+        2300 => WIDE_2300,
+        500 => aether_phy::waveform::NARROW_500,
+        other => return Err(format!("no waveform for {other} Hz in this version")),
+    };
     let audio = read_wav(wav).map_err(|e| format!("{}: {e}", wav.display()))?;
     let rate = u32::try_from(params.audio_rate).unwrap_or(48_000);
     if audio.sample_rate != rate {

@@ -322,7 +322,7 @@ fn diagnostics<P: Ptt>(
         },
         "generated": crate::log::rfc3339(unix_ms(std::time::SystemTime::now())),
         "status": status(station),
-        "capabilities": capabilities(),
+        "capabilities": capabilities(station.params()),
         "devices": devices,
         "config": Value::Null,
         "path": Value::Null,
@@ -405,7 +405,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
     let params = &request.params;
     match request.method.as_str() {
         "status" => Response::ok(id, status(station)),
-        "capabilities" => Response::ok(id, capabilities()),
+        "capabilities" => Response::ok(id, capabilities(station.params())),
         "spectrum" => Response::ok(id, spectrum(station)),
         "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, params, id),
@@ -836,29 +836,44 @@ fn constellation<P: Ptt>(station: &Station<P>) -> Value {
 /// What this modem can do, so a client discovers the mode table instead of hard-coding it.
 ///
 /// This is what keeps the control API free of any mention of a modulation: an FM physical
-/// layer would answer here with its own table and nothing else would change.
+/// layer would answer here with its own table and nothing else would change. The table
+/// is the one of the waveform the station runs (`bandwidth_hz`); `bandwidths_hz` lists
+/// what this version has.
 #[must_use]
-pub fn capabilities() -> Value {
-    use aether_phy::modes::{LONG, MODES};
+pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
+    use aether_phy::waveform::Bandwidth;
 
-    let modes: Vec<Value> = MODES
+    let air = aether_phy::modes::air_interface(params);
+    let (thresholds, payload): (&[f64], &[usize]) = match params.bandwidth {
+        Bandwidth::Narrow500 => (
+            &aether_link::rate::NARROW_AWGN_THRESHOLD_DB,
+            &aether_link::rate::NARROW_PAYLOAD_BYTES,
+        ),
+        _ => (
+            &aether_link::AWGN_THRESHOLD_DB,
+            &aether_link::rate::PAYLOAD_BYTES,
+        ),
+    };
+    let modes: Vec<Value> = air
+        .modes
         .iter()
         .map(|mode| {
             json!({
                 "index": mode.index,
                 "name": mode.name(),
-                "payload_bytes": mode.payload_bytes(&LONG),
-                "net_bit_rate": mode.net_bit_rate(&LONG),
-                "threshold_db": aether_link::AWGN_THRESHOLD_DB[mode.index],
+                "payload_bytes": mode.payload_bytes(&air.long),
+                "net_bit_rate": mode.net_bit_rate(&air.long),
+                "threshold_db": thresholds[mode.index],
             })
         })
         .collect();
     json!({
         "api_version": "0.1",
         "phy": "aether-hf",
-        "bandwidths_hz": [2300],
+        "bandwidth_hz": params.bandwidth.hz(),
+        "bandwidths_hz": [2300, 500],
         "modes": modes,
-        "usable_modes": aether_link::usable_modes(),
+        "usable_modes": aether_link::rate::usable_modes_of(thresholds, payload),
         "reports_preambles": true,
         "snr_reference_hz": 3000,
     })
@@ -940,7 +955,7 @@ mod tests {
 
     #[test]
     fn capabilities_carries_the_mode_table_and_names_no_modulation_in_its_shape() {
-        let caps = capabilities();
+        let caps = capabilities(aether_phy::waveform::WIDE_2300);
         let modes = caps["modes"].as_array().expect("modes");
         assert_eq!(modes.len(), aether_phy::modes::MODES.len());
         assert!(modes[0]["threshold_db"].is_number());

@@ -1139,7 +1139,10 @@ document.addEventListener("visibilitychange", scopesWanted);
 
 // ── capabilities and devices ────────────────────────────────────────
 
-/// The fastest-mode list, from the mode table the modem reports.
+/// The fastest-mode list, from the mode table the modem reports. The table is the
+/// running waveform's; when the operator picks the other bandwidth the list shrinks or
+/// grows to that table's size (ten modes at 500 Hz, fourteen at 2300) and the modem
+/// reports the real names once it has restarted into it.
 function fillModes() {
   const select = $("radio-max-mode");
   if (select.options.length === modeTable.length && modeTable.length > 0) return;
@@ -1286,6 +1289,8 @@ async function loadConfig() {
   showKeyingFields();
   const radio = liveConfig.radio ?? {};
   fillModes();
+  select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
+  $("radio-answer-only").checked = radio.answer_only === true;
   select($("radio-max-mode"), String(radio.max_mode ?? 13));
   $("radio-compress").checked = radio.compress !== false;
   $("radio-wait").checked = radio.wait_for_clear !== false;
@@ -1409,6 +1414,8 @@ function formChanges() {
   };
   const callsign = $("wz-call").value.trim().toUpperCase();
   if (callsign) changes.callsign = callsign;
+  changes["radio.bandwidth"] = Number($("radio-bandwidth").value);
+  changes["radio.answer_only"] = $("radio-answer-only").checked;
   changes["radio.max_mode"] = Number($("radio-max-mode").value);
   changes["radio.compress"] = $("radio-compress").checked;
   changes["radio.wait_for_clear"] = $("radio-wait").checked;
@@ -1779,6 +1786,13 @@ function wire() {
   for (const button of document.querySelectorAll("#heard-table button.sort")) {
     button.addEventListener("click", () => sortHeard(button.dataset.sort));
   }
+  $("radio-bandwidth").addEventListener("change", () => {
+    // the narrow table has ten modes: a fastest mode past it would be refused on save
+    const modes = $("radio-bandwidth").value === "500" ? 10 : 14;
+    const fastest = $("radio-max-mode");
+    for (const option of fastest.options) option.hidden = Number(option.value) >= modes;
+    if (Number(fastest.value) >= modes) fastest.value = String(modes - 1);
+  });
   $("btn-compact").addEventListener("click", () => {
     setCompact(!document.body.classList.contains("compact"));
   });

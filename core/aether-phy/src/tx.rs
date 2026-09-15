@@ -11,7 +11,7 @@
 
 use crate::{
     constellation::Complex,
-    modes::{CONTROL_MODE, FrameLayout, MODES},
+    modes::{AirInterface, FrameLayout, air_interface},
     ofdm::OfdmModulator,
     papr::{ClipAndFilter, clip_target_db},
     preamble::{FrameHeader, FrameType, Preamble},
@@ -22,6 +22,7 @@ use crate::{
 #[derive(Debug)]
 pub struct FrameTransmitter {
     params: WaveformParams,
+    air: AirInterface,
     modulator: OfdmModulator,
     preamble: Preamble,
     n_data_carriers: usize,
@@ -62,6 +63,7 @@ impl FrameTransmitter {
         let n_data_carriers = modulator.map().data_carriers().len();
         Self {
             params,
+            air: air_interface(params),
             modulator,
             preamble: Preamble::new(params),
             n_data_carriers,
@@ -147,8 +149,8 @@ impl FrameTransmitter {
             return waveform.to_vec();
         }
         let bits = match header.frame_type {
-            FrameType::Control => CONTROL_MODE.modulation.bits_per_symbol(),
-            FrameType::Data => MODES[header.mode].modulation.bits_per_symbol(),
+            FrameType::Control => self.air.control_mode().modulation.bits_per_symbol(),
+            FrameType::Data => self.air.modes[header.mode].modulation.bits_per_symbol(),
         };
         ClipAndFilter::new(self.params, clip_target_db(bits)).process(waveform)
     }

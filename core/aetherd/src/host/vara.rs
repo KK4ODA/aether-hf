@@ -137,6 +137,9 @@ pub struct HostState {
     pub cw_id: bool,
     /// Bytes the modem still has to send, as last reported.
     pub buffer: usize,
+    /// The bandwidth the station runs, in hertz: the one `BW<n>` is accepted for, and
+    /// the one `CONNECTED` reports. The server sets it from the modem's `capabilities`.
+    pub bandwidth_hz: u32,
     /// Settings the host asked for that this modem hears and does not act on.
     pub recorded: Recorded,
 }
@@ -164,6 +167,7 @@ impl Default for HostState {
             session: SessionKind::default(),
             cw_id: false,
             buffer: 0,
+            bandwidth_hz: BANDWIDTH_HZ,
         }
     }
 }
@@ -293,15 +297,23 @@ impl HostState {
                 }
                 _ => HostOutcome::wrong(),
             },
-            // One bandwidth exists (ADR-0002). Accepting a request for another and then
-            // transmitting 2300 Hz anyway would put a station outside what its operator
-            // asked for, so the others are refused.
-            // ...and a KISS-port detail with no KISS port behind it: heard, nothing to do
-            ("BW2300", []) | ("IGNOREKISSDCD", ["ON" | "OFF"]) => HostOutcome::ok(),
-            // `BW500` and `BW2750` fall through to the same refusal as anything unknown,
-            // which is the right answer: this physical layer does not have them.
+            // The station runs one bandwidth, chosen in its configuration (2300 or 500 Hz).
+            // A host asking for that one is answered `OK`; one asking for another is refused,
+            // because accepting and then transmitting the configured bandwidth anyway would
+            // put the station outside what its operator asked for — VarAC at 500 Hz on a
+            // calling frequency most of all. `BW2750` is not a waveform this version has.
+            ("BW2300" | "BW500", []) if Self::bandwidth_of(verb) == Some(self.bandwidth_hz) => {
+                HostOutcome::ok()
+            }
+            // a KISS-port detail with no KISS port behind it: heard, nothing to do
+            ("IGNOREKISSDCD", ["ON" | "OFF"]) => HostOutcome::ok(),
             _ => HostOutcome::wrong(),
         }
+    }
+
+    /// The bandwidth a `BW<n>` command names.
+    fn bandwidth_of(command: &str) -> Option<u32> {
+        command.strip_prefix("BW")?.parse().ok()
     }
 
     fn set_callsigns(&mut self, calls: &[&str]) -> HostOutcome {
@@ -510,6 +522,14 @@ mod tests {
         assert_eq!(host.command("BW2300").replies, vec!["OK"]);
         assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
         assert_eq!(host.command("BW2750").replies, vec!["WRONG"]);
+        // a station running the narrow waveform accepts BW500 and refuses BW2300
+        let mut narrow = HostState {
+            bandwidth_hz: 500,
+            ..HostState::default()
+        };
+        assert_eq!(narrow.command("BW500").replies, vec!["OK"]);
+        assert_eq!(narrow.command("BW2300").replies, vec!["WRONG"]);
+        assert_eq!(narrow.command("BW2750").replies, vec!["WRONG"]);
     }
 
     #[test]

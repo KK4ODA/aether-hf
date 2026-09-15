@@ -31,7 +31,8 @@ fn every_recorded_session_still_decodes_what_it_decoded_on_the_day() {
     for sidecar in &sidecars {
         let wav = sidecar.with_extension("wav");
         let expectation = Expectation::from_sidecar(sidecar).expect("a session sidecar");
-        let found = replay(&wav, &expectation.muted).expect("a readable recording");
+        let found = replay(&wav, &expectation.muted, expectation.bandwidth_hz)
+            .expect("a readable recording");
         let verdict = compare(&expectation.frames, &found);
         eprintln!(
             "{}: recorded {} decoded, replay decoded {} of {} found",

@@ -73,8 +73,8 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `LISTEN CQ` | VarAC: hear only CQ frames | Recorded as listening; this station hears everything and answers calls to its own callsigns either way |
 | `CHAT ON` / `CHAT OFF` | VarAC's chat mode | Recorded. The short frames it means are a different air interface this modem does not have; `OK` tells the host the modem heard, which is what keeps VarAC from calling it broken |
 | `IGNOREKISSDCD ON` / `OFF` | A KISS-port detail | Heard; there is no KISS port |
-| `BW2300` | Selects the bandwidth | The only one this PHY has (ADR-0002) |
-| `BW500`, `BW2750` | — | **Refused.** See §5 |
+| `BW2300`, `BW500` | Names the bandwidth | `OK` when it is the one the station runs (`[radio] bandwidth`; a host learns it from `capabilities`), `WRONG` otherwise: the bandwidth is the modem's configuration, not a session setting, and both stations of a session run the same one |
+| `BW2750` | — | **Refused.** Not a waveform this version has; see §5 |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
 | `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
@@ -113,9 +113,12 @@ limit, so the honest answer to "is this station limited?" is no.
 
 The three are deliberately distinguished, and a client can tell them apart.
 
-**Refused** (`WRONG`): `BW500` and `BW2750`. This physical layer has one bandwidth. Accepting
-the request and then transmitting 2300 Hz anyway would put a station outside the bandwidth its
-operator chose, which is an operator's decision and sometimes a legal one.
+**Refused** (`WRONG`): `BW2750`, and whichever of `BW2300` / `BW500` is not the bandwidth the
+station runs. Accepting a request for one bandwidth and then transmitting another would put a
+station outside the bandwidth its operator chose, which is an operator's decision and sometimes
+a legal one — a 2 300 Hz signal on a 500 Hz calling frequency most of all. The bandwidth is set
+in the station's configuration (`[radio] bandwidth`, 2300 or 500; the panel's Setup tab), and
+`CONNECTED` reports it.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
 `P2P SESSION`, `CHAT`, `LISTEN CQ`. The setting is remembered and reported back, and the
@@ -149,7 +152,7 @@ changing as clients are tested against it, and it cannot destabilise the modem u
 | The test suite's own host client | **Passing** — setup, call, session notifications, payload both ways, second-host refusal |
 | Pat 1.0.0 | **Passing on the bench** (2026-09-14): two daemons over the simulated channel at 15 dB, Pat at both ends; a P2P B2F session — connect, SID exchange, a proposal, a message with a 6 000-byte incompressible attachment, `FF`/`FQ`, disconnect — in 84 s, the attachment byte-identical on arrival. One fix on the way: the called side's `CONNECTED` had named this station first. On the air: not yet |
 | Winlink Express 1.8.5.0 | **Passing on the bench** (2026-09-14): two instances over the simulated channel at 15 dB, a Vara HF P2P session each, `MYCALL KK4ODA-1` and `KK4ODA-2`. A P2P message with a 6 000-byte incompressible attachment (zipped by Winlink Express, which does not allow `.bin`): 6 637 bytes in 36 s by its own count, the whole B2F session 62 s, the attachment byte-identical on arrival. Its opening line, verbatim in the adapter's test: `PUBLIC ON`, `CWID ON`, `COMPRESSION ON`, `BW<max>`, `MYCALL`, `LISTEN ON`. Two things it found. `COMPRESSION ON` is not in the published set and was `WRONG`; it is `TEXT` and is now heard. And **`MYCALL` had stopped at the adapter** — the modems kept the callsigns in their configuration files, and a call to the name Winlink Express chose was never answered — which is why `MYCALL` now reaches the modem (`callsigns.set`) and `CONNECT <from> <to>` says which callsign the session runs under. Quirks: it demands a TNC path even with auto-launch off (it launched `C:\VARA\Vara.exe` once before that was unchecked — set the path to `aetherd` and untick the launch), it opens a session on port 8300 by default so a second instance needs its own port before its session window is ever opened, and it wants a centre frequency before it will call. On the air: not yet |
-| VarAC 15.0.18 | **Talks to it; cannot operate with it yet.** Its start-up conversation is verbatim in the adapter's test: `BW500`, `CHAT ON`, `LISTEN ON`, `IGNOREKISSDCD ON`, `LISTEN CQ`, `VERSION`, `MYCALL <call> <call>-T`, `BW500` again. Three of those had come back `WRONG` and are now heard (§3). What remains is the one this modem cannot do: **VarAC's ecosystem is 500 Hz** — it disables its whole interface until `BW500` is answered `OK`, and refuses to call at 2300 Hz on a calling frequency ("you can't use a 2300/2750Hz bandwidth on a calling QRG"). VarAC support therefore needs a 500 Hz waveform (ADR-0002 anticipated one, 12 carriers), which is a Phase 2-class task, not an adapter change |
+| VarAC 15.0.18 | **Talks to it; the bench at 500 Hz is next (P7-0d).** Its start-up conversation is verbatim in the adapter's test: `BW500`, `CHAT ON`, `LISTEN ON`, `IGNOREKISSDCD ON`, `LISTEN CQ`, `VERSION`, `MYCALL <call> <call>-T`, `BW500` again. Three of those had come back `WRONG` and are now heard (§3). The one this modem could not do — **VarAC's ecosystem is 500 Hz**; it disables its whole interface until `BW500` is answered `OK`, and refuses to call at 2300 Hz on a calling frequency ("you can't use a 2300/2750Hz bandwidth on a calling QRG") — it now can: a station configured with `[radio] bandwidth = 500` runs the 500 Hz waveform (`air-interface.md` §2.3) and answers `BW500` `OK`. Two VarAC instances over `[sim]` at 500 Hz, then the air, are what remains |
 | BPQ32 | Not yet verified |
 
 The command set here is implemented from its published behaviour, and every client differs a
@@ -168,6 +171,7 @@ this table is what the compatibility claim rests on, and it should be read as ex
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always
   answers; the setting is recorded, and the control API says so explicitly rather than
   pretending.
-* **A 500 Hz waveform.** VarAC will not operate without `BW500`, and answering `OK` while
-  transmitting 2300 Hz would put a station across four of VarAC's 500 Hz slots — so the
-  refusal stays until there is a 500 Hz mode to accept it with.
+* **VarAC over the 500 Hz waveform.** The waveform exists and `BW500` is answered `OK` by a
+  station running it; what remains is the bench (two VarAC instances over `[sim]`, both
+  daemons at 500 Hz) and the air. VarAC also pings before it calls (`PING`/`PINGACK`),
+  which is roadmap P7-1.

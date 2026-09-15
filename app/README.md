@@ -21,7 +21,8 @@ beacons, calls, answers and session partners, with when, how strong and what the
 doing, sortable, kept by the modem in `heard.json` beside its configuration; **Diagnostics**
 is the constellation of the last frame, a spectrum and waterfall of the received audio,
 the rate controller's readings, the host program's connection and a table of the last sixty
-frames; **Setup** is one numbered flow; **Log** has the "Copy diagnostic bundle" button —
+frames; **Setup** is one numbered flow (the bandwidth — 2300 Hz, or 500 Hz for peer-to-peer
+and 30 m — and the answer-only rule are in step 4); **Log** has the "Copy diagnostic bundle" button —
 that bundle (`diagnostics` in `docs/spec/control-api.md` §4.6) is what to paste into a bug
 report; **Help** explains the readings. **Compact**, in the header, shrinks the panel to
 the state and four readings for a small window beside a logging program.

@@ -297,7 +297,8 @@ fn replay(wav: &Path, expect: Option<&Path>) -> Result<(), String> {
         None => None,
     };
     let muted = expectation.as_ref().map_or(&[][..], |e| e.muted.as_slice());
-    let found = aetherd::replay::replay(wav, muted)?;
+    let bandwidth_hz = expectation.as_ref().map_or(2300, |e| e.bandwidth_hz);
+    let found = aetherd::replay::replay(wav, muted, bandwidth_hz)?;
     for frame in &found {
         println!("{}", describe(frame));
     }
@@ -364,6 +365,12 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         None => beside.join("recordings"),
     };
     StationConfig {
+        // validated: the bandwidth names a waveform this version has
+        params: config
+            .radio
+            .params()
+            .unwrap_or(aether_phy::waveform::WIDE_2300),
+        answer_only: config.radio.answer_only,
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
         record_notes: config.record.notes.clone(),

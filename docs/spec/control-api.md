@@ -91,12 +91,17 @@ human-facing and may be localised.
 | `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `frequency_hz` (the dial, when the keying interface can ask the radio), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
-| `capabilities` | — | bandwidths, mode table, whether the PHY reports preambles |
+| `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the mode table of the running waveform (`modes`: index, name, payload bytes, net bit rate, AWGN threshold; `usable_modes`), whether the PHY reports preambles, the SNR reference |
 | `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
 | `shutdown` | `restart?` | `stopping`; the transmitter is released on the way out. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
-what keeps this document PHY-agnostic.
+what keeps this document PHY-agnostic. The table depends on the bandwidth: fourteen modes
+from BPSK ⅕ at 2 300 Hz, ten from QPSK ½ at 500 Hz, and a mode index means nothing without
+the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
+restart; `[radio] answer_only` (live) makes the station take calls and make none — what
+§97.221(c) allows an unattended station at 500 Hz outside the automatic sub-bands, and
+what `connect` and `beacon` are refused with while it is set.
 
 `config.get` and `diagnostics` return the configuration **with the secrets taken out**:
 `control.token` comes back as the string `<set>` when one is configured. A loopback client

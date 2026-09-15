@@ -22,6 +22,7 @@ fn timing(start_of_frame: bool) -> PhyTiming {
         tx_latency_s: 0.0,
         preamble_detect_s: start_of_frame.then(|| 4.0 * LONG.waveform.symbol_period_s()),
         data_capacity: PAYLOAD_BYTES.to_vec(),
+        mode_threshold_db: Vec::new(),
     }
 }
 
@@ -244,6 +245,84 @@ fn the_sender_learns_how_the_other_station_hears_it() {
     sim.run(300.0, 3.0);
     assert_eq!(sim.engine(0).state(), State::Idle);
     assert_eq!(sim.engine(0).peer_snr_db(), None);
+}
+
+#[test]
+fn a_call_stating_another_bandwidth_is_not_answered() {
+    use aether_link::frames::{CAP_COMPRESSION, bandwidth_code, with_bandwidth};
+    // the bandwidth bits are a statement of the waveform the frame was sent in; a station
+    // set up for 2 300 Hz that is called by a frame claiming 500 Hz leaves it alone
+    assert_eq!(bandwidth_code(with_bandwidth(0, 500)), 1);
+    assert_eq!(bandwidth_code(with_bandwidth(CAP_COMPRESSION, 2300)), 0);
+    assert_eq!(with_bandwidth(CAP_COMPRESSION, 500), CAP_COMPRESSION | 0x02);
+    let t = timing(false);
+    let narrow = LinkConfig {
+        capabilities: with_bandwidth(0, 500),
+        ..LinkConfig::default()
+    };
+    let wide = LinkConfig {
+        capabilities: with_bandwidth(0, 2300),
+        ..LinkConfig::default()
+    };
+    let mut a = LinkEngine::new("W4ODA", t.clone(), narrow.clone(), 1);
+    let b = LinkEngine::new("KK4XYZ", t.clone(), wide, 2);
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 6);
+    sim.run(200.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert!(
+        sim.events(1)
+            .iter()
+            .any(|e| e.starts_with("ignored:W4ODA calls in another bandwidth")),
+        "{:?}",
+        sim.events(1)
+    );
+    assert!(sim.events(0).iter().any(|e| e == "disconnected:no answer"));
+    // and two stations that agree connect as before
+    let (mut a, b) = pair(&t, &narrow);
+    a.connect("KK4XYZ").expect("idle");
+    a.send(b"at five hundred hertz");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 6);
+    sim.run(40.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    assert_eq!(bandwidth_code(sim.engine(1).peer_capabilities()), 1);
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), b"at five hundred hertz");
+}
+
+#[test]
+fn the_rate_controller_steps_the_table_the_phy_hands_it() {
+    use aether_link::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, usable_modes_of};
+    // a PHY with its own mode table — the 500 Hz waveform — hands its thresholds over, and
+    // the engine recommends nothing outside that table
+    let mut t = timing(false);
+    t.data_capacity = NARROW_PAYLOAD_BYTES.to_vec();
+    t.mode_threshold_db = NARROW_AWGN_THRESHOLD_DB.to_vec();
+    let usable = usable_modes_of(&NARROW_AWGN_THRESHOLD_DB, &NARROW_PAYLOAD_BYTES);
+    assert!(usable.contains(&0) && usable.contains(&9) && !usable.contains(&3));
+    let config = LinkConfig {
+        max_mode: 9,
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    a.connect("KK4XYZ").expect("idle");
+    let message: Vec<u8> = (0..1500u32).map(|i| (i * 7 % 256) as u8).collect();
+    a.send(&message);
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 25.0, 12);
+    sim.run(600.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    let highest = sim.modes_sent().iter().copied().max().unwrap_or(0);
+    assert!(
+        highest <= 9,
+        "a mode outside the narrow table was sent: {highest}"
+    );
+    assert!(
+        highest >= 5,
+        "at 25 dB the controller climbs the narrow table: {highest}"
+    );
 }
 
 #[test]

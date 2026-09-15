@@ -25,10 +25,9 @@
 
 use crate::{
     constellation::Complex,
-    modes::{FrameLayout, LONG, PREAMBLE_SYMBOLS, SHORT},
+    modes::{AirInterface, FrameLayout, LONG, PREAMBLE_SYMBOLS, SHORT, air_interface},
     ofdm::{DemodError, OfdmDemodulator},
-    preamble::{FrameType, N_MODES, N_RV, Preamble, chip_hypothesis},
-    tables,
+    preamble::{FrameType, Preamble},
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -66,7 +65,8 @@ mod c {
     }
 }
 
-/// Which layout a frame type uses.
+/// Which layout a frame type uses on the wide waveform. A receiver asks its own air
+/// interface ([`AirInterface::layout_for`]); this is for the wide-only callers.
 #[must_use]
 pub fn layout_for(frame_type: FrameType) -> FrameLayout {
     match frame_type {
@@ -115,6 +115,7 @@ pub struct ReceivedFrame {
 #[derive(Debug)]
 pub struct FrameReceiver {
     params: WaveformParams,
+    air: AirInterface,
     demodulator: OfdmDemodulator,
     preamble: Preamble,
     /// How far each per-symbol noise estimate is pulled back toward the frame-wide one.
@@ -138,6 +139,7 @@ impl FrameReceiver {
     pub fn new(params: WaveformParams) -> Self {
         Self {
             params,
+            air: air_interface(params),
             demodulator: OfdmDemodulator::new(params),
             preamble: Preamble::new(params),
             noise_shrinkage: 0.5,
@@ -156,7 +158,7 @@ impl FrameReceiver {
     /// Where a frame starts and ends in the sample stream.
     #[must_use]
     pub fn frame_span(&self, sync: &FrameSync) -> (usize, usize) {
-        let layout = layout_for(sync.frame_type);
+        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
         (sync.start, sync.start + layout.samples())
     }
 
@@ -177,7 +179,7 @@ impl FrameReceiver {
         sync: &FrameSync,
         hypothesis: Option<usize>,
     ) -> Result<ReceivedFrame, DemodError> {
-        let layout = layout_for(sync.frame_type);
+        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
         let period = self.params.symbol_samples();
         let n_sym = layout.total_symbols();
         let pre = PREAMBLE_SYMBOLS;
@@ -308,20 +310,21 @@ impl FrameReceiver {
                 }
             }
             let used = observed.len();
-            let mut metrics = vec![0.0f64; N_RV * N_MODES];
-            for (index, sequence) in tables::MODE_CHIPS.iter().enumerate() {
+            let mut metrics = vec![0.0f64; self.preamble.n_sequences()];
+            for (index, metric) in metrics.iter_mut().enumerate() {
+                let sequence = self.preamble.chip_sequence(index);
                 let mut accumulator = (0.0, 0.0);
                 for (slot, &chip) in sequence.iter().take(used).enumerate() {
                     accumulator = c::add(accumulator, c::scale(observed[slot], chip));
                 }
-                metrics[index] = c::norm_sq(accumulator).sqrt() / (used as f64).sqrt();
+                *metric = c::norm_sq(accumulator).sqrt() / (used as f64).sqrt();
             }
             let mut order: Vec<usize> = (0..metrics.len()).collect();
             order.sort_by(|&a, &b| metrics[b].partial_cmp(&metrics[a]).expect("finite metrics"));
             let best = order[0];
             runner_up = order[1];
             confidence = metrics[best] / metrics[runner_up].max(1e-12);
-            let (m, r) = chip_hypothesis(hypothesis.unwrap_or(best));
+            let (m, r) = self.preamble.chip_hypothesis(hypothesis.unwrap_or(best));
             mode = m;
             rv = r;
         }
@@ -679,7 +682,7 @@ mod tests {
         let forced = rx
             .receive(&buffer, &sync, Some(frame.chip_runner_up))
             .expect("receive");
-        let (mode, rv) = chip_hypothesis(frame.chip_runner_up);
+        let (mode, rv) = rx.preamble.chip_hypothesis(frame.chip_runner_up);
         assert_eq!((forced.mode, forced.rv), (mode, rv));
     }
 

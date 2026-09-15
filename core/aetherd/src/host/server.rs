@@ -28,7 +28,7 @@ use crate::{
         methods::to_base64,
         protocol::{ControlHandle, Request},
     },
-    host::vara::{BANDWIDTH_HZ, DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
+    host::vara::{DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
 };
 
 /// How the host interface is exposed.
@@ -336,6 +336,17 @@ fn serve_commands(
     let mut reader = BufReader::new(reader_stream);
     let mut writer = stream;
     let mut host = HostState::default();
+    // the bandwidth the station runs decides which `BW<n>` is accepted and what
+    // `CONNECTED` reports; asked once, when the host connects
+    if let Some(hz) = handle
+        .call(request("capabilities", json!({})))
+        .ok()
+        .and_then(|response| response.result)
+        .and_then(|result| result["bandwidth_hz"].as_u64())
+        .and_then(|hz| u32::try_from(hz).ok())
+    {
+        host.bandwidth_hz = hz;
+    }
     let events = handle.subscribe();
     let mut last_keepalive = std::time::Instant::now();
     let mut connected_to: Option<String> = None;
@@ -476,7 +487,7 @@ fn report_state(
                     &Notification::Connected {
                         caller,
                         called: callee,
-                        bandwidth_hz: BANDWIDTH_HZ,
+                        bandwidth_hz: host.bandwidth_hz,
                     }
                     .line(),
                 )

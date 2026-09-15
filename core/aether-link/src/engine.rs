@@ -32,11 +32,11 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, WINDOW, control_flags, data_capacity, decode_data, encode_data, in_window,
-        pack_callsign, seq_after, seq_distance,
+        MAX_BURST, WINDOW, bandwidth_code, control_flags, data_capacity, decode_data, encode_data,
+        in_window, pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
-    rate::RateController,
+    rate::{RateConfig, RateController},
 };
 
 // ── configuration, actions, states ────────────────────────────────────
@@ -322,11 +322,26 @@ impl std::fmt::Debug for LinkEngine {
     }
 }
 
+/// A fresh rate controller for the PHY's mode table: its thresholds when the timing carries
+/// them, the wide waveform's otherwise.
+fn rate_controller_for(timing: &PhyTiming) -> RateController {
+    if timing.mode_threshold_db.is_empty() {
+        RateController::default()
+    } else {
+        RateController::for_table(
+            RateConfig::default(),
+            &timing.mode_threshold_db,
+            &timing.data_capacity,
+        )
+    }
+}
+
 impl LinkEngine {
     /// Build a station.
     #[must_use]
     pub fn new(my_call: &str, timing: PhyTiming, config: LinkConfig, seed: u64) -> Self {
         let recommended = config.initial_mode;
+        let rate = rate_controller_for(&timing);
         Self {
             callsigns: vec![my_call.to_ascii_uppercase()],
             my_call: my_call.to_ascii_uppercase(),
@@ -340,7 +355,7 @@ impl LinkEngine {
             session: 0,
             now: 0.0,
             actions: Vec::new(),
-            rate: RateController::default(),
+            rate,
             deadlines: Vec::new(),
             tx_busy_until: 0.0,
             tx_queue: Vec::new(),
@@ -1448,6 +1463,16 @@ impl LinkEngine {
         if !self.callsigns.contains(&request.dst) {
             return;
         }
+        if bandwidth_code(request.caps) != bandwidth_code(self.config.capabilities) {
+            // a call that says it was made in another bandwidth than this station's: the
+            // frame decoded, so the claim is wrong, or the station is not set up for the
+            // bandwidth it was called in — either way not a session to start
+            self.actions.push(Action::Event {
+                name: "ignored",
+                detail: format!("{} calls in another bandwidth", request.src),
+            });
+            return;
+        }
         if self.state == State::Connecting && self.my_call > self.remote_call {
             return; // simultaneous call: the higher callsign keeps calling
         }
@@ -1476,6 +1501,13 @@ impl LinkEngine {
             return;
         };
         if accept.dst != self.my_call {
+            return;
+        }
+        if bandwidth_code(accept.caps) != bandwidth_code(self.config.capabilities) {
+            self.actions.push(Action::Event {
+                name: "ignored",
+                detail: format!("{} answers in another bandwidth", accept.src),
+            });
             return;
         }
         self.disarm(Timer::Connect);
@@ -1519,7 +1551,7 @@ impl LinkEngine {
         self.ack_counter = 0;
         self.break_requested = false;
         self.peer_capabilities = 0;
-        self.rate = RateController::default();
+        self.rate = rate_controller_for(&self.timing);
         for timer in [Timer::Ack, Timer::Wait, Timer::Keepalive, Timer::Link] {
             self.disarm(timer);
         }

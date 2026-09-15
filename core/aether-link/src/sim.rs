@@ -184,6 +184,8 @@ pub struct TwoStationSim {
     pub t: f64,
     thresholds: [f64; 14],
     snr_schedule: Option<Box<dyn Fn(f64) -> f64>>,
+    /// The mode of every DATA frame put on the pipe, in order: what the rate control did.
+    modes_sent: Vec<usize>,
 }
 
 impl TwoStationSim {
@@ -199,6 +201,7 @@ impl TwoStationSim {
             seq: 0,
             t: 0.0,
             thresholds: AWGN_THRESHOLD_DB,
+            modes_sent: Vec::new(),
             snr_schedule: None,
         }
     }
@@ -241,6 +244,12 @@ impl TwoStationSim {
     #[must_use]
     pub fn delivered(&self, who: usize) -> &[u8] {
         &self.stations[who].delivered
+    }
+
+    /// The mode of every DATA frame sent, in order.
+    #[must_use]
+    pub fn modes_sent(&self) -> &[usize] {
+        &self.modes_sent
     }
 
     /// Events a station reported, as `name:detail`.
@@ -325,6 +334,9 @@ impl TwoStationSim {
     }
 
     fn deliver(&mut self, rx: usize, frame: &TxFrame, t0: f64, t1: f64) {
+        if frame.container == Container::Data {
+            self.modes_sent.push(frame.mode);
+        }
         if self.busy(rx, t0, t1) {
             return; // half-duplex, or a collision: the receiver was transmitting
         }

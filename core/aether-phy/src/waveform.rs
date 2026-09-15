@@ -111,6 +111,12 @@ pub const WIDE_2300: WaveformParams = WaveformParams {
     audio_rate: 48000,
 };
 
+/// The 500 Hz waveform (ADR-0002, P7-0): the same numerology with twelve carriers.
+pub const NARROW_500: WaveformParams = WaveformParams {
+    bandwidth: Bandwidth::Narrow500,
+    ..WIDE_2300
+};
+
 impl Default for WaveformParams {
     fn default() -> Self {
         WIDE_2300

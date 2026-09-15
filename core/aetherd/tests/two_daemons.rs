@@ -64,13 +64,18 @@ struct Daemon {
 
 impl Daemon {
     fn start(dir: &Path, name: &str, callsign: &str, sim: &str) -> Self {
+        Self::start_with(dir, name, callsign, sim, "")
+    }
+
+    /// Start with extra `[radio]` lines — the bandwidth, say.
+    fn start_with(dir: &Path, name: &str, callsign: &str, sim: &str, radio: &str) -> Self {
         let control = free_port();
         let config = dir.join(format!("{name}.toml"));
         std::fs::write(
             &config,
             format!(
                 "callsign = \"{callsign}\"\n\
-                 [radio]\nwait_for_clear = false\n\
+                 [radio]\nwait_for_clear = false\n{radio}\n\
                  [control]\nbind = \"127.0.0.1:{control}\"\n\
                  [record]\nauto = true\n\
                  [sim]\n{sim}\nsnr_db = 25.0\n"
@@ -250,6 +255,67 @@ fn two_daemons_complete_a_session_over_the_simulated_channel() {
     // and, with [record] auto on, both sides recorded the session
     assert_recorded(&dir, "W4ODA_KK4XYZ");
     assert_recorded(&dir, "KK4XYZ_W4ODA");
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_daemons_complete_a_session_at_500_hz() {
+    // the narrow waveform end to end through the daemon: its own mode table, the
+    // capabilities a host reads `BW500` from, and a recording that says which waveform
+    let dir = std::env::temp_dir().join(format!("aether-narrow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let channel = free_port();
+    let radio = "bandwidth = 500\nmax_mode = 9\n";
+    let a = Daemon::start_with(
+        &dir,
+        "a",
+        "W4ODA",
+        &format!("listen = \"127.0.0.1:{channel}\""),
+        radio,
+    );
+    let b = Daemon::start_with(
+        &dir,
+        "b",
+        "KK4XYZ",
+        &format!("connect = \"127.0.0.1:{channel}\""),
+        radio,
+    );
+    wait_for_port(a.control, "daemon a");
+    wait_for_port(b.control, "daemon b");
+    let caps = a.call("capabilities", &json!({}))["result"].clone();
+    assert_eq!(caps["bandwidth_hz"], 500, "{caps}");
+    assert_eq!(caps["modes"].as_array().map(Vec::len), Some(10));
+    assert_eq!(caps["modes"][0]["name"], "QPSK-1/2");
+
+    let message = "At 500 Hz: the bandwidth peer-to-peer contacts are made in, end to end.";
+    let connected = a.call("connect", &json!({"remote": "KK4XYZ"}));
+    assert_eq!(connected["ok"], true, "{connected}");
+    a.wait_for_state(&b, "connected", "the narrow session never came up");
+    let encoded = aetherd::control::methods::to_base64(message.as_bytes());
+    let sent = a.call("send", &json!({"data": encoded}));
+    assert_eq!(sent["ok"], true, "{sent}");
+    let received = receive(b.control, message.len(), || b.status()["counters"].clone());
+    assert_eq!(String::from_utf8_lossy(&received), message);
+    let mode = b.status()["metrics"]["mode"].as_u64().unwrap_or(99);
+    assert!(mode < 10, "a narrow mode index: {mode}");
+
+    let closed = a.call("disconnect", &json!({}));
+    assert_eq!(closed["ok"], true, "{closed}");
+    a.wait_for_state(&b, "idle", "the narrow session never closed");
+    assert_recorded(&dir, "W4ODA_KK4XYZ");
+    // the sidecar says which waveform, so a replay runs the right receiver
+    let sidecar = std::fs::read_dir(dir.join("recordings"))
+        .expect("recordings")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "json"))
+        .expect("a sidecar");
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecar).expect("sidecar")).expect("json");
+    assert_eq!(document["session"]["bandwidth_hz"], 500);
     drop(b);
     drop(a);
     let _ = std::fs::remove_dir_all(&dir);

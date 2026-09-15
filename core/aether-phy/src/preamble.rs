@@ -25,6 +25,7 @@
 
 use crate::{
     constellation::Complex,
+    modes::air_interface,
     ofdm::CarrierMap,
     tables,
     waveform::{WIDE_2300, WaveformParams},
@@ -32,10 +33,13 @@ use crate::{
 
 /// Redundancy versions signalled per frame.
 pub const N_RV: usize = tables::N_RV;
-/// Modes signalled per frame.
-pub const N_MODES: usize = tables::N_MODES;
-/// Chips carried across the full pilot symbols of a frame.
-pub const CHIP_LENGTH: usize = tables::CHIP_LENGTH;
+/// Most modes any air interface may signal: the wide table's fourteen. The narrow table
+/// has ten, and each air interface's chip set is indexed by its own count
+/// ([`Preamble::chip_index`]).
+pub const N_MODES: usize = 14;
+/// Chips carried across the full pilot symbols of a wide frame; a preamble knows its own
+/// ([`Preamble::n_chips`]).
+pub const CHIP_LENGTH: usize = 168;
 
 /// Which container a frame is, signalled by the preamble sequence itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,19 +113,19 @@ impl core::fmt::Display for HeaderError {
 
 impl core::error::Error for HeaderError {}
 
-/// Index of the chip sequence carrying `(mode, rv)`.
+/// Index of the chip sequence carrying `(mode, rv)` in a table of `n_modes` modes.
 ///
-/// RV 0 occupies the first `N_MODES` sequences, so RV-0 frames are unchanged from the design
+/// RV 0 occupies the first `n_modes` sequences, so RV-0 frames are unchanged from the design
 /// before redundancy versions were signalled — which is why the golden vectors still hold.
 #[must_use]
-pub const fn chip_index(mode: usize, rv: u8) -> usize {
-    rv as usize * N_MODES + mode
+pub const fn chip_index(mode: usize, rv: u8, n_modes: usize) -> usize {
+    rv as usize * n_modes + mode
 }
 
 /// Inverse of [`chip_index`].
 #[must_use]
-pub const fn chip_hypothesis(index: usize) -> (usize, u8) {
-    (index % N_MODES, (index / N_MODES) as u8)
+pub const fn chip_hypothesis(index: usize, n_modes: usize) -> (usize, u8) {
+    (index % n_modes, (index / n_modes) as u8)
 }
 
 /// The preamble sequences for one numerology.
@@ -131,6 +135,8 @@ pub struct Preamble {
     even: Vec<usize>,
     scale: f64,
     n_data_carriers: usize,
+    n_modes: usize,
+    tables: &'static tables::Tables,
 }
 
 impl Preamble {
@@ -143,18 +149,33 @@ impl Preamble {
     /// failing loudly at construction rather than silently on the air.
     #[must_use]
     pub fn new(params: WaveformParams) -> Self {
+        let air = air_interface(params);
+        let tables = tables::for_bandwidth(params.bandwidth.hz())
+            .expect("every air interface has its tables exported");
         let map = CarrierMap::new(params);
         let even: Vec<usize> = (0..map.n_carriers())
             .filter(|&c| map.bins()[c].rem_euclid(2) == 0)
             .collect();
         assert_eq!(
             even.len(),
-            tables::SC_LENGTH,
+            tables.sc_length,
             "the exported Schmidl-Cox sequence does not fit this carrier map"
         );
         assert!(
-            even == tables::EVEN_CARRIERS,
+            even == tables.even_carriers,
             "this carrier map disagrees with the one the sequences were generated for"
+        );
+        assert_eq!(
+            tables.n_modes,
+            air.n_modes(),
+            "the chip set covers the mode table"
+        );
+        // the model exports the bound and the threshold with the sequences; the air
+        // interface here states them too, and the two must not drift apart
+        assert!(
+            (tables.chip_correlation_bound - air.chip_correlation_bound).abs() < 1e-12
+                && (tables.acquisition_threshold - air.acquisition_threshold).abs() < 1e-12,
+            "the air interface's bound or threshold differs from the model's export"
         );
         let scale = (map.n_carriers() as f64 / even.len() as f64).sqrt();
         Self {
@@ -162,6 +183,8 @@ impl Preamble {
             even,
             scale,
             n_data_carriers: map.data_carriers().len(),
+            n_modes: air.n_modes(),
+            tables,
         }
     }
 
@@ -174,7 +197,45 @@ impl Preamble {
     /// Chips carried across all the full pilot symbols of a frame.
     #[must_use]
     pub const fn n_chips(&self) -> usize {
-        CHIP_LENGTH
+        self.tables.chip_length
+    }
+
+    /// Modes this air interface's chips can signal.
+    #[must_use]
+    pub const fn n_modes(&self) -> usize {
+        self.n_modes
+    }
+
+    /// (mode, RV) chip sequences in all: [`N_RV`] × [`Self::n_modes`].
+    #[must_use]
+    pub const fn n_sequences(&self) -> usize {
+        N_RV * self.n_modes
+    }
+
+    /// Index of the chip sequence carrying `(mode, rv)` on this air interface.
+    #[must_use]
+    pub const fn chip_index(&self, mode: usize, rv: u8) -> usize {
+        chip_index(mode, rv, self.n_modes)
+    }
+
+    /// The `(mode, rv)` a chip-sequence index means on this air interface.
+    #[must_use]
+    pub const fn chip_hypothesis(&self, index: usize) -> (usize, u8) {
+        chip_hypothesis(index, self.n_modes)
+    }
+
+    /// The whole chip sequence with this index, all pilot symbols end to end.
+    ///
+    /// # Panics
+    /// If the index is past the last sequence.
+    #[must_use]
+    pub fn chip_sequence(&self, index: usize) -> &'static [f64] {
+        assert!(
+            index < self.n_sequences(),
+            "chip sequence {index} does not exist"
+        );
+        let length = self.tables.chip_length;
+        &self.tables.mode_chips[index * length..(index + 1) * length]
     }
 
     /// Carrier values of each Schmidl–Cox symbol for a frame type: unit mean power over the
@@ -182,8 +243,8 @@ impl Preamble {
     #[must_use]
     pub fn sc_values(&self, frame_type: FrameType) -> Vec<Complex> {
         let signs: &[f64] = match frame_type {
-            FrameType::Data => &tables::SC_DATA,
-            FrameType::Control => &tables::SC_CONTROL,
+            FrameType::Data => self.tables.sc_data,
+            FrameType::Control => self.tables.sc_control,
         };
         let mut out = vec![(0.0, 0.0); self.n_carriers];
         for (&carrier, &sign) in self.even.iter().zip(signs) {
@@ -205,7 +266,7 @@ impl Preamble {
     /// If the pilot symbol index runs past the chip sequence.
     #[must_use]
     pub fn mode_chips(&self, mode: usize, pilot_symbol_index: usize, rv: u8) -> Vec<f64> {
-        let sequence = &tables::MODE_CHIPS[chip_index(mode, rv)];
+        let sequence = self.chip_sequence(self.chip_index(mode, rv));
         let start = pilot_symbol_index * self.n_data_carriers;
         assert!(
             start + self.n_data_carriers <= sequence.len(),
@@ -267,44 +328,76 @@ mod tests {
         assert_eq!(symbols[0], symbols[1]);
     }
 
-    #[test]
-    fn every_chip_sequence_is_unit_magnitude_and_well_separated() {
-        let pre = Preamble::default();
+    fn chip_sets_are_unit_magnitude_and_well_separated(pre: &Preamble, bound: f64) {
         let sequences: Vec<Vec<f64>> = (0..N_RV)
             .flat_map(|rv| {
-                (0..N_MODES).map(move |mode| {
-                    let pre = Preamble::default();
+                (0..pre.n_modes()).map(move |mode| {
                     (0..4)
                         .flat_map(|s| pre.mode_chips(mode, s, rv as u8))
                         .collect::<Vec<f64>>()
                 })
             })
             .collect();
-        assert_eq!(sequences.len(), N_RV * N_MODES);
+        assert_eq!(sequences.len(), pre.n_sequences());
         for sequence in &sequences {
-            assert_eq!(sequence.len(), CHIP_LENGTH);
+            assert_eq!(sequence.len(), pre.n_chips());
             assert!(sequence.iter().all(|&c| (c.abs() - 1.0).abs() < 1e-12));
         }
         let mut worst: f64 = 0.0;
         for (i, a) in sequences.iter().enumerate() {
             for b in &sequences[i + 1..] {
                 let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-                worst = worst.max((dot / CHIP_LENGTH as f64).abs());
+                worst = worst.max((dot / pre.n_chips() as f64).abs());
             }
         }
-        assert!(worst <= 0.2, "worst pairwise correlation {worst}");
-        let _ = pre.n_chips();
+        assert!(worst <= bound + 1e-12, "worst pairwise correlation {worst}");
+    }
+
+    #[test]
+    fn every_chip_sequence_is_unit_magnitude_and_well_separated() {
+        let wide = Preamble::default();
+        assert_eq!(
+            (wide.n_chips(), wide.n_modes(), wide.n_sequences()),
+            (168, 14, 56)
+        );
+        chip_sets_are_unit_magnitude_and_well_separated(&wide, 0.2);
+        // the narrow waveform: 32 chips, forty sequences, a looser bound
+        let narrow = Preamble::new(crate::waveform::NARROW_500);
+        assert_eq!(
+            (narrow.n_chips(), narrow.n_modes(), narrow.n_sequences()),
+            (32, 10, 40)
+        );
+        chip_sets_are_unit_magnitude_and_well_separated(&narrow, 0.25);
+    }
+
+    #[test]
+    fn the_narrow_preamble_keeps_the_frame_types_apart_on_six_carriers() {
+        let pre = Preamble::new(crate::waveform::NARROW_500);
+        assert_eq!(pre.even_carriers().len(), 6);
+        let a = pre.sc_values(FrameType::Data);
+        let b = pre.sc_values(FrameType::Control);
+        let dot: f64 = a.iter().zip(&b).map(|(x, y)| x.0 * y.0 + x.1 * y.1).sum();
+        assert!(
+            dot.abs() < 1e-12,
+            "the same seeds come out orthogonal at length 6"
+        );
     }
 
     #[test]
     fn chip_index_and_hypothesis_are_inverses() {
-        for rv in 0..N_RV as u8 {
-            for mode in 0..N_MODES {
-                assert_eq!(chip_hypothesis(chip_index(mode, rv)), (mode, rv));
+        for pre in [
+            Preamble::default(),
+            Preamble::new(crate::waveform::NARROW_500),
+        ] {
+            for rv in 0..N_RV as u8 {
+                for mode in 0..pre.n_modes() {
+                    assert_eq!(pre.chip_hypothesis(pre.chip_index(mode, rv)), (mode, rv));
+                }
             }
         }
         // RV 0 occupies the first N_MODES slots, keeping earlier frames unchanged
-        assert_eq!(chip_index(5, 0), 5);
+        assert_eq!(chip_index(5, 0, N_MODES), 5);
+        assert_eq!(chip_index(5, 1, 10), 15);
     }
 
     #[test]

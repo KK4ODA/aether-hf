@@ -316,6 +316,46 @@ pub struct ConnectBody {
     pub version: u8,
 }
 
+/// Capability bit 0: stream compression (deflate) — offered, and used only if both offer.
+pub const CAP_COMPRESSION: u8 = 0x01;
+/// Capability bits 1–2: the bandwidth of the waveform the frame was sent in. Not a
+/// negotiation — a receiver knows the waveform from having decoded the frame — but a
+/// statement, so a station can refuse a request that claims a bandwidth other than the
+/// one it arrived in, and a station listening in more than one answers in the one it was
+/// called in. A session lives its whole life in one bandwidth.
+pub const CAP_BANDWIDTH_SHIFT: u8 = 1;
+/// The mask of the bandwidth bits.
+pub const CAP_BANDWIDTH_MASK: u8 = 0x03 << CAP_BANDWIDTH_SHIFT;
+
+/// The bandwidth code stated in a capability byte: 0 = 2 300 Hz, 1 = 500 Hz, 2 = 2 750 Hz.
+#[must_use]
+pub const fn bandwidth_code(caps: u8) -> u8 {
+    (caps & CAP_BANDWIDTH_MASK) >> CAP_BANDWIDTH_SHIFT
+}
+
+/// The code for a bandwidth in hertz, if it is one the air interface names.
+#[must_use]
+pub const fn bandwidth_code_of(bandwidth_hz: usize) -> Option<u8> {
+    match bandwidth_hz {
+        2300 => Some(0),
+        500 => Some(1),
+        2750 => Some(2),
+        _ => None,
+    }
+}
+
+/// A capability byte with its bandwidth bits set for `bandwidth_hz`.
+///
+/// # Panics
+/// If the bandwidth is not one the air interface names.
+#[must_use]
+pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
+    let Some(code) = bandwidth_code_of(bandwidth_hz) else {
+        panic!("no bandwidth code for this bandwidth");
+    };
+    (caps & !CAP_BANDWIDTH_MASK) | (code << CAP_BANDWIDTH_SHIFT)
+}
+
 /// Bytes a connect body occupies.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 2;
 

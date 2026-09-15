@@ -29,7 +29,7 @@ use rustfft::{Fft, FftPlanner, num_complex::Complex64};
 
 use crate::{
     constellation::Complex,
-    modes::{LONG, SHORT},
+    modes::{AirInterface, air_interface},
     ofdm::{OfdmDemodulator, OfdmModulator},
     preamble::{FrameType, Preamble},
     rx::FrameSync,
@@ -61,6 +61,7 @@ pub struct Acquisition {
 /// Finds preambles in a buffer.
 pub struct FrameDetector {
     params: WaveformParams,
+    air: AirInterface,
     /// Accept a candidate only above this normalised peak.
     pub min_timing_peak: f64,
     /// Search this far either side of zero for the carrier offset.
@@ -146,10 +147,12 @@ impl FrameDetector {
             .filter(|&k| bin_hz[k].abs() <= DEFAULT_MAX_CFO_HZ)
             .collect();
 
+        let air = air_interface(params);
         let mut planner = FftPlanner::new();
         Self {
             params,
-            min_timing_peak: DEFAULT_MIN_PEAK,
+            air,
+            min_timing_peak: air.acquisition_threshold,
             max_cfo_hz: DEFAULT_MAX_CFO_HZ,
             max_candidates: 16,
             period,
@@ -404,8 +407,8 @@ impl FrameDetector {
             // Nothing else can start inside this frame: strong data symbols correlate with
             // the reference well enough to pass the threshold on their own.
             let span = match frame_type {
-                FrameType::Data => LONG.samples(),
-                FrameType::Control => SHORT.samples(),
+                FrameType::Data => self.air.long.samples(),
+                FrameType::Control => self.air.short.samples(),
             };
             let low = start.saturating_sub(self.min_gap);
             let high = (start + span).min(eligible.len());
@@ -433,8 +436,12 @@ pub struct BankOutput {
 mod tests {
     use super::*;
     use crate::{
-        codec::FrameCodec, constellation::NoiseVar, modes::MODES, preamble::FrameHeader,
-        rx::FrameReceiver, tx::FrameTransmitter,
+        codec::FrameCodec,
+        constellation::NoiseVar,
+        modes::{LONG, MODES, SHORT},
+        preamble::FrameHeader,
+        rx::FrameReceiver,
+        tx::FrameTransmitter,
     };
 
     fn frame_at(lead: usize, mode_index: usize, rv: u8) -> (Vec<Complex>, Vec<u8>) {

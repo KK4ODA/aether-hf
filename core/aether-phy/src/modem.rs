@@ -14,7 +14,7 @@ use crate::{
     blanker::NoiseBlanker,
     codec::FrameCodec,
     constellation::NoiseVar,
-    modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, SHORT},
+    modes::{AirInterface, FrameLayout, Mode, air_interface},
     ofdm::DemodError,
     passband::band_limit_taps,
     preamble::{FrameHeader, FrameType, HeaderError},
@@ -101,6 +101,7 @@ impl DecodedFrame {
 /// Transmit and receive front for one waveform. Codecs are built once per mode and layout.
 pub struct Modem {
     params: WaveformParams,
+    air: AirInterface,
     tx: FrameTransmitter,
     detector: FrameDetector,
     rx: FrameReceiver,
@@ -138,6 +139,7 @@ impl Modem {
             blanker: blank_impulses.then(NoiseBlanker::default),
             band_taps: band_limit_taps(&params),
             codecs: HashMap::new(),
+            air: air_interface(params),
             params,
         }
     }
@@ -153,6 +155,18 @@ impl Modem {
     #[must_use]
     pub fn params(&self) -> WaveformParams {
         self.params
+    }
+
+    /// The air interface in use: the layouts and mode table of this waveform.
+    #[must_use]
+    pub fn air(&self) -> AirInterface {
+        self.air
+    }
+
+    /// The mode table of this waveform, most robust first.
+    #[must_use]
+    pub fn modes(&self) -> &'static [Mode] {
+        self.air.modes
     }
 
     /// The detector, for a caller that wants to acquire on its own.
@@ -200,9 +214,10 @@ impl Modem {
         mode: Mode,
         rv: u8,
     ) -> Result<Vec<Complex>, ModemError> {
-        let qam = self.codec(mode, LONG)?.encode(payload, rv)?;
+        let long = self.air.long;
+        let qam = self.codec(mode, long)?.encode(payload, rv)?;
         let header = FrameHeader::new(FrameType::Data, mode.index, rv)?;
-        Ok(self.tx.baseband(&header, &LONG, &qam)?)
+        Ok(self.tx.baseband(&header, &long, &qam)?)
     }
 
     /// Baseband for one control frame.
@@ -210,17 +225,18 @@ impl Modem {
     /// # Errors
     /// If the payload is the wrong length for the control mode.
     pub fn control_burst(&mut self, payload: &[u8], rv: u8) -> Result<Vec<Complex>, ModemError> {
-        let qam = self.codec(CONTROL_MODE, SHORT)?.encode(payload, rv)?;
-        let header = FrameHeader::new(FrameType::Control, CONTROL_MODE.index, rv)?;
-        Ok(self.tx.baseband(&header, &SHORT, &qam)?)
+        let (control, short) = (self.air.control_mode(), self.air.short);
+        let qam = self.codec(control, short)?.encode(payload, rv)?;
+        let header = FrameHeader::new(FrameType::Control, control.index, rv)?;
+        Ok(self.tx.baseband(&header, &short, &qam)?)
     }
 
     /// Payload bytes one frame of a mode carries; the control mode when `mode` is `None`.
     #[must_use]
     pub fn payload_bytes(&self, mode: Option<Mode>) -> usize {
         mode.map_or_else(
-            || CONTROL_MODE.payload_bytes(&SHORT),
-            |m| m.payload_bytes(&LONG),
+            || self.air.control_mode().payload_bytes(&self.air.short),
+            |m| m.payload_bytes(&self.air.long),
         )
     }
 
@@ -267,11 +283,11 @@ impl Modem {
     ) -> Result<(Option<Vec<u8>>, Vec<f64>), ModemError> {
         let control = frame.sync.frame_type == FrameType::Control;
         let mode = if control {
-            CONTROL_MODE
+            self.air.control_mode()
         } else {
-            MODES[frame.mode]
+            self.air.modes[frame.mode]
         };
-        let layout = if control { SHORT } else { LONG };
+        let layout = self.air.layout_for(!control);
         Ok(self.codec(mode, layout)?.decode(
             &frame.symbols,
             NoiseVar::PerSymbol(&frame.noise_var),
@@ -300,16 +316,16 @@ impl Modem {
             return Ok(DecodedFrame {
                 payload,
                 frame,
-                mode: CONTROL_MODE,
+                mode: self.air.control_mode(),
             });
         }
-        let mode = MODES[frame.mode];
+        let mode = self.air.modes[frame.mode];
         let (payload, _) = self.decode_frame(&frame, buffer)?;
         if payload.is_none() && frame.mode_confidence < MODE_RETRY_CONFIDENCE {
             let alternative = self.rx.receive(samples, sync, Some(frame.chip_runner_up))?;
             let (retry, _) = self.decode_frame(&alternative, buffer)?;
             if retry.is_some() {
-                let mode = MODES[alternative.mode];
+                let mode = self.air.modes[alternative.mode];
                 return Ok(DecodedFrame {
                     payload: retry,
                     frame: alternative,
@@ -338,6 +354,43 @@ impl Modem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::MODES;
+
+    #[test]
+    fn a_narrow_data_frame_and_control_frame_survive_the_round_trip() {
+        let mut modem = Modem::new(crate::waveform::NARROW_500, true);
+        assert_eq!(modem.modes().len(), 10);
+        assert_eq!(
+            modem.payload_bytes(None),
+            7,
+            "the narrow control frame carries 7 bytes"
+        );
+        for mode in [modem.modes()[0], modem.modes()[9]] {
+            let payload: Vec<u8> = (0..modem.payload_bytes(Some(mode)))
+                .map(|i| (i * 29 + 3) as u8)
+                .collect();
+            let burst = modem.data_burst(&payload, mode, 0).expect("burst");
+            let mut buffer = vec![(0.0, 0.0); 1000];
+            buffer.extend_from_slice(&burst);
+            buffer.extend(std::iter::repeat_n((0.0, 0.0), 1200));
+            let frames = modem.decode_buffer(&buffer, 1);
+            assert_eq!(frames.len(), 1, "{}", mode.name());
+            assert_eq!(frames[0].payload.as_deref(), Some(payload.as_slice()));
+            assert_eq!(frames[0].frame.mode, mode.index);
+            // positions are in the band-limited stream, a filter's group delay behind
+            let delay = crate::passband::band_limit_taps(&crate::waveform::NARROW_500).len() / 2;
+            assert_eq!(frames[0].frame.sync.start, 1000 + delay);
+        }
+        let payload: Vec<u8> = (0..7).collect();
+        let burst = modem.control_burst(&payload, 0).expect("burst");
+        let mut buffer = vec![(0.0, 0.0); 1000];
+        buffer.extend_from_slice(&burst);
+        buffer.extend(std::iter::repeat_n((0.0, 0.0), 1200));
+        let frames = modem.decode_buffer(&buffer, 1);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].frame.sync.frame_type, FrameType::Control);
+        assert_eq!(frames[0].payload.as_deref(), Some(payload.as_slice()));
+    }
 
     #[test]
     fn a_data_frame_survives_the_round_trip() {

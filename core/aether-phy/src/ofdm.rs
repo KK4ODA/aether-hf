@@ -87,8 +87,10 @@ impl CarrierMap {
             data_carriers,
             pilot_sequence: {
                 let computed = zadoff_chu(n, PILOT_ROOT);
-                if computed.len() == tables::PILOT_SEQUENCE.len() {
-                    for (got, want) in computed.iter().zip(tables::PILOT_SEQUENCE.iter()) {
+                let reference = tables::for_bandwidth(params.bandwidth.hz())
+                    .map_or(&[][..], |t| t.pilot_sequence);
+                if computed.len() == reference.len() {
+                    for (got, want) in computed.iter().zip(reference.iter()) {
                         assert!(
                             (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
                             "the pilot sequence disagrees with the reference model"

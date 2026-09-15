@@ -25,13 +25,13 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use aether_link::{
     Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
     frames::{
-        ConnectBody, DataHeader, DataKind, decode_data, encode_data, pack_callsign, unpack_callsign,
+        ConnectBody, DataHeader, DataKind, decode_data, encode_data, pack_callsign,
+        unpack_callsign, with_bandwidth,
     },
     rate::PAYLOAD_BYTES,
 };
 use aether_phy::{
     AudioToBaseband, BasebandToAudio, Complex, Modem, StreamingReceiver,
-    modes::{LONG, MODES, SHORT},
     preamble::FrameType,
     rx::ReceivedFrame,
     waveform::{WIDE_2300, WaveformParams},
@@ -46,12 +46,19 @@ use crate::{
 };
 
 /// How a station is set up.
+///
+/// Each flag is a setting the operator names in the configuration file; a bit set would
+/// make the file's keys and the struct's fields stop matching.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct StationConfig {
     /// This station's callsign.
     pub callsign: String,
     /// Numerology.
     pub params: WaveformParams,
+    /// Answer calls but never make one, and never beacon (§97.221(c): an automatically
+    /// controlled station may use 500 Hz outside the automatic sub-bands only to respond).
+    pub answer_only: bool,
     /// Link-layer tuning.
     pub link: LinkConfig,
     /// Busy-detector tuning.
@@ -100,6 +107,7 @@ impl Default for StationConfig {
         Self {
             callsign: String::new(),
             params: WIDE_2300,
+            answer_only: false,
             link: LinkConfig::default(),
             busy: BusyConfig::default(),
             tx_level: 0.25,
@@ -489,7 +497,12 @@ impl<P: Ptt> Station<P> {
         let mut timing = phy_timing(params);
         timing.tx_latency_s = config.key_lead_s + config.playback_lead_s + config.key_tail_s;
         let link = LinkConfig {
-            capabilities: offered_capabilities(config.compress),
+            // what this station offers, and the bandwidth it transmits in — stated, not
+            // negotiated: a call claiming another bandwidth than it arrived in is ignored
+            capabilities: with_bandwidth(
+                offered_capabilities(config.compress),
+                params.bandwidth.hz(),
+            ),
             ..config.link.clone()
         };
         let engine = LinkEngine::new(&config.callsign, timing, link, seed);
@@ -713,6 +726,9 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// If a session is already up, or the callsign is not one of this station's.
     pub fn connect_as(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        if self.config.answer_only {
+            return Err("this station is answer-only: it takes calls and makes none");
+        }
         self.engine.connect_as(remote, as_call)?;
         self.pump();
         Ok(())
@@ -847,6 +863,7 @@ impl<P: Ptt> Station<P> {
         self.config.max_key_s = config.radio.max_key_s;
         self.config.wait_for_clear = config.radio.wait_for_clear;
         self.config.link.max_mode = config.radio.max_mode;
+        self.config.answer_only = config.radio.answer_only;
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
@@ -863,6 +880,9 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// If a session is up, or the callsign cannot be packed.
     pub fn beacon(&mut self) -> Result<(), &'static str> {
+        if self.config.answer_only {
+            return Err("this station is answer-only: it takes calls and sends no beacon");
+        }
         if self.engine.state() != State::Idle {
             return Err("a session is running");
         }
@@ -1016,6 +1036,7 @@ impl<P: Ptt> Station<P> {
             "remote": remote,
             "notes": notes,
             "frequency_hz": frequency_hz,
+            "bandwidth_hz": self.config.params.bandwidth.hz(),
             "max_mode": self.config.link.max_mode,
             "compress": self.config.compress,
             "tx_level": self.config.tx_level,
@@ -1267,11 +1288,10 @@ impl<P: Ptt> Station<P> {
             } else {
                 Container::Data
             };
-            let layout = if container == Container::Control {
-                SHORT
-            } else {
-                LONG
-            };
+            let layout = self
+                .transmitter
+                .air()
+                .layout_for(container == Container::Data);
             let start = decoded.frame.sync.start as f64 / fs;
             let frame = PhyFrame {
                 container,
@@ -1288,7 +1308,9 @@ impl<P: Ptt> Station<P> {
             // before the frame itself arrives, and it marks the channel busy at an SNR far
             // below anything a power measurement would catch
             self.busy.mark_frame(now);
-            self.rx_until = self.rx_until.max(now + LONG.duration_s());
+            self.rx_until = self
+                .rx_until
+                .max(now + self.transmitter.air().long.duration_s());
             self.engine.on_preamble(pending.sync.start as f64 / fs, now);
         }
         self.pump();
@@ -1500,10 +1522,11 @@ impl<P: Ptt> Station<P> {
         let mut baseband: Vec<Complex> = Vec::new();
         for frame in &frames {
             let burst = match frame.container {
-                Container::Data => {
-                    self.transmitter
-                        .data_burst(&frame.payload, MODES[frame.mode], frame.rv)
-                }
+                Container::Data => self.transmitter.data_burst(
+                    &frame.payload,
+                    self.transmitter.modes()[frame.mode],
+                    frame.rv,
+                ),
                 Container::Control => self.transmitter.control_burst(&frame.payload, frame.rv),
             };
             match burst {
@@ -1600,9 +1623,21 @@ fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
 /// actually carry.
 #[must_use]
 pub fn phy_timing(params: WaveformParams) -> PhyTiming {
+    let air = aether_phy::modes::air_interface(params);
+    // the mode table of the waveform in use: its capacities, and the thresholds its
+    // benchmark measured, so the rate controller steps whichever table the air has
+    let (capacity, thresholds): (Vec<usize>, Vec<f64>) =
+        if params.bandwidth == aether_phy::waveform::Bandwidth::Narrow500 {
+            (
+                aether_link::rate::NARROW_PAYLOAD_BYTES.to_vec(),
+                aether_link::rate::NARROW_AWGN_THRESHOLD_DB.to_vec(),
+            )
+        } else {
+            (PAYLOAD_BYTES.to_vec(), Vec::new())
+        };
     PhyTiming {
-        data_frame_s: LONG.duration_s(),
-        control_frame_s: SHORT.duration_s(),
+        data_frame_s: air.long.duration_s(),
+        control_frame_s: air.short.duration_s(),
         // PTT, the radio's own transmit delay, and the audio buffers at both ends
         turnaround_s: 0.25,
         detect_latency_s: 0.15,
@@ -1610,7 +1645,8 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         tx_latency_s: 0.0,
         // acquisition reports a frame about two preamble symbols in, plus the search block
         preamble_detect_s: Some(4.0 * params.symbol_period_s()),
-        data_capacity: PAYLOAD_BYTES.to_vec(),
+        data_capacity: capacity,
+        mode_threshold_db: thresholds,
     }
 }
 
@@ -1651,11 +1687,23 @@ mod tests {
 
     impl Air {
         pub(crate) fn new(gain: f32, noise_sigma: f32) -> Self {
-            let config = |call: &str| StationConfig {
-                callsign: call.to_owned(),
-                // the channel in these tests is a wire, so politeness would only slow them
-                wait_for_clear: false,
-                ..StationConfig::default()
+            Self::with(gain, noise_sigma, |config| config)
+        }
+
+        /// Two stations built from the default configuration, adjusted by `tweak` — the
+        /// waveform, the answer-only rule, whatever a test wants both ends to share.
+        pub(crate) fn with(
+            gain: f32,
+            noise_sigma: f32,
+            tweak: impl Fn(StationConfig) -> StationConfig,
+        ) -> Self {
+            let config = |call: &str| {
+                tweak(StationConfig {
+                    callsign: call.to_owned(),
+                    // the channel in these tests is a wire, so politeness would only slow them
+                    wait_for_clear: false,
+                    ..StationConfig::default()
+                })
             };
             Self {
                 a: Station::new(config("W4ODA"), NullPtt::default(), 1),
@@ -2034,8 +2082,12 @@ mod tests {
         // muted as they were live, decodes every frame the station decoded on the day
         let expectation = crate::replay::Expectation::from_sidecar(&sidecar_path).unwrap();
         assert!(!expectation.muted.is_empty(), "the station never keyed?");
-        let found = crate::replay::replay(&sidecar_path.with_extension("wav"), &expectation.muted)
-            .expect("replay");
+        let found = crate::replay::replay(
+            &sidecar_path.with_extension("wav"),
+            &expectation.muted,
+            expectation.bandwidth_hz,
+        )
+        .expect("replay");
         let verdict = crate::replay::compare(&expectation.frames, &found);
         assert!(
             verdict.holds(),
@@ -2380,6 +2432,88 @@ mod tests {
             (peak - 1500.0).abs() < 2.0 * spectrum.bin_hz,
             "peak at {peak} Hz"
         );
+    }
+
+    #[test]
+    fn two_narrow_stations_carry_a_message_over_real_audio() {
+        // the 500 Hz waveform end to end: connect, the narrow mode table, a transfer, close
+        let narrow = |config: StationConfig| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        };
+        let mut air = Air::with(1.0, 0.0005, narrow);
+        assert_eq!(air.a.engine().timing().data_capacity.len(), 10);
+        assert_eq!(air.a.engine().timing().mode_threshold_db.len(), 10);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.b.take_events()
+        );
+        let message = b"Aether HF at 500 Hz: the bandwidth peer-to-peer contacts are made in.";
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received(), message);
+        // the frames the other end reported were narrow-table modes
+        let reports = air.b.take_frame_reports();
+        assert!(reports.iter().any(|r| r.kind == "data" && r.decoded));
+        assert!(reports.iter().all(|r| r.mode < 10), "{reports:?}");
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        assert_eq!(air.a.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_wide_station_does_not_hear_a_narrow_call() {
+        // the two waveforms do not decode each other's preambles: a 500 Hz call at a
+        // 2 300 Hz station is silence, which is the point of stating the bandwidth
+        let mut air = Air::new(1.0, 0.0005);
+        air.a = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                params: aether_phy::waveform::NARROW_500,
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(20.0, |_, b| b.stats.frames_detected > 0);
+        assert_eq!(air.b.stats.frames_detected, 0);
+        assert!(!air.b.connected());
+    }
+
+    #[test]
+    fn an_answer_only_station_takes_calls_and_makes_none() {
+        // §97.221(c): an automatically controlled station outside the automatic sub-bands
+        // may use 500 Hz only to respond. The rule is the station's, whatever the bandwidth.
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            answer_only: true,
+            ..config
+        });
+        assert_eq!(
+            air.a.connect("KK4XYZ"),
+            Err("this station is answer-only: it takes calls and makes none")
+        );
+        assert!(air.a.beacon().is_err());
+        assert_eq!(air.a.state(), State::Idle);
+        // the other end (also answer-only here) is still called by a station that may call
+        let caller = StationConfig {
+            callsign: "N0CALL".to_owned(),
+            wait_for_clear: false,
+            ..StationConfig::default()
+        };
+        air.b = Station::new(caller, NullPtt::default(), 3);
+        air.b
+            .connect("W4ODA")
+            .expect("a station that may call, calls");
+        air.run(40.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected(), "the answer-only station answered");
+        assert_eq!(air.a.role(), Role::Irs);
     }
 
     #[test]

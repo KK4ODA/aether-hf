@@ -389,6 +389,21 @@
             <li class="step" data-step="4">
               <h3>4. Misc modem settings</h3>
               <div class="row">
+                <label for="radio-bandwidth">Bandwidth</label>
+                <select id="radio-bandwidth">
+                  <option value="2300">2300 Hz — Winlink, Pat, the most data</option>
+                  <option value="500">500 Hz — peer-to-peer, VarAC, 30 m</option>
+                </select>
+                <label class="check"><input id="radio-answer-only" type="checkbox" /> answer only: take calls, make none, send no beacon</label>
+              </div>
+              <p class="sub">
+                Both stations of a session use the same bandwidth; a call in the other one is
+                not heard. <strong>Answer only</strong> is for a station left unattended on a 500 Hz
+                frequency outside the automatic-control sub-bands, where the rules (§97.221(c))
+                allow it to respond and nothing else — see the frequency plan on the Help tab.
+                Changing the bandwidth restarts the modem.
+              </p>
+              <div class="row">
                 <label for="radio-max-mode">Fastest mode</label>
                 <select id="radio-max-mode"></select>
                 <label class="check"><input id="radio-compress" type="checkbox" checked /> compress payload when the other station can too</label>

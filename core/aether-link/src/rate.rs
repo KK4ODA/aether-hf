@@ -32,18 +32,32 @@ pub const PAYLOAD_BYTES: [usize; 14] = [
     26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
 ];
 
-/// Modes on the throughput/threshold Pareto front, ascending.
+/// The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
+/// as an operator would compare them: measured by `tools/bench_phy.py --bandwidth 500`
+/// into `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py
+/// --bandwidth 500 --apply` into the model, and mirrored here (the vector test pins it).
+pub const NARROW_AWGN_THRESHOLD_DB: [f64; 10] =
+    [-5.2, -3.5, -2.1, 0.6, -0.1, 1.9, 3.6, 6.9, 8.8, 10.4];
+
+/// Payload bytes per frame for each narrow mode, on the narrow LONG layout.
+pub const NARROW_PAYLOAD_BYTES: [usize; 10] = [25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
+
+/// Modes on the throughput/threshold Pareto front, ascending, for the wide table.
 ///
 /// A mode another mode beats on both counts is never worth choosing; mode 7 (8-PSK 2/3) is in
 /// that position, beaten by mode 8 (16-QAM 1/2) on the same payload at a lower threshold.
 #[must_use]
 pub fn usable_modes() -> Vec<usize> {
-    (0..AWGN_THRESHOLD_DB.len())
+    usable_modes_of(&AWGN_THRESHOLD_DB, &PAYLOAD_BYTES)
+}
+
+/// Modes on the throughput/threshold Pareto front of any table, ascending.
+#[must_use]
+pub fn usable_modes_of(thresholds: &[f64], payload: &[usize]) -> Vec<usize> {
+    (0..thresholds.len())
         .filter(|&m| {
-            !(0..AWGN_THRESHOLD_DB.len()).any(|other| {
-                other != m
-                    && PAYLOAD_BYTES[other] >= PAYLOAD_BYTES[m]
-                    && AWGN_THRESHOLD_DB[other] <= AWGN_THRESHOLD_DB[m]
+            !(0..thresholds.len()).any(|other| {
+                other != m && payload[other] >= payload[m] && thresholds[other] <= thresholds[m]
             })
         })
         .collect()
@@ -112,14 +126,28 @@ impl Default for RateController {
 }
 
 impl RateController {
-    /// Build one.
+    /// Build one for the wide waveform's table.
     #[must_use]
     pub fn new(config: RateConfig) -> Self {
+        Self::for_table(config, &AWGN_THRESHOLD_DB, &PAYLOAD_BYTES)
+    }
+
+    /// Build one for any mode table: its thresholds decide when to step, its payloads
+    /// decide which modes another mode beats on both counts and are never recommended.
+    ///
+    /// # Panics
+    /// If the table is empty or the two slices disagree in length.
+    #[must_use]
+    pub fn for_table(config: RateConfig, thresholds: &[f64], payload: &[usize]) -> Self {
+        assert!(
+            !thresholds.is_empty() && thresholds.len() == payload.len(),
+            "a mode table has one threshold and one payload per mode"
+        );
         Self {
             margin_db: config.margin_db,
             config,
-            thresholds: AWGN_THRESHOLD_DB.to_vec(),
-            modes: usable_modes(),
+            thresholds: thresholds.to_vec(),
+            modes: usable_modes_of(thresholds, payload),
             smoothed_snr_db: None,
             index: 0,
             clean_run: 0,

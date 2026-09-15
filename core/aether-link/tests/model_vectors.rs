@@ -18,7 +18,10 @@ use aether_link::{
         ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, decode_data, encode_data,
         pack_callsign, unpack_callsign,
     },
-    rate::{AWGN_THRESHOLD_DB, RateController, usable_modes},
+    rate::{
+        AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, RateController,
+        usable_modes, usable_modes_of,
+    },
 };
 use serde_json::Value;
 
@@ -86,6 +89,41 @@ fn the_threshold_table_matches_the_model() {
         .map(|v| v.as_u64().expect("mode") as usize)
         .collect();
     assert_eq!(usable_modes(), expected_modes);
+}
+
+#[test]
+fn the_narrow_threshold_table_matches_the_model() {
+    let doc = vectors();
+    let expected: Vec<f64> = doc["narrow_awgn_thresholds"]
+        .as_array()
+        .expect("narrow thresholds")
+        .iter()
+        .map(|v| v.as_f64().expect("threshold"))
+        .collect();
+    assert_eq!(NARROW_AWGN_THRESHOLD_DB.len(), expected.len());
+    for (index, (got, want)) in NARROW_AWGN_THRESHOLD_DB.iter().zip(&expected).enumerate() {
+        assert!(
+            (got - want).abs() < 1e-12,
+            "narrow mode {index}: {got} vs {want}"
+        );
+    }
+    let payload: Vec<usize> = doc["narrow_payload_bytes"]
+        .as_array()
+        .expect("narrow payloads")
+        .iter()
+        .map(|v| v.as_u64().expect("bytes") as usize)
+        .collect();
+    assert_eq!(NARROW_PAYLOAD_BYTES.to_vec(), payload);
+    let expected_modes: Vec<usize> = doc["narrow_usable_modes"]
+        .as_array()
+        .expect("narrow usable modes")
+        .iter()
+        .map(|v| v.as_u64().expect("mode") as usize)
+        .collect();
+    assert_eq!(
+        usable_modes_of(&NARROW_AWGN_THRESHOLD_DB, &NARROW_PAYLOAD_BYTES),
+        expected_modes
+    );
 }
 
 #[test]

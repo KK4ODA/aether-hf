@@ -375,19 +375,31 @@ fn whole_frames_match_the_model() {
         "the vectors must cover both, or one of the two paths goes untested"
     );
 
-    let demodulator = OfdmDemodulator::new(WIDE_2300);
-    let period = WIDE_2300.symbol_samples();
+    assert!(
+        cases.iter().any(|c| c["bandwidth_hz"] == 500),
+        "the vectors must cover the narrow waveform too"
+    );
 
     for case in cases {
+        // the wide cases from before the narrow waveform existed carry no bandwidth
+        let params = match case["bandwidth_hz"].as_u64().unwrap_or(2300) {
+            2300 => WIDE_2300,
+            500 => aether_phy::waveform::NARROW_500,
+            other => panic!("no waveform for {other} Hz"),
+        };
+        let air = aether_phy::modes::air_interface(params);
+        let demodulator = OfdmDemodulator::new(params);
+        let period = params.symbol_samples();
         let label = format!(
-            "{} rv{} ({})",
+            "{} Hz {} rv{} ({})",
+            params.bandwidth.hz(),
             case["mode_name"].as_str().unwrap_or("?"),
             int(case, "rv"),
             case["layout"].as_str().unwrap_or("?")
         );
         let (mode, layout) = match case["layout"].as_str().expect("layout") {
-            "long" => (MODES[int(case, "mode")], LONG),
-            "short" => (CONTROL_MODE, SHORT),
+            "long" => (air.modes[int(case, "mode")], air.long),
+            "short" => (air.control_mode(), air.short),
             other => panic!("unknown layout {other}"),
         };
         let peak_reduced = case["peak_reduced"].as_bool().expect("peak_reduced");
@@ -396,9 +408,9 @@ fn whole_frames_match_the_model() {
             if peak_reduced { "on" } else { "off" }
         );
         let tx = if peak_reduced {
-            FrameTransmitter::default()
+            FrameTransmitter::new(params)
         } else {
-            FrameTransmitter::default().without_papr_reduction()
+            FrameTransmitter::new(params).without_papr_reduction()
         };
         let rv = int(case, "rv") as u8;
         let header = match case["frame_type"].as_str().expect("frame type") {
