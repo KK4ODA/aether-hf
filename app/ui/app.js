@@ -254,7 +254,7 @@ function renderCounters(counters) {
     const number = document.createElement("td");
     number.className = "num";
     number.textContent = String(value);
-    if (key === "watchdog_trips" && value > 0) number.style.color = "var(--hot)";
+    if (key === "watchdog_trips" && value > 0) number.style.color = "var(--status-error)";
     row.append(name, number);
     body.append(row);
   }
@@ -279,9 +279,10 @@ function drawChart() {
   if (history.length < 2) return;
 
   const style = getComputedStyle(document.body);
-  const ink = style.getPropertyValue("--ink-faint").trim();
+  const ink = style.getPropertyValue("--text-3").trim();
+  const floorInk = style.getPropertyValue("--text-2").trim();
   const accent = style.getPropertyValue("--accent").trim();
-  const edge = style.getPropertyValue("--edge").trim();
+  const grid = style.getPropertyValue("--plot-grid").trim();
 
   // One scale for both traces, so the gap between them is readable as the signal margin.
   let low = Infinity;
@@ -299,12 +300,13 @@ function drawChart() {
   const y = (db) => 14 + (1 - (db - low) / (high - low)) * (height - 34);
   const x = (index) => left + (index / (history.length - 1)) * plotWidth;
 
-  ctx.font = "11px ui-monospace, monospace";
+  ctx.font = `10.5px ${style.getPropertyValue("--numerals").trim() || "monospace"}`;
   ctx.textBaseline = "middle";
+  // horizontal grid at five levels, and a faint vertical rule every quarter of the span
   for (let step = 0; step <= 4; step++) {
     const db = low + ((high - low) * step) / 4;
     const at = y(db);
-    ctx.strokeStyle = edge;
+    ctx.strokeStyle = grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(left, at);
@@ -314,29 +316,64 @@ function drawChart() {
     ctx.textAlign = "right";
     ctx.fillText(db.toFixed(0), left - 6, at);
   }
+  for (let step = 1; step < 4; step++) {
+    const at = left + (plotWidth * step) / 4;
+    ctx.strokeStyle = grid;
+    ctx.beginPath();
+    ctx.moveTo(at, y(high));
+    ctx.lineTo(at, y(low));
+    ctx.stroke();
+  }
+  ctx.fillStyle = ink;
+  ctx.textAlign = "right";
+  ctx.fillText("dBFS", left - 6, height - 8);
 
-  const trace = (pick, colour, dashed) => {
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = dashed ? 1.5 : 2;
-    ctx.setLineDash(dashed ? [4, 4] : []);
+  const path = (pick) => {
     ctx.beginPath();
     history.forEach((point, index) => {
       const at = y(pick(point));
       if (index === 0) ctx.moveTo(x(index), at);
       else ctx.lineTo(x(index), at);
     });
-    ctx.stroke();
-    ctx.setLineDash([]);
   };
 
-  trace((p) => p.floor, ink, true);
-  trace((p) => p.level, accent, false);
+  // the level, with a faint fill down to the floor so the margin reads as an area
+  ctx.save();
+  path((p) => p.level);
+  for (let index = history.length - 1; index >= 0; index--) {
+    ctx.lineTo(x(index), y(history[index].floor));
+  }
+  ctx.closePath();
+  ctx.globalAlpha = 0.14;
+  ctx.fillStyle = accent;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.strokeStyle = floorInk;
+  ctx.lineWidth = 1.25;
+  ctx.setLineDash([4, 4]);
+  path((p) => p.floor);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.75;
+  ctx.lineJoin = "round";
+  path((p) => p.level);
+  ctx.stroke();
+
+  // the newest reading, marked, so the eye finds "now" without hunting for the end
+  const last = history.at(-1);
+  ctx.fillStyle = accent;
+  ctx.beginPath();
+  ctx.arc(x(history.length - 1), y(last.level), 2.5, 0, Math.PI * 2);
+  ctx.fill();
 
   ctx.textAlign = "left";
   ctx.fillStyle = accent;
-  ctx.fillText("level", left + 4, 10);
-  ctx.fillStyle = ink;
-  ctx.fillText("noise floor", left + 48, 10);
+  ctx.fillText("● level", left + 4, 10);
+  ctx.fillStyle = floorInk;
+  ctx.fillText("- - noise floor", left + 58, 10);
 }
 
 window.addEventListener("resize", drawChart);
@@ -617,7 +654,7 @@ async function applyConfig() {
     answer = await call("config.set", formChanges());
   } catch (error) {
     $("apply-note").textContent = error.message;
-    $("apply-note").style.color = "var(--hot)";
+    $("apply-note").style.color = "var(--status-error)";
     log(error.message, true);
     return;
   }
@@ -1145,6 +1182,35 @@ function fromBase64(text) {
   }
 }
 
+// ── the splash ──────────────────────────────────────────────────────
+//
+// The logo, briefly, when the panel first opens — and not again on every reconnect after a
+// restart, which is a plain refresh of the same instrument. A reader who has asked for less
+// motion gets the mark for a moment and no fade.
+
+function splash() {
+  const overlay = $("splash");
+  if (!overlay) return;
+  let seen = false;
+  try {
+    seen = sessionStorage.getItem("aether-splashed") === "1";
+    sessionStorage.setItem("aether-splashed", "1");
+  } catch {
+    // storage may be unavailable; the splash is then shown, which is the harmless case
+  }
+  if (seen) {
+    overlay.remove();
+    return;
+  }
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const dwell = reduced ? 700 : 1300;
+  setTimeout(() => {
+    overlay.classList.add("gone");
+    setTimeout(() => overlay.remove(), reduced ? 0 : 300);
+  }, dwell);
+}
+
+splash();
 wire();
 setLink(false);
 connect();

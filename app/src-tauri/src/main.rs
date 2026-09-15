@@ -187,6 +187,15 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
     command.arg("--config").arg(&config);
     // so the daemon can tell the panel a restart is something it can do for the operator
     command.env("AETHERD_SUPERVISED", "1");
+    // The daemon is a console program, and Windows gives a console program started from a
+    // windowed one a console of its own: an empty black window beside the panel, since its
+    // output goes to the log file below. CREATE_NO_WINDOW keeps it a background process.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     if let Some(ui) = ui_dir(resources) {
         command.env("AETHER_UI_DIR", ui);
     }
