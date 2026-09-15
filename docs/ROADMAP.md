@@ -645,7 +645,7 @@ foundation this phase was first named for is Phase 10 now.
 
 | ID | Task | Depends on |
 |---|---|---|
-| P7-0 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | — (moved ahead of the air on 2026-09-15) |
+| P7-0 🔁 | **The 500 Hz waveform**, ahead of FM. ADR-0002 anticipated it (12 carriers); VarAC's ecosystem runs on it and refuses to operate at 2300 Hz on a calling frequency, so VarAC support is this and nothing else (`host-interfaces.md` §7). Model first: numerology, modes and benchmark curves; then the core, the mode table in the air-interface spec, `BW500` accepted, and the bandwidth carried in the connect handshake so the two stations agree. One rule shapes it: in the US an automatically controlled station may use 500 Hz *outside* the §97.221(b) segments only to **answer** (§97.221(c)), so the daemon needs an unattended, answer-only mode — no calls, no beacons — and `docs/user/frequency-plan.md` §3 says why | — . **2026-09-15: a–c done** — model (`frame/modes.py` `NARROW`, ten modes from QPSK ½, 32 chips at 0.25, threshold 0.56, bandwidth bits in the handshake; `bench/baselines/phy_fer_500.csv`: −5.2 dB floor on AWGN, the wide floor's, ≈ 2 dB worse on ITU Good), port (`aether-phy` tables per waveform, bit-exact vectors; `aether-link` thresholds from `PhyTiming`; `aetherd` `[radio] bandwidth = 500`, `answer_only`, `BW500`, recordings and replay know the waveform; two daemons complete a 500 Hz session). **d remains**: VarAC over `[sim]` at 500 Hz, then the air |
 | P7-1 | **A link probe (VARA's PING).** The one user-facing thing the VARA HF / VARA Chat benchmark found that the dashboard could not give without a new air frame: a short unproto exchange that reports the SNR in *both* directions without a session — the caller sends a probe addressed to a station, the station answers with the SNR it heard, and the caller's panel shows both. It is a beacon with a destination and an answer, so the §97.221(c) rule that shapes P7-0 (an unattended 500 Hz station may only answer) holds for it too. Model first, an ADR for the frame, `PING`/`PINGACK` in the host adapter (`host-interfaces.md` §3–4), and a Probe button beside Beacon on the Session tab | P7-0 |
 
 ---
@@ -713,19 +713,16 @@ measured on the air.
 
 The Phase 0–5 list this section used to hold is done; the history is in the commits.
 
-1. **P7-0a** The 500 Hz numerology in the model: `WaveformParams` for `Narrow500` (12
-   carriers per ADR-0002), the pilot grid and prefix for it, `make_spec.py` tables, and the
-   mode table it carries — with the AWGN/Good/Moderate/Poor curves committed before a
-   single line of the port.
-2. **P7-0b** The bandwidth in the connect handshake (model first): a station calls in the
-   bandwidth it was asked for, answers in the bandwidth it was called in, and the two agree
-   before the first data frame. ADR-0002 amendment.
-3. **P7-0c** The port: `aether-phy` and `aether-link` cross-validated against the model's
-   vectors; `aetherd` selecting the waveform per session; `BW500` answered `OK`;
-   `[radio] bandwidth` and the panel's choice; the answer-only unattended mode for
-   §97.221(c) with `docs/user/frequency-plan.md` updated.
-4. **P7-0d** VarAC through the adapter at 500 Hz over `[sim]`, as a `host-interfaces.md`
-   §7 row, then on the air with a VarAC station.
+1. ~~**P7-0a** The 500 Hz numerology in the model~~ — done 2026-09-15 (`c4af0c2`,
+   `3dae512`): twelve carriers, ten modes from QPSK ½, curves on all four channels.
+2. ~~**P7-0b** The bandwidth in the connect handshake~~ — done: capability bits 1–2,
+   stated and checked, both engines.
+3. ~~**P7-0c** The port~~ — done (`8c0d351`, `0f1fcb9`): tables per waveform in
+   `aether-phy`, thresholds from `PhyTiming` in `aether-link`, `[radio] bandwidth = 500`
+   and `answer_only` in `aetherd`, `BW500` `OK`, the panel's Setup, recordings and replay.
+4. **P7-0d** VarAC through the adapter at 500 Hz over `[sim]` (two daemons at
+   `bandwidth = 500`, two VarAC scratch copies), as a `host-interfaces.md` §7 row, then on
+   the air with a VarAC station. VarAC pings before it calls, so P7-1 may be needed first.
 5. **P7-1** The link probe: frame format (ADR), model, port, `PING`/`PINGACK` in the
    adapter, a Probe button beside Beacon, both SNRs on the dashboard.
 6. **P9-2** The faster start from the connect frames' SNR, with its bench number.
