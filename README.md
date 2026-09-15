@@ -63,6 +63,7 @@ distilled from how the community received Mercury, the other VARA alternative, i
 | 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air | **in progress**: tooling done, the air open (`field/LOG.md`) |
 | 7 — Aether FM foundation | the 500 Hz waveform, then an FM PHY on the same link layer | later |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to over Bluetooth or Wi-Fi, then a phone app, then the modem inside the phone | later |
+| 9 — The modem's second rung | an audio-level A/B bench against VARA HF, a faster start, the deferred pilot/prefix/2750 Hz experiments, modes below 200 bit/s, time diversity | later |
 
 ## Architecture in one paragraph
 

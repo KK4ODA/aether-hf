@@ -646,6 +646,33 @@ with the phone alone on Android — logged in `field/LOG.md` like any other.
 
 ---
 
+### Phase 9 — The modem's second rung (once the first is measured on the air)
+
+The first modem was built to be *comparable*: robust choices everywhere ADR-0002 had a choice
+(25 % pilot overhead, a 6 ms cyclic prefix, mode 0 for every first burst). Each of those was
+a deliberate deferral with a measurement named as the condition for revisiting it. This phase
+is those measurements and what they license — after Phase 6 has said how the first modem
+does on the air, because a second rung built on the simulator alone would be built on the
+same guesses.
+
+Measurement comes first: nothing below is adopted without a committed curve that shows it
+paying for itself on **ITU Good, Moderate and Poor**, not only on AWGN (`bench/README.md`
+records why P2-6 was measured and *not* adopted; the same standard applies).
+
+| ID | Task | Depends on |
+|---|---|---|
+| P9-1 | **The A/B bench: VARA HF through the same channel, black box.** The one way to settle "comparable or better" before the air does: the same calibrated channel, the same SNRs and ITU profiles, the same Winlink messages, at the **audio level**, for both modems. A real-time channel tool (`tools/channel_cable.py`: the model's streaming simulator between two virtual audio cables, with the noise set by the same 3 kHz-referenced SNR the benches use) so that either modem's transmit audio passes through the identical impairment and out the other side. Aether is measured the same way rather than over `[sim]`, so the comparison shares every step of the path. The author runs their registered VARA copies at both ends; this repository holds the tool, the protocol and the results, never a byte of VARA. Goodput per SNR per profile for both, in `bench/ab/`, then the same two modems **alternated on one on-air path within minutes of each other**, logged in `field/LOG.md` | P6-4 |
+| P9-2 | **A faster start.** Every session begins at mode 0 and climbs (0→2→4→6→9→10 in six bursts on the bench): ten seconds of a short message spent proving what the connect frames already measured. The CONNECT_ACK carries the SNR the called station measured on the request (a byte, 3 kHz-referenced, as `metrics` reports it), the caller starts at the rate controller's recommendation for it less one step of margin, and the request's own SNR is measured on the acknowledgement for the called station's first burst. Model first (`engine.py`, `rate.py`), the frame format in `air-interface.md`, then the port; the gain is a bench number before it is a claim | P9-1 |
+| P9-3 | **Peak throughput: the deferred ADR-0002 experiments.** (a) **Sparser pilots** — every 8th carrier and a pilot symbol every 4th, ~13 % overhead instead of ~34 %, which ADR-0002 deferred until Poor-channel curves existed to compare against; they exist now. (b) **A shorter cyclic prefix** for everyday paths — the 6 ms prefix covers ITU Poor with 3× margin and NVIS's 7 ms is already the extended-CP option; a short-CP option for Good/Moderate paths, negotiated at connect. (c) **2 750 Hz** — 68 carriers, the bandwidth Winlink Express asks for first and VARA's widest, ~20 % more air; needs the bandwidth in the connect handshake (shared with P7-0) and `BW2750` accepted. Each is an ADR amendment with its curves, and each is a separate mode-table entry so that nothing already fielded changes underneath a station | P7-0 |
+| P9-4 | **The floor: modes below 200 bit/s.** Mode 0 (BPSK 1/5, 197 bit/s) decodes at −5.2 dB on AWGN and +2 dB on ITU Good. The target is about **−10 dB on AWGN and 0 dB or better on Good**. The natural home for it is the 500 Hz waveform of P7-0 — twelve carriers at the same power put ~6.6 dB more SNR into the band the signal occupies than spreading the same bits across 2 300 Hz — with repetition or spreading inside 2 300 Hz measured against it rather than assumed. Whichever wins carries the same connect frames at the same mode 0, so a station that cannot hear the fast modes can still be called | P7-0, P9-1 |
+| P9-5 | **Time diversity for slow fading.** ITU Good and Moderate fade slowly compared with a frame, and a frame that falls entirely into a fade is lost however low its rate. Two candidates, measured: coding spread across frames (an interleaver spanning a burst, so one fade costs part of several codewords instead of all of one), and shorter frames with HARQ at the low modes, so a retransmission lands in a different fade. This is what moves the Poor and Good columns of the mode table, which P9-4's rate alone does not | P9-4 |
+
+Acceptance: the A/B table in `bench/ab/` and the alternated on-air sessions in `field/LOG.md`
+say where Aether stands against VARA HF, per profile and per SNR, in numbers anybody can
+reproduce with the tool; every adopted change has its curve committed and its ADR amended.
+
+---
+
 ## 14. Next 20 concrete tasks for Claude Code (in order)
 
 1. **P0-1** Add `pyproject.toml`, lockfile, `LICENSE-MIT`/`LICENSE-APACHE`, ruff/mypy/pre-commit, pytest config.
