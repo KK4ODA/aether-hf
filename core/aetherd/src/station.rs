@@ -194,6 +194,10 @@ enum Outgoing {
     },
 }
 
+/// How much later than the playback lead a sound card's capture of this station's own
+/// burst may still be arriving, over and above the lead itself: device buffering both ways.
+const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.15;
+
 /// The Morse identifier's amplitude as a fraction of the transmit level: a little below the
 /// data waveform's peak, because it is an identifier and not the signal, and scaled with
 /// the drive so an operator who sets the level by the tone has set the identifier too.
@@ -345,6 +349,14 @@ pub struct Station<P: Ptt> {
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
     /// nothing else may: a burst cut short is a session broken.
     playing_tone: bool,
+    /// The audio clock when a held-back burst was last reported to the engine, while one
+    /// is held.
+    held_since: Option<f64>,
+    /// Until when the busy detector ignores what the sound card delivers: the card's
+    /// capture runs a lead behind its playback, so the end of this station's own burst
+    /// arrives after the key is released, and read as channel it would hold the next burst
+    /// back for its own echo.
+    deaf_until: f64,
     pending: VecDeque<Outgoing>,
     meter: LevelMeter,
     /// The session recording in progress, if one is.
@@ -417,6 +429,8 @@ impl<P: Ptt> Station<P> {
             audio_seen: 0,
             transmitting: false,
             playing_tone: false,
+            held_since: None,
+            deaf_until: f64::NEG_INFINITY,
             pending: VecDeque::new(),
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
@@ -938,7 +952,13 @@ impl<P: Ptt> Station<P> {
             let muted = vec![(0.0, 0.0); baseband.len()];
             self.absorb(&muted, now);
         } else {
-            self.busy.push(&baseband, now);
+            // the receiver hears everything; the busy detector is spared the tail of this
+            // station's own burst, which the card delivers a lead after the key is released
+            if now < self.deaf_until {
+                self.busy.skip(&baseband);
+            } else {
+                self.busy.push(&baseband, now);
+            }
             self.absorb(&baseband, now);
         }
 
@@ -986,6 +1006,7 @@ impl<P: Ptt> Station<P> {
             // the queue drained now, and what the sound card still holds is the tail's
             // silence: the burst itself has already left
             self.engine.on_tx_done(now);
+            self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
             self.pump();
             return Ok(0);
         }
@@ -1170,8 +1191,15 @@ impl<P: Ptt> Station<P> {
         let radiates = !matches!(next, Outgoing::Audio { silent: true, .. });
         if radiates && self.config.wait_for_clear && !self.channel_clear(now) {
             self.stats.deferred_for_busy += 1;
+            // the engine's timers move with the burst, or a retry fires against a burst
+            // that has not left yet and the two go out back to back when the channel clears
+            if let Some(since) = self.held_since {
+                self.engine.on_tx_delayed(now - since);
+            }
+            self.held_since = Some(now);
             return;
         }
+        self.held_since = None;
         let Some(outgoing) = self.pending.pop_front() else {
             return;
         };

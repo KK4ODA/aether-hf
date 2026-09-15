@@ -489,6 +489,38 @@ def test_an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() ->
     assert any(isinstance(x, Transmit) for x in a.drain()), "the queued data never went out"
 
 
+def test_a_burst_held_back_by_a_busy_channel_moves_the_timers_with_it(timing: PhyTiming) -> None:
+    """On the air, connect requests went out in pairs inside one keying: the busy detector
+    held the first back, the retry timer — set as if it had gone out — fired meanwhile,
+    and both left together when the channel cleared. A physical layer that holds a burst
+    now says so, and the engine's deadlines move by the same amount."""
+    a = LinkEngine("W4ODA", timing, seed=1)
+    a.connect("KK4XYZ")
+    assert sum(isinstance(x, Transmit) for x in a.drain()) == 1
+    # held for eight seconds, reported a block at a time as the station does
+    t = 0.0
+    while t < 8.0:
+        t += 0.02
+        a.on_tx_delayed(0.02)
+        a.tick(t)
+    assert not any(isinstance(x, Transmit) for x in a.drain()), "a retry was queued while held"
+    assert a.state is State.CONNECTING and a._connect_tries == 1
+    # once it has gone, the retry comes when it would have without the delay: after the
+    # burst, the reply wait and the backoff, all of it measured from the real departure
+    a.on_tx_done(t + timing.tx_latency_s + timing.data_frame_s)
+    retry_at = None
+    while t < 30.0:
+        t += 0.02
+        a.tick(t)
+        if any(isinstance(x, Transmit) for x in a.drain()):
+            retry_at = t
+            break
+    assert retry_at is not None, "no retry ever came"
+    assert retry_at - 8.0 > timing.data_frame_s * 2, (
+        f"the retry came too soon after departure: {retry_at - 8.0:.2f} s"
+    )
+
+
 def _timing(*, start_of_frame: bool) -> PhyTiming:
     caps = {m.index: m.payload_bytes(LONG) for m in MODES}
     return PhyTiming(

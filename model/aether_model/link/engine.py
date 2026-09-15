@@ -327,6 +327,22 @@ class LinkEngine:
         if self.state is State.CONNECTED and self.role is Role.ISS and self._waiting_for is None:
             self._maybe_start_burst()
 
+    def on_tx_delayed(self, seconds: float) -> None:
+        """The physical layer is holding the last transmission back — the channel is busy —
+        and has now held it for another ``seconds``.
+
+        Every deadline moves with it. A timer set when the burst was handed over expects a
+        reply to a burst that has not left yet; left alone it fires against nothing, a
+        retry of the same frame is queued behind the one still waiting, and the two go out
+        back to back when the channel clears. Seen on the air on the first attempt: pairs of
+        connect requests in one keying, at a cadence set by the busy detector rather than
+        by the backoff."""
+        if seconds <= 0.0:
+            return
+        self._tx_busy_until += seconds
+        for name in self._deadlines:
+            self._deadlines[name] += seconds
+
     def tick(self, now: float) -> None:
         self.now = max(self.now, now)
         for name in sorted(self._deadlines, key=self._deadlines.__getitem__):

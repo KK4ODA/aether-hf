@@ -510,6 +510,43 @@ fn transmitted(engine: &mut LinkEngine) -> Vec<aether_link::TxFrame> {
 }
 
 #[test]
+fn a_burst_held_back_by_a_busy_channel_moves_the_timers_with_it() {
+    // on the air, connect requests went out in pairs inside one keying: the busy detector
+    // held the first back, the retry timer fired meanwhile, and both left together
+    let t = timing(false);
+    let mut a = LinkEngine::new("W4ODA", t.clone(), LinkConfig::default(), 1);
+    a.connect("KK4XYZ").expect("idle");
+    assert_eq!(transmitted(&mut a).len(), 1);
+    let mut now = 0.0;
+    while now < 8.0 {
+        now += 0.02;
+        a.on_tx_delayed(0.02);
+        a.tick(now);
+    }
+    assert!(
+        transmitted(&mut a).is_empty(),
+        "a retry was queued while the first was held back"
+    );
+    assert_eq!(a.state(), State::Connecting);
+    a.on_tx_done(now + t.tx_latency_s + t.data_frame_s);
+    let mut retry_at = None;
+    while now < 30.0 {
+        now += 0.02;
+        a.tick(now);
+        if !transmitted(&mut a).is_empty() {
+            retry_at = Some(now);
+            break;
+        }
+    }
+    let retry_at = retry_at.expect("no retry ever came");
+    assert!(
+        retry_at - 8.0 > 2.0 * t.data_frame_s,
+        "the retry came too soon after departure: {:.2} s",
+        retry_at - 8.0
+    );
+}
+
+#[test]
 fn an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() {
     // The other half of the same stall, timed by hand: the acknowledgement of the
     // post-connect poll arrives just after the sender gave up on it and re-polled. It is

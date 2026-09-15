@@ -578,6 +578,25 @@ impl LinkEngine {
         }
     }
 
+    /// The physical layer is holding the last transmission back — the channel is busy —
+    /// and has now held it for another `seconds`.
+    ///
+    /// Every deadline moves with it. A timer set when the burst was handed over expects a
+    /// reply to a burst that has not left yet; left alone it fires against nothing, a retry
+    /// of the same frame is queued behind the one still waiting, and the two go out back to
+    /// back when the channel clears. Seen on the air on the first attempt: pairs of connect
+    /// requests in one keying, at a cadence set by the busy detector rather than by the
+    /// backoff.
+    pub fn on_tx_delayed(&mut self, seconds: f64) {
+        if seconds <= 0.0 {
+            return;
+        }
+        self.tx_busy_until += seconds;
+        for (_, at) in &mut self.deadlines {
+            *at += seconds;
+        }
+    }
+
     /// Advance the clock and let any due timers fire.
     pub fn tick(&mut self, now: f64) {
         self.now = self.now.max(now);
