@@ -546,6 +546,8 @@ fn report_state(
                     }
                     .line(),
                 )
+                // what VARA says of a link once it is up, and true here
+                && say(writer, &Notification::EncryptionDisabled.line())
         }
         // only report a disconnect for a session the host was told about
         "disconnected" if connected_to.take().is_some() => {

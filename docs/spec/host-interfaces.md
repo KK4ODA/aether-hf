@@ -101,6 +101,7 @@ Unsolicited, at any time.
 | `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel — outside a session. While a session is up the channel is the session's and reads `BUSY OFF`: the detector marks it busy at every frame of the other station, and a host that honours DCD (VarAC with *Ignore DCD* off holds "busy" for ten seconds after each) would never find a moment to hand its data over; the modem does the turn-taking |
 | `PENDING` | The called side, just before its `CONNECTED`: the order every client expects, from a modem that answers a call in one step |
 | `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
+| `ENCRYPTION DISABLED` | After `CONNECTED`: the link carries no encryption, which VARA states of its links and is simply true of this modem |
 | `DISCONNECTED` | A session ended |
 | `BUFFER <bytes>` | The number of payload bytes still to send changed — and `BUFFER 0` once, as the first line a host hears when it attaches. VarAC sends nothing on the data port until it has heard how full the modem's buffer is (found on the bench: a ping sat for ninety seconds with both ends waiting) |
 | `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |

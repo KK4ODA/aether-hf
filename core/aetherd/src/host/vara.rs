@@ -379,6 +379,9 @@ pub enum Notification {
     /// An incoming call is being answered: sent to the called side before `CONNECTED`,
     /// which is the order every client expects the two in.
     Pending,
+    /// The link carries no encryption — a statement VARA makes after `CONNECTED` and at
+    /// the end of a transmission, and one that is simply true of this modem.
+    EncryptionDisabled,
     /// The session ended.
     Disconnected,
     /// How many payload bytes the modem still has to send.
@@ -420,6 +423,7 @@ impl Notification {
                 let _ = write!(out, "CONNECTED {caller} {called} {bandwidth_hz}");
             }
             Self::Pending => out.push_str("PENDING"),
+            Self::EncryptionDisabled => out.push_str("ENCRYPTION DISABLED"),
             Self::Disconnected => out.push_str("DISCONNECTED"),
             Self::Buffer(bytes) => {
                 let _ = write!(out, "BUFFER {bytes}");
@@ -661,6 +665,10 @@ mod tests {
         assert_eq!(Notification::Busy(true).line(), "BUSY ON");
         assert_eq!(Notification::Disconnected.line(), "DISCONNECTED");
         assert_eq!(Notification::Pending.line(), "PENDING");
+        assert_eq!(
+            Notification::EncryptionDisabled.line(),
+            "ENCRYPTION DISABLED"
+        );
         assert_eq!(Notification::Buffer(42).line(), "BUFFER 42");
         assert_eq!(Notification::SignalToNoise(12.4).line(), "SN 12");
         assert_eq!(Notification::SignalToNoise(-2.6).line(), "SN -3");
