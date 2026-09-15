@@ -862,7 +862,7 @@ impl<P: Ptt> Station<P> {
         self.config.tx_level = config.audio.tx_level;
         self.config.max_key_s = config.radio.max_key_s;
         self.config.wait_for_clear = config.radio.wait_for_clear;
-        self.config.link.max_mode = config.radio.max_mode;
+        self.config.link.max_mode = config.radio.fastest_mode();
         self.config.answer_only = config.radio.answer_only;
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);

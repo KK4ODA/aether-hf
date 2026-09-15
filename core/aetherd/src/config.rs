@@ -233,6 +233,20 @@ fn default_bandwidth() -> u32 {
 }
 
 impl RadioSection {
+    /// The fastest mode the station will use, within the table of its bandwidth: the
+    /// configured `max_mode`, clamped to the table's last mode. The default, 13, is the
+    /// wide table's last; at 500 Hz it means the narrow table's last, mode 9, so a station
+    /// switched to 500 Hz with nothing else touched runs every mode it has.
+    #[must_use]
+    pub fn fastest_mode(&self) -> usize {
+        let modes = self
+            .params()
+            .map_or(aether_link::AWGN_THRESHOLD_DB.len(), |p| {
+                aether_phy::modes::air_interface(p).n_modes()
+            });
+        self.max_mode.min(modes - 1)
+    }
+
     /// The waveform the bandwidth names, if this version has it.
     #[must_use]
     pub fn params(&self) -> Option<aether_phy::waveform::WaveformParams> {
@@ -676,18 +690,19 @@ impl Config {
                 "max_key_s must be positive: a watchdog that can never fire is not one".into(),
             ));
         }
-        let Some(params) = self.radio.params() else {
+        if self.radio.params().is_none() {
             return Err(ConfigError::Invalid(format!(
                 "bandwidth must be 2300 or 500, not {}: those are the waveforms this version \
                  has",
                 self.radio.bandwidth
             )));
-        };
-        let modes = aether_phy::modes::air_interface(params).n_modes();
-        if self.radio.max_mode >= modes {
+        }
+        // the widest table's size; a narrower table clamps (`RadioSection::fastest_mode`)
+        // rather than refuses, so `bandwidth = 500` with everything else left alone works
+        if self.radio.max_mode >= aether_link::AWGN_THRESHOLD_DB.len() {
             return Err(ConfigError::Invalid(format!(
-                "max_mode must be below {modes}, the number of modes at {} Hz",
-                self.radio.bandwidth
+                "max_mode must be below {}, the number of modes this version defines",
+                aether_link::AWGN_THRESHOLD_DB.len()
             )));
         }
         // The control interface can key a transmitter, so an address the network can reach
@@ -960,7 +975,8 @@ bandwidth = 2300
 # Answer calls but never make one, and never beacon: how an unattended station is left on
 # a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).
 answer_only = false
-# The fastest mode this station will use: 0 to 13 at 2300 Hz, 0 to 9 at 500 Hz.
+# The fastest mode this station will use: 0 to 13 at 2300 Hz; at 500 Hz the table has ten
+# modes and anything past 9 means 9.
 max_mode = 13
 # Offer payload compression. Used only if the other station offers it too, so leaving this on
 # costs nothing when talking to one that cannot.
@@ -1109,8 +1125,7 @@ mod tests {
         for text in [
             "callsign = \"W4ODA\"\n[radio]\nmax_key_s = 0.0\n",
             "callsign = \"W4ODA\"\n[radio]\nmax_mode = 14\n",
-            // the narrow table has ten modes, and 2750 Hz is not a waveform yet
-            "callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\nmax_mode = 10\n",
+            // 2750 Hz is not a waveform yet
             "callsign = \"W4ODA\"\n[radio]\nbandwidth = 2750\n",
             "callsign = \"W4ODA\"\n[audio]\ntx_level = 0.0\n",
             "callsign = \"W4ODA\"\n[audio]\ntx_level = 2.0\n",
@@ -1306,13 +1321,19 @@ mod tests {
         assert!(Config::is_live("radio.answer_only"));
         // the waveform is the modem: a change to it is a restart
         assert!(!Config::is_live("radio.bandwidth"));
-        let narrow =
-            Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\nmax_mode = 9\n")
-                .expect("a narrow station");
+        // a station switched to 500 Hz with nothing else touched runs every narrow mode:
+        // the wide default of 13 clamps to the narrow table's last, 9
+        let narrow = Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\n")
+            .expect("a narrow station");
         assert_eq!(
             narrow.radio.params(),
             Some(aether_phy::waveform::NARROW_500)
         );
+        assert_eq!(narrow.radio.max_mode, 13);
+        assert_eq!(narrow.radio.fastest_mode(), 9);
+        let wide =
+            Config::parse("callsign = \"W4ODA\"\n[radio]\nmax_mode = 8\n").expect("a wide station");
+        assert_eq!(wide.radio.fastest_mode(), 8);
         assert!(!Config::is_live("audio.input"));
         assert!(!Config::is_live("ptt.port"));
         assert!(!Config::is_live("control.bind"));

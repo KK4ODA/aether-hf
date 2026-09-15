@@ -377,7 +377,7 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         playback_lead_s: PLAYBACK_BACKLOG_S,
         callsign: config.callsign.clone(),
         link: LinkConfig {
-            max_mode: config.radio.max_mode,
+            max_mode: config.radio.fastest_mode(),
             ..LinkConfig::default()
         },
         busy: config.busy_config(),
