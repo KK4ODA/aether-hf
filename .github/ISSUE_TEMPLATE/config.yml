@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and help getting on the air
+    url: https://github.com/KK4ODA/aether-hf/discussions/categories/q-a
+    about: Setup, host programs (Winlink Express, Pat, VarAC), rigs and interfaces — ask here first
+  - name: On-air stories and ideas
+    url: https://github.com/KK4ODA/aether-hf/discussions
+    about: Show and tell, ideas and proposals; a session with a recording is an issue (on-air report)
   - name: Roadmap and task queue
     url: https://github.com/KK4ODA/aether-hf/blob/master/docs/ROADMAP.md
     about: Phase plan and the ordered list of next tasks

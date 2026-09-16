@@ -154,17 +154,19 @@ change means a note in the release that says every station must update, and a ch
 the configuration schema means a migration step in `core/aetherd/src/config.rs` and a
 fixture under `core/aetherd/tests/data/config/`.
 
-## 5. Repository settings worth having
+## 5. Repository settings (set 2026-09-16)
 
-Set once, on GitHub (Settings), or with `gh`:
+What is set, so a change to it is a decision and not an accident:
 
 * **Merge methods**: rebase merging only, so a squash or a merge commit cannot happen by
-  a stray click. Delete head branches on merge.
-* **Branch protection on `master`**: require the three CI checks to pass before a PR
-  merges; allow the maintainer to bypass (the author pushes directly to `master`, and a
-  rule without a bypass would stop that).
-* **Discussions on**: questions and on-air stories go there instead of into issues, and
-  the issue templates' `config.yml` can point at it.
+  a stray click. Head branches are deleted on merge.
+* **A ruleset on `master`** ("master: CI green before merge", Settings → Rules): no
+  deletion, no force-push, changes arrive by pull request, and the eight CI jobs (model on
+  Windows and Ubuntu at two Python versions, core and app on both) must pass before a
+  merge. Repository admins bypass it, which is what lets the maintainer keep pushing
+  straight to `master`; a contributor cannot.
+* **Discussions on**: questions go to Q&A and on-air stories to Show and tell instead of
+  into issues; the issue templates' `config.yml` points there.
 * **Fork workflow approval** stays at GitHub's default ("require approval for first-time
   contributors"), which is what keeps a PR from running its own workflow with the
   repository's secrets before you have read it.
