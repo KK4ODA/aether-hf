@@ -221,8 +221,16 @@ answer-only station (answering is a §97.221(c) response and stays allowed), rep
 {remote, callsign?}`; the panel's Probe button beside Beacon shows the modem's own
 sentence. **The VARA adapter has no PING**: a web search found no public source for a
 VARA `PING`/`PINGACK` command (that vocabulary is ARDOP's), and VarAC's ping is a short
-session over `CONNECT`, which already works — so **P7-0d, VarAC over `[sim]` at 500 Hz,
-does not wait on anything** and is next. Then P9-2
+session over `CONNECT`. **P7-0d is done** (2026-09-15, beta.18): two VarAC copies
+(`C:\Dev\AetherBench\varac-a`/`-b`, plain callsigns — VarAC's ping is a `CONNECT` to
+`<call>-T`, and it strips the SSID from its own alias) ping and connect over `[sim]` at
+500 Hz. The adapter needed six things, found one attempt at a time and recorded in
+`host-interfaces.md` §7: `SN` per decoded frame *and before* `CONNECTED` (frames are now
+published before the state they produce), `TUNE ?` → `TUNE <dB>`, `BUFFER 0` on attach,
+`BUSY OFF` for the life of a session (VarAC honours DCD; Mercury does the same),
+`PENDING` before and `ENCRYPTION DISABLED` after `CONNECTED`. VarAC's own debug mode
+(`DebugMode=ON` in its INI) shows its message-queue decisions and is the tool for the
+next such stall. Then P9-2
 the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
