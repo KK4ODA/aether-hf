@@ -632,8 +632,9 @@ anything else. Every item is model first, benchmark curve second, port third; th
 | 7 | **P9-5** time diversity | after the floor exists to measure it against |
 | — | **P6-6** the air | continuous: cable → ground wave now at 2 300 Hz; P2P with VarAC users once P7-0 is out |
 
-Small things for the gaps between: CM108/GPIO keying (the DRA and AllStar interfaces;
-one more `ptt.rs` backend), BPQ32 over `[sim]` (human), three hams through the wizard
+Small things for the gaps between: ~~CM108/GPIO keying~~ (done 2026-09-16: `[ptt] kind =
+"cm108"`, the DRA/URI/RA-40 class by their USB ids, untested on hardware), BPQ32 over
+`[sim]` (human), three hams through the wizard
 (human), Authenticode signing (needs a certificate) and Apple signing/notarization (needs a
 developer account; the macOS dmg ships unsigned and untested on hardware), the panel's SNR
 history surviving a reload. **Host benches still owed (human, scratch copies under `C:\Dev\AetherBench`):**
@@ -754,6 +755,7 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
    −12 dB acquisition and −11 dB decode through the real modem, a session at −10 dB.
 9. **P9-1** `tools/channel_cable.py` and the A/B protocol; the runs when the author can.
 10. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor.
-11. Between any two of the above: CM108 keying; the panel's SNR history across a reload;
+11. Between any two of the above: ~~CM108 keying; the panel's SNR history across a reload~~
+    (both done 2026-09-16);
     whatever the air finds. Host benches owed: Winlink Express P2P at 500 Hz, RMS Trimode
     + Relay as a gateway over `[sim]` (both human; see the small-things paragraph above).

@@ -1,9 +1,9 @@
 //! Keying the transmitter, and the watchdog that will not let it stay keyed.
 //!
 //! A [`Ptt`] is anything that can put a radio into transmit and take it out again. The
-//! backends differ only in how they say it: a serial line's RTS or DTR, a sound-card
-//! interface's GPIO, a rig-control daemon over TCP, or nothing at all when the operator is
-//! using VOX.
+//! backends differ only in how they say it: a serial line's RTS or DTR, the radio's own CAT
+//! command, a CM108-class sound-card interface's GPIO pin, a rig-control daemon over TCP,
+//! or nothing at all when the operator is using VOX.
 //!
 //! # The watchdog is not optional
 //!
@@ -953,6 +953,212 @@ impl From<serialport::SerialPortInfo> for SerialPortInfo {
     }
 }
 
+// ── CM108-class interfaces: keying through the codec's own GPIO pin ──────────────────
+
+/// Whether a USB identity is one of the sound-card codecs whose general-purpose pins the
+/// DRA, URI, RA-40 and similar interfaces bring out to a PTT transistor: C-Media's CM108,
+/// CM108AH, CM108B, CM119, CM119A and CM119B, Solid State System's SSS1621/1623, and the
+/// AIOC cable that emulates one. The ids are the ones the parts report; a maker's EEPROM
+/// can override them, which is what `[ptt] device` is for.
+#[must_use]
+pub fn is_gpio_codec(vendor: u16, product: u16) -> bool {
+    match vendor {
+        0x0D8C => matches!(
+            product,
+            0x0008..=0x000F | 0x0012 | 0x0013 | 0x0139 | 0x013A | 0x013C
+        ),
+        0x0C76 => matches!(product, 0x1605 | 0x1607 | 0x160B),
+        0x1209 => product == 0x7388,
+        _ => false,
+    }
+}
+
+/// The HID output report that drives one pin, as the CM108 data sheet lays the four bytes
+/// out — register bits left alone, the pins' output data, the pins' direction (a set bit
+/// makes that pin an output), a spare — behind the report-id byte of zero that a device
+/// with unnumbered reports takes. One pin in the mask, so the others are not touched;
+/// bit 0 is GPIO1.
+#[must_use]
+pub fn gpio_report(pin: u8, high: bool) -> [u8; 5] {
+    let mask = 1u8 << (pin.clamp(1, 8) - 1);
+    [0x00, 0x00, if high { mask } else { 0x00 }, mask, 0x00]
+}
+
+/// A CM108-class interface as the operator should see it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GpioInterfaceInfo {
+    /// The path the configuration takes to name this one among several.
+    pub path: String,
+    /// What the interface calls itself.
+    pub name: String,
+}
+
+/// The CM108-class interfaces on this machine, for an operator choosing one.
+#[must_use]
+pub fn list_gpio_interfaces() -> Vec<GpioInterfaceInfo> {
+    hidapi::HidApi::new()
+        .map(|api| gpio_interfaces_in(&api))
+        .unwrap_or_default()
+}
+
+fn gpio_interfaces_in(api: &hidapi::HidApi) -> Vec<GpioInterfaceInfo> {
+    let mut out: Vec<GpioInterfaceInfo> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for device in api.device_list() {
+        if !is_gpio_codec(device.vendor_id(), device.product_id()) {
+            continue;
+        }
+        // Windows lists a codec once per HID collection: one entry per device is enough
+        let path = device.path().to_string_lossy().into_owned();
+        let key = instance_key(&path);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(GpioInterfaceInfo {
+            path,
+            name: interface_name(device),
+        });
+    }
+    out
+}
+
+fn interface_name(device: &hidapi::DeviceInfo) -> String {
+    let product = device.product_string().unwrap_or("").trim();
+    let maker = device.manufacturer_string().unwrap_or("").trim();
+    let mut name = if maker.is_empty() || product.starts_with(maker) {
+        product.to_owned()
+    } else {
+        format!("{maker} {product}")
+    };
+    if name.is_empty() {
+        name = format!(
+            "CM108-class codec {:04x}:{:04x}",
+            device.vendor_id(),
+            device.product_id()
+        );
+    }
+    if let Some(serial) = device.serial_number().filter(|s| !s.trim().is_empty()) {
+        name = format!("{name} ({})", serial.trim());
+    }
+    name
+}
+
+/// What identifies the device behind a HID path. Windows gives each of a device's HID
+/// collections a path of its own, differing only in a `&colNN` field; the GPIO report is
+/// accepted by one of them, so the device is the unit and the collections are tried.
+fn instance_key(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    match lower.find("&col") {
+        Some(at) if lower.len() >= at + 6 => format!("{}{}", &lower[..at], &lower[at + 6..]),
+        _ => lower,
+    }
+}
+
+/// Keying through the GPIO pin of a CM108-class sound-card interface — the DRA, URI, RA-40
+/// and most "USB radio interface" boards built on a C-Media codec. The codec that carries
+/// the audio also holds the PTT transistor, so there is no serial port at all: one USB
+/// cable for both.
+pub struct GpioPtt {
+    name: String,
+    pin: u8,
+    device: hidapi::HidDevice,
+}
+
+impl std::fmt::Debug for GpioPtt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpioPtt")
+            .field("name", &self.name)
+            .field("pin", &self.pin)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GpioPtt {
+    /// Open the interface — the one named by path or by part of its name, or the first
+    /// one on the machine — and put its pin into receive.
+    ///
+    /// # Errors
+    /// If there is no such interface, or none of its HID collections takes the report —
+    /// which on Linux is usually a `/dev/hidraw` the operator may not write to.
+    pub fn open(which: Option<&str>, pin: u8) -> Result<Self, PttError> {
+        if !(1..=8).contains(&pin) {
+            return Err(PttError::Backend(format!(
+                "[ptt] gpio must be 1–8, not {pin}; the DRA and URI boards key on 3"
+            )));
+        }
+        let api = hidapi::HidApi::new()
+            .map_err(|e| PttError::Backend(format!("HID devices cannot be listed ({e})")))?;
+        let listed = gpio_interfaces_in(&api);
+        let chosen = match which {
+            Some(wanted) => listed.iter().find(|d| {
+                d.path == wanted || d.name.to_lowercase().contains(&wanted.to_lowercase())
+            }),
+            None => listed.first(),
+        };
+        let Some(chosen) = chosen else {
+            return Err(PttError::Backend(match which {
+                Some(wanted) => format!(
+                    "no CM108-class interface matches {wanted:?}; `aetherd --list-ports` shows \
+                     what is there"
+                ),
+                None => "no CM108-class interface is plugged in; `aetherd --list-ports` shows \
+                         what is there"
+                    .to_owned(),
+            }));
+        };
+        let key = instance_key(&chosen.path);
+        let mut last_error = String::new();
+        let collections: Vec<_> = api
+            .device_list()
+            .filter(|d| instance_key(&d.path().to_string_lossy()) == key)
+            .collect();
+        for collection in collections {
+            match collection.open_device(&api) {
+                Ok(device) => {
+                    let mut ptt = Self {
+                        name: chosen.name.clone(),
+                        pin,
+                        device,
+                    };
+                    match ptt.set(false) {
+                        Ok(()) => return Ok(ptt),
+                        Err(PttError::Backend(message)) => last_error = message,
+                        Err(other) => return Err(other),
+                    }
+                }
+                Err(e) => last_error = e.to_string(),
+            }
+        }
+        Err(PttError::Backend(format!(
+            "{}: cannot drive its GPIO ({last_error}). On Linux the hidraw device needs a \
+             udev rule; docs/user/gateway-kit.md has it",
+            chosen.name
+        )))
+    }
+
+    fn set(&mut self, high: bool) -> Result<(), PttError> {
+        self.device
+            .write(&gpio_report(self.pin, high))
+            .map(|_| ())
+            .map_err(|e| PttError::Backend(format!("{}: {e}", self.name)))
+    }
+}
+
+impl Ptt for GpioPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.set(true)
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.set(false)
+    }
+
+    fn describe(&self) -> String {
+        format!("GPIO{} of {}", self.pin, self.name)
+    }
+}
+
 /// Check that a callsign is one the protocol can carry.
 ///
 /// The link layer packs callsigns six bits per character into seven bytes, so anything
@@ -965,4 +1171,43 @@ pub fn validate_callsign(call: &str) -> Result<(), PttError> {
     aether_link::frames::pack_callsign(call)
         .map(|_| ())
         .map_err(|e| PttError::Backend(format!("callsign {call:?}: {e}")))
+}
+
+#[cfg(test)]
+mod gpio_tests {
+    use super::*;
+
+    #[test]
+    fn the_report_drives_one_pin_and_leaves_the_others_alone() {
+        assert_eq!(gpio_report(3, true), [0, 0, 0b0100, 0b0100, 0]);
+        assert_eq!(gpio_report(3, false), [0, 0, 0, 0b0100, 0]);
+        assert_eq!(gpio_report(1, true), [0, 0, 1, 1, 0]);
+        assert_eq!(gpio_report(8, true), [0, 0, 0x80, 0x80, 0]);
+    }
+
+    #[test]
+    fn the_codecs_with_pins_are_known_by_their_ids() {
+        assert!(is_gpio_codec(0x0D8C, 0x0008)); // CM108
+        assert!(is_gpio_codec(0x0D8C, 0x000F)); // CM119
+        assert!(is_gpio_codec(0x0D8C, 0x0012)); // CM108B
+        assert!(is_gpio_codec(0x0D8C, 0x013A)); // CM119A
+        assert!(is_gpio_codec(0x0C76, 0x1607)); // SSS1623
+        assert!(is_gpio_codec(0x1209, 0x7388)); // AIOC
+        assert!(!is_gpio_codec(0x0D8C, 0x0100));
+        assert!(!is_gpio_codec(0x046D, 0x0008)); // another maker's product 8
+    }
+
+    #[test]
+    fn a_windows_path_names_the_device_and_not_one_of_its_collections() {
+        let one = r"\\?\hid#vid_0d8c&pid_0008&mi_03&col01#7&1a2b&0&0000#{4d1e55b2}";
+        let two = r"\\?\hid#vid_0d8c&pid_0008&mi_03&col02#7&1a2b&0&0000#{4d1e55b2}";
+        assert_eq!(instance_key(one), instance_key(two));
+        assert_ne!(instance_key("/dev/hidraw0"), instance_key("/dev/hidraw1"));
+    }
+
+    #[test]
+    fn a_pin_the_codecs_do_not_have_is_refused() {
+        let error = GpioPtt::open(None, 9).expect_err("no such pin");
+        assert!(error.to_string().contains("1–8"), "{error}");
+    }
 }

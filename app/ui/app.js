@@ -409,6 +409,41 @@ const peerHistory = [];
 const framesSeen = [];
 let lastPeer = null;
 
+// The readings survive a reload of the page: the chart's ten minutes of SNR, what the
+// other station reported, and the last frames — kept per browser, and dropped once
+// they are older than the chart shows.
+const HISTORY_KEY = "aether.history";
+let historySaveTimer = null;
+
+function loadHistory() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "null");
+    if (!kept) return;
+    const oldest = Date.now() - SNR_SPAN_MS;
+    for (const point of kept.snr ?? []) if (point.at >= oldest) snrHistory.push(point);
+    for (const point of kept.peer ?? []) if (point.at >= oldest) peerHistory.push(point);
+    for (const frame of kept.frames ?? []) if (frame.at >= oldest) framesSeen.push(frame);
+    lastPeer = peerHistory.at(-1)?.snr ?? null;
+  } catch {
+    // nothing kept, or nothing readable: the chart starts empty, as it always did
+  }
+}
+
+function saveHistory() {
+  if (historySaveTimer) return;
+  historySaveTimer = setTimeout(() => {
+    historySaveTimer = null;
+    try {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({ snr: snrHistory, peer: peerHistory, frames: framesSeen }),
+      );
+    } catch {
+      // a browser that keeps nothing keeps nothing
+    }
+  }, 2000);
+}
+
 function onFrame(frame) {
   const at = Date.now();
   snrHistory.push({ at, snr: frame.snr_db, decoded: frame.decoded === true, kind: frame.kind });
@@ -420,6 +455,7 @@ function onFrame(frame) {
     frame.confidence === undefined ? "—" : Number(frame.confidence).toFixed(2);
   if (frame.cfo_hz !== undefined) applyOffset(frame.cfo_hz);
   if (frame.snr_db !== undefined) $("v-snr").textContent = `${Number(frame.snr_db).toFixed(1)} dB`;
+  saveHistory();
   if (panelShown("status")) drawSnrChart();
   if (panelShown("diagnostics")) {
     renderFrames();
@@ -433,6 +469,7 @@ function notePeer(snr) {
   const at = Date.now();
   peerHistory.push({ at, snr });
   while (peerHistory.length && peerHistory[0].at < at - SNR_SPAN_MS) peerHistory.shift();
+  saveHistory();
 }
 
 function panelShown(name) {
@@ -1340,7 +1377,11 @@ async function loadDevices() {
     }
     select.addEventListener("change", writeConfig);
   };
-  devicesSeen = { devices: devices.devices ?? [], serial_ports: devices.serial_ports ?? [] };
+  devicesSeen = {
+    devices: devices.devices ?? [],
+    serial_ports: devices.serial_ports ?? [],
+    gpio_interfaces: devices.gpio_interfaces ?? [],
+  };
   const all = devicesSeen.devices;
   fill($("dev-in"), all.filter((d) => d.input), "system default");
   fill($("dev-out"), all.filter((d) => d.output), "system default");
@@ -1353,12 +1394,18 @@ async function loadDevices() {
         name: p.name,
         label: p.description ? `${p.name} — ${p.description}` : p.name,
       })),
+      // a CM108-class interface keys through its own codec: no serial port at all
+      ...devicesSeen.gpio_interfaces.map((i) => ({
+        name: `gpio:${i.path}`,
+        label: `${i.name} — keys by GPIO`,
+      })),
       { name: "rigctld", label: "rigctld — Hamlib rig control over the network" },
     ],
     "none (VOX or receive only)",
   );
   $("dev-ptt").addEventListener("change", showKeyingFields);
   $("ptt-line").addEventListener("change", showKeyingFields);
+  $("ptt-gpio").addEventListener("change", writeConfig);
   $("ptt-protocol").addEventListener("change", showKeyingFields);
   showKeyingFields();
   $("dev-in").addEventListener("change", checkRates);
@@ -1409,7 +1456,15 @@ async function loadConfig() {
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
   const ptt = liveConfig.ptt ?? {};
-  select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
+  if (ptt.kind === "cm108") {
+    // the file may name the interface or leave it to the first one found
+    const listed = [...$("dev-ptt").options].map((o) => o.value).filter((v) => v.startsWith("gpio:"));
+    const wanted = `gpio:${ptt.device ?? ""}`;
+    select($("dev-ptt"), listed.includes(wanted) ? wanted : (listed[0] ?? ""));
+    select($("ptt-gpio"), String(ptt.gpio ?? 3));
+  } else {
+    select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
+  }
   select($("ptt-line"), ptt.kind === "cat" ? "cat" : (ptt.line ?? "rts"));
   if (ptt.address) $("ptt-address").value = ptt.address;
   if (ptt.kind === "cat") {
@@ -1490,8 +1545,10 @@ function writeConfig() {
 /// The line, address and CAT fields belong to one keying method each; show what applies.
 function showKeyingFields() {
   const chosen = $("dev-ptt").value;
-  const onPort = chosen !== "" && chosen !== "rigctld";
+  const gpio = chosen.startsWith("gpio:");
+  const onPort = chosen !== "" && chosen !== "rigctld" && !gpio;
   $("ptt-line").hidden = !onPort;
+  $("ptt-gpio").hidden = !gpio;
   $("ptt-address").hidden = chosen !== "rigctld";
   const cat = onPort && $("ptt-line").value === "cat";
   $("cat-row").hidden = !cat;
@@ -1506,6 +1563,13 @@ function keyingChanges() {
     return {
       "ptt.kind": "rigctld",
       "ptt.address": $("ptt-address").value.trim() || "127.0.0.1:4532",
+    };
+  }
+  if (chosen.startsWith("gpio:")) {
+    return {
+      "ptt.kind": "cm108",
+      "ptt.device": chosen.slice(5),
+      "ptt.gpio": Number($("ptt-gpio").value) || 3,
     };
   }
   if ($("ptt-line").value === "cat") {
@@ -1627,6 +1691,13 @@ const PROFILES = [
     note: "Yaesu's USB port is two serial ports: the Standard one keys on RTS (chosen here when it can be told apart; the rig's PTT select for the mode must be RTS), or pick the Enhanced one with 'CAT command' to key over CAT and record the frequency.",
   },
   {
+    name: "DRA, URI, RA-40 or another CM108 interface (keys by GPIO)",
+    match: /C-Media|USB PnP Sound Device|USB Audio Device/i,
+    ptt: "gpio",
+    line: "rts",
+    note: "The interface's codec carries the audio and keys the radio through its GPIO pin (3 on the DRA and URI boards), so there is no serial port to choose.",
+  },
+  {
     name: "SignaLink USB",
     match: /USB Audio Device|SignaLink/i,
     ptt: "none",
@@ -1642,7 +1713,7 @@ const PROFILES = [
   },
 ];
 
-let devicesSeen = { devices: [], serial_ports: [] };
+let devicesSeen = { devices: [], serial_ports: [], gpio_interfaces: [] };
 
 // Whether the operator has picked an interface themselves. The list is rebuilt whenever
 // the machine's devices are listed again — a device event, a reconnect — and a rebuild
@@ -1677,6 +1748,12 @@ function guessProfile() {
     const owner = PROFILES.findIndex((p) => p.match && p.match.test(configured));
     if (owner >= 0) return owner;
   }
+  // a codec with a keying pin says what the interface is better than its audio name,
+  // which a Digirig and a DRA share
+  if (devicesSeen.gpio_interfaces.length > 0) {
+    const gpio = PROFILES.findIndex((p) => p.ptt === "gpio");
+    if (gpio >= 0) return gpio;
+  }
   const present = PROFILES.findIndex(
     (p) => p.match && devicesSeen.devices.some((d) => p.match.test(d.name)),
   );
@@ -1695,6 +1772,9 @@ function applyProfile() {
   checkRates();
   if (profile.ptt === "none") {
     $("dev-ptt").value = "";
+  } else if (profile.ptt === "gpio") {
+    const first = devicesSeen.gpio_interfaces[0];
+    if (first) $("dev-ptt").value = `gpio:${first.path}`;
   } else if (profile.port && $("dev-ptt").value === "") {
     // the profile knows which of the interface's ports keys, by what the driver calls it
     const keying = devicesSeen.serial_ports.find((p) => profile.port.test(p.description));
@@ -1986,6 +2066,8 @@ function wire() {
     $(id).addEventListener("input", checkAppSettings);
   }
   wireWaterfallControls();
+  loadHistory();
+  renderFrames(); // what was kept shows before the first new frame does
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);
@@ -2127,6 +2209,12 @@ function asToml(changes) {
   lines.push(`tx_level = ${changes["audio.tx_level"] ?? 0.25}`, "", "[ptt]");
   if (changes["ptt.kind"] === "rigctld") {
     lines.push(`kind = "rigctld"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:4532")}`);
+  } else if (changes["ptt.kind"] === "cm108") {
+    lines.push(
+      `kind = "cm108"`,
+      `device = ${quote(changes["ptt.device"])}`,
+      `gpio = ${changes["ptt.gpio"] ?? 3}`,
+    );
   } else if (changes["ptt.kind"] === "cat") {
     lines.push(
       `kind = "cat"`,

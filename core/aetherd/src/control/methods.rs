@@ -176,6 +176,7 @@ pub fn device_inventory() -> Value {
         Ok(devices) => json!({
             "devices": devices.iter().map(device_json).collect::<Vec<_>>(),
             "serial_ports": crate::ptt::list_serial_ports(),
+            "gpio_interfaces": crate::ptt::list_gpio_interfaces(),
         }),
         Err(error) => json!({ "error": error.to_string() }),
     }
@@ -644,6 +645,7 @@ fn devices(id: Option<String>) -> Response {
             json!({
                 "devices": devices.iter().map(device_json).collect::<Vec<_>>(),
                 "serial_ports": crate::ptt::list_serial_ports(),
+                "gpio_interfaces": crate::ptt::list_gpio_interfaces(),
             }),
         ),
         Err(error) => Response::failed(

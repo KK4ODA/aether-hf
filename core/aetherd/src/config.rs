@@ -61,6 +61,22 @@ pub enum PttConfig {
         #[serde(default)]
         source: CatSource,
     },
+    /// A CM108-class sound-card interface's GPIO pin — the DRA, URI, RA-40 and most
+    /// "USB radio interface" boards built on a C-Media codec. The codec that carries the
+    /// audio also keys the radio, so there is no serial port at all.
+    Cm108 {
+        /// Which interface, when there is more than one: the path `aetherd --list-ports`
+        /// prints, or part of the name it prints. Unset means the first one found.
+        #[serde(default)]
+        device: Option<String>,
+        /// The pin wired to PTT, 1–8. The DRA and URI boards use 3.
+        #[serde(default = "default_gpio")]
+        gpio: u8,
+    },
+}
+
+fn default_gpio() -> u8 {
+    3
 }
 
 fn default_rigctld() -> String {
@@ -659,6 +675,13 @@ impl Config {
                 ));
             }
         }
+        if let PttConfig::Cm108 { gpio, .. } = &self.ptt
+            && !(1..=8).contains(gpio)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[ptt] gpio must be 1–8, not {gpio}; the DRA and URI boards key on 3"
+            )));
+        }
         if self.sim.listen.is_some() && self.sim.connect.is_some() {
             return Err(ConfigError::Invalid(
                 "[sim] listen and connect are alternatives; set one of them".into(),
@@ -958,6 +981,9 @@ tx_level = 0.25
 # baud = 38400                        # the rate set in the radio's menu
 # civ_address = 148                   # icom only: the CI-V address (0x94 = 148)
 # source = "data"                     # yaesu only: transmit from data | mic
+# kind = "cm108"                      # a DRA, URI or other CM108-class interface's GPIO pin
+# device = "..."                      # which one, when there are several: its path or name
+# gpio = 3                            # the pin wired to PTT (3 on the DRA and URI boards)
 kind = "rigctld"                      # Hamlib's rig control daemon
 address = "127.0.0.1:4532"
 
@@ -1090,6 +1116,24 @@ mod tests {
             PttConfig::Rigctld {
                 address: "127.0.0.1:4532".into()
             }
+        );
+
+        let gpio = Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"cm108\"\n").expect("cm108");
+        assert_eq!(
+            gpio.ptt,
+            PttConfig::Cm108 {
+                device: None,
+                gpio: 3
+            }
+        );
+        let named = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"cm108\"\ndevice = \"DRA-36\"\ngpio = 4\n",
+        )
+        .expect("cm108 named");
+        assert!(matches!(named.ptt, PttConfig::Cm108 { gpio: 4, .. }));
+        assert!(
+            Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"cm108\"\ngpio = 9\n").is_err(),
+            "a pin the codecs do not have"
         );
     }
 

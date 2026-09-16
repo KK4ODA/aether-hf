@@ -63,7 +63,7 @@ xattr -dr com.apple.quarantine "/Applications/Aether HF.app"
 and open it normally after that. As on Windows, `SHA256SUMS` on the release page lets you
 check the download (`shasum -a 256 aether-hf_<version>_aarch64.dmg`). The configuration is
 `~/.config/aether-hf/station.toml`; the modem's audio goes through Core Audio, keying
-through a serial line or CAT as on the other systems. Nobody has run this build on a Mac
+through a serial line, CAT or a CM108-class interface's GPIO pin as on the other systems. Nobody has run this build on a Mac
 with a radio yet — a report, good or bad, is worth an issue.
 
 ### Updating

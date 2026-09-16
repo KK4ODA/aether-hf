@@ -128,6 +128,16 @@ fn parse_args() -> Result<Option<Args>, String> {
                 for port in ports {
                     println!("{:<12} {}", port.name, port.description);
                 }
+                let interfaces = aetherd::ptt::list_gpio_interfaces();
+                if !interfaces.is_empty() {
+                    println!();
+                    println!(
+                        "CM108-class interfaces, keyed through a GPIO pin ([ptt] kind = \"cm108\"):"
+                    );
+                    for interface in interfaces {
+                        println!("{}\n    device = {:?}", interface.name, interface.path);
+                    }
+                }
                 return Ok(None);
             }
             "--dry-run" => args.dry_run = true,
@@ -795,6 +805,9 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
                 },
             };
             Box::new(aetherd::ptt::CatPtt::open(port, *baud, protocol)?)
+        }
+        PttConfig::Cm108 { device, gpio } => {
+            Box::new(aetherd::ptt::GpioPtt::open(device.as_deref(), *gpio)?)
         }
     })
 }

@@ -350,6 +350,16 @@
                   <option value="both">RTS and DTR</option>
                   <option value="cat">CAT command</option>
                 </select>
+                <select id="ptt-gpio" aria-label="Which GPIO pin keys the radio" hidden>
+                  <option value="1">GPIO 1</option>
+                  <option value="2">GPIO 2</option>
+                  <option value="3" selected>GPIO 3</option>
+                  <option value="4">GPIO 4</option>
+                  <option value="5">GPIO 5</option>
+                  <option value="6">GPIO 6</option>
+                  <option value="7">GPIO 7</option>
+                  <option value="8">GPIO 8</option>
+                </select>
                 <input id="ptt-address" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
               </div>
               <div class="row" id="cat-row" hidden>
@@ -376,7 +386,9 @@
                 keyed over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> is the
                 other way to both. A radio's USB connection often shows two ports: Yaesu's
                 <em>Enhanced</em> port carries CAT and its <em>Standard</em> port the RTS line;
-                Icom's single port carries both. Choose <em>none</em> for a VOX interface such
+                Icom's single port carries both. A DRA, URI or other CM108-class interface
+                keys through its codec's own GPIO pin (3 on those boards) and is listed here
+                by name, with no serial port. Choose <em>none</em> for a VOX interface such
                 as a SignaLink, or to listen only.
               </p>
               <p class="note warn" id="rate-note" role="alert" hidden></p>
