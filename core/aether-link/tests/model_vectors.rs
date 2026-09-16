@@ -19,8 +19,8 @@ use aether_link::{
         encode_data, pack_callsign, unpack_callsign,
     },
     rate::{
-        AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, RateController,
-        usable_modes, usable_modes_of,
+        AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
+        RateController, usable_modes, usable_modes_by_rate,
     },
 };
 use serde_json::Value;
@@ -116,6 +116,19 @@ fn the_narrow_threshold_table_matches_the_model() {
         .map(|v| v.as_u64().expect("bytes") as usize)
         .collect();
     assert_eq!(NARROW_PAYLOAD_BYTES.to_vec(), payload);
+    let frame_s: Vec<f64> = doc["narrow_frame_s"]
+        .as_array()
+        .expect("narrow frame air times")
+        .iter()
+        .map(|v| v.as_f64().expect("seconds"))
+        .collect();
+    assert_eq!(NARROW_FRAME_S.len(), frame_s.len());
+    for (got, want) in NARROW_FRAME_S.iter().zip(&frame_s) {
+        assert!(
+            (got - want).abs() < 1e-9,
+            "narrow frame air time {got} vs {want}"
+        );
+    }
     let expected_modes: Vec<usize> = doc["narrow_usable_modes"]
         .as_array()
         .expect("narrow usable modes")
@@ -123,7 +136,11 @@ fn the_narrow_threshold_table_matches_the_model() {
         .map(|v| v.as_u64().expect("mode") as usize)
         .collect();
     assert_eq!(
-        usable_modes_of(&NARROW_AWGN_THRESHOLD_DB, &NARROW_PAYLOAD_BYTES),
+        usable_modes_by_rate(
+            &NARROW_AWGN_THRESHOLD_DB,
+            &NARROW_PAYLOAD_BYTES,
+            &NARROW_FRAME_S
+        ),
         expected_modes
     );
 }

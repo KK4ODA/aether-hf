@@ -34,6 +34,7 @@ fn literal(values: &[f64]) -> String {
 }
 
 /// One waveform's block of the JSON as Rust statics under `prefix`, plus its `Tables`.
+#[allow(clippy::too_many_lines)]
 fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize) {
     let sc_len = doc["sc_length"].as_u64().expect("sc_length") as usize;
     let chip_len = doc["chip_length"].as_u64().expect("chip_length") as usize;
@@ -75,6 +76,45 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
         }
     }
     out.push_str("];\n");
+    // The floor family (ADR-0009): its preamble sequences occupy every carrier and its chips
+    // run over every full pilot symbol of the floor data layout; empty on an air without one.
+    let floor_sc_len = doc["floor_sc_length"].as_u64().unwrap_or(0) as usize;
+    let floor_chip_len = doc["floor_chip_length"].as_u64().unwrap_or(0) as usize;
+    let floor_modes = doc["floor_modes"].as_u64().unwrap_or(0) as usize;
+    let control_mode_index = doc["control_mode_index"].as_u64().unwrap_or(0) as usize;
+    let floor_threshold = doc["floor_acquisition_threshold"].as_f64().unwrap_or(1.0);
+    for (name, key) in [("FLOOR_SC_DATA", "DATA"), ("FLOOR_SC_CONTROL", "CONTROL")] {
+        let signs = doc["floor_schmidl_cox"][key]
+            .as_str()
+            .map_or_else(Vec::new, |hex| unpack_signs(hex, floor_sc_len));
+        let _ = writeln!(
+            out,
+            "static {prefix}_{name}: [f64; {}] = [{}];",
+            signs.len(),
+            literal(&signs)
+        );
+    }
+    let floor_chip_count = if floor_chip_len == 0 {
+        0
+    } else {
+        n_rv * n_modes
+    };
+    let _ = writeln!(
+        out,
+        "static {prefix}_FLOOR_MODE_CHIPS: [f64; {}] = [",
+        floor_chip_count * floor_chip_len
+    );
+    if floor_chip_len > 0 {
+        for rv in 0..n_rv {
+            for mode in 0..n_modes {
+                let hex = doc["floor_mode_chips"][format!("{rv}_{mode}")]
+                    .as_str()
+                    .expect("floor chip sequence");
+                let _ = writeln!(out, "    {}", literal(&unpack_signs(hex, floor_chip_len)));
+            }
+        }
+    }
+    out.push_str("];\n");
     let pilots = doc["pilot_sequence"].as_array().expect("pilot_sequence");
     let _ = writeln!(
         out,
@@ -96,7 +136,13 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
          chip_correlation_bound: {:?},\n    acquisition_threshold: {:?},\n    \
          even_carriers: &{prefix}_EVEN_CARRIERS,\n    sc_data: &{prefix}_SC_DATA,\n    \
          sc_control: &{prefix}_SC_CONTROL,\n    mode_chips: &{prefix}_MODE_CHIPS,\n    \
-         pilot_sequence: &{prefix}_PILOT_SEQUENCE,\n}};",
+         pilot_sequence: &{prefix}_PILOT_SEQUENCE,\n    \
+         floor_sc_length: {floor_sc_len},\n    floor_chip_length: {floor_chip_len},\n    \
+         floor_modes: {floor_modes},\n    control_mode_index: {control_mode_index},\n    \
+         floor_acquisition_threshold: {floor_threshold:?},\n    \
+         floor_sc_data: &{prefix}_FLOOR_SC_DATA,\n    \
+         floor_sc_control: &{prefix}_FLOOR_SC_CONTROL,\n    \
+         floor_mode_chips: &{prefix}_FLOOR_MODE_CHIPS,\n}};",
         doc["chip_correlation_bound"]
             .as_f64()
             .expect("chip_correlation_bound"),
@@ -138,7 +184,18 @@ fn main() {
              pub sc_control: &'static [f64],\n    \
              /// Row-major: sequence `i` is `[i * chip_length .. (i + 1) * chip_length]`.\n    \
              pub mode_chips: &'static [f64],\n    \
-             pub pilot_sequence: &'static [(f64, f64)],\n\
+             pub pilot_sequence: &'static [(f64, f64)],\n    \
+             /// The floor family (ADR-0009); zero-length on an air without one.\n    \
+             pub floor_sc_length: usize,\n    \
+             pub floor_chip_length: usize,\n    \
+             pub floor_modes: usize,\n    \
+             pub control_mode_index: usize,\n    \
+             pub floor_acquisition_threshold: f64,\n    \
+             /// On every active carrier, not the even ones only.\n    \
+             pub floor_sc_data: &'static [f64],\n    \
+             pub floor_sc_control: &'static [f64],\n    \
+             /// Row-major like `mode_chips`, `floor_chip_length` chips a sequence.\n    \
+             pub floor_mode_chips: &'static [f64],\n\
          }\n\n",
     );
     let waveforms = doc["waveforms"].as_object().expect("waveforms");

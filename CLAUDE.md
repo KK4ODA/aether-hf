@@ -247,8 +247,31 @@ burst on the ~50 dB loopback decode nothing; open question for P9-1). `initial_m
 the floor under it. 2 kB sessions −24 % (wide) / −9 % (narrow); real modem at 12 dB
 29 → 15 s. A worktree at HEAD (`git worktree add C:/Dev/aether-before HEAD`) plus
 `python -m uv run --project model python C:/Dev/aether-before/tools/bench_link.py …` is
-how a "before" number is taken without stashing. Next
-the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
+how a "before" number is taken without stashing. **The floor** (ADR-0009, P9-4, same day,
+model first then the port): the narrow air has a *floor frame family* — `NARROW_FLOOR_LONG`
+(8 preamble symbols + 128 data, 4.2 s) and `NARROW_FLOOR_SHORT` (8 + 64, 2.2 s), eight
+identical symbols of the family's own PN sequences (`FLOOR_SC_SEEDS`, drawn on *all twelve*
+carriers: a data symbol correlates with a six-carrier reference at up to 0.75 once the bank
+has searched over CFO, half that with a twelve-carrier one), 128 chips over sixteen pilot
+symbols, ±3-symbol pilot smoothing — and a thirteen-mode table: 0 QPSK 1/10·floor (19 B),
+1 QPSK ⅕·floor (41 B), 2 QPSK ⅓·LONG (15 B), 3 QPSK ½·LONG = the control/connect/beacon/
+probe mode (`control_mode_index`), 4–12 the old 1–9. The detector runs the ordinary pass
+first (each candidate checked for the even-carriers-only symbol's two identical halves,
+`HALF_SYMBOL_MIN`) and the floor pass on what is left (the seven-window averaged *floor
+statistic*, threshold 0.32 from the noise maximum, coherent sub-grid timing refinement,
+seven-lag repetition check, ordinary spans masked); carrier-energy tests and preamble-length
+signalling were tried and rejected (see the ADR). Link layer: `PhyTiming` carries
+`floor_data_frame_s`/`floor_control_frame_s`/`floor_modes` and `frame_s(frame)`; `TxFrame`
+and `SoftFrame` carry `floor`; control frames go in the family of what the station sends
+(ISS) or last decoded (IRS); one family per burst (the other family's retransmissions go
+alone); HARQ buffers remember their mode; a connect request alternates families from the
+third try; `usable_modes` compares bytes per *second*; the codec refuses the all-zero
+block and session ids are 1–255. Measured through the real modem: floor frame acquired
+19/20 at −12 dB, decoded 20/20 at −11; a session completes at −10 dB AWGN (nothing
+connected below −5.5 before). Tools: `tools/bench_floor.py` (acquisition/decode/genie per
+frame). Found on the way: `test_the_first_mode_keeps_a_step_in_hand` had been red on
+master since ADR-0008 (CI was failing) — fixed to `first_mode_back`. Next:
+P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
 and Poor. The air (P6-6) runs alongside: cable → ground wave now at 2300 Hz, P2P after

@@ -13,3 +13,4 @@ context → decision → alternatives considered → consequences.
 | [0006](0006-link-probe.md) | The link probe — a beacon with a destination, answered with the SNR heard | accepted |
 | [0007](0007-faster-climb.md) | The faster climb — a learned margin is given back at an accelerating rate | accepted |
 | [0008](0008-faster-start.md) | The faster start — a session begins where the connect frames measured it | accepted |
+| [0009](0009-the-floor.md) | The floor — a frame family for the SNR region below the mode table | accepted |

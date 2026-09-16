@@ -898,8 +898,11 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
             json!({
                 "index": mode.index,
                 "name": mode.name(),
-                "payload_bytes": mode.payload_bytes(&air.long),
-                "net_bit_rate": mode.net_bit_rate(&air.long),
+                // on the layout the mode goes out on: a floor mode's frame is four times
+                // as long as the ordinary one (ADR-0009)
+                "payload_bytes": mode.payload_bytes(&air.data_layout(mode.index)),
+                "net_bit_rate": mode.net_bit_rate(&air.data_layout(mode.index)),
+                "floor": air.is_floor(mode.index),
                 "threshold_db": thresholds[mode.index],
             })
         })

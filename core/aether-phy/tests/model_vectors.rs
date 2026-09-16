@@ -354,6 +354,27 @@ fn a_frame_survives_the_full_round_trip_for_every_mode() {
     }
 }
 
+/// The mode and layout a waveform case was generated with: the ordinary layouts by name,
+/// and the floor family's (ADR-0009) where the air has one.
+fn mode_and_layout(
+    air: &aether_phy::modes::AirInterface,
+    case: &serde_json::Value,
+) -> (aether_phy::modes::Mode, aether_phy::modes::FrameLayout) {
+    match case["layout"].as_str().expect("layout") {
+        "long" => (air.modes[int(case, "mode")], air.long),
+        "short" => (air.control_mode(), air.short),
+        "floor-long" => (
+            air.modes[int(case, "mode")],
+            air.floor_long.expect("floor layout"),
+        ),
+        "floor-short" => (
+            air.control_mode_for(true),
+            air.floor_short.expect("floor layout"),
+        ),
+        other => panic!("unknown layout {other}"),
+    }
+}
+
 #[test]
 fn whole_frames_match_the_model() {
     // The strongest check of the physical layer: build the same frame the model builds and
@@ -397,11 +418,7 @@ fn whole_frames_match_the_model() {
             int(case, "rv"),
             case["layout"].as_str().unwrap_or("?")
         );
-        let (mode, layout) = match case["layout"].as_str().expect("layout") {
-            "long" => (air.modes[int(case, "mode")], air.long),
-            "short" => (air.control_mode(), air.short),
-            other => panic!("unknown layout {other}"),
-        };
+        let (mode, layout) = mode_and_layout(&air, case);
         let peak_reduced = case["peak_reduced"].as_bool().expect("peak_reduced");
         let label = format!(
             "{label}, peak reduction {}",

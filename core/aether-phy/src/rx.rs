@@ -25,7 +25,7 @@
 
 use crate::{
     constellation::Complex,
-    modes::{AirInterface, FrameLayout, LONG, PREAMBLE_SYMBOLS, SHORT, air_interface},
+    modes::{AirInterface, FrameLayout, LONG, SHORT, air_interface},
     ofdm::{DemodError, OfdmDemodulator},
     preamble::{FrameType, Preamble},
     waveform::{WIDE_2300, WaveformParams},
@@ -84,6 +84,9 @@ pub struct FrameSync {
     pub cfo_hz: f64,
     /// Which container it is.
     pub frame_type: FrameType,
+    /// The frame is of the floor family (ADR-0009): an eight-symbol preamble of the floor
+    /// sequences and the floor layouts; `start` is then the first of the eight.
+    pub floor: bool,
 }
 
 /// One demodulated frame.
@@ -158,7 +161,9 @@ impl FrameReceiver {
     /// Where a frame starts and ends in the sample stream.
     #[must_use]
     pub fn frame_span(&self, sync: &FrameSync) -> (usize, usize) {
-        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
+        let layout = self
+            .air
+            .layout_for_family(sync.frame_type == FrameType::Data, sync.floor);
         (sync.start, sync.start + layout.samples())
     }
 
@@ -179,10 +184,15 @@ impl FrameReceiver {
         sync: &FrameSync,
         hypothesis: Option<usize>,
     ) -> Result<ReceivedFrame, DemodError> {
-        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
+        let layout = self
+            .air
+            .layout_for_family(sync.frame_type == FrameType::Data, sync.floor);
         let period = self.params.symbol_samples();
         let n_sym = layout.total_symbols();
-        let pre = PREAMBLE_SYMBOLS;
+        let pre = layout.preamble_symbols;
+        // the comb-pilot estimate is averaged over ±radius symbols: ±1 on the ordinary
+        // layouts, ±3 on the floor layouts (ADR-0009)
+        let radius = layout.pilot_smoothing;
         let map = self.demodulator.map();
         let pilot_carriers = map.pilot_carriers().to_vec();
         let data_carriers = map.data_carriers().to_vec();
@@ -248,8 +258,8 @@ impl FrameReceiver {
         }
         let mut smoothed = comb.clone();
         for (symbol, row) in smoothed.iter_mut().enumerate().skip(pre) {
-            let low = symbol.saturating_sub(1).max(pre);
-            let high = (symbol + 1).min(n_sym - 1);
+            let low = symbol.saturating_sub(radius).max(pre);
+            let high = (symbol + radius).min(n_sym - 1);
             let count = (high - low + 1) as f64;
             for (slot, value) in row.iter_mut().enumerate() {
                 let mut sum = (0.0, 0.0);
@@ -312,7 +322,7 @@ impl FrameReceiver {
             let used = observed.len();
             let mut metrics = vec![0.0f64; self.preamble.n_sequences()];
             for (index, metric) in metrics.iter_mut().enumerate() {
-                let sequence = self.preamble.chip_sequence(index);
+                let sequence = self.preamble.chip_sequence_for(index, &layout);
                 let mut accumulator = (0.0, 0.0);
                 for (slot, &chip) in sequence.iter().take(used).enumerate() {
                     accumulator = c::add(accumulator, c::scale(observed[slot], chip));
@@ -335,7 +345,9 @@ impl FrameReceiver {
         for (pilot_number, &symbol) in pilot_symbols.iter().enumerate() {
             known[symbol].copy_from_slice(map.pilot_sequence());
             if sync.frame_type == FrameType::Data {
-                let chips = self.preamble.mode_chips(mode, pilot_number, rv);
+                let chips = self
+                    .preamble
+                    .mode_chips_for(mode, pilot_number, rv, &layout);
                 for (&carrier, &chip) in data_carriers.iter().zip(&chips) {
                     known[symbol][carrier] = (chip, 0.0);
                 }
@@ -370,7 +382,8 @@ impl FrameReceiver {
         }
 
         // 5. noise variance, per symbol and frame-wide
-        let bias = 3.0 / 2.0; // undo the three-tap averaging bias
+        // undo the (2r+1)-tap averaging bias: 3/2 for the ordinary ±1
+        let bias = (2 * radius + 1) as f64 / (2 * radius) as f64;
         let mut per_symbol = Vec::with_capacity(data_symbols.len());
         let mut total = 0.0f64;
         let mut count = 0usize;
@@ -480,6 +493,7 @@ mod tests {
                 start: lead,
                 cfo_hz: 0.0,
                 frame_type: FrameType::Data,
+                floor: false,
             },
         )
     }
@@ -658,6 +672,7 @@ mod tests {
             start: 400,
             cfo_hz: 0.0,
             frame_type: FrameType::Control,
+            floor: false,
         };
 
         let rx = FrameReceiver::default();
@@ -720,6 +735,7 @@ mod tests {
             start: 0,
             cfo_hz: 0.0,
             frame_type: FrameType::Data,
+            floor: false,
         };
         assert!(rx.receive(&[(0.0, 0.0); 100], &sync, None).is_err());
     }

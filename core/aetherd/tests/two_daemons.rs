@@ -268,7 +268,7 @@ fn two_daemons_complete_a_session_at_500_hz() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
     let channel = free_port();
-    let radio = "bandwidth = 500\nmax_mode = 9\n";
+    let radio = "bandwidth = 500\nmax_mode = 12\n";
     let a = Daemon::start_with(
         &dir,
         "a",
@@ -287,8 +287,12 @@ fn two_daemons_complete_a_session_at_500_hz() {
     wait_for_port(b.control, "daemon b");
     let caps = a.call("capabilities", &json!({}))["result"].clone();
     assert_eq!(caps["bandwidth_hz"], 500, "{caps}");
-    assert_eq!(caps["modes"].as_array().map(Vec::len), Some(10));
-    assert_eq!(caps["modes"][0]["name"], "QPSK-1/2");
+    assert_eq!(caps["modes"].as_array().map(Vec::len), Some(13));
+    // the floor family (ADR-0009) leads the table; the control mode is QPSK 1/2 at 3
+    assert_eq!(caps["modes"][0]["name"], "QPSK-1/10");
+    assert_eq!(caps["modes"][0]["floor"], true);
+    assert_eq!(caps["modes"][3]["name"], "QPSK-1/2");
+    assert_eq!(caps["modes"][3]["floor"], false);
 
     let message = "At 500 Hz: the bandwidth peer-to-peer contacts are made in, end to end.";
     let connected = a.call("connect", &json!({"remote": "KK4XYZ"}));

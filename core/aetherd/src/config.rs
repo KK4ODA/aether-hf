@@ -1322,7 +1322,7 @@ mod tests {
         // the waveform is the modem: a change to it is a restart
         assert!(!Config::is_live("radio.bandwidth"));
         // a station switched to 500 Hz with nothing else touched runs every narrow mode:
-        // the wide default of 13 clamps to the narrow table's last, 9
+        // the wide default of 13 clamps to the narrow table's last, 12
         let narrow = Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\n")
             .expect("a narrow station");
         assert_eq!(
@@ -1330,7 +1330,7 @@ mod tests {
             Some(aether_phy::waveform::NARROW_500)
         );
         assert_eq!(narrow.radio.max_mode, 13);
-        assert_eq!(narrow.radio.fastest_mode(), 9);
+        assert_eq!(narrow.radio.fastest_mode(), 12);
         let wide =
             Config::parse("callsign = \"W4ODA\"\n[radio]\nmax_mode = 8\n").expect("a wide station");
         assert_eq!(wide.radio.fastest_mode(), 8);

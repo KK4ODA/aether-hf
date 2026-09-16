@@ -303,6 +303,12 @@ pub struct LinkEngine {
     disc_requested: bool,
     disc_tries: usize,
     connect_tries: usize,
+    /// Whether the last frame decoded from the peer came on a floor layout (ADR-0009): the
+    /// family our control frames answer in, and the layout a connect answer goes back on.
+    peer_floor: bool,
+    /// The mode of the last DATA frame decoded from the peer — what its next frames are
+    /// most likely to take on the air.
+    peer_mode: Option<usize>,
     /// The station a probe of ours is out to, until it answers or the timer fires.
     probing: Option<String>,
     waiting_for: Option<Waiting>,
@@ -310,7 +316,9 @@ pub struct LinkEngine {
     rx_base: u8,
     rx_buffer: Vec<(u8, Vec<u8>)>,
     max_seen: Option<u8>,
-    harq: Vec<(u8, HarqBuffer, usize)>,
+    /// Per sequence number: the soft information kept for combining, how many combines it
+    /// has been through, and the mode it was sent at — another mode is another codeword.
+    harq: Vec<(u8, HarqBuffer, usize, usize)>,
     burst: Vec<RxRecord>,
     burst_t0: Option<f64>,
     ack_history: Vec<AckSnapshot>,
@@ -337,10 +345,14 @@ fn rate_controller_for(timing: &PhyTiming) -> RateController {
     if timing.mode_threshold_db.is_empty() {
         RateController::default()
     } else {
-        RateController::for_table(
+        let frame_s: Vec<f64> = (0..timing.mode_threshold_db.len())
+            .map(|m| timing.data_frame_s_for(m))
+            .collect();
+        RateController::for_table_timed(
             RateConfig::default(),
             &timing.mode_threshold_db,
             &timing.data_capacity,
+            &frame_s,
         )
     }
 }
@@ -380,6 +392,8 @@ impl LinkEngine {
             disc_requested: false,
             disc_tries: 0,
             connect_tries: 0,
+            peer_floor: false,
+            peer_mode: None,
             probing: None,
             waiting_for: None,
             rx_base: 0,
@@ -558,7 +572,9 @@ impl LinkEngine {
         };
         self.my_call = mine;
         self.remote_call = remote_call.to_ascii_uppercase();
-        self.session = (self.backoff.next_unit() * 256.0) as u8;
+        // never 0: with kind DATA and sequence 0 an all-zero body would make an all-zero
+        // frame, which the PHY refuses (the all-zero codeword passes any CRC)
+        self.session = 1 + (self.backoff.next_unit() * 255.0) as u8;
         self.state = State::Connecting;
         self.role = Role::None;
         self.connect_tries = 0;
@@ -601,7 +617,7 @@ impl LinkEngine {
         self.stats.probes_sent += 1;
         self.send_probe(DataKind::Probe, &remote, None);
         self.probing = Some(remote);
-        let wait = self.response_wait(self.timing.data_frame_s, 0.0);
+        let wait = self.response_wait(self.timing.data_frame_s_for(self.robust_mode(false)), 0.0);
         let delay = self.tx_busy_until - self.now + wait;
         self.arm(Timer::Probe, delay);
         Ok(())
@@ -726,7 +742,7 @@ impl LinkEngine {
         {
             return;
         }
-        let deadline = t_start + self.timing.data_frame_s + self.irs_reply_delay();
+        let deadline = t_start + self.peer_data_frame_s() + self.irs_reply_delay();
         let current = self.deadline_of(Timer::Ack).unwrap_or(0.0);
         self.set_deadline(Timer::Ack, deadline.max(current));
     }
@@ -766,7 +782,7 @@ impl LinkEngine {
         let quiet = self
             .timing
             .preamble_detect_s
-            .unwrap_or(self.timing.data_frame_s);
+            .unwrap_or_else(|| self.peer_data_frame_s());
         quiet + self.config.burst_gap_s + self.timing.turnaround_s
     }
 
@@ -810,13 +826,7 @@ impl LinkEngine {
     // ── transmit helpers ──────────────────────────────────────────────
 
     fn transmit(&mut self, frames: Vec<TxFrame>) {
-        let duration_s: f64 = frames
-            .iter()
-            .map(|f| match f.container {
-                Container::Data => self.timing.data_frame_s,
-                Container::Control => self.timing.control_frame_s,
-            })
-            .sum();
+        let duration_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
         self.tx_busy_until = self.now + self.timing.tx_latency_s + duration_s;
         self.actions.push(Action::Transmit { frames, duration_s });
     }
@@ -845,7 +855,62 @@ impl LinkEngine {
             payload: frame.encode().to_vec(),
             mode: 0,
             rv: 0,
+            floor: self.control_floor(),
         }
+    }
+
+    /// The family our control frames go out in (ADR-0009): the sending station answers in
+    /// the family of the bursts it sends, the receiving one in the family of what it last
+    /// decoded — so an acknowledgement comes back the way the burst went out, and either
+    /// side can tell how long to wait for it.
+    fn control_floor(&self) -> bool {
+        if self.role == Role::Iss && self.state == State::Connected {
+            self.timing
+                .is_floor(self.recommended.min(self.config.max_mode))
+        } else {
+            self.peer_floor
+        }
+    }
+
+    /// The longest DATA frame the peer may send next: the family of what we recommended
+    /// or of what it last sent, whichever is longer.
+    fn peer_data_frame_s(&self) -> f64 {
+        let recommended = self.timing.data_frame_s_for(self.rate.recommend());
+        match self.peer_mode {
+            Some(mode) => recommended.max(self.timing.data_frame_s_for(mode)),
+            None => recommended,
+        }
+    }
+
+    /// The slowest mode of a family whose frame carries a connect body (with a DATA header
+    /// and length): what connect requests, answers, probes and beacons go out at. Falls
+    /// back to the ordinary family when the floor has no such mode.
+    ///
+    /// # Panics
+    /// If no mode carries a connect frame, which would make the protocol unusable.
+    fn robust_mode(&self, floor: bool) -> usize {
+        let need = CONNECT_BODY_BYTES + 5;
+        let found = (0..self.timing.data_capacity.len())
+            .find(|&m| self.timing.is_floor(m) == floor && self.timing.capacity(m) >= need);
+        match found {
+            Some(mode) => mode,
+            None if floor => self.robust_mode(false),
+            None => panic!("no mode carries a connect frame"),
+        }
+    }
+
+    /// Whether the next connect request goes out on the floor layout: the first two tries
+    /// are ordinary frames, then the two families alternate, so a station that can only
+    /// be heard at the floor is still reached (ADR-0009).
+    fn connect_floor(&self) -> bool {
+        self.timing.floor_modes > 0 && self.connect_tries >= 2 && (self.connect_tries - 2) % 2 == 0
+    }
+
+    /// Learn the family and mode the peer sends data in — from a frame that decoded, so a
+    /// false detection cannot switch our control frames to the wrong layout.
+    fn note_peer_data(&mut self, mode: usize) {
+        self.peer_floor = self.timing.is_floor(mode);
+        self.peer_mode = Some(mode);
     }
 
     fn data_frame(&self, record: &mut TxRecord) -> TxFrame {
@@ -862,6 +927,7 @@ impl LinkEngine {
             payload,
             mode: record.mode,
             rv: ((record.tx_count - 1) % 4) as u8,
+            floor: false,
         }
     }
 
@@ -882,11 +948,15 @@ impl LinkEngine {
             snr_db,
         };
         let Ok(encoded) = body.encode() else { return };
-        let capacity = self.timing.capacity(0);
-        assert!(
-            capacity >= CONNECT_BODY_BYTES + 5,
-            "mode 0 is too small for a connect frame"
-        );
+        // a request alternates families once the ordinary frame has gone unanswered; an
+        // answer goes back on the layout the request arrived on (ADR-0009)
+        let floor = if kind == DataKind::ConnectReq {
+            self.connect_floor()
+        } else {
+            self.peer_floor
+        };
+        let mode = self.robust_mode(floor);
+        let capacity = self.timing.capacity(mode);
         let header = DataHeader {
             kind,
             seq: 0,
@@ -896,17 +966,19 @@ impl LinkEngine {
         self.transmit(vec![TxFrame {
             container: Container::Data,
             payload,
-            mode: 0,
+            mode,
             rv: 0,
+            floor: false,
         }]);
 
         if kind == DataKind::ConnectReq {
             self.connect_tries += 1;
             // Backoff that widens with each retry, so two stations that called each other at
             // the same instant desynchronise instead of colliding on every attempt.
-            let span = (1 + self.connect_tries) as f64 * self.timing.data_frame_s;
+            let frame_s = self.timing.data_frame_s_for(mode);
+            let span = (1 + self.connect_tries) as f64 * frame_s;
             let jitter = self.backoff.next_unit() * span;
-            let wait = self.response_wait(self.timing.data_frame_s, 0.0) + jitter;
+            let wait = self.response_wait(frame_s, 0.0) + jitter;
             let delay = self.tx_busy_until - self.now + wait;
             self.arm(Timer::Connect, delay);
         }
@@ -933,7 +1005,8 @@ impl LinkEngine {
             caps: self.config.capabilities,
         };
         let Ok(encoded) = body.encode() else { return };
-        let capacity = self.timing.capacity(0);
+        let mode = self.robust_mode(false);
+        let capacity = self.timing.capacity(mode);
         let header = DataHeader {
             kind,
             seq: 0,
@@ -943,8 +1016,9 @@ impl LinkEngine {
         self.transmit(vec![TxFrame {
             container: Container::Data,
             payload,
-            mode: 0,
+            mode,
             rv: 0,
+            floor: false,
         }]);
     }
 
@@ -957,7 +1031,8 @@ impl LinkEngine {
     fn send_poll(&mut self) {
         let frame = self.control(ControlKind::Poll, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        self.wait_for(Waiting::Poll, self.timing.control_frame_s, 0.0);
+        let family = self.control_floor();
+        self.wait_for(Waiting::Poll, self.timing.control_frame_s_for(family), 0.0);
     }
 
     fn send_turn(&mut self) {
@@ -970,7 +1045,8 @@ impl LinkEngine {
         self.peer_request = PeerRequest::None;
         self.disarm(Timer::Keepalive);
         // the peer answers with its first burst (or a poll); we wait a full data frame
-        self.wait_for(Waiting::Turn, self.timing.data_frame_s, 0.0);
+        let frame_s = self.timing.data_frame_s_for(self.rate.recommend());
+        self.wait_for(Waiting::Turn, frame_s, 0.0);
         self.actions.push(Action::Event {
             name: "role",
             detail: "irs".into(),
@@ -982,7 +1058,8 @@ impl LinkEngine {
         self.state = State::Disconnecting;
         let frame = self.control(ControlKind::Disc, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        self.wait_for(Waiting::Disc, self.timing.control_frame_s, 0.0);
+        let family = self.control_floor();
+        self.wait_for(Waiting::Disc, self.timing.control_frame_s_for(family), 0.0);
     }
 
     fn on_response_timeout(&mut self) {
@@ -1079,12 +1156,27 @@ impl LinkEngine {
     }
 
     fn send_burst(&mut self) {
-        let mut seqs = self.unacked();
-        seqs.truncate(self.config.burst_frames);
         let mode = self.recommended.min(self.config.max_mode);
+        let mut family = self.timing.is_floor(mode);
+        let unacked = self.unacked();
+        // One family per burst (ADR-0009): the receiver infers a frame's slot from its air
+        // time, which needs every frame of the burst to be the same length. A frame keeps
+        // its codeword — and so its mode — across retransmissions, so when the oldest
+        // unacknowledged frame is of the other family the burst carries that family's
+        // retransmissions alone and new frames wait for the next one.
+        if let Some(&oldest) = unacked.first() {
+            family = self.timing.is_floor(self.mode_of(oldest));
+        }
+        let mut seqs: Vec<u8> = unacked
+            .into_iter()
+            .filter(|&s| self.timing.is_floor(self.mode_of(s)) == family)
+            .collect();
+        seqs.truncate(self.config.burst_frames);
+        let new_frames = family == self.timing.is_floor(mode);
         let capacity = data_capacity(self.timing.capacity(mode));
 
-        while seqs.len() < self.config.burst_frames.min(MAX_BURST)
+        while new_frames
+            && seqs.len() < self.config.burst_frames.min(MAX_BURST)
             && self.outstanding() < WINDOW
             && !self.tx_queue.is_empty()
         {
@@ -1130,7 +1222,19 @@ impl LinkEngine {
         self.disarm(Timer::Keepalive);
         self.transmit(frames);
         let responder = self.irs_reply_delay();
-        self.wait_for(Waiting::Ack, self.timing.control_frame_s, responder);
+        self.wait_for(
+            Waiting::Ack,
+            self.timing.control_frame_s_for(family),
+            responder,
+        );
+    }
+
+    /// The mode a transmit record was encoded at.
+    fn mode_of(&self, seq: u8) -> usize {
+        self.records
+            .iter()
+            .find(|r| r.seq == seq)
+            .map_or(0, |r| r.mode)
     }
 
     fn on_ack(&mut self, ack: &ControlFrame) {
@@ -1171,7 +1275,7 @@ impl LinkEngine {
 
     // ── receiving station: bursts, HARQ and acknowledgements ──────────
 
-    fn slot_of(&mut self, t_start: f64) -> usize {
+    fn slot_of(&mut self, t_start: f64, mode: usize) -> usize {
         match self.burst_t0 {
             None => {
                 self.burst_t0 = Some(t_start);
@@ -1179,7 +1283,7 @@ impl LinkEngine {
             }
             // ties to even, so a frame landing exactly on a slot boundary lands in the same
             // slot here as it does in the reference model
-            Some(t0) => ((t_start - t0) / self.timing.data_frame_s)
+            Some(t0) => ((t_start - t0) / self.timing.data_frame_s_for(mode))
                 .round_ties_even()
                 .max(0.0) as usize,
         }
@@ -1189,6 +1293,7 @@ impl LinkEngine {
         if matches!(self.state, State::Idle | State::Connecting) {
             let (payload, _) = frame.decode(None);
             if let Some(payload) = payload {
+                self.note_peer_data(frame.mode());
                 self.on_connect_payload(&payload, frame.snr_db());
             }
             return;
@@ -1223,8 +1328,15 @@ impl LinkEngine {
             self.turn_tries = 0;
             self.disarm(Timer::Wait);
         }
+        if frame.floor() != self.timing.is_floor(frame.mode()) {
+            // a floor frame whose chips name an ordinary mode, or the reverse: the chips are
+            // noise — a false detection, most likely — and so are its SNR and its soft bits;
+            // it is not part of any burst
+            self.stats.frames_failed += 1;
+            return;
+        }
         // part of the current burst: record it, decode what decodes, acknowledge after the gap
-        let slot = self.slot_of(frame.t_start());
+        let slot = self.slot_of(frame.t_start(), frame.mode());
         let mut record = RxRecord {
             slot,
             mode: frame.mode(),
@@ -1254,7 +1366,10 @@ impl LinkEngine {
             self.stats.frames_failed += 1;
             return;
         };
-        if let Some(index) = self.harq.iter().position(|(seq, _, _)| *seq == guess) {
+        // re-encoded at another mode: another codeword, start over
+        self.harq
+            .retain(|(seq, _, _, mode)| *seq != guess || *mode == frame.mode());
+        if let Some(index) = self.harq.iter().position(|(seq, _, _, _)| *seq == guess) {
             let previous = self.harq[index].1.clone();
             let combines = self.harq[index].2;
             let (combined, merged) = frame.decode(Some(&previous));
@@ -1264,12 +1379,12 @@ impl LinkEngine {
                 return;
             }
             self.harq[index] = if combines + 1 >= self.config.max_combines {
-                (guess, buffer, 0)
+                (guess, buffer, 0, frame.mode())
             } else {
-                (guess, merged, combines + 1)
+                (guess, merged, combines + 1, frame.mode())
             };
         } else {
-            self.harq.push((guess, buffer, 0));
+            self.harq.push((guess, buffer, 0, frame.mode()));
         }
         self.stats.frames_failed += 1;
     }
@@ -1338,6 +1453,7 @@ impl LinkEngine {
         }
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
+        self.note_peer_data(record.mode);
         self.arm(Timer::Link, self.config.link_timeout_s);
         self.stats.frames_received += 1;
 
@@ -1370,7 +1486,7 @@ impl LinkEngine {
         if !self.rx_buffer.iter().any(|(seq, _)| *seq == header.seq) {
             self.rx_buffer.push((header.seq, body));
         }
-        self.harq.retain(|(seq, _, _)| *seq != header.seq);
+        self.harq.retain(|(seq, _, _, _)| *seq != header.seq);
 
         while let Some(index) = self
             .rx_buffer
@@ -1378,7 +1494,7 @@ impl LinkEngine {
             .position(|(seq, _)| *seq == self.rx_base)
         {
             let (_, data) = self.rx_buffer.remove(index);
-            self.harq.retain(|(seq, _, _)| *seq != self.rx_base);
+            self.harq.retain(|(seq, _, _, _)| *seq != self.rx_base);
             self.rx_base = seq_after(self.rx_base, 1);
             self.stats.bytes_delivered += data.len();
             if !data.is_empty() {
@@ -1465,6 +1581,7 @@ impl LinkEngine {
         {
             return;
         }
+        self.peer_floor = frame.floor();
         self.arm(Timer::Link, self.config.link_timeout_s);
         match control.kind {
             ControlKind::Disc => {

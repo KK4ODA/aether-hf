@@ -23,6 +23,9 @@ fn timing(start_of_frame: bool) -> PhyTiming {
         preamble_detect_s: start_of_frame.then(|| 4.0 * LONG.waveform.symbol_period_s()),
         data_capacity: PAYLOAD_BYTES.to_vec(),
         mode_threshold_db: Vec::new(),
+        floor_data_frame_s: None,
+        floor_control_frame_s: None,
+        floor_modes: 0,
     }
 }
 
@@ -427,16 +430,25 @@ fn a_probe_is_not_answered_during_a_session_or_in_another_bandwidth() {
 
 #[test]
 fn the_rate_controller_steps_the_table_the_phy_hands_it() {
-    use aether_link::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, usable_modes_of};
+    use aether_link::rate::{
+        NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES, usable_modes_by_rate,
+    };
     // a PHY with its own mode table — the 500 Hz waveform — hands its thresholds over, and
     // the engine recommends nothing outside that table
     let mut t = timing(false);
     t.data_capacity = NARROW_PAYLOAD_BYTES.to_vec();
     t.mode_threshold_db = NARROW_AWGN_THRESHOLD_DB.to_vec();
-    let usable = usable_modes_of(&NARROW_AWGN_THRESHOLD_DB, &NARROW_PAYLOAD_BYTES);
-    assert!(usable.contains(&0) && usable.contains(&9) && !usable.contains(&3));
+    t.floor_modes = 2;
+    t.floor_data_frame_s = Some(NARROW_FRAME_S[0]);
+    t.floor_control_frame_s = Some(2.232);
+    let usable = usable_modes_by_rate(
+        &NARROW_AWGN_THRESHOLD_DB,
+        &NARROW_PAYLOAD_BYTES,
+        &NARROW_FRAME_S,
+    );
+    assert!(usable.contains(&0) && usable.contains(&12) && !usable.contains(&6));
     let config = LinkConfig {
-        max_mode: 9,
+        max_mode: 12,
         ..LinkConfig::default()
     };
     let (mut a, b) = pair(&t, &config);
@@ -449,11 +461,11 @@ fn the_rate_controller_steps_the_table_the_phy_hands_it() {
     assert_eq!(sim.delivered(1), message.as_slice());
     let highest = sim.modes_sent().iter().copied().max().unwrap_or(0);
     assert!(
-        highest <= 9,
+        highest <= 12,
         "a mode outside the narrow table was sent: {highest}"
     );
     assert!(
-        highest >= 5,
+        highest >= 8,
         "at 25 dB the controller climbs the narrow table: {highest}"
     );
 }
@@ -702,14 +714,12 @@ struct Wire {
     t_start: f64,
     t_end: f64,
     payload: Vec<u8>,
+    floor: bool,
 }
 
 impl Wire {
     fn carry(frame: &aether_link::TxFrame, t_start: f64, t: &PhyTiming) -> Self {
-        let duration = match frame.container {
-            aether_link::Container::Data => t.data_frame_s,
-            aether_link::Container::Control => t.control_frame_s,
-        };
+        let duration = t.frame_s(frame);
         Self {
             container: frame.container,
             mode: frame.mode,
@@ -717,6 +727,10 @@ impl Wire {
             t_start,
             t_end: t_start + duration,
             payload: frame.payload.clone(),
+            floor: match frame.container {
+                aether_link::Container::Data => t.is_floor(frame.mode),
+                aether_link::Container::Control => frame.floor,
+            },
         }
     }
 }
@@ -727,6 +741,9 @@ impl aether_link::SoftFrame for Wire {
     }
     fn mode(&self) -> usize {
         self.mode
+    }
+    fn floor(&self) -> bool {
+        self.floor
     }
     fn rv(&self) -> u8 {
         self.rv

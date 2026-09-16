@@ -50,6 +50,7 @@ pub struct SimFrame {
     payload: Vec<u8>,
     draw: f64,
     thresholds: [f64; 14],
+    floor: bool,
 }
 
 impl SimFrame {
@@ -74,6 +75,7 @@ impl SimFrame {
             payload,
             draw: 0.0,
             thresholds: AWGN_THRESHOLD_DB,
+            floor: false,
         }
     }
 }
@@ -85,6 +87,10 @@ impl SoftFrame for SimFrame {
 
     fn mode(&self) -> usize {
         self.mode
+    }
+
+    fn floor(&self) -> bool {
+        self.floor
     }
 
     fn rv(&self) -> u8 {
@@ -322,14 +328,10 @@ impl TwoStationSim {
         self.stations[who].busy.push((t, t + duration_s));
         let timing = self.stations[who].engine.timing();
         let sof = timing.preamble_detect_s;
-        let data_s = timing.data_frame_s;
-        let control_s = timing.control_frame_s;
+        let timing = timing.clone();
         let peer = 1 - who;
         for frame in frames {
-            let duration = match frame.container {
-                Container::Data => data_s,
-                Container::Control => control_s,
-            };
+            let duration = timing.frame_s(&frame);
             if let Some(sof) = sof
                 && frame.container == Container::Data
             {
@@ -367,6 +369,11 @@ impl TwoStationSim {
             return; // half-duplex, or a collision: the receiver was transmitting
         }
         let arrival = t1 + self.prop_s;
+        // a data frame's family is its mode's; a control frame says which it went out on
+        let floor = match frame.container {
+            Container::Data => self.stations[rx].engine.timing().is_floor(frame.mode),
+            Container::Control => frame.floor,
+        };
         let sim = SimFrame {
             container: frame.container,
             mode: frame.mode,
@@ -377,6 +384,7 @@ impl TwoStationSim {
             payload: frame.payload.clone(),
             draw: self.rng.next_unit(),
             thresholds: self.thresholds,
+            floor,
         };
         self.stations[rx].engine.tick(arrival);
         self.stations[rx].engine.on_frame(&sim, arrival);

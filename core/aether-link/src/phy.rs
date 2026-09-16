@@ -31,6 +31,9 @@ pub struct TxFrame {
     pub mode: usize,
     /// Redundancy version, for data frames.
     pub rv: u8,
+    /// A control frame to go out on the floor layout (ADR-0009). A data frame's family
+    /// follows its mode; this flag is only read for control frames.
+    pub floor: bool,
 }
 
 /// A frame the physical layer detected, whether or not its payload decoded.
@@ -39,6 +42,9 @@ pub trait SoftFrame {
     fn container(&self) -> Container;
     /// Mode read from the frame.
     fn mode(&self) -> usize;
+    /// Whether the frame arrived on a floor layout (ADR-0009). A data frame's family is
+    /// also its mode's; for a control frame this is the only way the engine learns it.
+    fn floor(&self) -> bool;
     /// Redundancy version read from the frame.
     fn rv(&self) -> u8;
     /// SNR measured on this frame, referenced to 3 kHz.
@@ -84,6 +90,13 @@ pub struct PhyTiming {
     /// ([`crate::rate::AWGN_THRESHOLD_DB`]); a PHY with another mode table — the 500 Hz
     /// waveform — hands its own here, and the engine never knows which air it is on.
     pub mode_threshold_db: Vec<f64>,
+    /// Air time of a DATA frame at a floor mode (ADR-0009): the floor layout is longer than
+    /// the ordinary one. `None` on an air without a floor family.
+    pub floor_data_frame_s: Option<f64>,
+    /// Air time of a control frame sent on the floor layout.
+    pub floor_control_frame_s: Option<f64>,
+    /// How many of the leading modes go out on the floor layouts (the slowest ones).
+    pub floor_modes: usize,
 }
 
 impl PhyTiming {
@@ -94,5 +107,38 @@ impl PhyTiming {
     #[must_use]
     pub fn capacity(&self, mode: usize) -> usize {
         self.data_capacity[mode]
+    }
+
+    /// Whether a mode goes out on the floor layouts.
+    #[must_use]
+    pub const fn is_floor(&self, mode: usize) -> bool {
+        mode < self.floor_modes
+    }
+
+    /// Air time of a DATA frame at a mode.
+    #[must_use]
+    pub fn data_frame_s_for(&self, mode: usize) -> f64 {
+        match self.floor_data_frame_s {
+            Some(floor) if self.is_floor(mode) => floor,
+            _ => self.data_frame_s,
+        }
+    }
+
+    /// Air time of a control frame of a family.
+    #[must_use]
+    pub fn control_frame_s_for(&self, floor: bool) -> f64 {
+        match self.floor_control_frame_s {
+            Some(long) if floor => long,
+            _ => self.control_frame_s,
+        }
+    }
+
+    /// Air time of a frame the engine is about to send.
+    #[must_use]
+    pub fn frame_s(&self, frame: &TxFrame) -> f64 {
+        match frame.container {
+            Container::Data => self.data_frame_s_for(frame.mode),
+            Container::Control => self.control_frame_s_for(frame.floor),
+        }
     }
 }

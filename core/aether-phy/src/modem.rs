@@ -214,29 +214,50 @@ impl Modem {
         mode: Mode,
         rv: u8,
     ) -> Result<Vec<Complex>, ModemError> {
-        let long = self.air.long;
-        let qam = self.codec(mode, long)?.encode(payload, rv)?;
+        // a floor mode goes out on the floor data layout (ADR-0009)
+        let layout = self.air.data_layout(mode.index);
+        let qam = self.codec(mode, layout)?.encode(payload, rv)?;
         let header = FrameHeader::new(FrameType::Data, mode.index, rv)?;
-        Ok(self.tx.baseband(&header, &long, &qam)?)
+        Ok(self.tx.baseband(&header, &layout, &qam)?)
     }
 
-    /// Baseband for one control frame.
+    /// Baseband for one ordinary control frame.
     ///
     /// # Errors
     /// If the payload is the wrong length for the control mode.
     pub fn control_burst(&mut self, payload: &[u8], rv: u8) -> Result<Vec<Complex>, ModemError> {
-        let (control, short) = (self.air.control_mode(), self.air.short);
-        let qam = self.codec(control, short)?.encode(payload, rv)?;
-        let header = FrameHeader::new(FrameType::Control, control.index, rv)?;
-        Ok(self.tx.baseband(&header, &short, &qam)?)
+        self.control_burst_of(payload, rv, false)
     }
 
-    /// Payload bytes one frame of a mode carries; the control mode when `mode` is `None`.
+    /// Baseband for one control frame of a family: SHORT at the control mode, or — while the
+    /// link runs a floor mode — the floor control layout at the floor control mode
+    /// (ADR-0009), which has a byte over and is padded with zeros.
+    ///
+    /// # Errors
+    /// If the payload is too long for the control mode.
+    pub fn control_burst_of(
+        &mut self,
+        payload: &[u8],
+        rv: u8,
+        floor: bool,
+    ) -> Result<Vec<Complex>, ModemError> {
+        let layout = self.air.layout_for_family(false, floor);
+        let control = self.air.control_mode_for(floor);
+        let codec = self.codec(control, layout)?;
+        let mut padded = payload.to_vec();
+        padded.resize(padded.len().max(codec.payload_bytes), 0);
+        let qam = codec.encode(&padded, rv)?;
+        let header = FrameHeader::new(FrameType::Control, control.index, rv)?;
+        Ok(self.tx.baseband(&header, &layout, &qam)?)
+    }
+
+    /// Payload bytes one frame of a mode carries on the layout it goes out on; the control
+    /// mode's SHORT frame when `mode` is `None`.
     #[must_use]
     pub fn payload_bytes(&self, mode: Option<Mode>) -> usize {
         mode.map_or_else(
             || self.air.control_mode().payload_bytes(&self.air.short),
-            |m| m.payload_bytes(&self.air.long),
+            |m| m.payload_bytes(&self.air.data_layout(m.index)),
         )
     }
 
@@ -282,12 +303,13 @@ impl Modem {
         buffer: Option<&[f64]>,
     ) -> Result<(Option<Vec<u8>>, Vec<f64>), ModemError> {
         let control = frame.sync.frame_type == FrameType::Control;
+        let floor = frame.sync.floor;
         let mode = if control {
-            self.air.control_mode()
+            self.air.control_mode_for(floor)
         } else {
             self.air.modes[frame.mode]
         };
-        let layout = self.air.layout_for(!control);
+        let layout = self.air.layout_for_family(!control, floor);
         Ok(self.codec(mode, layout)?.decode(
             &frame.symbols,
             NoiseVar::PerSymbol(&frame.noise_var),
@@ -316,7 +338,7 @@ impl Modem {
             return Ok(DecodedFrame {
                 payload,
                 frame,
-                mode: self.air.control_mode(),
+                mode: self.air.control_mode_for(sync.floor),
             });
         }
         let mode = self.air.modes[frame.mode];
@@ -359,13 +381,13 @@ mod tests {
     #[test]
     fn a_narrow_data_frame_and_control_frame_survive_the_round_trip() {
         let mut modem = Modem::new(crate::waveform::NARROW_500, true);
-        assert_eq!(modem.modes().len(), 10);
+        assert_eq!(modem.modes().len(), 13);
         assert_eq!(
             modem.payload_bytes(None),
             7,
             "the narrow control frame carries 7 bytes"
         );
-        for mode in [modem.modes()[0], modem.modes()[9]] {
+        for mode in [modem.modes()[0], modem.modes()[3], modem.modes()[12]] {
             let payload: Vec<u8> = (0..modem.payload_bytes(Some(mode)))
                 .map(|i| (i * 29 + 3) as u8)
                 .collect();

@@ -56,16 +56,19 @@ _START_AWGN = {
 # The narrow table starts where the wide table's same (modulation, rate) starts, less the
 # ≈ 6.8 dB a 500 Hz signal gains per carrier at the same 3 kHz-referenced SNR, and a little.
 _START_AWGN_NARROW = {
-    0: -9,
-    1: -8,
-    2: -6,
-    3: -4,
-    4: -4,
-    5: -1,
-    6: 0,
-    7: 4,
-    8: 6,
-    9: 7,
+    0: -16,
+    1: -14,
+    2: -11,
+    3: -9,
+    4: -8,
+    5: -6,
+    6: -4,
+    7: -4,
+    8: -1,
+    9: 0,
+    10: 4,
+    11: 6,
+    12: 7,
 }
 _FADING_OFFSET = {"awgn": 0.0, "good": 2.0, "moderate": 3.0, "poor": 4.0}
 

@@ -29,7 +29,7 @@ use rustfft::{Fft, FftPlanner, num_complex::Complex64};
 
 use crate::{
     constellation::Complex,
-    modes::{AirInterface, air_interface},
+    modes::{AirInterface, PREAMBLE_SYMBOLS, air_interface},
     ofdm::{OfdmDemodulator, OfdmModulator},
     preamble::{FrameType, Preamble},
     rx::FrameSync,
@@ -58,6 +58,24 @@ pub struct Acquisition {
     pub coarse_cfo_hz: f64,
 }
 
+/// An ordinary candidate on an air with a floor family must show the ordinary preamble's
+/// own signature: a Schmidl–Cox symbol on the even carriers only is two identical halves,
+/// so the correlation of the halves of its useful part over their energy is the signal's
+/// share of the power (0.55 at −9 dB, where the bank gives out). A floor preamble symbol,
+/// on every carrier, is not — its odd carriers flip between the halves and cancel the even
+/// ones — and a data symbol shows only the comb pilots' 0.17. With twelve carriers a floor
+/// frame's preamble and body score up to 0.75 on the ordinary references at high SNR; this
+/// keeps the ordinary pass off them.
+pub const HALF_SYMBOL_MIN: f64 = 0.35;
+/// The least a floor candidate's eight symbols may repeat one another: the magnitude of the
+/// summed one-symbol-lag correlation over the energy the lags span. A floor preamble shows
+/// the signal's share of the power (0.2 at −13 dB); noise shows a few hundredths.
+pub const FLOOR_REPETITION_MIN: f64 = 0.1;
+/// Frequency sub-steps inside one 3.9 Hz bank bin for the coherent timing refinement of a
+/// floor candidate: four windows two symbols apart drift 180° over a bin's half-width, so
+/// the combination is tried on this grid and the best kept.
+const FLOOR_SUB_GRID_HZ: [f64; 5] = [-1.5625, -0.78125, 0.0, 0.78125, 1.5625];
+
 /// Finds preambles in a buffer.
 pub struct FrameDetector {
     params: WaveformParams,
@@ -72,6 +90,8 @@ pub struct FrameDetector {
     min_gap: usize,
     /// Segmented, unit-energy reference waveform per frame type.
     references: Vec<Vec<Complex>>,
+    /// The same for the floor family's sequences (ADR-0009); empty without a floor family.
+    floor_references: Vec<Vec<Complex>>,
     n_segments: usize,
     reference_len: usize,
     bin_hz: Vec<f64>,
@@ -79,6 +99,14 @@ pub struct FrameDetector {
     coarse_fft: Arc<dyn Fft<f64>>,
     fine_fft: Arc<dyn Fft<f64>>,
     fft_offset: usize,
+    fft_size: usize,
+    /// Whether the air has a floor family, and its preamble's length in symbols and in
+    /// two-symbol windows a symbol apart.
+    has_floor: bool,
+    floor_symbols: usize,
+    floor_windows: usize,
+    /// Accept a floor candidate only above this floor statistic.
+    pub min_floor_peak: f64,
 }
 
 impl std::fmt::Debug for FrameDetector {
@@ -86,6 +114,7 @@ impl std::fmt::Debug for FrameDetector {
         f.debug_struct("FrameDetector")
             .field("min_timing_peak", &self.min_timing_peak)
             .field("max_cfo_hz", &self.max_cfo_hz)
+            .field("has_floor", &self.has_floor)
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +129,30 @@ impl Default for FrameDetector {
     }
 }
 
+/// A unit-energy two-symbol reference waveform, segmented for the bank.
+fn reference_waveform(
+    modulator: &OfdmModulator,
+    values: Vec<Complex>,
+    period: usize,
+) -> Vec<Complex> {
+    let waveform = modulator.modulate(&[values.clone(), values]);
+    let mut wave: Vec<Complex> = waveform[..2 * period].to_vec();
+    let energy: f64 = wave
+        .iter()
+        .map(|&(re, im)| re * re + im * im)
+        .sum::<f64>()
+        .sqrt();
+    if energy > 0.0 {
+        for sample in &mut wave {
+            sample.0 /= energy;
+            sample.1 /= energy;
+        }
+    }
+    let segments = wave.len() / SEGMENT_LEN;
+    wave.truncate(segments * SEGMENT_LEN);
+    wave
+}
+
 impl FrameDetector {
     /// Build the detector for a numerology.
     #[must_use]
@@ -107,27 +160,21 @@ impl FrameDetector {
         let modulator = OfdmModulator::new(params);
         let preamble = Preamble::new(params);
         let period = params.symbol_samples();
+        let air = air_interface(params);
+        let has_floor = air.floor_long.is_some();
 
-        let mut references = Vec::with_capacity(FRAME_TYPES.len());
-        for frame_type in FRAME_TYPES {
-            let values = preamble.sc_values(frame_type);
-            let waveform = modulator.modulate(&[values.clone(), values]);
-            let mut wave: Vec<Complex> = waveform[..2 * period].to_vec();
-            let energy: f64 = wave
+        let references: Vec<Vec<Complex>> = FRAME_TYPES
+            .iter()
+            .map(|&ft| reference_waveform(&modulator, preamble.sc_values(ft), period))
+            .collect();
+        let floor_references: Vec<Vec<Complex>> = if has_floor {
+            FRAME_TYPES
                 .iter()
-                .map(|&(re, im)| re * re + im * im)
-                .sum::<f64>()
-                .sqrt();
-            if energy > 0.0 {
-                for sample in &mut wave {
-                    sample.0 /= energy;
-                    sample.1 /= energy;
-                }
-            }
-            let segments = wave.len() / SEGMENT_LEN;
-            wave.truncate(segments * SEGMENT_LEN);
-            references.push(wave);
-        }
+                .map(|&ft| reference_waveform(&modulator, preamble.sc_values_of(ft, true), period))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let reference_len = references[0].len();
         let n_segments = reference_len / SEGMENT_LEN;
 
@@ -147,7 +194,7 @@ impl FrameDetector {
             .filter(|&k| bin_hz[k].abs() <= DEFAULT_MAX_CFO_HZ)
             .collect();
 
-        let air = air_interface(params);
+        let floor_symbols = air.longest_preamble();
         let mut planner = FftPlanner::new();
         Self {
             params,
@@ -158,6 +205,7 @@ impl FrameDetector {
             period,
             min_gap: 4 * period,
             references,
+            floor_references,
             n_segments,
             reference_len,
             bin_hz,
@@ -165,6 +213,11 @@ impl FrameDetector {
             coarse_fft: planner.plan_fft_forward(FFT_LEN),
             fine_fft: planner.plan_fft_forward(FINE_FACTOR * FFT_LEN),
             fft_offset: OfdmDemodulator::new(params).fft_offset(),
+            fft_size: params.fft_size,
+            has_floor,
+            floor_symbols,
+            floor_windows: floor_symbols - 1,
+            min_floor_peak: air.floor_acquisition_threshold,
         }
     }
 
@@ -174,9 +227,42 @@ impl FrameDetector {
         self.reference_len
     }
 
+    /// Symbols in a floor preamble (two without a floor family).
+    #[must_use]
+    pub fn floor_symbols(&self) -> usize {
+        self.floor_symbols
+    }
+
+    /// The segmented partial correlations of one reference at one position.
+    fn partials(
+        &self,
+        samples: &[Complex],
+        position: usize,
+        reference: &[Complex],
+    ) -> Vec<Complex64> {
+        (0..self.n_segments)
+            .map(|segment| {
+                let mut accumulator = Complex64::new(0.0, 0.0);
+                for offset in 0..SEGMENT_LEN {
+                    let sample = samples[position + segment * SEGMENT_LEN + offset];
+                    let r = reference[segment * SEGMENT_LEN + offset];
+                    // correlate: sample * conj(reference)
+                    accumulator += Complex64::new(
+                        sample.0 * r.0 + sample.1 * r.1,
+                        sample.1 * r.0 - sample.0 * r.1,
+                    );
+                }
+                accumulator
+            })
+            .collect()
+    }
+
     /// The matched-filter bank: for every start position, the best normalised peak over both
     /// frame types, the offset of the winning bin, the other type's peak, and which type won.
+    /// On an air with a floor family the floor statistic — the floor references' normalised
+    /// peak averaged over the seven windows a floor preamble fills — comes alongside.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn bank(&self, samples: &[Complex]) -> BankOutput {
         let positions = samples.len().saturating_sub(self.reference_len) + 1;
         if samples.len() < self.reference_len {
@@ -194,9 +280,23 @@ impl FrameDetector {
         let mut cfo = vec![0.0f64; positions];
         let mut other = vec![0.0f64; positions];
         let mut winner = vec![0usize; positions];
+        let mut floor_stat = vec![0.0f64; positions];
+        let mut floor_cfo = vec![0.0f64; positions];
+        let mut floor_other = vec![0.0f64; positions];
+        let mut floor_winner = vec![0usize; positions];
+
+        // The floor statistic at q averages the floor references' normalised magnitude rows
+        // at q, q + P, …, q + 6P, so rows are kept in a ring that far back.
+        let n_bins = self.usable_bins.len();
+        let span = (self.floor_windows - 1) * self.period;
+        let ring_len = span + 1;
+        let mut rings: Vec<Vec<f64>> = if self.has_floor {
+            vec![vec![0.0f64; ring_len * n_bins]; self.floor_references.len()]
+        } else {
+            Vec::new()
+        };
 
         let mut spectrum = vec![Complex64::new(0.0, 0.0); FFT_LEN];
-        let mut parts = vec![Complex64::new(0.0, 0.0); self.n_segments];
         for position in 0..positions {
             let energy = (cumulative[position + self.reference_len] - cumulative[position])
                 .max(1e-30)
@@ -205,22 +305,7 @@ impl FrameDetector {
             let mut best = [0.0f64; FRAME_TYPES.len()];
             let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
             for (type_index, reference) in self.references.iter().enumerate() {
-                let mut bound = 0.0f64;
-                for (segment, slot) in parts.iter_mut().enumerate() {
-                    let mut accumulator = Complex64::new(0.0, 0.0);
-                    for offset in 0..SEGMENT_LEN {
-                        let index = position + segment * SEGMENT_LEN + offset;
-                        let sample = samples[index];
-                        let r = reference[segment * SEGMENT_LEN + offset];
-                        // correlate: sample * conj(reference)
-                        accumulator += Complex64::new(
-                            sample.0 * r.0 + sample.1 * r.1,
-                            sample.1 * r.0 - sample.0 * r.1,
-                        );
-                    }
-                    *slot = accumulator;
-                    bound += accumulator.norm();
-                }
+                let parts = self.partials(samples, position, reference);
                 // Every bin of the transform is a sum of the same partial correlations with
                 // unit-magnitude phases, so no bin can exceed the sum of their magnitudes.
                 // Where that bound is already under the threshold there is nothing to find and
@@ -228,6 +313,7 @@ impl FrameDetector {
                 // never discard a position that would have passed - and the bound is loose
                 // (about eight times the peak on noise), so it skips only the quietest
                 // positions: worth about 38 % of the bank's time, not an order of magnitude.
+                let bound: f64 = parts.iter().map(|p| p.norm()).sum();
                 if bound / energy < self.min_timing_peak {
                     continue;
                 }
@@ -251,39 +337,110 @@ impl FrameDetector {
             cfo[position] = best_cfo[win];
             other[position] = best[lose];
             winner[position] = win;
+
+            if !self.has_floor {
+                continue;
+            }
+            let slot = position % ring_len;
+            for (type_index, reference) in self.floor_references.iter().enumerate() {
+                let parts = self.partials(samples, position, reference);
+                spectrum[..self.n_segments].copy_from_slice(&parts);
+                spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
+                self.coarse_fft.process(&mut spectrum);
+                let row = &mut rings[type_index][slot * n_bins..(slot + 1) * n_bins];
+                for (value, &bin) in row.iter_mut().zip(&self.usable_bins) {
+                    *value = spectrum[bin].norm() / energy;
+                }
+            }
+            if position < span {
+                continue;
+            }
+            let q = position - span;
+            let mut best = [0.0f64; FRAME_TYPES.len()];
+            let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
+            for (type_index, ring) in rings.iter().enumerate() {
+                let mut top = 0.0f64;
+                let mut top_bin = 0usize;
+                for (b, &bin) in self.usable_bins.iter().enumerate() {
+                    let mut sum = 0.0f64;
+                    for k in 0..self.floor_windows {
+                        let at = (q + k * self.period) % ring_len;
+                        sum += ring[at * n_bins + b];
+                    }
+                    let mean = sum / self.floor_windows as f64;
+                    if mean > top {
+                        top = mean;
+                        top_bin = bin;
+                    }
+                }
+                best[type_index] = top;
+                best_cfo[type_index] = self.bin_hz[top_bin];
+            }
+            let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
+            floor_stat[q] = best[win];
+            floor_cfo[q] = best_cfo[win];
+            floor_other[q] = best[lose];
+            floor_winner[q] = win;
         }
         BankOutput {
             peak,
             cfo,
             other,
             winner,
+            floor_stat,
+            floor_cfo,
+            floor_other,
+            floor_winner,
         }
     }
 
-    /// Carrier offset at a known preamble position: the segmented filter on a fine grid, then
-    /// the full-symbol-lag phase to refine it.
+    /// Carrier offset at a known ordinary preamble position: the segmented filter on a fine
+    /// grid, then the full-symbol-lag phase to refine it.
     ///
     /// # Panics
     /// If the buffer does not hold two whole symbols from `start`.
     #[must_use]
     pub fn fine_cfo(&self, samples: &[Complex], start: usize, frame_type: FrameType) -> f64 {
+        self.fine_cfo_of(samples, start, frame_type, PREAMBLE_SYMBOLS, false)
+    }
+
+    /// Carrier offset at a known preamble position of either family. A floor preamble
+    /// (`preamble_symbols` = 8, `floor`) is matched whole — its two-symbol reference tiled —
+    /// and the lag phase is averaged over all seven symbol pairs.
+    ///
+    /// # Panics
+    /// If the buffer does not hold the whole preamble from `start`.
+    #[must_use]
+    pub fn fine_cfo_of(
+        &self,
+        samples: &[Complex],
+        start: usize,
+        frame_type: FrameType,
+        preamble_symbols: usize,
+        floor: bool,
+    ) -> f64 {
         let type_index = FRAME_TYPES
             .iter()
             .position(|&t| t == frame_type)
             .expect("known type");
-        let reference = &self.references[type_index];
+        let reference = if floor {
+            &self.floor_references[type_index]
+        } else {
+            &self.references[type_index]
+        };
         assert!(
-            start + 2 * self.period <= samples.len(),
-            "fine_cfo needs two whole symbols from the start position"
+            start + preamble_symbols * self.period <= samples.len(),
+            "fine_cfo needs the whole preamble from the start position"
         );
 
+        let reps = preamble_symbols / 2;
         let n_fine = FINE_FACTOR * FFT_LEN;
         let mut spectrum = vec![Complex64::new(0.0, 0.0); n_fine];
-        for segment in 0..self.n_segments {
+        for segment in 0..reps * self.n_segments {
             let mut accumulator = Complex64::new(0.0, 0.0);
             for offset in 0..SEGMENT_LEN {
                 let sample = samples[start + segment * SEGMENT_LEN + offset];
-                let r = reference[segment * SEGMENT_LEN + offset];
+                let r = reference[(segment % self.n_segments) * SEGMENT_LEN + offset];
                 accumulator += Complex64::new(
                     sample.0 * r.0 + sample.1 * r.1,
                     sample.1 * r.0 - sample.0 * r.1,
@@ -313,25 +470,223 @@ impl FrameDetector {
             }
         }
 
-        // Refine with the phase between the two identical preamble symbols.
+        // Refine with the phase between consecutive identical preamble symbols.
+        let rotate = |sample: Complex, t: f64| {
+            let phase = -2.0 * PI * coarse * t;
+            Complex64::new(
+                sample.0 * phase.cos() - sample.1 * phase.sin(),
+                sample.0 * phase.sin() + sample.1 * phase.cos(),
+            )
+        };
         let mut correlation = Complex64::new(0.0, 0.0);
-        for index in 0..self.period {
-            let t0 = (start + index) as f64 / self.params.fs_baseband;
-            let t1 = (start + index + self.period) as f64 / self.params.fs_baseband;
-            let rotate = |sample: Complex, t: f64| {
-                let phase = -2.0 * PI * coarse * t;
-                Complex64::new(
-                    sample.0 * phase.cos() - sample.1 * phase.sin(),
-                    sample.0 * phase.sin() + sample.1 * phase.cos(),
-                )
-            };
-            let a = rotate(samples[start + index], t0);
-            let b = rotate(samples[start + index + self.period], t1);
-            correlation += a.conj() * b;
+        for lag in 0..preamble_symbols - 1 {
+            for index in 0..self.period {
+                let i0 = start + lag * self.period + index;
+                let i1 = i0 + self.period;
+                let a = rotate(samples[i0], i0 as f64 / self.params.fs_baseband);
+                let b = rotate(samples[i1], i1 as f64 / self.params.fs_baseband);
+                correlation += a.conj() * b;
+            }
         }
         let residual = correlation.im.atan2(correlation.re) * self.params.fs_baseband
             / (2.0 * PI * self.period as f64);
         coarse + residual
+    }
+
+    /// How much the two halves of each ordinary preamble symbol's useful part repeat one
+    /// another, over both symbols: 1.0 for a noiseless even-carriers-only symbol, about 0
+    /// for one on every carrier. A carrier offset only rotates every half-pair by the same
+    /// phase; multipath is the same on both halves.
+    fn half_symbol_repetition(&self, samples: &[Complex], start: usize) -> f64 {
+        let half = self.fft_size / 2;
+        let mut acc = Complex64::new(0.0, 0.0);
+        let mut energy = 0.0f64;
+        for k in 0..PREAMBLE_SYMBOLS {
+            let a = start + k * self.period + self.fft_offset;
+            if a + 2 * half > samples.len() {
+                return 0.0;
+            }
+            for i in 0..half {
+                let x = samples[a + i];
+                let y = samples[a + half + i];
+                // conj(x) * y
+                acc += Complex64::new(x.0 * y.0 + x.1 * y.1, x.0 * y.1 - x.1 * y.0);
+                energy += (x.0 * x.0 + x.1 * x.1 + y.0 * y.0 + y.1 * y.1) / 2.0;
+            }
+        }
+        acc.norm() / energy.max(1e-30)
+    }
+
+    /// How much `symbols` symbol periods from `start` repeat one another: the magnitude of
+    /// the summed one-symbol-lag correlation over the energy the lags span, 1.0 for identical
+    /// noiseless symbols (Schmidl & Cox's timing metric, summed over a run).
+    fn repetition(&self, samples: &[Complex], start: usize, symbols: usize) -> f64 {
+        let n = symbols * self.period;
+        if start + n > samples.len() {
+            return 0.0;
+        }
+        let y = &samples[start..start + n];
+        let mut lags = Complex64::new(0.0, 0.0);
+        for i in 0..n - self.period {
+            let a = y[i];
+            let b = y[i + self.period];
+            lags += Complex64::new(a.0 * b.0 + a.1 * b.1, a.0 * b.1 - a.1 * b.0);
+        }
+        let energy: f64 = y.iter().map(|&(re, im)| re * re + im * im).sum::<f64>()
+            * (symbols - 1) as f64
+            / symbols as f64;
+        lags.norm() / energy.max(1e-30)
+    }
+
+    /// The start of a floor preamble within `lo … hi`: four two-symbol windows two symbols
+    /// apart combined coherently at the bank's bin nearest `f0` and the sub-grid around it,
+    /// each window normalised by its own energy. The averaged statistic that found the
+    /// candidate is a symbol wide at its top; this is not.
+    fn refine_floor(
+        &self,
+        samples: &[Complex],
+        lo: usize,
+        hi: usize,
+        frame_type: FrameType,
+        f0: f64,
+    ) -> usize {
+        let type_index = FRAME_TYPES
+            .iter()
+            .position(|&t| t == frame_type)
+            .expect("known type");
+        let reference = &self.floor_references[type_index];
+        let n_win = self.floor_symbols / 2;
+        let step = 2 * self.period;
+        let last_window = (n_win - 1) * step;
+        let positions = samples.len().saturating_sub(self.reference_len) + 1;
+        let hi = hi.min(positions.saturating_sub(last_window));
+        if hi <= lo {
+            return lo;
+        }
+        // the transform bin nearest f0, and the reference's single-bin transform there
+        let bin = *self
+            .usable_bins
+            .iter()
+            .min_by(|&&a, &&b| {
+                (self.bin_hz[a] - f0)
+                    .abs()
+                    .partial_cmp(&(self.bin_hz[b] - f0).abs())
+                    .expect("finite")
+            })
+            .expect("bins");
+        let twiddle: Vec<Complex64> = (0..self.n_segments)
+            .map(|k| Complex64::from_polar(1.0, -2.0 * PI * (bin * k) as f64 / FFT_LEN as f64))
+            .collect();
+        // the bin value and window energy at every position the windows can land on
+        let count = hi - lo + last_window;
+        let mut value = Vec::with_capacity(count);
+        let mut energy = Vec::with_capacity(count);
+        for p in lo..lo + count {
+            let parts = self.partials(samples, p, reference);
+            let v: Complex64 = parts.iter().zip(&twiddle).map(|(a, w)| a * w).sum();
+            value.push(v);
+            let e: f64 = samples[p..p + self.reference_len]
+                .iter()
+                .map(|&(re, im)| re * re + im * im)
+                .sum::<f64>()
+                .sqrt()
+                .max(1e-15);
+            energy.push(e);
+        }
+        let fs = self.params.fs_baseband;
+        let mut best = 0.0f64;
+        let mut best_at = lo;
+        for d in lo..hi {
+            for delta in FLOOR_SUB_GRID_HZ {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for k in 0..n_win {
+                    let at = d - lo + k * step;
+                    let rot = Complex64::from_polar(
+                        1.0,
+                        -2.0 * PI * (f0 + delta) * (k * step) as f64 / fs,
+                    );
+                    acc += value[at] * rot / energy[at];
+                }
+                let score = acc.norm() / n_win as f64;
+                if score > best {
+                    best = score;
+                    best_at = d;
+                }
+            }
+        }
+        best_at
+    }
+
+    /// Floor-family candidates, best first, outside the spans the ordinary pass took; each
+    /// accepted one masks its whole span and the seven symbols before it (where the averaged
+    /// statistic still sees part of its preamble).
+    fn detect_floor(
+        &self,
+        samples: &[Complex],
+        output: &BankOutput,
+        taken: &mut [bool],
+        max_frames: usize,
+    ) -> Vec<Acquisition> {
+        let mut found = Vec::new();
+        let mut eligible: Vec<bool> = output
+            .floor_stat
+            .iter()
+            .zip(taken.iter())
+            .map(|(&s, &t)| s >= self.min_floor_peak && !t)
+            .collect();
+        let half = 3 * self.period / 2;
+        let skirt = self.floor_windows * self.period;
+        for _ in 0..self.max_candidates {
+            if found.len() >= max_frames {
+                break;
+            }
+            let Some(c) = eligible
+                .iter()
+                .enumerate()
+                .filter(|&(_, &ok)| ok)
+                .max_by(|a, b| {
+                    output.floor_stat[a.0]
+                        .partial_cmp(&output.floor_stat[b.0])
+                        .expect("finite statistics")
+                })
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let lo = c.saturating_sub(half);
+            let hi = (c + half + 1).min(eligible.len());
+            let frame_type = FRAME_TYPES[output.floor_winner[c]];
+            let d = self.refine_floor(samples, lo, hi, frame_type, output.floor_cfo[c]);
+            let span = self
+                .air
+                .layout_for_family(frame_type == FrameType::Data, true)
+                .samples();
+            if d + span + self.fft_offset > samples.len() {
+                eligible[lo..hi].fill(false); // too close to the end to be usable yet
+                continue;
+            }
+            let cfo_hz = self.fine_cfo_of(samples, d, frame_type, self.floor_symbols, true);
+            if self.repetition(samples, d, self.floor_symbols) < FLOOR_REPETITION_MIN {
+                eligible[lo..hi].fill(false); // the bank liked it; the symbols do not repeat
+                continue;
+            }
+            found.push(Acquisition {
+                sync: FrameSync {
+                    start: d,
+                    cfo_hz,
+                    frame_type,
+                    floor: true,
+                },
+                timing_peak: output.floor_stat[c],
+                type_confidence: output.floor_stat[c] / output.floor_other[c].max(1e-12),
+                coarse_cfo_hz: output.floor_cfo[c],
+            });
+            let a = d.saturating_sub(self.min_gap.max(skirt));
+            let b = (d + span).min(eligible.len());
+            eligible[a..b].fill(false);
+            taken[a..b].fill(true);
+        }
+        found
     }
 
     /// Find up to `max_frames` preambles in a buffer.
@@ -341,15 +696,16 @@ impl FrameDetector {
     #[must_use]
     pub fn detect(&self, samples: &[Complex], max_frames: usize) -> Vec<Acquisition> {
         let output = self.bank(samples);
-        let mut found: Vec<Acquisition> = Vec::new();
+        let mut ordinary: Vec<Acquisition> = Vec::new();
         if output.peak.is_empty() {
-            return found;
+            return ordinary;
         }
         let mut eligible: Vec<bool> = output
             .peak
             .iter()
             .map(|&p| p >= self.min_timing_peak)
             .collect();
+        let mut taken = vec![false; eligible.len()];
 
         // The two preamble symbols are identical, so a preamble preceded by silence also
         // produces a strong sidelobe one symbol early. Never accept a peak until the
@@ -359,8 +715,14 @@ impl FrameDetector {
             *slot = false;
         }
 
+        // The ordinary pass first, each candidate checked for the ordinary preamble's own
+        // signature where a floor family exists (a floor frame's preamble and body score up
+        // to 0.75 on these references at high SNR); then the floor pass on what it left, so
+        // a strong ordinary burst's body — which scores on the floor references just as well
+        // — is never a floor candidate. Each pass looks for up to max_frames of its own; the
+        // earliest win below.
         for _ in 0..self.max_candidates {
-            if found.len() >= max_frames {
+            if ordinary.len() >= max_frames {
                 break;
             }
             let Some(start) = eligible
@@ -390,14 +752,20 @@ impl FrameDetector {
                 eligible[reject_low..reject_high].fill(false);
                 continue;
             }
+            if self.has_floor && self.half_symbol_repetition(samples, start) < HALF_SYMBOL_MIN {
+                // correlates, but is not an ordinary preamble
+                eligible[reject_low..reject_high].fill(false);
+                continue;
+            }
 
             let frame_type = FRAME_TYPES[output.winner[start]];
             let cfo_hz = self.fine_cfo(samples, start, frame_type);
-            found.push(Acquisition {
+            ordinary.push(Acquisition {
                 sync: FrameSync {
                     start,
                     cfo_hz,
                     frame_type,
+                    floor: false,
                 },
                 timing_peak: output.peak[start],
                 type_confidence: output.peak[start] / output.other[start].max(1e-12),
@@ -413,8 +781,35 @@ impl FrameDetector {
             let low = start.saturating_sub(self.min_gap);
             let high = (start + span).min(eligible.len());
             eligible[low..high].fill(false);
+            taken[low..high].fill(true);
         }
+
+        let mut found = if self.has_floor {
+            let floor = self.detect_floor(samples, &output, &mut taken, max_frames);
+            // an ordinary candidate inside a floor frame is that frame's body scoring on the
+            // ordinary references; the floor frame, verified whole, is the explanation
+            let spans: Vec<(usize, usize)> = floor
+                .iter()
+                .map(|f| {
+                    let span = self
+                        .air
+                        .layout_for_family(f.sync.frame_type == FrameType::Data, true)
+                        .samples();
+                    (f.sync.start, f.sync.start + span)
+                })
+                .collect();
+            ordinary.retain(|o| {
+                !spans
+                    .iter()
+                    .any(|&(a, b)| a <= o.sync.start && o.sync.start < b)
+            });
+            floor
+        } else {
+            Vec::new()
+        };
+        found.append(&mut ordinary);
         found.sort_by_key(|acquisition| acquisition.sync.start);
+        found.truncate(max_frames);
         found
     }
 }
@@ -430,6 +825,16 @@ pub struct BankOutput {
     pub other: Vec<f64>,
     /// Which frame type won: an index into the detector's type list.
     pub winner: Vec<usize>,
+    /// The floor statistic (ADR-0009): the winning floor reference's normalised peak
+    /// averaged over the seven windows a floor preamble fills; zero without a floor family
+    /// and at positions whose windows run past the buffer.
+    pub floor_stat: Vec<f64>,
+    /// Carrier offset of the floor statistic's winning bin, in hertz.
+    pub floor_cfo: Vec<f64>,
+    /// The losing floor reference's statistic at the same position.
+    pub floor_other: Vec<f64>,
+    /// Which frame type's floor reference won.
+    pub floor_winner: Vec<usize>,
 }
 
 #[cfg(test)]

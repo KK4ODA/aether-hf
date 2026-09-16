@@ -101,17 +101,18 @@ impl FrameTransmitter {
                 got: qam.len(),
             });
         }
-        let mut symbols = self.preamble.symbols(header);
+        let mut symbols = self.preamble.symbols_for(header, layout);
         let pilots = layout.pilot_symbol_indices();
         let mut position = 0usize;
         let mut pilot_number = 0usize;
         for index in 0..layout.data_symbols {
             if pilots.contains(&index) {
                 let chips = match header.frame_type {
-                    FrameType::Data => Some(self.preamble.mode_chips(
+                    FrameType::Data => Some(self.preamble.mode_chips_for(
                         header.mode,
                         pilot_number,
                         header.rv,
+                        layout,
                     )),
                     FrameType::Control => None,
                 };

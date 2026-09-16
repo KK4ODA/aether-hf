@@ -25,11 +25,16 @@
 
 use crate::{
     constellation::Complex,
-    modes::air_interface,
+    modes::{FrameLayout, air_interface},
     ofdm::CarrierMap,
     tables,
     waveform::{WIDE_2300, WaveformParams},
 };
+
+/// Largest cosine allowed between any two preamble sequences of one waveform. No length-6
+/// sequence is orthogonal to both ordinary ones (there are only 64), so the floor family's
+/// twelve-carrier sequences (ADR-0009) sit at 0.236 against them at 500 Hz.
+pub const SC_SEPARATION: f64 = 0.3;
 
 /// Redundancy versions signalled per frame.
 pub const N_RV: usize = tables::N_RV;
@@ -177,15 +182,56 @@ impl Preamble {
                 && (tables.acquisition_threshold - air.acquisition_threshold).abs() < 1e-12,
             "the air interface's bound or threshold differs from the model's export"
         );
+        // the same for the floor family (ADR-0009), present or absent on both sides
+        assert!(
+            tables.floor_modes == air.floor_modes
+                && tables.control_mode_index == air.control_mode_index
+                && (tables.floor_acquisition_threshold - air.floor_acquisition_threshold).abs()
+                    < 1e-12
+                && (tables.floor_sc_length > 0) == air.floor_long.is_some(),
+            "the air interface's floor family differs from the model's export"
+        );
+        if let Some(floor_long) = air.floor_long {
+            assert_eq!(
+                tables.floor_sc_length,
+                map.n_carriers(),
+                "a floor preamble sequence covers every carrier"
+            );
+            assert_eq!(
+                tables.floor_chip_length,
+                floor_long.n_pilot_symbols() * map.data_carriers().len(),
+                "the floor chips cover every full pilot symbol of the floor data frame"
+            );
+        }
         let scale = (map.n_carriers() as f64 / even.len() as f64).sqrt();
-        Self {
+        let this = Self {
             n_carriers: map.n_carriers(),
             even,
             scale,
             n_data_carriers: map.data_carriers().len(),
             n_modes: air.n_modes(),
             tables,
+        };
+        // every pair of preamble sequences of this waveform must be well separated
+        let mut sequences = vec![
+            this.sc_values_of(FrameType::Data, false),
+            this.sc_values_of(FrameType::Control, false),
+        ];
+        if air.floor_long.is_some() {
+            sequences.push(this.sc_values_of(FrameType::Data, true));
+            sequences.push(this.sc_values_of(FrameType::Control, true));
         }
+        for (i, a) in sequences.iter().enumerate() {
+            for b in &sequences[i + 1..] {
+                let dot: f64 = a.iter().zip(b).map(|(x, y)| x.0 * y.0 + x.1 * y.1).sum();
+                let norm = |s: &[Complex]| s.iter().map(|v| v.0 * v.0 + v.1 * v.1).sum::<f64>();
+                assert!(
+                    dot.abs() / (norm(a) * norm(b)).sqrt() <= SC_SEPARATION,
+                    "preamble PN sequences correlate too strongly"
+                );
+            }
+        }
+        this
     }
 
     /// Carrier indices the Schmidl–Cox sequence occupies.
@@ -238,10 +284,29 @@ impl Preamble {
         &self.tables.mode_chips[index * length..(index + 1) * length]
     }
 
-    /// Carrier values of each Schmidl–Cox symbol for a frame type: unit mean power over the
-    /// active carriers, zero on the odd ones.
+    /// Carrier values of each ordinary Schmidl–Cox symbol for a frame type: unit mean power
+    /// over the active carriers, zero on the odd ones.
     #[must_use]
     pub fn sc_values(&self, frame_type: FrameType) -> Vec<Complex> {
+        self.sc_values_of(frame_type, false)
+    }
+
+    /// Carrier values of each preamble symbol of a frame type and family: the ordinary
+    /// sequence on the even carriers, or the floor family's on every carrier (ADR-0009),
+    /// unit mean power either way.
+    ///
+    /// # Panics
+    /// If the floor family is asked of an air that has none.
+    #[must_use]
+    pub fn sc_values_of(&self, frame_type: FrameType, floor: bool) -> Vec<Complex> {
+        if floor {
+            let signs: &[f64] = match frame_type {
+                FrameType::Data => self.tables.floor_sc_data,
+                FrameType::Control => self.tables.floor_sc_control,
+            };
+            assert_eq!(signs.len(), self.n_carriers, "this air has no floor family");
+            return signs.iter().map(|&sign| (sign, 0.0)).collect();
+        }
         let signs: &[f64] = match frame_type {
             FrameType::Data => self.tables.sc_data,
             FrameType::Control => self.tables.sc_control,
@@ -253,20 +318,74 @@ impl Preamble {
         out
     }
 
-    /// The two preamble symbols of a frame — identical by construction.
+    /// The two preamble symbols of an ordinary frame — identical by construction.
     #[must_use]
     pub fn symbols(&self, header: &FrameHeader) -> Vec<Vec<Complex>> {
         let values = self.sc_values(header.frame_type);
         vec![values.clone(), values]
     }
 
-    /// Chips for the data carriers of one full pilot symbol of a DATA frame.
+    /// The preamble symbols of a frame on a layout: `layout.preamble_symbols` copies of the
+    /// type's sequence of the layout's family.
+    #[must_use]
+    pub fn symbols_for(&self, header: &FrameHeader, layout: &FrameLayout) -> Vec<Vec<Complex>> {
+        let values = self.sc_values_of(header.frame_type, layout.is_floor());
+        vec![values; layout.preamble_symbols]
+    }
+
+    /// Chips a DATA frame on a layout carries: the ordinary set's length on the ordinary
+    /// layouts, every full pilot symbol's data carriers on a floor layout.
+    #[must_use]
+    pub const fn n_chips_for(&self, layout: &FrameLayout) -> usize {
+        if layout.is_floor() {
+            self.tables.floor_chip_length
+        } else {
+            self.tables.chip_length
+        }
+    }
+
+    /// The whole chip sequence with this index on a layout, all pilot symbols end to end.
+    ///
+    /// # Panics
+    /// If the index is past the last sequence, or the floor family is asked of an air
+    /// without one.
+    #[must_use]
+    pub fn chip_sequence_for(&self, index: usize, layout: &FrameLayout) -> &'static [f64] {
+        if !layout.is_floor() {
+            return self.chip_sequence(index);
+        }
+        assert!(
+            index < self.n_sequences(),
+            "chip sequence {index} does not exist"
+        );
+        let length = self.tables.floor_chip_length;
+        assert!(length > 0, "this air has no floor family");
+        &self.tables.floor_mode_chips[index * length..(index + 1) * length]
+    }
+
+    /// Chips for the data carriers of one full pilot symbol of an ordinary DATA frame.
     ///
     /// # Panics
     /// If the pilot symbol index runs past the chip sequence.
     #[must_use]
     pub fn mode_chips(&self, mode: usize, pilot_symbol_index: usize, rv: u8) -> Vec<f64> {
-        let sequence = self.chip_sequence(self.chip_index(mode, rv));
+        // any ordinary layout selects the ordinary chip set
+        self.mode_chips_for(mode, pilot_symbol_index, rv, &crate::modes::LONG)
+    }
+
+    /// Chips for the data carriers of one full pilot symbol of a DATA frame on a layout.
+    ///
+    /// # Panics
+    /// If the pilot symbol index runs past the chip sequence.
+    #[must_use]
+    pub fn mode_chips_for(
+        &self,
+        mode: usize,
+        pilot_symbol_index: usize,
+        rv: u8,
+        layout: &FrameLayout,
+    ) -> Vec<f64> {
+        let sequence = self.chip_sequence_for(self.chip_index(mode, rv), layout);
         let start = pilot_symbol_index * self.n_data_carriers;
         assert!(
             start + self.n_data_carriers <= sequence.len(),
@@ -361,13 +480,28 @@ mod tests {
             (168, 14, 56)
         );
         chip_sets_are_unit_magnitude_and_well_separated(&wide, 0.2);
-        // the narrow waveform: 32 chips, forty sequences, a looser bound
+        // the narrow waveform: 32 chips, fifty-two sequences, a looser bound; its floor
+        // frames carry 128 chips at the wide bound (ADR-0009)
         let narrow = Preamble::new(crate::waveform::NARROW_500);
         assert_eq!(
             (narrow.n_chips(), narrow.n_modes(), narrow.n_sequences()),
-            (32, 10, 40)
+            (32, 13, 52)
         );
         chip_sets_are_unit_magnitude_and_well_separated(&narrow, 0.25);
+        let floor = crate::modes::NARROW_FLOOR_LONG;
+        assert_eq!(narrow.n_chips_for(&floor), 128);
+        for index in 0..narrow.n_sequences() {
+            let seq = narrow.chip_sequence_for(index, &floor);
+            assert_eq!(seq.len(), 128);
+            assert!(seq.iter().all(|c| (c.abs() - 1.0).abs() < 1e-12));
+        }
+        // the floor preamble sequences occupy every carrier, unit power each
+        let sc = narrow.sc_values_of(FrameType::Data, true);
+        assert_eq!(sc.len(), 12);
+        assert!(
+            sc.iter()
+                .all(|v| (v.0.abs() - 1.0).abs() < 1e-12 && v.1 == 0.0)
+        );
     }
 
     #[test]

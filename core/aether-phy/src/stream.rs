@@ -112,7 +112,9 @@ impl StreamingReceiver {
             announced: VecDeque::new(),
             fresh: Vec::new(),
             max_buffer: (max_buffer_s * params.fs_baseband) as usize,
-            lookback: 3 * params.symbol_samples(),
+            // a symbol after an ordinary candidate, the whole preamble of a floor one
+            lookback: (crate::modes::air_interface(params).longest_preamble() + 1)
+                * params.symbol_samples(),
             frames_decoded: 0,
             params,
         }
@@ -213,10 +215,11 @@ impl StreamingReceiver {
                 self.fresh.push(frame);
             }
         }
-        // the detector needs two symbols after a candidate, so leave that much unsearched
+        // the detector needs a symbol after an ordinary candidate and the whole preamble of
+        // a floor one (ADR-0009), so leave that much unsearched
         self.searched = self
             .searched
-            .max(self.samples_seen().saturating_sub(3 * symbol));
+            .max(self.samples_seen().saturating_sub(self.lookback));
     }
 
     /// Decode every pending frame whose samples have all arrived.

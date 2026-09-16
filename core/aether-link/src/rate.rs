@@ -36,11 +36,22 @@ pub const PAYLOAD_BYTES: [usize; 14] = [
 /// as an operator would compare them: measured by `tools/bench_phy.py --bandwidth 500`
 /// into `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py
 /// --bandwidth 500 --apply` into the model, and mirrored here (the vector test pins it).
-pub const NARROW_AWGN_THRESHOLD_DB: [f64; 10] =
-    [-5.2, -3.5, -2.1, 0.6, -0.1, 1.9, 3.6, 6.9, 8.8, 10.4];
+pub const NARROW_AWGN_THRESHOLD_DB: [f64; 13] = [
+    -12.0, -10.0, -7.5, -5.2, -3.5, -2.1, 0.6, -0.1, 1.9, 3.6, 6.9, 8.8, 10.4,
+];
 
-/// Payload bytes per frame for each narrow mode, on the narrow LONG layout.
-pub const NARROW_PAYLOAD_BYTES: [usize; 10] = [25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
+/// Payload bytes per frame for each narrow mode, on the layout it goes out on: the floor
+/// modes' frames (ADR-0009) are four times as long, which is why [`usable_modes_by_rate`]
+/// needs [`NARROW_FRAME_S`] to compare them.
+pub const NARROW_PAYLOAD_BYTES: [usize; 13] =
+    [19, 41, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
+
+/// Air time of each narrow mode's DATA frame: 136 symbols on the floor layout, 34 on the
+/// ordinary one, at 31 ms a symbol (the link layer's copy of the layouts; the vector test
+/// pins it).
+pub const NARROW_FRAME_S: [f64; 13] = [
+    4.216, 4.216, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+];
 
 /// Modes on the throughput/threshold Pareto front, ascending, for the wide table.
 ///
@@ -51,13 +62,23 @@ pub fn usable_modes() -> Vec<usize> {
     usable_modes_of(&AWGN_THRESHOLD_DB, &PAYLOAD_BYTES)
 }
 
-/// Modes on the throughput/threshold Pareto front of any table, ascending.
+/// Modes on the throughput/threshold Pareto front of any table, ascending, comparing
+/// payload bytes per frame — right when every frame is the same length.
 #[must_use]
 pub fn usable_modes_of(thresholds: &[f64], payload: &[usize]) -> Vec<usize> {
+    let frame_s = vec![1.0; thresholds.len()];
+    usable_modes_by_rate(thresholds, payload, &frame_s)
+}
+
+/// Modes on the throughput/threshold Pareto front of any table, ascending, comparing bytes
+/// per second — what tells a floor mode's long frame from an ordinary one (ADR-0009).
+#[must_use]
+pub fn usable_modes_by_rate(thresholds: &[f64], payload: &[usize], frame_s: &[f64]) -> Vec<usize> {
+    let worth = |m: usize| payload[m] as f64 / frame_s[m];
     (0..thresholds.len())
         .filter(|&m| {
             !(0..thresholds.len()).any(|other| {
-                other != m && payload[other] >= payload[m] && thresholds[other] <= thresholds[m]
+                other != m && worth(other) >= worth(m) && thresholds[other] <= thresholds[m]
             })
         })
         .collect()
@@ -157,15 +178,33 @@ impl RateController {
     /// If the table is empty or the two slices disagree in length.
     #[must_use]
     pub fn for_table(config: RateConfig, thresholds: &[f64], payload: &[usize]) -> Self {
+        let frame_s = vec![1.0; thresholds.len()];
+        Self::for_table_timed(config, thresholds, payload, &frame_s)
+    }
+
+    /// The same for a table whose frames differ in length (ADR-0009): modes are compared
+    /// by bytes per second.
+    ///
+    /// # Panics
+    /// If the table's columns differ in length or are empty.
+    #[must_use]
+    pub fn for_table_timed(
+        config: RateConfig,
+        thresholds: &[f64],
+        payload: &[usize],
+        frame_s: &[f64],
+    ) -> Self {
         assert!(
-            !thresholds.is_empty() && thresholds.len() == payload.len(),
-            "a mode table has one threshold and one payload per mode"
+            !thresholds.is_empty()
+                && thresholds.len() == payload.len()
+                && thresholds.len() == frame_s.len(),
+            "a mode table has one threshold, one payload and one air time per mode"
         );
         Self {
             margin_db: config.margin_db,
             config,
             thresholds: thresholds.to_vec(),
-            modes: usable_modes_of(thresholds, payload),
+            modes: usable_modes_by_rate(thresholds, payload, frame_s),
             smoothed_snr_db: None,
             index: 0,
             clean_run: 0,

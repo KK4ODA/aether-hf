@@ -209,6 +209,13 @@ impl FrameCodec {
         if !CRC24A.check(block) {
             return Ok((None, full));
         }
+        // The all-zero word is a codeword of every linear code and its CRC is zero, so a
+        // decoder fed noise (a false detection, a frame read at the wrong start) converges to
+        // it and "passes". No frame of ours is all zeros — the link layer never assigns
+        // session 0 and its other frames have a non-zero kind — so the block is refused.
+        if block.iter().all(|&bit| bit == 0) {
+            return Ok((None, full));
+        }
         let payload_bits = &block[..block.len() - CRC24A.width as usize];
         let payload = payload_bits
             .chunks_exact(8)

@@ -163,6 +163,10 @@ impl SoftFrame for PhyFrame {
         self.frame.mode
     }
 
+    fn floor(&self) -> bool {
+        self.frame.sync.floor
+    }
+
     fn rv(&self) -> u8 {
         self.frame.rv
     }
@@ -893,15 +897,19 @@ impl<P: Ptt> Station<P> {
             seq: 0,
             session: 0,
         };
-        let capacity = self.engine.timing().capacity(0);
+        // beacons go out at the control mode: the slowest ordinary mode whose frame carries
+        // a callsign (mode 0 is a floor mode on the narrow air, ADR-0009)
+        let mode = self.transmitter.air().control_mode().index;
+        let capacity = self.engine.timing().capacity(mode);
         let payload =
             encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
         self.pending
             .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
                 container: Container::Data,
                 payload,
-                mode: 0,
+                mode,
                 rv: 0,
+                floor: false,
             }]));
         self.stats.beacons_sent += 1;
         Ok(())
@@ -1311,7 +1319,7 @@ impl<P: Ptt> Station<P> {
             let layout = self
                 .transmitter
                 .air()
-                .layout_for(container == Container::Data);
+                .layout_for_family(container == Container::Data, decoded.frame.sync.floor);
             let start = decoded.frame.sync.start as f64 / fs;
             let frame = PhyFrame {
                 container,
@@ -1558,7 +1566,10 @@ impl<P: Ptt> Station<P> {
                     self.transmitter.modes()[frame.mode],
                     frame.rv,
                 ),
-                Container::Control => self.transmitter.control_burst(&frame.payload, frame.rv),
+                Container::Control => {
+                    self.transmitter
+                        .control_burst_of(&frame.payload, frame.rv, frame.floor)
+                }
             };
             match burst {
                 Ok(samples) => baseband.extend(samples),
@@ -1678,6 +1689,10 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         preamble_detect_s: Some(4.0 * params.symbol_period_s()),
         data_capacity: capacity,
         mode_threshold_db: thresholds,
+        // the floor family (ADR-0009): its layouts' air times and how many modes use them
+        floor_data_frame_s: air.floor_long.map(|l| l.duration_s()),
+        floor_control_frame_s: air.floor_short.map(|l| l.duration_s()),
+        floor_modes: air.floor_modes,
     }
 }
 
@@ -2473,8 +2488,9 @@ mod tests {
             ..config
         };
         let mut air = Air::with(1.0, 0.0005, narrow);
-        assert_eq!(air.a.engine().timing().data_capacity.len(), 10);
-        assert_eq!(air.a.engine().timing().mode_threshold_db.len(), 10);
+        assert_eq!(air.a.engine().timing().data_capacity.len(), 13);
+        assert_eq!(air.a.engine().timing().mode_threshold_db.len(), 13);
+        assert_eq!(air.a.engine().timing().floor_modes, 2);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(40.0, |a, b| a.connected() && b.connected());
         assert!(
@@ -2489,7 +2505,7 @@ mod tests {
         // the frames the other end reported were narrow-table modes
         let reports = air.b.take_frame_reports();
         assert!(reports.iter().any(|r| r.kind == "data" && r.decoded));
-        assert!(reports.iter().all(|r| r.mode < 10), "{reports:?}");
+        assert!(reports.iter().all(|r| r.mode < 13), "{reports:?}");
         air.a.disconnect();
         air.run(60.0, |a, b| {
             a.state() == State::Idle && b.state() == State::Idle
