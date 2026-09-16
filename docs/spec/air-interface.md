@@ -541,8 +541,8 @@ power into the same noise:
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| Floor mode 0 (QPSK 1/10 on the floor frame, 36 bit/s) | −12.4 dB | −4.0 | −1.0 | −5.0 |
-| Floor mode 1 (QPSK ⅕ on the floor frame, 78 bit/s) | −10.2 | −1.0 | −4.5 | −7.0 |
+| Floor mode 0 (QPSK 1/10 on the floor frame, 36 bit/s) | −12.2 dB | −2.0 | −1.0 | −2.0 |
+| Floor mode 1 (QPSK ⅕ on the floor frame, 78 bit/s) | −10.2 | −1.0 | −4.0 | −5.0 |
 | Control mode (QPSK ½) | −5.2 | +4.0 | +3.5 | +0.0 |
 | 16-QAM ½ | −0.1 | +9.0 | +9.5 | +8.0 |
 | Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +22 | > +23 |

@@ -187,10 +187,14 @@ first — the roadmap asks for the narrow floor and a measured comparison after 
    QPSK 1/10 decodes 90 % at −13 dB, QPSK ⅕ at −10, genie and detected within a
    decibel; the floor control frame decodes at −11 dB against −4 for the ordinary one.
    On ITU Good and Poor the floor frames reach 50 % at −12 dB and 90 % at −4/−2.
-2. `bench_phy.py --bandwidth 500` (`phy_fer_500.csv`, 30 frames a point): 10 % FER at
-   −12.4 dB (mode 0), −10.2 (mode 1) and −6.0 (mode 2) on AWGN; −4.0/−1.0/−5.0 for
-   mode 0 on Good/Moderate/Poor; modes 3–12 within a tenth of a decibel of the P7-0
-   table on AWGN. The rate table was written from it by `update_rate_table.py`.
+2. `bench_phy.py --bandwidth 500` (`phy_fer_500.csv`, 30 frames a point, the detector as
+   shipped): 10 % FER at −12.2 dB (mode 0), −10.2 (mode 1) and −7.0 (mode 2) on AWGN;
+   −2.0/−1.0/−2.0 for mode 0 on Good/Moderate/Poor, on curves so shallow (FER 0.10–0.17
+   across five decibels on Poor) that a run of thirty frames moves the crossing by that
+   much — the grid taken before the evidence rule read −4.0/−1.0/−5.0; modes 3–12 within
+   a tenth of a decibel of the P7-0 table on AWGN. The rate table was written from the
+   earlier grid by `update_rate_table.py` and keeps its −12.4 and −6.0, which differ from
+   this one by less than the sweep's step.
 3. A session through the real modem (`bench_link.py`'s harness): 126 bytes at −10 dB
    AWGN — connect on the floor frame after two unanswered ordinary tries, two bursts,
    an orderly close — where nothing connected below −5.5 dB before; at 8 dB the

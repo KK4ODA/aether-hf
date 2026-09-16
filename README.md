@@ -129,7 +129,7 @@ Conventions that matter:
 * Minimum usable SNR (FER ≤ 10 %, random CFO and sample-rate offset), 2300 Hz: BPSK 1/5 at
   −5.2 dB on AWGN and −0.3 dB on ITU Poor, QPSK 1/2 at +1.0 / +6.0 dB, 16-QAM 1/2 at
   +6.0 / +12.5 dB, 64-QAM 5/6 at +16.9 dB on AWGN. 500 Hz: the floor frame at QPSK 1/10
-  reaches −12.4 dB on AWGN and −5.0 dB on Poor, QPSK ½ at −5.2 dB. The whole table, per
+  reaches −12.2 dB on AWGN and −2.0 dB on Poor, QPSK ½ at −5.2 dB. The whole table, per
   channel class, is in [`bench/README.md`](bench/README.md).
 * **No test threshold is ever relaxed to make a suite pass.** A known defect gets an
   `xfail(strict=True)` that names the finding; a target that genuinely changes gets an ADR.

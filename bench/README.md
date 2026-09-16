@@ -64,15 +64,18 @@ acquisition path changed.
 The narrow waveform (`docs/spec/air-interface.md` §2.3; ADR-0002's P7-0 amendment, the
 floor family of ADR-0009) at the same 3 kHz-referenced SNR as the wide one — the same
 transmitter power into the same noise, which is how an operator compares them. Minimum
-usable SNR for FER ≤ 10 %, interpolated (rerun 2026-09-16 on the thirteen-mode table; the
-fading-channel crossings of the floor modes sit on shallow curves and move a decibel or two
-between runs of thirty frames):
+usable SNR for FER ≤ 10 %, interpolated (measured 2026-09-16 on the thirteen-mode table
+with the detector as shipped — an earlier grid, taken before the evidence rule that settles
+overlapping candidates of the two families, read −12.4/−4.0/−1.0/−5.0 for mode 0 and −6.0
+for mode 2 on AWGN; the fading-channel crossings of the floor modes sit on shallow curves,
+FER 0.10–0.17 across five decibels on Poor, and move by that much between runs of thirty
+frames):
 
 | Narrow mode | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| 0 QPSK 1/10 · floor frame | −12.4 | −4.0 | −1.0 | −5.0 |
-| 1 QPSK 1/5 · floor frame | −10.2 | −1.0 | −4.5 | −7.0 |
-| 2 QPSK 1/3 | −6.0 | +1.0 | +2.0 | −1.3 |
+| 0 QPSK 1/10 · floor frame | −12.2 | −2.0 | −1.0 | −2.0 |
+| 1 QPSK 1/5 · floor frame | −10.2 | −1.0 | −4.0 | −5.0 |
+| 2 QPSK 1/3 | −7.0 | +1.0 | +2.0 | −1.3 |
 | 3 QPSK 1/2 (control mode) | −5.2 | +4.0 | +3.5 | +0.0 |
 | 4 QPSK 2/3 | −3.6 | +5.5 | +5.0 | +4.0 |
 | 5 8-PSK 1/2 | −2.1 | +7.0 | +8.0 | +4.5 |
@@ -85,12 +88,15 @@ between runs of thirty frames):
 | 12 64-QAM 5/6 | +10.4 | +21.0 | > +22 | > +23 |
 
 What the table says. **The floor family (ADR-0009) moves the narrow floor from −5.2 to
-−12.4 dB on AWGN** — QPSK 1/10 on a 4.2 s frame behind an eight-symbol preamble, 19 bytes a
+−12.2 dB on AWGN** — QPSK 1/10 on a 4.2 s frame behind an eight-symbol preamble, 19 bytes a
 frame, 36 bit/s of frame air time — with QPSK ⅕ (41 bytes, 78 bit/s) at −10.2 and QPSK ⅓ on
-the ordinary frame at −6.0 as the rungs up to the control mode. On the fading channels the
-floor frames buy 8–9 dB over the old floor on Good and 5–7 dB on Poor: a 4.2 s frame spans
+the ordinary frame at −7.0 as the rungs up to the control mode. On the fading channels the
+floor frames buy 6 dB over the old floor on Good and 2–5 dB on Poor: a 4.2 s frame spans
 several fades on Poor, which the interleaver turns into diversity, while on Good (0.1 Hz
-Doppler) a frame still sits inside one fade and the shallow curves show it. **Modes 3–12
+Doppler) a frame still sits inside one fade and the shallow curves show it. The rate
+controller's narrow table (`NARROW_AWGN_THRESHOLD_DB`) keeps the earlier grid's −12.4 for
+mode 0 and −6.0 for mode 2: the differences are within the sweep's one-decibel step, and a
+table is not moved for less than a step. **Modes 3–12
 are the P7-0 table**, unchanged within a tenth of a decibel on AWGN: QPSK ½ on twelve
 carriers decodes at −5.2 dB, the wide table's BPSK ⅕ at −5.2 — the ≈ 6.8 dB a 500 Hz
 signal gains per carrier pays for the four rate steps — and the AWGN thresholds sit
