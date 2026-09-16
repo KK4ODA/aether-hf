@@ -123,13 +123,16 @@ the time cap (the channel is below the most robust mode's threshold).
 | −4 | 102 (m0, 0.52) | — | — | — |
 | +0 | 208 (m1, 0.29) | — | — | — |
 | +4 | 544 (m3, 0.37) | 126 (m2, 0.64) | 140 (m2, 0.71) | 191 (m3, 0.36) |
-| +8 | 1151 (m6, 0.52) | 314 (m4, 0.44) | 376 (m4, 0.52) | 567 (m5, 0.39) |
-| +12 | 1607 (m9, 0.48) | 782 (m6, 0.47) | 748 (m6, 0.51) | 1061 (m8, 0.64) |
-| +16 | 1770 (m10, 0.35) | 1246 (m9, 0.56) | 1341 (m9, 0.61) | 1586 (m10, 0.48) |
-| +20 | 2106 (m13, 0.38) | 1607 (m11, 0.48) | 1526 (m11, 0.46) | 1796 (m11, 0.41) |
+| +8 | 1246 (m6, 0.56) | 324 (m3, 0.45) | 383 (m3, 0.53) | 601 (m5, 0.41) |
+| +12 | 1879 (m9, 0.56) | 910 (m8, 0.55) | 910 (m8, 0.62) | 1140 (m8, 0.69) |
+| +16 | 2495 (m10, 0.50) | 1471 (m10, 0.67) | 1403 (m10, 0.64) | 1770 (m10, 0.53) |
+| +20 | 3399 (m12, 0.61) | 2222 (m11, 0.67) | 2144 (m11, 0.65) | 2547 (m11, 0.57) |
 
-Regenerated 2026-09-16 with the faster climb (ADR-0007): a learned margin is given back at
-an accelerating rate once clean burst follows clean burst. Against the previous controller
+Regenerated 2026-09-16 with the faster climb (ADR-0007) and the faster start (ADR-0008):
+a learned margin is given back at an accelerating rate once clean burst follows clean
+burst, and a session starts where the connect frames measured it instead of climbing
+from the most robust mode — which is most of the gain in these 16 kB figures at +8 dB
+and above. Against the previous controller
 on the same bench, +1.8 % net over this grid with no point worse than 0 % (+22 % on Good
 and Moderate at +8 dB, +18 % on Poor), +3.2 % on the narrow table and +5.2 % under the
 fade; the one loss anywhere is −3.4 % on Poor at +4 dB on the narrow table, where the
@@ -182,6 +185,27 @@ controller (16 kB sessions): Moderate +16 dB 1096 → 1419 bps (+29 %), Good +20
 now settles *lower* — mode 6 rather than mode 8 — and still delivers more: the old behaviour
 was overshooting onto a mode the channel could not hold and paying for it in retransmissions.
 
+## Link layer, the start of a session (P9-2, ADR-0008)
+
+`python tools/bench_link.py --bytes 2000 --snr 4,8,12,16,20 --trials 3` (and `--bandwidth
+500 --snr 4,8,12,16`): a 2 kB session — connect, transfer, orderly disconnect — is
+dominated by the climb from the most robust mode. Since 2026-09-16 the acceptance carries
+the SNR the request arrived at and the first burst starts two steps below what that
+supports. Median seconds per session, before → after:
+
+| SNR (3 kHz) | AWGN | Good | Moderate | Poor |
+|---|---|---|---|---|
+| +4 | 37.7 → 32.4 | 131.9 → 146.0 | 115.4 → 125.5 | 91.2 → 75.4 |
+| +8 | 30.3 → 18.7 | 42.9 → 39.2 | 42.9 → 39.7 | 35.5 → 25.6 |
+| +12 | 29.3 → 13.5 | 32.4 → 21.9 | 33.4 → 21.9 | 29.3 → 19.8 |
+| +16 | 29.3 → 10.3 | 29.3 → 16.6 | 29.3 → 15.6 | 29.3 → 12.4 |
+| +20 | 29.3 → 9.3 | 29.3 → 12.4 | 29.3 → 12.4 | 29.3 → 11.4 |
+
+Wide table; the whole grid 887 → 673 s. On the narrow table 1033 → 940 s, no point worse
+than +3.7 %. The +4 dB fading points are within the noise of three trials (ten trials on
+Good and Poor at +8 dB: −7 % and −28 %). Through the real modem at 12 dB: 29.3 → 14.5 s
+wide, 402 → 528 bit/s narrow.
+
 ## Link layer, rate tracking under a fade (`link_ramp.csv`)
 
 A ±8 dB triangular fade (60 s period) around the stated mean, 24 kB transfers. Every run
@@ -196,8 +220,11 @@ changes and retransmissions per run) and carries 5 % more through it.
 
 The fast backend models only the *error process*; all protocol timing is shared with the
 real-PHY harness. Re-running two AWGN points through the real modem reproduces the
-lossy-pipe goodput exactly — 745.9 bps at +8 dB and 849.8 bps at +14 dB on both — because at
-those SNRs no frame fails in either backend, so only the timing matters. Where frames do
+lossy-pipe goodput exactly at +8 dB — 927.6 bps on both — and within 5 % at +14 dB (1535
+against 1617 bps): no frame fails in either backend, so only the timing matters, and the
+one difference is that the modem's SNR estimate of the connect frame reads half a decibel
+under the pipe's nominal figure, which starts the session one mode lower (5 against 6)
+and ends the climb one lower (9 against 10). Where frames do
 fail the two differ: the pipe's error process is a logistic 1.2 dB⁻¹ steep, while the
 modem's measured FER curves are cliffs a decibel wide (`phy_fer_500.csv`, mode 8: 50 % at
 8 dB, 0 % at 9 dB), so the pipe fails the odd frame a few dB above threshold that the modem

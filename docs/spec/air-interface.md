@@ -311,6 +311,25 @@ Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in
 frame), `BEACON` (3), `PROBE` (4) and `PROBE_ACK` (5). A receiver ignores a kind it does
 not know, which is what lets a kind be added.
 
+A `CONNECT_REQ` and a `CONNECT_ACK` carry this body, at the most robust mode:
+
+| Offset | Field |
+|---|---|
+| 0–6 | calling station, packed |
+| 7–13 | called station, packed |
+| 14 | capability byte (§7.3) |
+| 15 | protocol version, 1 |
+| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request arrived at; in a request, 0x7F |
+
+The SNR byte is the **faster start**: a session used to begin at the most robust mode
+and climb from there, a burst per step, proving what the connect frames had already
+measured. The called station starts its rate controller from the request's SNR and
+sends that SNR back; the caller starts its first burst one step below the fastest mode
+that SNR supports with the controller's margin and hysteresis, and starts its own
+controller from the SNR the acceptance arrived at, which is what it will recommend once
+it receives. A station of an earlier version sends a sixteen-byte body, and a receiver
+reads a body that stops at the version byte as "not measured" and starts as before.
+
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
 id of zero and a body that is one packed callsign. It is how an operator answers "can anybody
 hear me?" without arranging a contact first, which on HF is most of what a new station needs
@@ -376,7 +395,7 @@ on every retry.
 
 ### 7.3 Capability negotiation
 
-The connect request and its acceptance each carry a one-byte capability field. A capability is
+The connect request and its acceptance each carry a one-byte capability field (§7.1). A capability is
 used only if **both** stations offered it: a station that has not said it can do something
 cannot be assumed to, and the only safe reading of a missing bit is that the feature is
 unavailable. Unknown bits are ignored, so a later version can add one without breaking an

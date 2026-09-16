@@ -318,7 +318,7 @@ pub const fn data_capacity(phy_payload_bytes: usize) -> usize {
 }
 
 /// Body of a connection request or acceptance: who is calling whom, and what they support.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConnectBody {
     /// Calling station.
     pub src: String,
@@ -328,6 +328,10 @@ pub struct ConnectBody {
     pub caps: u8,
     /// Protocol version.
     pub version: u8,
+    /// In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels — what
+    /// the caller starts its first burst from (P9-2). `None` in a request, and from a
+    /// station of an earlier version, whose body stops at the version byte.
+    pub snr_db: Option<f64>,
 }
 
 /// Capability bit 0: stream compression (deflate) — offered, and used only if both offer.
@@ -370,8 +374,8 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
     (caps & !CAP_BANDWIDTH_MASK) | (code << CAP_BANDWIDTH_SHIFT)
 }
 
-/// Bytes a connect body occupies.
-pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 2;
+/// Bytes a connect body occupies; one of an earlier version is one byte shorter.
+pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
 
 /// The SNR byte shared by the CONTROL frame and the probe body: signed whole decibels
 /// (3 kHz reference), clamped to ±40, [`SNR_UNKNOWN`] for "not measured".
@@ -458,6 +462,7 @@ impl ConnectBody {
         out.extend_from_slice(&pack_callsign(&self.dst)?);
         out.push(self.caps);
         out.push(self.version);
+        out.push(snr_byte(self.snr_db));
         Ok(out)
     }
 
@@ -466,7 +471,7 @@ impl ConnectBody {
     /// # Errors
     /// If the body is short or a callsign is malformed.
     pub fn decode(body: &[u8]) -> Result<Self, FrameError> {
-        if body.len() < CONNECT_BODY_BYTES {
+        if body.len() < 2 * CALL_BYTES + 2 {
             return Err(FrameError::TooShort);
         }
         Ok(Self {
@@ -474,6 +479,10 @@ impl ConnectBody {
             dst: unpack_callsign(&body[CALL_BYTES..2 * CALL_BYTES])?,
             caps: body[2 * CALL_BYTES],
             version: body[2 * CALL_BYTES + 1],
+            // a body from an earlier version stops here: not measured
+            snr_db: body
+                .get(2 * CALL_BYTES + 2)
+                .and_then(|&byte| snr_from_byte(byte)),
         })
     }
 }
@@ -637,6 +646,7 @@ mod tests {
             dst: "KK4XYZ".into(),
             caps: 0b101,
             version: 1,
+            snr_db: None,
         };
         let encoded = body.encode().expect("encode");
         assert_eq!(encoded.len(), CONNECT_BODY_BYTES);

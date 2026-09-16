@@ -869,11 +869,17 @@ impl LinkEngine {
     /// If the slowest mode cannot hold a connect body, which would make the protocol
     /// unusable. The waveform tables satisfy this by a wide margin.
     fn send_connect(&mut self, kind: DataKind) {
+        self.send_connect_with(kind, None);
+    }
+
+    /// A connect frame; an acceptance carries the SNR the request arrived at.
+    fn send_connect_with(&mut self, kind: DataKind, snr_db: Option<f64>) {
         let body = ConnectBody {
             src: self.my_call.clone(),
             dst: self.remote_call.clone(),
             caps: self.config.capabilities,
             version: 1,
+            snr_db,
         };
         let Ok(encoded) = body.encode() else { return };
         let capacity = self.timing.capacity(0);
@@ -1537,8 +1543,8 @@ impl LinkEngine {
             return;
         };
         match header.kind {
-            DataKind::ConnectReq => self.handle_connect_req(header, &body),
-            DataKind::ConnectAck => self.handle_connect_ack(header, &body),
+            DataKind::ConnectReq => self.handle_connect_req(header, &body, snr_db),
+            DataKind::ConnectAck => self.handle_connect_ack(header, &body, snr_db),
             DataKind::Probe => self.handle_probe(&body, snr_db),
             DataKind::ProbeAck => self.handle_probe_ack(&body, snr_db),
             DataKind::Data | DataKind::Beacon => {}
@@ -1595,7 +1601,7 @@ impl LinkEngine {
         });
     }
 
-    fn handle_connect_req(&mut self, header: DataHeader, body: &[u8]) {
+    fn handle_connect_req(&mut self, header: DataHeader, body: &[u8], snr_db: f64) {
         let Ok(request) = ConnectBody::decode(body) else {
             return;
         };
@@ -1624,7 +1630,11 @@ impl LinkEngine {
         self.state = State::Connected;
         self.role = Role::Irs;
         self.arm(Timer::Link, self.config.link_timeout_s);
-        self.send_connect(DataKind::ConnectAck);
+        // the request is the first measurement of how the caller is heard: the
+        // controller starts from it, and the acceptance carries it back so the caller's
+        // first burst can too (P9-2)
+        self.rate.seed(snr_db);
+        self.send_connect_with(DataKind::ConnectAck, Some(snr_db));
         let detail = format!("{} (irs)", self.remote_call);
         self.actions.push(Action::Event {
             name: "connected",
@@ -1632,7 +1642,7 @@ impl LinkEngine {
         });
     }
 
-    fn handle_connect_ack(&mut self, header: DataHeader, body: &[u8]) {
+    fn handle_connect_ack(&mut self, header: DataHeader, body: &[u8], snr_db: f64) {
         if self.state != State::Connecting || header.session != self.session {
             return;
         }
@@ -1659,7 +1669,15 @@ impl LinkEngine {
             name: "connected",
             detail,
         });
-        self.recommended = self.config.initial_mode;
+        // the acceptance says how the request was heard: the first burst starts at what
+        // that supports, less a step, instead of at the slowest mode; the acceptance's
+        // own SNR is how the other station is heard here, which this station's
+        // controller starts from for the day it receives (P9-2)
+        self.rate.seed(snr_db);
+        self.recommended = match accept.snr_db {
+            Some(heard) => self.config.initial_mode.max(self.rate.first_mode(heard)),
+            None => self.config.initial_mode,
+        };
         if self.has_work() {
             self.send_burst();
         } else {

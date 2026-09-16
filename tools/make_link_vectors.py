@@ -72,18 +72,21 @@ def data_frame_cases() -> list[dict]:  # type: ignore[type-arg]
 
 def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
     out = []
-    for src, dst, caps, version in (
-        ("W4ODA", "KK4XYZ", 0, 1),
-        ("M0ABC", "VK2DEF/P", 0b101, 1),
-        ("A1", "9Z9ZZZ9ZZ", 255, 7),
+    for src, dst, caps, version, snr in (
+        ("W4ODA", "KK4XYZ", 0, 1, None),
+        ("M0ABC", "VK2DEF/P", 0b101, 1, 12.5),
+        ("A1", "9Z9ZZZ9ZZ", 255, 7, -7.4),
+        ("KK4ODA", "N0CALL-T", 0b010, 1, 200.0),
     ):
-        body = ConnectBody(src, dst, caps=caps, version=version)
+        body = ConnectBody(src, dst, caps=caps, version=version, snr_db=snr)
         out.append(
             {
                 "src": src,
                 "dst": dst,
                 "caps": caps,
                 "version": version,
+                "snr_db": snr,
+                "decoded_snr_db": ConnectBody.decode(body.encode()).snr_db,
                 "encoded": body.encode().hex(),
             }
         )

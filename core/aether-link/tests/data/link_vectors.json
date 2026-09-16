@@ -824,21 +824,36 @@
    "dst": "KK4XYZ",
    "caps": 0,
    "version": 1,
-   "encoded": "5df3c4040000002cb7d865a000000001"
+   "snr_db": null,
+   "decoded_snr_db": null,
+   "encoded": "5df3c4040000002cb7d865a0000000017f"
   },
   {
    "src": "M0ABC",
    "dst": "VK2DEF/P",
    "caps": 5,
    "version": 1,
-   "encoded": "35b0420c00000058b744146990000501"
+   "snr_db": 12.5,
+   "decoded_snr_db": 12.0,
+   "encoded": "35b0420c00000058b7441469900005010c"
   },
   {
    "src": "A1",
    "dst": "9Z9ZZZ9ZZ",
    "caps": 255,
    "version": 7,
-   "encoded": "05c0000000000091a91a69a91a68ff07"
+   "snr_db": -7.4,
+   "decoded_snr_db": -7.0,
+   "encoded": "05c0000000000091a91a69a91a68ff07f9"
+  },
+  {
+   "src": "KK4ODA",
+   "dst": "N0CALL-T",
+   "caps": 2,
+   "version": 1,
+   "snr_db": 200.0,
+   "decoded_snr_db": 40.0,
+   "encoded": "2cb7cf1010000039b0c130c95400020128"
   }
  ],
  "probe_bodies": [

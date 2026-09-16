@@ -176,6 +176,7 @@ fn connect_bodies_match_the_model() {
         let body = ConnectBody {
             src: case["src"].as_str().expect("src").to_owned(),
             dst: case["dst"].as_str().expect("dst").to_owned(),
+            snr_db: case["snr_db"].as_f64(),
             caps: int(case, "caps") as u8,
             version: int(case, "version") as u8,
         };
@@ -187,7 +188,17 @@ fn connect_bodies_match_the_model() {
             body.src,
             body.dst
         );
-        assert_eq!(ConnectBody::decode(&expected).expect("decode"), body);
+        let decoded = ConnectBody::decode(&expected).expect("decode");
+        assert_eq!(
+            (&decoded.src, &decoded.dst, decoded.caps, decoded.version),
+            (&body.src, &body.dst, body.caps, body.version)
+        );
+        // the SNR is quantised to a signed byte, so compare against what the model read back
+        match (decoded.snr_db, case["decoded_snr_db"].as_f64()) {
+            (None, None) => {}
+            (Some(got), Some(want)) => assert!((got - want).abs() < 1e-12, "SNR {got} vs {want}"),
+            (got, want) => panic!("SNR presence differs, {got:?} vs {want:?}"),
+        }
     }
 }
 

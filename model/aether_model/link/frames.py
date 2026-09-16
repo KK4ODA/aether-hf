@@ -203,23 +203,36 @@ class ConnectBody:
     """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
     (bits 1–2, :func:`bandwidth_code`)."""
     version: int = 1
+    snr_db: float | None = None
+    """In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels, in the
+    CONTROL frame's byte — what the caller starts its first burst from (P9-2). Absent
+    in a request, and from a station of an earlier version, whose body stops at the
+    version byte; a receiver takes a short body as "not measured"."""
 
     def encode(self) -> bytes:
-        return pack_callsign(self.src) + pack_callsign(self.dst) + bytes([self.caps, self.version])
+        snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
+        return (
+            pack_callsign(self.src)
+            + pack_callsign(self.dst)
+            + bytes([self.caps, self.version, snr & 0xFF])
+        )
 
     @classmethod
     def decode(cls, body: bytes) -> ConnectBody:
         if len(body) < 2 * CALL_BYTES + 2:
             raise ValueError("short connect body")
+        raw = body[2 * CALL_BYTES + 2] if len(body) > 2 * CALL_BYTES + 2 else SNR_UNKNOWN
+        snr = None if raw == SNR_UNKNOWN else float(raw - 256 if raw >= 128 else raw)
         return cls(
             src=unpack_callsign(body[:CALL_BYTES]),
             dst=unpack_callsign(body[CALL_BYTES : 2 * CALL_BYTES]),
             caps=body[2 * CALL_BYTES],
             version=body[2 * CALL_BYTES + 1],
+            snr_db=snr,
         )
 
 
-CONNECT_BODY_BYTES = 2 * CALL_BYTES + 2
+CONNECT_BODY_BYTES = 2 * CALL_BYTES + 3
 
 
 @dataclass(frozen=True)

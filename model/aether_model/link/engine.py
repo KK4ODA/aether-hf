@@ -82,6 +82,9 @@ class LinkConfig:
     """Overrides for the rate controller's tunables (``RateController`` fields by name),
     for benches that compare one controller against another; empty means the defaults."""
     initial_mode: int = 0
+    """The slowest mode a session's first burst goes out at. The acceptance's SNR report
+    picks the first mode (P9-2); this is the floor under it, which a bench that pins a
+    mode sets along with :attr:`max_mode`."""
     max_mode: int = 13
     bursts_before_turn: int = 3
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
@@ -492,9 +495,9 @@ class LinkEngine:
         payload = encode_data(DataHeader(rec.kind, rec.seq, self.session), rec.body, cap)
         return TxFrame(Container.DATA, payload, mode=rec.mode, rv=(rec.tx_count - 1) % 4)
 
-    def _send_connect(self, kind: DataKind) -> None:
+    def _send_connect(self, kind: DataKind, snr_db: float | None = None) -> None:
         src, dst = self.my_call, self.remote_call
-        body = ConnectBody(src, dst, caps=self.cfg.capabilities).encode()
+        body = ConnectBody(src, dst, caps=self.cfg.capabilities, snr_db=snr_db).encode()
         cap = self.timing.capacity(0)
         if cap < CONNECT_BODY_BYTES + 5:
             raise ValueError("mode 0 too small for a connect frame")
@@ -941,9 +944,9 @@ class LinkEngine:
         except ValueError:
             return
         if header.kind is DataKind.CONNECT_REQ:
-            self._handle_connect_req(header, body)
+            self._handle_connect_req(header, body, frame.snr_db)
         elif header.kind is DataKind.CONNECT_ACK:
-            self._handle_connect_ack(header, body)
+            self._handle_connect_ack(header, body, frame.snr_db)
         elif header.kind is DataKind.PROBE:
             self._handle_probe(body, frame)
         elif header.kind is DataKind.PROBE_ACK:
@@ -983,7 +986,7 @@ class LinkEngine:
             Event("probe", f"{ack.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB")
         )
 
-    def _handle_connect_req(self, header: DataHeader, body: bytes) -> None:
+    def _handle_connect_req(self, header: DataHeader, body: bytes, snr_db: float) -> None:
         try:
             req = ConnectBody.decode(body)
         except ValueError:
@@ -1009,10 +1012,14 @@ class LinkEngine:
         self._confirmed = False
         self._last_peer_frame = self.now
         self._arm("link", self.cfg.link_timeout_s)
-        self._send_connect(DataKind.CONNECT_ACK)
+        # the request is the first measurement of how the caller is heard: the
+        # controller starts from it, and the acceptance carries it back so the caller's
+        # first burst can too (P9-2)
+        self.rate.seed(snr_db)
+        self._send_connect(DataKind.CONNECT_ACK, snr_db)
         self.actions.append(Event("connected", f"{self.remote_call} (irs)"))
 
-    def _handle_connect_ack(self, header: DataHeader, body: bytes) -> None:
+    def _handle_connect_ack(self, header: DataHeader, body: bytes, snr_db: float) -> None:
         if self.state is not State.CONNECTING or header.session != self.session:
             return
         try:
@@ -1032,7 +1039,14 @@ class LinkEngine:
         self._last_peer_frame = self.now
         self._arm("link", self.cfg.link_timeout_s)
         self.actions.append(Event("connected", f"{self.remote_call} (iss)"))
+        # the acceptance says how the request was heard: the first burst starts at what
+        # that supports, less a step, instead of at the slowest mode; the acceptance's
+        # own SNR is how the other station is heard here, which this station's
+        # controller starts from for the day it receives (P9-2)
+        self.rate.seed(snr_db)
         self._recommended = self.cfg.initial_mode
+        if ack.snr_db is not None:
+            self._recommended = max(self.cfg.initial_mode, self.rate.first_mode(ack.snr_db))
         if self._has_work():
             self._send_burst()
         else:

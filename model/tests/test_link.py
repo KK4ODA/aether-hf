@@ -11,6 +11,7 @@ from aether_model.frame.modes import LONG, MODES, SHORT
 from aether_model.link.engine import LinkConfig, LinkEngine, Role, State, Transmit
 from aether_model.link.frames import (
     CAP_COMPRESSION,
+    CONNECT_BODY_BYTES,
     ConnectBody,
     ControlFlags,
     ControlFrame,
@@ -90,6 +91,65 @@ def test_data_frame_is_identical_across_retransmissions() -> None:
 def test_connect_body_round_trip() -> None:
     body = ConnectBody("W4ODA", "KK4XYZ", caps=0b101, version=1)
     assert ConnectBody.decode(body.encode()) == body
+
+
+def test_a_connect_body_carries_the_snr_the_request_arrived_at() -> None:
+    # the acceptance says how the request was heard (P9-2); a request says nothing, and a
+    # body from an earlier version, which stops at the version byte, reads as nothing
+    ack = ConnectBody("KK4XYZ", "W4ODA", caps=0b010, snr_db=12.5)
+    assert len(ack.encode()) == CONNECT_BODY_BYTES == 17
+    assert ConnectBody.decode(ack.encode()).snr_db == 12.0  # whole dB, ties to even
+    req = ConnectBody("W4ODA", "KK4XYZ")
+    assert ConnectBody.decode(req.encode()).snr_db is None
+    old = req.encode()[:16]
+    assert ConnectBody.decode(old) == req
+
+
+def test_a_session_starts_at_the_mode_the_connect_frames_measured(timing: PhyTiming) -> None:
+    """P9-2: the first burst is not sent at the slowest mode and climbed from; the
+    acceptance carries the SNR the request arrived at, and the caller starts one step
+    below what that supports. Both controllers start from the connect frame they
+    decoded, so the called station's first recommendation is not mode 0 either."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=31)
+    first: list[int] = []
+    original = a._send_burst
+
+    def wrapped() -> None:
+        first.append(min(a._recommended, a.cfg.max_mode))
+        original()
+
+    a._send_burst = wrapped  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    a.send(bytes(600))
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(600)
+    expected = RateController().first_mode(15.0)
+    assert expected > 0
+    assert first[0] == expected, first
+    # and the climb is still allowed from there
+    assert max(first) >= expected
+
+
+def test_the_first_mode_keeps_a_step_in_hand() -> None:
+    rc = RateController()
+    # far below every mode but the slowest: the slowest
+    assert rc.first_mode(-10.0) == usable_modes()[0]
+    # one step below the fastest that fits with margin and hysteresis
+    for snr in (4.0, 9.0, 15.0, 20.0):
+        modes = rc.modes
+        fits = [
+            m for m in modes if AWGN_THRESHOLD_DB[m] + rc.margin_db + rc.up_hysteresis_db <= snr
+        ]
+        top = modes.index(fits[-1])
+        assert rc.first_mode(snr) == modes[max(0, top - 1)], snr
+    # seeding places the controller there and takes the measurement, once
+    rc.seed(15.0)
+    assert rc.recommend() == rc.first_mode(15.0)
+    assert rc.snr_db == 15.0
+    rc.seed(2.0)
+    assert rc.snr_db == 15.0  # a second seed changes nothing
 
 
 def test_probe_body_round_trips_and_clamps_its_snr() -> None:

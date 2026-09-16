@@ -148,6 +148,9 @@ class RateController:
     """Consecutive clean bursts required before any upshift."""
     max_up_step: int = 2
     """Most modes to climb at once, so a link never leaps onto an untried mode."""
+    first_mode_back: int = 2
+    """Steps kept in hand by :meth:`first_mode`: how far below the fastest mode one
+    measurement supports a session's first burst goes out."""
     thresholds: dict[int, float] = field(default_factory=lambda: dict(AWGN_THRESHOLD_DB))
     modes: list[int] = field(default_factory=usable_modes)
     snr_db: float | None = None
@@ -216,6 +219,32 @@ class RateController:
 
     def recommend(self) -> int:
         return self.modes[self._index]
+
+    # ── the faster start (P9-2) ───────────────────────────────────────
+
+    def first_mode(self, snr_db: float) -> int:
+        """The mode a session should start at, given one measurement and nothing else:
+        the fastest mode that fits under ``snr_db`` with the margin and the hysteresis a
+        step up would demand, less one step. The measurement is of a mode-0 frame — the
+        most robust there is — and a burst at a fast mode is more exposed to what the
+        channel does within a frame, so the first burst keeps :attr:`first_mode_back` steps in hand
+        and the climb makes them up in a burst if the channel allows."""
+        fit = 0
+        for i in range(1, len(self.modes)):
+            if self.thresholds[self.modes[i]] + self.margin_db + self.up_hysteresis_db > snr_db:
+                break
+            fit = i
+        return self.modes[max(0, fit - self.first_mode_back)]
+
+    def seed(self, snr_db: float) -> None:
+        """Start from a measurement — the connect frame this station decoded — instead of
+        from the slowest mode: the smoothed SNR becomes the measurement and the
+        recommendation :meth:`first_mode`. Only before anything has been observed; a
+        controller that has seen bursts knows more than one frame can tell it."""
+        if self._smoothed is not None:
+            return
+        self._smoothed = self.snr_db = snr_db
+        self._index = self.modes.index(self.first_mode(snr_db))
 
     # ── the state machine ─────────────────────────────────────────────
 

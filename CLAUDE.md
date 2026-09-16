@@ -237,7 +237,17 @@ and a half low for its whole length after one collision. `tools/bench_link.py` h
 `--bandwidth 500` and `--rate k=v,…` (and `LinkConfig.rate` overrides) for A/B runs;
 rejected on the bench: "a lone failure is an accident" (−11 % Moderate 16 dB). The link
 bench's lossy pipe (logistic 1.2 dB⁻¹) is softer than the modem's FER cliffs — settle
-threshold-level questions on `--backend phy`. Then P9-2
+threshold-level questions on `--backend phy`. **The faster start** (ADR-0008, same day,
+model first): the CONNECT_ACK body has a 17th byte, the SNR the request arrived at
+(CONTROL-frame byte; a 16-byte body from an earlier version reads as "not measured");
+both engines `seed` their rate controller from the connect frame they decoded, and the
+caller's first burst goes out at `first_mode(snr)` = the fastest fitting mode less
+`first_mode_back` (2 — one step cost +17 % on Poor 8 dB narrow and made a 64-QAM first
+burst on the ~50 dB loopback decode nothing; open question for P9-1). `initial_mode` is
+the floor under it. 2 kB sessions −24 % (wide) / −9 % (narrow); real modem at 12 dB
+29 → 15 s. A worktree at HEAD (`git worktree add C:/Dev/aether-before HEAD`) plus
+`python -m uv run --project model python C:/Dev/aether-before/tools/bench_link.py …` is
+how a "before" number is taken without stashing. Next
 the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate

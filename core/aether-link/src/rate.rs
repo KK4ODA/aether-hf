@@ -96,6 +96,9 @@ pub struct RateConfig {
     pub up_dwell: usize,
     /// Most modes to climb at once, so a link never leaps onto an untried mode.
     pub max_up_step: usize,
+    /// Steps kept in hand by [`RateController::first_mode`]: how far below the fastest mode
+    /// one measurement supports a session's first burst goes out.
+    pub first_mode_back: usize,
 }
 
 impl Default for RateConfig {
@@ -113,6 +116,7 @@ impl Default for RateConfig {
             up_hysteresis_db: 1.5,
             up_dwell: 1,
             max_up_step: 2,
+            first_mode_back: 2,
         }
     }
 }
@@ -175,6 +179,41 @@ impl RateController {
     #[must_use]
     pub fn recommend(&self) -> usize {
         self.modes[self.index]
+    }
+
+    /// The mode a session should start at, given one measurement and nothing else: the
+    /// fastest mode that fits under `snr_db` with the margin and the hysteresis a step
+    /// up would demand, less one step. The measurement is of a mode-0 frame — the most
+    /// robust there is — and a burst at a fast mode is more exposed to what the channel
+    /// does within a frame, so the first burst keeps `first_mode_back` steps in hand and
+    /// the climb makes them up in a burst if the channel allows (P9-2, ADR-0008).
+    #[must_use]
+    pub fn first_mode(&self, snr_db: f64) -> usize {
+        let mut fit = 0;
+        for index in 1..self.modes.len() {
+            if self.thresholds[self.modes[index]]
+                + self.config.margin_db
+                + self.config.up_hysteresis_db
+                > snr_db
+            {
+                break;
+            }
+            fit = index;
+        }
+        self.modes[fit.saturating_sub(self.config.first_mode_back)]
+    }
+
+    /// Start from a measurement — the connect frame this station decoded — instead of
+    /// from the slowest mode: the smoothed SNR becomes the measurement and the
+    /// recommendation [`first_mode`](Self::first_mode). Only before anything has been
+    /// observed; a controller that has seen bursts knows more than one frame can tell it.
+    pub fn seed(&mut self, snr_db: f64) {
+        if self.smoothed_snr_db.is_some() {
+            return;
+        }
+        self.smoothed_snr_db = Some(snr_db);
+        let first = self.first_mode(snr_db);
+        self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
     }
 
     /// The smoothed SNR, once anything has been measured.
