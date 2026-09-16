@@ -635,7 +635,17 @@ anything else. Every item is model first, benchmark curve second, port third; th
 Small things for the gaps between: CM108/GPIO keying (the DRA and AllStar interfaces;
 one more `ptt.rs` backend), BPQ32 over `[sim]` (human), three hams through the wizard
 (human), Authenticode signing (needs a certificate), the panel's SNR history surviving a
-reload. **Back burner:** Phase 10 (Aether FM) and Phase 8 (the phone).
+reload. **Host benches still owed (human, scratch copies under `C:\Dev\AetherBench`):**
+Winlink Express P2P again at 500 Hz and on the engine as it is now (its 2300 Hz pass
+predates the faster start and climb; `BW500` from its bandwidth setting must come back
+`OK`) — a `host-interfaces.md` §7 row; and **RMS Trimode with RMS Relay over `[sim]`**, a
+Winlink Express client calling an Aether-fed Trimode as a gateway, which speaks the same
+VARA TCP port (`LISTEN ON`, `PUBLIC ON`, `CWID`, several `MYCALL`s, `CONNECTED` for
+incoming calls). Two things to know before that one: Trimode needs a Winlink sysop
+account to run, and a *public* RMS gateway on Aether is the Winlink Development Team's
+call, not ours — the bench proves the modem side; the policy conversation is separate.
+BPQ32 is the open-source gateway route and reaches AX.25 as well. **Back burner:** Phase
+10 (Aether FM) and Phase 8 (the phone).
 
 ---
 
@@ -743,4 +753,5 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
 9. **P9-1** `tools/channel_cable.py` and the A/B protocol; the runs when the author can.
 10. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor.
 11. Between any two of the above: CM108 keying; the panel's SNR history across a reload;
-    whatever the air finds.
+    whatever the air finds. Host benches owed: Winlink Express P2P at 500 Hz, RMS Trimode
+    + Relay as a gateway over `[sim]` (both human; see the small-things paragraph above).
