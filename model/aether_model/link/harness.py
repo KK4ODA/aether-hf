@@ -64,8 +64,9 @@ def bandwidth_capabilities(params: WaveformParams = WIDE_2300, caps: int = 0) ->
 def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) -> PhyTiming:
     """Timing and per-mode capacities for the real waveform.
 
-    ``preamble_detect_s`` is four symbol periods: the two Schmidl–Cox symbols the detector
-    correlates against, plus the one-symbol sidelobe guard it needs before accepting a peak
+    ``preamble_detect_s`` is the air's longest preamble plus two symbol periods: the
+    Schmidl–Cox symbols the detector correlates against (two, or eight for the floor family
+    of ADR-0009), plus the one-symbol sidelobe guard it needs before accepting a peak
     (P2-3), plus a symbol of slack for block-boundary latency in the streaming receiver.
     Pass ``start_of_frame=False`` to model a PHY that cannot report preambles.
     """
@@ -79,7 +80,14 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
         control_frame_s=air.short.duration_s,
         turnaround_s=0.25,
         detect_latency_s=0.15,
-        preamble_detect_s=4 * params.symbol_period_s if start_of_frame else None,
+        # the longest preamble of the air plus the sidelobe guard and a symbol of slack: four
+        # symbols on the wide air, ten where the floor family's eight-symbol preamble is
+        # only complete that late (ADR-0009)
+        preamble_detect_s=(
+            (max(x.preamble_symbols for x in air.layouts) + 2) * params.symbol_period_s
+            if start_of_frame
+            else None
+        ),
         data_capacity=caps,
         mode_threshold_db=dict(thresholds),
         floor_data_frame_s=air.floor_long.duration_s if air.floor_long else None,

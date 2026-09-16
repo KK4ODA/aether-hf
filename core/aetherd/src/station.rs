@@ -1685,8 +1685,10 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         detect_latency_s: 0.15,
         // the station fills this in from its keying lead and the daemon's playback backlog
         tx_latency_s: 0.0,
-        // acquisition reports a frame about two preamble symbols in, plus the search block
-        preamble_detect_s: Some(4.0 * params.symbol_period_s()),
+        // acquisition reports a frame once its whole preamble is in, plus the search block:
+        // four symbols on the wide air, ten where the floor family's eight-symbol preamble
+        // is only complete that late (ADR-0009)
+        preamble_detect_s: Some((air.longest_preamble() + 2) as f64 * params.symbol_period_s()),
         data_capacity: capacity,
         mode_threshold_db: thresholds,
         // the floor family (ADR-0009): its layouts' air times and how many modes use them

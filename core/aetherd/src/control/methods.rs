@@ -913,7 +913,16 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
         "bandwidth_hz": params.bandwidth.hz(),
         "bandwidths_hz": [2300, 500],
         "modes": modes,
-        "usable_modes": aether_link::rate::usable_modes_of(thresholds, payload),
+        // by bytes per second, since a floor mode's frame is four times as long (ADR-0009)
+        "usable_modes": aether_link::rate::usable_modes_by_rate(
+            thresholds,
+            payload,
+            &air
+                .modes
+                .iter()
+                .map(|m| air.data_layout(m.index).duration_s())
+                .collect::<Vec<f64>>(),
+        ),
         "reports_preambles": true,
         "snr_reference_hz": 3000,
     })

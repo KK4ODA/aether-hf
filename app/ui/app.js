@@ -241,7 +241,7 @@ function applyMetrics(metrics) {
     $("v-mode").textContent = String(mode);
     const entry = modeTable[mode];
     $("v-mode-name").textContent = entry
-      ? `${entry.name} · ${Math.round(entry.net_bit_rate)} bit/s`
+      ? `${entry.name}${entry.floor ? " (floor)" : ""} · ${Math.round(entry.net_bit_rate)} bit/s`
       : "";
   }
   if (metrics.queued_bytes !== undefined) {
@@ -1191,7 +1191,8 @@ async function loadCapabilities() {
     row.dataset.usable = String(usable.has(mode.index));
     for (const [text, numeric] of [
       [String(mode.index), true],
-      [mode.name, false],
+      // a floor mode rides the long floor frame (ADR-0009): its bytes are per 4.2 s
+      [mode.floor ? `${mode.name} · floor` : mode.name, false],
       [String(mode.payload_bytes), true],
       [`${Math.round(mode.net_bit_rate)} bit/s`, true],
       [`${mode.threshold_db.toFixed(1)} dB`, true],
