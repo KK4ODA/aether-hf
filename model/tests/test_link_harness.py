@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from aether_model.link.engine import LinkConfig, LinkEngine, State
-from aether_model.link.harness import phy_timing, two_modem_sim
+from aether_model.link.harness import PhyBridge, phy_timing, two_modem_sim
+from aether_model.phy.preamble import FrameType
+from aether_model.waveform import NARROW_500, WIDE_2300
 
 
 @pytest.fixture(scope="module")
@@ -47,6 +49,25 @@ def test_real_phy_harq_ir_rescue_below_threshold(timing: object) -> None:
     sim.run(until=1500)
     assert sim.delivered(1) == msg
     assert b.stats.harq_rescues > 0
+
+
+def test_the_bridge_leaves_room_for_a_control_burst_read_as_data() -> None:
+    """On a fading channel the detector now and then reads a control burst's header as
+    DATA and the receiver wants the long layout's samples; a real receiver has them,
+    because audio keeps arriving, so the bridge's buffer must too. Found seven minutes
+    into a Poor-channel run of the link bench, as "frame runs past the end of the buffer"."""
+    from aether_model.phy.rx import layout_for
+
+    for params in (WIDE_2300, NARROW_500):
+        bridge = PhyBridge(channel="poor", snr_db=10.0, params=params)
+        control = bridge.modem.control_burst(bytes(7), 0)
+        buf = bridge.padded(control)
+        span = layout_for(FrameType.DATA, params).samples + bridge.modem.rx.dem.fft_offset
+        # a start anywhere up to a symbol late still fits a DATA span
+        assert len(buf) >= bridge.lead + params.symbol_samples + span, params.bandwidth
+        capacity = int(phy_timing(params).data_capacity[0])
+        data = bridge.modem.data_burst(bytes(capacity), bridge.modem.modes[0], 0)
+        assert len(bridge.padded(data)) >= bridge.lead + len(data) + bridge.tail
 
 
 def test_real_phy_probe_reports_both_directions(timing: object) -> None:

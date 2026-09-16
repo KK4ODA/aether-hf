@@ -28,7 +28,7 @@ from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
 from aether_model.link.sim import TwoStationSim
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameType
-from aether_model.phy.rx import ReceivedFrame
+from aether_model.phy.rx import ReceivedFrame, layout_for
 from aether_model.waveform import WIDE_2300, Bandwidth, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
@@ -106,6 +106,9 @@ class PhyBridge:
         self._rng = np.random.default_rng(seed)
         self.rendered = 0
         self.detected = 0
+        self.overrun = 0
+        """Frames the detector placed so late that their span left the buffer even with
+        the padding below — lost, as a receiver that ran out of audio would lose them."""
         self.modes_sent: list[int] = []
         """The mode of every DATA frame rendered, in order — what the rate controller did."""
 
@@ -115,12 +118,24 @@ class PhyBridge:
             return self.modem.data_burst(frame.payload, self.modem.modes[frame.mode], frame.rv)
         return self.modem.control_burst(frame.payload, frame.rv)
 
+    def padded(self, burst: ComplexArray) -> ComplexArray:
+        """The burst between its lead and tail of silence.
+
+        The tail is long enough for a DATA frame's span from any start inside the burst,
+        whatever was sent: on a fading channel the detector now and then reads a control
+        burst's header as DATA, and the receiver then wants the long layout's samples —
+        which a real receiver has, since audio keeps arriving. Here it would run off the
+        end of the buffer instead, and did, seven minutes into a Poor-channel run."""
+        p = self.modem.p
+        span = layout_for(FrameType.DATA, p).samples + self.modem.rx.dem.fft_offset
+        tail = max(self.tail, span + p.symbol_samples - len(burst))
+        return np.concatenate((np.zeros(self.lead, complex), burst, np.zeros(tail, complex)))
+
     def factory(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
     ) -> SoftFrame | None:
         self.rendered += 1
-        burst = self._burst(frame)
-        buf = np.concatenate((np.zeros(self.lead, complex), burst, np.zeros(self.tail, complex)))
+        buf = self.padded(self._burst(frame))
         seed = int(self._rng.integers(0, 2**31))
         cfo = float(self._rng.uniform(-100, 100))
         ch = make_channel(
@@ -130,7 +145,12 @@ class PhyBridge:
         syncs = self.modem.detector.detect(y, max_frames=1)
         if not syncs:
             return None
-        received = self.modem.demodulate(y, syncs[0])
+        try:
+            received = self.modem.demodulate(y, syncs[0])
+        except ValueError:
+            # placed later than a symbol past the burst: gone, and counted
+            self.overrun += 1
+            return None
         self.detected += 1
         container = (
             Container.DATA
