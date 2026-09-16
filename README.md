@@ -22,7 +22,24 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 > channel**, attachments byte-identical on arrival. Two on-air bugs have been found and fixed
 > from a rig's scope; logged on-air sessions with other stations are what remains (Phase 6).
 > Every performance figure in this repository comes from a committed benchmark curve in
-> `bench/baselines/`.
+> `bench/baselines/`. A **Test session** (Session → *Test session*) runs a fixed sequence
+> against any listening station — a probe, a message, a file, a burst at every mode —
+> records it, and Help → *Contribute* turns the recording into a report the project can
+> replay: how every volunteer contact becomes a measurement.
+
+## Screenshots
+
+The station panel during a Test session on the bench — two daemons on one machine over
+the simulated channel at 12 dB. The caller's Status tab: the readings, the SNR of every
+frame with what the other station reports, and the channel's rhythm of bursts,
+acknowledgements and this station's own transmissions:
+
+![The Status tab of the calling station during a Test session](docs/images/panel-status.png)
+
+The other station's Diagnostics tab while the file arrives: the last frame's constellation,
+the spectrum, the waterfall, and every frame the receiver found:
+
+![The Diagnostics tab of the receiving station](docs/images/panel-diagnostics.png)
 
 ## Getting it
 
@@ -67,7 +84,7 @@ distilled from how the community received Mercury, the other VARA alternative, i
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, VARA-compatible TCP, gateway kit | done; Pat and Winlink Express pass the bench, VarAC waits on a 500 Hz waveform |
 | 4 — Desktop application | station panel, Tauri shell, setup wizard, diagnostics, accessibility | done; the three-ham usability test is open |
 | 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.20` |
-| 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air; then on-air crowdsourcing — a Test session every volunteer can run, whose sidecar the bench replays (P6-7) | **in progress**: tooling done, the air open (`field/LOG.md`) |
+| 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air; then on-air crowdsourcing — a Test session every volunteer can run, whose sidecar the bench replays (P6-7) | **in progress**: tooling done, the Test session built (Session → *Test session*: probe, message, file, a burst at every mode, recorded; Help → *Contribute*), the air open (`field/LOG.md`) |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth P2P contacts are made in (VarAC's calling frequencies), the bandwidth in the connect handshake, an answer-only unattended mode, and a two-way SNR probe | **done on the bench**: the 500 Hz waveform (`[radio] bandwidth = 500`, `BW500`, answer-only), the probe (ADR-0006), and VarAC pinging and connecting over the simulated channel at 500 Hz; the air with a VarAC station remains. Phase 9 has begun: the rate controller climbs back faster after a failure (ADR-0007) and a session starts where the connect frames measured it (ADR-0008) — a 2 kB session at 12 dB in 15 s instead of 29. The 500 Hz air has its floor (ADR-0009): a frame family with an eight-symbol preamble and tenth-rate QPSK, acquired at −12 dB and decoded at −11 through the real modem, a session at −10 dB where nothing connected below −5.5 before |
 | 9 — The modem's second rung | a faster start, modes below 200 bit/s, an audio-level A/B bench against VARA HF, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | next, interleaved with 7 |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to over Bluetooth or Wi-Fi, then a phone app, then the modem inside the phone | back burner |
