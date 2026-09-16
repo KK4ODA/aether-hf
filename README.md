@@ -157,7 +157,7 @@ the air.
 Aether HF is free software and stays that way. The bench it is measured on — radios,
 interfaces, the hours on the air — is paid for by its author. If the modem is useful to
 you, a contribution through
-[PayPal](https://www.paypal.com/donate/?business=kk4oda%40gmail.com&item_name=Aether+HF&currency_code=USD)
+[PayPal](https://paypal.me/facundofern)
 (also the *Sponsor* button above) helps keep it on the air. An on-air report is worth as
 much.
 
