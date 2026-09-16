@@ -48,7 +48,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.19` on 2026-09-14…16, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.20` on 2026-09-14…16, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
 on-air attempt found two bugs (below), and the air is what remains (P6-6).
