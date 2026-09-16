@@ -179,6 +179,18 @@ pub struct LinkStats {
     pub frames_reencoded: usize,
 }
 
+/// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
+/// on our probe, and the SNR we measured on their answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeResult {
+    /// The station that answered.
+    pub remote: String,
+    /// The SNR it measured on our probe, when it said.
+    pub heard_there_db: Option<f64>,
+    /// The SNR we measured on its answer.
+    pub heard_here_db: f64,
+}
+
 /// One burst sent at a pinned mode and what came back for it: a rung of the Test
 /// session's mode ladder (P6-7), the frame error rate the peer saw at the SNR it measured.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -330,6 +342,9 @@ pub struct LinkEngine {
     peer_mode: Option<usize>,
     /// The station a probe of ours is out to, until it answers or the timer fires.
     probing: Option<String>,
+    /// What the last probe came back with; none while one is out, or after one went
+    /// unanswered.
+    last_probe: Option<ProbeResult>,
     /// A mode every new burst goes out at while set, whatever the peer recommends: the
     /// Test session's mode ladder (P6-7).
     pinned: Option<usize>,
@@ -423,6 +438,7 @@ impl LinkEngine {
             peer_floor: false,
             peer_mode: None,
             probing: None,
+            last_probe: None,
             pinned: None,
             pin_body: None,
             ladder_pending: None,
@@ -532,6 +548,24 @@ impl LinkEngine {
     #[must_use]
     pub fn ladder(&self) -> &[LadderRung] {
         &self.ladder
+    }
+
+    /// What the last probe came back with.
+    #[must_use]
+    pub fn last_probe(&self) -> Option<&ProbeResult> {
+        self.last_probe.as_ref()
+    }
+
+    /// Whether a probe of ours is out, unanswered and not yet given up on.
+    #[must_use]
+    pub fn probing(&self) -> bool {
+        self.probing.is_some()
+    }
+
+    /// Whether everything handed to [`send`](Self::send) has left and been acknowledged.
+    #[must_use]
+    pub fn all_acknowledged(&self) -> bool {
+        self.tx_queue.is_empty() && self.records.iter().all(|r| r.acked)
     }
 
     /// Bytes queued, or sent but not yet acknowledged.
@@ -683,6 +717,7 @@ impl LinkEngine {
         self.my_call = mine;
         let remote = remote_call.to_ascii_uppercase();
         self.stats.probes_sent += 1;
+        self.last_probe = None;
         self.send_probe(DataKind::Probe, &remote, None);
         self.probing = Some(remote);
         let wait = self.response_wait(self.timing.data_frame_s_for(self.robust_mode(false)), 0.0);
@@ -1848,6 +1883,11 @@ impl LinkEngine {
         self.disarm(Timer::Probe);
         self.probing = None;
         self.stats.probe_replies += 1;
+        self.last_probe = Some(ProbeResult {
+            remote: answer.src.clone(),
+            heard_there_db: answer.snr_db,
+            heard_here_db: snr_db,
+        });
         let theirs = answer
             .snr_db
             .map_or_else(|| "?".to_owned(), |value| format!("{value:.0}"));

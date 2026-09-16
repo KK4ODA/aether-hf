@@ -184,6 +184,14 @@ impl Recording {
         self.frames.push(record);
     }
 
+    /// Put something under `session` in the sidecar — a Test session's report, say —
+    /// replacing what was there under that key.
+    pub fn set_session_field(&mut self, key: &str, value: Value) {
+        if let Some(object) = self.meta.as_object_mut() {
+            object.insert(key.to_owned(), value);
+        }
+    }
+
     /// Something that happened: a session event, the transmitter keyed or released.
     pub fn event(&mut self, now_s: f64, event: &str, detail: &str, state: &str) {
         self.events.push(json!({

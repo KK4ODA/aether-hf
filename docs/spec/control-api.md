@@ -117,6 +117,9 @@ needs no token, so it must not be able to read the one that guards a network bin
 | `abort` | — | accepted; drops the session immediately |
 | `beacon` | — | accepted; one frame with this station's callsign, addressed to nobody, at the most robust mode. Refused during a session and on an answer-only station |
 | `probe` | `remote`, `callsign?` | accepted; one frame asking `remote` whether it hears this station, and how well (ADR-0006). The answer, or its absence, arrives as a `log` event named `probe`: `<call> hears us at <x> dB, heard at <y> dB` — the SNR the other station measured on the probe, and the SNR this one measured on the answer — or `<call>: no answer` after one frame's turnaround. One probe out at a time (`not_idle`, retryable); refused during a session and on an answer-only station, which answers probes and sends none. The other end reports a probe it answered as a `log` event named `probed` |
+| `test.start` | `remote`, `callsign?`, `remote_grid?`, `message_bytes?` (2048), `file_bytes?` (16384), `ladder?` (true), `rung_frames?` (6) | accepted; the **Test session** of P6-7 with `remote`: a probe, a call, the message and the file (incompressible bytes, timed), then the **mode ladder** — a burst pinned at each mode from the floor up, its frames small enough to be re-encoded at a slower mode if that mode fails, until three rungs in a row decode fewer than half their frames — then an orderly disconnect. All of it is one recording named `…_test`, with the report under the sidecar's `session.test` and the operator's `[operator]` grid, rig, power and antenna beside it. Progress arrives as `log` events named `test`, and `status.test` gives the step, the elapsed time and the rungs so far while it runs. The other station only listens; an answer-only station is a fine partner. Refused (`not_idle`) during a session, a probe or another test, and on an answer-only station |
+| `test.status` | — | `running`, and `results` — the running test's, or the last one's until the next starts: `remote`, `started`, `elapsed_s`, `step`, `outcome` (`complete`, or `aborted: <why>`), `bandwidth_hz`, `probe` (`heard_there_db`, `heard_here_db`; null when unanswered), `message` and `file` (`bytes`, `seconds`, `bps`), `ladder` (per rung: `mode`, `frames`, `decoded`, `snr_db` as the other station measured it, `seconds`), `path` (`my_grid`, `their_grid`, `km` from the two grids) |
+| `test.abort` | — | `aborted`: whether one was running. The session is aborted and the outcome recorded |
 | `listen` | `enabled` | accepted |
 | `send` | `data` (base64) | bytes accepted into the queue |
 
@@ -194,7 +197,7 @@ was on. Each change goes out as a `heard` event.
 | `ptt` | transmit starts or stops | on |
 | `busy` | channel busy detector changes | busy |
 | `device` | a device appears or disappears | kind, name, present |
-| `log` | notable events | level, message |
+| `log` | notable events | level, message. A Test session reports every step as a `log` event named `test`: the probe's answer, `connected`, each transfer's bytes and seconds, each rung as `rung mode <m>: <decoded>/<frames> decoded at <snr> dB`, and `complete` or `aborted: <why>` |
 
 `metrics` is the operator's window into the link. `snr_db` is referenced to 3 kHz, like every
 SNR in this project; `mode` is the index into the table returned by `capabilities`. Every

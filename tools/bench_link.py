@@ -21,6 +21,15 @@ Two backends:
 trough over ``--ramp-period`` s) and reports how the controller tracked it: the modes it
 used, how often it changed them, and what that cost in retransmissions.
 
+``--replay <sidecar.json>`` (P6-7) runs the engines against what a recorded session did: the
+SNR the receiver measured, frame by frame, becomes the schedule the pipe follows, and the
+per-mode thresholds are the AWGN table shifted by the penalty that best explains the
+session's own decodes — the Test session's ladder when there is one (a burst pinned at each
+mode, so the frame error rate per mode is measured directly), the data frames otherwise.
+The transfer is the size the session carried. What comes out is the goodput the model's
+engines would have got on that path beside what the air delivered, and the fitted penalty,
+which is the on-air equivalent of ``channel_thresholds``.
+
 Output columns: backend, channel, snr_db (or ramp description), bytes, seconds, goodput_bps,
 ideal_bps, efficiency, mode_min/mode_max/mode_final, mode_changes, bursts, frames_sent,
 frames_resent, harq_rescues, ack_timeouts, ok.
@@ -30,10 +39,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import math
 import statistics
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from itertools import pairwise
 from pathlib import Path
 
@@ -132,12 +144,12 @@ def run_point(
     ramp: tuple[float, float] | None = None,
     air: AirInterface = WIDE,
     rate: dict[str, float | int] | None = None,
+    schedule: Callable[[float], float] | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
     cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
     a = LinkEngine("W4ODA", timing, cfg, seed=seed)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
-    schedule = None
     if ramp is not None:
         span, period = ramp
         top, half = snr_db + span / 2, period / 2
@@ -203,6 +215,124 @@ def run_point(
     }
 
 
+# ── a recorded session, replayed (P6-7) ──────────────────────────────
+
+_REPLAY_STEEP = 1.2
+"""The pipe's logistic steepness, as ``aether_model.link.sim`` has it."""
+
+
+def sidecar_schedule(document: dict[str, object]) -> Callable[[float], float] | None:
+    """The SNR the receiver measured, frame by frame, as a function of session time:
+    linear between frames, held at the ends. ``None`` when the sidecar has fewer than two
+    frames with an SNR."""
+    frames = document.get("frames") or []
+    assert isinstance(frames, list)
+    points = sorted(
+        (float(f["t_s"]), float(f["snr_3k_db"]))
+        for f in frames
+        if isinstance(f, dict) and isinstance(f.get("snr_3k_db"), (int, float))
+    )
+    if len(points) < 2:
+        return None
+    t0 = points[0][0]
+    points = [(t - t0, s) for t, s in points]
+
+    def schedule(t: float) -> float:
+        if t <= points[0][0]:
+            return points[0][1]
+        if t >= points[-1][0]:
+            return points[-1][1]
+        for (x0, y0), (x1, y1) in pairwise(points):
+            if x0 <= t <= x1:
+                return y0 if x1 == x0 else y0 + (y1 - y0) * (t - x0) / (x1 - x0)
+        return points[-1][1]
+
+    return schedule
+
+
+def fit_penalty(observations: list[tuple[int, int, int, float]], awgn: dict[int, float]) -> float:
+    """The shift of the AWGN thresholds, dB, that best explains ``(mode, frames, decoded,
+    snr_db)`` observations under the pipe's logistic model: least squares over the frame
+    error rates, weighted by frames, searched at a quarter of a decibel. Zero when there is
+    nothing to fit."""
+    usable = [(m, n, d, s) for m, n, d, s in observations if n > 0 and m in awgn]
+    if not usable:
+        return 0.0
+
+    def cost(shift: float) -> float:
+        total = 0.0
+        for mode, frames, decoded, snr in usable:
+            predicted = 1.0 - 1.0 / (1.0 + math.exp(-_REPLAY_STEEP * (snr - awgn[mode] - shift)))
+            total += frames * (predicted - (1.0 - decoded / frames)) ** 2
+        return total
+
+    grid = [x / 4.0 for x in range(-24, 121)]  # −6 … +30 dB
+    return min(grid, key=cost)
+
+
+def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, int, float]]:
+    """What the session says about each mode: the ladder's rungs when there was a Test
+    session, else the data frames the receiver found, one observation each."""
+    session = document.get("session") or {}
+    assert isinstance(session, dict)
+    test = session.get("test") or {}
+    assert isinstance(test, dict)
+    rungs = [
+        (int(r["mode"]), int(r["frames"]), int(r["decoded"]), float(r["snr_db"]))
+        for r in test.get("ladder") or []
+        if isinstance(r, dict) and isinstance(r.get("snr_db"), (int, float))
+    ]
+    if rungs:
+        return rungs
+    frames = document.get("frames") or []
+    assert isinstance(frames, list)
+    return [
+        (int(f["mode"]), 1, int(bool(f.get("decoded"))), float(f["snr_3k_db"]))
+        for f in frames
+        if isinstance(f, dict)
+        and f.get("kind") == "data"
+        and isinstance(f.get("snr_3k_db"), (int, float))
+    ]
+
+
+def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
+    """One run of the engines against a recorded session."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("format") != "aether-hf-session/1":
+        raise ValueError(f"{path}: not a session sidecar")
+    session = document.get("session") or {}
+    test = session.get("test") or {}
+    air = NARROW if session.get("bandwidth_hz") == 500 else WIDE
+    awgn = table_for(air)[0]
+    observations = sidecar_observations(document)
+    penalty = fit_penalty(observations, awgn)
+    thresholds = {m: t + penalty for m, t in awgn.items()}
+    schedule = sidecar_schedule(document)
+    snrs = [s for *_, s in observations] or [
+        float(f["snr_3k_db"]) for f in document.get("frames") or [] if "snr_3k_db" in f
+    ]
+    mean_snr = statistics.mean(snrs) if snrs else 10.0
+    transfers = [test.get("message") or {}, test.get("file") or {}]
+    size = sum(int(t.get("bytes") or 0) for t in transfers if isinstance(t, dict))
+    measured = next(
+        (float(t["bps"]) for t in reversed(transfers) if isinstance(t, dict) and t.get("bps")),
+        None,
+    )
+    counters = document.get("counters") or {}
+    if size == 0:
+        size = int(counters.get("bytes_delivered") or 0)
+        seconds = float((document.get("audio") or {}).get("seconds") or 0.0)
+        measured = 8.0 * size / seconds if size and seconds > 0 else None
+    size = max(size, 512)
+    payload = bytes((i * 37) % 256 for i in range(size))
+    row = run_point("sim", "replay", mean_snr, payload, seed, thresholds, None, air, None, schedule)
+    row["replay_of"] = path.stem
+    row["penalty_db"] = penalty
+    row["observations"] = len(observations)
+    row["measured_bps"] = "" if measured is None else round(measured, 1)
+    return row
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--backend", choices=("sim", "phy"), default="sim")
@@ -223,8 +353,18 @@ def main() -> int:
         help="rate-controller overrides, key=value pairs separated by commas "
         "(RateController fields), to compare one controller against another",
     )
+    ap.add_argument(
+        "--replay",
+        nargs="+",
+        type=Path,
+        default=[],
+        help="session sidecars to run the engines against instead of a grid",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
+
+    if args.replay:
+        return replay_main(args.replay, args.trials, args.out)
 
     air = NARROW if args.bandwidth == 500 else WIDE
     fer_csv = args.fer_csv or (
@@ -278,6 +418,31 @@ def main() -> int:
             w.writeheader()
             w.writerows(rows)
         print(f"\nwrote {out} ({len(rows)} rows)")
+    return 0
+
+
+def replay_main(sidecars: list[Path], trials: int, out: str) -> int:
+    rows: list[dict[str, object]] = []
+    for sidecar in sidecars:
+        for trial in range(trials):
+            row = replay_sidecar(sidecar, 100 + 7 * trial)
+            rows.append(row)
+            measured = row["measured_bps"]
+            against = f"measured {measured} bps" if measured != "" else "no measured goodput"
+            print(
+                f"{row['replay_of']}: replayed {row['goodput_bps']} bps ({against}), "
+                f"penalty {row['penalty_db']:+.2f} dB over AWGN from {row['observations']} "
+                f"observations, modes {row['mode_min']}-{row['mode_max']}, ok={row['ok']}",
+                flush=True,
+            )
+    if out and rows:
+        target = Path(out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+        print(f"\nwrote {target} ({len(rows)} rows)")
     return 0
 
 

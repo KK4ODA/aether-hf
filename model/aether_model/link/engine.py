@@ -201,6 +201,16 @@ class LadderRung:
     """The SNR the peer measured on the burst, from its acknowledgement."""
 
 
+@dataclass(frozen=True)
+class ProbeResult:
+    """What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
+    on our probe, and the SNR we measured on their answer."""
+
+    remote: str
+    heard_there_db: float | None
+    heard_here_db: float
+
+
 # ── the engine ────────────────────────────────────────────────────────
 
 
@@ -259,6 +269,9 @@ class LinkEngine:
         most likely to take on the air."""
         self._probing: str | None = None
         """The station a probe of ours is out to, until it answers or the timer fires."""
+        self.last_probe: ProbeResult | None = None
+        """What the last probe came back with; ``None`` while one is out, or after one
+        went unanswered."""
         self._pinned: int | None = None
         """A mode every new burst goes out at while set, whatever the peer recommends:
         the Test session's mode ladder (P6-7)."""
@@ -348,6 +361,7 @@ class LinkEngine:
         else:
             raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
         self._probing = remote_call.upper()
+        self.last_probe = None
         self.stats.probes_sent += 1
         self._send_probe(DataKind.PROBE, self._probing, None)
         wait = self._response_wait(self.timing.data_frame_s_for(self._robust_mode(False)))
@@ -407,6 +421,15 @@ class LinkEngine:
     def tx_pending_bytes(self) -> int:
         queued = len(self._tx_queue)
         return queued + sum(len(r.body) for r in self._records.values() if not r.acked)
+
+    @property
+    def probing(self) -> bool:
+        """Whether a probe of ours is out, unanswered and not yet given up on."""
+        return self._probing is not None
+
+    def all_acknowledged(self) -> bool:
+        """Whether everything handed to :meth:`send` has left and been acknowledged."""
+        return not self._tx_queue and all(r.acked for r in self._records.values())
 
     @property
     def connected(self) -> bool:
@@ -1173,6 +1196,7 @@ class LinkEngine:
         self._disarm("probe")
         self._probing = None
         self.stats.probe_replies += 1
+        self.last_probe = ProbeResult(ack.src, ack.snr_db, frame.snr_db)
         theirs = "?" if ack.snr_db is None else f"{ack.snr_db:.0f}"
         self.actions.append(
             Event("probe", f"{ack.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB")

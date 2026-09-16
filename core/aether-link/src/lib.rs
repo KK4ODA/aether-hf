@@ -16,7 +16,7 @@ pub mod phy;
 pub mod rate;
 pub mod sim;
 
-pub use engine::{Action, LinkConfig, LinkEngine, LinkStats, Role, State};
+pub use engine::{Action, LadderRung, LinkConfig, LinkEngine, LinkStats, ProbeResult, Role, State};
 pub use frames::{
     CONTROL_BYTES, ConnectBody, ControlFrame, ControlKind, DATA_HEADER, DataHeader, DataKind,
     FrameError, ProbeBody, WINDOW,

@@ -133,6 +133,47 @@ impl From<SerialLineConfig> for SerialLine {
     }
 }
 
+/// Who and where: what a field recording says about the station beyond its callsign,
+/// so a volunteer's session is usable without a follow-up question (P6-7). All optional;
+/// an empty string is "not said".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorSection {
+    /// Maidenhead locator, four or six characters: `EM73` or `EM73tv`.
+    #[serde(default)]
+    pub grid: String,
+    /// The radio, in the operator's words.
+    #[serde(default)]
+    pub rig: String,
+    /// Transmitter output, watts.
+    #[serde(default)]
+    pub power_w: Option<f64>,
+    /// The antenna, in the operator's words.
+    #[serde(default)]
+    pub antenna: String,
+}
+
+impl OperatorSection {
+    /// The grid must be a locator and the power a number of watts, when given at all.
+    ///
+    /// # Errors
+    /// When either is not.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.grid.is_empty() && crate::grid::locator(&self.grid).is_none() {
+            return Err(ConfigError::Invalid(format!(
+                "[operator] grid {:?} is not a Maidenhead locator (EM73 or EM73tv)",
+                self.grid
+            )));
+        }
+        if self.power_w.is_some_and(|w| !(w > 0.0 && w <= 2000.0)) {
+            return Err(ConfigError::Invalid(
+                "[operator] power_w must be watts, above zero".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Sound-card settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -484,6 +525,9 @@ pub struct Config {
     pub schema_version: u32,
     /// This station's callsign. There is no default; nobody else can supply it.
     pub callsign: String,
+    /// Who and where, for the field log.
+    #[serde(default)]
+    pub operator: OperatorSection,
     /// Sound card.
     #[serde(default)]
     pub audio: AudioSection,
@@ -655,6 +699,7 @@ impl Config {
             return Err(ConfigError::Invalid("a callsign is required".into()));
         }
         crate::ptt::validate_callsign(&self.callsign)?;
+        self.operator.validate()?;
         if let PttConfig::Cat {
             protocol,
             civ_address,
@@ -829,6 +874,10 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.busy_threshold_db",
     "record.auto",
     "record.notes",
+    "operator.grid",
+    "operator.rig",
+    "operator.power_w",
+    "operator.antenna",
 ];
 
 /// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
@@ -959,6 +1008,13 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 schema_version = 1
 
 callsign = "N0CALL"
+
+[operator]
+# Who and where, for the field log a recording becomes: nothing here is needed to operate.
+# grid = "EM73tv"                    # Maidenhead locator, four or six characters
+# rig = "FTDX10"
+# power_w = 30
+# antenna = "EFHW at 10 m"
 
 [audio]
 # Names as `aetherd --list-devices` prints them. Unset means the system default.

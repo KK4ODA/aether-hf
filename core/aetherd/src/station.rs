@@ -20,6 +20,9 @@
 //! occupancy, and letting it into the noise-floor estimate would blind the detector for
 //! several seconds afterwards.
 
+mod fieldtest;
+pub use fieldtest::{Rung, Step, TestPlan, TestRun, Transfer};
+
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use aether_link::{
@@ -100,6 +103,8 @@ pub struct StationConfig {
     /// Longest a station may transmit without a Morse identifier, in seconds. Ignored when
     /// `cw_id` is `None`. Ten minutes is the common regulatory figure.
     pub cw_id_interval_s: f64,
+    /// Who and where, for the field log a recording becomes.
+    pub operator: crate::config::OperatorSection,
 }
 
 impl Default for StationConfig {
@@ -125,6 +130,7 @@ impl Default for StationConfig {
             record_auto: false,
             record_notes: String::new(),
             cw_id_interval_s: 600.0,
+            operator: crate::config::OperatorSection::default(),
         }
     }
 }
@@ -441,6 +447,8 @@ pub struct Station<P: Ptt> {
     recording: Option<crate::record::Recording>,
     /// Notes the operator gave for the next automatic recording, if any.
     record_notes: Option<String>,
+    /// The Test session running, or the last one run (P6-7).
+    test: Option<TestRun>,
     /// Callsigns given while a session was up, to take effect when it ends.
     pending_callsigns: Option<Vec<String>>,
     delivered: Vec<u8>,
@@ -535,6 +543,7 @@ impl<P: Ptt> Station<P> {
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
             record_notes: None,
+            test: None,
             pending_callsigns: None,
             delivered: Vec::new(),
             events: Vec::new(),
@@ -873,6 +882,7 @@ impl<P: Ptt> Station<P> {
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
         self.config.record_notes.clone_from(&config.record.notes);
+        self.config.operator.clone_from(&config.operator);
     }
 
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
@@ -1070,6 +1080,12 @@ impl<P: Ptt> Station<P> {
             "tx_level": self.config.tx_level,
             "wait_for_clear": self.config.wait_for_clear,
             "state": format!("{:?}", self.engine.state()),
+            "operator": {
+                "grid": self.config.operator.grid,
+                "rig": self.config.operator.rig,
+                "power_w": self.config.operator.power_w,
+                "antenna": self.config.operator.antenna,
+            },
         });
         let recording = crate::record::Recording::start(
             &dir,
@@ -1198,6 +1214,7 @@ impl<P: Ptt> Station<P> {
             self.note("watchdog", "key time exceeded");
         }
         self.pump();
+        self.advance_test();
         Ok(())
     }
 
@@ -1496,8 +1513,9 @@ impl<P: Ptt> Station<P> {
                     }
                     self.note(name, &detail);
                     // a session is the unit of a field recording: one file per session,
-                    // started when it comes up and closed when it ends
-                    if self.config.record_auto {
+                    // started when it comes up and closed when it ends — unless a Test
+                    // session is recording itself, probe to disconnect
+                    if self.config.record_auto && !self.test_running() {
                         if name == "connected" {
                             // a note given for the next recording wins; otherwise the
                             // standing one, which is what an unattended station has

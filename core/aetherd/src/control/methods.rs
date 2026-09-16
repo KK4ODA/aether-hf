@@ -75,6 +75,8 @@ pub fn is_mutating(method: &str) -> bool {
             | "callsigns.set"
             | "beacon"
             | "probe"
+            | "test.start"
+            | "test.abort"
             | "tune"
             | "record.start"
             | "record.stop"
@@ -412,6 +414,9 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, params, id),
         "probe" => probe(station, params, id),
+        "test.start" => test_start(station, params, id),
+        "test.status" => Response::ok(id, station.test_status()),
+        "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
         "callsigns.set" => set_callsigns(station, params, id),
         "beacon" => match station.beacon() {
             Ok(()) => Response::ok(id, json!({ "accepted": true })),
@@ -525,6 +530,33 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
                 },
                 format!("Cannot call {remote}: {reason}."),
                 false,
+            ),
+        ),
+    }
+}
+
+/// A Test session (P6-7): probe, call, a message, a file, the mode ladder, disconnect —
+/// recorded, and reported by `test.status` while it runs and after.
+fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let plan = match crate::station::TestPlan::from_params(params) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            return Response::failed(id, ApiError::new("bad_params", reason, false));
+        }
+    };
+    let remote = plan.remote.clone();
+    match station.start_test(plan) {
+        Ok(()) => Response::ok(id, json!({ "accepted": true })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                if reason.contains("not one of") {
+                    "bad_params"
+                } else {
+                    "not_idle"
+                },
+                format!("Cannot start a test session with {remote}: {reason}."),
+                reason.contains("already"),
             ),
         ),
     }
@@ -691,6 +723,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             "path": path.display().to_string(),
             "seconds": seconds,
         })),
+        "test": station.test_brief(),
         "counters": counters(station),
     })
 }

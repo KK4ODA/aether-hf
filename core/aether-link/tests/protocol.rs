@@ -319,6 +319,15 @@ fn a_probe_is_answered_with_the_snr_it_arrived_at() {
         "{:?}",
         sim.events(0)
     );
+    assert_eq!(
+        sim.engine(0).last_probe(),
+        Some(&aether_link::ProbeResult {
+            remote: "KK4XYZ".to_owned(),
+            heard_there_db: Some(15.0),
+            heard_here_db: 15.0,
+        })
+    );
+    assert!(!sim.engine(0).probing());
     let (sent, replies, answered) = (
         sim.engine(0).stats.probes_sent,
         sim.engine(0).stats.probe_replies,
@@ -930,6 +939,7 @@ fn a_pinned_mode_goes_out_whatever_the_peer_recommends() {
         "{rungs:?}"
     );
     assert!(sim.engine_mut(0).take_ladder().is_empty());
+    assert!(sim.engine(0).all_acknowledged());
 }
 
 #[test]

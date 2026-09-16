@@ -324,3 +324,80 @@ fn two_daemons_complete_a_session_at_500_hz() {
     drop(a);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn two_daemons_run_a_test_session_over_the_simulated_channel() {
+    let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let channel = free_port();
+    // the ladder stops at the operator's fastest mode: six rungs keep the test short
+    let a = Daemon::start_with(
+        &dir,
+        "a",
+        "W4ODA",
+        &format!("listen = \"127.0.0.1:{channel}\""),
+        "max_mode = 5",
+    );
+    let b = Daemon::start(
+        &dir,
+        "b",
+        "KK4XYZ",
+        &format!("connect = \"127.0.0.1:{channel}\""),
+    );
+    wait_for_port(a.control, "daemon a");
+    wait_for_port(b.control, "daemon b");
+
+    let started = a.call(
+        "test.start",
+        &json!({ "remote": "KK4XYZ", "message_bytes": 512, "file_bytes": 1024, "rung_frames": 2 }),
+    );
+    assert_eq!(started["ok"], true, "{started}");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        let status = a.call("test.status", &json!({}))["result"].clone();
+        if status["running"] == false {
+            let results = &status["results"];
+            assert_eq!(results["outcome"], "complete", "{results}");
+            assert!(results["probe"]["heard_here_db"].is_number(), "{results}");
+            assert!(
+                results["message"]["bps"].as_f64().is_some_and(|b| b > 0.0),
+                "{results}"
+            );
+            assert!(
+                results["file"]["bps"].as_f64().is_some_and(|b| b > 0.0),
+                "{results}"
+            );
+            let ladder = results["ladder"].as_array().expect("rungs");
+            assert_eq!(ladder.len(), 6, "{results}");
+            assert!(
+                ladder.iter().all(|r| r["decoded"] == r["frames"]),
+                "{results}"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the test session did not finish: {status}"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    a.wait_for_state(&b, "idle", "the session never closed");
+    // the run recorded itself, under a name that says so
+    let sidecars: Vec<PathBuf> = std::fs::read_dir(dir.join("recordings"))
+        .expect("dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.to_string_lossy().contains("W4ODA_KK4XYZ_test")
+                && p.extension().is_some_and(|x| x == "json")
+        })
+        .collect();
+    assert_eq!(sidecars.len(), 1, "{sidecars:?}");
+    let document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecars[0]).expect("read")).expect("json");
+    assert_eq!(document["session"]["test"]["outcome"], "complete");
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}

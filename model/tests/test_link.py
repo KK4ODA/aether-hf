@@ -8,7 +8,7 @@ from itertools import pairwise
 import pytest
 
 from aether_model.frame.modes import LONG, MODES, SHORT
-from aether_model.link.engine import LinkConfig, LinkEngine, Role, State, Transmit
+from aether_model.link.engine import LinkConfig, LinkEngine, ProbeResult, Role, State, Transmit
 from aether_model.link.frames import (
     CAP_COMPRESSION,
     CONNECT_BODY_BYTES,
@@ -462,6 +462,7 @@ def test_a_probe_is_answered_with_the_snr_it_arrived_at(timing: PhyTiming) -> No
     assert "probed:W4ODA at 15.0 dB" in sim.events(1)
     assert "probe:KK4XYZ hears us at 15 dB, heard at 15.0 dB" in sim.events(0)
     assert (a.stats.probes_sent, a.stats.probe_replies, b.stats.probes_answered) == (1, 1, 1)
+    assert a.last_probe == ProbeResult("KK4XYZ", 15.0, 15.0) and not a.probing
     # the question can be asked again, and a session can follow
     a.probe("KK4XYZ")
     sim.run(until=120)
@@ -479,8 +480,10 @@ def test_a_probe_to_nobody_reports_no_answer(timing: PhyTiming) -> None:
     a.probe("N0BODY")
     with pytest.raises(RuntimeError):
         a.probe("KK4XYZ")  # one at a time
+    assert a.probing and a.last_probe is None
     sim.run(until=60)
     assert "probe:N0BODY: no answer" in sim.events(0)
+    assert not a.probing and a.last_probe is None
     assert not any(e.startswith("probed") for e in sim.events(1))
     assert a.state is State.IDLE
     # and once it is answered or timed out, another may go
@@ -894,6 +897,7 @@ def test_a_pinned_mode_goes_out_whatever_the_peer_recommends(timing: PhyTiming) 
     assert all(r.mode == 2 and r.decoded == r.frames for r in rungs), rungs
     assert all(r.snr_db is not None and abs(r.snr_db - 15.0) < 1.0 for r in rungs), rungs
     assert a.take_ladder() == []
+    assert a.all_acknowledged()
     # unpinned, the recommendation is followed again
     a.pin_mode(None)
     assert a._burst_mode() == min(a._recommended, a.cfg.max_mode)

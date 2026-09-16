@@ -311,6 +311,30 @@ Mac with a radio; signing and notarization wait for an Apple Developer account
 clock instead of trusting its sleeps: a loaded three-core mac runner stretched 350 ms of
 sleeps past a second.
 
+**CM108 keying and P6-7's Test session (2026-09-16 evening).** `[ptt] kind = "cm108"`
+(`GpioPtt` in `ptt.rs`: the CM108 data sheet's five-byte HID output report through the
+pure-Rust hidapi backends — no libudev; `--list-ports` and `devices.list` list the
+interfaces; untested on hardware, though the author's machine shows a CM108B-class codec).
+The panel keeps ten minutes of readings in `localStorage`. **P6-7 (b), (c), (d) are built:**
+the engine (model first) has `pin_mode(mode, body_bytes)` and `LadderRung`s, `last_probe`,
+`probing`, `all_acknowledged`, and re-encodes a frame stranded `max_combines` transmissions
+at a mode the path cannot carry at the slowest mode down to the recommendation that fits
+its body (`frames_reencoded`) — the "stranded frames" item ADR-0009 left open; `[operator]`
+(grid, rig, power_w, antenna; live keys; Setup step 1) goes into every sidecar;
+`core/aetherd/src/grid.rs` turns two locators into kilometres;
+`core/aetherd/src/station/fieldtest.rs` is the Test session (`test.start/status/abort`,
+the Session tab's button, `log` events named `test`, `status.test`): probe → call →
+message → file → the mode ladder (a small-bodied burst pinned at each mode up to
+`max_mode`, three failing rungs in a row stop it) → disconnect, recorded as `…_test` with
+the report under `session.test`; `tools/field_ingest.py` folds a sidecar into
+`field/LOG.md`, `field/paths.csv` and `field/ladders.csv`; `tools/bench_link.py --replay
+<sidecar>` fits the AWGN-table penalty that explains the ladder (or the data frames) and
+runs the engines on the recorded SNR trace. **Found by the ladder on the clean loopback:**
+modes 12 and 13 (64-QAM) decode short at a reported 24–26 dB (2/3 and 0/3 of a rung) —
+ADR-0008's open question made a number; the `fieldtest` unit test excuses those two rungs
+and says so; P9-1's business. The two-daemon test runs a Test session over `[sim]`
+(`max_mode = 5` keeps it to six rungs).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

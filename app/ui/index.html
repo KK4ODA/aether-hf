@@ -127,6 +127,7 @@
           <button id="btn-abort" class="danger">Abort</button>
           <button id="btn-probe">Probe</button>
           <button id="btn-beacon">Beacon</button>
+          <button id="btn-test">Test session</button>
         </div>
         <p class="note" id="session-note">
           <strong>Disconnect</strong> finishes sending what is queued and then closes.
@@ -134,9 +135,13 @@
           Call whether it hears you, and how well, without a session: one frame, one
           answer, both directions of the path. <strong>Beacon</strong> puts this station's
           callsign on the air once, addressed to nobody, so anyone listening can report
-          hearing you.
+          hearing you. <strong>Test session</strong> runs the field test with the station in
+          Call: a probe, a 2 kB message, a 16 kB file and a short burst at every mode, all
+          recorded — a few minutes of transmitting, and a sidecar the project can learn from.
+          The other station only has to be listening.
         </p>
         <p class="note" id="probe-result" role="status" aria-live="polite"></p>
+        <p class="note" id="test-result" role="status" aria-live="polite"></p>
 
         <div class="card">
           <h3>Keying and drive</h3>
@@ -318,6 +323,24 @@
                 <label for="wz-call">Callsign</label>
                 <input id="wz-call" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" aria-describedby="wz-call-note" />
                 <span class="sub" id="wz-call-note">Letters, digits, <code>-</code> and <code>/</code>; up to nine characters.</span>
+              </div>
+              <div class="row">
+                <label for="op-grid">Grid</label>
+                <input id="op-grid" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
+                <span class="sub">Maidenhead locator, for the field log a recording becomes. Optional, like the rest of this.</span>
+              </div>
+              <div class="row">
+                <label for="op-rig">Rig</label>
+                <input id="op-rig" type="text" placeholder="FTDX10" autocomplete="off" />
+              </div>
+              <div class="row">
+                <label for="op-power">Power</label>
+                <input id="op-power" type="text" inputmode="decimal" class="port" placeholder="30" autocomplete="off" />
+                <span class="sub">watts</span>
+              </div>
+              <div class="row">
+                <label for="op-antenna">Antenna</label>
+                <input id="op-antenna" type="text" placeholder="EFHW at 10 m" autocomplete="off" />
               </div>
             </li>
             <li class="step" data-step="2">
@@ -528,6 +551,7 @@
         <div class="row">
           <button id="btn-clear-log">Clear</button>
           <button id="btn-diagnostics">Copy diagnostic bundle</button>
+          <button id="btn-contribute">Contribute the last test session</button>
           <span class="sub" id="diagnostics-note" role="status" aria-live="polite">Newest last.</span>
         </div>
         <p class="sub">

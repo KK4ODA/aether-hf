@@ -71,6 +71,33 @@ A minute of audio is 5.8 MB. Sessions of a few minutes are the useful size.
 Both stations record. The receiving side's recording is the one the tools want (the
 frames it heard are the channel); keep both anyway.
 
+## 3a. The Test session
+
+The one-button version of §3, for volunteers. Put the other station's callsign in
+**Call** on the Session tab and press **Test session**. The modem then runs, and records,
+a fixed sequence: a probe (both directions' SNR), a call, a 2 kB message, a 16 kB file,
+and the **mode ladder** — a short burst at every mode from the floor up, each one's
+acknowledgement kept as a rung, until three rungs in a row fail — then an orderly
+disconnect. A few minutes of transmitting; the Session tab shows the step, and the
+log says what each one found. The other station needs to do nothing but listen: an
+answer-only station (`[radio] answer_only`) is a fine partner, and the author's runs
+that way at agreed times.
+
+What it leaves is a recording named `…_<you>_<them>_test` whose sidecar carries, under
+`session.test`, the probe's numbers, both transfers' goodput, and the ladder — the
+frame error rate per mode at the SNR the other station measured, on a real path,
+which no bench can give — with your grid, rig, power and antenna from **Setup › step 1**
+beside it, and the path length if you gave the other station's grid (`test.start` on
+the API takes `remote_grid`). Those four Setup fields are optional and only for this:
+fill them in once.
+
+**Contribute it**: Help › *Contribute the last test session* copies a link to a
+pre-filled GitHub issue; paste it into a browser, attach the sidecar (the `.json`
+beside the `.wav` in the recordings folder — Help › *Open the configuration folder*),
+and send. The audio is yours to attach or not. `tools/field_ingest.py` folds what
+arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
+<sidecar>` runs the model's engines against what the path did.
+
 ## 4. Channel class
 
 The simulator's baselines are for four classes. Write down which one the air was, from what

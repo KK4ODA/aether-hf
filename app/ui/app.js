@@ -143,6 +143,7 @@ function onEvent(frame) {
       log(`${data.name}: ${data.detail}`, data.name === "error");
       // the probe's answer, or its absence, where the button is
       if (data.name === "probe") noteProbe(data.detail ?? "");
+      if (data.name === "test") noteTest(data.detail ?? "");
       break;
     default:
       log(`${frame.event}: ${JSON.stringify(data)}`);
@@ -151,6 +152,12 @@ function onEvent(frame) {
 
 // The probe's report is the modem's own sentence — "KK4XYZ hears us at 12 dB, heard at
 // 14.0 dB" or "KK4XYZ: no answer" — shown as it is, beside the button that asked.
+function noteTest(detail) {
+  const line = $("test-result");
+  line.textContent = `Test session: ${detail}`;
+  line.dataset.state = detail.startsWith("aborted") ? "warn" : "ok";
+}
+
 function noteProbe(detail) {
   const line = $("probe-result");
   const unanswered = detail.endsWith("no answer");
@@ -222,6 +229,12 @@ async function refreshStatus() {
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
   $("btn-probe").disabled = status.state !== "idle";
+  $("btn-test").disabled = (status.state !== "idle" && !status.test) || Boolean(status.test);
+  if (status.test) {
+    const t = status.test;
+    $("test-result").textContent =
+      `Test session with ${t.remote}: ${t.step} — ${Math.round(t.elapsed_s)} s, ${t.rungs} rung${t.rungs === 1 ? "" : "s"}`;
+  }
   applyRecording(status.recording ?? null);
   $("btn-disconnect").disabled = status.state === "idle";
   $("btn-abort").disabled = status.state === "idle";
@@ -1453,6 +1466,11 @@ async function loadConfig() {
     $("wz-call").value = liveConfig.callsign;
     markStep(1, true);
   }
+  const operator = liveConfig.operator ?? {};
+  $("op-grid").value = operator.grid ?? "";
+  $("op-rig").value = operator.rig ?? "";
+  $("op-power").value = operator.power_w == null ? "" : String(operator.power_w);
+  $("op-antenna").value = operator.antenna ?? "";
   select($("dev-in"), liveConfig.audio?.input ?? "");
   select($("dev-out"), liveConfig.audio?.output ?? "");
   const ptt = liveConfig.ptt ?? {};
@@ -1611,6 +1629,11 @@ function formChanges() {
   };
   const callsign = $("wz-call").value.trim().toUpperCase();
   if (callsign) changes.callsign = callsign;
+  // who and where, for the field log: optional, an empty field is "not said"
+  changes["operator.grid"] = $("op-grid").value.trim().toUpperCase();
+  changes["operator.rig"] = $("op-rig").value.trim();
+  changes["operator.power_w"] = numberIn("op-power");
+  changes["operator.antenna"] = $("op-antenna").value.trim();
   changes["radio.bandwidth"] = Number($("radio-bandwidth").value);
   changes["radio.answer_only"] = $("radio-answer-only").checked;
   changes["radio.max_mode"] = Number($("radio-max-mode").value);
@@ -2012,6 +2035,21 @@ function wire() {
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
   });
+  $("btn-test").addEventListener("click", async () => {
+    const remote = $("remote").value.trim().toUpperCase();
+    if (!remote) {
+      $("remote").focus();
+      return;
+    }
+    const sure = window.confirm(
+      `Run a test session with ${remote}? It sends a probe, a 2 kB message, a 16 kB file and a short burst at every mode: a few minutes of transmitting, all recorded.`,
+    );
+    if (!sure) return;
+    $("test-result").textContent = `Test session with ${remote}: starting…`;
+    delete $("test-result").dataset.state;
+    const ok = await act(() => call("test.start", { remote }), `test session with ${remote}`);
+    if (!ok) $("test-result").textContent = "";
+  });
   $("btn-record").addEventListener("click", toggleRecording);
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
@@ -2055,6 +2093,7 @@ function wire() {
     if (socket && socket.readyState === WebSocket.OPEN) refreshStatus();
   }, 15000);
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
+  $("btn-contribute").addEventListener("click", contributeTestSession);
   $("wz-profile").addEventListener("change", () => {
     profileChosen = true;
     applyProfile();
@@ -2091,6 +2130,60 @@ function wire() {
     }
     setTimeout(() => ($("copy-note").textContent = ""), 3000);
   });
+}
+
+// A report of the last test session, as the on-air issue form takes it: copied to the
+// clipboard as a link that opens the form pre-filled, so contributing a session is a
+// paste and an attachment. The sidecar itself is attached by hand: a link cannot
+// carry a file, and the operator decides whether the audio goes with it.
+function contributeUrl(results, status, operator) {
+  const path = results.path ?? {};
+  const where = (call, grid) => (grid ? `${call} (${grid})` : call);
+  const km = path.km == null ? "distance?" : `~${path.km} km`;
+  const rig = [operator.rig, operator.power_w != null ? `${operator.power_w} W` : "", operator.antenna]
+    .filter(Boolean)
+    .join(", ");
+  const ladder = (results.ladder ?? [])
+    .map((r) => `mode ${r.mode}: ${r.decoded}/${r.frames} at ${r.snr_db ?? "?"} dB`)
+    .join("; ");
+  const transfer = (name, t) =>
+    t ? `${name}: ${t.bytes} bytes in ${t.seconds} s (${t.bps} bit/s)` : `${name}: not run`;
+  const outcome = [
+    `Outcome: ${results.outcome ?? "still running"}`,
+    results.probe
+      ? `Probe: they hear us at ${results.probe.heard_there_db ?? "?"} dB, heard at ${results.probe.heard_here_db} dB`
+      : "Probe: no answer",
+    transfer("Message", results.message),
+    transfer("File", results.file),
+    ladder ? `Ladder: ${ladder}` : "Ladder: not run",
+    "",
+    "Sidecar: attach the .json the test session wrote beside its .wav in the recordings folder (Help › Open the configuration folder). Attach the .wav too if you are happy to share the audio.",
+  ].join("\n");
+  const params = new URLSearchParams({
+    template: "on_air_report.yml",
+    title: `Test session ${status.callsign ?? ""} ↔ ${results.remote}`,
+    version: status.version ?? "",
+    path: `${where(status.callsign ?? "", path.my_grid)} ↔ ${where(results.remote, path.their_grid)}, ${results.bandwidth_hz} Hz, ${results.started}, ${km}`,
+    stations: rig,
+    outcome,
+  });
+  return `https://github.com/KK4ODA/aether-hf/issues/new?${params}`;
+}
+
+async function contributeTestSession() {
+  const line = $("diagnostics-note");
+  try {
+    const [test, status] = await Promise.all([call("test.status"), call("status")]);
+    if (!test.results) {
+      line.textContent = "No test session has run yet: Session › Test session, with the other station's callsign in Call.";
+      return;
+    }
+    const url = contributeUrl(test.results, status, liveConfig?.operator ?? {});
+    await navigator.clipboard.writeText(url);
+    line.textContent = "A link to a pre-filled report is on the clipboard: paste it into your browser, attach the sidecar, and send. Thank you.";
+  } catch (error) {
+    line.textContent = `Could not prepare the report: ${error.message ?? error}`;
+  }
 }
 
 async function act(operation, description) {
@@ -2231,6 +2324,13 @@ function asToml(changes) {
     );
   } else {
     lines.push(`kind = "none"   # VOX, or receive only`);
+  }
+  if (changes["operator.grid"] || changes["operator.rig"] || changes["operator.antenna"] || changes["operator.power_w"] != null) {
+    lines.push("", "[operator]");
+    if (changes["operator.grid"]) lines.push(`grid = ${quote(changes["operator.grid"])}`);
+    if (changes["operator.rig"]) lines.push(`rig = ${quote(changes["operator.rig"])}`);
+    if (changes["operator.power_w"] != null) lines.push(`power_w = ${changes["operator.power_w"]}`);
+    if (changes["operator.antenna"]) lines.push(`antenna = ${quote(changes["operator.antenna"])}`);
   }
   lines.push("", "[radio]", "max_key_s = 30.0", "wait_for_clear = true");
   return lines.join("\n");

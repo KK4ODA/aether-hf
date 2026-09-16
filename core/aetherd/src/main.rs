@@ -400,6 +400,7 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
             ..aetherd::cwid::CwId::default()
         }),
         cw_id_interval_s: config.radio.cw_id_interval_s,
+        operator: config.operator.clone(),
         ..StationConfig::default()
     }
 }
