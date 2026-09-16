@@ -375,6 +375,8 @@ mod tests {
             sample_rate: 48_000,
         };
         let mut a = SimLink::open(&config(Peer::Listen(address.clone()))).expect("listen");
+        // b's clock starts when it opens: what it captures is what has elapsed since
+        let opened = Instant::now();
         let mut b = SimLink::open(&config(Peer::Connect(address))).expect("connect");
         let deadline = Instant::now() + Duration::from_secs(5);
         while !(a.connected() && b.connected()) {
@@ -391,16 +393,29 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(250));
         let mut heard = Vec::new();
-        for _ in 0..5 {
+        for round in 0..5 {
             heard.extend(b.capture());
-            std::thread::sleep(Duration::from_millis(25));
+            if round < 4 {
+                std::thread::sleep(Duration::from_millis(25));
+            }
         }
-        // about 0.35 s of audio at 48 kHz, give or take scheduling
+        let elapsed = opened.elapsed().as_secs_f64();
+        // Paced by the clock means exactly this: never more audio than the time that has
+        // passed, and never more than one block's worth behind it. Measured against the
+        // clock rather than the nominal sleeps, because a loaded CI runner (three cores
+        // and a suite running in parallel) can stretch 350 ms of sleeps past a second.
+        let paced = elapsed * 48_000.0;
         assert!(
-            heard.len() > 12_000 && heard.len() < 24_000,
-            "{} samples",
+            heard.len() as f64 <= paced + 1.0,
+            "{} samples for {elapsed:.3} s: ahead of the clock",
             heard.len()
         );
+        assert!(
+            heard.len() as f64 >= (elapsed - MIN_BLOCK_S) * 48_000.0 - 1.0,
+            "{} samples for {elapsed:.3} s: behind the clock",
+            heard.len()
+        );
+        assert!(heard.len() > 12_000, "{} samples", heard.len());
         let peak = heard.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(peak > 0.2, "the tone did not arrive: peak {peak}");
         // the silence after it is noise at −60 dB, not more

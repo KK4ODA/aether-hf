@@ -176,9 +176,11 @@ jobs:
           # Unsigned: without an Apple Developer certificate the dmg is a right-click-to-open
           # build for testers (docs/user/install.md says how), and the updater entry it
           # produces is unverified. Signing and notarization wait for the certificate.
+          # `app` is the target the updater bundle (`.app.tar.gz` + `.sig`) comes from;
+          # `dmg` alone builds the app but produces none
           - os: macos-latest
             triple: aarch64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
