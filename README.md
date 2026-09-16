@@ -152,6 +152,15 @@ ARDOP). It does not copy or reverse-engineer VARA; the host-interface compatibil
 VARA's *published* TCP command set only, and Aether frames are not compatible with VARA's on
 the air.
 
+## Support
+
+Aether HF is free software and stays that way. The bench it is measured on — radios,
+interfaces, the hours on the air — is paid for by its author. If the modem is useful to
+you, a contribution through
+[PayPal](https://www.paypal.com/donate/?business=kk4oda%40gmail.com&item_name=Aether+HF&currency_code=USD)
+(also the *Sponsor* button above) helps keep it on the air. An on-air report is worth as
+much.
+
 ## License
 
 Dual-licensed under **MIT OR Apache-2.0** — see [`LICENSE-MIT`](LICENSE-MIT) and
