@@ -255,12 +255,13 @@ carriers: a data symbol correlates with a six-carrier reference at up to 0.75 on
 has searched over CFO, half that with a twelve-carrier one), 128 chips over sixteen pilot
 symbols, ±3-symbol pilot smoothing — and a thirteen-mode table: 0 QPSK 1/10·floor (19 B),
 1 QPSK ⅕·floor (41 B), 2 QPSK ⅓·LONG (15 B), 3 QPSK ½·LONG = the control/connect/beacon/
-probe mode (`control_mode_index`), 4–12 the old 1–9. The detector runs the ordinary pass
-first (each candidate checked for the even-carriers-only symbol's two identical halves,
-`HALF_SYMBOL_MIN`) and the floor pass on what is left (the seven-window averaged *floor
-statistic*, threshold 0.32 from the noise maximum, coherent sub-grid timing refinement,
-seven-lag repetition check, ordinary spans masked); carrier-energy tests and preamble-length
-signalling were tried and rejected (see the ADR). Link layer: `PhyTiming` carries
+probe mode (`control_mode_index`), 4–12 the old 1–9. The detector runs both passes on the
+full statistics — the ordinary one exactly as before, the floor one on the seven-window
+averaged *floor statistic* (threshold 0.32 from the noise maximum, coherent sub-grid timing
+refinement, seven-lag repetition check) — and settles a candidate of one family inside
+the other's frame by evidence (`FLOOR_OVER_ORDINARY` = 0.85 of the ordinary peak keeps the
+floor one); carrier-energy tests, preamble-length signalling and a half-symbol check on
+ordinary candidates were tried and rejected (see the ADR). Link layer: `PhyTiming` carries
 `floor_data_frame_s`/`floor_control_frame_s`/`floor_modes` and `frame_s(frame)`; `TxFrame`
 and `SoftFrame` carry `floor`; control frames go in the family of what the station sends
 (ISS) or last decoded (IRS); one family per burst (the other family's retransmissions go

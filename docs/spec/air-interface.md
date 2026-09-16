@@ -197,12 +197,13 @@ over carrier offset — half of the even carriers are comb pilots, which repeat 
 — and at about half that with a twelve-carrier one; the seeds were searched so that at
 500 Hz every pair of the four sequences has a cosine of 0.25 or below and the floor pair
 overlaps the pilot sequence by no more than 0.4, and at 2 300 Hz every pair is at 0.25 or
-below. A receiver tells the families apart by which reference wins and by what a body
-cannot fake: an ordinary candidate must show the even-carriers-only symbol's two identical
-halves (0.55 at −9 dB; a floor symbol, on every carrier, shows about none, a data symbol
-the pilots' 0.17), and a floor candidate must show its eight symbols repeating one
-another over all seven lags. The ordinary pass runs first; the floor pass takes what it
-left, with the ordinary frames' spans masked.
+below. A receiver tells the families apart by evidence: a floor candidate must show its
+eight symbols repeating one another over all seven lags, and where a candidate of one
+family lies inside the other's frame — a strong frame's body scores on either family's
+references — the floor one is kept only if its statistic is at least 0.85 of the
+ordinary peak, since a genuine floor frame scores about the signal's share of the power
+on its own statistic and at most three quarters of it on the ordinary references, and a
+genuine ordinary frame the reverse.
 
 Zadoff–Chu is deliberately *not* used anywhere in the preamble: a ZC chirp shifted in
 frequency is, up to phase, the same chirp shifted in time, so a matched filter could not

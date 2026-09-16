@@ -108,20 +108,24 @@ prefix.)
   threshold set the way ADR-0002's were, just above the maximum over 60 s of noise (0.314
   → 0.32). Its start is then refined within a symbol and a half by combining four windows
   coherently on a fine frequency sub-grid, and its CFO comes from all seven symbol lags.
-* **Why every carrier, and why two checks.** Twelve-carrier OFDM symbols correlate with any
-  six-carrier PN reference at 0.4–0.75 at high SNR once the receiver has searched over
-  carrier offset — half the even carriers are comb pilots, which repeat on every symbol —
-  so a strong frame's *body*, of either family, scores on the other family's references
-  above their thresholds, and no test on carrier energies survives the noise of six
-  carriers at −13 dB. What a body cannot fake is the preamble's own structure. The ordinary
-  pass runs first and each candidate must show the even-carriers-only symbol's two
-  identical halves (0.55 at −9 dB; a twelve-carrier floor symbol shows about none, its odd
-  carriers cancelling its even ones between the halves; a data symbol shows the pilots'
-  0.17); the floor pass then takes what is left, outside the ordinary frames' spans, and
-  each candidate must show its eight symbols repeating over all seven lags. Putting the
-  floor sequences on every carrier halves the cross-talk of data onto them and is what
-  makes the half-symbol test sharp. The ordinary two-symbol path is untouched for the wide
-  air and for narrow frames of the ordinary family (its vectors hold).
+* **Why every carrier, and how the families are told apart.** Twelve-carrier OFDM symbols
+  correlate with any six-carrier PN reference at 0.4–0.75 at high SNR once the receiver
+  has searched over carrier offset — half the even carriers are comb pilots, which repeat
+  on every symbol — so a strong frame's *body*, of either family, scores on the other
+  family's references above their thresholds; putting the floor sequences on every
+  carrier halves the cross-talk of data onto them. No test on the candidate itself
+  survived measurement: carrier-energy ratios drown in the noise of six carriers at
+  −13 dB, and the ordinary symbol's two-identical-halves signature, which should read
+  0.55 at −9 dB and about nothing on a floor symbol, cost an eighth of the ordinary
+  acquisitions at −7 dB and still reached 0.73 inside floor frames. What does work is
+  *evidence*: both passes run on the full statistics (the ordinary one exactly as before
+  the floor existed), a floor candidate must show its eight symbols repeating over all
+  seven lags (noise does not), and where a candidate of one family lies inside the
+  other's frame, the floor one is kept only if its statistic is at least 0.85 of the
+  ordinary peak — a genuine floor frame scores the signal's share of the power on its
+  own statistic and at most three quarters of it on the ordinary references, a genuine
+  ordinary frame its share on its peak and at most half on the floor statistic. The
+  ordinary two-symbol path is untouched for both airs (its vectors and curves hold).
 * **Three modes below the former table**, so the narrow ladder is
   `0 QPSK 1/10·FLOOR (19 B) · 1 QPSK ⅕·FLOOR (41 B) · 2 QPSK ⅓·LONG (15 B) · 3 QPSK ½·LONG
   (25 B, the control/connect mode) · 4–12 as before` — thirteen modes, which is what the
@@ -155,7 +159,8 @@ then cannot know a frame is ordinary until eight symbols have passed, and the tw
 statistic's skirt of partial matches up to six symbols early defeats every timing rule;
 carrier-energy tests of a floor candidate (odd/even ratios over the eight symbols, their
 halves and quarters) — sharp at high SNR, useless at −13 dB with six carriers a side, and
-fooled by an ordinary preamble anywhere inside the window; coherent combining of the seven
+fooled by an ordinary preamble anywhere inside the window; a half-symbol repetition check
+on ordinary candidates (above); coherent combining of the seven
 windows in the search — a fine sub-grid per bin for half a decibel; a 2 300 Hz floor
 first — the roadmap asks for the narrow floor and a measured comparison after it (§7).
 
