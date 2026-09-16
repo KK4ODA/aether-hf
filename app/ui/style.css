@@ -598,10 +598,6 @@ canvas {
   gap: var(--s3);
 }
 
-.chart.activity canvas {
-  height: 22px;
-}
-
 /* the diagnostics scopes: the constellation is square, the two spectra stack beside it */
 .scopes {
   display: grid;
@@ -807,7 +803,6 @@ body.compact .tabs,
 body.compact footer.bar,
 body.compact #readings-channel,
 body.compact .charts,
-body.compact .chart.activity,
 body.compact .counters,
 body.compact .panel:not(#panel-status) {
   display: none;

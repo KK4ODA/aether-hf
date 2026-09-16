@@ -99,17 +99,13 @@
         <div class="charts">
           <figure class="chart">
             <figcaption>SNR by frame, last ten minutes</figcaption>
-            <canvas id="chart-snr" width="450" height="180" role="img" aria-label="SNR of every frame heard; the current reading is in SNR"></canvas>
+            <canvas id="chart-snr" width="450" height="180" role="img" aria-label="SNR in dB of every frame heard over the last ten minutes, with what the other station reports and the current mode's threshold"></canvas>
           </figure>
           <figure class="chart">
-            <figcaption>Channel level vs noise floor, last two minutes</figcaption>
-            <canvas id="chart" width="450" height="180" role="img" aria-label="Channel level chart; the current reading is in Signal above noise"></canvas>
+            <figcaption>Channel and activity, last two minutes</figcaption>
+            <canvas id="chart" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line"></canvas>
           </figure>
         </div>
-        <figure class="chart activity">
-          <figcaption>Transmit and receive, last two minutes</figcaption>
-          <canvas id="chart-activity" width="900" height="22" role="img" aria-label="When this station transmitted and when a burst arrived"></canvas>
-        </figure>
 
         <section class="counters" aria-labelledby="counters-title">
           <h2 id="counters-title">Counters</h2>

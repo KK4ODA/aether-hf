@@ -295,7 +295,6 @@ function applyMetrics(metrics) {
     setLamp("lamp-rx", metrics.receiving === true, metrics.receiving ? "A burst is arriving" : "Nothing arriving");
   }
   if (metrics.transmitting !== undefined && metrics.receiving !== undefined) {
-    noteActivity(metrics.transmitting === true, metrics.receiving === true);
   }
   const level = metrics.level_db;
   const floor = metrics.noise_floor_db;
@@ -307,9 +306,20 @@ function applyMetrics(metrics) {
   } else {
     $("v-excess").textContent = `${(level - floor).toFixed(1)} dB`;
     $("v-floor").textContent = `floor ${floor.toFixed(1)} dBFS`;
-    history.push({ level, floor });
-    if (history.length > 240) history.shift();
+    // while this station transmits the receiver is muted and the detector holds its
+    // last reading, which is not the channel: the sample says so instead of carrying it
+    const at = Date.now();
+    history.push({
+      at,
+      level: metrics.transmitting === true ? null : level,
+      floor,
+      tx: metrics.transmitting === true,
+      rx: metrics.receiving === true,
+    });
+    while (history.length && history[0].at < at - LEVEL_SPAN_MS) history.shift();
     drawChart();
+    // the SNR chart's window slides with the clock even when no frame arrives
+    drawSnrChart();
   }
   if (level !== null && level !== undefined && floor !== null && floor !== undefined) {
     $("d-busy").textContent = metrics.channel_busy ? "busy" : "clear";
@@ -525,26 +535,97 @@ function surface(id, fallbackWidth, height) {
   return { ctx, width, height };
 }
 
-function drawSnrChart() {
-  const { ctx, width, height } = surface("chart-snr", 450, 180);
-  const c = tokens();
-  ctx.clearRect(0, 0, width, height);
-  const now = Date.now();
-  const left = 36;
-  const plotWidth = width - left - 8;
-  const top = 14;
-  const bottom = height - 20;
-  ctx.font = `10.5px ${c.numerals}`;
-  ctx.textBaseline = "middle";
+// ── the Status tab's two charts share one frame ─────────────────────
+//
+// The same margins, type, grid and legend line, so the two read as parts of one
+// dashboard: the y axis is labelled in its unit at the head of the legend, the grid is
+// faint, and the time axis carries three labels, not a ruler.
 
+const CHART_LEFT = 40;
+const CHART_RIGHT = 8;
+const CHART_TOP = 20;
+const CHART_BOTTOM = 20;
+const LEVEL_SPAN_MS = 2 * 60 * 1000;
+
+/// A colour token with an alpha, for the quieter marks.
+function withAlpha(colour, alpha) {
+  const m = /^#([0-9a-f]{6})$/i.exec(colour.trim());
+  if (!m) return colour;
+  const v = parseInt(m[1], 16);
+  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
+}
+
+/// The frame both charts draw in: the surface, the tokens, and the y scale.
+function chartFrame(id, fallbackWidth, height, low, high) {
+  const s = surface(id, fallbackWidth, height);
+  const c = tokens();
+  s.ctx.clearRect(0, 0, s.width, s.height);
+  s.ctx.font = `10.5px ${c.numerals}`;
+  s.ctx.textBaseline = "middle";
+  const plotWidth = s.width - CHART_LEFT - CHART_RIGHT;
+  const bottom = height - CHART_BOTTOM;
+  const y = (value) => CHART_TOP + (1 - (value - low) / (high - low)) * (bottom - CHART_TOP);
+  return { ...s, c, plotWidth, bottom, y };
+}
+
+/// Horizontal grid lines every `step`, labelled at the left.
+function drawValueAxis(f, low, high, step) {
+  const { ctx, c } = f;
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  for (let value = Math.ceil(low / step) * step; value <= high; value += step) {
+    const at = f.y(value);
+    ctx.strokeStyle = c.grid;
+    ctx.beginPath();
+    ctx.moveTo(CHART_LEFT, at);
+    ctx.lineTo(CHART_LEFT + f.plotWidth, at);
+    ctx.stroke();
+    ctx.fillStyle = c.ink;
+    ctx.fillText(String(value), CHART_LEFT - 6, at);
+  }
+}
+
+/// A faint rule every `gridMs`, and a label at every `labelMs`: "−N min" and "now".
+function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
+  const { ctx, c, height } = f;
+  const x = (at) => CHART_LEFT + ((at - (now - spanMs)) / spanMs) * f.plotWidth;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = c.grid;
+  for (let back = gridMs; back < spanMs; back += gridMs) {
+    ctx.beginPath();
+    ctx.moveTo(x(now - back), CHART_TOP);
+    ctx.lineTo(x(now - back), f.bottom);
+    ctx.stroke();
+  }
+  ctx.fillStyle = c.ink;
+  for (let back = 0; back <= spanMs; back += labelMs) {
+    ctx.textAlign = back === 0 ? "right" : back === spanMs ? "left" : "center";
+    const minutes = back / 60_000;
+    ctx.fillText(back === 0 ? "now" : `−${minutes} min`, x(now - back), height - 8);
+  }
+  return x;
+}
+
+/// The legend line along the top: the unit first, then each series in its colour.
+function drawLegend(f, items) {
+  const { ctx } = f;
+  ctx.textAlign = "left";
+  let at = CHART_LEFT;
+  for (const [colour, text] of items) {
+    ctx.fillStyle = colour;
+    ctx.fillText(text, at, 8);
+    at += ctx.measureText(text).width + 14;
+  }
+}
+
+// ── SNR by frame, last ten minutes ──────────────────────────────────
+
+function drawSnrChart() {
+  const now = Date.now();
   const threshold = modeTable[currentMode]?.threshold_db;
   let low = -2;
   let high = 20;
-  for (const point of snrHistory) {
-    low = Math.min(low, point.snr - 2);
-    high = Math.max(high, point.snr + 2);
-  }
-  for (const point of peerHistory) {
+  for (const point of [...snrHistory, ...peerHistory]) {
     low = Math.min(low, point.snr - 2);
     high = Math.max(high, point.snr + 2);
   }
@@ -552,133 +633,80 @@ function drawSnrChart() {
     low = Math.min(low, threshold - 2);
     high = Math.max(high, threshold + 2);
   }
-  const y = (db) => top + (1 - (db - low) / (high - low)) * (bottom - top);
-  const x = (at) => left + ((at - (now - SNR_SPAN_MS)) / SNR_SPAN_MS) * plotWidth;
+  low = Math.floor(low / 5) * 5;
+  high = Math.ceil(high / 5) * 5;
+  const f = chartFrame("chart-snr", 450, 180, low, high);
+  const { ctx, c } = f;
+  drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
+  const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
 
-  // grid every five dB, labelled; a tick every two minutes
-  const step = high - low > 40 ? 10 : 5;
-  for (let db = Math.ceil(low / step) * step; db <= high; db += step) {
-    ctx.strokeStyle = c.grid;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(left, y(db));
-    ctx.lineTo(left + plotWidth, y(db));
-    ctx.stroke();
-    ctx.fillStyle = c.ink;
-    ctx.textAlign = "right";
-    ctx.fillText(String(db), left - 6, y(db));
-  }
-  ctx.textAlign = "center";
-  for (let minutes = 0; minutes <= 10; minutes += 2) {
-    const at = now - SNR_SPAN_MS + (minutes / 10) * SNR_SPAN_MS;
-    ctx.strokeStyle = c.grid;
-    ctx.beginPath();
-    ctx.moveTo(x(at), top);
-    ctx.lineTo(x(at), bottom);
-    ctx.stroke();
-    ctx.fillStyle = c.ink;
-    ctx.textAlign = minutes === 0 ? "left" : minutes === 10 ? "right" : "center";
-    ctx.fillText(minutes === 10 ? "now" : `−${10 - minutes} min`, x(at), height - 8);
-  }
   if (threshold !== undefined) {
-    ctx.strokeStyle = c.ink;
+    ctx.strokeStyle = withAlpha(c.ink, 0.7);
     ctx.setLineDash([3, 4]);
     ctx.beginPath();
-    ctx.moveTo(left, y(threshold));
-    ctx.lineTo(left + plotWidth, y(threshold));
+    ctx.moveTo(CHART_LEFT, f.y(threshold));
+    ctx.lineTo(CHART_LEFT + f.plotWidth, f.y(threshold));
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.textAlign = "left";
     ctx.fillStyle = c.ink2;
-    ctx.fillText(`mode ${currentMode} needs ${threshold.toFixed(1)}`, left + 4, y(threshold) - 7);
+    ctx.fillText(
+      `mode ${currentMode} needs ${threshold.toFixed(1)} dB`,
+      CHART_LEFT + 4,
+      f.y(threshold) - 7,
+    );
   }
 
-  // what the other station reports: small squares, so the two readings are told apart
+  // what the other station reports hearing us at: a thin dashed line with small squares,
+  // quieter than the receiver's own readings so the two are told apart at a glance
+  ctx.strokeStyle = withAlpha(c.tx, 0.8);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  peerHistory.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(x(point.at), f.y(point.snr));
+    else ctx.lineTo(x(point.at), f.y(point.snr));
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
   ctx.fillStyle = c.tx;
   for (const point of peerHistory) {
-    ctx.fillRect(x(point.at) - 2.5, y(point.snr) - 2.5, 5, 5);
+    ctx.fillRect(x(point.at) - 1.5, f.y(point.snr) - 1.5, 3, 3);
   }
-  // the receiver's own: a line through the decoded frames, a hollow mark for a failed one
+
+  // the receiver's own: a line through the decoded frames with a small dot each, and a
+  // hollow mark for a frame that did not decode — the reading that matters most
   ctx.strokeStyle = c.accent;
   ctx.lineWidth = 1.25;
+  ctx.lineJoin = "round";
   ctx.beginPath();
   let started = false;
   for (const point of snrHistory) {
     if (!point.decoded) continue;
-    if (started) ctx.lineTo(x(point.at), y(point.snr));
-    else ctx.moveTo(x(point.at), y(point.snr));
+    if (started) ctx.lineTo(x(point.at), f.y(point.snr));
+    else ctx.moveTo(x(point.at), f.y(point.snr));
     started = true;
   }
   ctx.stroke();
   for (const point of snrHistory) {
     ctx.beginPath();
-    ctx.arc(x(point.at), y(point.snr), 2.5, 0, Math.PI * 2);
     if (point.decoded) {
+      ctx.arc(x(point.at), f.y(point.snr), 1.75, 0, Math.PI * 2);
       ctx.fillStyle = c.accent;
       ctx.fill();
     } else {
+      ctx.arc(x(point.at), f.y(point.snr), 3, 0, Math.PI * 2);
       ctx.strokeStyle = c.error;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
   }
-  ctx.textAlign = "left";
-  let at = left + 4;
-  for (const [colour, text] of [
+  drawLegend(f, [
+    [c.ink2, "SNR, dB"],
     [c.accent, "● heard here"],
     [c.error, "○ not decoded"],
     [c.tx, "■ they hear you"],
-  ]) {
-    ctx.fillStyle = colour;
-    ctx.fillText(text, at, 8);
-    at += ctx.measureText(text).width + 14;
-  }
-}
-
-// ── activity: when the key was down, when a burst was arriving ──────
-
-const ACTIVITY_SPAN_MS = 2 * 60 * 1000;
-const activity = [];
-
-function noteActivity(tx, rx) {
-  const at = Date.now();
-  activity.push({ at, tx, rx });
-  while (activity.length && activity[0].at < at - ACTIVITY_SPAN_MS) activity.shift();
-  if (panelShown("status")) drawActivity();
-}
-
-function drawActivity() {
-  const { ctx, width, height } = surface("chart-activity", 900, 22);
-  const c = tokens();
-  ctx.clearRect(0, 0, width, height);
-  const now = Date.now();
-  const x = (at) => ((at - (now - ACTIVITY_SPAN_MS)) / ACTIVITY_SPAN_MS) * width;
-  const slot = (500 / ACTIVITY_SPAN_MS) * width;
-  ctx.strokeStyle = c.grid;
-  ctx.lineWidth = 1;
-  for (let step = 1; step < 4; step++) {
-    ctx.beginPath();
-    ctx.moveTo((width * step) / 4, 0);
-    ctx.lineTo((width * step) / 4, height);
-    ctx.stroke();
-  }
-  for (const sample of activity) {
-    if (sample.tx) {
-      ctx.fillStyle = c.tx;
-      ctx.fillRect(x(sample.at) - slot, 3, slot + 0.5, height / 2 - 4);
-    }
-    if (sample.rx) {
-      ctx.fillStyle = c.rx;
-      ctx.fillRect(x(sample.at) - slot, height / 2 + 1, slot + 0.5, height / 2 - 4);
-    }
-  }
-  ctx.font = `9px ${c.numerals}`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  ctx.fillStyle = c.tx;
-  ctx.fillText("TX", 3, height / 4);
-  ctx.fillStyle = c.rx;
-  ctx.fillText("RX", 3, (3 * height) / 4);
+  ]);
 }
 
 // ── the stations heard ──────────────────────────────────────────────
@@ -1211,114 +1239,88 @@ function renderCounters(counters) {
   }
 }
 
-// ── chart ───────────────────────────────────────────────────────────
+// ── the channel, last two minutes ───────────────────────────────────
+//
+// One reading every half second from the busy detector, drawn as a bar: its height is
+// the received level, dim while only noise is arriving and bright while a burst is being
+// received, and a short tick at the baseline where this station was transmitting and its
+// receiver was muted. A faint dashed rule marks every change between the two, so the
+// rhythm of a session — burst, acknowledgement, burst — is read off the top of the chart.
 
 const history = [];
 
 function drawChart() {
-  const canvas = $("chart");
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth || 900;
-  const height = 180;
-  if (canvas.width !== Math.round(width * ratio)) {
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
+  const now = Date.now();
+  if (history.length < 2) {
+    surface("chart", 450, 180).ctx.clearRect(0, 0, 4096, 4096);
+    return;
   }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  if (history.length < 2) return;
-
-  const style = getComputedStyle(document.body);
-  const ink = style.getPropertyValue("--text-3").trim();
-  const floorInk = style.getPropertyValue("--text-2").trim();
-  const accent = style.getPropertyValue("--accent").trim();
-  const grid = style.getPropertyValue("--plot-grid").trim();
-
-  // One scale for both traces, so the gap between them is readable as the signal margin.
   let low = Infinity;
   let high = -Infinity;
   for (const point of history) {
-    low = Math.min(low, point.level, point.floor);
-    high = Math.max(high, point.level, point.floor);
+    low = Math.min(low, point.floor);
+    high = Math.max(high, point.floor + 12, point.level ?? point.floor);
   }
-  const pad = Math.max(3, (high - low) * 0.15);
-  low -= pad;
-  high += pad;
+  low = Math.floor((low - 3) / 5) * 5;
+  high = Math.ceil((high + 3) / 5) * 5;
+  const f = chartFrame("chart", 450, 180, low, high);
+  const { ctx, c } = f;
+  drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
+  const x = drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
+  const slot = (500 / LEVEL_SPAN_MS) * f.plotWidth;
+  const bar = Math.max(1, slot - 0.6);
+  const base = f.bottom;
 
-  const left = 44;
-  const plotWidth = width - left - 8;
-  const y = (db) => 14 + (1 - (db - low) / (high - low)) * (height - 34);
-  const x = (index) => left + (index / (history.length - 1)) * plotWidth;
-
-  ctx.font = `10.5px ${style.getPropertyValue("--numerals").trim() || "monospace"}`;
-  ctx.textBaseline = "middle";
-  // horizontal grid at five levels, and a faint vertical rule every quarter of the span
-  for (let step = 0; step <= 4; step++) {
-    const db = low + ((high - low) * step) / 4;
-    const at = y(db);
-    ctx.strokeStyle = grid;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(left, at);
-    ctx.lineTo(left + plotWidth, at);
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    ctx.textAlign = "right";
-    ctx.fillText(db.toFixed(0), left - 6, at);
+  for (const point of history) {
+    const x0 = x(point.at) - slot;
+    if (point.tx) {
+      ctx.fillStyle = c.tx;
+      ctx.fillRect(x0, base - 5, bar, 5);
+    } else if (point.level !== null && point.level !== undefined) {
+      ctx.fillStyle = point.rx ? c.rx : withAlpha(c.rx, 0.45);
+      const top = Math.min(f.y(point.level), base - 1);
+      ctx.fillRect(x0, top, bar, base - top);
+    }
   }
-  for (let step = 1; step < 4; step++) {
-    const at = left + (plotWidth * step) / 4;
-    ctx.strokeStyle = grid;
-    ctx.beginPath();
-    ctx.moveTo(at, y(high));
-    ctx.lineTo(at, y(low));
-    ctx.stroke();
+
+  // a rule at every change between receiving and transmitting
+  ctx.strokeStyle = withAlpha(c.ink, 0.3);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  for (let i = 1; i < history.length; i++) {
+    if (history[i].tx !== history[i - 1].tx) {
+      const at = x(history[i].at) - slot;
+      ctx.beginPath();
+      ctx.moveTo(at, CHART_TOP);
+      ctx.lineTo(at, base);
+      ctx.stroke();
+    }
   }
-  ctx.fillStyle = ink;
-  ctx.textAlign = "right";
-  ctx.fillText("dBFS", left - 6, height - 8);
+  ctx.setLineDash([]);
 
-  const path = (pick) => {
-    ctx.beginPath();
-    history.forEach((point, index) => {
-      const at = y(pick(point));
-      if (index === 0) ctx.moveTo(x(index), at);
-      else ctx.lineTo(x(index), at);
-    });
-  };
-
-  ctx.strokeStyle = floorInk;
+  // the noise floor the busy detector keeps, which the bars are read against
+  ctx.strokeStyle = c.ink2;
   ctx.lineWidth = 1.25;
   ctx.setLineDash([4, 4]);
-  path((p) => p.floor);
+  ctx.beginPath();
+  history.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(x(point.at), f.y(point.floor));
+    else ctx.lineTo(x(point.at), f.y(point.floor));
+  });
   ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.75;
-  ctx.lineJoin = "round";
-  path((p) => p.level);
-  ctx.stroke();
-
-  // the newest reading, marked, so the eye finds "now" without hunting for the end
-  const last = history.at(-1);
-  ctx.fillStyle = accent;
-  ctx.beginPath();
-  ctx.arc(x(history.length - 1), y(last.level), 2.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = accent;
-  ctx.fillText("● level", left + 4, 10);
-  ctx.fillStyle = floorInk;
-  ctx.fillText("- - noise floor", left + 58, 10);
+  drawLegend(f, [
+    [c.ink2, "level, dBFS"],
+    [c.rx, "▍ receiving"],
+    [c.tx, "▍ transmitting"],
+    [c.ink2, "- - noise floor"],
+  ]);
 }
 
 window.addEventListener("resize", () => {
   drawChart();
   drawSnrChart();
-  drawActivity();
 });
 document.addEventListener("visibilitychange", scopesWanted);
 
@@ -1992,7 +1994,6 @@ function selectTab(tab, focus = false) {
   if (tab.dataset.panel === "status") {
     drawChart();
     drawSnrChart();
-    drawActivity();
   }
   if (tab.dataset.panel === "stations") renderHeard();
   scopesWanted();
@@ -2116,6 +2117,7 @@ function wire() {
   wireWaterfallControls();
   loadHistory();
   renderFrames(); // what was kept shows before the first new frame does
+  drawSnrChart(); // the axes are there from the start, frames or none
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);
