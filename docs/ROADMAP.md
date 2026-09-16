@@ -726,7 +726,15 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
 5. ~~**P7-1** The link probe~~ — done 2026-09-15: ADR-0006, model, port, `probe` in the
    control API, the Probe button beside Beacon with both SNRs beside it. No `PING` in the
    VARA adapter (VARA has none; VarAC pings by connecting).
-6. **P9-2** The faster start from the connect frames' SNR, with its bench number.
+6. **P9-2** The faster start from the connect frames' SNR — and the faster climb. Found on
+   the VarAC bench (2026-09-16): a 16 kB transfer at 12 dB on the 500 Hz waveform ran the
+   whole way at mode 6 (615 bit/s) though mode 8 (934 bit/s) fits with the margin and
+   hysteresis; one failed burst costs the outer loop 1.5 dB of margin, earned back at
+   0.25 dB per three clean bursts — eighteen bursts, two and a half minutes at that rate —
+   and a burst lost whole (a collision, a missed preamble) is charged like a fade. Model
+   first: widen less for an all-lost burst, decay faster while bursts stay clean, and the
+   curve on Good, Moderate and Poor to show it does not oscillate. Also `burst_frames`
+   (6): 44 acknowledgement exchanges for 208 frames was a fifth of the air time.
 7. **P9-4** The floor: modes below 200 bit/s at 500 Hz, with their curves.
 8. **P9-1** `tools/channel_cable.py` and the A/B protocol; the runs when the author can.
 9. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor.
