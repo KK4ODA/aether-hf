@@ -253,7 +253,13 @@ author's registered VARA (`tools/channel_cable.py`, to be written; runs are the 
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
 and Poor. The air (P6-6) runs alongside: cable → ground wave now at 2300 Hz, P2P after
 P7-0; twenty logged sessions in `field/LOG.md`. **Back burner by decision: Aether FM (now
-Phase 10) and the phone (Phase 8).** Human items still open: BPQ32 over `[sim]`, three
+Phase 10) and the phone (Phase 8).** **P6-7, on-air crowdsourcing** (added 2026-09-16, order
+open): a Test session (probe, 2 kB, 16 kB, a mode ladder pinned per mode) as a control-API
+method and panel button, sidecar fields for grid/rig/power/antenna/path, *Contribute this
+session* (GitHub issue or email; audio opt-in), `tools/field_ingest.py`, and
+`bench_link --replay <sidecar>` — every volunteer contact becomes a sidecar the bench
+replays; per-class penalties and the SNR estimator get checked on real paths. Human
+items still open: BPQ32 over `[sim]`, three
 external hams through the wizard, Authenticode signing. Small: CM108 keying, the panel's
 SNR history across a reload.
 
