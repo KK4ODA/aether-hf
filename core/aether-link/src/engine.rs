@@ -174,6 +174,23 @@ pub struct LinkStats {
     pub probes_answered: usize,
     /// Answers to this station's own probes that arrived.
     pub probe_replies: usize,
+    /// Frames given another codeword at a slower mode after going unacknowledged at
+    /// their own for `max_combines` transmissions.
+    pub frames_reencoded: usize,
+}
+
+/// One burst sent at a pinned mode and what came back for it: a rung of the Test
+/// session's mode ladder (P6-7), the frame error rate the peer saw at the SNR it measured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LadderRung {
+    /// The pinned mode.
+    pub mode: usize,
+    /// New frames the burst carried at it; retransmissions are not counted.
+    pub frames: usize,
+    /// Of those, the ones the acknowledgement covered.
+    pub decoded: usize,
+    /// The SNR the peer measured on the burst, from its acknowledgement.
+    pub snr_db: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +201,8 @@ struct TxRecord {
     mode: usize,
     tx_count: usize,
     acked: bool,
+    /// Transmissions made under an earlier codeword, before a re-encoding.
+    reencoded: usize,
 }
 
 struct RxRecord {
@@ -311,6 +330,15 @@ pub struct LinkEngine {
     peer_mode: Option<usize>,
     /// The station a probe of ours is out to, until it answers or the timer fires.
     probing: Option<String>,
+    /// A mode every new burst goes out at while set, whatever the peer recommends: the
+    /// Test session's mode ladder (P6-7).
+    pinned: Option<usize>,
+    /// While pinned, the most payload a new frame takes — small, so a frame the pinned
+    /// mode cannot carry can be re-encoded at one that can.
+    pin_body: Option<usize>,
+    ladder_pending: Option<(usize, Vec<u8>)>,
+    /// What each pinned burst reported back, in order; see [`pin_mode`](Self::pin_mode).
+    ladder: Vec<LadderRung>,
     waiting_for: Option<Waiting>,
     // receiving side
     rx_base: u8,
@@ -395,6 +423,10 @@ impl LinkEngine {
             peer_floor: false,
             peer_mode: None,
             probing: None,
+            pinned: None,
+            pin_body: None,
+            ladder_pending: None,
+            ladder: Vec::new(),
             waiting_for: None,
             rx_base: 0,
             rx_buffer: Vec::new(),
@@ -464,6 +496,42 @@ impl LinkEngine {
     #[must_use]
     pub fn current_mode(&self) -> usize {
         self.recommended
+    }
+
+    /// Send every new burst at `mode` until unpinned (`None`), whatever the peer
+    /// recommends — the Test session's mode ladder (P6-7): a burst at each mode from the
+    /// floor up, and what its acknowledgement said kept as a [`LadderRung`] (the frame
+    /// error rate the peer saw at the SNR it measured). `body_bytes` caps the payload of
+    /// each new frame while pinned, so that a frame a mode cannot carry can be re-encoded
+    /// at one that can; the operator's `max_mode` still applies.
+    ///
+    /// # Errors
+    /// For a mode the table has not, or an empty body cap.
+    pub fn pin_mode(
+        &mut self,
+        mode: Option<usize>,
+        body_bytes: Option<usize>,
+    ) -> Result<(), &'static str> {
+        if mode.is_some_and(|m| m >= self.timing.data_capacity.len()) {
+            return Err("not a mode of the table");
+        }
+        if body_bytes == Some(0) {
+            return Err("body_bytes must be at least 1");
+        }
+        self.pinned = mode;
+        self.pin_body = if mode.is_some() { body_bytes } else { None };
+        Ok(())
+    }
+
+    /// The rungs recorded since the last call, oldest first.
+    pub fn take_ladder(&mut self) -> Vec<LadderRung> {
+        std::mem::take(&mut self.ladder)
+    }
+
+    /// The rungs recorded so far.
+    #[must_use]
+    pub fn ladder(&self) -> &[LadderRung] {
+        &self.ladder
     }
 
     /// Bytes queued, or sent but not yet acknowledged.
@@ -865,11 +933,33 @@ impl LinkEngine {
     /// side can tell how long to wait for it.
     fn control_floor(&self) -> bool {
         if self.role == Role::Iss && self.state == State::Connected {
-            self.timing
-                .is_floor(self.recommended.min(self.config.max_mode))
+            self.timing.is_floor(self.burst_mode())
         } else {
             self.peer_floor
         }
+    }
+
+    /// The mode the next burst's new frames go out at: the pin while one is set, the
+    /// peer's recommendation otherwise, never past the operator's ceiling.
+    fn burst_mode(&self) -> usize {
+        self.pinned
+            .unwrap_or(self.recommended)
+            .min(self.config.max_mode)
+    }
+
+    /// Whether a body can be encoded at `mode`: within its capacity, and not the one
+    /// length short of full that the container cannot carry.
+    fn fits(&self, body_len: usize, mode: usize) -> bool {
+        let capacity = data_capacity(self.timing.capacity(mode));
+        body_len == capacity || body_len + 2 <= capacity
+    }
+
+    /// The slowest mode from `to_mode` up to (not including) `from_mode` that carries a
+    /// body of `body_len` bytes, or none when none does — a full frame has nowhere
+    /// slower to go.
+    fn reencode_target(&self, body_len: usize, from_mode: usize, to_mode: usize) -> Option<usize> {
+        (to_mode..from_mode.min(self.timing.data_capacity.len()))
+            .find(|&mode| self.fits(body_len, mode))
     }
 
     /// The longest DATA frame the peer may send next: the family of what we recommended
@@ -1156,9 +1246,34 @@ impl LinkEngine {
     }
 
     fn send_burst(&mut self) {
-        let mode = self.recommended.min(self.config.max_mode);
-        let mut family = self.timing.is_floor(mode);
+        let mode = self.burst_mode();
+        let recommendation = self.recommended.min(self.config.max_mode);
         let unacked = self.unacked();
+        // A frame sent max_combines times at its mode without an acknowledgement is
+        // stranded there: the peer has reset its buffer for it, and another round at the
+        // same mode has the odds the last one had. When the recommendation has moved
+        // below that mode, the frame is re-encoded at the slowest mode down to it that
+        // carries the body — another codeword, which the peer starts fresh on. A full
+        // frame has nowhere slower to go and keeps trying; the ladder (P6-7) sends small
+        // bodies for that reason, and so should anything that expects to fall far.
+        for &seq in &unacked {
+            let Some(index) = self.records.iter().position(|r| r.seq == seq) else {
+                continue;
+            };
+            let record = &self.records[index];
+            if record.tx_count >= self.config.max_combines && recommendation < record.mode {
+                if let Some(target) =
+                    self.reencode_target(record.body.len(), record.mode, recommendation)
+                {
+                    let record = &mut self.records[index];
+                    record.mode = target;
+                    record.reencoded += record.tx_count;
+                    record.tx_count = 0;
+                    self.stats.frames_reencoded += 1;
+                }
+            }
+        }
+        let mut family = self.timing.is_floor(mode);
         // One family per burst (ADR-0009): the receiver infers a frame's slot from its air
         // time, which needs every frame of the burst to be the same length. A frame keeps
         // its codeword — and so its mode — across retransmissions, so when the oldest
@@ -1181,6 +1296,9 @@ impl LinkEngine {
             && !self.tx_queue.is_empty()
         {
             let mut take = capacity.min(self.tx_queue.len());
+            if let Some(cap) = self.pin_body {
+                take = take.min(cap);
+            }
             // A body one byte short of full is the one length the container cannot carry:
             // it is partial, so it needs its two length bytes, and then it no longer fits.
             // Leave one more byte for the next frame instead of failing on the air.
@@ -1196,12 +1314,27 @@ impl LinkEngine {
                 mode,
                 tx_count: 0,
                 acked: false,
+                reencoded: 0,
             });
             self.tx_next = seq_after(self.tx_next, 1);
             seqs.push(seq);
         }
         if seqs.is_empty() {
             return;
+        }
+        if self.pinned.is_some() {
+            let fresh: Vec<u8> = seqs
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    self.records
+                        .iter()
+                        .any(|r| r.seq == s && r.tx_count == 0 && r.reencoded == 0)
+                })
+                .collect();
+            if !fresh.is_empty() {
+                self.ladder_pending = Some((mode, fresh));
+            }
         }
 
         let mut frames = Vec::with_capacity(seqs.len());
@@ -1210,7 +1343,7 @@ impl LinkEngine {
                 continue;
             };
             let mut record = self.records[index].clone();
-            if record.tx_count > 0 {
+            if record.tx_count > 0 || record.reencoded > 0 {
                 self.stats.frames_resent += 1;
             }
             frames.push(self.data_frame(&mut record));
@@ -1240,6 +1373,15 @@ impl LinkEngine {
     fn on_ack(&mut self, ack: &ControlFrame) {
         self.stats.acks_received += 1;
         self.retries = 0;
+        if let Some((mode, fresh)) = self.ladder_pending.take() {
+            let decoded = fresh.iter().filter(|&&s| ack.received(s)).count();
+            self.ladder.push(LadderRung {
+                mode,
+                frames: fresh.len(),
+                decoded,
+                snr_db: ack.snr_db,
+            });
+        }
         for record in &mut self.records {
             if !record.acked && record.tx_count > 0 && ack.received(record.seq) {
                 record.acked = true;

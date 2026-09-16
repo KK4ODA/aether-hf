@@ -890,3 +890,72 @@ fn an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() {
         "the queued data never went out: {burst:?}"
     );
 }
+
+#[test]
+fn a_pinned_mode_goes_out_whatever_the_peer_recommends() {
+    // P6-7's ladder: while a mode is pinned every new frame goes out at it, the peer's
+    // recommendation notwithstanding, and each pinned burst leaves a rung saying how
+    // many of its frames the peer acknowledged at what SNR
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    assert_eq!(a.pin_mode(Some(99), None), Err("not a mode of the table"));
+    assert_eq!(
+        a.pin_mode(Some(2), Some(0)),
+        Err("body_bytes must be at least 1")
+    );
+    a.pin_mode(Some(2), Some(16)).expect("a mode of the table");
+    let message: Vec<u8> = (0..200u8).collect();
+    let mut sim = TwoStationSim::new(a, b, 15.0, 31);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(&message);
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), &message[..]);
+    // connect frames go at the robust mode; every data frame went at the pin
+    let modes = sim.modes_sent();
+    assert!(modes.iter().all(|&m| m == 0 || m == 2), "{modes:?}");
+    assert!(modes.iter().filter(|&&m| m == 2).count() >= 13, "{modes:?}");
+    // 16-byte bodies: 200 bytes are 13 frames, six to a burst
+    let rungs = sim.engine_mut(0).take_ladder();
+    let frames: Vec<usize> = rungs.iter().map(|r| r.frames).collect();
+    assert_eq!(frames, vec![6, 6, 1], "{rungs:?}");
+    assert!(
+        rungs.iter().all(|r| r.mode == 2 && r.decoded == r.frames),
+        "{rungs:?}"
+    );
+    assert!(
+        rungs
+            .iter()
+            .all(|r| r.snr_db.is_some_and(|s| (s - 15.0).abs() < 1.0)),
+        "{rungs:?}"
+    );
+    assert!(sim.engine_mut(0).take_ladder().is_empty());
+}
+
+#[test]
+fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
+    // a frame that has gone max_combines transmissions unacknowledged at a mode the
+    // channel cannot carry is given another codeword at the slowest mode down to the
+    // recommendation that fits its body — so a ladder rung above the channel, or a link
+    // that drops into the floor, does not strand the session
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    let top = PAYLOAD_BYTES.len() - 1;
+    a.pin_mode(Some(top), Some(16)).expect("the top mode");
+    let message: Vec<u8> = (0..48u8).collect();
+    let mut sim = TwoStationSim::new(a, b, 0.0, 7);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(&message);
+    sim.engine_mut(0).disconnect();
+    let ended = sim.run(600.0, 3.0);
+    assert_eq!(sim.delivered(1), &message[..]);
+    assert!(ended < 600.0, "the session did not end: {ended}");
+    let rungs = sim.engine_mut(0).take_ladder();
+    assert!(
+        rungs
+            .first()
+            .is_some_and(|r| r.mode == top && r.decoded == 0),
+        "{rungs:?}"
+    );
+    assert!(sim.engine(0).stats.frames_reencoded >= 1);
+}

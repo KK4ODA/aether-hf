@@ -139,6 +139,8 @@ class _TxRecord:
     mode: int
     tx_count: int = 0
     acked: bool = False
+    reencoded: int = 0
+    """Transmissions made under an earlier codeword, before a re-encoding."""
 
 
 @dataclass
@@ -180,6 +182,23 @@ class LinkStats:
     """Probes from other stations this one answered."""
     probe_replies: int = 0
     """Answers to this station's own probes that arrived."""
+    frames_reencoded: int = 0
+    """Frames given another codeword at a slower mode after going unacknowledged at their
+    own for :attr:`LinkConfig.max_combines` transmissions."""
+
+
+@dataclass(frozen=True)
+class LadderRung:
+    """One burst sent at a pinned mode and what came back for it: a rung of the Test
+    session's mode ladder (P6-7), the frame error rate the peer saw at the SNR it measured."""
+
+    mode: int
+    frames: int
+    """New frames the burst carried at the pinned mode; retransmissions are not counted."""
+    decoded: int
+    """Of those, the ones the acknowledgement covered."""
+    snr_db: float | None
+    """The SNR the peer measured on the burst, from its acknowledgement."""
 
 
 # ── the engine ────────────────────────────────────────────────────────
@@ -240,6 +259,15 @@ class LinkEngine:
         most likely to take on the air."""
         self._probing: str | None = None
         """The station a probe of ours is out to, until it answers or the timer fires."""
+        self._pinned: int | None = None
+        """A mode every new burst goes out at while set, whatever the peer recommends:
+        the Test session's mode ladder (P6-7)."""
+        self._pin_body: int | None = None
+        """While pinned, the most payload a new frame takes — small, so a frame the
+        pinned mode cannot carry can be re-encoded at one that can."""
+        self._ladder_pending: tuple[int, list[int]] | None = None
+        self.ladder: list[LadderRung] = []
+        """What each pinned burst reported back, in order; see :meth:`pin_mode`."""
         self._waiting_for: str | None = None  # "ack" | "poll" | "turn" | "disc" | "connect"
         # receiving side
         self._rx_base = 0
@@ -349,6 +377,27 @@ class LinkEngine:
         self._tx_queue += data
         if self.state is State.CONNECTED and self.role is Role.ISS:
             self._maybe_start_burst()
+
+    def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
+        """Send every new burst at ``mode`` until unpinned (``None``), whatever the peer
+        recommends — the Test session's mode ladder (P6-7): a burst at each mode from the
+        floor up, and what its acknowledgement said appended to :attr:`ladder` as the
+        frame error rate the peer saw at the SNR it measured. ``body_bytes`` caps the
+        payload of each new frame while pinned, so that a frame a mode cannot carry can
+        be re-encoded at one that can (see :meth:`_send_burst`); the operator's
+        :attr:`LinkConfig.max_mode` still applies. Raises ``ValueError`` for a mode the
+        table has not."""
+        if mode is not None and mode not in (self.timing.data_capacity or {}):
+            raise ValueError(f"mode {mode} is not in the table")
+        if body_bytes is not None and body_bytes < 1:
+            raise ValueError("body_bytes must be at least 1")
+        self._pinned = mode
+        self._pin_body = body_bytes if mode is not None else None
+
+    def take_ladder(self) -> list[LadderRung]:
+        """The rungs recorded since the last call, oldest first."""
+        rungs, self.ladder = self.ladder, []
+        return rungs
 
     def request_break(self) -> None:
         """IRS: demand the sending role in the next ACK."""
@@ -513,8 +562,29 @@ class LinkEngine:
         comes back the way the burst went out, and either side can tell how long to wait
         for it."""
         if self.role is Role.ISS and self.state is State.CONNECTED:
-            return self.timing.is_floor(min(self._recommended, self.cfg.max_mode))
+            return self.timing.is_floor(self._burst_mode())
         return self._peer_floor
+
+    def _burst_mode(self) -> int:
+        """The mode the next burst's new frames go out at: the pin while one is set, the
+        peer's recommendation otherwise, never past the operator's ceiling."""
+        chosen = self._recommended if self._pinned is None else self._pinned
+        return min(chosen, self.cfg.max_mode)
+
+    def _fits(self, body_len: int, mode: int) -> bool:
+        """Whether a body can be encoded at ``mode``: within its capacity, and not the one
+        length short of full that the container cannot carry."""
+        cap = data_capacity(self.timing.capacity(mode))
+        return body_len == cap or body_len <= cap - 2
+
+    def _reencode_target(self, body_len: int, from_mode: int, to_mode: int) -> int | None:
+        """The slowest mode from ``to_mode`` up to (not including) ``from_mode`` that
+        carries a body of ``body_len`` bytes, or ``None`` when none does — a full frame
+        has nowhere slower to go."""
+        for mode in sorted(self.timing.data_capacity or {}):
+            if to_mode <= mode < from_mode and self._fits(body_len, mode):
+                return mode
+        return None
 
     def _peer_data_frame_s(self) -> float:
         """The longest DATA frame the peer may send next: the family of what we recommended
@@ -683,9 +753,26 @@ class LinkEngine:
         return bool(self._unacked()) or bool(self._tx_queue)
 
     def _send_burst(self) -> None:
-        mode = min(self._recommended, self.cfg.max_mode)
-        family = self.timing.is_floor(mode)
+        mode = self._burst_mode()
+        recommendation = min(self._recommended, self.cfg.max_mode)
         unacked = self._unacked()
+        # A frame sent max_combines times at its mode without an acknowledgement is
+        # stranded there: the peer has reset its buffer for it, and another round at the
+        # same mode has the odds the last one had. When the recommendation has moved
+        # below that mode, the frame is re-encoded at the slowest mode down to it that
+        # carries the body — another codeword, which the peer starts fresh on. A full
+        # frame has nowhere slower to go and keeps trying; the ladder (P6-7) sends small
+        # bodies for that reason, and so should anything that expects to fall far.
+        for s in unacked:
+            rec = self._records[s]
+            if rec.tx_count >= self.cfg.max_combines and recommendation < rec.mode:
+                target = self._reencode_target(len(rec.body), rec.mode, recommendation)
+                if target is not None:
+                    rec.mode = target
+                    rec.reencoded += rec.tx_count
+                    rec.tx_count = 0
+                    self.stats.frames_reencoded += 1
+        family = self.timing.is_floor(mode)
         # One family per burst (ADR-0009): the receiver infers a frame's slot from its air
         # time, which needs every frame of the burst to be the same length. A frame keeps
         # its codeword — and so its mode — across retransmissions, so when the oldest
@@ -704,6 +791,8 @@ class LinkEngine:
             and self._tx_queue
         ):
             take = min(cap, len(self._tx_queue))
+            if self._pin_body is not None:
+                take = min(take, self._pin_body)
             # A body one byte short of full is the one length the container cannot carry:
             # it is partial, so it needs its two length bytes, and then it no longer fits.
             # Leave one more byte for the next frame instead of failing on the air.
@@ -717,10 +806,16 @@ class LinkEngine:
             seqs.append(rec.seq)
         if not seqs:
             return
+        if self._pinned is not None:
+            fresh = [
+                s for s in seqs if not (self._records[s].tx_count or self._records[s].reencoded)
+            ]
+            if fresh:
+                self._ladder_pending = (mode, fresh)
         frames = []
         for s in seqs:
             rec = self._records[s]
-            if rec.tx_count:
+            if rec.tx_count or rec.reencoded:
                 self.stats.frames_resent += 1
             frames.append(self._data_frame(rec))
         self.stats.frames_sent += len(frames)
@@ -738,6 +833,11 @@ class LinkEngine:
     def _on_ack(self, ack: ControlFrame) -> None:
         self.stats.acks_received += 1
         self._retries = 0
+        if self._ladder_pending is not None:
+            pinned_mode, fresh = self._ladder_pending
+            self._ladder_pending = None
+            decoded = sum(1 for s in fresh if ack.received(s))
+            self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, ack.snr_db))
         for s, rec in list(self._records.items()):
             if not rec.acked and rec.tx_count and ack.received(s):
                 rec.acked = True

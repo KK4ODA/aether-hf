@@ -860,3 +860,69 @@ def test_capabilities_are_forgotten_when_a_session_ends(timing: PhyTiming) -> No
     assert b.peer_capabilities == 0b111
     b.abort()
     assert b.peer_capabilities == 0
+
+
+def test_a_pinned_mode_goes_out_whatever_the_peer_recommends(timing: PhyTiming) -> None:
+    """P6-7's ladder: while a mode is pinned every new frame goes out at it, the peer's
+    recommendation notwithstanding, and each pinned burst leaves a rung saying how many
+    of its frames the peer acknowledged at what SNR."""
+    from aether_model.link.phy import Container, TxFrame
+
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=31)
+    sent: list[tuple[int, int]] = []
+    original = a._transmit
+
+    def wrapped(frames: list[TxFrame]) -> None:
+        if a.state is State.CONNECTED and a.role is Role.ISS:
+            sent.extend((f.mode, f.rv) for f in frames if f.container is Container.DATA)
+        original(frames)
+
+    a._transmit = wrapped  # type: ignore[method-assign]
+    with pytest.raises(ValueError):
+        a.pin_mode(99)
+    a.pin_mode(2, body_bytes=16)
+    a.connect("KK4XYZ")
+    a.send(bytes(range(200)))
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(range(200))
+    assert sent and all(mode == 2 for mode, _ in sent), sent
+    # 16-byte bodies: 200 bytes are 13 frames, six to a burst
+    rungs = a.take_ladder()
+    assert [r.frames for r in rungs] == [6, 6, 1], rungs
+    assert all(r.mode == 2 and r.decoded == r.frames for r in rungs), rungs
+    assert all(r.snr_db is not None and abs(r.snr_db - 15.0) < 1.0 for r in rungs), rungs
+    assert a.take_ladder() == []
+    # unpinned, the recommendation is followed again
+    a.pin_mode(None)
+    assert a._burst_mode() == min(a._recommended, a.cfg.max_mode)
+
+
+def test_a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it(timing: PhyTiming) -> None:
+    """A frame that has gone max_combines transmissions unacknowledged at a mode the
+    channel cannot carry is given another codeword at the slowest mode down to the
+    recommendation that fits its body — so a ladder rung above the channel, or a link
+    that drops into the floor, does not strand the session."""
+    from aether_model.link.frames import data_capacity
+
+    a, b = _pair(timing)
+    top = usable_modes()[-1]
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=7)
+    a.pin_mode(top, body_bytes=16)
+    a.connect("KK4XYZ")
+    a.send(bytes(range(48)))
+    a.disconnect()
+    sim.run(until=600)
+    assert sim.delivered(1) == bytes(range(48))
+    rungs = a.take_ladder()
+    assert rungs and rungs[0].mode == top and rungs[0].decoded == 0, rungs
+    assert a.stats.frames_reencoded >= 1
+    assert sim.t < 600
+    # the chooser: the slowest mode down to the recommendation that carries the body, and
+    # nothing for a body only the faster mode can hold
+    small = a._reencode_target(16, top, 0)
+    assert small == 0
+    assert a._reencode_target(16, top, 5) == 5
+    full = data_capacity(timing.capacity(top))
+    assert a._reencode_target(full, top, 0) is None

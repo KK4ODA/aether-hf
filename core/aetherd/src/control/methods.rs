@@ -753,6 +753,7 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "probes_sent": stats.probes_sent,
         "probes_answered": stats.probes_answered,
         "probe_replies": stats.probe_replies,
+        "frames_reencoded": stats.frames_reencoded,
     })
 }
 
