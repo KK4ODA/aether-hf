@@ -76,9 +76,19 @@ pub struct RateConfig {
     pub up_step_db: f64,
     /// Cap on a single targeted increase, so one deep fade cannot strand the link.
     pub max_jump_db: f64,
-    /// Margin decrease per decay step.
+    /// Margin decrease at the first decay step after a failure, applied once `decay_every`
+    /// clean bursts have gone by.
     pub down_step_db: f64,
-    /// Clean bursts per decay step, once a failure has taught the margin something.
+    /// How much each further clean burst's decay step grows on the last (1.0 keeps the
+    /// step fixed and the old every-`decay_every` cadence): once the stickiness has run
+    /// its course the margin comes back at an accelerating rate, capped at
+    /// `max_down_step_db`. A learned penalty is given up slowly at first and quickly once
+    /// clean burst follows clean burst — what a fade that has passed, or a collision that
+    /// was never a fade, looks like (ADR-0007).
+    pub decay_growth: f64,
+    /// Cap on a single decay step.
+    pub max_down_step_db: f64,
+    /// Clean bursts before the first decay step after a failure.
     pub decay_every: usize,
     /// Extra headroom demanded before stepping up — the anti-oscillation mechanism.
     pub up_hysteresis_db: f64,
@@ -97,6 +107,8 @@ impl Default for RateConfig {
             up_step_db: 1.5,
             max_jump_db: 3.0,
             down_step_db: 0.25,
+            decay_growth: 2.0,
+            max_down_step_db: 1.0,
             decay_every: 3,
             up_hysteresis_db: 1.5,
             up_dwell: 1,
@@ -117,6 +129,8 @@ pub struct RateController {
     clean_run: usize,
     clean_since_decay: usize,
     ever_failed: bool,
+    /// The last decay step taken since the failure before, which the next one grows on.
+    decay_step_db: f64,
 }
 
 impl Default for RateController {
@@ -153,6 +167,7 @@ impl RateController {
             clean_run: 0,
             clean_since_decay: 0,
             ever_failed: false,
+            decay_step_db: 0.0,
         }
     }
 
@@ -188,17 +203,23 @@ impl RateController {
             self.ever_failed = true;
             self.clean_run = 0;
             self.clean_since_decay = 0;
+            self.decay_step_db = 0.0;
             self.step_down();
         } else if ok > 0 {
             self.clean_run += 1;
             self.clean_since_decay += 1;
-            let period = if self.ever_failed {
-                self.config.decay_every
-            } else {
-                1
-            };
-            if self.clean_since_decay >= period {
+            if !self.ever_failed {
+                self.margin_db =
+                    (self.margin_db - self.config.down_step_db).max(self.config.min_margin_db);
+            } else if self.decay_step_db > 0.0 {
+                // past the sticky bursts: every clean burst gives back more than the last
+                self.decay_step_db = (self.decay_step_db * self.config.decay_growth)
+                    .min(self.config.max_down_step_db);
+                self.margin_db =
+                    (self.margin_db - self.decay_step_db).max(self.config.min_margin_db);
+            } else if self.clean_since_decay >= self.config.decay_every {
                 self.clean_since_decay = 0;
+                self.decay_step_db = self.config.down_step_db;
                 self.margin_db =
                     (self.margin_db - self.config.down_step_db).max(self.config.min_margin_db);
             }

@@ -1,3 +1,3 @@
-backend,channel,snr_db,ramp,bytes,seconds,goodput_bps,ideal_bps,efficiency,mode_min,mode_max,mode_final,mode_changes,bursts,frames_sent,frames_resent,harq_rescues,ack_timeouts,ok,wall_s
-phy,awgn,8.0,,4000,41.8,764.7,2952.6,0.259,0,6,6,3,6,31,0,0,0,1,13.7
-phy,awgn,14.0,,4000,37.7,849.8,4440.2,0.191,0,9,9,4,5,28,0,0,0,1,12.5
+backend,bandwidth_hz,rate,channel,snr_db,ramp,bytes,seconds,goodput_bps,ideal_bps,efficiency,mode_min,mode_max,mode_final,mode_changes,bursts,frames_sent,frames_resent,harq_rescues,ack_timeouts,ok,wall_s
+phy,2300,,awgn,8.0,,4000,42.9,745.9,2208.7,0.338,0,6,6,4,6,32,0,0,0,1,18.9
+phy,2300,,awgn,14.0,,4000,37.7,849.8,4440.2,0.191,0,9,9,4,5,28,0,0,0,1,14.3

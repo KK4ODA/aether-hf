@@ -122,7 +122,18 @@ class RateController:
     """Cap on a single targeted margin increase, so one deep fade cannot slam the link to
     its slowest mode and strand it there."""
     down_step_db: float = 0.25
-    """Margin decrease per clean burst, applied once every :attr:`decay_every` of them."""
+    """Margin decrease at the first decay step after a failure, applied once
+    :attr:`decay_every` clean bursts have gone by."""
+    decay_growth: float = 2.0
+    """How much each further clean burst's decay step grows on the last (1.0 keeps the
+    step fixed and the old every-``decay_every`` cadence): once the stickiness has run
+    its course the margin comes back at an accelerating rate, capped at
+    :attr:`max_down_step_db`. A learned penalty is given up slowly at first and quickly
+    once clean burst follows clean burst, which is what a fade that has passed — or a
+    collision that was never a fade — looks like. Found on the VarAC bench: one lost
+    burst cost eighteen bursts at the mode below the one the SNR carried."""
+    max_down_step_db: float = 1.0
+    """Cap on a single decay step."""
     decay_every: int = 3
     """Clean bursts per step of margin decay, *once a failure has taught the margin
     something*. The margin encodes what this channel costs over AWGN — a property of the
@@ -146,6 +157,8 @@ class RateController:
     _clean_run: int = 0
     _clean_since_decay: int = 0
     _ever_failed: bool = False
+    _decay_step_db: float = 0.0
+    """The last decay step taken since the failure before, which the next one grows on."""
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
@@ -165,12 +178,22 @@ class RateController:
             self._ever_failed = True
             self._clean_run = 0
             self._clean_since_decay = 0
+            self._decay_step_db = 0.0
             self._step_down()
         elif ok:
             self._clean_run += 1
             self._clean_since_decay += 1
-            if self._clean_since_decay >= (self.decay_every if self._ever_failed else 1):
+            if not self._ever_failed:
+                self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
+            elif self._decay_step_db > 0.0:
+                # past the sticky bursts: every clean burst gives back more than the last
+                self._decay_step_db = min(
+                    self.max_down_step_db, self._decay_step_db * self.decay_growth
+                )
+                self.margin_db = max(self.min_margin_db, self.margin_db - self._decay_step_db)
+            elif self._clean_since_decay >= self.decay_every:
                 self._clean_since_decay = 0
+                self._decay_step_db = self.down_step_db
                 self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
             self._step_up()
 
@@ -179,7 +202,12 @@ class RateController:
         says this channel needs more than ``s − threshold[m]`` dB of margin. Jump most of the
         way there instead of creeping up in fixed steps — on a fading channel, where every
         mode costs 6–10 dB more than the AWGN table predicts, creeping means overshooting the
-        mode for many bursts first. The jump is capped so one deep fade cannot strand the link."""
+        mode for many bursts first. The jump is capped so one deep fade cannot strand the link.
+
+        Every failure is a measurement, an isolated one included: reading the first as an
+        accident (a collision, a missed preamble) and jumping only on a repeat was tried on
+        the link bench and cost 11 % on the Moderate channel at 16 dB, where the climb it
+        allowed ran into the fades — see ADR-0007."""
         target = self.margin_db + self.up_step_db
         if snr_db is not None and mode is not None and mode in self.thresholds:
             implied = snr_db - self.thresholds[mode] + self.up_step_db

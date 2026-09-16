@@ -12,7 +12,7 @@ deliberate change to the waveform, and say why in the commit.
 | `phy_fer_phase1_uw.csv` | `python tools/bench_phy.py --frames 30` at commit `377be74` | FER / throughput vs SNR (3 kHz) per mode and ITU channel, **Phase 1 air interface** (3-symbol preamble with unique word, S&C-nominated detector) |
 | `phy_fer.csv` | `python tools/bench_phy.py --frames 30` | same, current air interface (P2-3: PN type preamble, chip-signalled mode, PMF-FFT bank). Generated before ADR-0004 peak reduction; re-checked at all seven measured thresholds afterwards, worst shift ≈ 0.2 dB (QPSK 1/2), so the table still stands |
 | `link_throughput.csv` | `python tools/bench_link.py --bytes 16000 --trials 3` | end-to-end link goodput vs SNR per channel: a whole session (connect, 16 kB, disconnect) with adaptive rate |
-| `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking |
+| `link_ramp.csv` | `python tools/bench_link.py --ramp --channels awgn,poor --snr 8,14 --bytes 24000 --trials 2` | the same under a ±8 dB triangular fade, 60 s period — rate-control tracking. `--bandwidth 500` runs the narrow table; `--rate key=value,…` overrides the controller's tunables, for one controller against another (ADR-0007) |
 | `phy_fer_awgn14.csv` | `python tools/bench_phy.py --channels awgn --modes 0,1,...,13 --frames 30` | AWGN FER for **every** mode — the source of the rate controller's threshold table (`tools/update_rate_table.py`) |
 | `phy_fer_500.csv` | `python tools/bench_phy.py --bandwidth 500 --frames 30` (2026-09-15) | the **500 Hz waveform** (P7-0): FER / throughput vs SNR (3 kHz) for all ten narrow modes on AWGN, Good, Moderate and Poor — the source of the narrow rate table (`tools/update_rate_table.py --bandwidth 500`) |
 | `gate_awgn.csv` | `python tools/bench_gate.py --regenerate` (AWGN, modes 0, 4, 8, 13, 30 frames) | the release gate's baseline, measured with the current air interface including ADR-0004 peak reduction and the P2-5 blanker. Against `phy_fer_awgn14.csv` (measured before both) modes 0, 4 and 13 are within 0.01 dB and QAM16-1/2 read 0.4 dB worse. A re-sweep of modes 6–10 settled it: 6, 7, 9 and 10 are unchanged to 0.02 dB, and mode 8 differs by two frames out of thirty at 6 dB (25 decode now, 27 before) — the 10 % crossing of the old sweep sat exactly on that grid point, so two frames move the interpolated threshold by 0.4 dB. Measurement resolution, not a change in the waveform: the other 16-QAM modes share the 7 dB clipping target and did not move |
@@ -121,12 +121,21 @@ the time cap (the channel is below the most robust mode's threshold).
 | SNR (3 kHz) | AWGN | Good | Moderate | Poor |
 |---|---|---|---|---|
 | −4 | 102 (m0, 0.52) | — | — | — |
-| +0 | 169 (m1, 0.23) | — | — | — |
-| +4 | 578 (m4, 0.40) | 126 (m1, 0.36) | 140 (m1, 0.40) | 151 (m2, 0.28) |
-| +8 | 1162 (m6, 0.39) | 299 (m4, 0.41) | 346 (m4, 0.48) | 595 (m4, 0.41) |
-| +12 | 1696 (m9, 0.51) | 859 (m6, 0.52) | 819 (m6, 0.56) | 1034 (m6, 0.63) |
-| +16 | 2003 (m11, 0.40) | 1246 (m9, 0.42) | 1419 (m9, 0.48) | 1565 (m11, 0.47) |
-| +20 | 2106 (m13, 0.38) | 1696 (m11, 0.51) | 1565 (m11, 0.47) | 1745 (m13, 0.35) |
+| +0 | 208 (m1, 0.29) | — | — | — |
+| +4 | 544 (m3, 0.37) | 126 (m2, 0.64) | 140 (m2, 0.71) | 191 (m3, 0.36) |
+| +8 | 1151 (m6, 0.52) | 314 (m4, 0.44) | 376 (m4, 0.52) | 567 (m5, 0.39) |
+| +12 | 1607 (m9, 0.48) | 782 (m6, 0.47) | 748 (m6, 0.51) | 1061 (m8, 0.64) |
+| +16 | 1770 (m10, 0.35) | 1246 (m9, 0.56) | 1341 (m9, 0.61) | 1586 (m10, 0.48) |
+| +20 | 2106 (m13, 0.38) | 1607 (m11, 0.48) | 1526 (m11, 0.46) | 1796 (m11, 0.41) |
+
+Regenerated 2026-09-16 with the faster climb (ADR-0007): a learned margin is given back at
+an accelerating rate once clean burst follows clean burst. Against the previous controller
+on the same bench, +1.8 % net over this grid with no point worse than 0 % (+22 % on Good
+and Moderate at +8 dB, +18 % on Poor), +3.2 % on the narrow table and +5.2 % under the
+fade; the one loss anywhere is −3.4 % on Poor at +4 dB on the narrow table, where the
+controller probes the next mode more often. The transfer that found it — 16 kB at 12 dB
+over 500 Hz with one burst lost to a collision — goes from never recovering the top mode
+to recovering it eight bursts later.
 
 **Efficiency.** Against the raw payload rate of the mode in use, goodput is ≈ 0.71–0.75 once
 a transfer is long enough to amortise the rate ramp (250 kB on AWGN: 0.71 at +12 dB, 0.75 at
@@ -176,17 +185,23 @@ was overshooting onto a mode the channel could not hold and paying for it in ret
 ## Link layer, rate tracking under a fade (`link_ramp.csv`)
 
 A ±8 dB triangular fade (60 s period) around the stated mean, 24 kB transfers. Every run
-completed. On AWGN at a +8 dB mean the controller made 16–20 mode changes and 15–18
-retransmissions; on Poor at the same mean, 33–34 changes and 60–70 retransmissions. Nothing
+completed. On AWGN at a +8 dB mean the controller made 20–21 mode changes and 25–27
+retransmissions; on Poor at the same mean, 44–46 changes and 70–76 retransmissions. Nothing
 stalled and no session was lost, which is the property under test — the hysteresis stops the
-controller flapping on a static channel without stopping it tracking a moving one.
+controller flapping on a static channel without stopping it tracking a moving one. The
+faster climb (ADR-0007) tracks the fade more actively than its predecessor (a few more
+changes and retransmissions per run) and carries 5 % more through it.
 
 ## Backend cross-check (`link_throughput_phy.csv`)
 
 The fast backend models only the *error process*; all protocol timing is shared with the
 real-PHY harness. Re-running two AWGN points through the real modem reproduces the
-lossy-pipe goodput exactly — 764.7 bps at +8 dB and 849.8 bps at +14 dB on both — because at
-those SNRs no frame fails in either backend, so only the timing matters.
+lossy-pipe goodput exactly — 745.9 bps at +8 dB and 849.8 bps at +14 dB on both — because at
+those SNRs no frame fails in either backend, so only the timing matters. Where frames do
+fail the two differ: the pipe's error process is a logistic 1.2 dB⁻¹ steep, while the
+modem's measured FER curves are cliffs a decibel wide (`phy_fer_500.csv`, mode 8: 50 % at
+8 dB, 0 % at 9 dB), so the pipe fails the odd frame a few dB above threshold that the modem
+would not. Anything that turns on FER near threshold is settled on the `phy` backend.
 
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 

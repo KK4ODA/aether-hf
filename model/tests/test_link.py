@@ -735,6 +735,30 @@ def test_learned_margin_is_sticky_then_decays() -> None:
     assert rc.margin_db < learned  # but it is not permanent either
 
 
+def test_a_learned_margin_is_given_back_faster_the_longer_bursts_stay_clean() -> None:
+    """P9-2 (the faster climb): after the sticky bursts, every further clean burst gives back
+    more of a learned margin than the one before, so a fade that has passed — or a collision
+    that never was one — costs a handful of bursts, not twenty. Found on the VarAC bench,
+    where one lost burst held a transfer a mode and a half below what the SNR carried."""
+    rc = RateController()
+    rc.observe(12.0, ok=0, failed=4, mode=4)
+    learned = rc.margin_db
+    steps: list[float] = []
+    before = learned
+    for _ in range(8):
+        rc.observe(12.0, ok=6, failed=0, mode=4)
+        steps.append(before - rc.margin_db)
+        before = rc.margin_db
+    assert steps[: rc.decay_every - 1] == [0.0] * (rc.decay_every - 1)  # sticky first
+    taken = [s for s in steps if s > 0]
+    assert taken[0] == rc.down_step_db
+    # never slower, until the floor cuts the last step short
+    assert all(b >= a for a, b in pairwise(taken[:-1]))
+    assert taken[1] > taken[0]  # and faster from the second step on
+    assert learned - rc.margin_db >= 2.0, steps  # most of it back within eight bursts
+    assert max(taken) <= rc.max_down_step_db
+
+
 def test_margin_decays_freely_before_anything_is_learned() -> None:
     """Stickiness protects a *learned* penalty; on a link that has never failed there is
     nothing to protect, so a clean channel must still reach its mode quickly."""

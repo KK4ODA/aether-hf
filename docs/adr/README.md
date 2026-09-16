@@ -11,3 +11,4 @@ context → decision → alternatives considered → consequences.
 | [0004](0004-papr-reduction.md) | Peak-to-average power reduction | accepted |
 | [0005](0005-front-end-without-a-build-step.md) | The front-end is plain ES modules, with no build step | accepted (amends 0001 §3) |
 | [0006](0006-link-probe.md) | The link probe — a beacon with a destination, answered with the SNR heard | accepted |
+| [0007](0007-faster-climb.md) | The faster climb — a learned margin is given back at an accelerating rate | accepted |

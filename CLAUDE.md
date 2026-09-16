@@ -230,7 +230,14 @@ published before the state they produce), `TUNE ?` → `TUNE <dB>`, `BUFFER 0` o
 `BUSY OFF` for the life of a session (VarAC honours DCD; Mercury does the same),
 `PENDING` before and `ENCRYPTION DISABLED` after `CONNECTED`. VarAC's own debug mode
 (`DebugMode=ON` in its INI) shows its message-queue decisions and is the tool for the
-next such stall. Then P9-2
+next such stall. **The faster climb** (ADR-0007, 2026-09-16, model first): the rate
+controller's learned margin now decays at an accelerating rate after the sticky bursts
+(`decay_growth` ×2 per clean burst, capped 1 dB) — the VarAC 16 kB transfer had sat a mode
+and a half low for its whole length after one collision. `tools/bench_link.py` has
+`--bandwidth 500` and `--rate k=v,…` (and `LinkConfig.rate` overrides) for A/B runs;
+rejected on the bench: "a lone failure is an accident" (−11 % Moderate 16 dB). The link
+bench's lossy pipe (logistic 1.2 dB⁻¹) is softer than the modem's FER cliffs — settle
+threshold-level questions on `--backend phy`. Then P9-2
 the faster start, P9-4 the sub-200 bit/s floor at 500 Hz, P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate

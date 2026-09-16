@@ -39,10 +39,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import LONG, MODES
-from aether_model.link.engine import LinkEngine
+from aether_model.frame.modes import NARROW, WIDE, AirInterface
+from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.harness import phy_timing, two_modem_sim
-from aether_model.link.rate import AWGN_THRESHOLD_DB, usable_modes
+from aether_model.link.rate import (
+    AWGN_THRESHOLD_DB,
+    NARROW_AWGN_THRESHOLD_DB,
+    NARROW_PAYLOAD_BYTES,
+    PAYLOAD_BYTES,
+    usable_modes,
+)
 from aether_model.link.sim import TwoStationSim
 
 CHANNEL_ORDER = ("awgn", "good", "moderate", "poor")
@@ -51,7 +57,11 @@ CHANNEL_ORDER = ("awgn", "good", "moderate", "poor")
 # ── channel calibration for the fast backend ──────────────────────────
 
 
-def channel_thresholds(csv_path: Path, target_fer: float = 0.10) -> dict[str, dict[int, float]]:
+def channel_thresholds(
+    csv_path: Path,
+    target_fer: float = 0.10,
+    awgn: dict[int, float] = AWGN_THRESHOLD_DB,
+) -> dict[str, dict[int, float]]:
     """Per-channel, per-mode minimum usable SNR interpolated from the PHY sweep.
 
     Modes the sweep did not cover are filled by shifting the AWGN table by the mean measured
@@ -85,20 +95,28 @@ def channel_thresholds(csv_path: Path, target_fer: float = 0.10) -> dict[str, di
 
     out: dict[str, dict[int, float]] = {}
     for channel, table in measured.items():
-        penalties = [table[m] - AWGN_THRESHOLD_DB[m] for m in table if m in AWGN_THRESHOLD_DB]
+        penalties = [table[m] - awgn[m] for m in table if m in awgn]
         shift = statistics.fmean(penalties) if penalties else 0.0
-        out[channel] = {m: table.get(m, AWGN_THRESHOLD_DB[m] + shift) for m in AWGN_THRESHOLD_DB}
+        out[channel] = {m: table.get(m, awgn[m] + shift) for m in awgn}
     return out
 
 
-def ideal_bps(thresholds: dict[int, float], snr_db: float) -> float:
+def ideal_bps(thresholds: dict[int, float], snr_db: float, air: AirInterface = WIDE) -> float:
     """Payload rate of the fastest mode the channel supports at this SNR, ignoring every
     protocol cost — the ceiling the link layer is measured against."""
+    awgn, payload = table_for(air)
     best = 0.0
-    for m in usable_modes():
-        if thresholds.get(m, AWGN_THRESHOLD_DB[m]) <= snr_db:
-            best = max(best, MODES[m].net_bit_rate(LONG))
+    for m in usable_modes(awgn, payload):
+        if thresholds.get(m, awgn[m]) <= snr_db:
+            best = max(best, air.modes[m].net_bit_rate(air.long))
     return best
+
+
+def table_for(air: AirInterface) -> tuple[dict[int, float], dict[int, float]]:
+    """The measured AWGN thresholds and payloads of an air interface."""
+    if air is NARROW:
+        return NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES
+    return AWGN_THRESHOLD_DB, PAYLOAD_BYTES
 
 
 # ── one run ───────────────────────────────────────────────────────────
@@ -112,10 +130,13 @@ def run_point(
     seed: int,
     thresholds: dict[int, float] | None,
     ramp: tuple[float, float] | None = None,
+    air: AirInterface = WIDE,
+    rate: dict[str, float | int] | None = None,
 ) -> dict[str, object]:
-    timing = phy_timing()
-    a = LinkEngine("W4ODA", timing, seed=seed)
-    b = LinkEngine("KK4XYZ", timing, seed=seed + 1)
+    timing = phy_timing(air.params)
+    cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
+    a = LinkEngine("W4ODA", timing, cfg, seed=seed)
+    b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
     schedule = None
     if ramp is not None:
         span, period = ramp
@@ -126,11 +147,16 @@ def run_point(
             return top - span * phase / half if phase < half else top - span * (2 - phase / half)
 
     if backend == "phy":
-        sim = two_modem_sim(a, b, channel=channel, snr_db=snr_db, seed=seed)
+        sim = two_modem_sim(a, b, channel=channel, snr_db=snr_db, seed=seed, params=air.params)
         sim.snr_schedule = schedule
     else:
         sim = TwoStationSim(
-            a, b, snr_db=snr_db, seed=seed, thresholds=thresholds, snr_schedule=schedule
+            a,
+            b,
+            snr_db=snr_db,
+            seed=seed,
+            thresholds=thresholds or table_for(air)[0],
+            snr_schedule=schedule,
         )
 
     modes: list[int] = []
@@ -150,9 +176,11 @@ def run_point(
     ok = sim.delivered(1) == payload
     changes = sum(1 for x, y in pairwise(modes) if x != y)
     goodput = 8 * len(sim.delivered(1)) / seconds if seconds > 0 else 0.0
-    ceiling = ideal_bps(thresholds or AWGN_THRESHOLD_DB, snr_db)
+    ceiling = ideal_bps(thresholds or table_for(air)[0], snr_db, air)
     return {
         "backend": backend,
+        "bandwidth_hz": air.params.bandwidth.value,
+        "rate": ",".join(f"{k}={v}" for k, v in sorted((rate or {}).items())),
         "channel": channel,
         "snr_db": round(snr_db, 1),
         "ramp": "" if ramp is None else f"+/-{ramp[0] / 2:.0f}dB/{ramp[1]:.0f}s",
@@ -185,13 +213,31 @@ def main() -> int:
     ap.add_argument("--ramp", action="store_true", help="triangular fade instead of a fixed SNR")
     ap.add_argument("--ramp-span", type=float, default=16.0)
     ap.add_argument("--ramp-period", type=float, default=60.0)
-    ap.add_argument("--fer-csv", default="bench/baselines/phy_fer.csv")
+    ap.add_argument("--fer-csv", default="")
+    ap.add_argument(
+        "--bandwidth", type=int, choices=(2300, 500), default=2300, help="the air interface"
+    )
+    ap.add_argument(
+        "--rate",
+        default="",
+        help="rate-controller overrides, key=value pairs separated by commas "
+        "(RateController fields), to compare one controller against another",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    tables = channel_thresholds(Path(args.fer_csv))
+    air = NARROW if args.bandwidth == 500 else WIDE
+    fer_csv = args.fer_csv or (
+        "bench/baselines/phy_fer_500.csv" if air is NARROW else "bench/baselines/phy_fer.csv"
+    )
+    rate: dict[str, float | int] = {}
+    for item in args.rate.split(","):
+        if item.strip():
+            key, value = item.split("=", 1)
+            rate[key.strip()] = int(value) if value.strip().lstrip("-").isdigit() else float(value)
+    tables = channel_thresholds(Path(fer_csv), awgn=table_for(air)[0])
     if args.backend == "sim" and not tables:
-        print(f"warning: {args.fer_csv} not found; every channel modelled as AWGN", flush=True)
+        print(f"warning: {fer_csv} not found; every channel modelled as AWGN", flush=True)
     channels = [c.strip() for c in args.channels.split(",") if c.strip()]
     snrs = [float(s) for s in args.snr.split(",") if s.strip()]
     payload = bytes((i * 37) % 256 for i in range(args.bytes))
@@ -205,7 +251,15 @@ def main() -> int:
         for snr in snrs:
             for trial in range(args.trials):
                 row = run_point(
-                    args.backend, channel, snr, payload, 100 + 7 * trial, thresholds, ramp
+                    args.backend,
+                    channel,
+                    snr,
+                    payload,
+                    100 + 7 * trial,
+                    thresholds,
+                    ramp,
+                    air,
+                    rate,
                 )
                 rows.append(row)
                 print(

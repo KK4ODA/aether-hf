@@ -1934,47 +1934,47 @@
     },
     {
      "recommend": 3,
-     "margin_db": 7.25,
-     "snr_db": 9.0
-    },
-    {
-     "recommend": 3,
-     "margin_db": 7.25,
-     "snr_db": 9.0
-    },
-    {
-     "recommend": 3,
-     "margin_db": 7.0,
-     "snr_db": 9.0
-    },
-    {
-     "recommend": 3,
-     "margin_db": 7.0,
-     "snr_db": 9.0
-    },
-    {
-     "recommend": 3,
-     "margin_db": 7.0,
-     "snr_db": 9.0
-    },
-    {
-     "recommend": 3,
      "margin_db": 6.75,
      "snr_db": 9.0
     },
     {
-     "recommend": 3,
-     "margin_db": 6.75,
+     "recommend": 4,
+     "margin_db": 5.75,
      "snr_db": 9.0
     },
     {
-     "recommend": 3,
-     "margin_db": 6.75,
+     "recommend": 4,
+     "margin_db": 4.75,
      "snr_db": 9.0
     },
     {
-     "recommend": 3,
-     "margin_db": 6.5,
+     "recommend": 5,
+     "margin_db": 3.75,
+     "snr_db": 9.0
+    },
+    {
+     "recommend": 6,
+     "margin_db": 2.75,
+     "snr_db": 9.0
+    },
+    {
+     "recommend": 6,
+     "margin_db": 1.75,
+     "snr_db": 9.0
+    },
+    {
+     "recommend": 8,
+     "margin_db": 1.5,
+     "snr_db": 9.0
+    },
+    {
+     "recommend": 8,
+     "margin_db": 1.5,
+     "snr_db": 9.0
+    },
+    {
+     "recommend": 8,
+     "margin_db": 1.5,
      "snr_db": 9.0
     }
    ]
@@ -2088,32 +2088,32 @@
     },
     {
      "recommend": 2,
-     "margin_db": 11.75,
-     "snr_db": 12.0
-    },
-    {
-     "recommend": 2,
-     "margin_db": 11.75,
-     "snr_db": 12.0
-    },
-    {
-     "recommend": 2,
-     "margin_db": 11.5,
-     "snr_db": 12.0
-    },
-    {
-     "recommend": 2,
-     "margin_db": 11.5,
-     "snr_db": 12.0
-    },
-    {
-     "recommend": 2,
-     "margin_db": 11.5,
-     "snr_db": 12.0
-    },
-    {
-     "recommend": 2,
      "margin_db": 11.25,
+     "snr_db": 12.0
+    },
+    {
+     "recommend": 3,
+     "margin_db": 10.25,
+     "snr_db": 12.0
+    },
+    {
+     "recommend": 3,
+     "margin_db": 9.25,
+     "snr_db": 12.0
+    },
+    {
+     "recommend": 4,
+     "margin_db": 8.25,
+     "snr_db": 12.0
+    },
+    {
+     "recommend": 5,
+     "margin_db": 7.25,
+     "snr_db": 12.0
+    },
+    {
+     "recommend": 5,
+     "margin_db": 6.25,
      "snr_db": 12.0
     }
    ]

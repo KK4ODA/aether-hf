@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from aether_model.link.frames import (
@@ -78,6 +78,9 @@ class LinkConfig:
     """Slack added to every wait for a peer response."""
     burst_gap_s: float = 0.2
     """Silence after a DATA frame that marks the end of a burst (the IRS then ACKs)."""
+    rate: dict[str, float | int] = field(default_factory=dict)
+    """Overrides for the rate controller's tunables (``RateController`` fields by name),
+    for benches that compare one controller against another; empty means the defaults."""
     initial_mode: int = 0
     max_mode: int = 13
     bursts_before_turn: int = 3
@@ -1041,9 +1044,13 @@ class LinkEngine:
         another mode beats on both counts and are never recommended."""
         thresholds = self.timing.mode_threshold_db
         if thresholds is None:
-            return RateController()
+            return RateController(**self.cfg.rate)  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
-        return RateController(thresholds=dict(thresholds), modes=usable_modes(thresholds, payload))
+        return RateController(
+            thresholds=dict(thresholds),
+            modes=usable_modes(thresholds, payload),
+            **self.cfg.rate,  # type: ignore[arg-type]
+        )
 
     def _reset_transfer_state(self) -> None:
         self._records.clear()
