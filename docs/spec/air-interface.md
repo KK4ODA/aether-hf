@@ -106,26 +106,47 @@ carrier and both edges: carriers 0, 4, 8 and 11), leaving eight data carriers.
 | Passband centre | 1500 Hz | audio |
 | Full pilot symbols | every 8th data symbol | all carriers known |
 | Preamble | 2 symbols | two identical Schmidl-Cox symbols |
-| Mode/RV chips | 32 | 4 x 10 sequences, pairwise |correlation| <= 0.25 |
+| Mode/RV chips | 32 | 4 x 13 sequences, pairwise |correlation| <= 0.25 |
 | Acquisition threshold | 0.56 | normalised matched-filter peak |
+| Floor preamble | 8 symbols | identical Schmidl-Cox symbols of the floor sequences (ADR-0009) |
+| Floor mode/RV chips | 128 | 4 x 13 sequences, pairwise |correlation| <= 0.2 |
+| Floor acquisition threshold | 0.32 | seven-window average of the floor references' normalised peak |
 <!-- END:waveform500 -->
 
-The frame layouts keep their symbol counts, so a narrow frame lasts exactly as long as a
-wide one and a link layer's timers do not know which waveform is under them:
+The ordinary frame layouts keep their symbol counts, so a narrow frame lasts exactly as
+long as a wide one and a link layer's timers do not know which waveform is under them. The
+**floor layouts** (ADR-0009) are the narrow air's own: an eight-symbol preamble and two or
+four times the data symbols, for the modes below the control mode and for control frames
+while the link runs one of them:
 
 <!-- BEGIN:layouts500 -->
 | Layout | Symbols | Duration | Samples (8 kHz) | Full pilot symbols | QAM slots |
 |---|---|---|---|---|---|
 | LONG | 2 + 32 = 34 | 1054 ms | 8432 | 0, 8, 16, 24 | 224 |
 | SHORT | 2 + 12 = 14 | 434 ms | 3472 | 0, 8 | 80 |
+| FLOOR-LONG | 8 + 128 = 136 | 4216 ms | 33728 | 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120 | 896 |
+| FLOOR-SHORT | 8 + 64 = 72 | 2232 ms | 17856 | 0, 8, 16, 24, 32, 40, 48, 56 | 448 |
 <!-- END:layouts500 -->
 
-The preamble uses the same PN seeds drawn to the six even carriers (the two frame types come
-out orthogonal at that length). The mode and redundancy version ride on the 32 data-carrier
-chips of the four full pilot symbols; with 40 (mode, RV) pairs to tell apart the sequences
-are held to a pairwise correlation of 0.25 rather than 0.2. The acquisition threshold is
-higher (§ constants) because band-limited noise has a fifth of the degrees of freedom in a
-preamble's span, and so are the signal peaks by about as much.
+The ordinary preamble uses the same PN seeds drawn to the six even carriers (the two frame
+types come out orthogonal at that length). The mode and redundancy version ride on the 32
+data-carrier chips of the four full pilot symbols; with 52 (mode, RV) pairs to tell apart
+the sequences are held to a pairwise correlation of 0.25 rather than 0.2 — thirteen modes
+is what that set holds. The acquisition threshold is higher (§ constants) because
+band-limited noise has a fifth of the degrees of freedom in a preamble's span, and so are
+the signal peaks by about as much.
+
+**The floor family.** A floor frame's preamble is eight identical symbols of a second pair
+of PN sequences, one per frame type, drawn on all twelve carriers (§3.1), followed by the
+FLOOR-LONG or FLOOR-SHORT data symbols. Eight symbols give a receiver four times the preamble energy —
+its *floor statistic* averages the two-symbol matched-filter output over the seven
+symbol-spaced windows the preamble fills, and has its own, lower threshold (§8) — and the
+separate sequences keep the two families from firing each other's detectors. A floor DATA
+frame's chips run over all sixteen of its full pilot symbols (128 chips, pairwise
+correlation ≤ 0.2). A receiver averages its comb-pilot channel estimate over ±3 symbols
+on a floor layout (±1 on the others). Which frames use the family is the link layer's
+rule (§7.2): the two floor modes' data frames, control frames while the link runs a floor
+mode, and every other connect request once the ordinary ones go unanswered.
 
 ### 2.2 Peak reduction
 
@@ -140,8 +161,9 @@ See `../adr/0004-papr-reduction.md`.
 
 ## 3. Frame structure
 
-A frame is a two-symbol preamble followed by data symbols. Every 8th data symbol, starting
-with the first, is a **full pilot symbol** in which all carriers are known to the receiver.
+A frame is a two-symbol preamble followed by data symbols — eight symbols on the narrow
+air's floor layouts (§2.3). Every 8th data symbol, starting with the first, is a **full
+pilot symbol** in which all carriers are known to the receiver.
 
 <!-- BEGIN:layouts -->
 | Layout | Symbols | Duration | Samples (8 kHz) | Full pilot symbols | QAM slots |
@@ -151,7 +173,9 @@ with the first, is a **full pilot symbol** in which all carriers are known to th
 <!-- END:layouts -->
 
 LONG carries user data and the connection handshake. SHORT carries acknowledgements and
-other control frames, always at the most robust mode.
+other control frames, always at the control mode. On the narrow air FLOOR-LONG carries the
+floor modes' data and a connection request once the ordinary one has gone unanswered, and
+FLOOR-SHORT the control frames of a link running a floor mode (ADR-0009).
 
 ### 3.1 Preamble, and what it signals
 
@@ -165,6 +189,20 @@ Commun.*, 1997).
 different seeds — so the type decision carries the full processing gain of the preamble
 rather than depending on a separate header symbol that would be unreadable at the SNRs where
 the robust modes operate.
+
+The floor family (§2.3) has a second pair of seeds, and its preamble symbols carry their
+PN on **every** active carrier, not the even ones only. With twelve carriers a data symbol
+correlates with a six-carrier PN reference at up to 0.75 once the receiver has searched
+over carrier offset — half of the even carriers are comb pilots, which repeat every symbol
+— and at about half that with a twelve-carrier one; the seeds were searched so that at
+500 Hz every pair of the four sequences has a cosine of 0.25 or below and the floor pair
+overlaps the pilot sequence by no more than 0.4, and at 2 300 Hz every pair is at 0.25 or
+below. A receiver tells the families apart by which reference wins and by what a body
+cannot fake: an ordinary candidate must show the even-carriers-only symbol's two identical
+halves (0.55 at −9 dB; a floor symbol, on every carrier, shows about none, a data symbol
+the pilots' 0.17), and a floor candidate must show its eight symbols repeating one
+another over all seven lags. The ordinary pass runs first; the floor pass takes what it
+left, with the ordinary frames' spans masked.
 
 Zadoff–Chu is deliberately *not* used anywhere in the preamble: a ZC chirp shifted in
 frequency is, up to phase, the same chirp shifted in time, so a matched filter could not
@@ -219,24 +257,33 @@ payload and threshold is never selected by the rate controller; mode 7 is in tha
 
 ### 4.1 Modes at 500 Hz
 
-The narrow table has ten modes. It starts at QPSK ½ — the slowest mode whose SHORT frame
-carries a seven-byte control frame and whose LONG frame carries a connection request — and
-its indices are its own: mode 4 at 500 Hz is 16-QAM ½, not the wide table's QPSK ½. A
-station knows which table applies from the waveform the frame arrived in.
+The narrow table has thirteen modes and its indices are its own: mode 7 at 500 Hz is
+16-QAM ½, not the wide table's 8-PSK ⅔. A station knows which table applies from the
+waveform the frame arrived in. Mode 3, QPSK ½, is the **control mode** — the slowest whose
+SHORT frame carries a seven-byte control frame and whose LONG frame carries a connection
+request; control frames, connect requests, beacons and probes go out at it. Modes 0 and 1
+are the **floor modes** (ADR-0009): QPSK 1/10 and QPSK ⅕ on the FLOOR-LONG layout, 19 and
+41 bytes in a frame of 4.2 s, for the SNR region the ordinary frames cannot reach; while a
+link runs one of them its control frames go on FLOOR-SHORT at mode 0's modulation and rate
+(8 bytes, one over a control frame's need). Mode 2, QPSK ⅓ on the ordinary frame, is the
+rung between the floor and the control mode.
 
 <!-- BEGIN:modes500 -->
-| Mode | Name | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | QPSK-1/2 | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
-| 1 | QPSK-2/3 | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.5 |
-| 2 | PSK8-1/2 | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
-| 3 | PSK8-2/3 | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.6 |
-| 4 | QAM16-1/2 | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
-| 5 | QAM16-2/3 | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +1.9 |
-| 6 | QAM16-3/4 | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.6 |
-| 7 | QAM64-2/3 | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
-| 8 | QAM64-3/4 | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
-| 9 | QAM64-5/6 | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
+| Mode | Name | Layout | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | QPSK-1/10 | FLOOR-LONG | 2 | 1/10 | BG2 | 30 | 176 | 1792 | 19 | 36 | -12.0 |
+| 1 | QPSK-1/5 | FLOOR-LONG | 2 | 1/5 | BG2 | 44 | 352 | 1792 | 41 | 78 | -10.0 |
+| 2 | QPSK-1/3 | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -7.5 |
+| 3 | QPSK-1/2 | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
+| 4 | QPSK-2/3 | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.5 |
+| 5 | PSK8-1/2 | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
+| 6 | PSK8-2/3 | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.6 |
+| 7 | QAM16-1/2 | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
+| 8 | QAM16-2/3 | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +1.9 |
+| 9 | QAM16-3/4 | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.6 |
+| 10 | QAM64-2/3 | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
+| 11 | QAM64-3/4 | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
+| 12 | QAM64-5/6 | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
 <!-- END:modes500 -->
 
 ---
@@ -381,6 +428,12 @@ two correct implementations encode differently is not a wire format.
 
 ### 7.2 Session
 
+A session identifier is never zero: with kind DATA and sequence zero an all-zero body
+would make an all-zero frame, and a receiver **discards any decoded block that is all
+zeros** — the all-zero word is a codeword of every linear code and its CRC is zero, so a
+decoder fed a false detection converges to it. Every other frame carries a non-zero kind.
+
+
 One station is the information sending station (ISS), the other the information receiving
 station (IRS). The ISS sends a burst of data frames; the IRS answers each burst with one ACK
 carrying the selective-repeat bitmap, the SNR it measured, and the mode it recommends. The
@@ -440,6 +493,8 @@ retransmission that follows.
 | Payload CRC | CRC24A, polynomial 0x864CFB, 24 bits |
 | Schmidl-Cox PN seed, DATA | 4649 |
 | Schmidl-Cox PN seed, CONTROL | 7919 |
+| Schmidl-Cox PN seed, floor DATA | 4 |
+| Schmidl-Cox PN seed, floor CONTROL | 9 |
 | Mode/RV chip seed | 20260913 |
 | Redundancy versions | 4 |
 | Peak reduction target, PSK modes | 5.0 dB |
@@ -500,7 +555,8 @@ These are simulator figures. No on-air measurements exist yet, and none should b
 
 ## 11. Open items for v1.0
 
-* A spreading or repetition mode below the current −5 dB floor, at 500 Hz first.
+* A floor family for the wide waveform, measured against the narrow one (ADR-0009 gives
+  the narrow air its floor; the roadmap's 2 300 Hz question is still open).
 * The wide (2.75 kHz) bandwidth variant.
 * Compression negotiation, CW identification, beacon and ping datagrams.
 * Formal test vectors published alongside this document; the reference vectors in `vectors/`

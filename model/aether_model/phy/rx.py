@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import LONG, PREAMBLE_SYMBOLS, SHORT, FrameLayout, air_interface
+from aether_model.frame.modes import LONG, SHORT, FrameLayout, air_interface
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import (
     FrameType,
@@ -82,11 +82,13 @@ class ReceivedFrame:
     ``chip_runner_up`` if the CRC fails."""
 
 
-def layout_for(header_type: FrameType, params: WaveformParams = WIDE_2300) -> FrameLayout:
-    """The layout a frame of this type has on this waveform."""
-    if params is WIDE_2300:
+def layout_for(
+    header_type: FrameType, params: WaveformParams = WIDE_2300, floor: bool = False
+) -> FrameLayout:
+    """The layout a frame of this type — and family (ADR-0009) — has on this waveform."""
+    if params is WIDE_2300 and not floor:
         return LONG if header_type is FrameType.DATA else SHORT
-    return air_interface(params).layout_for(header_type is FrameType.DATA)
+    return air_interface(params).layout_for(header_type is FrameType.DATA, floor)
 
 
 class FrameReceiver:
@@ -135,7 +137,7 @@ class FrameReceiver:
         self.data_c = self.cmap.data_carriers
 
     def frame_span(self, sync: FrameSync) -> tuple[int, int]:
-        layout = layout_for(sync.header.frame_type, self.p)
+        layout = layout_for(sync.header.frame_type, self.p, sync.floor)
         return sync.start, sync.start + layout.samples
 
     def receive(
@@ -143,14 +145,14 @@ class FrameReceiver:
     ) -> ReceivedFrame:
         """Demodulate and equalize one frame. ``hypothesis`` (a chip-sequence index)
         overrides chip-based (mode, rv) detection — used for the runner-up retry."""
-        layout = layout_for(sync.header.frame_type, self.p)
+        layout = layout_for(sync.header.frame_type, self.p, sync.floor)
         start, end = self.frame_span(sync)
         if end + self.dem.fft_offset > len(x):
             raise ValueError("frame runs past the end of the buffer")
         per = self.p.symbol_samples
         fs = self.p.fs_baseband
         n_sym = layout.total_symbols
-        pre = PREAMBLE_SYMBOLS
+        pre = layout.preamble_symbols
         pilot_syms = [pre + i for i in layout.pilot_symbol_indices]
         data_syms = [s for s in range(pre, n_sym) if s not in pilot_syms]
         raw_in = np.asarray(x[start : end + per], dtype=np.complex128)
@@ -170,7 +172,8 @@ class FrameReceiver:
         raw = demod(cfo_total)
 
         # 2. comb LS estimates on every symbol after the preamble (pilot carriers are known
-        #    on all of them), smoothed over ±1 symbol
+        #    on all of them), smoothed over ±1 symbol (±3 on a floor layout)
+        radius = layout.pilot_smoothing
         comb = np.zeros((n_sym, len(pc)), dtype=np.complex128)
         comb[pre:] = raw[pre:, pc] / ref
         carriers = np.arange(self.cmap.n_carriers)
@@ -197,7 +200,7 @@ class FrameReceiver:
         else:
             sm = comb.copy()
             for s_i in range(pre, n_sym):
-                lo, hi = max(pre, s_i - 1), min(n_sym - 1, s_i + 1)
+                lo, hi = max(pre, s_i - radius), min(n_sym - 1, s_i + radius)
                 sm[s_i] = comb[lo : hi + 1].mean(axis=0)
 
             def interp(row: ComplexArray) -> ComplexArray:
@@ -213,7 +216,7 @@ class FrameReceiver:
                 z_parts.append(raw[s_i, dc] * np.conj(h_est))
             z = np.concatenate(z_parts)
             z /= max(float(np.linalg.norm(z)), 1e-12)
-            seqs = self.pre.sequences
+            seqs = self.pre.sequences_for(layout)
             n_used = len(z)
             metrics = np.array([abs(np.vdot(seq[:n_used], z)) for seq in seqs]) / np.sqrt(n_used)
             order = np.argsort(metrics)[::-1]
@@ -227,7 +230,7 @@ class FrameReceiver:
         for pilot_no, s_i in enumerate(pilot_syms):
             known[s_i] = self.pilot_seq
             if sync.header.frame_type is FrameType.DATA:
-                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no, rv)
+                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no, rv, layout)
             full[s_i] = True
         for s_i in data_syms:
             known[s_i, pc] = ref
@@ -249,7 +252,7 @@ class FrameReceiver:
         if self.channel_estimator == "wiener" and self.wiener_pilot_passthrough:
             h[pre:, pc] = sm[pre:]
         resid = raw[data_syms][:, pc] - h[data_syms][:, pc] * known[data_syms][:, pc]
-        bias = 3.0 / 2.0  # undo the 3-tap averaging bias
+        bias = (2 * radius + 1) / (2 * radius)  # undo the (2r+1)-tap averaging bias
         sigma2 = float(np.mean(np.abs(resid) ** 2)) * bias
         per_symbol = np.mean(np.abs(resid) ** 2, axis=1) * bias
         # Only 15 pilots back each per-symbol estimate, so shrink it toward the frame value:

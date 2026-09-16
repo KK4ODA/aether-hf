@@ -64,7 +64,10 @@ class StreamingReceiver:
         self._pending: list[_Pending] = []
         self._done: list[tuple[int, int]] = []  # spans of frames already handed out
         self._max_buf = int(max_buffer_s * params.fs_baseband)
-        self._lookback = 3 * params.symbol_samples
+        # the detector needs a symbol after an ordinary candidate and the whole preamble of a
+        # floor one (ADR-0009): search again from that far back, and hold that much unsearched
+        longest = max(layout.preamble_symbols for layout in self.modem.air.layouts)
+        self._lookback = (longest + 1) * params.symbol_samples
         self.frames_decoded = 0
         self._taps = band_limit_taps(params)
         self.blanker_latency = self.blanker.latency_samples if self.blanker else 0
@@ -104,10 +107,7 @@ class StreamingReceiver:
                 self._pending.append(
                     _Pending(replace(sync, start=start_abs), start_abs + layout_samples)
                 )
-            # the detector needs two symbols after a candidate; keep that much unsearched
-            self._searched_abs = max(
-                self._searched_abs, self.samples_seen - 3 * self.p.symbol_samples
-            )
+            self._searched_abs = max(self._searched_abs, self.samples_seen - self._lookback)
 
         # 2. decode every pending frame that is complete
         still: list[_Pending] = []

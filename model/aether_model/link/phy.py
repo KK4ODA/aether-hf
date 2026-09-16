@@ -28,6 +28,9 @@ class TxFrame:
     payload: bytes
     mode: int = 0
     rv: int = 0
+    floor: bool = False
+    """A CONTROL frame to go out on the floor layout (ADR-0009). A DATA frame's family
+    follows its mode; this flag is only read for control frames."""
 
 
 class SoftFrame(Protocol):
@@ -38,6 +41,9 @@ class SoftFrame(Protocol):
     """Estimated SNR (3 kHz reference) of this frame, for rate control."""
     t_start: float
     t_end: float
+    floor: bool
+    """The frame arrived on a floor layout (ADR-0009). A DATA frame's family is also its
+    mode's; for a control frame this is the only way the engine learns it."""
     """Air time of the frame in the receiver's clock (seconds)."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
@@ -75,7 +81,36 @@ class PhyTiming:
     the 500 Hz waveform, P7-0 — hands its own here, and the engine never knows which air
     it is on."""
 
+    floor_data_frame_s: float | None = None
+    """Air time of a DATA frame at a floor mode (ADR-0009): the floor layout is longer
+    than the ordinary one. ``None`` on an air without a floor family."""
+    floor_control_frame_s: float | None = None
+    """Air time of a control frame sent on the floor layout."""
+    floor_modes: int = 0
+    """How many of the leading modes go out on the floor layouts (the slowest ones)."""
+
     def capacity(self, mode: int) -> int:
         if self.data_capacity is None:
             raise ValueError("PhyTiming.data_capacity not set")
         return self.data_capacity[mode]
+
+    def is_floor(self, mode: int) -> bool:
+        return mode < self.floor_modes
+
+    def data_frame_s_for(self, mode: int) -> float:
+        """Air time of a DATA frame at ``mode``."""
+        if self.is_floor(mode) and self.floor_data_frame_s is not None:
+            return self.floor_data_frame_s
+        return self.data_frame_s
+
+    def control_frame_s_for(self, floor: bool) -> float:
+        """Air time of a control frame of the given family."""
+        if floor and self.floor_control_frame_s is not None:
+            return self.floor_control_frame_s
+        return self.control_frame_s
+
+    def frame_s(self, frame: TxFrame) -> float:
+        """Air time of a frame the engine is about to send."""
+        if frame.container is Container.DATA:
+            return self.data_frame_s_for(frame.mode)
+        return self.control_frame_s_for(frame.floor)

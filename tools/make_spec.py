@@ -33,7 +33,14 @@ from aether_model.frame.modes import (
 from aether_model.link.frames import CALL_BYTES, CONTROL_BYTES, DATA_HEADER, WINDOW
 from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
 from aether_model.phy.papr import CLIP_TARGET_DB, CLIP_TARGET_DENSE_DB
-from aether_model.phy.preamble import MODE_CHIP_SEED, N_RV, SC_SEEDS, preamble
+from aether_model.phy.preamble import (
+    FLOOR_CHIP_CORRELATION_BOUND,
+    FLOOR_SC_SEEDS,
+    MODE_CHIP_SEED,
+    N_RV,
+    SC_SEEDS,
+    preamble,
+)
 
 SPEC = Path(__file__).resolve().parents[1] / "docs" / "spec" / "air-interface.md"
 
@@ -88,16 +95,35 @@ def waveform_block(air: AirInterface = WIDE) -> str:
             "normalised matched-filter peak",
         ],
     ]
+    if air.floor_long is not None:
+        rows += [
+            [
+                "Floor preamble",
+                f"{air.floor_long.preamble_symbols} symbols",
+                "identical Schmidl-Cox symbols of the floor sequences (ADR-0009)",
+            ],
+            [
+                "Floor mode/RV chips",
+                f"{pre.n_chips_for(air.floor_long)}",
+                f"{N_RV} x {air.n_modes} sequences, pairwise |correlation| <= "
+                f"{FLOOR_CHIP_CORRELATION_BOUND}",
+            ],
+            [
+                "Floor acquisition threshold",
+                f"{air.floor_acquisition_threshold}",
+                "seven-window average of the floor references' normalised peak",
+            ],
+        ]
     return _table(["Parameter", "Value", "Notes"], rows)
 
 
 def layout_block(air: AirInterface = WIDE) -> str:
     rows = []
-    for layout in (air.long, air.short):
+    for layout in air.layouts:
         rows.append(
             [
                 layout.name.upper(),
-                f"{PREAMBLE_SYMBOLS} + {layout.data_symbols} = {layout.total_symbols}",
+                f"{layout.preamble_symbols} + {layout.data_symbols} = {layout.total_symbols}",
                 f"{layout.duration_s * 1e3:.0f} ms",
                 f"{layout.samples}",
                 ", ".join(str(i) for i in layout.pilot_symbol_indices),
@@ -112,12 +138,16 @@ def layout_block(air: AirInterface = WIDE) -> str:
 
 def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
     thresholds = AWGN_THRESHOLD_DB if air is WIDE else NARROW_AWGN_THRESHOLD_DB
+    floor = air.floor_long is not None
     rows = []
     for m in air.modes:
+        # a floor mode is tabulated on the layout it actually goes out on (ADR-0009)
+        layout = air.data_layout(m.index) if floor else layout
         rows.append(
             [
                 str(m.index),
                 m.name,
+                *([layout.name.upper()] if floor else []),
                 str(m.modulation.bits_per_symbol),
                 str(m.code_rate),
                 f"BG{m.base_graph(layout)}",
@@ -133,6 +163,7 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
         [
             "Mode",
             "Name",
+            *(["Layout"] if floor else []),
             "bits/sym",
             "Rate",
             "Base graph",
@@ -155,6 +186,8 @@ def constants_block() -> str:
         ],
         ["Schmidl-Cox PN seed, DATA", str(SC_SEEDS[0])],
         ["Schmidl-Cox PN seed, CONTROL", str(SC_SEEDS[1])],
+        ["Schmidl-Cox PN seed, floor DATA", str(FLOOR_SC_SEEDS[0])],
+        ["Schmidl-Cox PN seed, floor CONTROL", str(FLOOR_SC_SEEDS[1])],
         ["Mode/RV chip seed", str(MODE_CHIP_SEED)],
         ["Redundancy versions", str(N_RV)],
         ["Peak reduction target, PSK modes", f"{CLIP_TARGET_DB:.1f} dB"],

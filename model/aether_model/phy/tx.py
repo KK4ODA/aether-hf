@@ -1,6 +1,7 @@
 """Frame transmitter: header + coded symbols → complex baseband → audio (roadmap P1-4).
 
-A frame is ``[SC, SC] + data symbols`` (the SC sequence encodes the frame type); data
+A frame is ``[SC, SC] + data symbols`` (the SC sequence encodes the frame type; a floor
+layout sends eight SC symbols instead of two, ADR-0009); data
 symbol ``i`` is a full pilot symbol when ``i`` is in ``layout.pilot_symbol_indices`` — in
 DATA frames its data carriers carry the mode's PN chips — and otherwise carries the next
 ``n_data_carriers`` constellation symbols (time-major) on its data carriers with comb
@@ -49,7 +50,7 @@ class FrameTransmitter:
             raise ValueError(
                 f"expected {layout.qam_symbols} constellation symbols, got {qam.shape}"
             )
-        symbols = self.pre.symbols(header)
+        symbols = self.pre.symbols(header, layout)
         pilots = set(layout.pilot_symbol_indices)
         pos = 0
         pilot_no = 0
@@ -57,7 +58,7 @@ class FrameTransmitter:
             if i in pilots:
                 chips = None
                 if header.frame_type is FrameType.DATA:
-                    chips = self.pre.mode_chips(header.mode, pilot_no, header.rv)
+                    chips = self.pre.mode_chips(header.mode, pilot_no, header.rv, layout)
                 pilot_no += 1
                 symbols.append(self.mod.symbol_values(None, full_pilot=True, chips=chips))
             else:

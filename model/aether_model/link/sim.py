@@ -63,6 +63,7 @@ class SimFrame:
     t_end: float
     payload: bytes
     _draw: float
+    floor: bool = False
     _thresholds: dict[int, float] | None = None
     """Per-mode FER thresholds of the channel being modelled; AWGN when unset."""
 
@@ -162,11 +163,7 @@ class TwoStationSim:
         st.busy.append((t, t + tx.duration_s))
         sof = st.engine.timing.preamble_detect_s
         for frame in tx.frames:
-            dur = (
-                st.engine.timing.data_frame_s
-                if frame.container is Container.DATA
-                else st.engine.timing.control_frame_s
-            )
+            dur = st.engine.timing.frame_s(frame)
             if sof is not None and frame.container is Container.DATA:
                 # acquisition succeeds far below every mode's decode threshold (P2-3: 100 %
                 # at −5 dB), so a listening receiver is assumed to see every preamble

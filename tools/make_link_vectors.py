@@ -35,6 +35,7 @@ from aether_model.link.frames import (
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     NARROW_AWGN_THRESHOLD_DB,
+    NARROW_FRAME_S,
     NARROW_PAYLOAD_BYTES,
     RateController,
     usable_modes,
@@ -213,8 +214,10 @@ def main() -> int:
         "narrow_payload_bytes": [
             int(NARROW_PAYLOAD_BYTES[m]) for m in sorted(NARROW_PAYLOAD_BYTES)
         ],
+        "narrow_frame_s": [float(NARROW_FRAME_S[m]) for m in sorted(NARROW_FRAME_S)],
         "narrow_usable_modes": [
-            int(m) for m in usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES)
+            int(m)
+            for m in usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)
         ],
         "callsigns": callsign_cases(),
         "data_frames": data_frame_cases(),

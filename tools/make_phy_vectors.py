@@ -32,7 +32,10 @@ from aether_model.frame.modes import (
     CONTROL_MODE,
     LONG,
     MODES,
+    NARROW,
     NARROW_CONTROL_MODE,
+    NARROW_FLOOR_LONG,
+    NARROW_FLOOR_SHORT,
     NARROW_LONG,
     NARROW_MODES,
     NARROW_SHORT,
@@ -225,10 +228,15 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
         (MODES[4], LONG, FrameType.DATA, 1),
         (MODES[13], LONG, FrameType.DATA, 3),
         (CONTROL_MODE, SHORT, FrameType.CONTROL, 0),
-        (NARROW_MODES[0], NARROW_LONG, FrameType.DATA, 0),
-        (NARROW_MODES[4], NARROW_LONG, FrameType.DATA, 2),
-        (NARROW_MODES[9], NARROW_LONG, FrameType.DATA, 1),
+        (NARROW_MODES[3], NARROW_LONG, FrameType.DATA, 0),
+        (NARROW_MODES[7], NARROW_LONG, FrameType.DATA, 2),
+        (NARROW_MODES[12], NARROW_LONG, FrameType.DATA, 1),
         (NARROW_CONTROL_MODE, NARROW_SHORT, FrameType.CONTROL, 0),
+        # the floor family (ADR-0009): eight-symbol preambles of their own sequences, the
+        # floor layouts, and chips over all sixteen pilot symbols
+        (NARROW_MODES[0], NARROW_FLOOR_LONG, FrameType.DATA, 0),
+        (NARROW_MODES[1], NARROW_FLOOR_LONG, FrameType.DATA, 3),
+        (NARROW.floor_control_mode, NARROW_FLOOR_SHORT, FrameType.CONTROL, 0),
     ]
     transmitters_by_params: dict = {}
     for mode, layout, frame_type, rv in cases:

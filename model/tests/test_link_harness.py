@@ -11,7 +11,6 @@ import pytest
 
 from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.harness import PhyBridge, phy_timing, two_modem_sim
-from aether_model.phy.preamble import FrameType
 from aether_model.waveform import NARROW_500, WIDE_2300
 
 
@@ -56,13 +55,12 @@ def test_the_bridge_leaves_room_for_a_control_burst_read_as_data() -> None:
     DATA and the receiver wants the long layout's samples; a real receiver has them,
     because audio keeps arriving, so the bridge's buffer must too. Found seven minutes
     into a Poor-channel run of the link bench, as "frame runs past the end of the buffer"."""
-    from aether_model.phy.rx import layout_for
-
     for params in (WIDE_2300, NARROW_500):
         bridge = PhyBridge(channel="poor", snr_db=10.0, params=params)
         control = bridge.modem.control_burst(bytes(7), 0)
         buf = bridge.padded(control)
-        span = layout_for(FrameType.DATA, params).samples + bridge.modem.rx.dem.fft_offset
+        # the longest layout of the air: a floor DATA frame at 500 Hz (ADR-0009)
+        span = max(x.samples for x in bridge.modem.air.layouts) + bridge.modem.rx.dem.fft_offset
         # a start anywhere up to a symbol late still fits a DATA span
         assert len(buf) >= bridge.lead + params.symbol_samples + span, params.bandwidth
         capacity = int(phy_timing(params).data_capacity[0])

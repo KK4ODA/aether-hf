@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.phy.ofdm import PILOT_ROOT, carrier_map, zadoff_chu
 from aether_model.phy.preamble import (
+    FLOOR_CHIP_CORRELATION_BOUND,
     MODE_CHIP_SEED,
     N_RV,
     SC_SEEDS,
@@ -51,11 +52,23 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
     for frame_type in FrameType:
         values = pre.sc_values(frame_type)[even]
         sc[frame_type.name] = pack_signs(values / np.abs(values).mean())
+    floor_sc = {}
+    if air.floor_long is not None:
+        # the floor sequences occupy every carrier
+        for frame_type in FrameType:
+            values = pre.sc_values(frame_type, floor=True)
+            floor_sc[frame_type.name] = pack_signs(values / np.abs(values).mean())
 
     chip_table = {}
     for rv in range(N_RV):
         for mode in range(air.n_modes):
             chip_table[f"{rv}_{mode}"] = pack_signs(pre.sequences[pre.chip_index(mode, rv)])
+    floor_chips = {}
+    if air.floor_long is not None:
+        seqs = pre.sequences_for(air.floor_long)
+        for rv in range(N_RV):
+            for mode in range(air.n_modes):
+                floor_chips[f"{rv}_{mode}"] = pack_signs(seqs[pre.chip_index(mode, rv)])
 
     return {
         "bandwidth_hz": params.bandwidth.hz,
@@ -69,6 +82,27 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
         "chip_correlation_bound": air.chip_correlation_bound,
         "acquisition_threshold": air.acquisition_threshold,
         "mode_chips": chip_table,
+        # the floor family (ADR-0009): empty on an air without one
+        "floor_modes": air.floor_modes,
+        "control_mode_index": air.control_mode_index,
+        "floor_schmidl_cox": floor_sc,
+        "floor_sc_length": int(cmap.n_carriers) if air.floor_long is not None else 0,
+        "floor_preamble_symbols": (
+            air.floor_long.preamble_symbols if air.floor_long is not None else 0
+        ),
+        "floor_chip_length": int(pre.n_chips_for(air.floor_long)) if air.floor_long else 0,
+        "floor_chip_correlation_bound": FLOOR_CHIP_CORRELATION_BOUND,
+        "floor_acquisition_threshold": air.floor_acquisition_threshold,
+        "floor_mode_chips": floor_chips,
+        "layouts": [
+            {
+                "name": layout.name,
+                "data_symbols": layout.data_symbols,
+                "preamble_symbols": layout.preamble_symbols,
+                "pilot_smoothing": layout.pilot_smoothing,
+            }
+            for layout in air.layouts
+        ],
         "pilot_sequence": [
             [float(v.real), float(v.imag)] for v in zadoff_chu(cmap.n_carriers, PILOT_ROOT)
         ],

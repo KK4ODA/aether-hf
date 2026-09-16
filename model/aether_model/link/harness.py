@@ -28,7 +28,7 @@ from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
 from aether_model.link.sim import TwoStationSim
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameType
-from aether_model.phy.rx import ReceivedFrame, layout_for
+from aether_model.phy.rx import ReceivedFrame
 from aether_model.waveform import WIDE_2300, Bandwidth, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
@@ -45,6 +45,7 @@ class RealSoftFrame:
     snr_db: float
     t_start: float
     t_end: float
+    floor: bool
     _modem: Modem
     _received: ReceivedFrame
 
@@ -69,7 +70,7 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
     Pass ``start_of_frame=False`` to model a PHY that cannot report preambles.
     """
     air = air_interface(params)
-    caps = {m.index: m.payload_bytes(air.long) for m in air.modes}
+    caps = {m.index: m.payload_bytes(air.data_layout(m.index)) for m in air.modes}
     thresholds = (
         AWGN_THRESHOLD_DB if params.bandwidth is Bandwidth.WIDE_2300 else NARROW_AWGN_THRESHOLD_DB
     )
@@ -81,6 +82,9 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
         preamble_detect_s=4 * params.symbol_period_s if start_of_frame else None,
         data_capacity=caps,
         mode_threshold_db=dict(thresholds),
+        floor_data_frame_s=air.floor_long.duration_s if air.floor_long else None,
+        floor_control_frame_s=air.floor_short.duration_s if air.floor_short else None,
+        floor_modes=air.floor_modes,
     )
 
 
@@ -116,7 +120,7 @@ class PhyBridge:
         if frame.container is Container.DATA:
             self.modes_sent.append(frame.mode)
             return self.modem.data_burst(frame.payload, self.modem.modes[frame.mode], frame.rv)
-        return self.modem.control_burst(frame.payload, frame.rv)
+        return self.modem.control_burst(frame.payload, frame.rv, floor=frame.floor)
 
     def padded(self, burst: ComplexArray) -> ComplexArray:
         """The burst between its lead and tail of silence.
@@ -127,7 +131,7 @@ class PhyBridge:
         which a real receiver has, since audio keeps arriving. Here it would run off the
         end of the buffer instead, and did, seven minutes into a Poor-channel run."""
         p = self.modem.p
-        span = layout_for(FrameType.DATA, p).samples + self.modem.rx.dem.fft_offset
+        span = max(x.samples for x in self.modem.air.layouts) + self.modem.rx.dem.fft_offset
         tail = max(self.tail, span + p.symbol_samples - len(burst))
         return np.concatenate((np.zeros(self.lead, complex), burst, np.zeros(tail, complex)))
 
@@ -164,6 +168,7 @@ class PhyBridge:
             snr_db=received.snr_3k_db,
             t_start=t_start,
             t_end=t_end,
+            floor=received.sync.floor,
             _modem=self.modem,
             _received=received,
         )

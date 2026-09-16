@@ -22,6 +22,24 @@ Stages, on band-limited complex baseband at ``fs_baseband``:
    peaks as the confidence. Because this decision rides on the full preamble gain it is
    essentially error-free wherever the frame is detectable. The mode of a DATA frame is
    read later by the receiver from the pilot-symbol chips (see :mod:`preamble`).
+4. **The floor family (ADR-0009).** A floor frame's preamble is eight symbols of the
+   floor family's own Schmidl–Cox sequence for its type, so its two-symbol statistic on
+   the floor reference is a run of seven full peaks a symbol apart, and neither family's
+   references fire on the other's frames. On an air with a floor family the bank also runs
+   the two floor references and averages their normalised statistic over those seven
+   windows — non-coherently, which the prototype measured within half a decibel of
+   coherent combining on AWGN and which does not care about phase drift across a quarter
+   second on a fading channel — and that *floor statistic* has its own, lower noise floor
+   and threshold: a floor frame is found about 4.5 dB below where an ordinary one is. A
+   floor candidate's start is refined within a symbol and a half by combining four
+   two-symbol windows coherently on a fine frequency sub-grid (the averaged statistic is
+   a symbol wide at its top), its CFO is estimated from all seven symbol lags, and the
+   candidate is checked for the preamble's repetition over its seven lags. With twelve
+   carriers, and the bank's search over frequency, a strong frame's *body* of either
+   family scores 0.4–0.75 on any reference — so the ordinary pass runs first, each of
+   its candidates checked for the ordinary preamble's own signature (an even-carriers-
+   only symbol is two identical halves; a floor symbol, on every carrier, is not), and
+   the floor pass takes what it left, with the ordinary spans masked.
 
 Candidates are the local maxima of the bank statistic above ``min_timing_peak``, which
 defaults to the air interface's ``acquisition_threshold``:
@@ -40,7 +58,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
-from aether_model.frame.modes import air_interface
+from aether_model.frame.modes import PREAMBLE_SYMBOLS, air_interface
 from aether_model.phy.ofdm import OfdmDemodulator, OfdmModulator
 from aether_model.phy.passband import band_limit_taps
 from aether_model.phy.preamble import FrameHeader, FrameType, preamble
@@ -51,6 +69,23 @@ FloatArray = NDArray[np.float64]
 
 SEGMENT_LEN = 8
 FFT_LEN = 256
+HALF_SYMBOL_MIN = 0.35
+"""An ordinary candidate on an air with a floor family must show the ordinary preamble's
+own signature: a Schmidl–Cox symbol on the even carriers only is two identical halves, so
+the correlation of the halves of its useful part over their energy is the signal's share
+of the power (0.55 at −9 dB, where the bank gives out). A floor preamble symbol, on every
+carrier, is not — its odd carriers flip between the halves and cancel the even ones — and
+a data symbol shows only the comb pilots' 0.17. With twelve carriers a floor frame's
+preamble and body score up to 0.75 on the ordinary references at high SNR; this keeps the
+ordinary pass off them."""
+FLOOR_REPETITION_MIN = 0.1
+"""The least a floor candidate's eight symbols may repeat one another: the magnitude of
+the summed one-symbol-lag correlation over the energy the lags span. A floor preamble
+shows the signal's share of the power (0.2 at −13 dB); noise shows a few hundredths."""
+FLOOR_SUB_GRID_HZ = (-1.5625, -0.78125, 0.0, 0.78125, 1.5625)
+"""Frequency sub-steps inside one 3.9 Hz bank bin for the coherent timing refinement of a
+floor candidate: four windows two symbols apart drift 180° over a bin's half-width, so the
+combination is tried on this grid and the best kept."""
 
 
 @dataclass(frozen=True)
@@ -64,7 +99,11 @@ class FrameSync:
     header_confidence: float
     """Bank peak of the winning frame-type reference divided by the other type's peak."""
     timing_peak: float
-    """Normalised matched-filter-bank peak (1.0 = perfect match)."""
+    """Normalised matched-filter-bank peak (1.0 = perfect match); for a floor frame, the
+    floor statistic at the candidate."""
+    floor: bool = False
+    """The frame is of the floor family (ADR-0009): an eight-symbol preamble of the floor
+    sequences and the floor layouts; ``start`` is then the first of the eight."""
 
 
 def _moving_sum(x: NDArray, length: int) -> NDArray:
@@ -96,22 +135,35 @@ class FrameDetector:
         self.n = params.fft_size
         self.period = params.symbol_samples
         self.min_gap = min_gap_samples or 4 * self.period
-        # Known two-symbol Schmidl–Cox waveforms (unit energy), one per frame type,
-        # segmented for the bank.
+        # The floor family (ADR-0009): its preamble length and the threshold of the
+        # averaged statistic that finds it.
+        self.has_floor = self.air.floor_long is not None
+        self.floor_symbols = max(layout.preamble_symbols for layout in self.air.layouts)
+        self.floor_windows = self.floor_symbols - 1
+        """Two-symbol windows, a symbol apart, that a floor preamble fills."""
+        self.min_floor_peak = self.air.floor_acquisition_threshold
+        # Known two-symbol Schmidl–Cox waveforms (unit energy), one per frame type and
+        # family, segmented for the bank.
         self._types = [FrameType.DATA, FrameType.CONTROL]
-        self._ref_segs = []
-        for ft in self._types:
-            sc = self.pre.sc_values(ft)
-            wave = self.mod.modulate([sc, sc])[: 2 * self.period]
-            wave = wave / np.sqrt(np.sum(np.abs(wave) ** 2))
-            n_seg = len(wave) // SEGMENT_LEN
-            self._ref_segs.append(wave[: n_seg * SEGMENT_LEN].reshape(n_seg, SEGMENT_LEN))
-        self.n_seg = self._ref_segs[0].shape[0]
+        self._families = [False, True] if self.has_floor else [False]
+        self._ref_segs: dict[tuple[FrameType, bool], ComplexArray] = {}
+        for floor in self._families:
+            for ft in self._types:
+                sc = self.pre.sc_values(ft, floor)
+                wave = self.mod.modulate([sc, sc])[: 2 * self.period]
+                wave = wave / np.sqrt(np.sum(np.abs(wave) ** 2))
+                n_seg = len(wave) // SEGMENT_LEN
+                self._ref_segs[ft, floor] = wave[: n_seg * SEGMENT_LEN].reshape(n_seg, SEGMENT_LEN)
+        self.n_seg = self._ref_segs[FrameType.DATA, False].shape[0]
         self._ref_len = self.n_seg * SEGMENT_LEN
         # Bank bin → frequency, and the bins inside the search range.
         fs = params.fs_baseband
         self._bin_hz = np.fft.fftfreq(FFT_LEN, d=SEGMENT_LEN / fs)
         self._bins_ok = np.flatnonzero(np.abs(self._bin_hz) <= max_cfo_hz)
+        self._floor_stat = np.zeros(0)
+        self._floor_other = np.zeros(0)
+        self._floor_cfo = np.zeros(0)
+        self._floor_type = np.zeros(0, dtype=np.intp)
 
     # ── stage 0: conditioning ─────────────────────────────────────────
 
@@ -128,55 +180,208 @@ class FrameDetector:
 
     # ── stage 1: matched-filter bank ──────────────────────────────────
 
+    def _spectra(self, x: ComplexArray, p0: int, p1: int, ref: ComplexArray) -> ComplexArray:
+        """The segmented matched filter's FFT outputs (complex, positions ``p0 … p1`` ×
+        search bins) for one reference; positions past the last valid one are dropped."""
+        n_pos = len(x) - self._ref_len + 1
+        m = min(p1, n_pos) - p0
+        if m <= 0:
+            return np.zeros((0, len(self._bins_ok)), dtype=np.complex128)
+        parts = np.empty((m, self.n_seg), dtype=np.complex128)
+        for k in range(self.n_seg):
+            a = p0 + k * SEGMENT_LEN
+            seg = x[a : a + m + SEGMENT_LEN - 1]
+            parts[:, k] = np.correlate(seg, ref[k], mode="valid")
+        return np.asarray(np.fft.fft(parts, n=FFT_LEN, axis=1)[:, self._bins_ok])
+
     def bank(self, x: ComplexArray, chunk: int = 8192) -> tuple[FloatArray, FloatArray, FloatArray]:
         """For every start position: (best normalised peak over both frame types, CFO of
-        the best bin in Hz, peak of the *other* type at that position)."""
+        the best bin in Hz, peak of the *other* type at that position). On an air with a
+        floor family the floor statistic — the floor references' normalised peak averaged
+        over the seven windows a floor preamble fills — is kept alongside for
+        :meth:`detect`."""
         x = np.asarray(x, dtype=np.complex128)
         n_pos = len(x) - self._ref_len + 1
         if n_pos <= 0:
+            self._floor_stat = self._floor_other = self._floor_cfo = np.zeros(0)
+            self._floor_type = np.zeros(0, dtype=np.intp)
             return np.zeros(0), np.zeros(0), np.zeros(0)
         energy = np.sqrt(np.maximum(_moving_sum(np.abs(x) ** 2, self._ref_len), 1e-30))
         floor = 1e-3 * float(np.sqrt(np.mean(np.abs(x) ** 2))) * np.sqrt(self._ref_len)
+        norm = np.maximum(energy, floor)
         peaks = np.zeros((len(self._types), n_pos))
         cfos = np.zeros((len(self._types), n_pos))
+        fstats = np.zeros((len(self._types), n_pos))
+        fcfos = np.zeros((len(self._types), n_pos))
+        bins = self._bin_hz[self._bins_ok]
+        ext = (self.floor_windows - 1) * self.period if self.has_floor else 0
         for p0 in range(0, n_pos, chunk):
             p1 = min(n_pos, p0 + chunk)
             m = p1 - p0
-            norm = np.maximum(energy[p0:p1], floor)
-            for ti, ref in enumerate(self._ref_segs):
-                parts = np.empty((m, self.n_seg), dtype=np.complex128)
-                for k in range(self.n_seg):
-                    a = p0 + k * SEGMENT_LEN
-                    seg = x[a : a + m + SEGMENT_LEN - 1]
-                    parts[:, k] = np.correlate(seg, ref[k], mode="valid")
-                mag = np.abs(np.fft.fft(parts, n=FFT_LEN, axis=1)[:, self._bins_ok])
+            for ti, ft in enumerate(self._types):
+                spec = self._spectra(x, p0, p1, self._ref_segs[ft, False])
+                mag = np.abs(spec)
                 best = np.argmax(mag, axis=1)
-                peaks[ti, p0:p1] = mag[np.arange(m), best] / norm
-                cfos[ti, p0:p1] = self._bin_hz[self._bins_ok][best]
+                peaks[ti, p0:p1] = mag[np.arange(m), best] / norm[p0:p1]
+                cfos[ti, p0:p1] = bins[best]
+                if not self.has_floor:
+                    continue
+                spec = self._spectra(x, p0, p1 + ext, self._ref_segs[ft, True])
+                mag = np.abs(spec) / norm[p0 : p0 + len(spec), None]
+                # positions whose seven windows all lie inside the buffer
+                m_f = len(spec) - ext
+                if m_f <= 0:
+                    continue
+                acc = mag[:m_f].copy()
+                for k in range(1, self.floor_windows):
+                    acc += mag[k * self.period : k * self.period + m_f]
+                acc /= self.floor_windows
+                fbest = np.argmax(acc, axis=1)
+                fstats[ti, p0 : p0 + m_f] = acc[np.arange(m_f), fbest]
+                fcfos[ti, p0 : p0 + m_f] = bins[fbest]
         win = np.argmax(peaks, axis=0)
         cols = np.arange(n_pos)
         self._last_type = win
+        fwin = np.argmax(fstats, axis=0)
+        self._floor_type = fwin
+        self._floor_stat = fstats[fwin, cols]
+        self._floor_other = fstats[1 - fwin, cols]
+        self._floor_cfo = fcfos[fwin, cols]
         return peaks[win, cols], cfos[win, cols], peaks[1 - win, cols]
 
     # ── stage 2: CFO refinement ───────────────────────────────────────
 
-    def fine_cfo(self, x: ComplexArray, start: int, frame_type: FrameType) -> float:
+    def fine_cfo(
+        self,
+        x: ComplexArray,
+        start: int,
+        frame_type: FrameType,
+        preamble_symbols: int = PREAMBLE_SYMBOLS,
+        floor: bool = False,
+    ) -> float:
         """CFO at a known preamble position: the segmented matched filter evaluated on a
         fine frequency grid (0.24 Hz), then the full-symbol-lag refinement (±16 Hz range —
-        safe because the fine-grid estimate leaves a residual of a hertz or two)."""
+        safe because the fine-grid estimate leaves a residual of a hertz or two). A floor
+        preamble (``preamble_symbols`` = 8, ``floor``) is matched whole — its two-symbol
+        reference tiled — and the lag phase is averaged over all seven symbol pairs."""
         fs = self.p.fs_baseband
-        ref = self._ref_segs[self._types.index(frame_type)]
-        seg = x[start : start + self._ref_len].reshape(self.n_seg, SEGMENT_LEN)
-        parts = np.sum(seg * np.conj(ref), axis=1)
+        ref = self._ref_segs[frame_type, floor]
+        reps = preamble_symbols // 2
+        seg = x[start : start + reps * self._ref_len].reshape(reps * self.n_seg, SEGMENT_LEN)
+        parts = np.sum(seg * np.conj(np.tile(ref, (reps, 1))), axis=1)
         n_fine = 16 * FFT_LEN
         spectrum = np.fft.fft(parts, n=n_fine)
         freqs = np.fft.fftfreq(n_fine, d=SEGMENT_LEN / fs)
         ok = np.abs(freqs) <= self.max_cfo_hz
         f0 = float(freqs[ok][np.argmax(np.abs(spectrum[ok]))])
-        t = (np.arange(2 * self.period) + start) / fs
-        y = x[start : start + 2 * self.period] * np.exp(-2j * np.pi * f0 * t)
-        c2 = np.vdot(y[: self.period], y[self.period :])
-        return f0 + float(np.angle(c2) * fs / (2 * np.pi * self.period))
+        n = preamble_symbols * self.period
+        t = (np.arange(n) + start) / fs
+        y = x[start : start + n] * np.exp(-2j * np.pi * f0 * t)
+        per = self.period
+        c2: complex = 0j
+        for k in range(preamble_symbols - 1):
+            c2 += complex(np.vdot(y[k * per : (k + 1) * per], y[(k + 1) * per : (k + 2) * per]))
+        return f0 + float(np.angle(c2) * fs / (2 * np.pi * per))
+
+    # ── the floor family ──────────────────────────────────────────────
+
+    def _refine_floor(
+        self, x: ComplexArray, lo: int, hi: int, frame_type: FrameType, f0: float
+    ) -> int:
+        """The start of a floor preamble within ``lo … hi``: four two-symbol windows two
+        symbols apart combined coherently at the bank's bin ``f0`` and the sub-grid around
+        it, each window normalised by its own energy."""
+        ref = self._ref_segs[frame_type, True]
+        n_win = self.floor_symbols // 2
+        step = 2 * self.period
+        spec = self._spectra(x, lo, hi + (n_win - 1) * step, ref)
+        n = len(spec) - (n_win - 1) * step
+        if n <= 0:
+            return lo
+        b = int(np.argmin(np.abs(self._bin_hz[self._bins_ok] - f0)))
+        energy = np.sqrt(np.maximum(_moving_sum(np.abs(x) ** 2, self._ref_len), 1e-30))
+        best = np.zeros(n)
+        fs = self.p.fs_baseband
+        for delta in FLOOR_SUB_GRID_HZ:
+            acc = np.zeros(n, dtype=np.complex128)
+            for k in range(n_win):
+                a = lo + k * step
+                rot = np.exp(-2j * np.pi * (f0 + delta) * (k * step) / fs)
+                acc += spec[k * step : k * step + n, b] * rot / energy[a : a + n]
+            best = np.maximum(best, np.abs(acc) / n_win)
+        return lo + int(np.argmax(best))
+
+    def _half_symbol_repetition(self, x: ComplexArray, start: int) -> float:
+        """How much the two halves of each ordinary preamble symbol's useful part repeat
+        one another, over both symbols: 1.0 for a noiseless even-carriers-only symbol,
+        about 0 for one on every carrier. A carrier offset only rotates every half-pair
+        by the same phase; multipath is the same on both halves."""
+        n = self.n
+        half = n // 2
+        acc = 0j
+        energy = 0.0
+        for k in range(PREAMBLE_SYMBOLS):
+            a = start + k * self.period + self.dem.fft_offset
+            if a + n > len(x):
+                return 0.0
+            u = x[a : a + n]
+            acc += complex(np.vdot(u[:half], u[half : 2 * half]))
+            energy += float(np.sum(np.abs(u[: 2 * half]) ** 2)) / 2
+        return abs(acc) / max(energy, 1e-30)
+
+    def _repetition(self, x: ComplexArray, start: int, symbols: int) -> float:
+        """How much ``symbols`` symbol periods from ``start`` repeat one another: the
+        magnitude of the summed one-symbol-lag correlation over the energy the lags
+        span, 1.0 for identical noiseless symbols (Schmidl & Cox's timing metric, summed
+        over a run). Carrier offset only rotates every lag by the same phase."""
+        per = self.period
+        n = symbols * per
+        if start + n > len(x):
+            return 0.0
+        y = x[start : start + n].reshape(symbols, per)
+        lags = np.sum(np.conj(y[:-1]) * y[1:])
+        energy = float(np.sum(np.abs(y) ** 2)) * (symbols - 1) / symbols
+        return float(abs(lags)) / max(energy, 1e-30)
+
+    def _detect_floor(
+        self, x: ComplexArray, taken: NDArray[np.bool_], max_frames: int
+    ) -> list[FrameSync]:
+        """Floor-family candidates, best first, outside the spans the ordinary pass took;
+        each accepted one masks its whole span and the seven symbols before it (where the
+        averaged statistic still sees part of its preamble)."""
+        found: list[FrameSync] = []
+        fstat, fother = self._floor_stat, self._floor_other
+        fcfo, ftype = self._floor_cfo, self._floor_type
+        fmask = (fstat >= self.min_floor_peak) & ~taken
+        half = 3 * self.period // 2
+        skirt = self.floor_windows * self.period
+        for _ in range(self.max_candidates):
+            if len(found) >= max_frames:
+                break
+            idx = np.flatnonzero(fmask)
+            if len(idx) == 0:
+                break
+            c = int(idx[np.argmax(fstat[idx])])
+            lo, hi = max(0, c - half), min(len(fstat), c + half + 1)
+            frame_type = self._types[int(ftype[c])]
+            d = self._refine_floor(x, lo, hi, frame_type, float(fcfo[c]))
+            span = self.air.layout_for(frame_type is FrameType.DATA, floor=True).samples
+            if d + span + self.dem.fft_offset > len(x):
+                fmask[lo:hi] = False  # too close to the end to be usable yet
+                continue
+            cfo = self.fine_cfo(x, d, frame_type, self.floor_symbols, True)
+            if self._repetition(x, d, self.floor_symbols) < FLOOR_REPETITION_MIN:
+                fmask[lo:hi] = False  # the bank liked it; the symbols do not repeat
+                continue
+            confidence = float(fstat[c] / max(fother[c], 1e-12))
+            header = FrameHeader(frame_type)
+            found.append(
+                FrameSync(d, cfo, header, float(fcfo[c]), confidence, float(fstat[c]), True)
+            )
+            a, b = max(0, d - max(self.min_gap, skirt)), min(len(fmask), d + span)
+            fmask[a:b] = False
+            taken[a:b] = True
+        return found
 
     # ── full acquisition ──────────────────────────────────────────────
 
@@ -192,8 +397,16 @@ class FrameDetector:
         # ≈ 0.7 sidelobe one symbol early. Never accept a peak until the statistic one symbol
         # later exists (a stronger one there wins); in streaming use the caller re-scans.
         mask[max(0, len(mask) - self.period) :] = False
+        taken = np.zeros(len(peak), dtype=bool)
+        # The ordinary pass first, each candidate checked for the ordinary preamble's own
+        # signature where a floor family exists (a floor frame's preamble and body score up
+        # to 0.75 on these references at high SNR); then the floor pass on what it left,
+        # so a strong ordinary burst's body — which scores on the floor references just as
+        # well — is never a floor candidate. Each pass looks for up to max_frames of its
+        # own; the earliest win below.
+        ordinary: list[FrameSync] = []
         for _ in range(self.max_candidates):
-            if len(found) >= max_frames:
+            if len(ordinary) >= max_frames:
                 break
             idx = np.flatnonzero(mask)
             if len(idx) == 0:
@@ -207,14 +420,32 @@ class FrameDetector:
             if start + 4 * self.period + self.dem.fft_offset > len(x):
                 mask[reject_lo:reject_hi] = False  # too close to the end to be usable yet
                 continue
+            if self.has_floor and self._half_symbol_repetition(x, start) < HALF_SYMBOL_MIN:
+                mask[reject_lo:reject_hi] = False  # correlates, but is not an ordinary preamble
+                continue
             header = FrameHeader(self._types[int(self._last_type[start])])
             cfo = self.fine_cfo(x, start, header.frame_type)
             confidence = float(peak[start] / max(other[start], 1e-12))
-            found.append(
+            ordinary.append(
                 FrameSync(start, cfo, header, float(bin_cfo[start]), confidence, float(peak[start]))
             )
             # Nothing else can start inside this frame (strong data symbols correlate with
             # the reference at ≈ 0.3–0.4, which the threshold does not exclude).
             span = self.air.layout_for(header.frame_type is FrameType.DATA).samples
-            mask[max(0, start - self.min_gap) : min(len(mask), start + span)] = False
-        return sorted(found, key=lambda f: f.start)
+            a, b = max(0, start - self.min_gap), min(len(mask), start + span)
+            mask[a:b] = False
+            taken[a:b] = True
+        if self.has_floor:
+            found = self._detect_floor(x, taken, max_frames)
+            # an ordinary candidate inside a floor frame is that frame's body scoring on
+            # the ordinary references; the floor frame, verified whole, is the explanation
+            spans = [
+                (
+                    f.start,
+                    f.start
+                    + self.air.layout_for(f.header.frame_type is FrameType.DATA, True).samples,
+                )
+                for f in found
+            ]
+            ordinary = [o for o in ordinary if not any(a <= o.start < b for a, b in spans)]
+        return sorted(found + ordinary, key=lambda f: f.start)[:max_frames]

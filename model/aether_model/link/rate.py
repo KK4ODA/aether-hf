@@ -64,47 +64,70 @@ PAYLOAD_BYTES: dict[int, float] = {
 
 
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -5.2,
-    1: -3.5,
-    2: -2.1,
-    3: 0.6,
-    4: -0.1,
-    5: 1.9,
-    6: 3.6,
-    7: 6.9,
-    8: 8.8,
-    9: 10.4,
+    0: -12.0,
+    1: -10.0,
+    2: -7.5,
+    3: -5.2,
+    4: -3.5,
+    5: -2.1,
+    6: 0.6,
+    7: -0.1,
+    8: 1.9,
+    9: 3.6,
+    10: 6.9,
+    11: 8.8,
+    12: 10.4,
 }
 """The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
 as an operator would compare them: the same transmitter power into the same noise. Every
 entry is measured (``bench/baselines/phy_fer_500.csv``, ``tools/bench_phy.py --bandwidth
-500``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). The floor is
-where the design put it — QPSK ½ at −5.2 dB against the wide table's BPSK ⅕ at −5.1 —
-because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven."""
+500``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). Its control
+mode, QPSK ½ (mode 3), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1 because
+twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it the floor
+family (ADR-0009) — modes 0 and 1 on a frame four times as long, and mode 2 on the
+ordinary one — reaches −12 dB."""
 
 NARROW_PAYLOAD_BYTES: dict[int, float] = {
-    0: 25,
-    1: 34,
-    2: 39,
-    3: 53,
-    4: 53,
-    5: 71,
-    6: 81,
-    7: 109,
-    8: 123,
-    9: 137,
+    0: 19,
+    1: 41,
+    2: 15,
+    3: 25,
+    4: 34,
+    5: 39,
+    6: 53,
+    7: 53,
+    8: 71,
+    9: 81,
+    10: 109,
+    11: 123,
+    12: 137,
 }
+"""Payload bytes per frame of each narrow mode *on the layout it goes out on*: the floor
+modes' frames are four times as long, which is why :func:`usable_modes` needs
+:data:`NARROW_FRAME_S` to compare them."""
+
+NARROW_FRAME_S: dict[int, float] = {m: (4.216 if m < 2 else 1.054) for m in range(13)}
+"""Air time of each narrow mode's DATA frame: 136 symbols on the floor layout, 34 on the
+ordinary one, at 31 ms a symbol (the link layer's copy of the layouts; tested against
+them)."""
 
 
 def usable_modes(
     thresholds: Mapping[int, float] = AWGN_THRESHOLD_DB,
     payload: Mapping[int, float] = PAYLOAD_BYTES,
+    frame_s: Mapping[int, float] | None = None,
 ) -> list[int]:
-    """Modes on the throughput/threshold Pareto front, ascending."""
+    """Modes on the throughput/threshold Pareto front, ascending. ``payload`` is bytes per
+    frame; given ``frame_s`` (air time per mode) the comparison is bytes per second, which
+    is what tells a floor mode's long frame from an ordinary one (ADR-0009)."""
+
+    def worth(m: int) -> float:
+        return payload[m] / (frame_s[m] if frame_s is not None else 1.0)
+
     out = []
     for m, thr in thresholds.items():
         dominated = any(
-            payload[o] >= payload[m] and thresholds[o] <= thr and o != m for o in thresholds
+            worth(o) >= worth(m) and thresholds[o] <= thr and o != m for o in thresholds
         )
         if not dominated:
             out.append(m)

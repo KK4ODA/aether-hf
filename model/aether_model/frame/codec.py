@@ -102,6 +102,12 @@ class FrameCodec:
         block = hard[: self.info_bits]
         if not PAYLOAD_CRC.check(block):
             return None, full
+        # The all-zero word is a codeword of every linear code and its CRC is zero, so a
+        # decoder fed noise (a false detection, a frame read at the wrong start) converges
+        # to it and "passes". No frame of ours is all zeros — the link layer never assigns
+        # session 0 and its other frames have a non-zero kind — so the block is refused.
+        if not block.any():
+            return None, full
         payload = np.packbits(block[: -PAYLOAD_CRC.width]).tobytes()
         return payload, full
 

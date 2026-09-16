@@ -35,7 +35,7 @@ from functools import cache
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.frame.modes import air_interface
+from aether_model.frame.modes import PREAMBLE_SYMBOLS, FrameLayout, air_interface
 from aether_model.phy.ofdm import carrier_map
 from aether_model.waveform import WIDE_2300, WaveformParams
 
@@ -46,12 +46,28 @@ SC_SEEDS = {0: 4649, 1: 7919}
 The same seeds serve every bandwidth: the sequence is drawn to the length of the even
 carriers — 29 at 2 300 Hz, 6 at 500 Hz — and the two frame types stay separated at both
 (orthogonal at length 6; the constructor checks)."""
+FLOOR_SC_SEEDS = {0: 4, 1: 9}
+"""PN seeds of the floor family's preamble sequences per frame type (ADR-0009). A floor
+frame's preamble is eight symbols of its own sequence, drawn on *all* active carriers —
+not the even ones only — because with twelve carriers a data symbol correlates with any
+six-carrier PN reference at up to 0.75 (half its even carriers are the comb pilots,
+which repeat every symbol) and at about half that with a twelve-carrier one, which is
+what keeps a strong ordinary frame's body from looking like a floor preamble. The seeds
+were searched so that at 500 Hz every pair of the four sequences has a cosine of 1/6
+or less, the floor pair overlaps the comb-pilot sequence by less than 0.4, and at
+2 300 Hz every pair is at 0.25 or below."""
+SC_SEPARATION = 0.3
+"""Largest cosine allowed between any two preamble sequences of one waveform."""
 MODE_CHIP_SEED = 20260913
 N_MODES = 14
 """Most modes any air interface may signal; the wide table uses all fourteen, the narrow
 one its first ten. Each air interface's chip sequences are indexed by *its* mode count
 (:meth:`Preamble.chip_index`)."""
 N_RV = 4
+FLOOR_CHIP_CORRELATION_BOUND = 0.2
+"""Pairwise bound of a floor layout's chip set. A floor frame carries its chips on every
+one of its full pilot symbols — 128 at 500 Hz — so the wide waveform's bound holds with
+room to spare, and the metric keeps 21 dB of processing gain at −12 dB."""
 """Redundancy versions signalled per frame (TS 38.212 rate matching has four)."""
 MAX_PILOT_SYMBOLS = 4
 
@@ -133,15 +149,21 @@ class Preamble:
         n = self.cmap.n_carriers
         self.even = np.flatnonzero(self.cmap.bins % 2 == 0)
         scale = math.sqrt(n / len(self.even))
-        self._sc: dict[FrameType, ComplexArray] = {}
+        self._sc: dict[tuple[FrameType, bool], ComplexArray] = {}
         for ft in FrameType:
             sc = np.zeros(n, dtype=np.complex128)
             sc[self.even] = _pn(SC_SEEDS[ft.value], len(self.even)) * scale
-            self._sc[ft] = sc
-        # ensure the two type sequences are well separated
-        a, b = self._sc[FrameType.DATA][self.even], self._sc[FrameType.CONTROL][self.even]
-        if abs(np.vdot(a, b)) / np.vdot(a, a).real > 0.3:
-            raise RuntimeError("frame-type PN sequences correlate too strongly")
+            self._sc[ft, False] = sc
+            # the floor family's sequence occupies every carrier (unit power each)
+            self._sc[ft, True] = _pn(FLOOR_SC_SEEDS[ft.value], n)
+        # ensure every pair of sequences is well separated
+        keys = list(self._sc)
+        for i, k1 in enumerate(keys):
+            for k2 in keys[i + 1 :]:
+                a, b = self._sc[k1], self._sc[k2]
+                cosine = abs(np.vdot(a, b)) / np.sqrt(np.vdot(a, a).real * np.vdot(b, b).real)
+                if cosine > SC_SEPARATION:
+                    raise RuntimeError("preamble PN sequences correlate too strongly")
         self.n_data = len(self.cmap.data_carriers)
         self.n_chips = MAX_PILOT_SYMBOLS * self.n_data
 
@@ -160,17 +182,44 @@ class Preamble:
     def chip_hypothesis(self, index: int) -> tuple[int, int]:
         return chip_hypothesis(index, self.n_modes)
 
-    def sc_values(self, frame_type: FrameType = FrameType.DATA) -> ComplexArray:
-        """Carrier values of each Schmidl–Cox symbol (unit mean power over active carriers)."""
-        return self._sc[frame_type].copy()
+    def sc_values(
+        self, frame_type: FrameType = FrameType.DATA, floor: bool = False
+    ) -> ComplexArray:
+        """Carrier values of each Schmidl–Cox symbol (unit mean power over active carriers)
+        of the ordinary or the floor family."""
+        return self._sc[frame_type, floor].copy()
 
-    def symbols(self, header: FrameHeader) -> list[ComplexArray]:
-        sc = self.sc_values(header.frame_type)
-        return [sc, sc.copy()]
+    def symbols(self, header: FrameHeader, layout: FrameLayout | None = None) -> list[ComplexArray]:
+        """The preamble: ``layout.preamble_symbols`` copies of the type's SC symbol — two
+        without a layout, which is every ordinary frame; eight on a floor layout."""
+        n = PREAMBLE_SYMBOLS if layout is None else layout.preamble_symbols
+        sc = self.sc_values(header.frame_type, floor=n != PREAMBLE_SYMBOLS)
+        return [sc.copy() for _ in range(n)]
 
-    def mode_chips(self, mode: int, pilot_symbol_index: int, rv: int = 0) -> ComplexArray:
+    def n_chips_for(self, layout: FrameLayout | None) -> int:
+        """Chips a DATA frame on this layout carries: the ordinary set's length on the
+        ordinary layouts, every full pilot symbol's data carriers on a floor layout."""
+        if layout is None or layout.preamble_symbols == PREAMBLE_SYMBOLS:
+            return self.n_chips
+        return layout.n_pilot_symbols * self.n_data
+
+    def sequences_for(self, layout: FrameLayout | None) -> tuple[ComplexArray, ...]:
+        """The chip set of a layout: :attr:`sequences` for the ordinary layouts, a longer
+        set of its own for a floor layout (same indexing)."""
+        n = self.n_chips_for(layout)
+        if n == self.n_chips:
+            return self.sequences
+        return mode_chip_sequences(n, N_RV * self.n_modes, FLOOR_CHIP_CORRELATION_BOUND)
+
+    def mode_chips(
+        self,
+        mode: int,
+        pilot_symbol_index: int,
+        rv: int = 0,
+        layout: FrameLayout | None = None,
+    ) -> ComplexArray:
         """Chips (±1) for the data carriers of the given full pilot symbol of a DATA frame."""
-        seq = self.sequences[self.chip_index(mode, rv)]
+        seq = self.sequences_for(layout)[self.chip_index(mode, rv)]
         a = pilot_symbol_index * self.n_data
         if a + self.n_data > len(seq):
             raise ValueError("more pilot symbols than the chip sequence covers")

@@ -72,16 +72,20 @@ class Modem:
         return self.air.modes
 
     def data_burst(self, payload: bytes, mode: Mode, rv: int = 0) -> ComplexArray:
-        long = self.air.long
-        codec = self.codec(mode, long)
+        """A DATA frame at ``mode`` on the layout that mode goes out on."""
+        layout = self.air.data_layout(mode.index)
+        codec = self.codec(mode, layout)
         return self.tx.baseband(
-            FrameHeader(FrameType.DATA, mode.index, rv), long, codec.encode(payload, rv)
+            FrameHeader(FrameType.DATA, mode.index, rv), layout, codec.encode(payload, rv)
         )
 
-    def control_burst(self, payload: bytes, rv: int = 0) -> ComplexArray:
-        short = self.air.short
-        codec = self.codec(self.air.control_mode, short)
-        return self.tx.baseband(FrameHeader(FrameType.CONTROL), short, codec.encode(payload, rv))
+    def control_burst(self, payload: bytes, rv: int = 0, floor: bool = False) -> ComplexArray:
+        """A control frame: SHORT at the control mode, or — while the link runs a floor
+        mode — the floor control layout at the floor control mode (ADR-0009)."""
+        layout = self.air.layout_for(False, floor)
+        codec = self.codec(self.air.control_mode_for(floor), layout)
+        payload = payload.ljust(codec.payload_bytes, b"\0")  # the floor frame has a byte over
+        return self.tx.baseband(FrameHeader(FrameType.CONTROL), layout, codec.encode(payload, rv))
 
     def audio(self, baseband: ComplexArray, level: float = 0.25) -> NDArray[np.float32]:
         """48 kHz float32 audio of a baseband burst at RMS ``level`` (default −12 dBFS)."""
@@ -89,7 +93,7 @@ class Modem:
 
     def payload_bytes(self, mode: Mode | None = None) -> int:
         return (
-            self.codec(mode, self.air.long).payload_bytes
+            self.codec(mode, self.air.data_layout(mode.index)).payload_bytes
             if mode
             else self.codec(self.air.control_mode, self.air.short).payload_bytes
         )
@@ -108,7 +112,9 @@ class Modem:
         """Decode a demodulated frame with the RV it announced, optionally soft-combining
         with ``buffer`` (HARQ-IR). Returns ``(payload or None, llr buffer)``."""
         control = frame.sync.header.frame_type is FrameType.CONTROL
-        mode = self.air.control_mode if control else self.air.modes[frame.mode]
+        mode = (
+            self.air.control_mode_for(frame.sync.floor) if control else self.air.modes[frame.mode]
+        )
         return self.codec(mode, frame.layout).decode(
             frame.symbols, frame.noise_var, rv=frame.rv, buffer=buffer
         )
@@ -119,7 +125,7 @@ class Modem:
         frame = self.rx.receive(x, sync)
         if sync.header.frame_type is FrameType.CONTROL:
             payload, _ = self.decode_frame(frame, buffer)
-            return DecodedFrame(payload, frame, self.air.control_mode)
+            return DecodedFrame(payload, frame, self.air.control_mode_for(sync.floor))
         mode = self.air.modes[frame.mode]
         payload, _ = self.decode_frame(frame, buffer)
         if payload is None and frame.mode_confidence < MODE_RETRY_CONFIDENCE:

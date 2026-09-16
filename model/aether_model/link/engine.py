@@ -231,6 +231,13 @@ class LinkEngine:
         self._disc_requested = False
         self._disc_tries = 0
         self._connect_tries = 0
+        self._peer_floor = False
+        """Whether the last frame heard from the peer came on a floor layout (ADR-0009):
+        the family our control frames answer in, and the layout a connect answer goes
+        back on."""
+        self._peer_mode: int | None = None
+        """The mode of the last DATA frame heard from the peer — what its next frames are
+        most likely to take on the air."""
         self._probing: str | None = None
         """The station a probe of ours is out to, until it answers or the timer fires."""
         self._waiting_for: str | None = None  # "ack" | "poll" | "turn" | "disc" | "connect"
@@ -238,7 +245,10 @@ class LinkEngine:
         self._rx_base = 0
         self._rx_buf: dict[int, bytes] = {}
         self._max_seen: int | None = None
-        self._harq: dict[int, tuple[object, int]] = {}
+        self._harq: dict[int, tuple[object, int, int]] = {}
+        """Per sequence number: the soft information kept for combining, how many combines
+        it has been through, and the mode it was sent at — another mode is another
+        codeword, which cannot be combined with it."""
         self._burst: list[_RxRecord] = []
         self._burst_t0: float | None = None
         self._ack_history: list[_AckSnapshot] = []
@@ -282,7 +292,9 @@ class LinkEngine:
         else:
             raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
         self.remote_call = remote_call.upper()
-        self.session = self.rng.randrange(256)
+        # never 0: with kind DATA and sequence 0 an all-zero body would make an all-zero
+        # frame, which the PHY refuses (the all-zero codeword passes any CRC)
+        self.session = self.rng.randrange(1, 256)
         self.state = State.CONNECTING
         self.role = Role.NONE
         self._connect_tries = 0
@@ -310,7 +322,7 @@ class LinkEngine:
         self._probing = remote_call.upper()
         self.stats.probes_sent += 1
         self._send_probe(DataKind.PROBE, self._probing, None)
-        wait = self._response_wait(self.timing.data_frame_s)
+        wait = self._response_wait(self.timing.data_frame_s_for(self._robust_mode(False)))
         self._arm("probe", self._tx_busy_until - self.now + wait)
 
     def disconnect(self) -> None:
@@ -413,7 +425,7 @@ class LinkEngine:
         self.now = max(self.now, now)
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
-        deadline = t_start + self.timing.data_frame_s + self._irs_reply_delay()
+        deadline = t_start + self._peer_data_frame_s() + self._irs_reply_delay()
         self._deadlines["ack"] = max(self._deadlines.get("ack", 0.0), deadline)
 
     # ── timers ────────────────────────────────────────────────────────
@@ -439,7 +451,7 @@ class LinkEngine:
         data frame, which is roughly a quarter of the air time."""
         quiet = self.timing.preamble_detect_s
         if quiet is None:
-            quiet = self.timing.data_frame_s
+            quiet = self._peer_data_frame_s()
         return quiet + self.cfg.burst_gap_s + self.timing.turnaround_s
 
     def _response_wait(self, response_s: float, responder_delay: float = 0.0) -> float:
@@ -477,17 +489,63 @@ class LinkEngine:
     # ── transmit helpers ──────────────────────────────────────────────
 
     def _transmit(self, frames: list[TxFrame]) -> None:
-        dur = sum(
-            self.timing.data_frame_s
-            if f.container is Container.DATA
-            else self.timing.control_frame_s
-            for f in frames
-        )
+        dur = sum(self.timing.frame_s(f) for f in frames)
         self._tx_busy_until = self.now + self.timing.tx_latency_s + dur
         self.actions.append(Transmit(frames, dur))
 
     def _control(self, kind: ControlKind, **kw: object) -> TxFrame:
-        return TxFrame(Container.CONTROL, ControlFrame(kind, self.session, **kw).encode())  # type: ignore[arg-type]
+        payload = ControlFrame(kind, self.session, **kw).encode()  # type: ignore[arg-type]
+        return TxFrame(Container.CONTROL, payload, floor=self._control_floor())
+
+    def _note_peer_frame(self, frame: SoftFrame) -> None:
+        """Learn the family (and, for data, the mode) the peer sends in — from frames that
+        decoded, so a false detection cannot switch our control frames to the wrong
+        layout."""
+        if frame.container is Container.DATA:
+            self._peer_floor = self.timing.is_floor(frame.mode)
+            self._peer_mode = frame.mode
+        else:
+            self._peer_floor = frame.floor
+
+    def _control_floor(self) -> bool:
+        """The family our control frames go out in (ADR-0009): the ISS answers in the family
+        of the bursts it sends, the IRS in the family of what it last heard — so an ACK
+        comes back the way the burst went out, and either side can tell how long to wait
+        for it."""
+        if self.role is Role.ISS and self.state is State.CONNECTED:
+            return self.timing.is_floor(min(self._recommended, self.cfg.max_mode))
+        return self._peer_floor
+
+    def _peer_data_frame_s(self) -> float:
+        """The longest DATA frame the peer may send next: the family of what we recommended
+        or of what it last sent, whichever is longer."""
+        modes = [self.rate.recommend()]
+        if self._peer_mode is not None:
+            modes.append(self._peer_mode)
+        return max(self.timing.data_frame_s_for(m) for m in modes)
+
+    def _robust_mode(self, floor: bool) -> int:
+        """The slowest mode of the given family whose frame carries a connect body (with a
+        DATA header and length): what connect requests, answers, probes and beacons go out
+        at. Falls back to the ordinary family when the floor has no such mode."""
+        need = CONNECT_BODY_BYTES + 5
+        caps = self.timing.data_capacity or {}
+        for m in sorted(caps):
+            if self.timing.is_floor(m) == floor and caps[m] >= need:
+                return m
+        if floor:
+            return self._robust_mode(False)
+        raise ValueError("no mode carries a connect frame")
+
+    def _connect_floor(self) -> bool:
+        """Whether the next connect request goes out on the floor layout: the first two tries
+        are ordinary frames, then the two families alternate, so a station that can only
+        be heard at the floor is still reached (ADR-0009)."""
+        return (
+            self.timing.floor_modes > 0
+            and self._connect_tries >= 2
+            and (self._connect_tries - 2) % 2 == 0
+        )
 
     def _data_frame(self, rec: _TxRecord) -> TxFrame:
         rec.tx_count += 1
@@ -498,26 +556,30 @@ class LinkEngine:
     def _send_connect(self, kind: DataKind, snr_db: float | None = None) -> None:
         src, dst = self.my_call, self.remote_call
         body = ConnectBody(src, dst, caps=self.cfg.capabilities, snr_db=snr_db).encode()
-        cap = self.timing.capacity(0)
-        if cap < CONNECT_BODY_BYTES + 5:
-            raise ValueError("mode 0 too small for a connect frame")
+        # a request alternates families once the ordinary frame has gone unanswered; an
+        # answer goes back on the layout the request arrived on
+        floor = self._connect_floor() if kind is DataKind.CONNECT_REQ else self._peer_floor
+        mode = self._robust_mode(floor)
+        cap = self.timing.capacity(mode)
         payload = encode_data(DataHeader(kind, 0, self.session), body, cap)
-        self._transmit([TxFrame(Container.DATA, payload, mode=0, rv=0)])
+        self._transmit([TxFrame(Container.DATA, payload, mode=mode, rv=0)])
         if kind is DataKind.CONNECT_REQ:
             self._connect_tries += 1
             # backoff that widens with each retry, so two stations that called each other
             # at the same instant desynchronise instead of colliding on every attempt
-            span = (1 + self._connect_tries) * self.timing.data_frame_s
-            wait = self._response_wait(self.timing.data_frame_s) + self.rng.uniform(0.0, span)
+            frame_s = self.timing.data_frame_s_for(mode)
+            span = (1 + self._connect_tries) * frame_s
+            wait = self._response_wait(frame_s) + self.rng.uniform(0.0, span)
             self._arm("connect", self._tx_busy_until - self.now + wait)
 
     def _send_probe(self, kind: DataKind, remote: str, snr_db: float | None) -> None:
         """A PROBE (``snr_db`` absent) or a PROBE_ACK (the SNR the probe arrived at),
         outside any session: session 0, sequence 0, the most robust mode."""
         body = ProbeBody(self.my_call, remote, snr_db, caps=self.cfg.capabilities).encode()
-        cap = self.timing.capacity(0)
+        mode = self._robust_mode(False)
+        cap = self.timing.capacity(mode)
         payload = encode_data(DataHeader(kind, 0, 0), body, cap)
-        self._transmit([TxFrame(Container.DATA, payload, mode=0, rv=0)])
+        self._transmit([TxFrame(Container.DATA, payload, mode=mode, rv=0)])
 
     def _retry_connect(self) -> None:
         if self.state is not State.CONNECTING:
@@ -536,7 +598,7 @@ class LinkEngine:
 
     def _send_poll(self) -> None:
         self._transmit([self._control(ControlKind.POLL)])
-        self._wait_for("poll", self.timing.control_frame_s)
+        self._wait_for("poll", self.timing.control_frame_s_for(self._control_floor()))
 
     def _send_turn(self) -> None:
         self._turn_tries += 1
@@ -547,14 +609,14 @@ class LinkEngine:
         self._peer_wants_tx = self._peer_break = False
         self._disarm("keepalive")
         # the peer answers with its first burst (or a POLL); we wait a full data frame
-        self._wait_for("turn", self.timing.data_frame_s)
+        self._wait_for("turn", self.timing.data_frame_s_for(self.rate.recommend()))
         self.actions.append(Event("role", "irs"))
 
     def _send_disc(self) -> None:
         self._disc_tries += 1
         self.state = State.DISCONNECTING
         self._transmit([self._control(ControlKind.DISC)])
-        self._wait_for("disc", self.timing.control_frame_s)
+        self._wait_for("disc", self.timing.control_frame_s_for(self._control_floor()))
 
     def _on_response_timeout(self) -> None:
         what, self._waiting_for = self._waiting_for, None
@@ -621,11 +683,23 @@ class LinkEngine:
         return bool(self._unacked()) or bool(self._tx_queue)
 
     def _send_burst(self) -> None:
-        seqs = self._unacked()[: self.cfg.burst_frames]
         mode = min(self._recommended, self.cfg.max_mode)
+        family = self.timing.is_floor(mode)
+        unacked = self._unacked()
+        # One family per burst (ADR-0009): the receiver infers a frame's slot from its air
+        # time, which needs every frame of the burst to be the same length. A frame keeps
+        # its codeword — and so its mode — across retransmissions, so when the oldest
+        # unacknowledged frame is of the other family the burst carries that family's
+        # retransmissions alone and new frames wait for the next one.
+        if unacked:
+            family = self.timing.is_floor(self._records[unacked[0]].mode)
+        seqs = [s for s in unacked if self.timing.is_floor(self._records[s].mode) == family]
+        seqs = seqs[: self.cfg.burst_frames]
+        new_frames = family == self.timing.is_floor(mode)
         cap = data_capacity(self.timing.capacity(mode))
         while (
-            len(seqs) < min(self.cfg.burst_frames, MAX_BURST)
+            new_frames
+            and len(seqs) < min(self.cfg.burst_frames, MAX_BURST)
             and self._outstanding() < WINDOW
             and self._tx_queue
         ):
@@ -655,7 +729,11 @@ class LinkEngine:
         self._bursts_since_turn += 1
         self._disarm("keepalive")
         self._transmit(frames)
-        self._wait_for("ack", self.timing.control_frame_s, self._irs_reply_delay())
+        self._wait_for(
+            "ack",
+            self.timing.control_frame_s_for(family),
+            self._irs_reply_delay(),
+        )
 
     def _on_ack(self, ack: ControlFrame) -> None:
         self.stats.acks_received += 1
@@ -682,7 +760,8 @@ class LinkEngine:
         if self._burst_t0 is None:
             self._burst_t0 = frame.t_start
             return 0
-        return max(0, round((frame.t_start - self._burst_t0) / self.timing.data_frame_s))
+        frame_s = self.timing.data_frame_s_for(frame.mode)
+        return max(0, round((frame.t_start - self._burst_t0) / frame_s))
 
     def _on_data(self, frame: SoftFrame) -> None:
         if self.state is State.IDLE or self.state is State.CONNECTING:
@@ -713,6 +792,12 @@ class LinkEngine:
             self._waiting_for = None
             self._turn_tries = 0
             self._disarm("wait")
+        if frame.floor != self.timing.is_floor(frame.mode):
+            # a floor frame whose chips name an ordinary mode, or the reverse: the chips
+            # are noise — a false detection, most likely — and so are its SNR and its soft
+            # bits; it is not part of any burst
+            self.stats.frames_failed += 1
+            return
         # part of the current burst: record it, decode what decodes, ACK after the gap
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
@@ -734,18 +819,22 @@ class LinkEngine:
         if guess is None or not in_window(guess, self._rx_base):
             self.stats.frames_failed += 1
             return
+        if guess in self._harq and self._harq[guess][2] != rec.frame.mode:
+            del self._harq[guess]  # re-encoded at another mode: start over
         if guess in self._harq:
-            prev, combines = self._harq[guess]
+            prev, combines, _ = self._harq[guess]
             combined, merged = rec.frame.decode(prev)
             if combined is not None:
                 self.stats.harq_rescues += 1
                 self._accept(rec, combined)
                 return
             self._harq[guess] = (
-                (buffer, 0) if combines + 1 >= self.cfg.max_combines else (merged, combines + 1)
+                (buffer, 0, rec.frame.mode)
+                if combines + 1 >= self.cfg.max_combines
+                else (merged, combines + 1, rec.frame.mode)
             )
         else:
-            self._harq[guess] = (buffer, 0)
+            self._harq[guess] = (buffer, 0, rec.frame.mode)
         self.stats.frames_failed += 1
 
     def _infer_seq(self, slot: int) -> int | None:
@@ -790,6 +879,7 @@ class LinkEngine:
         if header.session != self.session:
             rec.payload = None
             return
+        self._note_peer_frame(rec.frame)
         self._last_peer_frame = self.now
         self._arm("link", self.cfg.link_timeout_s)
         rec.seq = header.seq
@@ -886,6 +976,7 @@ class LinkEngine:
             ctl = ControlFrame.decode(payload)
         except ValueError:
             return
+        self._note_peer_frame(frame)
         if (
             self.state is State.IDLE
             or self.state is State.CONNECTING
@@ -943,6 +1034,7 @@ class LinkEngine:
             header, body = decode_data(payload)
         except ValueError:
             return
+        self._note_peer_frame(frame)
         if header.kind is DataKind.CONNECT_REQ:
             self._handle_connect_req(header, body, frame.snr_db)
         elif header.kind is DataKind.CONNECT_ACK:
@@ -1060,9 +1152,10 @@ class LinkEngine:
         if thresholds is None:
             return RateController(**self.cfg.rate)  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
+        frame_s = {m: self.timing.data_frame_s_for(m) for m in thresholds}
         return RateController(
             thresholds=dict(thresholds),
-            modes=usable_modes(thresholds, payload),
+            modes=usable_modes(thresholds, payload, frame_s),
             **self.cfg.rate,  # type: ignore[arg-type]
         )
 

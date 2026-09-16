@@ -143,7 +143,7 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
             m for m in modes if AWGN_THRESHOLD_DB[m] + rc.margin_db + rc.up_hysteresis_db <= snr
         ]
         top = modes.index(fits[-1])
-        assert rc.first_mode(snr) == modes[max(0, top - 1)], snr
+        assert rc.first_mode(snr) == modes[max(0, top - rc.first_mode_back)], snr
     # seeding places the controller there and takes the measurement, once
     rc.seed(15.0)
     assert rc.recommend() == rc.first_mode(15.0)
