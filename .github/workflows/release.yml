@@ -100,6 +100,9 @@ jobs:
             triple: aarch64-unknown-linux-gnu
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
+          # Apple Silicon only (every Mac since 2020); an Intel build can join when someone asks
+          - os: macos-latest
+            triple: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -136,7 +139,9 @@ jobs:
             cp core/target/release/aetherd.exe "dist/$name/"
           else
             cp core/target/release/aetherd "dist/$name/"
-            cp deploy/aetherd.service "dist/$name/"
+          fi
+          if [[ "$triple" == *linux* ]]; then
+            cp deploy/aetherd.service "dist/$name/"  # systemd; a Mac gateway is its own story
           fi
           cp -r app/ui "dist/$name/ui"
           cp LICENSE-MIT LICENSE-APACHE docs/user/gateway-kit.md docs/user/frequency-plan.md "dist/$name/"
@@ -168,6 +173,12 @@ jobs:
           - os: ubuntu-22.04
             triple: x86_64-unknown-linux-gnu
             bundles: deb,appimage
+          # Unsigned: without an Apple Developer certificate the dmg is a right-click-to-open
+          # build for testers (docs/user/install.md says how), and the updater entry it
+          # produces is unverified. Signing and notarization wait for the certificate.
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -220,11 +231,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          version="${{ needs.plan.outputs.version }}"
+          arch="${{ matrix.triple }}"; arch="${arch%%-*}"
           find app/src-tauri/target/release/bundle -type f \
-            \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.sig' \) \
+            \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' \
+               -o -name '*.app.tar.gz' -o -name '*.sig' \) \
             -print0 | while IFS= read -r -d '' file; do
               base="$(basename "$file")"
-              mv "$file" "dist/${base/Aether HF_/aether-hf_}"
+              case "$base" in
+                # the macOS updater bundle carries neither version nor architecture in its
+                # name, and the manifest keys the platform on both
+                "Aether HF.app.tar.gz"|"Aether HF.app.tar.gz.sig")
+                  base="aether-hf_${version}_${arch}.app.tar.gz${base#Aether HF.app.tar.gz}" ;;
+                *) base="${base/Aether HF_/aether-hf_}" ;;
+              esac
+              mv "$file" "dist/$base"
             done
           ls -l dist
 

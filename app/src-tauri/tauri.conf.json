@@ -32,7 +32,8 @@
     "targets": [
       "nsis",
       "deb",
-      "appimage"
+      "appimage",
+      "dmg"
     ],
     "icon": [
       "icons/32x32.png",
@@ -51,6 +52,9 @@
     ],
     "resources": {
       "../ui/": "ui/"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
     },
     "windows": {
       "nsis": {

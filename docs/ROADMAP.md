@@ -386,7 +386,7 @@ CPU time per second of audio. **All SNRs referenced to 3 kHz noise bandwidth.**
 | Versioning | SemVer; `vX.Y.Z` tags; Conventional Commits; `git-cliff` (Rust) / `release-please` for changelog |
 | CI | GitHub Actions matrix (windows-latest, ubuntu-latest, macos-latest): lint (ruff/clippy), unit + DSP regression, protocol tests, benchmark smoke; cache `cargo`/`pip` |
 | Reproducible builds | pinned toolchains (`rust-toolchain.toml`, `uv.lock`/`requirements.lock`), locked npm deps, SBOM via `cargo auditable` / `cyclonedx` |
-| Installer | Tauri bundler → NSIS `.exe` (per-user install, no admin) + MSI; Linux `.deb`/AppImage; macOS `.dmg` later. Clean uninstall keeps `%APPDATA%\AetherHF` unless user opts to remove |
+| Installer | Tauri bundler → NSIS `.exe` (per-user install, no admin) + MSI; Linux `.deb`/AppImage; macOS `.dmg` (Apple Silicon, unsigned until there is an Apple Developer certificate — 2026-09-16). Clean uninstall keeps `%APPDATA%\AetherHF` unless user opts to remove |
 | Settings migration | `config.json` with `schema_version`; ordered migration functions; backup previous file on every upgrade |
 | Signing | Ed25519-signed update manifests (Tauri updater / minisign) from day one; Windows Authenticode via **SignPath.io free OSS signing** or Azure Trusted Signing when eligible; until then document the SmartScreen warning |
 | Auto-update | Tauri v2 updater plug-in: checks `https://…/releases/<channel>/latest.json`, verifies signature, downloads, prompts, installs, restarts. Python alternative: `tufup` |
@@ -634,8 +634,9 @@ anything else. Every item is model first, benchmark curve second, port third; th
 
 Small things for the gaps between: CM108/GPIO keying (the DRA and AllStar interfaces;
 one more `ptt.rs` backend), BPQ32 over `[sim]` (human), three hams through the wizard
-(human), Authenticode signing (needs a certificate), the panel's SNR history surviving a
-reload. **Host benches still owed (human, scratch copies under `C:\Dev\AetherBench`):**
+(human), Authenticode signing (needs a certificate) and Apple signing/notarization (needs a
+developer account; the macOS dmg ships unsigned and untested on hardware), the panel's SNR
+history surviving a reload. **Host benches still owed (human, scratch copies under `C:\Dev\AetherBench`):**
 Winlink Express P2P again at 500 Hz and on the engine as it is now (its 2300 Hz pass
 predates the faster start and climb; `BW500` from its bandwidth setting must come back
 `OK`) — a `host-interfaces.md` §7 row; and **RMS Trimode with RMS Relay over `[sim]`**, a

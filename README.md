@@ -26,11 +26,13 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 
 ## Getting it
 
-* **Desktop:** download the installer from
+* **Desktop:** download the installer for Windows, Linux or macOS from
   [Releases](https://github.com/KK4ODA/aether-hf/releases) and follow
   [`docs/user/install.md`](docs/user/install.md). The setup wizard finds the sound card and
-  the rig, tests keying, and sets the transmit level. The installer is not yet
-  Authenticode-signed, so Windows SmartScreen will ask; `SHA256SUMS` is beside every asset.
+  the rig, tests keying, and sets the transmit level. The Windows installer is not yet
+  Authenticode-signed, so SmartScreen will ask, and the macOS build (Apple Silicon) is
+  unsigned and untested on a real Mac — the guide says how to open it; `SHA256SUMS` is
+  beside every asset.
 * **Host programs:** Winlink Express (Vara HF session, TNC at `127.0.0.1:8300`, auto-launch
   off) and Pat (`varahf`) talk to the daemon's VARA-compatible port. What each client sends,
   what is verified and what is not is in

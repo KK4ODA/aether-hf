@@ -1,8 +1,8 @@
 # Installing Aether HF
 
 Everything is on the [releases page](https://github.com/KK4ODA/aether-hf/releases). Each
-release carries the desktop application for Windows and Linux, the daemon on its own for
-gateways, a `SHA256SUMS` file, and a software bill of materials.
+release carries the desktop application for Windows, Linux and macOS, the daemon on its own
+for gateways, a `SHA256SUMS` file, and a software bill of materials.
 
 ---
 
@@ -46,6 +46,26 @@ or an AppImage, `aether-hf_<version>_amd64.AppImage`, which runs from wherever y
 (`chmod +x` it first). Both need ALSA; the package declares it. The configuration is
 `~/.config/aether-hf/station.toml`.
 
+### macOS
+
+`aether-hf_<version>_aarch64.dmg` runs on Apple Silicon (any Mac from 2020 on, macOS 11 or
+later). Open it and drag *Aether HF* into *Applications*.
+
+**It is not signed.** Signing and notarizing a Mac application needs an Apple Developer
+account, which this project does not have yet, so macOS will refuse the first launch
+("cannot be opened because the developer cannot be verified", or on newer systems
+"is damaged"). Clear the download flag once, in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Aether HF.app"
+```
+
+and open it normally after that. As on Windows, `SHA256SUMS` on the release page lets you
+check the download (`shasum -a 256 aether-hf_<version>_aarch64.dmg`). The configuration is
+`~/.config/aether-hf/station.toml`; the modem's audio goes through Core Audio, keying
+through a serial line or CAT as on the other systems. Nobody has run this build on a Mac
+with a radio yet — a report, good or bad, is worth an issue.
+
 ### Updating
 
 The application looks for a newer version when it starts and asks before installing one.
@@ -54,7 +74,7 @@ default), *betas too*, or *nightlies too*. A stable installation is never offere
 a nightly. *Help > Check for updates…* asks now.
 
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
-on Windows, `~/.local/state/aether-hf/rollback/` on Linux), so if an update does not work
+on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
 for you, *Help > Restore the previous version…* goes back without a network. Your settings
 are never touched by an update or a restore; if a version changes the shape of the
 configuration file, the old file is backed up beside itself first (`station.toml.bak-v1`).
