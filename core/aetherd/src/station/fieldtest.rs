@@ -282,6 +282,8 @@ pub struct TestRun {
     recorded: bool,
     seed: u64,
     failure: Option<String>,
+    /// When the run ended, so the elapsed time stops with it.
+    ended_s: Option<f64>,
     message_size: usize,
     file_size: usize,
     /// What was shortened or skipped, and why, for the report.
@@ -313,6 +315,7 @@ impl TestRun {
             recorded: false,
             seed,
             failure: None,
+            ended_s: None,
             message_size: 0,
             file_size: 0,
             adjustments: Vec::new(),
@@ -358,7 +361,7 @@ impl TestRun {
         json!({
             "remote": self.plan.remote,
             "started": self.started,
-            "elapsed_s": round1(now - self.started_s),
+            "elapsed_s": round1(self.ended_s.unwrap_or(now) - self.started_s),
             "step": self.step.name(),
             "outcome": self.outcome,
             "bandwidth_hz": bandwidth_hz,
@@ -767,6 +770,7 @@ impl<P: Ptt> Station<P> {
     fn finish_test(&mut self, run: &mut TestRun, outcome: &str) {
         run.step = Step::Done;
         run.outcome = Some(outcome.to_owned());
+        run.ended_s = Some(self.now());
         self.sync_test_report(run);
         if run.recorded {
             self.stop_recording();

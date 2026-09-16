@@ -1,0 +1,2 @@
+date,recording,callsign,remote,my_grid,their_grid,km,band,frequency_hz,bandwidth_hz,class,outcome,snr_db,probe_there_db,probe_here_db,message_bps,file_bps,goodput_bps,rungs,ladder,rig,power_w,antenna
+2026-09-16,20260916-223635_KK4ODA-1_KK4ODA-2_test,KK4ODA-1,KK4ODA-2,EM73,,,bench,,2300,awgn,complete,11.8,12.0,11.8,1041.3,1976.7,1976.7,14,0:5/5@12; 1:5/5@12; 2:5/5@12; 3:5/5@12; 4:5/5@12; 5:5/5@11; 6:5/5@12; 7:5/5@12; 8:5/5@11; 9:5/5@11; 10:5/5@11; 11:0/5@12; 12:0/5@13; 13:0/5@12,bench,50.0,a socket
