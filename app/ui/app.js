@@ -155,7 +155,7 @@ function onEvent(frame) {
 function noteTest(detail) {
   const line = $("test-result");
   line.textContent = `Test session: ${detail}`;
-  line.dataset.state = detail.startsWith("aborted") ? "warn" : "ok";
+  line.dataset.state = detail.startsWith("aborted") || detail.startsWith("stopped") ? "warn" : "ok";
 }
 
 function noteProbe(detail) {
@@ -229,7 +229,11 @@ async function refreshStatus() {
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
   $("btn-probe").disabled = status.state !== "idle";
-  $("btn-test").disabled = (status.state !== "idle" && !status.test) || Boolean(status.test);
+  // one button: it starts a test session when the station is idle, and stops the one
+  // that is running
+  $("btn-test").textContent = status.test ? "Stop test" : "Test session";
+  $("btn-test").disabled = !status.test && status.state !== "idle";
+  testRunning = Boolean(status.test);
   if (status.test) {
     const t = status.test;
     $("test-result").textContent =
@@ -425,6 +429,7 @@ let lastPeer = null;
 // The readings survive a reload of the page: the chart's ten minutes of SNR, what the
 // other station reported, and the last frames — kept per browser, and dropped once
 // they are older than the chart shows.
+let testRunning = false;
 const HISTORY_KEY = "aether.history";
 let historySaveTimer = null;
 
@@ -2036,13 +2041,17 @@ function wire() {
     if (!ok) $("probe-result").textContent = "";
   });
   $("btn-test").addEventListener("click", async () => {
+    if (testRunning) {
+      await act(() => call("test.abort"), "stopping the test session");
+      return;
+    }
     const remote = $("remote").value.trim().toUpperCase();
     if (!remote) {
       $("remote").focus();
       return;
     }
     const sure = window.confirm(
-      `Run a test session with ${remote}? It sends a probe, a 2 kB message, a 16 kB file and a short burst at every mode: a few minutes of transmitting, all recorded.`,
+      `Run a test session with ${remote}? It sends a probe, a message, a file and a short burst at every mode — about five minutes of transmitting, ten at most, all recorded. Stop test ends it at any time.`,
     );
     if (!sure) return;
     $("test-result").textContent = `Test session with ${remote}: starting…`;
@@ -2157,7 +2166,9 @@ function contributeUrl(results, status, operator) {
     transfer("File", results.file),
     ladder ? `Ladder: ${ladder}` : "Ladder: not run",
     "",
-    "Sidecar: attach the .json the test session wrote beside its .wav in the recordings folder (Help › Open the configuration folder). Attach the .wav too if you are happy to share the audio.",
+    (results.adjustments ?? []).length ? `Adjusted: ${results.adjustments.join("; ")}` : "",
+    "",
+    "Sidecar: attach the .json the test session wrote beside its .wav in the recordings folder (Help › Open the configuration folder). Attach the .wav too, zipped, if you are happy to share the audio.",
   ].join("\n");
   const params = new URLSearchParams({
     template: "on_air_report.yml",
@@ -2171,7 +2182,9 @@ function contributeUrl(results, status, operator) {
 }
 
 async function contributeTestSession() {
-  const line = $("diagnostics-note");
+  const line = $("contribute-note");
+  const link = $("contribute-link");
+  link.hidden = true;
   try {
     const [test, status] = await Promise.all([call("test.status"), call("status")]);
     if (!test.results) {
@@ -2179,8 +2192,10 @@ async function contributeTestSession() {
       return;
     }
     const url = contributeUrl(test.results, status, liveConfig?.operator ?? {});
+    link.href = url;
+    link.hidden = false;
     await navigator.clipboard.writeText(url);
-    line.textContent = "A link to a pre-filled report is on the clipboard: paste it into your browser, attach the sidecar, and send. Thank you.";
+    line.textContent = "A link to the pre-filled report is on the clipboard and beside the button: open it, attach the .json, and send. Thank you.";
   } catch (error) {
     line.textContent = `Could not prepare the report: ${error.message ?? error}`;
   }

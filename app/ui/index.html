@@ -136,9 +136,10 @@
           answer, both directions of the path. <strong>Beacon</strong> puts this station's
           callsign on the air once, addressed to nobody, so anyone listening can report
           hearing you. <strong>Test session</strong> runs the field test with the station in
-          Call: a probe, a 2 kB message, a 16 kB file and a short burst at every mode, all
-          recorded — a few minutes of transmitting, and a sidecar the project can learn from.
-          The other station only has to be listening.
+          Call: a probe, a message, a file and a short burst at every mode, all recorded —
+          about five minutes of transmitting, sized to what the path can do, and a sidecar the
+          project can learn from. The same button stops it. The other station only has to be
+          listening; Help says how to contribute the result.
         </p>
         <p class="note" id="probe-result" role="status" aria-live="polite"></p>
         <p class="note" id="test-result" role="status" aria-live="polite"></p>
@@ -551,7 +552,6 @@
         <div class="row">
           <button id="btn-clear-log">Clear</button>
           <button id="btn-diagnostics">Copy diagnostic bundle</button>
-          <button id="btn-contribute">Contribute the last test session</button>
           <span class="sub" id="diagnostics-note" role="status" aria-live="polite">Newest last.</span>
         </div>
         <p class="sub">
@@ -587,6 +587,28 @@
             <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
           </ol>
+        </div>
+
+        <div class="card">
+          <h3>Running a test session</h3>
+          <p class="sub">
+            A test session is how a contact becomes a measurement the project can use: a
+            probe, a message, a file and a burst at every mode, recorded, in about five
+            minutes. The other station only has to be listening — a person at the panel or
+            an unattended station set to answer only.
+          </p>
+          <ol class="help-steps">
+            <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one).</li>
+            <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
+            <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The message and the file are sized to what the path can do, and the whole run stops at ten minutes on its own. <em>Stop test</em> ends it earlier, keeping what was learned.</li>
+            <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder (Help menu › <em>Open the configuration folder</em>), two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
+            <li><strong>Contribute it</strong>: the button below copies a link to a pre-filled report. Paste it into your browser (a GitHub account is needed, free), drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
+          </ol>
+          <div class="row">
+            <button id="btn-contribute">Contribute the last test session</button>
+            <a id="contribute-link" class="numerals" href="#" target="_blank" rel="noopener" hidden>open the report</a>
+          </div>
+          <p class="sub" id="contribute-note" role="status" aria-live="polite"></p>
         </div>
 
         <div class="card">

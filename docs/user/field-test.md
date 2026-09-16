@@ -78,8 +78,11 @@ The one-button version of §3, for volunteers. Put the other station's callsign 
 a fixed sequence: a probe (both directions' SNR), a call, a 2 kB message, a 16 kB file,
 and the **mode ladder** — a short burst at every mode from the floor up, each one's
 acknowledgement kept as a rung, until three rungs in a row fail — then an orderly
-disconnect. A few minutes of transmitting; the Session tab shows the step, and the
-log says what each one found. The other station needs to do nothing but listen: an
+disconnect. About five minutes of transmitting, ten at most: the message and the file
+are sized to what the path can do (the probe's SNR sizes the message, the message's
+measured rate sizes the file to about two minutes' worth), the run keeps to a time budget,
+and **Stop test** — the same button while it runs — ends it at once, keeping what was
+learned. The Session tab shows the step, and the log says what each one found. The other station needs to do nothing but listen: an
 answer-only station (`[radio] answer_only`) is a fine partner, and the author's runs
 that way at agreed times.
 

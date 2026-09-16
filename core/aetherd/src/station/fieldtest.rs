@@ -32,14 +32,19 @@ pub struct TestPlan {
     /// The other station's Maidenhead locator, when the operator knows it: the path
     /// length comes from the two grids.
     pub remote_grid: Option<String>,
-    /// The message's size, bytes; zero skips it.
+    /// The most the message may be, bytes; zero skips it. The probe's SNR sizes the
+    /// message under this (see [`message_size_for`]).
     pub message_bytes: usize,
-    /// The file's size, bytes; zero skips it.
+    /// The most the file may be, bytes; zero skips it. The message's measured rate sizes
+    /// the file under this, to about two minutes' worth (see [`file_size_for`]).
     pub file_bytes: usize,
     /// Whether to climb the mode ladder after the transfers.
     pub ladder: bool,
     /// Frames per rung.
     pub rung_frames: usize,
+    /// The whole run's time budget, seconds: a step that would not fit in what is left is
+    /// shortened or skipped, and the disconnect is still orderly.
+    pub budget_s: f64,
 }
 
 impl Default for TestPlan {
@@ -51,7 +56,8 @@ impl Default for TestPlan {
             message_bytes: 2048,
             file_bytes: 16_384,
             ladder: true,
-            rung_frames: 6,
+            rung_frames: 4,
+            budget_s: 600.0,
         }
     }
 }
@@ -112,6 +118,13 @@ impl TestPlan {
             .and_then(Value::as_bool)
             .unwrap_or(true);
         plan.rung_frames = size("rung_frames", plan.rung_frames)?.clamp(1, 16);
+        plan.budget_s = match params.get("budget_s") {
+            None | Some(Value::Null) => plan.budget_s,
+            Some(value) => value
+                .as_f64()
+                .filter(|b| (60.0..=3600.0).contains(b))
+                .ok_or("budget_s must be seconds, 60 to 3600")?,
+        };
         Ok(plan)
     }
 }
@@ -208,6 +221,37 @@ impl Rung {
 /// Rungs in a row that may fail before the ladder stops.
 const LADDER_FAILS: usize = 3;
 
+/// How long the file should take at the rate the message measured.
+const FILE_TARGET_S: f64 = 120.0;
+
+/// The message the probe's SNR earns, under the plan's ceiling: half a kilobyte on a
+/// path heard below 0 dB, a kilobyte below 6 dB or when the probe went unanswered, the
+/// ceiling above that. The message is the first transfer and the one that measures the
+/// rate the file is sized from, so it is kept short where the rate will be low.
+#[must_use]
+pub fn message_size_for(heard_here_db: Option<f64>, ceiling: usize) -> usize {
+    let earned = match heard_here_db {
+        Some(snr) if snr < 0.0 => 512,
+        Some(snr) if snr < 6.0 => 1024,
+        Some(_) => usize::MAX,
+        None => 1024,
+    };
+    ceiling.min(earned)
+}
+
+/// The file the measured rate earns: about two minutes' worth, at least a kilobyte,
+/// never past the ceiling, and nothing at all when the time left in the budget is under
+/// a minute. Rounded down to 256 bytes so the number reads as what it is.
+#[must_use]
+pub fn file_size_for(message_bps: f64, ceiling: usize, remaining_s: f64) -> usize {
+    if ceiling == 0 || remaining_s < 60.0 || message_bps <= 0.0 {
+        return 0;
+    }
+    let seconds = FILE_TARGET_S.min(remaining_s - 60.0);
+    let earned = (message_bps * seconds / 8.0) as usize / 256 * 256;
+    earned.clamp(1024.min(ceiling), ceiling)
+}
+
 /// A Test session in progress, or the last one run.
 #[derive(Debug, Clone)]
 pub struct TestRun {
@@ -238,6 +282,10 @@ pub struct TestRun {
     recorded: bool,
     seed: u64,
     failure: Option<String>,
+    message_size: usize,
+    file_size: usize,
+    /// What was shortened or skipped, and why, for the report.
+    pub adjustments: Vec<String>,
 }
 
 impl TestRun {
@@ -265,7 +313,14 @@ impl TestRun {
             recorded: false,
             seed,
             failure: None,
+            message_size: 0,
+            file_size: 0,
+            adjustments: Vec::new(),
         }
+    }
+
+    fn remaining_s(&self, now: f64) -> f64 {
+        self.plan.budget_s - (now - self.started_s)
     }
 
     /// Whether the run is still going.
@@ -314,6 +369,8 @@ impl TestRun {
             "message": self.message.map(Transfer::json),
             "file": self.file.map(Transfer::json),
             "ladder": self.rungs.iter().copied().map(Rung::json).collect::<Vec<_>>(),
+            "budget_s": self.plan.budget_s,
+            "adjustments": self.adjustments,
             "path": {
                 "my_grid": (!my_grid.is_empty()).then_some(my_grid),
                 "their_grid": their_grid,
@@ -417,9 +474,9 @@ impl<P: Ptt> Station<P> {
         }
         let _ = self.engine.pin_mode(None, None);
         if self.engine.state() == State::Idle {
-            self.finish_test(&mut run, "aborted: by the operator");
+            self.finish_test(&mut run, "stopped by the operator");
         } else {
-            run.failure = Some("aborted: by the operator".into());
+            run.failure = Some("stopped by the operator".into());
             self.abort();
             run.enter(Step::Disconnect, self.now());
             run.entered = true;
@@ -508,6 +565,16 @@ impl<P: Ptt> Station<P> {
                         ),
                         None => self.note("test", "probe: no answer; calling anyway"),
                     }
+                    run.message_size =
+                        message_size_for(run.probe.map(|(_, here)| here), run.plan.message_bytes);
+                    if run.message_size < run.plan.message_bytes {
+                        let why = match run.probe {
+                            Some((_, here)) => format!("heard at {here:.0} dB"),
+                            None => "the probe went unanswered".to_owned(),
+                        };
+                        run.adjustments
+                            .push(format!("message {} bytes: {why}", run.message_size));
+                    }
                     run.enter(Step::Connect, now);
                 }
             }
@@ -529,9 +596,9 @@ impl<P: Ptt> Station<P> {
             }
             Step::Message | Step::File => {
                 let (bytes, salt, next) = if run.step == Step::Message {
-                    (run.plan.message_bytes, 1, Step::File)
+                    (run.message_size, 1, Step::File)
                 } else {
-                    (run.plan.file_bytes, 2, Step::Ladder)
+                    (run.file_size, 2, Step::Ladder)
                 };
                 if bytes == 0 {
                     run.enter(next, now);
@@ -557,21 +624,50 @@ impl<P: Ptt> Station<P> {
                     );
                     if run.step == Step::Message {
                         run.message = Some(transfer);
+                        // the file is what the measured rate earns in about two minutes
+                        run.file_size = file_size_for(
+                            transfer.bps(),
+                            run.plan.file_bytes,
+                            run.remaining_s(now),
+                        );
+                        if run.file_size == 0 && run.plan.file_bytes > 0 {
+                            run.adjustments
+                                .push("file skipped: no time left".to_owned());
+                            self.note("test", "file skipped: no time left in the budget");
+                        } else if run.file_size < run.plan.file_bytes {
+                            run.adjustments.push(format!(
+                                "file {} bytes: {:.0} bit/s measured",
+                                run.file_size,
+                                transfer.bps()
+                            ));
+                        }
                     } else {
                         run.file = Some(transfer);
                     }
                     run.enter(next, now);
-                } else if since > transfer_timeout_s(bytes) {
-                    run.failure = Some(format!("aborted: the {} timed out", run.step.name()));
-                    run.enter(Step::Disconnect, now);
+                } else if since > transfer_timeout_s(bytes).min(run.remaining_s(now) + 60.0) {
+                    // a crawl: end it now, keeping what was learned, rather than wait for
+                    // an orderly close that would first deliver the rest of the transfer
+                    let why = format!("aborted: the {} timed out", run.step.name());
+                    self.abort();
+                    self.finish_test(run, &why);
+                    return;
                 }
                 self.sync_test_report(run);
             }
             Step::Ladder => {
+                let out_of_time = run.remaining_s(now) < 30.0;
                 if !run.plan.ladder
                     || run.ladder_next >= run.modes.len()
                     || run.ladder_fails >= LADDER_FAILS
+                    || out_of_time
                 {
+                    if run.plan.ladder && out_of_time && run.ladder_next < run.modes.len() {
+                        run.adjustments.push(format!(
+                            "ladder stopped after {} rungs: no time left",
+                            run.rungs.len()
+                        ));
+                    }
                     if run.plan.ladder {
                         self.note("test", &format!("ladder: {} rungs, done", run.rungs.len()));
                     }
@@ -625,8 +721,10 @@ impl<P: Ptt> Station<P> {
                     } else if since > RUNG_TIMEOUT_S {
                         let _ = self.engine.pin_mode(None, None);
                         self.note("test", &format!("rung mode {mode}: timed out"));
-                        run.failure = Some(format!("aborted: the rung at mode {mode} timed out"));
-                        run.enter(Step::Disconnect, now);
+                        let why = format!("aborted: the rung at mode {mode} timed out");
+                        self.abort();
+                        self.finish_test(run, &why);
+                        return;
                     }
                 }
                 self.sync_test_report(run);
@@ -687,12 +785,15 @@ mod tests {
         let plan = TestPlan::from_params(&json!({ "remote": " kk4xyz " })).expect("a callsign");
         assert_eq!(plan.remote, "KK4XYZ");
         assert_eq!((plan.message_bytes, plan.file_bytes), (2048, 16_384));
-        assert!(plan.ladder && plan.rung_frames == 6);
+        assert!(plan.ladder && plan.rung_frames == 4);
+        assert!((plan.budget_s - 600.0).abs() < f64::EPSILON);
         let plan = TestPlan::from_params(&json!({
             "remote": "KK4XYZ", "remote_grid": "FN31", "message_bytes": 300,
-            "file_bytes": 0, "ladder": false, "rung_frames": 40
+            "file_bytes": 0, "ladder": false, "rung_frames": 40, "budget_s": 300
         }))
         .expect("a full plan");
+        assert!((plan.budget_s - 300.0).abs() < f64::EPSILON);
+        assert!(TestPlan::from_params(&json!({ "remote": "KK4XYZ", "budget_s": 5 })).is_err());
         assert_eq!(plan.remote_grid.as_deref(), Some("FN31"));
         assert_eq!(
             (plan.message_bytes, plan.file_bytes, plan.rung_frames),
@@ -705,6 +806,24 @@ mod tests {
                 .is_err()
         );
         assert!(TestPlan::from_params(&json!({ "remote": "KK4XYZ", "file_bytes": -1 })).is_err());
+    }
+
+    #[test]
+    fn the_sizes_follow_the_path() {
+        assert_eq!(message_size_for(Some(12.0), 2048), 2048);
+        assert_eq!(message_size_for(Some(3.0), 2048), 1024);
+        assert_eq!(message_size_for(Some(-4.0), 2048), 512);
+        assert_eq!(message_size_for(None, 2048), 1024);
+        assert_eq!(message_size_for(Some(-4.0), 300), 300);
+        // two minutes' worth at the measured rate, within a kilobyte and the ceiling
+        assert_eq!(file_size_for(1000.0, 16_384, 600.0), 14_848);
+        assert_eq!(file_size_for(2000.0, 16_384, 600.0), 16_384);
+        assert_eq!(file_size_for(50.0, 16_384, 600.0), 1024);
+        assert_eq!(file_size_for(1000.0, 600, 600.0), 600);
+        // and what the budget leaves: 90 s left is 30 s of file
+        assert_eq!(file_size_for(1000.0, 16_384, 90.0), 3584);
+        assert_eq!(file_size_for(1000.0, 16_384, 45.0), 0);
+        assert_eq!(file_size_for(1000.0, 0, 600.0), 0);
     }
 
     #[test]
