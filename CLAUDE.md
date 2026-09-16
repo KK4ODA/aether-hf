@@ -335,6 +335,18 @@ ADR-0008's open question made a number; the `fieldtest` unit test excuses those 
 and says so; P9-1's business. The two-daemon test runs a Test session over `[sim]`
 (`max_mode = 5` keeps it to six rungs).
 
+**P9-1's tool (2026-09-16 evening):** `tools/channel_cable.py` runs the model's `HfChannel` in
+real time between virtual audio cables (48 kHz audio ↔ 8 kHz complex baseband around
+1500 Hz, a 0–3.4 kHz passband, the SNR against `--signal-dbfs` or `--auto-level`, noise on
+whether or not anything is sent; `CableChannel` is the testable core, `sounddevice` the
+streams — `uv sync --extra audio`). Four cables are needed (two per direction); the author's
+machine has one VB-Cable, so the runs wait on the A+B and C+D packs. The protocol is
+`bench/ab/README.md`; results go to `bench/ab/results.csv`, `tools/ab_summary.py` tabulates.
+The Status tab's charts were redrawn that evening (channel-and-activity bars, the SNR chart
+with its unit), the README has screenshots, and one bench run dropped after station B's
+audio clock fell seven seconds behind the wall clock (`C:\Dev\AetherBench\sim\drop-2311`,
+unexplained; the control server is per-client-threaded).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
