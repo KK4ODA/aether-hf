@@ -10,16 +10,19 @@ channels — with a **publicly documented air interface**, a **VARA-compatible h
 interface** so existing applications work unchanged, and a **headless core** that runs on a
 Raspberry Pi gateway as happily as on a Windows desktop.
 
-> **Status: beta — verified on the bench, not yet on the air.**
-> [0.2.0-beta.2](https://github.com/KK4ODA/aether-hf/releases/tag/v0.2.0-beta.2) is the
-> first tagged build: a Windows installer, Linux packages and the standalone `aetherd`
-> daemon for gateways. The modem (3GPP LDPC, OFDM, 14 modes from BPSK 1/5 to 64-QAM 5/6,
-> selective-repeat ARQ with HARQ soft combining, rate control, compression) completes
-> sessions over real 48 kHz audio in its own test suite, and **Winlink Express and Pat each
-> pass a peer-to-peer session at both ends of a simulated channel**, attachments
-> byte-identical on arrival. What remains is the air: on-air sessions, logged and folded back
-> into the simulator, are Phase 6 and in progress. Every performance figure in this
-> repository comes from a committed benchmark curve in `bench/baselines/`.
+> **Status: beta — verified on the bench, first contacts on the air.**
+> Signed builds ship from [Releases](https://github.com/KK4ODA/aether-hf/releases)
+> (`0.2.0-beta.20` at the time of writing): a Windows installer, Linux packages and the
+> standalone `aetherd` daemon for gateways, with in-place updates on a beta channel. The
+> modem (3GPP LDPC, OFDM, selective-repeat ARQ with HARQ soft combining, rate control,
+> compression) runs at 2300 Hz with 14 modes from BPSK 1/5 to 64-QAM 5/6, and at 500 Hz
+> with 13 modes down to a *floor frame family* that is acquired at −12 dB and decoded at
+> −11 dB SNR (3 kHz) and completes a session at −10 dB ([ADR-0009](docs/adr/0009-the-floor.md)).
+> **Winlink Express, Pat and VarAC each complete a session at both ends of a simulated
+> channel**, attachments byte-identical on arrival. Two on-air bugs have been found and fixed
+> from a rig's scope; logged on-air sessions with other stations are what remains (Phase 6).
+> Every performance figure in this repository comes from a committed benchmark curve in
+> `bench/baselines/`.
 
 ## Getting it
 
@@ -61,7 +64,7 @@ distilled from how the community received Mercury, the other VARA alternative, i
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done (model) |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, VARA-compatible TCP, gateway kit | done; Pat and Winlink Express pass the bench, VarAC waits on a 500 Hz waveform |
 | 4 — Desktop application | station panel, Tauri shell, setup wizard, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — `0.2.0-beta.2` |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.20` |
 | 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air; then on-air crowdsourcing — a Test session every volunteer can run, whose sidecar the bench replays (P6-7) | **in progress**: tooling done, the air open (`field/LOG.md`) |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth P2P contacts are made in (VarAC's calling frequencies), the bandwidth in the connect handshake, an answer-only unattended mode, and a two-way SNR probe | **done on the bench**: the 500 Hz waveform (`[radio] bandwidth = 500`, `BW500`, answer-only), the probe (ADR-0006), and VarAC pinging and connecting over the simulated channel at 500 Hz; the air with a VarAC station remains. Phase 9 has begun: the rate controller climbs back faster after a failure (ADR-0007) and a session starts where the connect frames measured it (ADR-0008) — a 2 kB session at 12 dB in 15 s instead of 29. The 500 Hz air has its floor (ADR-0009): a frame family with an eight-symbol preamble and tenth-rate QPSK, acquired at −12 dB and decoded at −11 through the real modem, a session at −10 dB where nothing connected below −5.5 before |
 | 9 — The modem's second rung | a faster start, modes below 200 bit/s, an audio-level A/B bench against VARA HF, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | next, interleaved with 7 |
@@ -121,10 +124,11 @@ Conventions that matter:
 * **SNR is always referenced to a 3 kHz noise bandwidth**; Doppler spread is the ITU-R
   F.1487 2σ value. `model/aether_model/channel.py` is calibrated to both and its tests are
   the guarantee behind every benchmark number.
-* Minimum usable SNR (FER ≤ 10 %, random CFO and sample-rate offset): BPSK 1/5 at −5.2 dB
-  on AWGN and −0.3 dB on ITU Poor, QPSK 1/2 at +1.0 / +6.0 dB, 16-QAM 1/2 at +6.0 / +12.5 dB,
-  64-QAM 5/6 at +16.9 dB on AWGN — the whole table, per channel class, is in
-  [`bench/README.md`](bench/README.md).
+* Minimum usable SNR (FER ≤ 10 %, random CFO and sample-rate offset), 2300 Hz: BPSK 1/5 at
+  −5.2 dB on AWGN and −0.3 dB on ITU Poor, QPSK 1/2 at +1.0 / +6.0 dB, 16-QAM 1/2 at
+  +6.0 / +12.5 dB, 64-QAM 5/6 at +16.9 dB on AWGN. 500 Hz: the floor frame at QPSK 1/10
+  reaches −12.4 dB on AWGN and −5.0 dB on Poor, QPSK ½ at −5.2 dB. The whole table, per
+  channel class, is in [`bench/README.md`](bench/README.md).
 * **No test threshold is ever relaxed to make a suite pass.** A known defect gets an
   `xfail(strict=True)` that names the finding; a target that genuinely changes gets an ADR.
 * Numbers about the waveform come from `model/aether_model/waveform.py`, never from prose;
@@ -132,10 +136,12 @@ Conventions that matter:
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Issues and pull requests are welcome; the roadmap
-is the queue, and the most useful contribution right now is an on-air session logged the way
-[`docs/user/field-test.md`](docs/user/field-test.md) describes. Protocol and DSP decisions
-go through short ADRs in `docs/adr/`.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rules and
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md) for how pull requests are reviewed. Issues and
+pull requests are welcome; the roadmap is the queue, and the most useful contribution right
+now is an on-air session logged the way [`docs/user/field-test.md`](docs/user/field-test.md)
+describes. Protocol and DSP decisions go through short ADRs in `docs/adr/`. The
+[code of conduct](CODE_OF_CONDUCT.md) is the hobby's own: be excellent to each other.
 
 ## Prior art and independence
 

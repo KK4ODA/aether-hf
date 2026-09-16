@@ -1,0 +1,3 @@
+# Every pull request asks the maintainer for review. Add a line per path (last match
+# wins) when a co-maintainer takes a part of the tree, e.g. `/app/ui/ @someone`.
+* @KK4ODA
