@@ -64,9 +64,9 @@ PAYLOAD_BYTES: dict[int, float] = {
 
 
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -12.0,
-    1: -10.0,
-    2: -7.5,
+    0: -12.4,
+    1: -10.2,
+    2: -6.0,
     3: -5.2,
     4: -3.5,
     5: -2.1,

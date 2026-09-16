@@ -271,9 +271,9 @@ rung between the floor and the control mode.
 <!-- BEGIN:modes500 -->
 | Mode | Name | Layout | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | QPSK-1/10 | FLOOR-LONG | 2 | 1/10 | BG2 | 30 | 176 | 1792 | 19 | 36 | -12.0 |
-| 1 | QPSK-1/5 | FLOOR-LONG | 2 | 1/5 | BG2 | 44 | 352 | 1792 | 41 | 78 | -10.0 |
-| 2 | QPSK-1/3 | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -7.5 |
+| 0 | QPSK-1/10 | FLOOR-LONG | 2 | 1/10 | BG2 | 30 | 176 | 1792 | 19 | 36 | -12.4 |
+| 1 | QPSK-1/5 | FLOOR-LONG | 2 | 1/5 | BG2 | 44 | 352 | 1792 | 41 | 78 | -10.2 |
+| 2 | QPSK-1/3 | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
 | 3 | QPSK-1/2 | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
 | 4 | QPSK-2/3 | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.5 |
 | 5 | PSK8-1/2 | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
