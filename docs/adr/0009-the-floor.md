@@ -1,6 +1,6 @@
 # ADR-0009: The floor — a frame family for the SNR region below the mode table
 
-**Status:** accepted 2026-09-16 (model), curves in `bench/` · **Roadmap:** P9-4 ·
+**Status:** accepted 2026-09-16, model and port, curves in `bench/` (§6) · **Roadmap:** P9-4 ·
 **Builds on:** ADR-0002 (waveform), P7-0 (the 500 Hz air), ADR-0007/0008 (rate control)
 
 ## 1. Context
@@ -59,7 +59,7 @@ it would have helped only the weak direction of an asymmetric link.
 A frame at −12 dB (3 kHz) sees −4 dB per carrier at 500 Hz. At that SNR:
 
 * the **preamble** must integrate longer — every doubling of its length is 3 dB of
-  detection; two symbols reach −8.5 dB (90 %), eight reach ≈ −13 (measured, §6);
+  detection; two symbols reach −8.5 dB (90 %), eight reach −13 (measured, §6);
 * the **code** must run at a tenth rate, which the TS 38.212 rate matcher already gives by
   repeating the circular buffer below the BG2 mother rate of ⅕; a tenth-rate frame still
   has to carry something useful — a 7-byte control frame, a 20-byte connect body, a data
@@ -180,18 +180,24 @@ first — the roadmap asks for the narrow floor and a measured comparison after 
   number that counts there.
 * At 30 bit/s a 2.2 s acknowledgement per six 4.2 s frames is 8 % of the air time.
 
-## 6. Acceptance (each with the numbers in `bench/`)
+## 6. Acceptance (measured; the numbers are in `bench/`)
 
-1. `bench_floor.py`: the floor modes', the floor control frame's and the two-symbol
-   detector's acquisition/decode curves (`bench/baselines/floor_500.csv`).
-2. `bench_phy.py --bandwidth 500` curves for modes 0–2 on AWGN, Good, Moderate, Poor;
-   modes 3–12 unchanged from `phy_fer_500.csv` within noise; thresholds into the table
-   by `update_rate_table.py --bandwidth 500`.
-3. `bench_link.py --backend phy --bandwidth 500` sessions at −8, −10, −12 dB AWGN and at
-   −2, 0, +2 dB Good: bytes per second through the real modem, and nothing above the
-   floor slower than before.
+1. `bench_floor.py` (`bench/baselines/floor_500.csv`, 20 frames a point): the floor
+   frame is acquired 90 % at −13 dB on AWGN where the two-symbol preamble stops at −8.5;
+   QPSK 1/10 decodes 90 % at −13 dB, QPSK ⅕ at −10, genie and detected within a
+   decibel; the floor control frame decodes at −11 dB against −4 for the ordinary one.
+   On ITU Good and Poor the floor frames reach 50 % at −12 dB and 90 % at −4/−2.
+2. `bench_phy.py --bandwidth 500` (`phy_fer_500.csv`, 30 frames a point): 10 % FER at
+   −12.4 dB (mode 0), −10.2 (mode 1) and −6.0 (mode 2) on AWGN; −4.0/−1.0/−5.0 for
+   mode 0 on Good/Moderate/Poor; modes 3–12 within a tenth of a decibel of the P7-0
+   table on AWGN. The rate table was written from it by `update_rate_table.py`.
+3. A session through the real modem (`bench_link.py`'s harness): 126 bytes at −10 dB
+   AWGN — connect on the floor frame after two unanswered ordinary tries, two bursts,
+   an orderly close — where nothing connected below −5.5 dB before; at 8 dB the
+   session is as before (one burst, no floor frames). The full session grid of
+   `bench_link.py --backend phy --bandwidth 500` at the floor SNRs is owed.
 4. Rust cross-validation: narrow `phy_vectors.json` regenerated (this ADR), floor frames
-   bit-exact, `two_daemons.rs` at 500 Hz still completes.
+   bit-exact, the whole workspace's tests pass, `two_daemons.rs` at 500 Hz completes.
 
 ## 7. After this ADR
 

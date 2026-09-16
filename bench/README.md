@@ -103,6 +103,35 @@ reach 10 % FER on Poor within the sweep, where 16-QAM ¾ at 2 300 Hz does not ei
 (64-QAM ⅚) on AWGN from +10.4 dB; 901 bit/s on Good and 654 on Moderate at +20 dB, and
 359 bit/s on Poor at +12.
 
+## PHY, where the 500 Hz floor breaks (`floor_500.csv`, ADR-0009, 20 frames/point, random ±100 Hz CFO)
+
+`tools/bench_floor.py`: for each frame, how many of twenty the detector placed within half
+a symbol of the truth, how many decoded through the detector, and how many decoded with
+genie timing (the true start, the detector's own CFO). Genie against detected separates the
+code's floor from the receiver's. The SNR at which nine of ten make it (the 50 % point in
+brackets):
+
+| frame | AWGN acquired / decoded | ITU Good decoded | ITU Poor decoded |
+|---|---|---|---|
+| mode 0, QPSK 1/10 on the floor frame (19 B) | −13 / −13 | −4 (−12) | −2 (−12) |
+| mode 1, QPSK 1/5 on the floor frame (41 B) | −12 / −10 | −4 (−8) | −6 (−8) |
+| mode 2, QPSK 1/3 on the ordinary frame (15 B) | −7 / −7 | 0 (−4) | 0 (−4) |
+| control frame on the ordinary layout (QPSK 1/2, 7 B) | −7 / −4 | +2 (−4) | +2 (−4) |
+| control frame on the floor layout (QPSK 1/10, 8 B) | −11 / −11 | −4 (−10) | −6 (−10) |
+
+What it says. **The detector no longer sets the floor**: the eight-symbol preamble is
+acquired 90 % at −13 dB on AWGN where the two-symbol one stops at −8.5, and the floor
+modes decode where their codes give out, genie and detected agreeing to within a decibel.
+**The control frame keeps up with the data**: on the floor layout it decodes at −11 dB
+against −4 on the ordinary one, so a link can be held, not only heard, at the floor. On
+the fading channels the floor frames' curves are shallow — 50 % of frames at −12 dB on
+Good and Poor, 90 % only at −4 and −2 — because a frame shorter than a fade (Good, 0.1 Hz
+Doppler) is lost whole when the fade takes it, whatever its rate; ARQ with soft combining
+across bursts and P9-5's interleaving are what move those columns. Through the real modem
+a 126-byte session — connect on the floor frame after two unanswered ordinary tries, two
+bursts, an orderly close — completes at −10 dB on AWGN, where nothing connected below
+−5.5 before.
+
 ## PHY, Phase 1 air interface (`phy_fer_phase1_uw.csv`, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
 
 Minimum usable SNR (3 kHz noise bandwidth) for FER ≤ 10 %, linearly interpolated:

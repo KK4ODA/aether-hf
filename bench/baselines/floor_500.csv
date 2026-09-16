@@ -80,117 +80,117 @@ mode 1 QPSK-1/5 floor-long,41,77.8,poor,4,20,20,20,16
 mode 2 QPSK-1/3 long,15,113.9,awgn,-18,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,awgn,-17,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,awgn,-16,20,0,0,0
-mode 2 QPSK-1/3 long,15,113.9,awgn,-15,20,0,0,0
+mode 2 QPSK-1/3 long,15,113.9,awgn,-15,20,1,0,0
 mode 2 QPSK-1/3 long,15,113.9,awgn,-14,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,awgn,-13,20,0,0,0
-mode 2 QPSK-1/3 long,15,113.9,awgn,-12,20,1,0,0
-mode 2 QPSK-1/3 long,15,113.9,awgn,-11,20,3,0,0
-mode 2 QPSK-1/3 long,15,113.9,awgn,-10,20,4,0,0
-mode 2 QPSK-1/3 long,15,113.9,awgn,-9,20,12,3,4
-mode 2 QPSK-1/3 long,15,113.9,awgn,-8,20,15,9,14
-mode 2 QPSK-1/3 long,15,113.9,awgn,-7,20,17,16,19
+mode 2 QPSK-1/3 long,15,113.9,awgn,-12,20,4,0,0
+mode 2 QPSK-1/3 long,15,113.9,awgn,-11,20,4,0,0
+mode 2 QPSK-1/3 long,15,113.9,awgn,-10,20,12,0,0
+mode 2 QPSK-1/3 long,15,113.9,awgn,-9,20,12,4,4
+mode 2 QPSK-1/3 long,15,113.9,awgn,-8,20,16,9,14
+mode 2 QPSK-1/3 long,15,113.9,awgn,-7,20,18,18,20
 mode 2 QPSK-1/3 long,15,113.9,awgn,-6,20,20,20,20
 mode 2 QPSK-1/3 long,15,113.9,awgn,-5,20,20,20,20
 mode 2 QPSK-1/3 long,15,113.9,awgn,-4,20,20,20,20
 mode 2 QPSK-1/3 long,15,113.9,awgn,-3,20,20,20,20
 mode 2 QPSK-1/3 long,15,113.9,awgn,-2,20,20,20,20
 mode 2 QPSK-1/3 long,15,113.9,good,-16,20,0,0,0
-mode 2 QPSK-1/3 long,15,113.9,good,-14,20,1,0,0
-mode 2 QPSK-1/3 long,15,113.9,good,-12,20,0,0,0
-mode 2 QPSK-1/3 long,15,113.9,good,-10,20,1,1,1
-mode 2 QPSK-1/3 long,15,113.9,good,-8,20,10,7,8
-mode 2 QPSK-1/3 long,15,113.9,good,-6,20,13,11,11
-mode 2 QPSK-1/3 long,15,113.9,good,-4,20,17,15,15
-mode 2 QPSK-1/3 long,15,113.9,good,-2,20,17,17,17
+mode 2 QPSK-1/3 long,15,113.9,good,-14,20,2,1,1
+mode 2 QPSK-1/3 long,15,113.9,good,-12,20,4,3,3
+mode 2 QPSK-1/3 long,15,113.9,good,-10,20,10,6,5
+mode 2 QPSK-1/3 long,15,113.9,good,-8,20,8,6,6
+mode 2 QPSK-1/3 long,15,113.9,good,-6,20,14,9,10
+mode 2 QPSK-1/3 long,15,113.9,good,-4,20,18,17,17
+mode 2 QPSK-1/3 long,15,113.9,good,-2,20,14,14,15
 mode 2 QPSK-1/3 long,15,113.9,good,0,20,19,19,19
-mode 2 QPSK-1/3 long,15,113.9,good,2,20,20,20,20
-mode 2 QPSK-1/3 long,15,113.9,good,4,20,18,18,20
+mode 2 QPSK-1/3 long,15,113.9,good,2,20,18,17,17
+mode 2 QPSK-1/3 long,15,113.9,good,4,20,19,18,19
 mode 2 QPSK-1/3 long,15,113.9,poor,-16,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,poor,-14,20,0,0,0
-mode 2 QPSK-1/3 long,15,113.9,poor,-12,20,1,0,0
-mode 2 QPSK-1/3 long,15,113.9,poor,-10,20,4,0,0
-mode 2 QPSK-1/3 long,15,113.9,poor,-8,20,12,3,5
-mode 2 QPSK-1/3 long,15,113.9,poor,-6,20,13,6,5
-mode 2 QPSK-1/3 long,15,113.9,poor,-4,20,18,16,12
-mode 2 QPSK-1/3 long,15,113.9,poor,-2,20,16,16,12
-mode 2 QPSK-1/3 long,15,113.9,poor,0,20,19,19,18
-mode 2 QPSK-1/3 long,15,113.9,poor,2,20,20,20,15
-mode 2 QPSK-1/3 long,15,113.9,poor,4,20,20,19,15
+mode 2 QPSK-1/3 long,15,113.9,poor,-12,20,2,1,1
+mode 2 QPSK-1/3 long,15,113.9,poor,-10,20,10,1,1
+mode 2 QPSK-1/3 long,15,113.9,poor,-8,20,10,2,4
+mode 2 QPSK-1/3 long,15,113.9,poor,-6,20,13,4,7
+mode 2 QPSK-1/3 long,15,113.9,poor,-4,20,15,13,11
+mode 2 QPSK-1/3 long,15,113.9,poor,-2,20,13,12,13
+mode 2 QPSK-1/3 long,15,113.9,poor,0,20,19,19,17
+mode 2 QPSK-1/3 long,15,113.9,poor,2,20,19,19,16
+mode 2 QPSK-1/3 long,15,113.9,poor,4,20,18,18,17
 control short,7,129.0,awgn,-18,20,0,0,0
 control short,7,129.0,awgn,-17,20,0,0,0
 control short,7,129.0,awgn,-16,20,0,0,0
-control short,7,129.0,awgn,-15,20,0,0,0
-control short,7,129.0,awgn,-14,20,0,0,0
+control short,7,129.0,awgn,-15,20,1,0,0
+control short,7,129.0,awgn,-14,20,1,0,0
 control short,7,129.0,awgn,-13,20,0,0,0
-control short,7,129.0,awgn,-12,20,1,0,0
-control short,7,129.0,awgn,-11,20,4,0,0
-control short,7,129.0,awgn,-10,20,4,0,0
-control short,7,129.0,awgn,-9,20,10,0,0
-control short,7,129.0,awgn,-8,20,18,0,0
-control short,7,129.0,awgn,-7,20,18,3,3
-control short,7,129.0,awgn,-6,20,18,9,10
-control short,7,129.0,awgn,-5,20,20,17,17
-control short,7,129.0,awgn,-4,20,20,19,19
+control short,7,129.0,awgn,-12,20,3,0,0
+control short,7,129.0,awgn,-11,20,9,0,0
+control short,7,129.0,awgn,-10,20,12,0,0
+control short,7,129.0,awgn,-9,20,15,0,0
+control short,7,129.0,awgn,-8,20,17,1,1
+control short,7,129.0,awgn,-7,20,20,3,3
+control short,7,129.0,awgn,-6,20,20,10,11
+control short,7,129.0,awgn,-5,20,20,16,17
+control short,7,129.0,awgn,-4,20,20,20,20
 control short,7,129.0,awgn,-3,20,20,20,20
 control short,7,129.0,awgn,-2,20,20,20,20
-control short,7,129.0,good,-16,20,0,0,0
+control short,7,129.0,good,-16,20,4,0,0
 control short,7,129.0,good,-14,20,2,0,0
-control short,7,129.0,good,-12,20,3,1,1
-control short,7,129.0,good,-10,20,5,1,1
-control short,7,129.0,good,-8,20,6,0,0
-control short,7,129.0,good,-6,20,12,7,7
-control short,7,129.0,good,-4,20,14,11,11
-control short,7,129.0,good,-2,20,17,17,17
-control short,7,129.0,good,0,20,20,16,16
-control short,7,129.0,good,2,20,20,19,19
-control short,7,129.0,good,4,20,20,20,19
+control short,7,129.0,good,-12,20,4,1,1
+control short,7,129.0,good,-10,20,7,1,1
+control short,7,129.0,good,-8,20,5,2,2
+control short,7,129.0,good,-6,20,9,5,6
+control short,7,129.0,good,-4,20,17,13,12
+control short,7,129.0,good,-2,20,17,15,15
+control short,7,129.0,good,0,20,20,17,17
+control short,7,129.0,good,2,20,19,18,18
+control short,7,129.0,good,4,20,19,19,17
 control short,7,129.0,poor,-16,20,0,0,0
-control short,7,129.0,poor,-14,20,1,0,0
-control short,7,129.0,poor,-12,20,1,0,0
-control short,7,129.0,poor,-10,20,6,0,0
-control short,7,129.0,poor,-8,20,8,0,0
-control short,7,129.0,poor,-6,20,11,3,2
-control short,7,129.0,poor,-4,20,14,4,4
-control short,7,129.0,poor,-2,20,16,10,10
-control short,7,129.0,poor,0,20,20,16,13
-control short,7,129.0,poor,2,20,20,18,13
-control short,7,129.0,poor,4,20,20,20,17
-control floor,8,28.7,awgn,-18,20,2,0,0
-control floor,8,28.7,awgn,-17,20,2,0,0
-control floor,8,28.7,awgn,-16,20,7,0,0
-control floor,8,28.7,awgn,-15,20,11,0,0
-control floor,8,28.7,awgn,-14,20,13,2,2
-control floor,8,28.7,awgn,-13,20,18,15,17
-control floor,8,28.7,awgn,-12,20,19,19,20
-control floor,8,28.7,awgn,-11,20,20,20,20
+control short,7,129.0,poor,-14,20,0,0,0
+control short,7,129.0,poor,-12,20,2,0,0
+control short,7,129.0,poor,-10,20,5,0,0
+control short,7,129.0,poor,-8,20,7,0,1
+control short,7,129.0,poor,-6,20,14,5,3
+control short,7,129.0,poor,-4,20,19,14,9
+control short,7,129.0,poor,-2,20,18,10,10
+control short,7,129.0,poor,0,20,19,16,11
+control short,7,129.0,poor,2,20,20,18,17
+control short,7,129.0,poor,4,20,19,17,15
+control floor,8,28.7,awgn,-18,20,1,0,0
+control floor,8,28.7,awgn,-17,20,5,0,0
+control floor,8,28.7,awgn,-16,20,9,0,0
+control floor,8,28.7,awgn,-15,20,8,0,0
+control floor,8,28.7,awgn,-14,20,11,2,3
+control floor,8,28.7,awgn,-13,20,16,14,16
+control floor,8,28.7,awgn,-12,20,16,15,19
+control floor,8,28.7,awgn,-11,20,19,19,20
 control floor,8,28.7,awgn,-10,20,18,18,20
 control floor,8,28.7,awgn,-9,20,20,20,20
 control floor,8,28.7,awgn,-8,20,20,20,20
 control floor,8,28.7,awgn,-7,20,20,20,20
 control floor,8,28.7,awgn,-6,20,20,20,20
 control floor,8,28.7,awgn,-5,20,20,20,20
-control floor,8,28.7,awgn,-4,20,19,19,20
-control floor,8,28.7,awgn,-3,20,19,19,20
-control floor,8,28.7,awgn,-2,20,19,19,20
-control floor,8,28.7,good,-16,20,7,1,2
-control floor,8,28.7,good,-14,20,6,5,5
-control floor,8,28.7,good,-12,20,17,11,12
-control floor,8,28.7,good,-10,20,13,11,13
-control floor,8,28.7,good,-8,20,13,10,12
-control floor,8,28.7,good,-6,20,19,18,18
-control floor,8,28.7,good,-4,20,18,18,19
-control floor,8,28.7,good,-2,20,19,18,18
-control floor,8,28.7,good,0,20,18,18,20
-control floor,8,28.7,good,2,20,16,16,19
+control floor,8,28.7,awgn,-4,20,20,20,20
+control floor,8,28.7,awgn,-3,20,20,20,20
+control floor,8,28.7,awgn,-2,20,20,20,20
+control floor,8,28.7,good,-16,20,4,2,2
+control floor,8,28.7,good,-14,20,9,5,6
+control floor,8,28.7,good,-12,20,11,5,8
+control floor,8,28.7,good,-10,20,14,13,13
+control floor,8,28.7,good,-8,20,18,17,17
+control floor,8,28.7,good,-6,20,18,17,19
+control floor,8,28.7,good,-4,20,19,18,18
+control floor,8,28.7,good,-2,20,18,18,20
+control floor,8,28.7,good,0,20,20,20,20
+control floor,8,28.7,good,2,20,20,20,20
 control floor,8,28.7,good,4,20,20,20,20
-control floor,8,28.7,poor,-16,20,5,0,0
-control floor,8,28.7,poor,-14,20,8,1,2
-control floor,8,28.7,poor,-12,20,8,4,6
-control floor,8,28.7,poor,-10,20,9,9,13
-control floor,8,28.7,poor,-8,20,18,18,15
-control floor,8,28.7,poor,-6,20,19,19,17
-control floor,8,28.7,poor,-4,20,19,19,16
-control floor,8,28.7,poor,-2,20,18,18,15
-control floor,8,28.7,poor,0,20,18,18,18
-control floor,8,28.7,poor,2,20,20,20,17
-control floor,8,28.7,poor,4,20,19,19,16
+control floor,8,28.7,poor,-16,20,4,0,0
+control floor,8,28.7,poor,-14,20,3,0,2
+control floor,8,28.7,poor,-12,20,12,9,6
+control floor,8,28.7,poor,-10,20,17,16,11
+control floor,8,28.7,poor,-8,20,15,15,16
+control floor,8,28.7,poor,-6,20,20,20,17
+control floor,8,28.7,poor,-4,20,17,17,14
+control floor,8,28.7,poor,-2,20,20,20,18
+control floor,8,28.7,poor,0,20,18,18,17
+control floor,8,28.7,poor,2,20,19,19,15
+control floor,8,28.7,poor,4,20,20,20,18
