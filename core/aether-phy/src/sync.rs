@@ -58,19 +58,17 @@ pub struct Acquisition {
     pub coarse_cfo_hz: f64,
 }
 
-/// An ordinary candidate on an air with a floor family must show the ordinary preamble's
-/// own signature: a Schmidl–Cox symbol on the even carriers only is two identical halves,
-/// so the correlation of the halves of its useful part over their energy is the signal's
-/// share of the power (0.55 at −9 dB, where the bank gives out). A floor preamble symbol,
-/// on every carrier, is not — its odd carriers flip between the halves and cancel the even
-/// ones — and a data symbol shows only the comb pilots' 0.17. With twelve carriers a floor
-/// frame's preamble and body score up to 0.75 on the ordinary references at high SNR; this
-/// keeps the ordinary pass off them.
-pub const HALF_SYMBOL_MIN: f64 = 0.35;
 /// The least a floor candidate's eight symbols may repeat one another: the magnitude of the
 /// summed one-symbol-lag correlation over the energy the lags span. A floor preamble shows
 /// the signal's share of the power (0.2 at −13 dB); noise shows a few hundredths.
 pub const FLOOR_REPETITION_MIN: f64 = 0.1;
+/// When a candidate of one family lies inside the other family's frame, the floor one is
+/// kept if its statistic is at least this fraction of the ordinary one's peak. A genuine
+/// floor frame scores about the signal's share of the power on its own statistic and at
+/// most three quarters of that on the ordinary references; a genuine ordinary frame scores
+/// its share on its own peak and at most half of it on the floor statistic — so the ratio
+/// sits at 1.3 or above for the one and 0.5 or below for the other.
+pub const FLOOR_OVER_ORDINARY: f64 = 0.85;
 /// Frequency sub-steps inside one 3.9 Hz bank bin for the coherent timing refinement of a
 /// floor candidate: four windows two symbols apart drift 180° over a bin's half-width, so
 /// the combination is tried on this grid and the best kept.
@@ -99,7 +97,6 @@ pub struct FrameDetector {
     coarse_fft: Arc<dyn Fft<f64>>,
     fine_fft: Arc<dyn Fft<f64>>,
     fft_offset: usize,
-    fft_size: usize,
     /// Whether the air has a floor family, and its preamble's length in symbols and in
     /// two-symbol windows a symbol apart.
     has_floor: bool,
@@ -213,7 +210,6 @@ impl FrameDetector {
             coarse_fft: planner.plan_fft_forward(FFT_LEN),
             fine_fft: planner.plan_fft_forward(FINE_FACTOR * FFT_LEN),
             fft_offset: OfdmDemodulator::new(params).fft_offset(),
-            fft_size: params.fft_size,
             has_floor,
             floor_symbols,
             floor_windows: floor_symbols - 1,
@@ -493,30 +489,6 @@ impl FrameDetector {
         coarse + residual
     }
 
-    /// How much the two halves of each ordinary preamble symbol's useful part repeat one
-    /// another, over both symbols: 1.0 for a noiseless even-carriers-only symbol, about 0
-    /// for one on every carrier. A carrier offset only rotates every half-pair by the same
-    /// phase; multipath is the same on both halves.
-    fn half_symbol_repetition(&self, samples: &[Complex], start: usize) -> f64 {
-        let half = self.fft_size / 2;
-        let mut acc = Complex64::new(0.0, 0.0);
-        let mut energy = 0.0f64;
-        for k in 0..PREAMBLE_SYMBOLS {
-            let a = start + k * self.period + self.fft_offset;
-            if a + 2 * half > samples.len() {
-                return 0.0;
-            }
-            for i in 0..half {
-                let x = samples[a + i];
-                let y = samples[a + half + i];
-                // conj(x) * y
-                acc += Complex64::new(x.0 * y.0 + x.1 * y.1, x.0 * y.1 - x.1 * y.0);
-                energy += (x.0 * x.0 + x.1 * x.1 + y.0 * y.0 + y.1 * y.1) / 2.0;
-            }
-        }
-        acc.norm() / energy.max(1e-30)
-    }
-
     /// How much `symbols` symbol periods from `start` repeat one another: the magnitude of
     /// the summed one-symbol-lag correlation over the energy the lags span, 1.0 for identical
     /// noiseless symbols (Schmidl & Cox's timing metric, summed over a run).
@@ -617,22 +589,20 @@ impl FrameDetector {
         best_at
     }
 
-    /// Floor-family candidates, best first, outside the spans the ordinary pass took; each
-    /// accepted one masks its whole span and the seven symbols before it (where the averaged
-    /// statistic still sees part of its preamble).
+    /// Floor-family candidates, best first; each accepted one masks its whole span and the
+    /// seven symbols before it (where the averaged statistic still sees part of its
+    /// preamble). The contest with the ordinary pass is settled in [`Self::detect`].
     fn detect_floor(
         &self,
         samples: &[Complex],
         output: &BankOutput,
-        taken: &mut [bool],
         max_frames: usize,
     ) -> Vec<Acquisition> {
         let mut found = Vec::new();
         let mut eligible: Vec<bool> = output
             .floor_stat
             .iter()
-            .zip(taken.iter())
-            .map(|(&s, &t)| s >= self.min_floor_peak && !t)
+            .map(|&s| s >= self.min_floor_peak)
             .collect();
         let half = 3 * self.period / 2;
         let skirt = self.floor_windows * self.period;
@@ -684,10 +654,49 @@ impl FrameDetector {
             let a = d.saturating_sub(self.min_gap.max(skirt));
             let b = (d + span).min(eligible.len());
             eligible[a..b].fill(false);
-            taken[a..b].fill(true);
         }
         found
     }
+
+    /// Where a frame of this acquisition starts and ends.
+    fn span(&self, acquisition: &Acquisition) -> (usize, usize) {
+        let layout = self.air.layout_for_family(
+            acquisition.sync.frame_type == FrameType::Data,
+            acquisition.sync.floor,
+        );
+        (
+            acquisition.sync.start,
+            acquisition.sync.start + layout.samples(),
+        )
+    }
+
+    /// Where a candidate of one family lies inside the other's frame, one of them is the
+    /// other's body or preamble scoring on the wrong references: the floor one stays if its
+    /// statistic is at least [`FLOOR_OVER_ORDINARY`] of the ordinary peak, else the ordinary
+    /// one does. Strongest ordinary candidates are settled first.
+    fn settle_families(
+        &self,
+        mut floor: Vec<Acquisition>,
+        mut ordinary: Vec<Acquisition>,
+    ) -> (Vec<Acquisition>, Vec<Acquisition>) {
+        ordinary.sort_by(|a, b| b.timing_peak.total_cmp(&a.timing_peak));
+        let mut kept = Vec::with_capacity(ordinary.len());
+        for o in ordinary {
+            let (o_start, o_end) = self.span(&o);
+            let clashes = |f: &Acquisition| o_start < self.span(f).1 && f.sync.start < o_end;
+            if floor
+                .iter()
+                .any(|f| clashes(f) && f.timing_peak >= FLOOR_OVER_ORDINARY * o.timing_peak)
+            {
+                continue; // a floor frame explains it
+            }
+            floor.retain(|f| !clashes(f));
+            kept.push(o);
+        }
+        (floor, kept)
+    }
+
+    // ── full acquisition ──────────────────────────────────────────────
 
     /// Find up to `max_frames` preambles in a buffer.
     ///
@@ -705,7 +714,6 @@ impl FrameDetector {
             .iter()
             .map(|&p| p >= self.min_timing_peak)
             .collect();
-        let mut taken = vec![false; eligible.len()];
 
         // The two preamble symbols are identical, so a preamble preceded by silence also
         // produces a strong sidelobe one symbol early. Never accept a peak until the
@@ -715,12 +723,9 @@ impl FrameDetector {
             *slot = false;
         }
 
-        // The ordinary pass first, each candidate checked for the ordinary preamble's own
-        // signature where a floor family exists (a floor frame's preamble and body score up
-        // to 0.75 on these references at high SNR); then the floor pass on what it left, so
-        // a strong ordinary burst's body — which scores on the floor references just as well
-        // — is never a floor candidate. Each pass looks for up to max_frames of its own; the
-        // earliest win below.
+        // Both passes look for up to max_frames of their own on the full statistics — a
+        // strong frame's body scores on either family's references, so each pass sees the
+        // other's frames — and the contest is settled by evidence below.
         for _ in 0..self.max_candidates {
             if ordinary.len() >= max_frames {
                 break;
@@ -752,12 +757,6 @@ impl FrameDetector {
                 eligible[reject_low..reject_high].fill(false);
                 continue;
             }
-            if self.has_floor && self.half_symbol_repetition(samples, start) < HALF_SYMBOL_MIN {
-                // correlates, but is not an ordinary preamble
-                eligible[reject_low..reject_high].fill(false);
-                continue;
-            }
-
             let frame_type = FRAME_TYPES[output.winner[start]];
             let cfo_hz = self.fine_cfo(samples, start, frame_type);
             ordinary.push(Acquisition {
@@ -781,29 +780,17 @@ impl FrameDetector {
             let low = start.saturating_sub(self.min_gap);
             let high = (start + span).min(eligible.len());
             eligible[low..high].fill(false);
-            taken[low..high].fill(true);
         }
 
         let mut found = if self.has_floor {
-            let floor = self.detect_floor(samples, &output, &mut taken, max_frames);
-            // an ordinary candidate inside a floor frame is that frame's body scoring on the
-            // ordinary references; the floor frame, verified whole, is the explanation
-            let spans: Vec<(usize, usize)> = floor
-                .iter()
-                .map(|f| {
-                    let span = self
-                        .air
-                        .layout_for_family(f.sync.frame_type == FrameType::Data, true)
-                        .samples();
-                    (f.sync.start, f.sync.start + span)
-                })
-                .collect();
-            ordinary.retain(|o| {
-                !spans
-                    .iter()
-                    .any(|&(a, b)| a <= o.sync.start && o.sync.start < b)
-            });
-            floor
+            let floor = self.detect_floor(samples, &output, max_frames);
+            if floor.is_empty() {
+                floor
+            } else {
+                let (floor, kept) = self.settle_families(floor, ordinary);
+                ordinary = kept;
+                floor
+            }
         } else {
             Vec::new()
         };

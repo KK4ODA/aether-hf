@@ -34,12 +34,14 @@ Stages, on band-limited complex baseband at ``fs_baseband``:
    floor candidate's start is refined within a symbol and a half by combining four
    two-symbol windows coherently on a fine frequency sub-grid (the averaged statistic is
    a symbol wide at its top), its CFO is estimated from all seven symbol lags, and the
-   candidate is checked for the preamble's repetition over its seven lags. With twelve
-   carriers, and the bank's search over frequency, a strong frame's *body* of either
-   family scores 0.4–0.75 on any reference — so the ordinary pass runs first, each of
-   its candidates checked for the ordinary preamble's own signature (an even-carriers-
-   only symbol is two identical halves; a floor symbol, on every carrier, is not), and
-   the floor pass takes what it left, with the ordinary spans masked.
+   candidate is checked for the preamble's repetition over its seven lags (noise does
+   not repeat). With twelve carriers, and the bank's search over frequency, a strong
+   frame's *body* of either family scores 0.4–0.75 on the other family's references —
+   so both passes run on the full statistics and, where a candidate of one family lies
+   inside the other's frame, the contest is settled by evidence: a genuine floor frame
+   scores the signal's share of the power on its own statistic and at most three
+   quarters of it on the ordinary peak, a genuine ordinary frame its share on its peak
+   and at most half on the floor statistic. The ordinary path itself is untouched.
 
 Candidates are the local maxima of the bank statistic above ``min_timing_peak``, which
 defaults to the air interface's ``acquisition_threshold``:
@@ -69,16 +71,14 @@ FloatArray = NDArray[np.float64]
 
 SEGMENT_LEN = 8
 FFT_LEN = 256
-HALF_SYMBOL_MIN = 0.35
-"""An ordinary candidate on an air with a floor family must show the ordinary preamble's
-own signature: a Schmidl–Cox symbol on the even carriers only is two identical halves, so
-the correlation of the halves of its useful part over their energy is the signal's share
-of the power (0.55 at −9 dB, where the bank gives out). A floor preamble symbol, on every
-carrier, is not — its odd carriers flip between the halves and cancel the even ones — and
-a data symbol shows only the comb pilots' 0.17. With twelve carriers a floor frame's
-preamble and body score up to 0.75 on the ordinary references at high SNR; this keeps the
-ordinary pass off them."""
 FLOOR_REPETITION_MIN = 0.1
+FLOOR_OVER_ORDINARY = 0.85
+"""When a candidate of one family lies inside the other family's frame, the floor one is
+kept if its statistic is at least this fraction of the ordinary one's peak. A genuine
+floor frame scores about the signal's share of the power on its own statistic and at
+most three quarters of that on the ordinary references; a genuine ordinary frame scores
+its share on its own peak and at most half of it on the floor statistic — so the ratio
+sits at 1.3 or above for the one and 0.5 or below for the other."""
 """The least a floor candidate's eight symbols may repeat one another: the magnitude of
 the summed one-symbol-lag correlation over the energy the lags span. A floor preamble
 shows the signal's share of the power (0.2 at −13 dB); noise shows a few hundredths."""
@@ -311,24 +311,6 @@ class FrameDetector:
             best = np.maximum(best, np.abs(acc) / n_win)
         return lo + int(np.argmax(best))
 
-    def _half_symbol_repetition(self, x: ComplexArray, start: int) -> float:
-        """How much the two halves of each ordinary preamble symbol's useful part repeat
-        one another, over both symbols: 1.0 for a noiseless even-carriers-only symbol,
-        about 0 for one on every carrier. A carrier offset only rotates every half-pair
-        by the same phase; multipath is the same on both halves."""
-        n = self.n
-        half = n // 2
-        acc = 0j
-        energy = 0.0
-        for k in range(PREAMBLE_SYMBOLS):
-            a = start + k * self.period + self.dem.fft_offset
-            if a + n > len(x):
-                return 0.0
-            u = x[a : a + n]
-            acc += complex(np.vdot(u[:half], u[half : 2 * half]))
-            energy += float(np.sum(np.abs(u[: 2 * half]) ** 2)) / 2
-        return abs(acc) / max(energy, 1e-30)
-
     def _repetition(self, x: ComplexArray, start: int, symbols: int) -> float:
         """How much ``symbols`` symbol periods from ``start`` repeat one another: the
         magnitude of the summed one-symbol-lag correlation over the energy the lags
@@ -343,16 +325,14 @@ class FrameDetector:
         energy = float(np.sum(np.abs(y) ** 2)) * (symbols - 1) / symbols
         return float(abs(lags)) / max(energy, 1e-30)
 
-    def _detect_floor(
-        self, x: ComplexArray, taken: NDArray[np.bool_], max_frames: int
-    ) -> list[FrameSync]:
-        """Floor-family candidates, best first, outside the spans the ordinary pass took;
-        each accepted one masks its whole span and the seven symbols before it (where the
-        averaged statistic still sees part of its preamble)."""
+    def _detect_floor(self, x: ComplexArray, max_frames: int) -> list[FrameSync]:
+        """Floor-family candidates, best first; each accepted one masks its whole span and
+        the seven symbols before it (where the averaged statistic still sees part of its
+        preamble). The contest with the ordinary pass is settled in :meth:`detect`."""
         found: list[FrameSync] = []
         fstat, fother = self._floor_stat, self._floor_other
         fcfo, ftype = self._floor_cfo, self._floor_type
-        fmask = (fstat >= self.min_floor_peak) & ~taken
+        fmask = fstat >= self.min_floor_peak
         half = 3 * self.period // 2
         skirt = self.floor_windows * self.period
         for _ in range(self.max_candidates):
@@ -380,7 +360,6 @@ class FrameDetector:
             )
             a, b = max(0, d - max(self.min_gap, skirt)), min(len(fmask), d + span)
             fmask[a:b] = False
-            taken[a:b] = True
         return found
 
     # ── full acquisition ──────────────────────────────────────────────
@@ -389,22 +368,17 @@ class FrameDetector:
         """Find up to ``max_frames`` preambles in ``x`` (offline, whole-buffer)."""
         x = np.asarray(x, dtype=np.complex128)
         peak, bin_cfo, other = self.bank(x)
-        found: list[FrameSync] = []
+        ordinary: list[FrameSync] = []
         if len(peak) == 0:
-            return found
+            return ordinary
         mask = peak >= self.min_timing_peak
         # The two SC symbols are identical, so a preamble preceded by silence also produces a
         # ≈ 0.7 sidelobe one symbol early. Never accept a peak until the statistic one symbol
         # later exists (a stronger one there wins); in streaming use the caller re-scans.
         mask[max(0, len(mask) - self.period) :] = False
-        taken = np.zeros(len(peak), dtype=bool)
-        # The ordinary pass first, each candidate checked for the ordinary preamble's own
-        # signature where a floor family exists (a floor frame's preamble and body score up
-        # to 0.75 on these references at high SNR); then the floor pass on what it left,
-        # so a strong ordinary burst's body — which scores on the floor references just as
-        # well — is never a floor candidate. Each pass looks for up to max_frames of its
-        # own; the earliest win below.
-        ordinary: list[FrameSync] = []
+        # Both passes look for up to max_frames of their own on the full statistics — a
+        # strong frame's body scores on either family's references, so each pass sees the
+        # other's frames — and the contest is settled by evidence below.
         for _ in range(self.max_candidates):
             if len(ordinary) >= max_frames:
                 break
@@ -420,9 +394,6 @@ class FrameDetector:
             if start + 4 * self.period + self.dem.fft_offset > len(x):
                 mask[reject_lo:reject_hi] = False  # too close to the end to be usable yet
                 continue
-            if self.has_floor and self._half_symbol_repetition(x, start) < HALF_SYMBOL_MIN:
-                mask[reject_lo:reject_hi] = False  # correlates, but is not an ordinary preamble
-                continue
             header = FrameHeader(self._types[int(self._last_type[start])])
             cfo = self.fine_cfo(x, start, header.frame_type)
             confidence = float(peak[start] / max(other[start], 1e-12))
@@ -432,20 +403,29 @@ class FrameDetector:
             # Nothing else can start inside this frame (strong data symbols correlate with
             # the reference at ≈ 0.3–0.4, which the threshold does not exclude).
             span = self.air.layout_for(header.frame_type is FrameType.DATA).samples
-            a, b = max(0, start - self.min_gap), min(len(mask), start + span)
-            mask[a:b] = False
-            taken[a:b] = True
-        if self.has_floor:
-            found = self._detect_floor(x, taken, max_frames)
-            # an ordinary candidate inside a floor frame is that frame's body scoring on
-            # the ordinary references; the floor frame, verified whole, is the explanation
-            spans = [
-                (
-                    f.start,
-                    f.start
-                    + self.air.layout_for(f.header.frame_type is FrameType.DATA, True).samples,
-                )
-                for f in found
-            ]
-            ordinary = [o for o in ordinary if not any(a <= o.start < b for a, b in spans)]
+            mask[max(0, start - self.min_gap) : min(len(mask), start + span)] = False
+        found = self._detect_floor(x, max_frames) if self.has_floor else []
+        if found:
+            found, ordinary = self._settle_families(found, ordinary)
         return sorted(found + ordinary, key=lambda f: f.start)[:max_frames]
+
+    def _span(self, sync: FrameSync) -> tuple[int, int]:
+        layout = self.air.layout_for(sync.header.frame_type is FrameType.DATA, sync.floor)
+        return sync.start, sync.start + layout.samples
+
+    def _settle_families(
+        self, floor: list[FrameSync], ordinary: list[FrameSync]
+    ) -> tuple[list[FrameSync], list[FrameSync]]:
+        """Where a candidate of one family lies inside the other's frame, one of them is the
+        other's body or preamble scoring on the wrong references: the floor one stays if
+        its statistic is at least ``FLOOR_OVER_ORDINARY`` of the ordinary peak, else the
+        ordinary one does. Strongest ordinary candidates are settled first."""
+        kept: list[FrameSync] = []
+        for o in sorted(ordinary, key=lambda f: -f.timing_peak):
+            o_start, o_end = self._span(o)
+            clash = [f for f in floor if o_start < self._span(f)[1] and f.start < o_end]
+            if any(f.timing_peak >= FLOOR_OVER_ORDINARY * o.timing_peak for f in clash):
+                continue  # a floor frame explains it
+            floor = [f for f in floor if f not in clash]
+            kept.append(o)
+        return floor, kept
