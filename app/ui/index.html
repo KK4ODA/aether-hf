@@ -237,7 +237,14 @@
             </figure>
             <figure class="chart">
               <figcaption>Waterfall</figcaption>
-              <canvas id="chart-waterfall" width="600" height="110" role="img" aria-label="Waterfall of the received audio, newest at the bottom"></canvas>
+              <canvas id="chart-waterfall" width="600" height="110" role="img" aria-label="Waterfall of the received audio, newest at the top"></canvas>
+              <div class="scope-controls" role="group" aria-label="Waterfall controls">
+                <label>Floor <input id="wf-floor" type="range" min="-120" max="-40" step="1" value="-90" aria-label="Waterfall floor in dBFS" /> <span class="numerals" id="wf-floor-value">auto</span></label>
+                <label class="check"><input id="wf-auto" type="checkbox" checked /> auto</label>
+                <label>Gain <input id="wf-gain" type="range" min="15" max="90" step="1" value="45" aria-label="Waterfall range above the floor in dB" /> <span class="numerals" id="wf-gain-value">45 dB</span></label>
+                <label>Speed <select id="wf-speed" aria-label="Waterfall lines per second"><option value="8">8 lines/s</option><option value="4">4 lines/s</option><option value="2">2 lines/s</option><option value="1">1 line/s</option></select></label>
+                <label>Palette <select id="wf-palette" aria-label="Waterfall palette"><option value="aether">Aether</option><option value="blue">Blue</option><option value="turbo">Turbo</option><option value="viridis">Viridis</option><option value="grey">Grey</option></select></label>
+              </div>
             </figure>
           </div>
         </div>

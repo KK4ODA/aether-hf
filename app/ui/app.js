@@ -748,6 +748,81 @@ async function clearHeard() {
 let spectrumTimer = null;
 let spectrumBusy = false;
 let palette = null;
+let spectrumPolls = 0;
+
+// The waterfall's controls, as any waterfall has them: the floor (auto follows the
+// quietest fifth of the spectrum), the range above it, lines per second, the palette.
+const waterfall = { auto: true, floor: -90, gain: 45, speed: 8, palette: "aether" };
+
+const PALETTES = {
+  // black, the accent, white: the panel's own
+  aether: null,
+  // the classic blue waterfall: black, blue, cyan, white
+  blue: [[0, 0, 0], [0, 0, 110], [0, 70, 255], [0, 220, 255], [255, 255, 255]],
+  turbo: [[48, 18, 59], [70, 107, 227], [26, 228, 182], [164, 252, 60], [251, 190, 26], [227, 72, 6], [122, 4, 3]],
+  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
+  grey: [[0, 0, 0], [255, 255, 255]],
+};
+
+function loadWaterfallSettings() {
+  try {
+    const kept = JSON.parse(localStorage.getItem("aether.waterfall") ?? "{}");
+    for (const key of Object.keys(waterfall)) if (key in kept) waterfall[key] = kept[key];
+  } catch {
+    // nothing kept, or nothing readable: the defaults
+  }
+}
+
+function saveWaterfallSettings() {
+  try {
+    localStorage.setItem("aether.waterfall", JSON.stringify(waterfall));
+  } catch {
+    // a browser that keeps nothing keeps nothing
+  }
+}
+
+function showWaterfallSettings() {
+  $("wf-auto").checked = waterfall.auto;
+  $("wf-floor").value = String(waterfall.floor);
+  $("wf-floor").disabled = waterfall.auto;
+  $("wf-floor-value").textContent = waterfall.auto
+    ? `auto ${Math.round(waterfallFloor)} dBFS`
+    : `${waterfall.floor} dBFS`;
+  $("wf-gain").value = String(waterfall.gain);
+  $("wf-gain-value").textContent = `${waterfall.gain} dB`;
+  $("wf-speed").value = String(waterfall.speed);
+  $("wf-palette").value = waterfall.palette;
+}
+
+function wireWaterfallControls() {
+  loadWaterfallSettings();
+  $("wf-auto").addEventListener("change", () => {
+    waterfall.auto = $("wf-auto").checked;
+    if (!waterfall.auto) waterfall.floor = Math.round(waterfallFloor);
+    saveWaterfallSettings();
+    showWaterfallSettings();
+  });
+  $("wf-floor").addEventListener("input", () => {
+    waterfall.floor = Number($("wf-floor").value);
+    saveWaterfallSettings();
+    showWaterfallSettings();
+  });
+  $("wf-gain").addEventListener("input", () => {
+    waterfall.gain = Number($("wf-gain").value);
+    saveWaterfallSettings();
+    showWaterfallSettings();
+  });
+  $("wf-speed").addEventListener("change", () => {
+    waterfall.speed = Number($("wf-speed").value);
+    saveWaterfallSettings();
+  });
+  $("wf-palette").addEventListener("change", () => {
+    waterfall.palette = $("wf-palette").value;
+    palette = null;
+    saveWaterfallSettings();
+  });
+  showWaterfallSettings();
+}
 
 function startScopes() {
   if (spectrumTimer !== null) return;
@@ -774,7 +849,9 @@ async function pollSpectrum() {
   try {
     const spectrum = await call("spectrum");
     drawSpectrum(spectrum);
-    drawWaterfall(spectrum);
+    // the spectrum refreshes eight times a second; the waterfall advances at its own pace
+    spectrumPolls += 1;
+    if (spectrumPolls % Math.max(1, Math.round(8 / waterfall.speed)) === 0) drawWaterfall(spectrum);
   } catch {
     // the next tick tries again; a missed frame of a scope is nothing
   } finally {
@@ -855,7 +932,7 @@ function heat(fraction) {
       const v = parseInt(m[1], 16);
       return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
     };
-    const stops = [hex(c.plot), hex(c.accent), [255, 255, 255]];
+    const stops = PALETTES[waterfall.palette] ?? [hex(c.plot), hex(c.accent), [255, 255, 255]];
     palette = [];
     for (let i = 0; i < 256; i++) {
       const p = (i / 255) * (stops.length - 1);
@@ -884,17 +961,21 @@ function drawWaterfall(spectrum) {
   // the newest line at the top; everything else moves down one
   ctx.drawImage(canvas, 0, 0, width, height - 1, 0, 1, width, height - 1);
   // the floor follows the quietest fifth of the spectrum, slowly, so the noise stays dark
-  // and a signal stays bright whatever the receive level
+  // and a signal stays bright whatever the receive level — unless the operator set it
   const sorted = [...bins].sort((a, b) => a - b);
   const quiet = sorted[Math.floor(sorted.length / 5)];
   waterfallFloor += (quiet - waterfallFloor) * 0.1;
-  const span = 45;
+  if (waterfall.auto && spectrumPolls % 8 === 0) {
+    $("wf-floor-value").textContent = `auto ${Math.round(waterfallFloor)} dBFS`;
+  }
+  const floor = waterfall.auto ? waterfallFloor : waterfall.floor;
+  const span = waterfall.gain;
   const row = ctx.createImageData(width, 1);
   const binHz = spectrum.bin_hz;
   for (let px = 0; px < width; px++) {
     const hz = (px / width) * SPECTRUM_TOP_HZ;
     const index = Math.min(bins.length - 1, Math.round(hz / binHz));
-    const [r, g, b] = heat((bins[index] - waterfallFloor) / span);
+    const [r, g, b] = heat((bins[index] - floor) / span);
     row.data[px * 4] = r;
     row.data[px * 4 + 1] = g;
     row.data[px * 4 + 2] = b;
@@ -989,10 +1070,42 @@ function renderFrames() {
 
 // ── compact ─────────────────────────────────────────────────────────
 
+let sizeBeforeCompact = null;
+
+// In the desktop shell the window follows the view: compact fits the state strip and
+// the four readings, and coming back restores what the operator had. In a browser tab
+// there is no window to size; the layout still compacts.
+async function fitShellWindow(on) {
+  const tauri = window.__TAURI__;
+  const getWindow = tauri?.window?.getCurrentWindow;
+  const LogicalSize = tauri?.dpi?.LogicalSize ?? tauri?.window?.LogicalSize;
+  if (!getWindow || !LogicalSize) return;
+  try {
+    const win = getWindow();
+    if (on) {
+      const scale = await win.scaleFactor();
+      const size = await win.innerSize();
+      sizeBeforeCompact = { width: size.width / scale, height: size.height / scale };
+      // let the compact layout settle before measuring what it needs
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const height = Math.ceil(document.body.getBoundingClientRect().height) + 4;
+      await win.setMinSize(new LogicalSize(360, 120));
+      await win.setSize(new LogicalSize(Math.min(sizeBeforeCompact.width, 520), height));
+    } else if (sizeBeforeCompact) {
+      await win.setMinSize(new LogicalSize(420, 300));
+      await win.setSize(new LogicalSize(sizeBeforeCompact.width, sizeBeforeCompact.height));
+      sizeBeforeCompact = null;
+    }
+  } catch {
+    // the shell refused (an older shell without the panel's capability) or a browser
+  }
+}
+
 function setCompact(on) {
   document.body.classList.toggle("compact", on);
   $("btn-compact").setAttribute("aria-pressed", String(on));
   if (on) selectTab($("tab-status"));
+  fitShellWindow(on);
   try {
     localStorage.setItem("aether.compact", on ? "1" : "0");
   } catch {
@@ -1331,6 +1444,8 @@ async function loadConfig() {
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
   // the file's devices, not the profile's guess, are what the warning should be about
   checkRates();
+  checkModemSettings();
+  checkAppSettings();
   writeConfig();
 }
 
@@ -1625,6 +1740,28 @@ function markStep(number, done) {
   if (step) step.dataset.done = String(done);
 }
 
+function numberWithin(id, low, high) {
+  const value = numberIn(id);
+  return $(id).value.trim() !== "" && value !== null && value >= low && value <= high;
+}
+
+// Steps 4 and 5 hold defaults that are already in order, so their marks say "nothing
+// here is wrong" rather than "you did this": a busy threshold, a key limit and a Morse
+// schedule that parse, a host port a program can reach.
+function checkModemSettings() {
+  const morse = !$("radio-cwid").checked
+    || (numberWithin("radio-cwid-interval", 10, 3600) && numberWithin("radio-cwid-wpm", 5, 40));
+  const ok = numberWithin("radio-busy-db", 0, 60) && numberWithin("radio-max-key", 1, 600) && morse;
+  markStep(4, ok);
+  return ok;
+}
+
+function checkAppSettings() {
+  const ok = numberWithin("host-port", 1024, 65535) && Boolean($("update-channel").value);
+  markStep(5, ok);
+  return ok;
+}
+
 async function wizardSave() {
   $("wz-save-note").textContent = "";
   const call_ = $("wz-call").value.trim().toUpperCase();
@@ -1816,8 +1953,8 @@ function wire() {
     button.addEventListener("click", () => sortHeard(button.dataset.sort));
   }
   $("radio-bandwidth").addEventListener("change", () => {
-    // the narrow table has ten modes: a fastest mode past it would be refused on save
-    const modes = $("radio-bandwidth").value === "500" ? 10 : 14;
+    // the narrow table has thirteen modes: a fastest mode past it would be refused on save
+    const modes = $("radio-bandwidth").value === "500" ? 13 : 14;
     const fastest = $("radio-max-mode");
     for (const option of fastest.options) option.hidden = Number(option.value) >= modes;
     if (Number(fastest.value) >= modes) fastest.value = String(modes - 1);
@@ -1842,6 +1979,13 @@ function wire() {
     profileChosen = true;
     applyProfile();
   });
+  for (const id of ["radio-busy-db", "radio-max-key", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
+    $(id).addEventListener("input", checkModemSettings);
+  }
+  for (const id of ["host-port", "update-channel", "host-enabled"]) {
+    $(id).addEventListener("input", checkAppSettings);
+  }
+  wireWaterfallControls();
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);

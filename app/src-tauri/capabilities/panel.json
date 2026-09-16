@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panel-window",
+  "description": "The panel, served by the daemon at its control port and shown in the main window: it may size the window it lives in (compact view) and nothing else.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:8515/*",
+      "http://localhost:8515/*"
+    ]
+  },
+  "permissions": [
+    "core:window:allow-scale-factor",
+    "core:window:allow-inner-size",
+    "core:window:allow-set-size",
+    "core:window:allow-set-min-size"
+  ]
+}

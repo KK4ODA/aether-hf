@@ -628,6 +628,38 @@ canvas {
   height: 110px;
 }
 
+/* the waterfall's controls, as a waterfall has them: floor, gain, speed, palette */
+.scope-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+  align-items: center;
+  margin-top: var(--s2);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.scope-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scope-controls input[type="range"] {
+  width: 88px;
+  accent-color: var(--accent);
+}
+
+.scope-controls select {
+  font-size: 11.5px;
+  padding: 1px 4px;
+}
+
+.scope-controls .numerals {
+  min-width: 5.5em;
+  color: var(--text-2);
+}
+
 .chart figcaption .numerals {
   text-transform: none;
   letter-spacing: 0;
@@ -765,6 +797,11 @@ button.sort:focus-visible {
 }
 
 /* ── compact: the state strip and four readings, nothing else ────── */
+
+/* the page is as tall as what it shows, so the shell can size its window to it */
+body.compact {
+  min-height: 0;
+}
 
 body.compact .tabs,
 body.compact footer.bar,
@@ -1337,6 +1374,12 @@ button[aria-pressed="true"] {
 /* ── footer ─────────────────────────────────────────────────────── */
 
 footer.bar {
+  /* in view whatever the page has scrolled to: the version, the config file and the
+     endpoint are what a screenshot or a support request needs */
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  background: var(--bg);
   border-bottom: 0;
   border-top: 1px solid var(--border);
   margin-top: auto;
