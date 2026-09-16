@@ -37,7 +37,7 @@ pub const PAYLOAD_BYTES: [usize; 14] = [
 /// into `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py
 /// --bandwidth 500 --apply` into the model, and mirrored here (the vector test pins it).
 pub const NARROW_AWGN_THRESHOLD_DB: [f64; 13] = [
-    -12.4, -10.2, -6.0, -5.2, -3.5, -2.1, 0.6, -0.1, 1.9, 3.6, 6.9, 8.8, 10.4,
+    -12.4, -10.2, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
 ];
 
 /// Payload bytes per frame for each narrow mode, on the layout it goes out on: the floor

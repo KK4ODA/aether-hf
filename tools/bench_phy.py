@@ -119,7 +119,10 @@ def run_point(
         "acquired": acquired,
         "decoded": decoded,
         "fer": round(fer, 4),
-        "throughput_bps": round(8 * n_payload * (1 - fer) / modem.air.long.duration_s),
+        # per second of the frame the mode goes out on: a floor frame is four times as long
+        "throughput_bps": round(
+            8 * n_payload * (1 - fer) / modem.air.data_layout(mode.index).duration_s
+        ),
         "mean_reported_snr_db": round(float(np.mean(snr_est)), 2) if snr_est else "",
         "seconds": round(time.perf_counter() - t0, 1),
     }

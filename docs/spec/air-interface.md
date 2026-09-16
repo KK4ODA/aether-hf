@@ -276,12 +276,12 @@ rung between the floor and the control mode.
 | 1 | QPSK-1/5 | FLOOR-LONG | 2 | 1/5 | BG2 | 44 | 352 | 1792 | 41 | 78 | -10.2 |
 | 2 | QPSK-1/3 | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
 | 3 | QPSK-1/2 | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
-| 4 | QPSK-2/3 | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.5 |
+| 4 | QPSK-2/3 | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.6 |
 | 5 | PSK8-1/2 | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
-| 6 | PSK8-2/3 | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.6 |
+| 6 | PSK8-2/3 | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.5 |
 | 7 | QAM16-1/2 | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
-| 8 | QAM16-2/3 | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +1.9 |
-| 9 | QAM16-3/4 | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.6 |
+| 8 | QAM16-2/3 | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
+| 9 | QAM16-3/4 | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.5 |
 | 10 | QAM64-2/3 | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
 | 11 | QAM64-3/4 | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
 | 12 | QAM64-5/6 | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
@@ -541,14 +541,20 @@ power into the same noise:
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| Most robust narrow mode (QPSK ½) | −5.2 dB | +4.0 | +1.0 | +1.0 |
-| 16-QAM ½ | −0.1 | +9.0 | +6.0 | +9.5 |
-| Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +23 | > +27 |
-| Best single-mode throughput at +12 dB | 1040 bps | 533 | 634 | 413 |
+| Floor mode 0 (QPSK 1/10 on the floor frame, 36 bit/s) | −12.4 dB | −4.0 | −1.0 | −5.0 |
+| Floor mode 1 (QPSK ⅕ on the floor frame, 78 bit/s) | −10.2 | −1.0 | −4.5 | −7.0 |
+| Control mode (QPSK ½) | −5.2 | +4.0 | +3.5 | +0.0 |
+| 16-QAM ½ | −0.1 | +9.0 | +9.5 | +8.0 |
+| Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +22 | > +23 |
+| Best single-mode throughput at −10 dB | 311 bps | 114 | 91 | 111 |
+| Best single-mode throughput at +12 dB | 1040 bps | 533 | 469 | 359 |
 
-The narrow floor equals the wide floor on AWGN, because twelve carriers carry ≈ 6.8 dB
+The control mode equals the wide floor on AWGN, because twelve carriers carry ≈ 6.8 dB
 more per carrier than fifty-seven; on the fading channels a fifth of the frequency
-diversity costs it about 2 dB on ITU Good.
+diversity costs it about 2 dB on ITU Good. The floor family (ADR-0009) reaches 7 dB
+lower on AWGN and 5–9 dB lower on the fading channels, where a 4.2 s frame spans several
+fades on ITU Poor. The fading-channel crossings of the floor modes sit on shallow curves
+and move a decibel or two between runs of thirty frames.
 
 These are simulator figures. No on-air measurements exist yet, and none should be inferred.
 
