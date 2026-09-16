@@ -287,6 +287,30 @@ items still open: BPQ32 over `[sim]`, three
 external hams through the wizard, Authenticode signing. Small: CM108 keying, the panel's
 SNR history across a reload.
 
+**Betas .21 and .22 (2026-09-16 afternoon).** The author's panel fixes: Setup steps 4 and 5
+get their mark (`checkModemSettings`/`checkAppSettings`), Compact asks the shell to fit the
+window (`fitShellWindow` through `window.__TAURI__`; `capabilities/panel.json` grants the
+main window four window-size permissions to the panel's origin — an older shell ignores the
+call), the footer is sticky, the waterfall has floor/gain/speed/palette controls kept in
+`localStorage`. To try the checkout's panel: a `--dry-run` daemon from
+`core/target/release/aetherd.exe` on another port with `[control] ui_dir` pointing at
+`app/ui` — the author's daemon on 8515 serves the *installed* panel. **The community kit:**
+`docs/MAINTAINING.md` (forks need no review; the PR playbook and the ten rules a change is
+held to), `CODE_OF_CONDUCT.md`, `.github/CODEOWNERS`, the PR template, CONTRIBUTING (branch
+from `master`, rebase-merge). Repository settings set with the author's approval: rebase
+merging only, head branches deleted on merge, Discussions on, a ruleset on `master` (no
+deletion or force-push, pull requests with the eight CI jobs green; repository admins
+bypass, which is what keeps direct pushes working), the Sponsor button
+(`hasSponsorshipsEnabled` had to be switched on — `FUNDING.yml` alone shows nothing) with
+the author's PayPal.Me link. **macOS:** the release matrix builds an unsigned Apple Silicon
+`dmg` and the updater bundle (`bundles: app,dmg` — `dmg` alone produces no `.app.tar.gz`),
+renamed in the collect step to the versioned name the manifest keys `darwin-aarch64` on,
+plus the daemon for the same target; CI's core and app jobs run on macOS. Untested on a
+Mac with a radio; signing and notarization wait for an Apple Developer account
+(`docs/user/install.md` has the `xattr` step). The sim's pacing test now measures the
+clock instead of trusting its sleeps: a loaded three-core mac runner stretched 350 ms of
+sleeps past a second.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
