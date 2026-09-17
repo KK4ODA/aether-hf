@@ -1,10 +1,10 @@
 # OTA test 1 — findings and what to do next
 
-The first radio-to-radio test (2026-09-17, KK4ODA home FTDX10/20 W ↔ KK4ODA-2 mobile
-TS-480/50 W, 40 m 7101 kHz, 500 Hz) is analysed in full from the six saved sidecars under
-`%APPDATA%\aether-hf\recordings\`. This is the action list it produced. Beta 26 fixed the
-panel faults it exposed; the items here are the modem/protocol and operating work that a
-second OTA test should chase.
+The first radio-to-radio test (2026-09-17, KK4ODA home FTDX10 / 20 W into a dipole ↔
+KK4ODA-2 mobile TS-480 / 35 W into a screwdriver antenna, 40 m 7101 kHz, 500 Hz) is
+analysed in full from **both stations'** saved sidecars (the home's six and the mobile's
+five). Beta 26 fixed the panel faults it exposed; the items here are the modem/protocol and
+operating work that a second OTA test should chase.
 
 ## What the test established
 
@@ -14,7 +14,13 @@ cleanly and delivered its text ("hello there"). The other five each ended in **l
 timeout**, with roughly half the frames failing to decode, and a **compression-stream
 desync** on the marginal path that turned delivered bytes into binary garbage.
 
-Two root problems sit under that, and they are the point of the next test.
+With the mobile's sidecars now in, the cause is plain: **a marginal, weak-signal path.**
+Decoded frames on both ends sat at +3 to +9 dB SNR and the link only ever carried the
+robust floor modes (0 and 3); failures were frames that arrived at −5 to −14 dB. The dials
+agree to within ~3 Hz — the large frequency offsets seen from the home side were
+failed-acquisition artifacts, not a rig problem (item 2). So the two things worth engineering
+on are the **compression desync** (item 1), which is a real modem robustness gap, and the
+**diagnostics** around failed frames; the rest is antenna and power.
 
 ## Action items, most important first
 
@@ -40,19 +46,42 @@ marginal sessions were not.
   payload is then delivered verbatim even on a lossy path, which both isolates the desync
   and gives a clean control run.
 
-### 2. The mobile's frames arrived with a large frequency offset (modem + hardware)
+### 2. Frequency offset — RESOLVED as a non-issue by the mobile's sidecars
 
-The home receiver removed a stable −3 Hz; the mobile's inbound frames repeatedly showed
-**+25 to +65 Hz** carrier offset, and those are the frames that failed. That, not raw SNR,
-drove most of the losses.
+The first read (from the home side alone) suspected a mobile TX offset, because many of the
+home's inbound frames showed **+25 to +65 Hz** CFO. The mobile's own sidecars (analysed
+2026-09-17) settle it: **the dials agree.** On *decoded* frames the offset is symmetric and
+small — the mobile read the home at −0.2 to +3.5 Hz (median +2.2), the home read the mobile
+near −3 Hz. The large CFO values on both ends were attached **only to frames that failed to
+decode**: they are the acquisition correlator locking onto noise and reporting a spurious
+offset, not a real carrier error. There is no rig-calibration or Doppler problem.
 
-- **Diagnose:** we need the **mobile's own sidecars** — the home's are not enough. If the
-  mobile's RX offset on the home's frames is the same sign and size, it is a fixed dial/rig
-  calibration difference; if only one direction is offset, it is that rig's TX. A parked
-  truck rules out Doppler; a running engine/alternator does not rule out RFI.
-- **Check the PHY:** confirm the 500 Hz acquisition CFO search window comfortably covers
-  ±65 Hz, and that a frame at +65 Hz with good SNR still acquires on the bench. If it does
-  not, the offset window is too narrow at 500 Hz and that is a model/PHY item.
+- **What this leaves:** a small, real modem-diagnostics wart — the sidecar reports a CFO for
+  a frame that did not decode, which is meaningless and misled this very analysis. Consider
+  omitting or flagging CFO on a failed frame so a reader is not sent chasing a ghost.
+- **The real cause of the losses was the link budget, not offset — see item 2b.**
+
+### 2b. The path was marginal and asymmetric — only the floor modes carried (operating)
+
+The mobile ran 35 W into a screwdriver antenna on the truck; the home 20 W into a dipole.
+Decoded frames sat at +3 to +9 dB SNR; failures were at −5 to −14 dB. **The link only ever
+carried the robust floor modes (0 and 3) — it never successfully climbed.** So the sessions
+died whenever the SNR dipped below the floor-mode threshold, which on this path was often.
+This is a plain weak-signal path, not a modem defect. For a cleaner next test: a better
+mobile antenna or more power, or accept it as a floor-mode path and test at modes 0–3 with
+compression off (item 1) so at least the payload is intact when frames do get through.
+
+- **Test sessions abort early here.** All three of the mobile's Test sessions aborted "the
+  session dropped during the transfer" before the probe or message finished, so the air gave
+  no clean ladder. That is the Test session behaving correctly on a dying link, but it means
+  a marginal path yields little. Worth considering whether the Test session should lead with
+  a longer, floor-mode-only probe so *something* is captured before it gives up.
+
+### 3. Five of six ended in link timeout, not a clean disconnect (modem — medium)
+
+On the marginal path the retransmit ladder (rv0→rv3) never cleared and the dead-man timer
+fired. Confirm the link-timeout value is sensible for HF and whether a failing station
+should attempt a graceful DISC before the timer, so the other end is not left waiting.
 
 ### 3. Five of six ended in link timeout, not a clean disconnect (modem — medium)
 
