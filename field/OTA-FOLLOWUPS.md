@@ -56,9 +56,10 @@ near −3 Hz. The large CFO values on both ends were attached **only to frames t
 decode**: they are the acquisition correlator locking onto noise and reporting a spurious
 offset, not a real carrier error. There is no rig-calibration or Doppler problem.
 
-- **What this leaves:** a small, real modem-diagnostics wart — the sidecar reports a CFO for
-  a frame that did not decode, which is meaningless and misled this very analysis. Consider
-  omitting or flagging CFO on a failed frame so a reader is not sent chasing a ghost.
+- **Done (beta.27):** the sidecar and the live displays no longer report a CFO for a
+  probable noise trigger (a non-decoding frame below the modem's confidence threshold); a
+  real near-miss keeps its offset, and every sidecar frame now records `confidence` so a
+  near-miss can be told from noise. This is what would have avoided the wrong first read.
 - **The real cause of the losses was the link budget, not offset — see item 2b.**
 
 ### 2b. The path was marginal and asymmetric — only the floor modes carried (operating)
@@ -83,11 +84,21 @@ On the marginal path the retransmit ladder (rv0→rv3) never cleared and the dea
 fired. Confirm the link-timeout value is sensible for HF and whether a failing station
 should attempt a graceful DISC before the timer, so the other end is not left waiting.
 
-### 3. Five of six ended in link timeout, not a clean disconnect (modem — medium)
+### 3b. The busy detector versus a crowded band (operating, not a defect)
 
-On the marginal path the retransmit ladder (rv0→rv3) never cleared and the dead-man timer
-fired. Confirm the link-timeout value is sensible for HF and whether a failing station
-should attempt a graceful DISC before the timer, so the other end is not left waiting.
+On the 40 m calling frequency, "anything in the passband" tripped busy with the radios'
+RX filters wide open (common digital-mode practice). The daemon already band-limits its own
+busy measurement to about ±400 Hz around the signal, so far-off QRM is ignored for the
+direct power reading — the mechanism that trips it with a wide filter is the radio's **AGC**:
+a strong signal anywhere in the SSB passband pumps the gain inside that ±400 Hz slot and
+disturbs the noise floor the detector learns.
+
+- **Operate:** set the radio's RX/DSP filter to ~500 Hz centred on 1500 Hz audio (keep it
+  ≥ 500 Hz so it passes Aether's full 1260–1740 Hz signal), and use AGC FAST/AUTO or OFF.
+  That keeps adjacent QRM out of the AGC. QRM within ±400 Hz of the tone genuinely occupies
+  the channel and still trips busy — move the dial to a clear spot or raise the busy
+  threshold (Setup step 4).
+- **Modem:** there is no clean modem substitute — the AGC is the radio's. Not an action item.
 
 ### 4. Sidecar counters are daemon-lifetime, not per-session (diagnostic quality — low)
 
@@ -102,21 +113,23 @@ Carried over; not part of this path.
 
 ## Protocol for the next OTA test
 
-1. Both stations on **Beta 26** (this release), both at **500 Hz**, same agreed
+1. Both stations on **Beta 27** (this release), both at **500 Hz**, same agreed
    frequency and time.
-2. **Probe first** (Session tab). Record the both-way SNR. Proceed only if it is roughly
+2. **Set the radio RX filter to ~500 Hz centred on 1500 Hz** and AGC FAST/AUTO or OFF
+   (item 3b), so a crowded band does not keep the busy detector tripped.
+3. **Probe first** (Session tab). Record the both-way SNR. Proceed only if it is roughly
    ≥ 6 dB each way.
-3. Run a **Test session** (Session tab) if the probe is good — it sends a probe, a message,
+4. Run a **Test session** (Session tab) if the probe is good — it sends a probe, a message,
    a file and a burst at every mode, and leaves a `_test` sidecar the bench can replay.
    Then Contribute it (the button is on the Session tab now).
-4. Do **two data passes**: one with **compression off**, one with it **on**, sending a
+5. Do **two data passes**: one with **compression off**, one with it **on**, sending a
    known repeated string (e.g. "the quick brown fox jumps over the lazy dog") both
    directions so decode correctness is checkable by eye.
-5. If it keeps timing out, **pin a slow mode**: set *Fastest mode* low (3–4) in Setup step
+6. If it keeps timing out, **pin a slow mode**: set *Fastest mode* low (3–4) in Setup step
    4, to test whether the rate controller is over-climbing for the path.
-6. Keep the mobile **stationary**; note whether the engine is running (alternator RFI).
-7. **Both operators keep and send their `recordings/` sidecars + WAVs.** The mobile's are
-   as important as the home's — item 2 cannot be settled without them.
+7. Keep the mobile **stationary**; note whether the engine is running (alternator RFI).
+8. **Both operators keep and send their `recordings/` sidecars + WAVs.** The mobile's are
+   as important as the home's.
 
 ## Owners
 
