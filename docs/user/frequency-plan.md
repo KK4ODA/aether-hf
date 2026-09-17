@@ -63,7 +63,7 @@ segments of the Region 2 band plan; check your own national plan, which may diff
 |---|---|---|---|---|
 | 80 m | 3.585–3.600 MHz | **3.590 MHz** | 3.5903–3.5926 | Region 2. 80 m allocations vary more than any other band; check yours. |
 | 40 m | 7.100–7.105 MHz | **7.101 MHz** | 7.1013–7.1036 | The segment is 5 kHz wide: 7.101 is the only dial that fits a 2.3 kHz signal with margin. Away from FT8 (7.074) and JS8 (7.078). |
-| 30 m | 10.140–10.150 MHz | — | — | **Not at 2.3 kHz.** The IARU plans limit 30 m to 500 Hz; the 500 Hz waveform (`[radio] bandwidth = 500`) is what 30 m calls for, and 10.141 is its place. |
+| 30 m | 10.140–10.150 MHz | **10.141 MHz** at 500 Hz | 10.1423–10.1427 | The IARU plans mark 30 m for narrow modes of 500 Hz or less, so 10.141 is a 500 Hz dial (`[radio] bandwidth = 500`). 2.3 kHz signals are nonetheless in use on the band, Winlink gateways among them; what your own plan and licence allow is yours to check. |
 | 20 m | 14.0950–14.0995 and 14.1005–14.112 MHz | **14.107 MHz** | 14.1073–14.1096 | The band most likely to be usable for a first contact. The gap at 14.0995–14.1005 protects the International Beacon Project on 14.100; stay above it. |
 | 17 m | 18.105–18.110 MHz | **18.107 MHz** | 18.1073–18.1096 | 18.106 or lower runs into JS8 (18.104); 18.108 spills past 18.110. |
 | 15 m | 21.090–21.100 MHz | **21.094 MHz** | 21.0943–21.0966 | |

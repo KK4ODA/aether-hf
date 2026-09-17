@@ -229,7 +229,7 @@ pub struct RadioSection {
     #[serde(default = "default_busy_threshold")]
     pub busy_threshold_db: f64,
     /// The waveform's bandwidth in hertz: 2300, the default, or 500 — the bandwidth
-    /// peer-to-peer contacts are made in and the only one 30 m allows. Both stations of a
+    /// peer-to-peer contacts and `VarAC`'s calling frequencies use. Both stations of a
     /// session use the same one; a call in the other bandwidth is not heard.
     #[serde(default = "default_bandwidth")]
     pub bandwidth: u32,
@@ -523,7 +523,10 @@ pub struct Config {
     /// Which shape of file this is. See [`SCHEMA_VERSION`].
     #[serde(default = "first_schema")]
     pub schema_version: u32,
-    /// This station's callsign. There is no default; nobody else can supply it.
+    /// This station's callsign. There is no default; nobody else can supply it. Up to nine
+    /// characters of letters, digits, `-` and `/`, so an SSID (`KK4ODA-1`) or a suffix
+    /// (`KK4ODA/P`) is part of it; a host program that names its own callsign (Winlink
+    /// Express's MYCALL) is answered to as well.
     pub callsign: String,
     /// Who and where, for the field log.
     #[serde(default)]
@@ -1007,6 +1010,8 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
 schema_version = 1
 
+# Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
+# (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
 callsign = "N0CALL"
 
 [operator]
@@ -1051,8 +1056,8 @@ max_key_s = 30.0
 # answers: the peer is waiting, and silence only makes it retransmit.
 wait_for_clear = true
 busy_threshold_db = 6.0
-# The waveform: 2300 Hz, or 500 Hz — the bandwidth peer-to-peer contacts are made in and
-# the only one 30 m allows. Both stations of a session use the same one.
+# The waveform: 2300 Hz, or 500 Hz — the bandwidth peer-to-peer contacts and VarAC's
+# calling frequencies use. Both stations of a session use the same one.
 bandwidth = 2300
 # Answer calls but never make one, and never beacon: how an unattended station is left on
 # a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).

@@ -19,6 +19,7 @@ pub mod grid;
 pub mod heard;
 pub mod host;
 pub mod log;
+pub mod memories;
 pub mod ptt;
 pub mod record;
 pub mod replay;

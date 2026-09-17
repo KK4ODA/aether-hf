@@ -29,6 +29,9 @@ request meets the rules the first time.
    waveform parameters from `model/aether_model/waveform.py`, never restated by hand.
 7. **Licensing**: by contributing you agree your work is licensed MIT OR Apache-2.0. Code
    under another licence cannot be merged.
+8. **The panel explains itself.** Every control and indicator in `app/ui/` — button,
+   field, select, lamp, reading, chart, table heading — has a `title` tooltip saying
+   what it does or shows, in plain words. Add one with anything you add.
 
 ## Workflow
 

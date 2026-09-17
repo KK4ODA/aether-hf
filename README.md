@@ -54,7 +54,7 @@ the spectrum, the waterfall, and every frame the receiver found:
   off) and Pat (`varahf`) talk to the daemon's VARA-compatible port. What each client sends,
   what is verified and what is not is in
   [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md). The modem runs at
-  2300 Hz or, for peer-to-peer contacts, VarAC and 30 m, at **500 Hz** (`[radio]
+  2300 Hz or, for peer-to-peer contacts and VarAC, at **500 Hz** (`[radio]
   bandwidth`; `docs/spec/air-interface.md` §2.3) — both stations of a session use the same
   one. VarAC pings and connects to it at 500 Hz on the bench.
 * **Gateway:** the `aetherd-…` archive and [`docs/user/gateway-kit.md`](docs/user/gateway-kit.md)

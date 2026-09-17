@@ -70,6 +70,23 @@ pub trait Ptt: Send {
     fn frequency_hz(&mut self) -> Option<u64> {
         None
     }
+
+    /// Whether `set_frequency_hz` has a way to ask: CAT and `rigctld` do.
+    fn can_tune(&self) -> bool {
+        false
+    }
+
+    /// Tune the radio to `hz`, when this backend has a way to ask.
+    ///
+    /// # Errors
+    /// If it has none — a keying line, a GPIO pin, nothing at all — or the radio refused.
+    fn set_frequency_hz(&mut self, _hz: u64) -> Result<(), PttError> {
+        Err(PttError::Backend(
+            "the keying interface has no way to ask; tuning takes CAT on the radio's own port, \
+             or rigctld"
+                .into(),
+        ))
+    }
 }
 
 impl<P: Ptt + ?Sized> Ptt for Box<P> {
@@ -83,6 +100,14 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
 
     fn frequency_hz(&mut self) -> Option<u64> {
         (**self).frequency_hz()
+    }
+
+    fn can_tune(&self) -> bool {
+        (**self).can_tune()
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
+        (**self).set_frequency_hz(hz)
     }
 
     fn describe(&self) -> String {
@@ -241,6 +266,15 @@ impl Ptt for RigctldPtt {
         // rig cannot say. Best effort: a recording without a frequency is still a recording.
         self.query("f\n").and_then(|line| line.trim().parse().ok())
     }
+
+    fn can_tune(&self) -> bool {
+        true
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
+        // `F` is set_freq; the daemon answers `RPRT 0` when the rig took it
+        self.command(&format!("F {hz}\n"))
+    }
 }
 
 /// What a watchdog poll found.
@@ -308,6 +342,11 @@ impl<P: Ptt> PttWatchdog<P> {
     /// What the backend is.
     pub fn describe(&self) -> String {
         self.inner.describe()
+    }
+
+    /// Whether the backend can tune the radio.
+    pub fn can_tune(&self) -> bool {
+        self.inner.can_tune()
     }
 
     /// Key the transmitter.
@@ -398,6 +437,29 @@ mod tests {
         assert_eq!(icom.frequency_query(), [0xFE, 0xFE, 0x94, 0xE0, 0x03, 0xFD]);
         assert!(!icom.keying_accepted(&[0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD]));
         assert!(icom.keying_accepted(&[0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD]));
+    }
+
+    #[test]
+    fn the_tuning_command_is_the_published_one_in_each_dialect() {
+        let yaesu = CatProtocol::Yaesu { data: true };
+        assert_eq!(yaesu.frequency_set(14_107_000), b"FA014107000;");
+        assert_eq!(
+            CatProtocol::Kenwood.frequency_set(7_101_000),
+            b"FA00007101000;"
+        );
+        let icom = CatProtocol::Icom { address: 0x94 };
+        let command = icom.frequency_set(14_107_000);
+        assert_eq!(
+            command,
+            [
+                0xFE, 0xFE, 0x94, 0xE0, 0x05, 0x00, 0x70, 0x10, 0x14, 0x00, 0xFD
+            ]
+        );
+        // the same five bytes read back as the frequency: one layout both ways
+        let mut answer = vec![0xFE, 0xFE, 0xE0, 0x94, 0x03];
+        answer.extend_from_slice(&command[5..10]);
+        answer.push(0xFD);
+        assert_eq!(icom.parse_frequency(&answer), Some(14_107_000));
     }
 
     #[test]
@@ -535,6 +597,54 @@ mod tests {
         assert_eq!(ptt.poll(100.0), Ok(WatchdogState::Idle));
     }
 
+    /// A stand-in for `rigctld`: one client, Hamlib's one-line answers, and a record of
+    /// every line it was sent.
+    fn fake_rigctld() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address").to_string();
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = received.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut dial: u64 = 14_107_000;
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { break };
+                seen.lock().expect("lock").push(line.clone());
+                let answer = match line.as_str() {
+                    "f" => format!("{dial}\n"),
+                    other => {
+                        if let Some(hz) = other.strip_prefix("F ") {
+                            dial = hz.trim().parse().expect("hertz");
+                        }
+                        "RPRT 0\n".to_owned()
+                    }
+                };
+                writer.write_all(answer.as_bytes()).expect("write");
+            }
+        });
+        (address, received)
+    }
+
+    #[test]
+    fn rigctld_is_asked_for_the_dial_and_told_a_new_one() {
+        let (address, received) = fake_rigctld();
+        let mut rig = RigctldPtt::new(&address, std::time::Duration::from_secs(2));
+        assert!(rig.can_tune());
+        assert_eq!(rig.frequency_hz(), Some(14_107_000));
+        rig.set_frequency_hz(7_101_000).expect("tuned");
+        assert_eq!(rig.frequency_hz(), Some(7_101_000));
+        assert_eq!(
+            *received.lock().expect("lock"),
+            vec!["f".to_owned(), "F 7101000".to_owned(), "f".to_owned()]
+        );
+        let mut none = NullPtt::default();
+        assert!(!none.can_tune());
+        assert!(none.set_frequency_hz(7_101_000).is_err());
+    }
+
     #[test]
     fn the_null_backend_keys_nothing() {
         let mut ptt = NullPtt::default();
@@ -625,6 +735,28 @@ impl CatProtocol {
         match self {
             Self::Yaesu { .. } | Self::Kenwood => b"FA;".to_vec(),
             Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x03, 0xFD],
+        }
+    }
+
+    /// The command that tunes VFO A to `hz`: nine digits on a Yaesu, eleven on a
+    /// Kenwood, and CI-V command 05 with the frequency as five BCD bytes, least
+    /// significant first, on an Icom — the same layout its frequency answer uses.
+    #[must_use]
+    pub fn frequency_set(self, hz: u64) -> Vec<u8> {
+        match self {
+            Self::Yaesu { .. } => format!("FA{hz:09};").into_bytes(),
+            Self::Kenwood => format!("FA{hz:011};").into_bytes(),
+            Self::Icom { address } => {
+                let mut bytes = vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x05];
+                let mut rest = hz;
+                for _ in 0..5 {
+                    let pair = u8::try_from(rest % 100).unwrap_or(0);
+                    rest /= 100;
+                    bytes.push(((pair / 10) << 4) | (pair % 10));
+                }
+                bytes.push(0xFD);
+                bytes
+            }
         }
     }
 
@@ -809,6 +941,44 @@ impl Ptt for CatPtt {
         let query = self.protocol.frequency_query();
         let reply = self.ask(&query)?;
         self.protocol.parse_frequency(&reply)
+    }
+
+    fn can_tune(&self) -> bool {
+        true
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
+        use std::io::Write as _;
+
+        let command = self.protocol.frequency_set(hz);
+        if self.protocol.acknowledges_keying() {
+            // an Icom answers FB or FA to every command, this one included
+            let reply = self.ask(&command).unwrap_or_default();
+            if !self.protocol.keying_accepted(&reply) {
+                return Err(PttError::Backend(format!(
+                    "{}: the radio did not accept the frequency (answer {:02X?})",
+                    self.path, reply
+                )));
+            }
+            return Ok(());
+        }
+        self.port
+            .write_all(&command)
+            .and_then(|()| self.port.flush())
+            .map_err(|e| PttError::Backend(format!("{}: {e}", self.path)))?;
+        // a Yaesu or Kenwood says nothing back: read the dial to see that it moved
+        match self.frequency_hz() {
+            Some(now) if now.abs_diff(hz) <= 10 => Ok(()),
+            Some(now) => Err(PttError::Backend(format!(
+                "{}: the radio reads {now} Hz after being asked for {hz}; a locked VFO or a \
+                 band the radio has not got",
+                self.path
+            ))),
+            None => Err(PttError::Backend(format!(
+                "{}: the radio did not answer after the frequency was set",
+                self.path
+            ))),
+        }
     }
 }
 

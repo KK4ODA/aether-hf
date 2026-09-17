@@ -725,6 +725,12 @@ impl<P: Ptt> Station<P> {
         self.ptt.describe()
     }
 
+    /// Whether the keying interface can tune the radio (CAT or `rigctld`).
+    #[must_use]
+    pub fn can_tune(&self) -> bool {
+        self.ptt.can_tune()
+    }
+
     // ── commands ──────────────────────────────────────────────────────
 
     /// Call a station, as this station's first callsign.
@@ -883,6 +889,32 @@ impl<P: Ptt> Station<P> {
         self.config.record_auto = config.record.auto;
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
+    }
+
+    /// Tune the radio, when the keying interface can ask it to. Refused during a session
+    /// or while transmitting: the other station is on the frequency this one would leave.
+    ///
+    /// # Errors
+    /// With the reason, in a sentence for the operator.
+    pub fn tune_to(&mut self, hz: u64) -> Result<(), String> {
+        if self.transmitting {
+            return Err("the transmitter is keyed".into());
+        }
+        if self.engine.state() != State::Idle {
+            return Err("a session is running".into());
+        }
+        self.ptt
+            .inner_mut()
+            .set_frequency_hz(hz)
+            .map_err(|e| match e {
+                crate::ptt::PttError::Backend(message) => message,
+                other @ crate::ptt::PttError::WatchdogTripped => other.to_string(),
+            })?;
+        // what the radio now reads, and a fresh reading soon after
+        self.frequency.value = Some(hz);
+        self.frequency.next_ask_s = self.now() + 2.0;
+        self.note("tune", &format!("dial set to {hz} Hz"));
+        Ok(())
     }
 
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody.

@@ -85,6 +85,8 @@ pub fn is_mutating(method: &str) -> bool {
             | "config.set"
             | "ptt.test"
             | "heard.clear"
+            | "frequencies.set"
+            | "frequency.set"
     )
 }
 
@@ -120,6 +122,8 @@ pub struct DaemonState {
     pub supervised: bool,
     /// The stations heard, kept in a file beside the configuration.
     pub heard: crate::heard::HeardList,
+    /// The remembered dials, kept beside it too.
+    pub memories: crate::memories::Memories,
     /// The host interface, when one is listening.
     pub host: Option<HostStatus>,
 }
@@ -152,6 +156,9 @@ impl DaemonState {
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
             heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
+            memories: crate::memories::Memories::open(Some(
+                path.with_file_name("frequencies.json"),
+            )),
             host: None,
             path,
         }
@@ -229,6 +236,22 @@ pub fn dispatch_with<P: Ptt>(
             let cleared = daemon.map_or(0, |d| d.heard.clear());
             return Response::ok(request.id.clone(), json!({ "cleared": cleared }));
         }
+        "frequencies.list" => {
+            let (memories, path) = daemon.as_ref().map_or_else(
+                || (crate::memories::defaults(), None),
+                |d| {
+                    (
+                        d.memories.entries().to_vec(),
+                        d.memories.path().map(|p| p.display().to_string()),
+                    )
+                },
+            );
+            return Response::ok(
+                request.id.clone(),
+                json!({ "memories": memories, "path": path, "limit": crate::memories::LIMIT }),
+            );
+        }
+        "frequencies.set" => return frequencies_set(daemon, &request.params, request.id.clone()),
         "status" => {
             let mut result = status(station);
             result["supervised"] = json!(daemon.as_ref().is_some_and(|d| d.supervised));
@@ -414,6 +437,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, params, id),
         "probe" => probe(station, params, id),
+        "frequency.set" => tune_to(station, params, id),
         "test.start" => test_start(station, params, id),
         "test.status" => Response::ok(id, station.test_status()),
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
@@ -535,6 +559,53 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
     }
 }
 
+/// The remembered dials, replaced whole and written beside the configuration.
+fn frequencies_set(
+    daemon: Option<&mut DaemonState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let Some(daemon) = daemon else {
+        return Response::failed(
+            id,
+            ApiError::new("refused", "This modem keeps no list of dials.", false),
+        );
+    };
+    let entries: Vec<crate::memories::Memory> = match params
+        .get("memories")
+        .map(|v| serde_json::from_value(v.clone()))
+    {
+        Some(Ok(entries)) => entries,
+        _ => {
+            return Response::failed(
+                id,
+                ApiError::new(
+                    "bad_params",
+                    "A list is required: {\"memories\": [{\"hz\": 14107000, \"name\": \"20 m\"}]}.",
+                    false,
+                ),
+            );
+        }
+    };
+    if let Err(reason) = daemon.memories.replace(entries) {
+        return Response::failed(id, ApiError::new("bad_params", reason, false));
+    }
+    if let Err(error) = daemon.memories.save() {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "refused",
+                format!("The list could not be written: {error}."),
+                true,
+            ),
+        );
+    }
+    Response::ok(
+        id,
+        json!({ "memories": daemon.memories.entries(), "path": daemon.memories.path().map(|p| p.display().to_string()) }),
+    )
+}
+
 /// A Test session (P6-7): probe, call, a message, a file, the mode ladder, disconnect —
 /// recorded, and reported by `test.status` while it runs and after.
 fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
@@ -557,6 +628,32 @@ fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Strin
                 },
                 format!("Cannot start a test session with {remote}: {reason}."),
                 reason.contains("already"),
+            ),
+        ),
+    }
+}
+
+/// The radio tuned to a dial, over CAT or `rigctld`; refused in a session or with a
+/// keying interface that cannot ask.
+fn tune_to<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let Some(hz) = params.get("hz").and_then(Value::as_u64) else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A frequency is required: {\"hz\": 14107000}.",
+                false,
+            ),
+        );
+    };
+    match station.tune_to(hz) {
+        Ok(()) => Response::ok(id, json!({ "hz": hz })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                "refused",
+                format!("Cannot tune the radio: {reason}."),
+                false,
             ),
         ),
     }
@@ -715,6 +812,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "compression_saving": station.compression_saving(),
         "uptime_s": station.now(),
         "ptt": station.ptt_description(),
+        "can_tune": station.can_tune(),
         "queued_bytes": engine.tx_pending_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
         "link": link_json(station),

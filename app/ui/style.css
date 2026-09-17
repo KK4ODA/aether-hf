@@ -1071,6 +1071,10 @@ tbody tr:hover {
   flex-wrap: wrap;
 }
 
+.row[hidden] {
+  display: none;
+}
+
 .row > label {
   min-width: 96px;
   color: var(--text-2);
@@ -1165,6 +1169,13 @@ input[type="range"] {
 input.port {
   font-family: var(--numerals);
   width: 7ch;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+input.mhz {
+  font-family: var(--numerals);
+  width: 10ch;
   text-transform: none;
   letter-spacing: normal;
 }

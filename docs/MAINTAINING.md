@@ -107,6 +107,11 @@ Every one of these has cost the project a day at some point; none is decoration.
    one-commit PR, reworded by you before merging.
 10. **Style.** `ruff`, `mypy`, `cargo fmt --all`, `cargo clippy --all-targets
     --all-features -- -D warnings` — all of which CI runs, so this is item 1 again.
+11. **Every control and indicator in the panel has a tooltip.** A new button, field,
+    select, lamp, reading, chart or table heading in `app/ui/index.html` carries a
+    `title` saying what it does or shows, in the panel's plain wording (`CLAUDE.md`,
+    "the panel's appearance"); one built in `app.js` sets `.title` the same way. A PR
+    that adds one without is asked for it.
 
 ### 3.4 Run it
 

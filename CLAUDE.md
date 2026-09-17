@@ -335,6 +335,19 @@ ADR-0008's open question made a number; the `fieldtest` unit test excuses those 
 and says so; P9-1's business. The two-daemon test runs a Test session over `[sim]`
 (`max_mode = 5` keeps it to six rungs).
 
+**The dial memories and the tooltip rule (2026-09-17):** `core/aetherd/src/memories.rs`
+keeps the remembered dials (`frequencies.json` beside the configuration; the frequency
+plan's proposals until edited; `frequencies.list`/`frequencies.set`), `Ptt::set_frequency_hz`
+and `can_tune` tune a radio over CAT (`FA…;` / CI-V `05`, verified by reading back or by the
+Icom's FB) or `rigctld` (`F`), `Station::tune_to` refuses it in a session or while keyed,
+`frequency.set` is the method and the Session tab's Dial row (select, Tune, Add, Remove;
+the select follows the radio's dial when it changes) is the panel. **Rule: every control
+and indicator in the panel carries a `title` tooltip** — `index.html` has one on every
+id'd element, reading card and table heading, `app.js` sets `.title` on what it builds;
+a new one without a tooltip is not done (CONTRIBUTING §8, MAINTAINING rule 11). The
+callsign note says an SSID or a `/` suffix is fine and a host program's MYCALL is
+answered to; the 500 Hz option no longer names 30 m (2.3 kHz signals are used there too).
+
 **P9-1's tool (2026-09-16 evening):** `tools/channel_cable.py` runs the model's `HfChannel` in
 real time between virtual audio cables (48 kHz audio ↔ 8 kHz complex baseband around
 1500 Hz, a 0–3.4 kHz passband, the SNR against `--signal-dbfs` or `--auto-level`, noise on

@@ -53,6 +53,7 @@ function connect() {
     refreshStatus();
     loadCapabilities();
     loadHeard();
+    loadMemories();
     // devices first: the configuration selects among them, and a profile's guess must not
     // overwrite what the file says
     await loadDevices();
@@ -110,6 +111,9 @@ function setLink(up) {
     "btn-probe",
     "btn-send",
     "btn-record",
+    "btn-tune-to",
+    "btn-memory-add",
+    "btn-memory-remove",
   ]) {
     $(id).disabled = !up;
   }
@@ -232,6 +236,7 @@ async function refreshStatus() {
   applyMetrics(status.metrics ?? {});
   renderCounters(status.counters ?? {});
 
+  applyDial(status);
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
   $("btn-probe").disabled = status.state !== "idle";
@@ -736,6 +741,158 @@ async function loadHeard() {
     return;
   }
   renderHeard();
+}
+
+// ── the dial memories ───────────────────────────────────────────────
+//
+// The modem keeps the list (`frequencies.list`/`frequencies.set`), so it is the same from
+// every panel and survives a reinstall; the panel only edits it whole. The select follows
+// the radio's own dial when the dial changes and matches an entry, and otherwise keeps the
+// operator's choice, so a pick made before Tune is not undone by the next status tick.
+
+let memories = [];
+let memoriesLoaded = false;
+let lastDialHz = null;
+let canTune = false;
+let lastState = null;
+
+function memoryLabel(entry) {
+  const mhz = (entry.hz / 1e6).toFixed(entry.hz % 1000 === 0 ? 3 : 4);
+  return entry.name ? `${mhz} MHz — ${entry.name}` : `${mhz} MHz`;
+}
+
+function renderMemories(selectHz = null) {
+  const select = $("memory");
+  const chosen = selectHz ?? Number(select.value) ?? null;
+  select.replaceChildren();
+  if (memories.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "no dial remembered yet — Add one";
+    select.append(option);
+  }
+  for (const entry of memories) {
+    const option = document.createElement("option");
+    option.value = String(entry.hz);
+    option.textContent = memoryLabel(entry);
+    select.append(option);
+  }
+  if (chosen && memories.some((m) => m.hz === chosen)) select.value = String(chosen);
+  $("btn-memory-remove").disabled = memories.length === 0;
+  updateTuneButton();
+}
+
+function updateTuneButton() {
+  const idle = lastState === null || lastState === "idle";
+  $("btn-tune-to").disabled = !canTune || !idle || memories.length === 0;
+}
+
+async function loadMemories() {
+  try {
+    const result = await call("frequencies.list");
+    memories = result.memories ?? [];
+    memoriesLoaded = true;
+  } catch {
+    return;
+  }
+  renderMemories();
+}
+
+async function saveMemories(next, description) {
+  try {
+    const result = await call("frequencies.set", { memories: next });
+    memories = result.memories ?? next;
+    $("memory-note").textContent = description;
+    delete $("memory-note").dataset.state;
+    log(description);
+    return true;
+  } catch (error) {
+    $("memory-note").textContent = error.message;
+    $("memory-note").dataset.state = "error";
+    log(error.message, true);
+    return false;
+  }
+}
+
+function applyDial(status) {
+  canTune = status.can_tune === true;
+  lastState = status.state ?? null;
+  // a first request lost to a slow start is asked again with the next status
+  if (!memoriesLoaded) loadMemories();
+  const reading = $("dial-reading");
+  if (status.frequency_hz) {
+    reading.textContent = `radio: ${formatHz(status.frequency_hz)} Hz`;
+    if (status.frequency_hz !== lastDialHz) {
+      lastDialHz = status.frequency_hz;
+      const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
+      if (match) $("memory").value = String(match.hz);
+    }
+  } else if (canTune) {
+    reading.textContent = "radio: no reading yet";
+  } else {
+    reading.textContent = "tuning needs CAT or rigctld keying (Setup step 2)";
+  }
+  updateTuneButton();
+}
+
+function parseMhz(text) {
+  const value = Number(String(text).trim().replace(",", "."));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  // a dial typed in kHz is still a dial: 14107 is 14.107
+  const hz = value >= 1000 ? value * 1e3 : value * 1e6;
+  return Math.round(hz);
+}
+
+function openMemoryForm() {
+  const form = $("memory-form");
+  form.hidden = false;
+  $("memory-mhz").value = lastDialHz ? (lastDialHz / 1e6).toFixed(lastDialHz % 1000 === 0 ? 3 : 4) : "";
+  $("memory-name").value = "";
+  $("memory-note").textContent = "";
+  delete $("memory-note").dataset.state;
+  $("memory-mhz").focus();
+}
+
+function closeMemoryForm() {
+  $("memory-form").hidden = true;
+}
+
+async function saveMemoryForm() {
+  const hz = parseMhz($("memory-mhz").value);
+  if (!hz) {
+    $("memory-note").textContent = "a frequency in MHz is needed, such as 14.107";
+    $("memory-note").dataset.state = "error";
+    $("memory-mhz").focus();
+    return;
+  }
+  const name = $("memory-name").value.trim();
+  const next = memories.filter((m) => m.hz !== hz).concat([{ hz, name }]);
+  const renamed = memories.some((m) => m.hz === hz);
+  const ok = await saveMemories(next, `${renamed ? "renamed" : "remembered"} ${formatHz(hz)} Hz${name ? ` — ${name}` : ""}`);
+  if (!ok) return;
+  closeMemoryForm();
+  renderMemories(hz);
+}
+
+async function removeMemory() {
+  const hz = Number($("memory").value);
+  const entry = memories.find((m) => m.hz === hz);
+  if (!entry) return;
+  const next = memories.filter((m) => m.hz !== hz);
+  const ok = await saveMemories(next, `forgot ${memoryLabel(entry)}`);
+  if (!ok) return;
+  renderMemories();
+}
+
+async function tuneToMemory() {
+  const hz = Number($("memory").value);
+  if (!hz) return;
+  const entry = memories.find((m) => m.hz === hz);
+  const ok = await act(() => call("frequency.set", { hz }), `tuned to ${entry ? memoryLabel(entry) : `${formatHz(hz)} Hz`}`);
+  if (ok) {
+    $("dial-reading").textContent = `radio: ${formatHz(hz)} Hz`;
+    lastDialHz = hz;
+  }
 }
 
 function noteHeard(entry) {
@@ -2067,6 +2224,21 @@ function wire() {
     const ok = await act(() => call("test.start", { remote }), `test session with ${remote}`);
     if (!ok) $("test-result").textContent = "";
   });
+  $("btn-tune-to").addEventListener("click", tuneToMemory);
+  $("btn-memory-add").addEventListener("click", openMemoryForm);
+  $("btn-memory-remove").addEventListener("click", removeMemory);
+  $("btn-memory-save").addEventListener("click", saveMemoryForm);
+  $("btn-memory-cancel").addEventListener("click", closeMemoryForm);
+  for (const id of ["memory-mhz", "memory-name"]) {
+    $(id).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveMemoryForm();
+      } else if (event.key === "Escape") {
+        closeMemoryForm();
+      }
+    });
+  }
   $("btn-record").addEventListener("click", toggleRecording);
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
