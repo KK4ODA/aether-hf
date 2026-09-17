@@ -197,6 +197,12 @@ async function refreshStatus() {
   setState(status.state, name + who, detail + role);
 
   $("callsign").textContent = status.callsign || "—";
+  // a first run: the configuration still has the placeholder callsign, so the wizard is
+  // where this panel should open — once, and only until Setup is saved
+  if (!firstRunShown && status.callsign === "N0CALL") {
+    firstRunShown = true;
+    selectTab($("tab-setup"));
+  }
   $("footer-version").textContent = `aetherd ${status.version} · ptt: ${status.ptt}`;
   $("help-daemon").textContent = `aetherd ${status.version}`;
   $("help-callsign").textContent = status.callsign || "—";
@@ -440,6 +446,7 @@ let lastPeer = null;
 // other station reported, and the last frames — kept per browser, and dropped once
 // they are older than the chart shows.
 let testRunning = false;
+let firstRunShown = false;
 const HISTORY_KEY = "aether.history";
 let historySaveTimer = null;
 
