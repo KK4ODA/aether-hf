@@ -441,9 +441,74 @@ impl AudioIo for Loopback {
     }
 }
 
+/// A sound card that could not be opened, kept so the daemon can start anyway.
+///
+/// It delivers silence and discards what is played, but it does so *on the clock*: the
+/// station's sense of time comes from the samples it is handed, so a backend that
+/// returned nothing would freeze the modem rather than run it quietly. Silence paced
+/// like a real card leaves the panel live, the log ticking and Setup reachable, which
+/// is the whole point — the screen that names the sound card is served by the daemon a
+/// missing sound card would otherwise stop.
+#[derive(Debug)]
+pub struct Silence {
+    rate: f64,
+    started: std::time::Instant,
+    delivered: u64,
+}
+
+impl Silence {
+    /// A silent card at the modem's sample rate.
+    #[must_use]
+    pub fn new(rate: u32) -> Self {
+        Self {
+            rate: f64::from(rate),
+            started: std::time::Instant::now(),
+            delivered: 0,
+        }
+    }
+}
+
+impl AudioIo for Silence {
+    fn capture(&mut self) -> Vec<f32> {
+        // however long has really passed, that many samples — no more, so the modem
+        // does not race ahead of the clock, and no fewer, so it does not stall
+        let due = (self.started.elapsed().as_secs_f64() * self.rate) as u64;
+        let owed = usize::try_from(due.saturating_sub(self.delivered)).unwrap_or(0);
+        self.delivered = due;
+        vec![0.0; owed]
+    }
+
+    fn playback(&mut self, _samples: &[f32]) {}
+
+    fn queued(&self) -> usize {
+        0
+    }
+
+    fn dropped(&self) -> usize {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn silence_keeps_the_clock_rather_than_stopping_it() {
+        let mut audio = Silence::new(48_000);
+        // nothing is owed the instant it opens, and what it hands over follows the clock
+        assert!(audio.capture().len() < 4_800);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let block = audio.capture();
+        assert!(
+            block.len() >= 1_200 && block.len() <= 12_000,
+            "50 ms of 48 kHz silence, got {}",
+            block.len()
+        );
+        assert!(block.iter().all(|&x| x == 0.0), "it is silence");
+        audio.playback(&[0.5; 128]);
+        assert_eq!(audio.queued(), 0, "what is played goes nowhere");
+    }
 
     #[test]
     fn loopback_returns_what_was_played() {

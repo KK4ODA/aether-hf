@@ -736,6 +736,12 @@ impl<P: Ptt> Station<P> {
         self.ptt.describe()
     }
 
+    /// Why this station cannot transmit, when its keying interface could not be opened.
+    #[must_use]
+    pub fn ptt_fault(&self) -> Option<String> {
+        self.ptt.fault()
+    }
+
     /// Whether the keying interface can tune the radio (CAT or `rigctld`).
     #[must_use]
     pub fn can_tune(&self) -> bool {
@@ -1810,6 +1816,40 @@ pub(crate) mod tests_support {
 mod tests {
     use super::*;
     use crate::ptt::NullPtt;
+
+    /// The safety property behind starting anyway: a station whose keying interface would
+    /// not open runs, but puts nothing on the air. `playback` keys before it copies a single
+    /// sample, so a refusal there means the sound card is handed silence, not a burst.
+    #[test]
+    fn a_station_whose_keying_failed_transmits_nothing() {
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            crate::ptt::BrokenPtt::new("cannot open the serial port COM9"),
+            1,
+        );
+        assert_eq!(
+            station.ptt_fault().as_deref(),
+            Some("cannot open the serial port COM9")
+        );
+        // ask it for the one thing that would key the radio
+        station
+            .beacon()
+            .expect("a beacon is queued like any other burst");
+        let mut out = vec![1.0f32; 4096];
+        let refused = station
+            .playback(&mut out)
+            .expect_err("keying must fail rather than transmit");
+        assert!(matches!(refused, crate::ptt::PttError::Backend(_)));
+        assert!(!station.transmitting(), "it never entered transmit");
+        assert!(
+            out.iter().all(|&x| x == 0.0),
+            "the sound card is handed silence, not a burst"
+        );
+    }
 
     #[test]
     fn cfo_is_reported_only_when_the_acquisition_can_be_trusted() {

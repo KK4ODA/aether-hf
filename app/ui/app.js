@@ -252,6 +252,7 @@ async function refreshStatus() {
       `Test session with ${t.remote}: ${t.step} — ${Math.round(t.elapsed_s)} s, ${t.rungs} rung${t.rungs === 1 ? "" : "s"}`;
   }
   applyRecording(status.recording ?? null);
+  applyFaults(status);
   applyRecordingsDir(status.recordings_dir ?? null);
   applyLastSession(status);
   // a fresh call must not leave the last probe's or test's outcome on the panel: a
@@ -2545,6 +2546,23 @@ async function copyDiagnostics() {
 }
 
 let recordingPath = null;
+
+// The modem runs even when its keying interface or sound card would not open, so that
+// Setup — the screen naming the very port or card at fault — can be reached. It says so
+// here, on every tab, because a station that is quietly deaf or mute is worse than one
+// that refused to start.
+function applyFaults(status) {
+  const banner = $("fault-banner");
+  const faults = [];
+  if (status.ptt_fault) {
+    faults.push(`Keying is unavailable — ${status.ptt_fault}. The modem is receiving only and will not transmit: choose the radio interface in Setup, step 2.`);
+  }
+  if (status.audio_fault) {
+    faults.push(`The sound card is unavailable — ${status.audio_fault}. The modem can neither hear nor transmit: choose the modem devices in Setup, step 2.`);
+  }
+  banner.textContent = faults.join(" ");
+  banner.hidden = faults.length === 0;
+}
 
 let recordingsDir = null;
 

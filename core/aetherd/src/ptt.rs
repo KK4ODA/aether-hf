@@ -71,6 +71,14 @@ pub trait Ptt: Send {
         None
     }
 
+    /// Why this interface cannot key, when it cannot. `None` for one that works.
+    ///
+    /// A station holding a faulted interface still runs and still receives; it simply
+    /// cannot transmit, and says why rather than pretending the radio is there.
+    fn fault(&self) -> Option<String> {
+        None
+    }
+
     /// Whether `set_frequency_hz` has a way to ask: CAT and `rigctld` do.
     fn can_tune(&self) -> bool {
         false
@@ -100,6 +108,10 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
 
     fn frequency_hz(&mut self) -> Option<u64> {
         (**self).frequency_hz()
+    }
+
+    fn fault(&self) -> Option<String> {
+        (**self).fault()
     }
 
     fn can_tune(&self) -> bool {
@@ -135,6 +147,51 @@ impl Ptt for NullPtt {
 
     fn describe(&self) -> String {
         "none (vox or receive only)".to_owned()
+    }
+}
+
+/// A keying interface that could not be opened, kept so the daemon can start anyway.
+///
+/// Refusing to start over a serial port that is not there traps the operator: the Setup
+/// screen that names the port is served by this very daemon, so the one comfortable way
+/// to correct the setting is behind the thing the setting stops. The daemon therefore
+/// starts with this instead, and the panel comes up with the reason on it.
+///
+/// Nothing reaches the air. `key` fails with the original reason, and the station copies
+/// no audio to the sound card until keying has succeeded, so a faulted station is deaf
+/// to nothing and mute to everything.
+#[derive(Debug, Clone)]
+pub struct BrokenPtt {
+    reason: String,
+}
+
+impl BrokenPtt {
+    /// A faulted interface that will explain itself every time it is asked.
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+impl Ptt for BrokenPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        Err(PttError::Backend(self.reason.clone()))
+    }
+
+    /// Releasing something that was never keyed is not a failure, and must not be one:
+    /// the run loop unkeys on paths where an error would be noise about nothing.
+    fn unkey(&mut self) -> Result<(), PttError> {
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        format!("unavailable — {}", self.reason)
+    }
+
+    fn fault(&self) -> Option<String> {
+        Some(self.reason.clone())
     }
 }
 
@@ -342,6 +399,12 @@ impl<P: Ptt> PttWatchdog<P> {
     /// What the backend is.
     pub fn describe(&self) -> String {
         self.inner.describe()
+    }
+
+    /// Why the backend cannot key, when it cannot.
+    #[must_use]
+    pub fn fault(&self) -> Option<String> {
+        self.inner.fault()
     }
 
     /// Whether the backend can tune the radio.
@@ -643,6 +706,28 @@ mod tests {
         let mut none = NullPtt::default();
         assert!(!none.can_tune());
         assert!(none.set_frequency_hz(7_101_000).is_err());
+    }
+
+    #[test]
+    fn a_keying_interface_that_would_not_open_refuses_every_key_and_says_why() {
+        let mut broken = BrokenPtt::new("cannot open the serial port COM9");
+        // it explains itself rather than pretending the radio is there
+        assert_eq!(
+            broken.fault().as_deref(),
+            Some("cannot open the serial port COM9")
+        );
+        assert!(broken.describe().contains("COM9"));
+        // and it never keys: the station copies no audio to the card until keying succeeds,
+        // so a station holding one cannot put a signal on the air
+        let refused = broken.key().expect_err("it must not key");
+        assert_eq!(
+            refused,
+            PttError::Backend("cannot open the serial port COM9".to_owned())
+        );
+        // releasing what was never keyed is not an error worth raising
+        broken.unkey().expect("unkey is a no-op");
+        // a working interface has no fault to report
+        assert_eq!(NullPtt::default().fault(), None);
     }
 
     #[test]

@@ -211,11 +211,7 @@ fn run() -> Result<Exit, String> {
     // must not put a carrier on the air to find out that they had the wrong serial port.
     // Neither does a simulated channel: there is no radio on the other end of a socket.
     let sim = config.sim_config();
-    let ptt: Box<dyn Ptt> = if args.dry_run || sim.is_some() {
-        Box::new(NullPtt::default())
-    } else {
-        open_ptt(&config.ptt).map_err(|e| e.to_string())?
-    };
+    let ptt = keying(&config, args.dry_run || sim.is_some(), &mut daemon);
     let mut station = Station::new(
         station_config(&config, &daemon.path),
         ptt,
@@ -232,19 +228,7 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    let mut audio: Box<dyn AudioIo> = if args.dry_run {
-        "dry run: audio loops back and nothing is keyed".clone_into(&mut daemon.audio);
-        Box::new(Loopback::new())
-    } else if let Some(sim) = &sim {
-        let link = aetherd::sim::SimLink::open(sim)
-            .map_err(|e| format!("cannot open the simulated channel: {e}"))?;
-        daemon.audio.clone_from(&link.description);
-        Box::new(link)
-    } else {
-        let card = SoundCard::open(&config.audio_config()).map_err(|e| e.to_string())?;
-        daemon.audio.clone_from(&card.description);
-        Box::new(card)
-    };
+    let mut audio = sound(&config, args.dry_run, sim.as_ref(), &mut daemon)?;
     daemon
         .log
         .record(Level::Info, "audio", &daemon.audio, "Idle");
@@ -780,6 +764,84 @@ fn sighting_of(
         frequency_hz,
         activity,
         detail,
+    })
+}
+
+/// The keying interface to run with — or one that says why there is none.
+///
+/// A serial port that is not there is a setting to correct, not a reason to refuse to run:
+/// the Setup screen naming the port is served by this daemon, so a station that dies over a
+/// bad port hides the only comfortable way to fix it. It starts receive-only instead, with
+/// the reason on the panel, and puts nothing on the air until the setting is right.
+fn keying(config: &Config, keys_nothing: bool, daemon: &mut DaemonState) -> Box<dyn Ptt> {
+    // A dry run keys nothing, whatever the file says. Somebody checking their configuration
+    // must not put a carrier on the air to find out that they had the wrong serial port.
+    // Neither does a simulated channel: there is no radio on the other end of a socket.
+    if keys_nothing {
+        return Box::new(NullPtt::default());
+    }
+    match open_ptt(&config.ptt) {
+        Ok(ptt) => ptt,
+        Err(error) => {
+            let reason = error.to_string();
+            daemon.log.record(
+                Level::Error,
+                "ptt",
+                &format!(
+                    "{reason} — the modem is running receive-only and will not transmit; \
+                     set the radio interface in Setup"
+                ),
+                "Idle",
+            );
+            Box::new(aetherd::ptt::BrokenPtt::new(reason))
+        }
+    }
+}
+
+/// The audio to run on — or silence that says why there is none.
+///
+/// Same reasoning as [`keying`]: the Setup screen naming the sound card is served by this
+/// daemon, so dying over a card that is not plugged in hides the way to correct it. Silence
+/// is paced by the clock, so the modem runs quietly rather than freezing.
+///
+/// # Errors
+/// Only for a simulated channel that will not open, which is a developer's own doing.
+fn sound(
+    config: &Config,
+    dry_run: bool,
+    sim: Option<&aetherd::sim::SimConfig>,
+    daemon: &mut DaemonState,
+) -> Result<Box<dyn AudioIo>, String> {
+    if dry_run {
+        "dry run: audio loops back and nothing is keyed".clone_into(&mut daemon.audio);
+        return Ok(Box::new(Loopback::new()));
+    }
+    if let Some(sim) = sim {
+        let link = aetherd::sim::SimLink::open(sim)
+            .map_err(|e| format!("cannot open the simulated channel: {e}"))?;
+        daemon.audio.clone_from(&link.description);
+        return Ok(Box::new(link));
+    }
+    Ok(match SoundCard::open(&config.audio_config()) {
+        Ok(card) => {
+            daemon.audio.clone_from(&card.description);
+            Box::new(card)
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            daemon.log.record(
+                Level::Error,
+                "audio",
+                &format!(
+                    "{reason} — the modem is running without audio and can neither hear \
+                     nor transmit; set the modem devices in Setup"
+                ),
+                "Idle",
+            );
+            daemon.audio = format!("unavailable — {reason}");
+            daemon.audio_fault = Some(reason);
+            Box::new(aetherd::audio::Silence::new(config.audio.sample_rate))
+        }
     })
 }
 

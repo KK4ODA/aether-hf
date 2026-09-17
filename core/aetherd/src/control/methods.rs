@@ -109,6 +109,9 @@ pub struct DaemonState {
     pub audio: String,
     /// Captured samples dropped because the modem fell behind, since the start.
     pub dropped_audio: u64,
+    /// Why the sound card could not be opened, when it could not. The station runs on
+    /// silence until the devices are corrected, and the panel says so.
+    pub audio_fault: Option<String>,
     /// What the machine reports as audio devices and serial ports, for the bundle.
     ///
     /// A function rather than a call, because enumerating devices goes through the
@@ -154,6 +157,7 @@ impl DaemonState {
             started: std::time::SystemTime::now(),
             audio: String::new(),
             dropped_audio: 0,
+            audio_fault: None,
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
             heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
@@ -260,6 +264,7 @@ pub fn dispatch_with<P: Ptt>(
                 || json!({ "enabled": false, "connected": false }),
                 |d| d.host_json(),
             );
+            result["audio_fault"] = json!(daemon.as_ref().and_then(|d| d.audio_fault.clone()));
             // which installation this daemon runs from: a shell that finds one already
             // listening decides from this whether it is its own to stop
             result["binary"] = json!(
@@ -817,6 +822,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "compression_saving": station.compression_saving(),
         "uptime_s": station.now(),
         "ptt": station.ptt_description(),
+        "ptt_fault": station.ptt_fault(),
         "can_tune": station.can_tune(),
         "queued_bytes": engine.tx_pending_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
