@@ -418,13 +418,6 @@ h2 {
 .note {
   margin: 0;
   color: var(--text-2);
-  max-width: 72ch;
-}
-
-/* The Session tab's explanatory paragraphs run the full width of the tab, like the notes
- * inside its cards, rather than sitting in a 72ch column with the rest of the row empty. */
-#panel-session .note {
-  max-width: none;
 }
 
 #probe-result:empty {
@@ -1469,7 +1462,6 @@ button[aria-pressed="true"] {
   gap: 6px;
   color: var(--text-2);
   font-size: 12.5px;
-  max-width: 76ch;
 }
 
 .help-steps strong,
