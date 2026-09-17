@@ -1984,6 +1984,12 @@ impl LinkEngine {
         }
     }
 
+    /// Zero the running tallies. These are counted for display only — nothing in the
+    /// protocol reads them — so clearing them mid-session changes no behaviour.
+    pub fn reset_stats(&mut self) {
+        self.stats = LinkStats::default();
+    }
+
     fn reset_transfer_state(&mut self) {
         self.records.clear();
         self.tx_base = 0;

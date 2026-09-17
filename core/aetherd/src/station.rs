@@ -1158,6 +1158,32 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// Where recordings are written, whether or not one is running now.
+    #[must_use]
+    pub fn record_dir(&self) -> Option<&std::path::Path> {
+        self.config.record_dir.as_deref()
+    }
+
+    /// Zero the counters the panel shows, on both this station and its engine. Only the
+    /// display tallies are cleared; the session, the link account and the configuration
+    /// are untouched.
+    pub fn reset_counters(&mut self) {
+        self.engine.reset_stats();
+        let StationStats {
+            bytes_before_compression,
+            bytes_after_compression,
+            ..
+        } = self.stats;
+        // the two compression figures are recomputed from the live compressor each
+        // metrics tick, so they are carried rather than zeroed to a value that would
+        // only be overwritten a moment later
+        self.stats = StationStats {
+            bytes_before_compression,
+            bytes_after_compression,
+            ..StationStats::default()
+        };
+    }
+
     /// The recording in progress: its file and how long it is.
     #[must_use]
     pub fn recording(&self) -> Option<(std::path::PathBuf, f64)> {

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel-window",
-  "description": "The panel, served by the daemon at its control port and shown in the main window: it may size the window it lives in (compact view) and nothing else.",
+  "description": "The panel, served by the daemon at its control port and shown in the main window: it may size the window it lives in (compact view) and open its own recordings folder in the file manager.",
   "windows": [
     "main"
   ],
@@ -15,6 +15,8 @@
     "core:window:allow-scale-factor",
     "core:window:allow-inner-size",
     "core:window:allow-set-size",
-    "core:window:allow-set-min-size"
+    "core:window:allow-set-min-size",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

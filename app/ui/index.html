@@ -108,7 +108,10 @@
         </div>
 
         <section class="counters" aria-labelledby="counters-title">
-          <h2 id="counters-title">Counters</h2>
+          <div class="section-head">
+            <h2 id="counters-title">Counters</h2>
+            <button id="btn-reset-counters" class="small ghost" title="Set the counters back to zero without restarting the modem; the session and settings are untouched">Reset counters</button>
+          </div>
           <div class="pills" id="counters" title="The modem's counters since it started; each pill says what it counts"></div>
         </section>
       </section>
@@ -187,16 +190,35 @@
           </p>
         </div>
 
-        <div class="row">
-          <button id="btn-record" title="Record the radio's audio and what the modem makes of it, until pressed again">Record</button>
-          <input id="record-notes" title="Notes kept with the recording: band, frequency, the other station, distance" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
-          <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
+        <div class="card" id="session-recording">
+          <h3>Recording and last session</h3>
+          <div class="row">
+            <button id="btn-record" title="Record the radio's audio and what the modem makes of it, until pressed again">Record</button>
+            <input id="record-notes" title="Notes kept with the recording: band, frequency, the other station, distance" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
+            <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
+          </div>
+          <div class="kv session-facts">
+            <span>Last session</span>
+            <span id="last-session" class="numerals" title="The station and outcome of the current or most recent session">no session yet</span>
+            <span>Recordings folder</span>
+            <span class="path-row">
+              <span id="recordings-dir" class="path" title="Where recordings and their reports are written on this machine">—</span>
+              <button id="btn-open-recordings" class="small" title="Open the recordings folder in the file manager">Open folder</button>
+              <button id="btn-copy-recordings" class="small ghost" title="Copy the recordings folder path">Copy path</button>
+            </span>
+          </div>
+          <p class="note">
+            A recording is what the radio delivered, at 48 kHz, and a JSON file beside it saying
+            what the modem made of it — every frame, its SNR, whether it decoded. It is what a bug
+            report about the air should carry. A test session leaves two files whose names end in
+            <code>_test</code>: the <code>.json</code> report and the <code>.wav</code> audio.
+          </p>
+          <div class="row">
+            <button id="btn-contribute" title="Copy a link to a pre-filled GitHub report for the last test session">Contribute the last test session</button>
+            <a id="contribute-link" title="Open the pre-filled report" class="numerals" href="#" target="_blank" rel="noopener" hidden>open the report</a>
+            <span class="sub" id="contribute-note" title="What the last contribute did" role="status" aria-live="polite"></span>
+          </div>
         </div>
-        <p class="note">
-          A recording is what the radio delivered, at 48 kHz, and a file beside it saying
-          what the modem made of it — every frame, its SNR, whether it decoded. It is what a
-          bug report about the air should carry, and what <code>field/</code> keeps.
-        </p>
 
         <div class="split">
           <div>
@@ -208,8 +230,11 @@
             </div>
           </div>
           <div>
-            <h2>Received</h2>
-            <pre id="incoming" title="Text received over the session" class="received" role="log" aria-label="Received text"></pre>
+            <div class="section-head">
+              <h2>Received</h2>
+              <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard">Copy</button>
+            </div>
+            <pre id="incoming" title="Text received over the session; select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
           </div>
         </div>
       </section>
@@ -623,13 +648,13 @@
             <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
             <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The message and the file are sized to what the path can do, and the whole run stops at ten minutes on its own. <em>Stop test</em> ends it earlier, keeping what was learned.</li>
             <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder (Help menu › <em>Open the configuration folder</em>), two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
-            <li><strong>Contribute it</strong>: the button below copies a link to a pre-filled report. Paste it into your browser (a GitHub account is needed, free), drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
+            <li><strong>Contribute it</strong>: the <em>Contribute the last test session</em> button on the Session tab copies a link to a pre-filled report. Paste it into your browser (a GitHub account is needed, free), drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
           </ol>
-          <div class="row">
-            <button id="btn-contribute" title="Copy a link to a pre-filled GitHub report for the last test session">Contribute the last test session</button>
-            <a id="contribute-link" title="Open the pre-filled report" class="numerals" href="#" target="_blank" rel="noopener" hidden>open the report</a>
-          </div>
-          <p class="sub" id="contribute-note" title="What the last contribute did" role="status" aria-live="polite"></p>
+          <p class="sub">
+            The <strong>Session</strong> tab has the <em>Contribute the last test session</em> button, the
+            recordings folder, and an <em>Open folder</em> control — everything for the
+            run-test-then-share workflow is there.
+          </p>
         </div>
 
         <div class="card">

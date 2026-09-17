@@ -476,6 +476,20 @@ pub struct RecordSection {
     pub notes: String,
 }
 
+/// Panel preferences: choices the desktop panel makes that are not the modem's to keep,
+/// stored here so they survive a restart. Nothing in this section changes what the modem
+/// does; the daemon only holds it and hands it back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PanelSection {
+    /// The radio-interface profile the operator chose in Setup, by its stable id. The
+    /// devices it selected are saved in their own sections; this keeps the panel's
+    /// Interface dropdown on the operator's choice instead of re-guessing it from the
+    /// devices every time the panel loads.
+    #[serde(default)]
+    pub interface: Option<String>,
+}
+
 /// Where the daemon's log goes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -558,6 +572,9 @@ pub struct Config {
     /// A simulated channel instead of a sound card.
     #[serde(default)]
     pub sim: SimSection,
+    /// Panel preferences the daemon keeps but does not act on.
+    #[serde(default)]
+    pub panel: PanelSection,
 }
 
 /// The shape of configuration file this version writes.
@@ -881,6 +898,7 @@ pub const LIVE_KEYS: &[&str] = &[
     "operator.rig",
     "operator.power_w",
     "operator.antenna",
+    "panel.interface",
 ];
 
 /// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
@@ -1116,6 +1134,10 @@ check = true
 # control API (or the panel's Record button) starts one; `auto = true` records every session
 # on its own, which is what a gateway and field validation want.
 # dir = "recordings"                  # default: recordings/ beside this file
+
+# [panel]
+# The desktop panel keeps its own choices here; it writes this itself.
+# interface = "yaesu-usb"             # the Setup interface the operator picked
 auto = false
 # What every automatic recording says about the station: the band, the antenna, the
 # frequency when there is no rig control to ask (with [ptt] kind = "rigctld" the frequency
@@ -1442,6 +1464,27 @@ mod tests {
         assert!(!Config::is_live("audio.input"));
         assert!(!Config::is_live("ptt.port"));
         assert!(!Config::is_live("control.bind"));
+        // the panel's own choice takes effect at once and travels in the file
+        assert!(Config::is_live("panel.interface"));
+    }
+
+    #[test]
+    fn the_panel_interface_choice_is_kept_and_handed_back() {
+        let mut config = Config::parse("callsign = \"W4ODA\"").expect("parse");
+        assert_eq!(config.panel.interface, None);
+        let changed = config
+            .merge(&serde_json::json!({ "panel.interface": "yaesu-usb" }))
+            .expect("merge");
+        assert_eq!(changed, vec!["panel.interface".to_owned()]);
+        assert_eq!(config.panel.interface.as_deref(), Some("yaesu-usb"));
+        // it round-trips through a saved file exactly as written
+        let dir = std::env::temp_dir().join(format!("aether-panel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("station.toml");
+        config.save(&path).expect("save");
+        let reloaded = Config::load(&path).expect("reload");
+        assert_eq!(reloaded.panel.interface.as_deref(), Some("yaesu-usb"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

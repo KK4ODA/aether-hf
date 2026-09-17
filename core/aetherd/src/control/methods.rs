@@ -85,6 +85,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "config.set"
             | "ptt.test"
             | "heard.clear"
+            | "counters.reset"
             | "frequencies.set"
             | "frequency.set"
     )
@@ -438,6 +439,10 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "connect" => connect(station, params, id),
         "probe" => probe(station, params, id),
         "frequency.set" => tune_to(station, params, id),
+        "counters.reset" => {
+            station.reset_counters();
+            Response::ok(id, json!({ "counters": counters(station) }))
+        }
         "test.start" => test_start(station, params, id),
         "test.status" => Response::ok(id, station.test_status()),
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
@@ -823,6 +828,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         })),
         "test": station.test_brief(),
         "counters": counters(station),
+        "recordings_dir": station.record_dir().map(|p| p.display().to_string()),
     })
 }
 
@@ -1134,6 +1140,31 @@ mod tests {
         assert_eq!(result["callsign"], "W4ODA");
         assert_eq!(result["transmitting"], false);
         assert!(result["counters"]["frames_sent"].is_number());
+    }
+
+    #[test]
+    fn counters_reset_zeroes_the_tallies_and_leaves_the_station_idle() {
+        let mut station = station();
+        station.stats.transmissions = 7;
+        station.stats.frames_detected = 42;
+        station.stats.beacons_heard = 3;
+        let response = call(&mut station, "counters.reset", json!({}));
+        assert!(response.ok);
+        let result = response.result.expect("result");
+        assert_eq!(result["counters"]["transmissions"], 0);
+        assert_eq!(result["counters"]["frames_detected"], 0);
+        assert_eq!(result["counters"]["frames_sent"], 0);
+        // resetting a display tally is not a session change
+        assert_eq!(station.engine().state(), aether_link::State::Idle);
+        assert!(is_mutating("counters.reset"));
+    }
+
+    #[test]
+    fn status_says_where_recordings_go() {
+        let mut station = station();
+        // the default station has no record directory; a configured one is reported as-is
+        let response = call(&mut station, "status", json!({}));
+        assert!(response.result.expect("result")["recordings_dir"].is_null());
     }
 
     #[test]

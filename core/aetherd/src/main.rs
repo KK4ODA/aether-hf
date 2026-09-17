@@ -623,12 +623,14 @@ fn serve(
         }
         let received = station.take_received();
         if !received.is_empty() {
+            // The payload reaches panels through this event and host programs through the
+            // host interface. It never goes to standard output: that is a log sink, and a
+            // binary or compressed stream printed there is the garbage that filled the log
+            // of the first radio-to-radio test.
             control.publish(&Event::new(
                 "data",
                 json!({"data": aetherd::control::methods::to_base64(&received)}),
             ));
-            // with no client attached there is still somewhere for it to go
-            print!("{}", String::from_utf8_lossy(&received));
         }
 
         // metrics are the operator's window into the link, so they go out while it runs

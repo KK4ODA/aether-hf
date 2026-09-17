@@ -132,6 +132,7 @@ function onEvent(frame) {
       break;
     case "state":
       log(`${data.name}: ${data.detail}`);
+      if (data.name === "connected") resetReceived();
       refreshStatus();
       break;
     case "frame":
@@ -141,7 +142,7 @@ function onEvent(frame) {
       noteHeard(data);
       break;
     case "data":
-      appendReceived(fromBase64(data.data ?? ""));
+      onReceivedData(data.data ?? "");
       break;
     case "log":
       log(`${data.name}: ${data.detail}`, data.name === "error");
@@ -251,6 +252,15 @@ async function refreshStatus() {
       `Test session with ${t.remote}: ${t.step} — ${Math.round(t.elapsed_s)} s, ${t.rungs} rung${t.rungs === 1 ? "" : "s"}`;
   }
   applyRecording(status.recording ?? null);
+  applyRecordingsDir(status.recordings_dir ?? null);
+  applyLastSession(status);
+  // a fresh call must not leave the last probe's or test's outcome on the panel: a
+  // stale "no answer" sitting through a session that then succeeds is exactly the
+  // confusion reported after the first radio-to-radio test
+  if (status.state !== "idle") {
+    clearNote("probe-result");
+    if (!testRunning) clearNote("test-result");
+  }
   $("btn-disconnect").disabled = status.state === "idle";
   $("btn-abort").disabled = status.state === "idle";
   $("btn-send").disabled = status.state !== "connected";
@@ -1674,11 +1684,19 @@ async function loadConfig() {
   $("radio-cwid").checked = radio.cw_id === true;
   $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
   $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
-  // the file's capture device says which interface this station is, better than a guess
-  // from whatever else is plugged in; the operator's own choice is left alone
+  // the operator's saved Interface choice wins over a guess; without one, the file's
+  // capture device says which interface this station is, better than whatever else is
+  // plugged in. Either way a choice already made by hand this session is left alone.
+  const savedProfile = liveConfig.panel?.interface;
+  const savedIndex = savedProfile
+    ? PROFILES.findIndex((p) => p.id === savedProfile)
+    : -1;
   if (!profileChosen && $("wz-profile").options.length > 0) {
-    $("wz-profile").value = String(guessProfile());
-    $("wz-profile-note").textContent = PROFILES[Number($("wz-profile").value)]?.note ?? "";
+    const index = savedIndex >= 0 ? savedIndex : guessProfile();
+    $("wz-profile").value = String(index);
+    $("wz-profile-note").textContent = PROFILES[index]?.note ?? "";
+    // a stored choice is authoritative: hold it through the next device rebuild
+    if (savedIndex >= 0) profileChosen = true;
   }
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
@@ -1826,6 +1844,10 @@ function formChanges() {
   changes["record.notes"] = $("record-standing").value.trim();
   changes["audio.tx_level"] = txLevel();
   changes["host.enabled"] = $("host-enabled").checked;
+  // the Interface is a panel choice, not a modem setting; it is kept so the dropdown
+  // comes back to what the operator picked instead of being re-guessed from the devices
+  const chosen = PROFILES[Number($("wz-profile").value)];
+  changes["panel.interface"] = chosen?.id ?? null;
   const hostPort = Number($("host-port").value);
   if (Number.isInteger(hostPort) && hostPort > 0 && hostPort < 65535) {
     changes["host.bind"] = `127.0.0.1:${hostPort}`;
@@ -1862,6 +1884,7 @@ async function applied(answer) {
 // form; nothing here is authoritative, and every entry can be changed afterwards.
 const PROFILES = [
   {
+    id: "digirig",
     name: "Digirig",
     match: /USB PnP Sound Device|Digirig/i,
     ptt: "serial",
@@ -1869,6 +1892,7 @@ const PROFILES = [
     note: "Digirig keys on RTS of its own serial port.",
   },
   {
+    id: "icom-usb",
     name: "Icom with USB audio (IC-7300, IC-7610, IC-9700, IC-705)",
     match: /USB Audio CODEC/i,
     ptt: "serial",
@@ -1876,6 +1900,7 @@ const PROFILES = [
     note: "Icom's USB port carries audio and a serial port; RTS keying needs 'USB SEND' set to RTS in the rig's menu.",
   },
   {
+    id: "yaesu-usb",
     name: "Yaesu with USB audio (FT-991A, FTDX10, FT-710)",
     match: /USB AUDIO\s+CODEC/i,
     ptt: "serial",
@@ -1885,6 +1910,7 @@ const PROFILES = [
     note: "Yaesu's USB port is two serial ports: the Standard one keys on RTS (chosen here when it can be told apart; the rig's PTT select for the mode must be RTS), or pick the Enhanced one with 'CAT command' to key over CAT and record the frequency.",
   },
   {
+    id: "cm108",
     name: "DRA, URI, RA-40 or another CM108 interface (keys by GPIO)",
     match: /C-Media|USB PnP Sound Device|USB Audio Device/i,
     ptt: "gpio",
@@ -1892,6 +1918,7 @@ const PROFILES = [
     note: "The interface's codec carries the audio and keys the radio through its GPIO pin (3 on the DRA and URI boards), so there is no serial port to choose.",
   },
   {
+    id: "signalink",
     name: "SignaLink USB",
     match: /USB Audio Device|SignaLink/i,
     ptt: "none",
@@ -1899,6 +1926,7 @@ const PROFILES = [
     note: "SignaLink keys itself from the audio (VOX), so no keying line is needed.",
   },
   {
+    id: "manual",
     name: "Manual — pick the modem devices below yourself",
     match: null,
     ptt: "serial",
@@ -2240,6 +2268,12 @@ function wire() {
     });
   }
   $("btn-record").addEventListener("click", toggleRecording);
+  $("btn-open-recordings").addEventListener("click", openRecordingsFolder);
+  $("btn-copy-recordings").addEventListener("click", () => copyRecordingsPath(false));
+  $("btn-copy-received").addEventListener("click", copyReceived);
+  $("btn-reset-counters").addEventListener("click", async () => {
+    await act(() => call("counters.reset"), "counters reset");
+  });
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
     const notes = $("record-notes").value.trim();
@@ -2417,6 +2451,67 @@ async function copyDiagnostics() {
 
 let recordingPath = null;
 
+let recordingsDir = null;
+
+function applyRecordingsDir(dir) {
+  recordingsDir = dir;
+  const line = $("recordings-dir");
+  line.textContent = dir ?? "set a recordings folder, or none is written";
+  const have = Boolean(dir);
+  $("btn-open-recordings").disabled = !have;
+  $("btn-copy-recordings").disabled = !have;
+}
+
+// The current session, or the last one this panel saw, in a word: who and how it ended.
+let lastSessionText = null;
+function applyLastSession(status) {
+  const line = $("last-session");
+  if (status.state === "connected" && status.remote) {
+    lastSessionText = `${status.remote} — connected${status.role === "iss" ? ", sending" : status.role === "irs" ? ", receiving" : ""}`;
+  } else if (status.state === "connecting" && status.remote) {
+    lastSessionText = `${status.remote} — calling`;
+  }
+  if (lastSessionText) line.textContent = lastSessionText;
+}
+
+async function openRecordingsFolder() {
+  if (!recordingsDir) return;
+  // under the desktop shell the opener reveals it; a plain browser cannot, so the
+  // path is copied instead and the note says what to do with it
+  const opener = window.__TAURI__?.opener;
+  if (opener?.openPath) {
+    try {
+      await opener.openPath(recordingsDir);
+      return;
+    } catch {
+      // fall through to copying the path
+    }
+  }
+  await copyRecordingsPath(true);
+}
+
+async function copyRecordingsPath(fallback = false) {
+  if (!recordingsDir) return;
+  try {
+    await navigator.clipboard.writeText(recordingsDir);
+    $("record-note").textContent = fallback
+      ? "This build cannot open the folder for you — the path is on the clipboard; paste it into your file manager."
+      : "Recordings folder path copied.";
+  } catch {
+    $("record-note").textContent = recordingsDir;
+  }
+}
+
+async function copyReceived() {
+  const text = $("incoming").innerText;
+  try {
+    await navigator.clipboard.writeText(text);
+    $("send-note").textContent = "Received text copied.";
+  } catch {
+    $("send-note").textContent = "Could not copy — select the text and press Ctrl+C.";
+  }
+}
+
 function applyRecording(recording) {
   recordingPath = recording?.path ?? null;
   const button = $("btn-record");
@@ -2475,9 +2570,53 @@ function log(message, bad = false) {
   pane.scrollTop = pane.scrollHeight;
 }
 
+// The received pane shows reconstructed user text only. Payload bytes are decoded as
+// UTF-8 with a strict, streaming decoder: a partial character at a frame boundary is
+// held for the next frame, but a byte sequence that is not text — a binary or corrupted
+// stream — throws rather than rendering as replacement-character soup, and is reported
+// as a count instead. This is what keeps garbage out of the message window.
+let rxDecoder = null;
+let rxDropped = 0;
+
+function resetReceived() {
+  rxDecoder = new TextDecoder("utf-8", { fatal: true });
+  rxDropped = 0;
+}
+
+function onReceivedData(base64) {
+  const bytes = bytesFromBase64(base64);
+  if (!bytes || bytes.length === 0) return;
+  if (!rxDecoder) resetReceived();
+  let text;
+  try {
+    text = rxDecoder.decode(bytes, { stream: true });
+  } catch {
+    // not text: a compressed or binary stream, or a corrupted one. Never render it.
+    rxDropped += bytes.length;
+    rxDecoder = new TextDecoder("utf-8", { fatal: true });
+    noteDropped();
+    return;
+  }
+  if (text) appendReceived(text);
+}
+
 function appendReceived(text) {
   const pane = $("incoming");
-  pane.textContent += text;
+  // keep the reader's place and any selection if they have scrolled up to read
+  const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 4;
+  pane.appendChild(document.createTextNode(text));
+  if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+function noteDropped() {
+  const pane = $("incoming");
+  let tag = pane.querySelector(".rx-drop:last-child");
+  if (!tag || tag !== pane.lastElementChild) {
+    tag = document.createElement("span");
+    tag.className = "rx-drop";
+    pane.appendChild(tag);
+  }
+  tag.textContent = `\n[${rxDropped} bytes of non-text data were not shown]\n`;
   pane.scrollTop = pane.scrollHeight;
 }
 
@@ -2541,14 +2680,19 @@ function toBase64(text) {
   return btoa(binary);
 }
 
-function fromBase64(text) {
+function bytesFromBase64(text) {
   try {
     const binary = atob(text);
-    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
+    return Uint8Array.from(binary, (c) => c.charCodeAt(0));
   } catch {
-    return "";
+    return null;
   }
+}
+
+function clearNote(id) {
+  const el = $(id);
+  el.textContent = "";
+  delete el.dataset.state;
 }
 
 // ── the splash ──────────────────────────────────────────────────────
