@@ -354,6 +354,8 @@ jobs:
         run: gh release delete nightly --cleanup-tag --yes || true
 
       - name: Publish
+        id: publish
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
@@ -363,6 +365,35 @@ jobs:
           make_latest: ${{ env.CHANNEL == 'stable' }}
           files: dist/*
           fail_on_unmatched_files: true
+
+      # GitHub drops a large asset now and then — the ~90 MB AppImage twice running — with
+      # "Error saving asset" or a headers timeout. That failed the job *after* the release
+      # existed, so the channel step below never ran and the updater feed silently stayed a
+      # version behind: the dangerous half, because installations then see nothing new.
+      # Re-running the whole step is worse, not better, since the action deletes and
+      # re-uploads everything and can drop a different file. So the upload is repaired here,
+      # one missing asset at a time, and the job only carries on once the release matches
+      # `dist/` exactly.
+      - name: Every asset is really there
+        run: |
+          for attempt in 1 2 3; do
+            missing=""
+            have="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for file in dist/*; do
+              name="$(basename "$file")"
+              printf '%s\n' "$have" | grep -Fxq "$name" || missing="$missing $file"
+            done
+            [ -z "$missing" ] && break
+            echo "attempt $attempt: re-uploading$missing"
+            for file in $missing; do
+              gh release upload "$TAG" "$file" --clobber || true
+            done
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::still missing after three attempts:$missing"
+            exit 1
+          fi
+          echo "all $(ls dist | wc -l) assets are on $TAG"
 
       # The beta channel's endpoint is one rolling release that only ever holds the newest
       # beta's manifest, so a beta installation finds the next beta and a stable one never
@@ -374,3 +405,6 @@ jobs:
             || gh release create channel-beta --prerelease --title "Beta channel" \
                  --notes "The updater manifest for the beta channel. The releases themselves are the vX.Y.Z-beta.N tags."
           gh release upload channel-beta dist/latest.json --clobber
+          # a manifest is a promise: every URL in it must already resolve, or a beta
+          # installation is offered an update it cannot download
+          python tools/check_manifest.py dist/latest.json
