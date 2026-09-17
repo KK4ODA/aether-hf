@@ -326,6 +326,17 @@ impl LevelMeter {
     }
 }
 
+/// The carrier offset worth reporting. It is real when the frame decoded, or when the
+/// acquisition was confident enough to trust (the modem's own mode-retry threshold);
+/// `None` for a probable noise trigger, whose offset is the correlator locking onto
+/// noise, not a real frequency error. Nothing in the protocol reads carrier offset —
+/// this only keeps a phantom number off the panel and out of the sidecar, where one
+/// once sent an on-air analysis chasing a rig fault that did not exist.
+#[must_use]
+pub fn reported_cfo(decoded: bool, confidence: f64, cfo_hz: f64) -> Option<f64> {
+    (decoded || confidence >= aether_phy::modem::MODE_RETRY_CONFIDENCE).then_some(cfo_hz)
+}
+
 /// What the physical layer made of one frame: for a display, for the list of stations
 /// heard, and for a recording's sidecar.
 ///
@@ -1361,7 +1372,12 @@ impl<P: Ptt> Station<P> {
                     mode: decoded.frame.mode,
                     rv: decoded.frame.rv,
                     snr_3k_db: decoded.frame.snr_3k_db,
-                    cfo_hz: decoded.frame.cfo_hz,
+                    cfo_hz: reported_cfo(
+                        decoded.ok(),
+                        decoded.frame.mode_confidence,
+                        decoded.frame.cfo_hz,
+                    ),
+                    confidence: decoded.frame.mode_confidence,
                     decoded: decoded.ok(),
                     bytes: decoded.payload.as_ref().map_or(0, Vec::len),
                     control: if decoded.frame.sync.frame_type == FrameType::Control {
@@ -1794,6 +1810,17 @@ pub(crate) mod tests_support {
 mod tests {
     use super::*;
     use crate::ptt::NullPtt;
+
+    #[test]
+    fn cfo_is_reported_only_when_the_acquisition_can_be_trusted() {
+        // a decoded frame's offset is real, whatever its confidence
+        assert_eq!(reported_cfo(true, 0.5, 12.0), Some(12.0));
+        // a confident non-decode is a real near-miss: keep its offset
+        assert_eq!(reported_cfo(false, 2.0, -3.0), Some(-3.0));
+        // a low-confidence non-decode is a noise trigger: its +55 Hz is the correlator on
+        // noise, not a rig error, and is not reported
+        assert_eq!(reported_cfo(false, 0.8, 55.0), None);
+    }
 
     /// Step two stations against each other through a channel, in blocks of audio.
     ///

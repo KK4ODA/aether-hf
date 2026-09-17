@@ -39,8 +39,14 @@ pub struct FrameRecord {
     pub rv: u8,
     /// Signal to noise, 3 kHz reference.
     pub snr_3k_db: f64,
-    /// Carrier offset the receiver removed.
-    pub cfo_hz: f64,
+    /// Carrier offset the receiver removed. `null` when the acquisition was a probable
+    /// noise trigger (see `confidence`): its offset would be the correlator on noise.
+    #[serde(default)]
+    pub cfo_hz: Option<f64>,
+    /// Mode-chip confidence of the acquisition; below about 1.3 is a guess, and a
+    /// non-decoding frame that low is a noise trigger rather than a real signal.
+    #[serde(default)]
+    pub confidence: f64,
     /// Whether the payload came through.
     pub decoded: bool,
     /// Payload length when it did.
@@ -412,7 +418,8 @@ mod tests {
             mode: 4,
             rv: 0,
             snr_3k_db: 7.25,
-            cfo_hz: -3.0,
+            cfo_hz: Some(-3.0),
+            confidence: 2.4,
             decoded: true,
             bytes: 144,
             control: None,

@@ -144,7 +144,12 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
                 mode: decoded.frame.mode,
                 rv: decoded.frame.rv,
                 snr_3k_db: decoded.frame.snr_3k_db,
-                cfo_hz: decoded.frame.cfo_hz,
+                cfo_hz: crate::station::reported_cfo(
+                    decoded.ok(),
+                    decoded.frame.mode_confidence,
+                    decoded.frame.cfo_hz,
+                ),
+                confidence: decoded.frame.mode_confidence,
                 decoded: decoded.ok(),
                 bytes: decoded.payload.as_ref().map_or(0, Vec::len),
                 control: if decoded.frame.sync.frame_type == FrameType::Control {
@@ -213,14 +218,16 @@ pub fn compare(expected: &[FrameRecord], found: &[FrameRecord]) -> Verdict {
 /// One line per frame, for a person.
 #[must_use]
 pub fn describe(frame: &FrameRecord) -> String {
+    let cfo = frame
+        .cfo_hz
+        .map_or_else(|| "     —".to_owned(), |hz| format!("{hz:>+6.1}"));
     format!(
-        "{:>8.2} s  {:<7} mode {:>2} rv {}  {:>+6.1} dB  cfo {:>+6.1} Hz  {}",
+        "{:>8.2} s  {:<7} mode {:>2} rv {}  {:>+6.1} dB  cfo {cfo} Hz  {}",
         frame.t_s,
         frame.kind,
         frame.mode,
         frame.rv,
         frame.snr_3k_db,
-        frame.cfo_hz,
         match (&frame.control, frame.decoded) {
             (Some(control), _) => control.clone(),
             (None, true) => format!("decoded {} bytes", frame.bytes),

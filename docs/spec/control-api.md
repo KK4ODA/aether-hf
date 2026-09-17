@@ -166,7 +166,7 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
-(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz`, `decoded`, `bytes`), every event with
+(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `decoded`, `bytes`), every event with
 the modem's state, when the transmitter was keyed and released, the counters at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (`rigctld`; a
 keying line cannot, and the field is null rather than a guess). Times are seconds from the
@@ -193,8 +193,8 @@ was on. Each change goes out as a `heard` event.
 | Event | When | Key fields |
 |---|---|---|
 | `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
-| `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `channel_busy`, `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
-| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz`, `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `channel_busy`, `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |

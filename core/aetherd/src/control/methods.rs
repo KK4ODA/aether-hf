@@ -933,7 +933,7 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         // the last frame the receiver found: its SNR is the reading an operator calls
         // "the SNR", its offset is what the other station's dial is off by
         "snr_db": last.map(|f| f.snr_db),
-        "cfo_hz": last.map(|f| f.cfo_hz),
+        "cfo_hz": last.and_then(|f| crate::station::reported_cfo(f.decoded, f.confidence, f.cfo_hz)),
         "last_frame_s": last.map(|f| f.t_s),
         // what the other station reports hearing this one at
         "peer_snr_db": station.engine().peer_snr_db(),
@@ -968,7 +968,7 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "mode": frame.mode,
         "rv": frame.rv,
         "snr_db": frame.snr_db,
-        "cfo_hz": frame.cfo_hz,
+        "cfo_hz": crate::station::reported_cfo(frame.decoded, frame.confidence, frame.cfo_hz),
         "confidence": frame.confidence,
         "decoded": frame.decoded,
         "bytes": frame.bytes,

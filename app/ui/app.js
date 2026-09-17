@@ -299,7 +299,9 @@ function applyMetrics(metrics) {
     $("d-peer").textContent = peer === null || peer === undefined ? "—" : `${peer.toFixed(1)} dB`;
     if (peer !== null && peer !== undefined) notePeer(peer);
   }
-  if (metrics.cfo_hz !== undefined) applyOffset(metrics.cfo_hz);
+  // a null offset is a noise trigger the modem would not vouch for: hold the last real
+  // reading rather than blank it
+  if (typeof metrics.cfo_hz === "number") applyOffset(metrics.cfo_hz);
   if (metrics.throughput_bps !== undefined) {
     $("v-throughput").textContent = metrics.link ? formatRate(metrics.throughput_bps) : "—";
   }
@@ -503,7 +505,7 @@ function onFrame(frame) {
   if (framesSeen.length > 60) framesSeen.pop();
   $("d-confidence").textContent =
     frame.confidence === undefined ? "—" : Number(frame.confidence).toFixed(2);
-  if (frame.cfo_hz !== undefined) applyOffset(frame.cfo_hz);
+  if (typeof frame.cfo_hz === "number") applyOffset(frame.cfo_hz);
   if (frame.snr_db !== undefined) $("v-snr").textContent = `${Number(frame.snr_db).toFixed(1)} dB`;
   saveHistory();
   if (panelShown("status")) drawSnrChart();
@@ -1316,7 +1318,7 @@ function renderFrames() {
     cell(String(frame.mode), "num");
     cell(String(frame.rv), "num");
     cell(`${Number(frame.snr_db).toFixed(1)}`, "num");
-    cell(`${Number(frame.cfo_hz).toFixed(0)} Hz`, "num");
+    cell(typeof frame.cfo_hz === "number" ? `${frame.cfo_hz.toFixed(0)} Hz` : "—", "num");
     cell(Number(frame.confidence).toFixed(2), "num");
     cell(frame.decoded ? "yes" : "no", frame.decoded ? "" : "bad");
     cell(String(frame.bytes), "num");
