@@ -32,6 +32,12 @@ request meets the rules the first time.
 8. **The panel explains itself.** Every control and indicator in `app/ui/` — button,
    field, select, lamp, reading, chart, table heading — has a `title` tooltip saying
    what it does or shows, in plain words. Add one with anything you add.
+9. **The panel loads clean.** A change to `app/ui/` is not done until the panel has been
+   loaded against a running daemon and the browser console shows **no errors**, with the
+   LINK lamp lit and the readings populated. `node --check` proves syntax, not that the
+   page works: a beta once shipped with an infinitely recursive redraw that passed
+   `node --check`, threw on every tick, and left the Status page blank and reading
+   "Not connected to a modem".
 
 ## Workflow
 

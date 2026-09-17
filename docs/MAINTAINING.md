@@ -112,6 +112,9 @@ Every one of these has cost the project a day at some point; none is decoration.
     `title` saying what it does or shows, in the panel's plain wording (`CLAUDE.md`,
     "the panel's appearance"); one built in `app.js` sets `.title` the same way. A PR
     that adds one without is asked for it.
+12. **The panel was actually loaded.** A PR touching `app/ui/` says it was opened against a
+    running daemon with a clean browser console, the LINK lamp lit and the readings
+    populated. `node --check` catches syntax and nothing else.
 
 ### 3.4 Run it
 

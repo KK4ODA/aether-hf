@@ -660,7 +660,7 @@ let statusChart = "snr";
 
 function drawStatusChart() {
   if (statusChart === "speed") drawSpeedChart();
-  else drawStatusChart();
+  else drawSnrChart();
 }
 
 function selectStatusChart(which) {
