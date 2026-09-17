@@ -98,8 +98,12 @@
 
         <div class="charts">
           <figure class="chart">
-            <figcaption>SNR by frame, last ten minutes</figcaption>
+            <div class="chart-tabs" role="tablist" aria-label="Status chart, last ten minutes">
+              <button class="chart-tab" id="chart-tab-snr" role="tab" aria-selected="true" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold">SNR by frame</button>
+              <button class="chart-tab" id="chart-tab-speed" role="tab" aria-selected="false" title="Connection speed: application bytes both ways per second, against the current mode's on-air rate">Speed</button>
+            </div>
             <canvas id="chart-snr" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold" width="450" height="180" role="img" aria-label="SNR in dB of every frame heard over the last ten minutes, with what the other station reports and the current mode's threshold"></canvas>
+            <canvas id="chart-speed" title="Connection speed: application bytes both ways per second, and the current mode's on-air rate, over the last ten minutes" width="450" height="180" role="img" aria-label="Connection throughput and the current mode's on-air rate over the last ten minutes" hidden></canvas>
           </figure>
           <figure class="chart">
             <figcaption>Channel and activity, last two minutes</figcaption>
@@ -168,6 +172,24 @@
         <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
         <p class="note" id="test-result" title="The test session's progress" role="status" aria-live="polite"></p>
 
+        <div class="split">
+          <div>
+            <h2>Send</h2>
+            <textarea id="outgoing" title="Text to send over the session" rows="6" aria-label="Text to send" placeholder="Text to send once a session is up…"></textarea>
+            <div class="row">
+              <button id="btn-send" title="Queue the text for the session" class="primary">Send</button>
+              <span class="sub" id="send-note" title="What happened to the last text sent"></span>
+            </div>
+          </div>
+          <div>
+            <div class="section-head">
+              <h2>Received</h2>
+              <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard">Copy</button>
+            </div>
+            <pre id="incoming" title="Text received over the session; select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
+          </div>
+        </div>
+
         <div class="card">
           <h3>Keying and drive</h3>
           <div class="row">
@@ -220,23 +242,6 @@
           </div>
         </div>
 
-        <div class="split">
-          <div>
-            <h2>Send</h2>
-            <textarea id="outgoing" title="Text to send over the session" rows="6" aria-label="Text to send" placeholder="Text to send once a session is up…"></textarea>
-            <div class="row">
-              <button id="btn-send" title="Queue the text for the session" class="primary">Send</button>
-              <span class="sub" id="send-note" title="What happened to the last text sent"></span>
-            </div>
-          </div>
-          <div>
-            <div class="section-head">
-              <h2>Received</h2>
-              <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard">Copy</button>
-            </div>
-            <pre id="incoming" title="Text received over the session; select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
-          </div>
-        </div>
       </section>
 
       <!-- ── stations heard ─────────────────────────────────────── -->
@@ -499,7 +504,7 @@
               <div class="row">
                 <label for="radio-max-mode">Fastest mode</label>
                 <select id="radio-max-mode" title="The fastest mode the rate controller may climb to"></select>
-                <label class="check"><input id="radio-compress" title="Compress the payload when the other station can too" type="checkbox" checked /> compress payload when the other station can too</label>
+                <label class="check"><input id="radio-compress" title="Off by default. Compression is deflate over the whole session, so on a weak path one lost frame can spoil the rest — turn it on only on a solid link the other station also supports." type="checkbox" /> enable compression when the link is solid and the other station supports it</label>
               </div>
               <div class="row">
                 <label for="radio-wait">Busy channel</label>

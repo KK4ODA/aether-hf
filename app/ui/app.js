@@ -304,6 +304,12 @@ function applyMetrics(metrics) {
   if (typeof metrics.cfo_hz === "number") applyOffset(metrics.cfo_hz);
   if (metrics.throughput_bps !== undefined) {
     $("v-throughput").textContent = metrics.link ? formatRate(metrics.throughput_bps) : "—";
+    const at = Date.now();
+    // speed is zero with no session; the mode's on-air rate is only meaningful in one
+    const rate = metrics.link ? (modeTable[currentMode]?.net_bit_rate ?? null) : null;
+    throughputHistory.push({ at, bps: metrics.link ? metrics.throughput_bps : 0, rate });
+    while (throughputHistory.length && throughputHistory[0].at < at - SNR_SPAN_MS) throughputHistory.shift();
+    if (throughputHistory.length > 1400) throughputHistory.shift();
   }
   if (metrics.link !== undefined) applyLink(metrics.link);
   if (metrics.rate_snr_db !== undefined) {
@@ -342,7 +348,7 @@ function applyMetrics(metrics) {
     while (history.length && history[0].at < at - LEVEL_SPAN_MS) history.shift();
     drawChart();
     // the SNR chart's window slides with the clock even when no frame arrives
-    drawSnrChart();
+    drawStatusChart();
   }
   if (level !== null && level !== undefined && floor !== null && floor !== undefined) {
     $("d-busy").textContent = metrics.channel_busy ? "busy" : "clear";
@@ -455,6 +461,8 @@ function stamp(ms) {
 
 const SNR_SPAN_MS = 10 * 60 * 1000;
 const snrHistory = [];
+// connection speed over the same ten-minute window: {at, bps goodput, rate mode on-air}
+const throughputHistory = [];
 const peerHistory = [];
 const framesSeen = [];
 let lastPeer = null;
@@ -508,7 +516,7 @@ function onFrame(frame) {
   if (typeof frame.cfo_hz === "number") applyOffset(frame.cfo_hz);
   if (frame.snr_db !== undefined) $("v-snr").textContent = `${Number(frame.snr_db).toFixed(1)} dB`;
   saveHistory();
-  if (panelShown("status")) drawSnrChart();
+  if (panelShown("status")) drawStatusChart();
   if (panelShown("diagnostics")) {
     renderFrames();
     fetchConstellation();
@@ -640,6 +648,84 @@ function drawLegend(f, items) {
     ctx.fillText(text, at, 8);
     at += ctx.measureText(text).width + 14;
   }
+}
+
+// ── the Status chart area: SNR by frame, or connection speed ────────
+//
+// One frame holds two views the operator switches between. Only the visible canvas is
+// drawn — a hidden one has no width to size against — so every redraw goes through
+// drawStatusChart.
+
+let statusChart = "snr";
+
+function drawStatusChart() {
+  if (statusChart === "speed") drawSpeedChart();
+  else drawStatusChart();
+}
+
+function selectStatusChart(which) {
+  statusChart = which === "speed" ? "speed" : "snr";
+  const speed = statusChart === "speed";
+  $("chart-snr").hidden = speed;
+  $("chart-speed").hidden = !speed;
+  $("chart-tab-snr").setAttribute("aria-selected", String(!speed));
+  $("chart-tab-speed").setAttribute("aria-selected", String(speed));
+  try {
+    localStorage.setItem("aether.statuschart", statusChart);
+  } catch {
+    // a browser that keeps nothing keeps nothing
+  }
+  drawStatusChart();
+}
+
+// ── connection speed, last ten minutes ──────────────────────────────
+//
+// The goodput the session is moving, both ways, against the on-air rate of the mode it
+// is running — so a curve well under the mode line means the link is the limit, not the
+// modem, and a curve near it means the mode is working as fast as it can.
+
+function drawSpeedChart() {
+  const now = Date.now();
+  let high = 200;
+  for (const point of throughputHistory) {
+    high = Math.max(high, point.bps, point.rate ?? 0);
+  }
+  const step = high > 4000 ? 1000 : high > 1500 ? 500 : 100;
+  high = Math.ceil(high / step) * step;
+  const f = chartFrame("chart-speed", 450, 180, 0, high);
+  const { ctx, c } = f;
+  drawValueAxis(f, 0, high, step);
+  const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
+  drawLegend(f, [[c.ink, "bit/s"], [withAlpha(c.tx, 0.9), "mode rate"], [c.accent, "goodput"]]);
+
+  // the mode's on-air rate: a faint dashed step, the ceiling the goodput works under
+  ctx.strokeStyle = withAlpha(c.tx, 0.8);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  let started = false;
+  for (const point of throughputHistory) {
+    if (point.rate == null) {
+      started = false;
+      continue;
+    }
+    if (started) ctx.lineTo(x(point.at), f.y(point.rate));
+    else ctx.moveTo(x(point.at), f.y(point.rate));
+    started = true;
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // the goodput itself: the solid accent line, the reading that matters
+  ctx.strokeStyle = c.accent;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  throughputHistory.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(x(point.at), f.y(point.bps));
+    else ctx.lineTo(x(point.at), f.y(point.bps));
+  });
+  ctx.stroke();
 }
 
 // ── SNR by frame, last ten minutes ──────────────────────────────────
@@ -1371,7 +1457,7 @@ function setCompact(on) {
     // a browser that keeps nothing keeps nothing
   }
   drawChart();
-  drawSnrChart();
+  drawStatusChart();
 }
 
 
@@ -1496,7 +1582,7 @@ function drawChart() {
 
 window.addEventListener("resize", () => {
   drawChart();
-  drawSnrChart();
+  drawStatusChart();
 });
 document.addEventListener("visibilitychange", scopesWanted);
 
@@ -1679,7 +1765,7 @@ async function loadConfig() {
   select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
   $("radio-answer-only").checked = radio.answer_only === true;
   select($("radio-max-mode"), String(radio.max_mode ?? 13));
-  $("radio-compress").checked = radio.compress !== false;
+  $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
   $("radio-max-key").value = String(radio.max_key_s ?? 30);
@@ -2187,7 +2273,7 @@ function selectTab(tab, focus = false) {
   if (focus) tab.focus();
   if (tab.dataset.panel === "status") {
     drawChart();
-    drawSnrChart();
+    drawStatusChart();
   }
   if (tab.dataset.panel === "stations") renderHeard();
   scopesWanted();
@@ -2276,6 +2362,13 @@ function wire() {
   $("btn-reset-counters").addEventListener("click", async () => {
     await act(() => call("counters.reset"), "counters reset");
   });
+  $("chart-tab-snr").addEventListener("click", () => selectStatusChart("snr"));
+  $("chart-tab-speed").addEventListener("click", () => selectStatusChart("speed"));
+  try {
+    selectStatusChart(localStorage.getItem("aether.statuschart") || "snr");
+  } catch {
+    selectStatusChart("snr");
+  }
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
     const notes = $("record-notes").value.trim();
@@ -2332,7 +2425,7 @@ function wire() {
   wireWaterfallControls();
   loadHistory();
   renderFrames(); // what was kept shows before the first new frame does
-  drawSnrChart(); // the axes are there from the start, frames or none
+  drawStatusChart(); // the axes are there from the start, frames or none
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);

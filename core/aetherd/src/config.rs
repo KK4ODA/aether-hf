@@ -245,8 +245,11 @@ pub struct RadioSection {
     #[serde(default = "default_max_mode")]
     pub max_mode: usize,
     /// Offer payload compression in the connect handshake. Used only if the peer offers it
-    /// too, so leaving it on costs nothing when talking to a station that cannot.
-    #[serde(default = "default_true")]
+    /// too. Off by default: compression is deflate over the whole session's byte stream, so
+    /// on a weak path a single corrupted frame can desync the stream and turn the rest to
+    /// rubbish — a risk not worth its 30–40 % on the marginal links where it would matter
+    /// most, until the stream carries its own integrity check.
+    #[serde(default)]
     pub compress: bool,
     /// Identify in Morse at the end of a transmission. Off by default: Aether's own frames
     /// carry both callsigns, and whether that satisfies the local rules is something only the
@@ -324,7 +327,7 @@ impl Default for RadioSection {
             bandwidth: default_bandwidth(),
             answer_only: false,
             max_mode: default_max_mode(),
-            compress: default_true(),
+            compress: false,
             cw_id: false,
             cw_id_wpm: default_cw_wpm(),
             cw_id_interval_s: default_cw_interval(),
@@ -1083,9 +1086,10 @@ answer_only = false
 # The fastest mode this station will use: 0 to 13 at 2300 Hz; at 500 Hz the table has ten
 # modes and anything past 9 means 9.
 max_mode = 13
-# Offer payload compression. Used only if the other station offers it too, so leaving this on
-# costs nothing when talking to one that cannot.
-compress = true
+# Offer payload compression. Used only if the other station offers it too. Off by default:
+# it is deflate over the whole session, so on a weak path one corrupted frame can desync the
+# stream and spoil the rest.
+compress = false
 # Identify in Morse at the end of a transmission. Off by default: Aether's frames carry both
 # callsigns, and whether that satisfies your licence conditions is your call, not the modem's.
 cw_id = false
