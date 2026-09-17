@@ -125,6 +125,16 @@ body {
   background: var(--accent-dim);
 }
 
+/* `hidden` means hidden, whatever else says otherwise.
+ *
+ * The browser's own `[hidden] { display: none }` is a user-agent rule, so any author rule
+ * that sets `display` on the same element beats it: `canvas { display: block }` left a
+ * hidden chart on screen and the SNR and Speed canvases stacked, and `.tab-count` did the
+ * same to the stations badge. One `!important` here is worth a guard on every such rule. */
+[hidden] {
+  display: none !important;
+}
+
 /* ── the top bar: brand, lamps, callsign ────────────────────────── */
 
 .bar {
