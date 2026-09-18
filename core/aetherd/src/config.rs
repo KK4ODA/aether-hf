@@ -229,12 +229,14 @@ pub struct RadioSection {
     /// Refuse to start a session while the channel is occupied.
     #[serde(default = "default_true")]
     pub wait_for_clear: bool,
-    /// How far above the learned noise floor counts as occupied, in dB. The level has to
-    /// stay over it for three 25 ms blocks in a row before the channel is busy, so a static
-    /// crash does not count; the floor is the least of the last minute's blocks that were
-    /// not under a signal, so a sustained signal — an FT8 period, an SSB over — raises the
-    /// level and not the floor. Six is well clear of stationary noise: the block-to-block
-    /// spread of HF noise against its own floor measures under 4 dB at the 99th percentile.
+    /// How far above the noise floor counts as occupied, in dB. The floor is the *typical*
+    /// noise level — the median of the last minute's blocks that were not under a signal —
+    /// so a sustained signal raises the level and not the floor, and the margin means what
+    /// it says on a bursty band. The level has to be over it for half of the last 400 ms
+    /// before the channel is busy: a static crash is a block, a surge of storm noise a few
+    /// hundred milliseconds, and nothing that is occupancy is that short. Six is the
+    /// default; on the noisiest evening measured it gave a false trip every 75 s and seven
+    /// gave none, so seven is a fair choice when the band is stormy.
     #[serde(default = "default_busy_threshold")]
     pub busy_threshold_db: f64,
     /// The waveform's bandwidth in hertz: 2300, the default, or 500 — the bandwidth

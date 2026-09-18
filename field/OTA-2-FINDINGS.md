@@ -169,6 +169,32 @@ held this station's own turn, so replies waited on frames that never existed —
 belongs on the list of things that may have ended eleven sessions in eleven with a link
 timeout.
 
+### And what a stormy band does to a minimum-statistics floor
+
+Two evenings later, on 7071.4 kHz with the busy threshold back at 6 dB, the indicator
+tripped every second or so with nothing visible on the chart. Seventy seconds of the
+receive audio, recorded from the live station: the spectrum is flat across the 500 Hz
+filter — no carrier, no CW — and the noise's envelope surges 8–13 dB above its quietest
+lulls for 300–400 ms at a time. Against the floor of the time, the *minimum* over the
+window:
+
+| | quiet evening (OTA-2) | stormy evening |
+|---|---|---|
+| block level spread, p99 − p1 | ~5 dB | **11.4 dB** |
+| median above the minimum | ~2 dB | **+4.2 dB** |
+| blocks ≥ 6 dB over the minimum | 0 % | **25.8 %** |
+| runs of ≥ 3 such blocks | 0 | **91 in 71 s** |
+
+A margin over the *minimum* of bursty noise is a margin over its quietest lull, two
+decibels over its typical level. Martin's minimum statistics carry a bias correction for
+exactly this; the detector never had one. So (beta.38) the floor is the **median** of the
+signal-free blocks — the noise's typical level — over a ten-second window, held for up to
+a minute when a signal leaves no signal-free block; and the attack is **half of the last
+400 ms** over the threshold rather than 75 ms in a row, because the surges are 300–400 ms
+and nothing that is occupancy is that short. On this recording: 0.8 false trips a minute
+at 6 dB, none at 7, none on the quiet evening's audio, FT8 busy end to end, CW at 25 wpm
+busy for 98 % of its sending.
+
 ## Finding 3 — a control frame never gets a real confidence
 
 `rx.rs:307`:

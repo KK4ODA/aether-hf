@@ -189,11 +189,12 @@ interface, not on the air: an Aether station cannot decode a VARA signal and nev
 
 ## 7. Being a good neighbour
 
-* Leave `wait_for_clear = true`. The busy detector learns the noise floor — the quietest of
-  the last minute, taken only from moments when nothing was on the channel — and refuses to
-  start a session while the level sits `busy_threshold_db` (6 dB) over it, or while a frame
-  is being decoded. A static crash does not count; a signal that stays does, for as long as
-  it stays. A station already in session answers regardless, because the peer is waiting
+* Leave `wait_for_clear = true`. The busy detector learns the noise floor — the typical
+  level of the last minute, taken only from moments when nothing was on the channel — and
+  refuses to start a session while the level sits `busy_threshold_db` (6 dB) over it for
+  most of half a second, or while a frame is being decoded. A static crash does not count;
+  a signal that stays does, for as long as it stays. On a stormy night 7 dB is a fair
+  setting. A station already in session answers regardless, because the peer is waiting
   and silence would only make it retransmit.
 * Pick a frequency with `docs/user/frequency-plan.md` in front of you. Sitting on a VARA
   calling frequency is the fastest way to make the mode unwelcome.

@@ -9,11 +9,17 @@
 //!
 //! Occupancy is a power measurement against a noise floor the detector has to learn, because
 //! an HF noise floor moves by tens of dB between bands, hours and antennas — no fixed
-//! threshold in dBm or dBFS can work. The floor is tracked by **minimum statistics**: the
-//! smallest block power seen over a window. The reasoning is Martin's (*Noise power spectral
-//! density estimation based on optimal smoothing and minimum statistics*, IEEE Trans. Speech
-//! and Audio Processing 9(5), 2001): any signal only ever *adds* power, so over a window
-//! longer than the longest gap-free stretch of signal, the minimum is the noise alone.
+//! threshold in dBm or dBFS can work. The floor is the **median** of the block powers seen
+//! over a window, taken only over blocks that were not under a signal. The reasoning
+//! descends from Martin's minimum statistics (*Noise power spectral density estimation
+//! based on optimal smoothing and minimum statistics*, IEEE Trans. Speech and Audio
+//! Processing 9(5), 2001): a signal only ever *adds* power, so the quiet blocks are the
+//! noise. Martin takes their minimum and corrects its bias; this takes their median, which
+//! needs no correction and is the number the margin has to mean something against. On a
+//! stormy 40 m evening the noise is not stationary — its envelope surges 8–13 dB above its
+//! quietest lulls for a few hundred milliseconds at a time, and the median sits 4 dB above
+//! the minimum. A margin over the *minimum* was two decibels over typical noise on such a
+//! night, and fired twenty-five times a minute.
 //!
 //! That last clause is the whole difficulty. A window of five seconds sees between the
 //! syllables of speech and the frames of a burst, and it made the floor climb into the
@@ -25,14 +31,16 @@
 //! architecture:
 //!
 //! * **channel energy** is the latest 25 ms block, and the busy decision is made on it;
-//! * **background noise** is the minimum over a **60 s** window of blocks that were
+//! * **background noise** is the median over a **10 s** window of blocks that were
 //!   captured while the channel was **not busy**. A block taken while a signal is present is
 //!   by definition not noise, and never enters the floor — so a sustained signal raises the
-//!   measured energy and leaves the floor where it was, for as long as the window reaches
-//!   back before it. Sixty seconds covers FT8, a CW or RTTY exchange and most SSB overs.
-//!   Past that the signal has been there for a minute and the floor accepts the window's
-//!   plain minimum: at that point it *is* the environment, and refusing to learn it would
-//!   leave a floor that once collapsed stuck below everything for ever.
+//!   measured energy and leaves the floor where it was. When the window holds no such block
+//!   at all, the floor learned before is **held**, for up to a minute: that covers FT8, a
+//!   CW or RTTY exchange and most SSB overs. Past the minute the signal has been there
+//!   long enough to be the environment, and the floor accepts the median of everything —
+//!   refusing to would leave a floor that once collapsed stuck below everything for ever.
+//!   Ten seconds is the window because a median follows a change only once half the
+//!   window has seen it: a band that goes quiet is reflected in five seconds, not thirty.
 //!
 //! The minimum is taken only over blocks where the level was **steady** — the raw block
 //! powers within 3 dB over the last 200 ms. A receiver's AGC cuts its gain in a millisecond when
@@ -53,11 +61,14 @@
 //!
 //! On top of that:
 //!
-//! * the threshold has to be exceeded for **three consecutive blocks** (75 ms) before the
-//!   channel is called busy. A static crash is one block, a keying click one or two; the
-//!   shortest thing on the air that is occupancy — a CW dah at 25 wpm, an Aether preamble of
-//!   four 31 ms symbols — is longer. The one-pole smoother this replaces did the opposite:
-//!   it stretched a single hot block over four and each of those re-armed the hangover;
+//! * the threshold has to be exceeded by **half of the last sixteen blocks** (400 ms) before
+//!   the channel is called busy. A static crash is one block; a surge of atmospheric noise
+//!   measured 300–400 ms; the shortest occupancy that matters — a CW character, an FT8
+//!   period, an SSB syllable, an Aether frame — runs longer and keys at least half the time.
+//!   Measured against a stormy band's noise: 0.8 false trips a minute at 6 dB, none at 7;
+//!   against CW at 25 wpm, busy for 98 % of the sending. The one-pole smoother this
+//!   replaces did the opposite: it stretched a single hot block over four and each of those
+//!   re-armed the hangover;
 //! * a **hangover** keeps the channel marked busy for a moment after the power drops, so the
 //!   gaps inside a burst do not read as a free channel — that is the release hysteresis;
 //! * a block at **digital silence** never enters the floor. A receiver never delivers it; a
@@ -81,11 +92,14 @@ pub struct BusyConfig {
     pub fs: f64,
     /// How much audio each measurement covers, in seconds.
     pub block_s: f64,
-    /// How far back the floor estimate looks, in seconds. Must cover the longest gap-free
-    /// stretch of signal the channel will carry, or the floor climbs into the signal — and
-    /// it is the horizon after which a signal that never stops is accepted as the
-    /// environment.
+    /// How far back the floor estimate looks, in seconds. A median follows a change once
+    /// half the window has seen it, so this is the floor's response time doubled. It need
+    /// not outlast a signal: blocks under a signal never enter the floor at all.
     pub floor_window_s: f64,
+    /// How long the floor is held when no block in the window was free of signal, before
+    /// the signal is accepted as the environment. The longest transmission the floor will
+    /// see through.
+    pub floor_hold_s: f64,
     /// How far above the floor counts as occupied, in dB.
     pub threshold_db: f64,
     /// How long the channel stays marked busy after the power falls back.
@@ -99,8 +113,10 @@ impl Default for BusyConfig {
         Self {
             fs: 8000.0,
             block_s: 0.025,
+            // a band that goes quiet is reflected in five seconds
+            floor_window_s: 10.0,
             // a minute: past an FT8 period (15 s), a CW or RTTY exchange, most SSB overs
-            floor_window_s: 60.0,
+            floor_hold_s: 60.0,
             // measured acquisition works well below this, so the frame signal is what catches
             // a weak Aether station; this catches everything else on the channel
             threshold_db: 6.0,
@@ -120,7 +136,7 @@ impl Default for BusyConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BusyReason {
     /// The block level stood at least the threshold above the learned floor, for the
-    /// attack's worth of blocks in a row.
+    /// attack's majority of the last 400 ms.
     Level {
         /// The level at the moment, dBFS.
         level_db: f64,
@@ -152,13 +168,17 @@ pub struct BusyDetector {
     /// `window_blocks`.
     history: std::collections::VecDeque<(f64, bool)>,
     partial: Vec<Complex>,
-    /// How many blocks in a row have exceeded the threshold, for the attack qualification.
-    over: usize,
+    /// Whether each of the last `ATTACK_WINDOW` blocks exceeded the threshold, newest last.
+    over: std::collections::VecDeque<bool>,
+    /// When the window last held no signal-free block, if it holds none now: the floor is
+    /// held from then, and accepted from everything once the hold has run out.
+    held_since: Option<f64>,
     busy_until: f64,
     /// Latest block power, in dB relative to full scale: the channel energy the busy
     /// decision is made on, block by block.
     pub level_db: f64,
-    /// Latest floor estimate, in dB relative to full scale.
+    /// Latest floor estimate, in dB relative to full scale: the median of the last
+    /// minute's blocks that were not under a signal — the noise's typical level.
     pub floor_db: f64,
     /// Blocks discarded because this station was transmitting.
     pub blocks_skipped: usize,
@@ -167,10 +187,12 @@ pub struct BusyDetector {
 /// Power floor for the logarithm, so silence gives a very negative number rather than
 /// negative infinity.
 const FLOOR: f64 = 1e-20;
-/// How many consecutive blocks must exceed the threshold before the channel is busy: 75 ms.
-/// A static crash or a keying click is a block or two; the shortest occupancy that matters
-/// — a CW dah, an Aether preamble of four 31 ms symbols — is longer.
-const ATTACK_BLOCKS: usize = 3;
+/// The attack: over the last `ATTACK_WINDOW` blocks (400 ms), at least `ATTACK_MAJORITY`
+/// must have exceeded the threshold. A crash is one block and a surge of storm noise a
+/// dozen; a CW character keys about half its span, and everything slower keys all of it.
+const ATTACK_WINDOW: usize = 16;
+/// See [`ATTACK_WINDOW`].
+const ATTACK_MAJORITY: usize = 8;
 /// How many blocks the detector listens for before its floor means anything: 2.5 s, the
 /// half-window the five-second design waited for.
 const SETTLE_BLOCKS: usize = 100;
@@ -210,7 +232,8 @@ impl BusyDetector {
             partial: Vec::with_capacity(block_samples),
             reason: None,
             excess_peak_db: f64::NEG_INFINITY,
-            over: 0,
+            over: std::collections::VecDeque::with_capacity(ATTACK_WINDOW),
+            held_since: None,
             busy_until: f64::NEG_INFINITY,
             level_db: f64::NEG_INFINITY,
             floor_db: f64::NEG_INFINITY,
@@ -329,8 +352,11 @@ impl BusyDetector {
             let excess = self.level_db - self.floor_db;
             self.excess_peak_db = self.excess_peak_db.max(excess);
             let over = self.floor_db.is_finite() && excess >= self.config.threshold_db;
-            self.over = if over { self.over + 1 } else { 0 };
-            if self.over >= ATTACK_BLOCKS {
+            self.over.push_back(over);
+            if self.over.len() > ATTACK_WINDOW {
+                self.over.pop_front();
+            }
+            if self.over.iter().filter(|&&o| o).count() >= ATTACK_MAJORITY {
                 self.busy_until = self.busy_until.max(now + self.config.hang_s);
                 self.reason = Some(BusyReason::Level {
                     level_db: self.level_db,
@@ -346,35 +372,50 @@ impl BusyDetector {
                 self.history.pop_front();
             }
 
-            let floor = self
-                .history
-                .iter()
-                .filter(|&&(_, evidence)| evidence)
-                .map(|&(power, _)| power)
-                .fold(f64::INFINITY, f64::min);
-            if floor.is_finite() {
-                self.floor_db = 10.0 * floor.max(FLOOR).log10();
-            } else if self.history.len() >= self.window_blocks
-                || self.floor_db == f64::NEG_INFINITY
-            {
-                // No evidence in the whole window: either nothing has been heard yet, or
-                // the channel has been busy for the whole minute. Then the plain minimum,
-                // silence excepted — a signal that never stops is the environment, and a
-                // floor that will not learn it is a floor that can never recover.
-                let lowest = self
-                    .history
+            let floor = median(
+                self.history
                     .iter()
-                    .map(|&(power, _)| power)
-                    .filter(|&p| p > SILENCE)
-                    .fold(f64::INFINITY, f64::min);
-                if lowest.is_finite() {
-                    self.floor_db = 10.0 * lowest.max(FLOOR).log10();
+                    .filter(|&&(_, evidence)| evidence)
+                    .map(|&(power, _)| power),
+            );
+            if let Some(floor) = floor {
+                self.floor_db = 10.0 * floor.max(FLOOR).log10();
+                self.held_since = None;
+            } else {
+                // No signal-free block in the window: the floor learned before is held —
+                // through an FT8 period, an SSB over — until the hold runs out. Then, or
+                // when nothing has been learned yet at all, the median of every block,
+                // silence excepted: a signal that never stops is the environment, and a
+                // floor that will not learn it is a floor that can never recover.
+                let since = *self.held_since.get_or_insert(now);
+                let unlearned = self.floor_db == f64::NEG_INFINITY;
+                if unlearned || now - since >= self.config.floor_hold_s {
+                    let all = median(
+                        self.history
+                            .iter()
+                            .map(|&(power, _)| power)
+                            .filter(|&p| p > SILENCE),
+                    );
+                    if let Some(all) = all {
+                        self.floor_db = 10.0 * all.max(FLOOR).log10();
+                    }
                 }
             }
         }
         self.partial.drain(..consumed);
         self.busy(now)
     }
+}
+
+/// The median of some powers, or `None` of none. Linear, so it is the median block and
+/// not a mean that a surge would pull up.
+fn median(powers: impl Iterator<Item = f64>) -> Option<f64> {
+    let mut sorted: Vec<f64> = powers.collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(f64::total_cmp);
+    Some(sorted[sorted.len() / 2])
 }
 
 #[cfg(test)]
@@ -568,14 +609,14 @@ mod tests {
         };
         let floor = floor_at_end(&trace, "noise");
         assert!(
-            (median - floor) < 2.5 && (median - floor) > 0.0,
-            "the floor should sit just under the noise's median: median {median:.1}, floor {floor:.1}"
+            (median - floor).abs() < 1.0,
+            "the floor is the noise's typical level: median {median:.1}, floor {floor:.1}"
         );
     }
 
     #[test]
     fn case_2_a_single_short_spike_does_not_trigger_busy() {
-        // one block, +20 dB: a static crash. The attack needs three in a row.
+        // one block, +20 dB: a static crash. The attack needs half of 400 ms.
         let mut detector = BusyDetector::new(BusyConfig::default());
         let stages: Vec<Stage<'static>> = vec![
             ("noise", secs(10.0), Box::new(|_| 0.01)),
@@ -690,10 +731,12 @@ mod tests {
         ];
         let trace = traced(&mut detector, &stages, 23);
         let after: Vec<_> = trace.iter().filter(|r| r.0 == "after").collect();
-        // busy clears within the hangover
+        // busy clears within the hangover, plus the half of the attack window that is
+        // still over the threshold when the signal stops: the release latency
         let cleared = after.iter().position(|r| !r.4).expect("busy never cleared");
+        let drain_s = (ATTACK_WINDOW - ATTACK_MAJORITY) as f64 * 0.025;
         assert!(
-            cleared as f64 * 0.025 <= detector.config().hang_s + 0.1,
+            cleared as f64 * 0.025 <= detector.config().hang_s + drain_s + 0.05,
             "took {:.2} s to clear after the signal stopped",
             cleared as f64 * 0.025
         );
