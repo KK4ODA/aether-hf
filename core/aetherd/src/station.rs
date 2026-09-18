@@ -593,6 +593,7 @@ impl<P: Ptt> Station<P> {
         let engine = LinkEngine::new(&config.callsign, timing, link, seed);
         let busy = BusyDetector::new(BusyConfig {
             fs: params.fs_baseband,
+            passband_hz: params.occupied_bandwidth_hz(),
             ..config.busy
         });
         Self {
@@ -1954,6 +1955,9 @@ impl<P: Ptt> Station<P> {
                 }
                 Some(crate::busy::BusyReason::Frame { detect_confidence }) => {
                     format!("a frame decoded (acquired at {detect_confidence:.2})")
+                }
+                Some(crate::busy::BusyReason::Shape { peak_db }) => {
+                    format!("the passband is peaked ({peak_db:.1} dB over its median)")
                 }
                 None => "no reason recorded".to_owned(),
             }

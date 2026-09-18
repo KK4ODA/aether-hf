@@ -367,16 +367,28 @@ function applyMetrics(metrics) {
     // the peak the detector tested since the last reading, and which path last lit it —
     // the two things the reading itself cannot show
     const peak = typeof metrics.excess_peak_db === "number" ? `peak ${signed(metrics.excess_peak_db)} dB` : "";
-    const why = metrics.busy_reason === "frame" ? "last lit by a decoded frame" : metrics.busy_reason === "level" ? "last lit by the level" : "";
-    $("d-busy-why").textContent = [peak, why].filter(Boolean).join(" · ");
+    // the passband's shape: flat noise reads about 6 dB, a narrowband signal 15 and up,
+    // and it is the one reading the receiver's AGC cannot compress
+    const shape = typeof metrics.shape_db === "number" ? `shape ${metrics.shape_db.toFixed(1)} dB` : "";
+    const why =
+      metrics.busy_reason === "frame"
+        ? "last lit by a decoded frame"
+        : metrics.busy_reason === "shape"
+          ? "last lit by the passband's shape"
+          : metrics.busy_reason === "level"
+            ? "last lit by the level"
+            : "";
+    $("d-busy-why").textContent = [peak, shape, why].filter(Boolean).join(" · ");
   }
   // the lamp says which path lit it: the level threshold, or a frame acquired
   const why =
     metrics.busy_reason === "frame"
-      ? "Channel busy: a frame was acquired"
-      : metrics.busy_reason === "level"
-        ? `Channel busy: the level crossed the threshold (${busyThresholdDb} dB over the floor)`
-        : "Channel busy";
+      ? "Channel busy: a frame decoded"
+      : metrics.busy_reason === "shape"
+        ? "Channel busy: a narrowband signal is in the passband"
+        : metrics.busy_reason === "level"
+          ? `Channel busy: the level crossed the threshold (${busyThresholdDb} dB over the floor)`
+          : "Channel busy";
   setLamp("lamp-busy", metrics.channel_busy === true, metrics.channel_busy ? why : "Channel clear");
   if (metrics.transmitting !== undefined) {
     setLamp("lamp-ptt", metrics.transmitting === true, metrics.transmitting ? "Transmitter keyed" : "Transmitter off");

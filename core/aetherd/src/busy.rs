@@ -59,6 +59,24 @@
 //! slower than about 15 dB/s (a SLOW setting) ramps gently enough to pass the gate, and
 //! its dips will show; the field notes say which settings to use.
 //!
+//! # The shape of the passband
+//!
+//! A level against a floor is the wrong instrument behind a receiver's AGC. With a strong
+//! signal in the passband the receiver turns its gain down, so in the audio the signal sits
+//! at the AGC's set point and the noise beside it drops: a strong FT8 station measured
+//! exactly 6 dB over the noise between periods, and no margin that rejects storm noise can
+//! catch that. What the AGC cannot hide is the **shape**: it scales every frequency in the
+//! passband together, so a narrowband signal's peak stays the same distance above the bins
+//! beside it. Noise is spectrally flat; an FT8 tone, a CW carrier, a PSK or RTTY signal, the
+//! formants of a voice are not. So every 200 ms the detector takes the periodogram of the
+//! passband and compares its highest bin to its median bin. Measured: quiet noise sits at
+//! 6 dB and never passes 10; storm noise the same; the weakest FT8 station recorded —
+//! invisible to the level, 4.5 dB over the floor — sits at 15 dB and above, and a strong one
+//! at 19–25. Two consecutive windows over 12 dB is busy, and a block in such a window is
+//! not noise evidence, which is what keeps a floor from learning a channel that two FT8
+//! stations occupy nine seconds in ten. An OFDM signal like Aether's own is as flat as
+//! noise and is caught by the level path, or by decoding it.
+//!
 //! On top of that:
 //!
 //! * the threshold has to be exceeded by **half of the last sixteen blocks** (400 ms) before
@@ -106,6 +124,13 @@ pub struct BusyConfig {
     pub hang_s: f64,
     /// How long a detected frame keeps the channel marked busy.
     pub frame_hold_s: f64,
+    /// How far the passband's highest spectral bin must stand over its median bin, in dB,
+    /// for the shape to count as a signal. Noise measures about 6 and never passed 10 on
+    /// any recording; the weakest FT8 station measured 15.
+    pub shape_db: f64,
+    /// The width of the passband the shape is judged over, in hertz: the waveform's
+    /// occupied bandwidth.
+    pub passband_hz: f64,
 }
 
 impl Default for BusyConfig {
@@ -122,6 +147,8 @@ impl Default for BusyConfig {
             threshold_db: 6.0,
             hang_s: 0.75,
             frame_hold_s: 2.0,
+            shape_db: 12.0,
+            passband_hz: 500.0,
         }
     }
 }
@@ -149,10 +176,15 @@ pub enum BusyReason {
         /// Acquisition peak over the threshold that accepted it.
         detect_confidence: f64,
     },
+    /// The passband's spectrum was peaked, as a narrowband signal's is and noise's never.
+    Shape {
+        /// The highest bin over the median bin, dB.
+        peak_db: f64,
+    },
 }
 
 /// Channel occupancy from the received baseband.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BusyDetector {
     config: BusyConfig,
     block_samples: usize,
@@ -173,6 +205,14 @@ pub struct BusyDetector {
     /// When the window last held no signal-free block, if it holds none now: the floor is
     /// held from then, and accepted from everything once the hold has run out.
     held_since: Option<f64>,
+    /// Baseband of the last few blocks, for the periodogram; drained every `SHAPE_BLOCKS`.
+    shape_buffer: Vec<Complex>,
+    /// The planned transform, `SHAPE_FFT` points.
+    fft: std::sync::Arc<dyn rustfft::Fft<f64>>,
+    /// Whether each of the last two shape windows was peaked, newest last.
+    peaked: [bool; 2],
+    /// The latest shape reading: the passband's highest bin over its median, dB.
+    pub shape_db: f64,
     busy_until: f64,
     /// Latest block power, in dB relative to full scale: the channel energy the busy
     /// decision is made on, block by block.
@@ -193,6 +233,14 @@ const FLOOR: f64 = 1e-20;
 const ATTACK_WINDOW: usize = 16;
 /// See [`ATTACK_WINDOW`].
 const ATTACK_MAJORITY: usize = 8;
+/// How many blocks make one shape window: 200 ms, enough for a steady periodogram and
+/// short enough that two of them are the level path's attack.
+const SHAPE_BLOCKS: usize = 8;
+/// Samples per transform: 50 ms at the baseband rate, 20 Hz bins; four of them are
+/// averaged over a window, and the zero padding to `SHAPE_FFT` interpolates the bins.
+const SHAPE_SAMPLES: usize = 400;
+/// The transform length.
+const SHAPE_FFT: usize = 512;
 /// How many blocks the detector listens for before its floor means anything: 2.5 s, the
 /// half-window the five-second design waited for.
 const SETTLE_BLOCKS: usize = 100;
@@ -234,6 +282,10 @@ impl BusyDetector {
             excess_peak_db: f64::NEG_INFINITY,
             over: std::collections::VecDeque::with_capacity(ATTACK_WINDOW),
             held_since: None,
+            shape_buffer: Vec::with_capacity(SHAPE_BLOCKS * block_samples),
+            fft: rustfft::FftPlanner::new().plan_fft_forward(SHAPE_FFT),
+            peaked: [false, false],
+            shape_db: f64::NAN,
             busy_until: f64::NEG_INFINITY,
             level_db: f64::NEG_INFINITY,
             floor_db: f64::NEG_INFINITY,
@@ -343,6 +395,36 @@ impl BusyDetector {
                 });
                 high <= low.max(FLOOR) * 10f64.powf(STEADY_RANGE_DB / 10.0)
             };
+            // the shape path: every eight blocks, the passband's periodogram
+            self.shape_buffer.extend_from_slice(block);
+            let peaked_now = if self.shape_buffer.len() >= SHAPE_BLOCKS * self.block_samples {
+                // digital silence has no shape: a muted sound card, or nothing on the
+                // input, is not judged — its spectrum is numerical noise and can look
+                // peaked, and it says nothing about the channel
+                let window_power = self
+                    .shape_buffer
+                    .iter()
+                    .map(|&(re, im)| re.mul_add(re, im * im))
+                    .sum::<f64>()
+                    / self.shape_buffer.len() as f64;
+                let peak_db = if window_power > SILENCE {
+                    self.passband_peak_db()
+                } else {
+                    f64::NAN
+                };
+                self.shape_buffer.clear();
+                self.shape_db = peak_db;
+                let peaked = peak_db >= self.config.shape_db;
+                self.peaked = [self.peaked[1], peaked];
+                if self.peaked.iter().all(|&p| p) {
+                    self.busy_until = self.busy_until.max(now + self.config.hang_s);
+                    self.reason = Some(BusyReason::Shape { peak_db });
+                }
+                peaked
+            } else {
+                self.peaked[1]
+            };
+
             // The separation the whole detector rests on: the busy decision is made on this
             // block's energy against the floor learned *before* it, and the block only
             // becomes floor evidence if the channel was not busy when it was taken. A block
@@ -363,10 +445,10 @@ impl BusyDetector {
                     floor_db: self.floor_db,
                 });
             }
-            // evidence of the floor: steady, not a muted card, and not under a signal — the
-            // block that crosses the threshold is itself excluded, whether or not it goes
-            // on to make the channel busy
-            let evidence = steady && power > SILENCE && !was_busy && !over;
+            // evidence of the floor: steady, not a muted card, and not under a signal — by
+            // level or by shape; the block that crosses the threshold is itself excluded,
+            // whether or not it goes on to make the channel busy
+            let evidence = steady && power > SILENCE && !was_busy && !over && !peaked_now;
             self.history.push_back((power, evidence));
             if self.history.len() > self.window_blocks {
                 self.history.pop_front();
@@ -404,6 +486,59 @@ impl BusyDetector {
         }
         self.partial.drain(..consumed);
         self.busy(now)
+    }
+}
+
+impl BusyDetector {
+    /// The passband's highest spectral bin over its median bin, in dB, from the blocks
+    /// gathered since the last window: four 50 ms transforms averaged, so a bin is
+    /// judged on 200 ms and not on one noisy periodogram.
+    fn passband_peak_db(&self) -> f64 {
+        let bin_hz = self.config.fs / SHAPE_FFT as f64;
+        let half = (self.config.passband_hz / 2.0 / bin_hz).round() as usize;
+        let mut power = vec![0.0f64; SHAPE_FFT];
+        let mut scratch = vec![rustfft::num_complex::Complex64::default(); SHAPE_FFT];
+        for chunk in self.shape_buffer.chunks(SHAPE_SAMPLES) {
+            if chunk.len() < SHAPE_SAMPLES {
+                break;
+            }
+            for (slot, (i, &(re, im))) in scratch.iter_mut().zip(chunk.iter().enumerate()) {
+                // a Hann window, so a strong bin does not leak into its neighbours' median
+                let w = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / SHAPE_SAMPLES as f64).cos();
+                *slot = rustfft::num_complex::Complex64::new(re * w, im * w);
+            }
+            for slot in scratch.iter_mut().skip(SHAPE_SAMPLES) {
+                *slot = rustfft::num_complex::Complex64::default();
+            }
+            self.fft.process(&mut scratch);
+            for (p, v) in power.iter_mut().zip(&scratch) {
+                *p += v.norm_sqr();
+            }
+        }
+        // the passband straddles DC in baseband: the bins from -half..=half, wrapping
+        let band: Vec<f64> = (0..=half)
+            .map(|k| power[k])
+            .chain((1..=half).map(|k| power[SHAPE_FFT - k]))
+            .collect();
+        match median(band.iter().copied()) {
+            Some(mid) if mid > 0.0 => {
+                let peak = band.iter().copied().fold(0.0, f64::max);
+                10.0 * (peak / mid).log10()
+            }
+            _ => f64::NAN,
+        }
+    }
+}
+
+impl std::fmt::Debug for BusyDetector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BusyDetector")
+            .field("level_db", &self.level_db)
+            .field("floor_db", &self.floor_db)
+            .field("shape_db", &self.shape_db)
+            .field("busy_until", &self.busy_until)
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
     }
 }
 
@@ -777,6 +912,140 @@ mod tests {
             "busy {:.0}% of the gaps, more than the hangover accounts for",
             share_off * 100.0
         );
+    }
+
+    /// Noise plus a tone at `offset_hz` inside the passband, the tone `db` over the noise's
+    /// power: what a narrowband signal looks like in baseband.
+    fn tone_over_noise(n: usize, sigma: f64, db: f64, offset_hz: f64, seed: u64, phase0: f64) -> Vec<Complex> {
+        let amp = sigma * 10f64.powf(db / 20.0) * std::f64::consts::SQRT_2;
+        noise(n, sigma, seed)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (re, im))| {
+                let ph = phase0 + 2.0 * std::f64::consts::PI * offset_hz * i as f64 / 8000.0;
+                (re + amp * ph.cos(), im + amp * ph.sin())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_narrowband_signal_too_weak_for_the_level_is_caught_by_its_shape() {
+        // An FT8 station behind the receiver's AGC measured 4.5 dB over the noise between
+        // periods — under any margin that rejects storm noise — and 15 dB peaked in the
+        // passband. The level path cannot see it; the shape path must.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let fs = detector.config().fs;
+        let block = (detector.config().block_s * fs) as usize;
+        let mut now = 0.0;
+        for i in 0..secs(10.0) {
+            now += 0.025;
+            detector.push(&noise(block, 0.01, 40 + i as u64), now);
+        }
+        assert!(!detector.busy(now), "noise alone is quiet");
+        let floor_before = detector.floor_db;
+        // +4 dB of tone at +60 Hz: a 3 s "period" of it
+        let mut phase = 0.0;
+        for i in 0..secs(3.0) {
+            now += 0.025;
+            let samples = tone_over_noise(block, 0.01, 4.0, 60.0, 900 + i as u64, phase);
+            phase += 2.0 * std::f64::consts::PI * 60.0 * block as f64 / fs;
+            detector.push(&samples, now);
+        }
+        assert!(
+            detector.level_db - floor_before < 6.0,
+            "the test is meant to be under the level margin: {:+.1} dB",
+            detector.level_db - floor_before
+        );
+        assert!(
+            detector.shape_db >= detector.config().shape_db,
+            "the passband should read peaked: {:.1} dB",
+            detector.shape_db
+        );
+        assert!(detector.busy(now), "a narrowband signal under the level margin is busy by shape");
+        assert!(matches!(detector.reason(), Some(BusyReason::Shape { .. })));
+        assert!(
+            (detector.floor_db - floor_before).abs() < 1.0,
+            "and the floor did not learn it: {floor_before:.1} -> {:.1}",
+            detector.floor_db
+        );
+    }
+
+    #[test]
+    fn flat_noise_at_any_level_is_not_peaked() {
+        // the shape of noise: about 6 dB peak over median in the passband, never 12
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let block = (detector.config().block_s * detector.config().fs) as usize;
+        let mut worst = f64::MIN;
+        let mut now = 0.0;
+        for i in 0..secs(30.0) {
+            now += 0.025;
+            // the level wanders +-6 dB block to block, as storm noise does
+            let sigma = 0.01 * 10f64.powf(((i % 7) as f64 - 3.0) * 2.0 / 20.0);
+            detector.push(&noise(block, sigma, 70 + i as u64), now);
+            if detector.shape_db.is_finite() {
+                worst = worst.max(detector.shape_db);
+            }
+        }
+        assert!(
+            worst < detector.config().shape_db,
+            "flat noise read as peaked: {worst:.1} dB against {}",
+            detector.config().shape_db
+        );
+        assert!(!matches!(detector.reason(), Some(BusyReason::Shape { .. })));
+    }
+
+    #[test]
+    fn two_alternating_stations_leave_the_floor_at_the_gaps() {
+        // Two FT8 stations on alternate periods, each 12.6 s, with 2.4 s of noise between:
+        // the channel is occupied nine seconds in ten. The strong one is +6 dB by level
+        // (what the AGC leaves of a strong signal), the weak one +4. Both are peaked, so
+        // neither is floor evidence, the floor stays at the gaps, and both periods are busy.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let fs = detector.config().fs;
+        let block = (detector.config().block_s * fs) as usize;
+        let mut now = 0.0;
+        let mut seed = 0u64;
+        let feed_noise = |d: &mut BusyDetector, now: &mut f64, s: f64, seed: &mut u64| {
+            for _ in 0..secs(s) {
+                *now += 0.025;
+                *seed += 1;
+                d.push(&noise(block, 0.01, 1000 + *seed), *now);
+            }
+        };
+        let feed_tone = |d: &mut BusyDetector, now: &mut f64, s: f64, db: f64, hz: f64, seed: &mut u64| -> f64 {
+            let mut phase = 0.0;
+            let mut busy_blocks = 0usize;
+            let n = secs(s);
+            for _ in 0..n {
+                *now += 0.025;
+                *seed += 1;
+                d.push(&tone_over_noise(block, 0.01, db, hz, 5000 + *seed, phase), *now);
+                phase += 2.0 * std::f64::consts::PI * hz * block as f64 / fs;
+                if d.busy(*now) {
+                    busy_blocks += 1;
+                }
+            }
+            busy_blocks as f64 / n as f64
+        };
+        feed_noise(&mut detector, &mut now, 10.0, &mut seed);
+        let floor_before = detector.floor_db;
+        let mut worst_floor = f64::MIN;
+        let mut strong_share = 0.0;
+        let mut weak_share = 0.0;
+        for _ in 0..3 {
+            strong_share += feed_tone(&mut detector, &mut now, 12.6, 6.0, 80.0, &mut seed);
+            worst_floor = worst_floor.max(detector.floor_db);
+            feed_noise(&mut detector, &mut now, 2.4, &mut seed);
+            weak_share += feed_tone(&mut detector, &mut now, 12.6, 4.0, -120.0, &mut seed);
+            worst_floor = worst_floor.max(detector.floor_db);
+            feed_noise(&mut detector, &mut now, 2.4, &mut seed);
+        }
+        assert!(
+            worst_floor - floor_before < 1.5,
+            "the floor climbed into the stations: {floor_before:.1} -> {worst_floor:.1}"
+        );
+        assert!(strong_share / 3.0 > 0.9, "the strong station busy only {:.0}%", strong_share / 3.0 * 100.0);
+        assert!(weak_share / 3.0 > 0.9, "the weak station busy only {:.0}%", weak_share / 3.0 * 100.0);
     }
 
     #[test]

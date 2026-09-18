@@ -965,7 +965,11 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "busy_reason": busy.reason().map(|reason| match reason {
             crate::busy::BusyReason::Level { .. } => "level",
             crate::busy::BusyReason::Frame { .. } => "frame",
+            crate::busy::BusyReason::Shape { .. } => "shape",
         }),
+        // the passband's highest spectral bin over its median, dB: flat noise reads about
+        // 6, a narrowband signal 15 and up, and the AGC cannot change it
+        "shape_db": level(busy.shape_db),
         "transmitting": station.transmitting(),
         "receiving": station.receiving(),
         "audio": level_json(&station.audio_level()),
