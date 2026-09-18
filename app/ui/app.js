@@ -814,13 +814,29 @@ function drawSnrChart() {
     ctx.lineTo(CHART_LEFT + f.plotWidth, f.y(threshold));
     ctx.stroke();
     ctx.setLineDash([]);
+    // The label goes where the readings are not. A session that sits right at its mode's
+    // threshold — which is what a rate controller aims for — puts every point on this
+    // line, so a fixed spot beside it is a collision. Four places are tried, either end
+    // of the line, above and below, and the one with the fewest points under it wins;
+    // a background keeps the words legible even when nowhere is empty.
+    const text = `mode ${currentMode} needs ${threshold.toFixed(1)} dB`;
+    const width = ctx.measureText(text).width;
+    const yLine = f.y(threshold);
+    const points = [...snrHistory, ...peerHistory].map((point) => [x(point.at), f.y(point.snr)]);
+    const candidates = [
+      { left: CHART_LEFT + 4, y: yLine - 7 },
+      { left: CHART_LEFT + 4, y: yLine + 8 },
+      { left: CHART_LEFT + f.plotWidth - 4 - width, y: yLine - 7 },
+      { left: CHART_LEFT + f.plotWidth - 4 - width, y: yLine + 8 },
+    ];
+    const conflicts = ({ left, y }) =>
+      points.filter(([px, py]) => px >= left - 3 && px <= left + width + 3 && Math.abs(py - y) <= 7).length;
+    const spot = candidates.reduce((best, next) => (conflicts(next) < conflicts(best) ? next : best));
+    ctx.fillStyle = withAlpha(c.plot, 0.85);
+    ctx.fillRect(spot.left - 3, spot.y - 6, width + 6, 12);
     ctx.textAlign = "left";
     ctx.fillStyle = c.ink2;
-    ctx.fillText(
-      `mode ${currentMode} needs ${threshold.toFixed(1)} dB`,
-      CHART_LEFT + 4,
-      f.y(threshold) - 7,
-    );
+    ctx.fillText(text, spot.left, spot.y);
   }
 
   // what the other station reports hearing us at: a thin dashed line with small squares,
