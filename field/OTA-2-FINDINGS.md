@@ -210,12 +210,14 @@ transmitted twice on top of a burst it had stopped being able to decode.
 2. **Raise the floor detector's threshold, or qualify it.** 13.6 false alarms a minute on a
    real band. Needs a measurement against recorded band noise, not AWGN — `tools/floor_trace.py`
    is the shape of the tool. ADR amendment to 0009.
-3. **Record the modes a station transmits.** Both structural explanations for the silent
-   26 s burst are refuted by measurement (claimed spans, and the receive buffer), which
-   leaves the transmitter — and the leading account is a clipped PA carrying QPSK control
-   frames but not a denser payload mode. It cannot be confirmed, because a sidecar records
-   only what the station *received*. Half of every two-sided analysis is guesswork until
-   this exists, and with it the recordings already on disk would settle item 1 as well.
+3. ~~**Record the modes a station transmits.**~~ — **done** (beta.32). Both structural
+   explanations for the silent 26 s burst are refuted by measurement (claimed spans, and
+   the receive buffer), which leaves the transmitter — and the leading account is a clipped
+   PA carrying QPSK control frames but not a denser payload mode. It could not be confirmed,
+   because a sidecar recorded only what the station *received*. A sidecar now carries `sent`
+   (t_s, kind, mode, rv, floor, bytes for every frame put on the air) and a `tx_peak` event
+   per transmission, so the next test answers both questions from its own recordings. The
+   OTA-2 recordings themselves predate it and cannot be re-read this way.
 4. ~~**Give control frames a real confidence**~~ — **done** (beta.32). `FrameSync` carries
    the acquisition peak through to the receiver as the model's always did, and
    `detect_confidence` — the peak over the threshold that accepted it — is reported on the
