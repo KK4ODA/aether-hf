@@ -269,6 +269,15 @@ transmitted twice on top of a burst it had stopped being able to decode.
    modem's own telemetry rather than offline.
 5. Carry forward from test 1: the **compression desync** ADR (compression was off in this
    test, so nothing new was learned).
+6. **Waitlisted — an adaptive busy margin.** The 6 dB margin was set against one station's
+   two evenings, and the noise's *spread* (how far its surges reach above its typical
+   level) measured ~5 dB on one and 11 dB on the other. The detector already holds the
+   blocks it would need to measure that spread and lift the threshold with it, CFAR-style,
+   with the configured margin as the floor of the threshold. Deliberately not built from
+   this data: it would be tuned to this shack. Every sidecar now records each busy
+   transition with level, floor, delta and margin, so once P6-7's contributed sessions
+   arrive from other stations, the spread across users is a measurement and the rule can
+   be set from it.
 
 ## Next test
 
