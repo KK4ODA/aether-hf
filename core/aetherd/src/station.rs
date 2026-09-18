@@ -347,9 +347,13 @@ impl LevelMeter {
 /// Set from the 300-frame OTA-2 record (`field/OTA-2-FINDINGS.md`), where a crowded 40 m
 /// produced 13.6 false acquisitions a minute: every frame that decoded cleared its
 /// threshold by a wide margin, and the noise triggers sat just above it, which is what a
-/// threshold set on the statistic's maximum over *noise* implies. This is deliberately
-/// only a reporting gate — raising the detector's own threshold is ADR business, because
-/// it would cost weak-signal frames that do decode.
+/// threshold set on the statistic's maximum over *noise* implies.
+///
+/// It gates what an *unconfirmed* acquisition is allowed to do — report an offset, mark
+/// the channel busy, extend the receive window, tell the engine a burst is arriving — and
+/// nothing about what the receiver decodes: every candidate is still pursued, and a frame
+/// that decodes is real whatever its acquisition looked like. Raising the detector's own
+/// threshold is ADR business, because it would cost weak-signal frames that do decode.
 pub const DETECT_CONFIDENCE_TRUSTED: f64 = 1.3;
 
 /// The carrier offset worth reporting. It is real when the frame decoded, or when
@@ -1583,6 +1587,7 @@ impl<P: Ptt> Station<P> {
                 .air()
                 .layout_for_family(container == Container::Data, decoded.frame.sync.floor);
             let start = decoded.frame.sync.start as f64 / fs;
+            let decoded_ok = decoded.ok();
             let frame = PhyFrame {
                 container,
                 t_start: start,
@@ -1590,19 +1595,17 @@ impl<P: Ptt> Station<P> {
                 frame: decoded.frame,
                 modem: Rc::clone(&self.decoder),
             };
+            // A frame that decoded is real whatever its acquisition looked like, and a weak
+            // one at the floor may have acquired below the gate below — it counts here. One
+            // that did not decode is a soft frame the engine may still combine, and it says
+            // nothing about the channel: a phantom gets this far too.
+            if decoded_ok {
+                self.busy.mark_frame(now);
+            }
             self.engine.on_frame(&frame, now);
         }
 
-        for pending in preambles {
-            // the start-of-frame signal: it tells the engine a burst is still running long
-            // before the frame itself arrives, and it marks the channel busy at an SNR far
-            // below anything a power measurement would catch
-            self.busy.mark_frame(now);
-            self.rx_until = self
-                .rx_until
-                .max(now + self.transmitter.air().long.duration_s());
-            self.engine.on_preamble(pending.sync.start as f64 / fs, now);
-        }
+        self.heed_preambles(&preambles, now);
         self.pump();
     }
 
@@ -1884,6 +1887,29 @@ impl<P: Ptt> Station<P> {
         self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
+    }
+
+    /// Act on the preambles acquisition found in this block: the start-of-frame signal.
+    ///
+    /// It tells the engine a burst is still running long before the frame itself arrives,
+    /// and it marks the channel busy at an SNR far below anything a power measurement
+    /// would catch. But only for an acquisition worth believing. On a crowded band the
+    /// detector false-alarms many times a minute (OTA-2: 13.6), and every phantom used to
+    /// silence this station for two seconds, extend its receive window by a frame and tell
+    /// the engine the other station was still talking — the busy indicator lit for seconds
+    /// with nothing 6 dB above the floor, and replies waited on frames that never existed.
+    /// A phantom sits just above its threshold; a frame clears it by a wide margin.
+    fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], now: f64) {
+        let air = self.air();
+        let fs = self.config.params.fs_baseband;
+        for pending in preambles {
+            if pending.sync.detect_confidence(&air) < DETECT_CONFIDENCE_TRUSTED {
+                continue;
+            }
+            self.busy.mark_frame(now);
+            self.rx_until = self.rx_until.max(now + air.long.duration_s());
+            self.engine.on_preamble(pending.sync.start as f64 / fs, now);
+        }
     }
 
     /// Record what this station is putting on the air, beside what it hears.
@@ -3428,6 +3454,50 @@ mod tests {
         }
         assert!(station.stats.deferred_for_busy > 0);
         assert_eq!(station.stats.transmissions, 0);
+    }
+
+    #[test]
+    fn a_phantom_acquisition_does_not_light_the_busy_indicator_but_a_frame_does() {
+        // The operator watched the level never reach 6 dB over the floor while the busy
+        // indicator stayed on for seconds at a time. It was the acquisition path: every
+        // preamble marked the channel busy for two seconds, and on a crowded band the
+        // detector finds a phantom every few seconds. A phantom sits just above its
+        // threshold; a real frame clears it by a wide margin (OTA-2: 1.0-1.5 against 2.8-4).
+        use aether_phy::preamble::FrameType;
+        use aether_phy::rx::FrameSync;
+
+        let mut station = idle_station();
+        let quiet = vec![0.0001f32; 4096];
+        for _ in 0..80 {
+            station.capture(&quiet).expect("capture");
+        }
+        let now = station.now();
+        let air = station.air();
+        let preamble = |peak: f64| aether_phy::PendingFrame {
+            sync: FrameSync {
+                start: 0,
+                cfo_hz: 0.0,
+                frame_type: FrameType::Control,
+                floor: true,
+                timing_peak: peak,
+                type_confidence: 1.0,
+            },
+            end: 1000,
+        };
+        assert!(!station.channel_busy(), "quiet to begin with");
+
+        // just over the floor threshold: what noise produces
+        let phantom = preamble(air.acceptance_threshold(true) * 1.05);
+        station.heed_preambles(&[phantom], now);
+        assert!(
+            !station.channel_busy(),
+            "a phantom acquisition must not silence the station"
+        );
+
+        // well clear of it: what a frame produces
+        let real = preamble(air.acceptance_threshold(true) * 2.5);
+        station.heed_preambles(&[real], now);
+        assert!(station.channel_busy(), "a confident acquisition marks the channel");
     }
 
     #[test]
