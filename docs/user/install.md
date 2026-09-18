@@ -32,8 +32,10 @@ through an open-source signing service is on the roadmap (`docs/ROADMAP.md` §9)
 First run writes a configuration with a placeholder callsign and no keying, so nothing
 transmits until you have been through **Setup** — which is where the panel opens until the
 first save: callsign, radio interface and devices, receive level, save. The configuration lives at
-`%APPDATA%\aether-hf\station.toml`; the daemon's output for the last run is `aetherd.log`
-beside it, and *Help > Open the configuration folder* takes you there.
+`%APPDATA%\aether-hf\station.toml`; the daemon's output for this run is `aetherd.log`
+beside it and the run before it is `aetherd.prev.log`, and *Help > Open the configuration
+folder* takes you there. If restarting the modem made a problem go away, the log worth
+reading is `aetherd.prev.log` — the one from the run that misbehaved.
 
 ### Linux
 

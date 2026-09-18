@@ -243,8 +243,13 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
     }
     // The daemon's output goes to a file, not a pipe: a pipe nobody drains would stall the
     // daemon once it filled, and a file is also the only record a packaged build keeps of
-    // what the daemon said. Truncated on every start so it describes this run.
+    // what the daemon said. Each run gets a clean file so it describes this run — but the
+    // run before it is kept alongside, because "I restarted it and it came good" is the
+    // commonest way a fault is reported and truncating on start threw away the only record
+    // of exactly the run worth reading. One generation, not a rotation: the question is
+    // always "what did it do just before I restarted it".
     let log = daemon_log_path(&config);
+    let _ = std::fs::rename(&log, previous_log_path(&log));
     if let Ok(file) = std::fs::File::create(&log) {
         if let Ok(errors) = file.try_clone() {
             command.stderr(errors);
@@ -354,6 +359,11 @@ fn daemon_log_path(config: &std::path::Path) -> PathBuf {
         || PathBuf::from("aetherd.log"),
         |dir| dir.join("aetherd.log"),
     )
+}
+
+/// Where the run before this one is kept, beside the current log.
+fn previous_log_path(log: &std::path::Path) -> PathBuf {
+    log.with_extension("prev.log")
 }
 
 /// The last few lines of a file, for showing a person.
