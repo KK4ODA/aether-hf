@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "aether-model"
-version = "0.2.0-beta.31"
+version = "0.2.0-beta.32"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
