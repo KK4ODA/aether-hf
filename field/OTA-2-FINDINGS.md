@@ -9,6 +9,11 @@ The operator's report — the base sounded "choppy" in the truck, and the statio
 seemed to connect when it sounded continuous — is exactly right, and the recordings say
 what it means.
 
+Everything below is held to `aetherd --replay`, which reproduces both sides of the best
+pair exactly as they ran on the night (mobile 60 found / 16 decoded, base 42 / 2), so the
+receiver's behaviour over this audio is deterministic and can be re-measured against any
+change.
+
 ## What happened
 
 | | |
@@ -86,10 +91,16 @@ chip confidence  1.0 - 1.5   ->  213 detections, 0 decoded (except control frame
 chip confidence  2.8 - 4.0   ->   22 detections, 22 decoded
 ```
 
-115 of the 215 were floor-family control-frame detections. The floor detector is new in
-beta.20 (ADR-0009) and its threshold of 0.32 was set from the noise maximum **on AWGN**; a
-40 m evening with CW QRM is not AWGN. For comparison, a 156 s idle listen on 2.3 kHz (no
-floor detector) recorded **zero** detections.
+115 of the 215 were floor-family control-frame detections, and at the base end it is worse
+still — 24 of its 40 failures in one session. The floor detector is new in beta.20
+(ADR-0009) and its threshold of 0.32 was set from the noise maximum **on AWGN**; a 40 m
+evening with CW QRM is not AWGN. For comparison, a 156 s idle listen on 2.3 kHz (no floor
+detector) recorded **zero** detections.
+
+The beta.27 CFO gate is very nearly the right cut: exactly one phantom of the 215 reported
+an offset (`66.20 s data mode 1 rv 3 -11.5 dB cfo +30.5 Hz`), so its confidence reached
+`MODE_RETRY_CONFIDENCE`. The spurious offsets that dominated OTA-1 are rare now rather than
+gone.
 
 This is not merely wasted work. In `stream.rs:188-199` a candidate whose start falls inside
 a span already claimed is dropped as a duplicate:
