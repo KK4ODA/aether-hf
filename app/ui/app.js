@@ -361,8 +361,14 @@ function applyMetrics(metrics) {
   }
   if (level !== null && level !== undefined && floor !== null && floor !== undefined) {
     $("d-busy").textContent = metrics.channel_busy ? "busy" : "clear";
-    const peak = typeof metrics.excess_peak_db === "number" ? ` · peak ${metrics.excess_peak_db >= 0 ? "+" : ""}${metrics.excess_peak_db.toFixed(1)} dB` : "";
-    $("d-busy-sub").textContent = `level ${level.toFixed(1)} · floor ${floor.toFixed(1)} dBFS${peak}`;
+    const delta = level - floor;
+    const signed = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+    $("d-busy-sub").textContent = `level ${level.toFixed(1)} · floor ${floor.toFixed(1)} dBFS · delta ${signed(delta)} of ${busyThresholdDb} dB`;
+    // the peak the detector tested since the last reading, and which path last lit it —
+    // the two things the reading itself cannot show
+    const peak = typeof metrics.excess_peak_db === "number" ? `peak ${signed(metrics.excess_peak_db)} dB` : "";
+    const why = metrics.busy_reason === "frame" ? "last lit by a decoded frame" : metrics.busy_reason === "level" ? "last lit by the level" : "";
+    $("d-busy-why").textContent = [peak, why].filter(Boolean).join(" · ");
   }
   // the lamp says which path lit it: the level threshold, or a frame acquired
   const why =
@@ -606,16 +612,36 @@ function withAlpha(colour, alpha) {
 }
 
 /// The frame both charts draw in: the surface, the tokens, and the y scale.
-function chartFrame(id, fallbackWidth, height, low, high) {
+function chartFrame(id, fallbackWidth, height, low, high, legend = null) {
   const s = surface(id, fallbackWidth, height);
   const c = tokens();
   s.ctx.clearRect(0, 0, s.width, s.height);
   s.ctx.font = `10.5px ${c.numerals}`;
   s.ctx.textBaseline = "middle";
   const plotWidth = s.width - CHART_LEFT - CHART_RIGHT;
+  // a legend wider than the chart wraps, and the plot starts under its last row rather
+  // than behind it — the rows are counted here so the y scale knows where it may begin
+  const rows = legend ? legendRows(s.ctx, plotWidth, legend) : 1;
+  const top = CHART_TOP + (rows - 1) * LEGEND_ROW;
   const bottom = height - CHART_BOTTOM;
-  const y = (value) => CHART_TOP + (1 - (value - low) / (high - low)) * (bottom - CHART_TOP);
-  return { ...s, c, plotWidth, bottom, y };
+  const y = (value) => top + (1 - (value - low) / (high - low)) * (bottom - top);
+  return { ...s, c, plotWidth, bottom, top, y, legend };
+}
+
+/// How many rows a legend takes at this plot width.
+function legendRows(ctx, plotWidth, items) {
+  const right = CHART_LEFT + plotWidth;
+  let at = CHART_LEFT;
+  let rows = 1;
+  for (const [, text] of items) {
+    const width = ctx.measureText(text).width;
+    if (at > CHART_LEFT && at + width > right) {
+      at = CHART_LEFT;
+      rows += 1;
+    }
+    at += width + 14;
+  }
+  return rows;
 }
 
 /// Horizontal grid lines every `step`, labelled at the left.
@@ -643,7 +669,7 @@ function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
   ctx.strokeStyle = c.grid;
   for (let back = gridMs; back < spanMs; back += gridMs) {
     ctx.beginPath();
-    ctx.moveTo(x(now - back), CHART_TOP);
+    ctx.moveTo(x(now - back), f.top ?? CHART_TOP);
     ctx.lineTo(x(now - back), f.bottom);
     ctx.stroke();
   }
@@ -660,13 +686,25 @@ function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
 function drawLegend(f, items) {
   const { ctx } = f;
   ctx.textAlign = "left";
+  // a legend wider than the chart wraps to a second row rather than running off the
+  // right edge; the frame was told the items, so the plot already starts below it
+  const right = CHART_LEFT + f.plotWidth;
   let at = CHART_LEFT;
+  let row = 8;
   for (const [colour, text] of items) {
+    const width = ctx.measureText(text).width;
+    if (at > CHART_LEFT && at + width > right) {
+      at = CHART_LEFT;
+      row += LEGEND_ROW;
+    }
     ctx.fillStyle = colour;
-    ctx.fillText(text, at, 8);
-    at += ctx.measureText(text).width + 14;
+    ctx.fillText(text, at, row);
+    at += width + 14;
   }
 }
+
+/// Height of one legend row, in canvas pixels.
+const LEGEND_ROW = 11;
 
 // ── the Status chart area: SNR by frame, or connection speed ────────
 //
@@ -1552,7 +1590,15 @@ function drawChart() {
   }
   low = Math.floor((low - 3) / 5) * 5;
   high = Math.ceil((high + 3) / 5) * 5;
-  const f = chartFrame("chart", 450, 180, low, high);
+  const legend = [
+    [null, "level, dBFS"],
+    [null, "▍ receiving"],
+    [null, "▍ transmitting"],
+    [null, "- - noise floor"],
+    [null, "· · busy threshold"],
+    [null, "▏ peak that tripped it"],
+  ];
+  const f = chartFrame("chart", 450, 180, low, high, legend);
   const { ctx, c } = f;
   drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
   const x = drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
@@ -1572,7 +1618,7 @@ function drawChart() {
       // the peak the detector tested in this half second, above the sampled bar: when the
       // busy lamp lights with the bars below the line, this is what crossed it
       if (point.peak !== null && point.peak !== undefined && point.peak > point.level) {
-        ctx.fillStyle = point.busy ? c.warn : withAlpha(c.ink, 0.5);
+        ctx.fillStyle = point.busy ? c.error : withAlpha(c.ink, 0.5);
         const peakY = Math.min(f.y(point.peak), top - 1);
         ctx.fillRect(x0, peakY, bar, Math.max(1, top - peakY));
       }
@@ -1587,7 +1633,7 @@ function drawChart() {
     if (history[i].tx !== history[i - 1].tx) {
       const at = x(history[i].at) - slot;
       ctx.beginPath();
-      ctx.moveTo(at, CHART_TOP);
+      ctx.moveTo(at, f.top);
       ctx.lineTo(at, base);
       ctx.stroke();
     }
@@ -1607,7 +1653,7 @@ function drawChart() {
   ctx.setLineDash([]);
 
   // the busy threshold: the floor plus the configured margin, the line the lamp answers to
-  ctx.strokeStyle = withAlpha(c.warn, 0.8);
+  ctx.strokeStyle = withAlpha(c.error, 0.8);
   ctx.lineWidth = 1;
   ctx.setLineDash([2, 3]);
   ctx.beginPath();
@@ -1619,14 +1665,8 @@ function drawChart() {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  drawLegend(f, [
-    [c.ink2, "level, dBFS"],
-    [c.rx, "▍ receiving"],
-    [c.tx, "▍ transmitting"],
-    [c.ink2, "- - noise floor"],
-    [c.warn, "· · busy threshold"],
-    [c.warn, "▏ peak that tripped it"],
-  ]);
+  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.error];
+  drawLegend(f, legend.map(([, text], i) => [colours[i], text]));
 }
 
 window.addEventListener("resize", () => {

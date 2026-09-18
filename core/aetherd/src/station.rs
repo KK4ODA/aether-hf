@@ -224,8 +224,12 @@ enum Outgoing {
 }
 
 /// How much later than the playback lead a sound card's capture of this station's own
-/// burst may still be arriving, over and above the lead itself: device buffering both ways.
-const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.15;
+/// burst may still be arriving, over and above the lead itself: device buffering both ways,
+/// and the radio's own switch back to receive. Measured on an FTDX10 over USB: the receive
+/// audio stays at digital silence for 250-325 ms after the key is released, and eight
+/// blocks of that in a row would have put the busy detector's floor at −78 dBFS. Half a
+/// second covers it with room for a slower rig; the receiver itself still hears throughout.
+const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
 
 /// How long each drive-setting burst runs: enough to read the ALC and move the level while
 /// it is still transmitting, since the level is live and the meter answers at once.
@@ -1939,26 +1943,29 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.was_busy = busy;
-        let threshold = self.busy.config().threshold_db;
-        let detail = if busy {
-            let why = self
-                .busy
-                .reason()
-                .map_or_else(|| "no reason recorded".to_owned(), |r| r.describe(threshold));
-            format!(
-                "on: {why}; now level {:.1} floor {:.1} ({:+.1} dB)",
-                self.busy.level_db,
-                self.busy.floor_db,
-                self.busy.excess_db()
-            )
+        let margin = self.busy.config().threshold_db;
+        let (level, floor) = (self.busy.level_db, self.busy.floor_db);
+        // one line per transition, every quantity the decision used, in a fixed order:
+        //   signal | floor | delta | margin | threshold | before -> after | reason
+        let why = if busy {
+            match self.busy.reason() {
+                Some(crate::busy::BusyReason::Level { .. }) => {
+                    "energy over the threshold for the attack".to_owned()
+                }
+                Some(crate::busy::BusyReason::Frame { detect_confidence }) => {
+                    format!("a frame decoded (acquired at {detect_confidence:.2})")
+                }
+                None => "no reason recorded".to_owned(),
+            }
         } else {
-            format!(
-                "off: level {:.1} floor {:.1} ({:+.1} dB)",
-                self.busy.level_db,
-                self.busy.floor_db,
-                self.busy.excess_db()
-            )
+            "hangover ran out with the energy under the threshold".to_owned()
         };
+        let detail = format!(
+            "{level:.1} dBFS | floor {floor:.1} | delta {:+.1} dB | margin {margin:.1} |              threshold {:.1} dBFS | {} | {why}",
+            level - floor,
+            floor + margin,
+            if busy { "OFF -> ON" } else { "ON -> OFF" },
+        );
         self.note("busy", &detail);
     }
 
@@ -2289,6 +2296,21 @@ mod tests {
             out.iter().all(|&x| x == 0.0),
             "nothing is left to transmit once the operator stops it"
         );
+    }
+
+    /// A block of quiet: low-level noise, as a receiver delivers it. A constant value is
+    /// not quiet — the band-pass turns it into digital silence, which the busy detector
+    /// rightly refuses to learn as a noise floor.
+    fn quiet_block(seed: u32) -> Vec<f32> {
+        let mut state = seed.wrapping_mul(2_654_435_761) | 1;
+        (0..4096)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (f64::from(state) / f64::from(u32::MAX) - 0.5) as f32 * 0.004
+            })
+            .collect()
     }
 
     /// A station that will transmit on demand: no channel gate, no keying to fail.
@@ -3476,9 +3498,8 @@ mod tests {
             1,
         );
         // let the detector learn a quiet floor, then put a strong signal on the channel
-        let quiet = vec![0.0001f32; 4096];
-        for _ in 0..80 {
-            station.capture(&quiet).expect("capture");
+        for i in 0..80 {
+            station.capture(&quiet_block(i)).expect("capture");
         }
         assert!(station.busy_detector().settled());
         let loud: Vec<f32> = (0..4096)
@@ -3512,26 +3533,26 @@ mod tests {
         // and what the level, floor and threshold were at that moment — so the next report
         // of "busy with nothing above the threshold" names its cause instead of guessing.
         let mut station = idle_station();
-        let quiet: Vec<f32> = (0..4096).map(|i| 0.002 * ((i as f32 * 0.37).sin())).collect();
-        let loud: Vec<f32> = quiet.iter().map(|x| x * 40.0).collect(); // +32 dB
-        for _ in 0..80 {
-            station.capture(&quiet).expect("capture");
+        for i in 0..120 {
+            station.capture(&quiet_block(i)).expect("capture");
         }
         let _ = station.take_events();
         assert!(!station.channel_busy(), "quiet to begin with");
 
-        for _ in 0..6 {
+        // +32 dB of the same noise: well over the threshold, for well over the attack
+        for i in 0..6 {
+            let loud: Vec<f32> = quiet_block(500 + i).iter().map(|x| x * 40.0).collect();
             station.capture(&loud).expect("capture");
         }
         assert!(station.channel_busy(), "a level far over the floor lights it");
         let events = station.take_events();
         let on = events
             .iter()
-            .find(|e| e.starts_with("busy:on:"))
+            .find(|e| e.starts_with("busy:") && e.contains("OFF -> ON"))
             .expect("the transition to busy is logged");
         assert!(
-            on.contains("over the floor") && on.contains("threshold 6.0"),
-            "the log names the level path and the threshold: {on}"
+            on.contains("OFF -> ON") && on.contains("margin 6.0") && on.contains("delta +"),
+            "the log carries the level, floor, delta, margin and direction: {on}"
         );
         assert!(
             matches!(station.busy_detector().reason(), Some(crate::busy::BusyReason::Level { .. })),
@@ -3539,12 +3560,14 @@ mod tests {
         );
 
         // and back to quiet: the clearing is logged too, once the hang has run out
-        for _ in 0..40 {
-            station.capture(&quiet).expect("capture");
+        for i in 0..40 {
+            station.capture(&quiet_block(900 + i)).expect("capture");
         }
         let events = station.take_events();
         assert!(
-            events.iter().any(|e| e.starts_with("busy:off:")),
+            events
+                .iter()
+                .any(|e| e.starts_with("busy:") && e.contains("ON -> OFF")),
             "the clearing is logged: {events:?}"
         );
         assert!(!station.channel_busy());
