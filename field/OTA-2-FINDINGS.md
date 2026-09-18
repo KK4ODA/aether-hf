@@ -102,23 +102,30 @@ an offset (`66.20 s data mode 1 rv 3 -11.5 dB cfo +30.5 Hz`), so its confidence 
 `MODE_RETRY_CONFIDENCE`. The spurious offsets that dominated OTA-1 are rare now rather than
 gone.
 
-This is not merely wasted work. In `stream.rs:188-199` a candidate whose start falls inside
-a span already claimed is dropped as a duplicate:
+### It is not, however, why the long burst failed — that was tested and refuted
 
-```rust
-let known = self.pending.iter().map(|p| (p.sync.start, p.end))
-    .chain(self.done.iter().copied())
-    .any(|(a, b)| a.saturating_sub(symbol) < start && start < b);
-if known { continue; }
-```
+The obvious suspicion was that phantom frames blind the receiver. In `stream.rs:188-199` a
+candidate whose start falls inside a span already claimed is dropped as a duplicate, and a
+phantom floor frame claims 2.2-4.2 s of stream; over the 43 s of phase 2 the claimed spans
+cover 90 % of the window. It fitted "short bursts work, long bursts do not" exactly.
 
-A phantom floor control frame claims 2.2 s of the stream; a phantom floor data frame claims
-4.2 s. Over the 43 s of phase 2 the claimed spans cover **90 % of the window** and nothing
-decoded. Over the 30 s of phase 1 — short bursts with real silence between them, which lets
-the claims expire — coverage was 74 % and 15 of 19 detections decoded.
+**It is wrong.** Measured, on the 30 s of the collapse window, with the suppression
+compiled out and the binary verified to contain the change:
 
-That is the mechanism behind "short bursts work, long bursts do not", and it matters far
-beyond this test: a long burst is exactly what a file transfer is.
+| | candidates | decoded |
+|---|---|---|
+| suppression as shipped | 26 | **0** |
+| suppression disabled | 1199 | **0** |
+
+Suppression really is hiding a great many candidates — forty-six times as many — but not one
+of them is a frame. The real frames in the base's 26 s burst are not being blocked; they are
+not decodable from that audio at all. Whatever silenced phase 2 is upstream of acquisition,
+and finding it is open work: the leading candidates are the transmitter distortion of
+finding 1 at whatever mode the 1024-byte message went out on, and the receiver's 6 s buffer
+bound against a burst far longer than that.
+
+The cost of the false alarms is therefore wasted work and a useless confidence signal, not
+deafness — which is a smaller claim than this section first made, and the measurement is why.
 
 ## Finding 3 — a control frame never gets a real confidence
 
@@ -170,18 +177,25 @@ transmitted twice on top of a burst it had stopped being able to decode.
 
 ## Action items
 
-1. **Find the 19 dB.** Attenuator and drive test above, then decide whether to add a
-   transmit-path EVM check to the Test session. Blocks any trust in the rate controller.
+1. **Find the 19 dB.** Part of it is now accounted for: drive was being set against a tune
+   tone whose peaks sit 5.8-7.0 dB *below* the waveform's (measured at the sound card), so
+   the rig was being run that far into ALC limiting. `drive.set` and `metrics.tx_peak_dbfs`
+   (beta.32) fix the instrument; the next test measures how much of the 19 dB it was.
+   What remains: the attenuator leg — the video of the base shows **ATT OFF with IPO AMP1**,
+   a preamp on, at 300 ft from a 10 W transmitter.
 2. **Raise the floor detector's threshold, or qualify it.** 13.6 false alarms a minute on a
    real band. Needs a measurement against recorded band noise, not AWGN — `tools/floor_trace.py`
    is the shape of the tool. ADR amendment to 0009.
-3. **Stop a phantom frame from blinding the receiver** (`stream.rs:188`). Options: let a
-   later candidate with higher evidence displace a claimed span; shorten what an
-   unconfirmed candidate claims until its header verifies; keep searching inside a claimed
-   span and only suppress on decode. Needs an ADR — this is the difference between short
-   bursts working and long ones not.
-4. **Give control frames a real confidence** (`rx.rs:307`). Cheap, and every other item
-   here is easier to measure once it exists.
+3. **Find what actually silenced the long burst.** Not the claimed spans — that was tested
+   and refuted (above). Next: replay with the receiver's `max_buffer_s` raised well past
+   the burst length, and establish what mode the 1024-byte message went out on, which the
+   transmitting station's sidecar does not currently record. **A station should record the
+   modes it sends**; without that, half of every two-sided analysis is guesswork.
+4. ~~**Give control frames a real confidence**~~ — **done** (beta.32). `FrameSync` carries
+   the acquisition peak through to the receiver as the model's always did, and
+   `detect_confidence` — the peak over the threshold that accepted it — is reported on the
+   frame event and in the sidecar, so the next test's phantoms can be counted from the
+   modem's own telemetry rather than offline.
 5. Carry forward from test 1: the **compression desync** ADR (compression was off in this
    test, so nothing new was learned).
 
@@ -189,5 +203,12 @@ transmitted twice on top of a burst it had stopped being able to decode.
 
 Same 300 ft geometry — it is a good bench, because the path is not the variable. Add:
 20 dB attenuator both ends, TX drive backed off to almost no ALC, mobile filter at ~500 Hz,
-AGC FAST or OFF both ends, a dial that CAT actually reports, and one leg on a quiet part of
-40 m (7.052–7.065) rather than 7064 with CW QRM on top.
+AGC FAST or OFF both ends, **the preamp off (IPO) or the attenuator in**, a dial that CAT
+actually reports, and one leg on a quiet part of 40 m (7.052–7.065) rather than 7064 with CW
+QRM on top. Set drive with **Set drive**, not the tune tone, and note `tx_peak_dbfs`.
+
+One caution on `wait_for_clear`: on 7064 that evening the shipped busy detector read busy
+**0 % of the time** on genuine receive audio, because the band was so uniformly occupied
+that the learned floor sat at the occupancy level and nothing ever stood 6 dB above it. A
+minimum-statistics floor cannot tell a quiet band from a wall-to-wall busy one, so the
+setting protected nothing. That belongs with item 2.
