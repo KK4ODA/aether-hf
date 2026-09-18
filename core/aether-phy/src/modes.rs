@@ -330,6 +330,19 @@ pub struct AirInterface {
 }
 
 impl AirInterface {
+
+    /// The threshold a candidate of this family had to clear to be declared a preamble.
+    ///
+    /// The two families are detected by different statistics against different thresholds,
+    /// so a raw peak only means something next to the one that applied to it.
+    #[must_use]
+    pub const fn acceptance_threshold(&self, floor: bool) -> f64 {
+        if floor {
+            self.floor_acquisition_threshold
+        } else {
+            self.acquisition_threshold
+        }
+    }
     /// The control mode: control frames, connect requests, beacons and probes go out at it.
     #[must_use]
     pub const fn control_mode(&self) -> Mode {

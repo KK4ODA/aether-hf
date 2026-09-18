@@ -204,6 +204,10 @@ impl SoftFrame for PhyFrame {
 enum Outgoing {
     /// Link-layer frames, to be modulated.
     Frames(Vec<aether_link::TxFrame>),
+    /// A drive-setting burst: the real waveform, modulated exactly as traffic is, so the
+    /// rig's ALC sees the peaks traffic will actually present it with. The operator may cut
+    /// it short like a tune tone.
+    Drive(Vec<aether_link::TxFrame>),
     /// Audio to play as it is: a keying test, or a tune tone.
     Audio {
         samples: Vec<f32>,
@@ -326,15 +330,38 @@ impl LevelMeter {
     }
 }
 
-/// The carrier offset worth reporting. It is real when the frame decoded, or when the
-/// acquisition was confident enough to trust (the modem's own mode-retry threshold);
-/// `None` for a probable noise trigger, whose offset is the correlator locking onto
-/// noise, not a real frequency error. Nothing in the protocol reads carrier offset —
-/// this only keeps a phantom number off the panel and out of the sidecar, where one
-/// once sent an on-air analysis chasing a rig fault that did not exist.
+/// How far above its acceptance threshold acquisition has to have seen a frame before the
+/// detection is worth believing on its own.
+///
+/// Set from the 300-frame OTA-2 record (`field/OTA-2-FINDINGS.md`), where a crowded 40 m
+/// produced 13.6 false acquisitions a minute: every frame that decoded cleared its
+/// threshold by a wide margin, and the noise triggers sat just above it, which is what a
+/// threshold set on the statistic's maximum over *noise* implies. This is deliberately
+/// only a reporting gate — raising the detector's own threshold is ADR business, because
+/// it would cost weak-signal frames that do decode.
+pub const DETECT_CONFIDENCE_TRUSTED: f64 = 1.3;
+
+/// The carrier offset worth reporting. It is real when the frame decoded, or when
+/// acquisition itself was confident enough to trust; `None` for a probable noise trigger,
+/// whose offset is the correlator locking onto noise, not a real frequency error. Nothing
+/// in the protocol reads carrier offset — this only keeps a phantom number off the panel
+/// and out of the sidecar, where one once sent an on-air analysis chasing a rig fault that
+/// did not exist.
+///
+/// `mode_confidence` is read from the pilot chips, which only a DATA frame carries, so a
+/// CONTROL frame always reports 1.0 there and this used to suppress the offset of every
+/// one of them — including the connect, poll and acknowledgement frames the link cannot do
+/// without. `detect_confidence` is defined for both, so it is what decides.
 #[must_use]
-pub fn reported_cfo(decoded: bool, confidence: f64, cfo_hz: f64) -> Option<f64> {
-    (decoded || confidence >= aether_phy::modem::MODE_RETRY_CONFIDENCE).then_some(cfo_hz)
+pub fn reported_cfo(
+    decoded: bool,
+    confidence: f64,
+    detect_confidence: f64,
+    cfo_hz: f64,
+) -> Option<f64> {
+    let sure = confidence >= aether_phy::modem::MODE_RETRY_CONFIDENCE
+        || detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
+    (decoded || sure).then_some(cfo_hz)
 }
 
 /// What the physical layer made of one frame: for a display, for the list of stations
@@ -359,8 +386,14 @@ pub struct FrameReport {
     pub snr_db: f64,
     /// Carrier offset removed, hertz — positive means the other station is high.
     pub cfo_hz: f64,
-    /// How sure the receiver was of the mode chips (below about 1.3 is a guess).
+    /// How sure the receiver was of the mode chips (below about 1.3 is a guess). Only a
+    /// DATA frame carries chips, so a CONTROL frame always reports 1.0 here — read
+    /// `detect_confidence` for those.
     pub confidence: f64,
+    /// How far above its acceptance threshold acquisition saw the preamble: 1.0 is exactly
+    /// at the threshold. Defined for every frame type, so this is the one number that
+    /// separates a real control frame from a noise trigger.
+    pub detect_confidence: f64,
     /// Whether the payload decoded.
     pub decoded: bool,
     /// Payload bytes, when it did.
@@ -443,7 +476,14 @@ pub struct Station<P: Ptt> {
     transmitting: bool,
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
     /// nothing else may: a burst cut short is a session broken.
-    playing_tone: bool,
+    playing_test: bool,
+    /// Largest sample magnitude handed to the sound card during the transmission now
+    /// running, after the transmit level is applied — what the rig's ALC is actually being
+    /// shown.
+    tx_peak_running: f32,
+    /// The same for the last transmission that finished, which is the one worth reporting:
+    /// a peak is only meaningful over a whole burst.
+    tx_peak_last: Option<f32>,
     /// The audio clock when a held-back burst was last reported to the engine, while one
     /// is held.
     held_since: Option<f64>,
@@ -547,7 +587,9 @@ impl<P: Ptt> Station<P> {
             baseband_seen: 0,
             audio_seen: 0,
             transmitting: false,
-            playing_tone: false,
+            playing_test: false,
+            tx_peak_running: 0.0,
+            tx_peak_last: None,
             held_since: None,
             deaf_until: f64::NEG_INFINITY,
             pending: VecDeque::new(),
@@ -1064,25 +1106,110 @@ impl<P: Ptt> Station<P> {
         Ok(())
     }
 
-    /// Cut a tune tone short, playing or still queued.
+    /// Send a few real bursts so the operator can set drive against the waveform the
+    /// station actually transmits.
+    ///
+    /// A tune tone is a sine, and the daemon scales the data waveform to the *tone's RMS* —
+    /// but the waveform is OFDM, so its peaks land far above anything the tone reaches.
+    /// Measured at the sound card, which is where it matters: **+5.8 dB** at the floor
+    /// control mode and **+7.0 dB** at the fastest, against a tone whose peak is exactly
+    /// the transmit level. (ADR-0004's 5.9/7.6 dB are baseband PAPR, before the passband
+    /// conversion regrows the peaks; these numbers are the end-to-end ones.)
+    ///
+    /// An ALC responds to peaks, so drive set by ear on the tone is six or seven decibels
+    /// into limiting on real traffic, which smears the constellation and costs far more
+    /// than it saves (OTA-2, finding 1: a 26 dB channel demodulating at 7 dB).
+    ///
+    /// So the two jobs are separated. [`tune`](Self::tune) stays a steady carrier, which is
+    /// what an antenna tuner needs; this sends the real thing, at the fastest mode the
+    /// station is allowed to use, because that is the worst case its ALC will ever see.
+    /// Set the drive here and every slower mode has margin in hand.
+    ///
+    /// The bursts carry filler, not protocol: a station that decodes one finds a data frame
+    /// for a session it does not have and ignores it, as it would any stray frame.
+    ///
+    /// # Errors
+    /// If a session is running, the channel is not known to be clear, the count is outside
+    /// what is sensible, or this build has no waveform for the configured bandwidth.
+    pub fn set_drive(&mut self, bursts: usize) -> Result<(), &'static str> {
+        if self.engine.state() != State::Idle {
+            return Err("a session is running");
+        }
+        if !(1..=10).contains(&bursts) {
+            return Err("a drive check is between 1 and 10 bursts");
+        }
+        if self.config.wait_for_clear && !self.busy.settled() {
+            return Err(
+                "the busy detector is still learning the noise floor; try again in a few seconds",
+            );
+        }
+        if self.config.wait_for_clear && !self.channel_clear(self.now()) {
+            return Err("the channel is busy");
+        }
+        let air = self.air();
+        let index = self.config.link.max_mode.min(air.n_modes() - 1);
+        let mode = air.modes[index];
+        let bytes = mode.payload_bytes(&air.data_layout(index));
+        if bytes == 0 {
+            return Err("this mode carries no payload to send");
+        }
+        // not all-zero: the codec refuses that block (ADR-0009)
+        let payload = vec![0x5a_u8; bytes];
+        for _ in 0..bursts {
+            self.pending
+                .push_back(Outgoing::Drive(vec![aether_link::TxFrame {
+                    container: aether_link::Container::Data,
+                    payload: payload.clone(),
+                    mode: index,
+                    rv: 0,
+                    // a data frame's family follows its mode; this flag is for control frames
+                    floor: false,
+                }]));
+        }
+        Ok(())
+    }
+
+    /// Cut a tune tone or a drive burst short, playing or still queued.
     ///
     /// An operator setting drive has a hand on the control and the other on this: the tone
     /// is bounded either way, but ten seconds of carrier after the ALC is where it should
-    /// be is ten seconds too many. Nothing but a tone is ever cut: a burst stopped halfway
-    /// is a session broken. Returns whether there was a tone to stop.
+    /// be is ten seconds too many. Only an operator's own test transmission is ever cut —
+    /// a session's burst stopped halfway is a session broken. Returns whether there was
+    /// something to stop.
     pub fn tune_stop(&mut self) -> bool {
         let queued = self.pending.len();
-        self.pending
-            .retain(|next| !matches!(next, Outgoing::Audio { tone: true, .. }));
+        self.pending.retain(|next| {
+            !matches!(
+                next,
+                Outgoing::Audio { tone: true, .. } | Outgoing::Drive(_)
+            )
+        });
         let mut stopped = self.pending.len() != queued;
-        if self.playing_tone {
+        if self.playing_test {
             // the keying tail goes with it; the transmitter unkeys as soon as the queue
             // is empty, which is the point
             self.playback.clear();
-            self.playing_tone = false;
+            self.playing_test = false;
             stopped = true;
         }
         stopped
+    }
+
+    /// The peak of the last transmission, in dBFS, and whether it reached full scale.
+    ///
+    /// `None` until this station has transmitted. 0 dBFS means the audio itself clipped
+    /// before the radio ever saw it; well below is what a rig's ALC wants, because the
+    /// waveform's peaks are what drive it and they sit about 6-7 dB above a tone of the
+    /// same average power (measured; see [`set_drive`](Self::set_drive)).
+    #[must_use]
+    pub fn tx_peak_dbfs(&self) -> Option<f64> {
+        self.tx_peak_last.map(|peak| {
+            if peak <= 0.0 {
+                f64::NEG_INFINITY
+            } else {
+                20.0 * f64::from(peak).log10()
+            }
+        })
     }
 
     /// The last few seconds of received audio, as levels an operator can set a sound card by.
@@ -1309,7 +1436,9 @@ impl<P: Ptt> Station<P> {
         // it would hear one endless burst and never answer.
         if self.playback.is_empty() && self.transmitting {
             self.transmitting = false;
-            self.playing_tone = false;
+            self.playing_test = false;
+            self.tx_peak_last = Some(self.tx_peak_running);
+            self.tx_peak_running = 0.0;
             if let Some(recording) = &mut self.recording {
                 recording.event(
                     now,
@@ -1347,6 +1476,9 @@ impl<P: Ptt> Station<P> {
         let count = out.len().min(self.playback.len());
         for slot in out.iter_mut().take(count) {
             *slot = self.playback.pop_front().unwrap_or(0.0) * level;
+            // the ALC sees peaks, so this is the number that decides whether the rig is
+            // being over-driven — measured after the level, which is where it is applied
+            self.tx_peak_running = self.tx_peak_running.max(slot.abs());
         }
         Ok(count)
     }
@@ -1367,6 +1499,7 @@ impl<P: Ptt> Station<P> {
         for decoded in frames {
             self.stats.frames_detected += 1;
             self.report(&decoded, now);
+            let detected = decoded.frame.sync.detect_confidence(&self.air());
             if let Some(recording) = &mut self.recording {
                 recording.frame(crate::record::FrameRecord {
                     t_s: now,
@@ -1381,9 +1514,11 @@ impl<P: Ptt> Station<P> {
                     cfo_hz: reported_cfo(
                         decoded.ok(),
                         decoded.frame.mode_confidence,
+                        detected,
                         decoded.frame.cfo_hz,
                     ),
                     confidence: decoded.frame.mode_confidence,
+                    detect_confidence: detected,
                     decoded: decoded.ok(),
                     bytes: decoded.payload.as_ref().map_or(0, Vec::len),
                     control: if decoded.frame.sync.frame_type == FrameType::Control {
@@ -1441,6 +1576,12 @@ impl<P: Ptt> Station<P> {
         self.pump();
     }
 
+    /// The air interface this station runs, for the numbers that only mean something
+    /// against it — an acquisition threshold, a layout, a mode table.
+    fn air(&self) -> aether_phy::modes::AirInterface {
+        aether_phy::modes::air_interface(self.config.params)
+    }
+
     /// Describe a frame for the displays, and keep its constellation.
     fn report(&mut self, decoded: &aether_phy::DecodedFrame, now: f64) {
         let frame = &decoded.frame;
@@ -1454,6 +1595,7 @@ impl<P: Ptt> Station<P> {
             snr_db: frame.snr_3k_db,
             cfo_hz: frame.cfo_hz,
             confidence: frame.mode_confidence,
+            detect_confidence: frame.sync.detect_confidence(&self.air()),
             decoded: decoded.ok(),
             bytes: payload.map_or(0, <[u8]>::len),
             from: None,
@@ -1640,8 +1782,9 @@ impl<P: Ptt> Station<P> {
         let Some(outgoing) = self.pending.pop_front() else {
             return;
         };
+        let cuttable = matches!(outgoing, Outgoing::Drive(_));
         let frames = match outgoing {
-            Outgoing::Frames(frames) => frames,
+            Outgoing::Frames(frames) | Outgoing::Drive(frames) => frames,
             // raw audio goes out as it is, inside the same keying and lead and tail as a
             // burst, so a keying test exercises exactly the path a transmission uses
             Outgoing::Audio { samples, tone, .. } => {
@@ -1651,7 +1794,7 @@ impl<P: Ptt> Station<P> {
                 self.playback.extend(std::iter::repeat_n(0.0f32, lead));
                 self.playback.extend(samples);
                 self.playback.extend(std::iter::repeat_n(0.0f32, tail));
-                self.playing_tone = tone;
+                self.playing_test = tone;
                 return;
             }
         };
@@ -1697,6 +1840,7 @@ impl<P: Ptt> Station<P> {
         self.playback.extend(rendered);
         self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+        self.playing_test = cuttable;
     }
 
     /// Put a Morse identifier at the end of this transmission, if one is due.
@@ -1852,14 +1996,134 @@ mod tests {
     }
 
     #[test]
+    fn drive_is_set_against_the_waveform_not_against_a_tone() {
+        // The point of the whole thing: a tune tone is a sine, the data waveform is OFDM,
+        // and the daemon scales the waveform to the tone's RMS — so the waveform's peaks
+        // land well above anything the tone reaches, and an ALC set on the tone is that far
+        // into limiting on traffic (OTA-2, finding 1).
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate as usize;
+
+        station.tune(2.0).expect("tune");
+        let tone_peak = drain_peak(&mut station, rate * 6);
+
+        station.set_drive(1).expect("set drive");
+        let burst_peak = drain_peak(&mut station, rate * 20);
+
+        assert!(tone_peak > 0.0 && burst_peak > 0.0, "both radiated something");
+        let gap_db = 20.0 * (burst_peak / tone_peak).log10();
+        assert!(
+            gap_db > 2.0,
+            "the waveform should peak well above the tone that sets the drive, not level              with it: {gap_db:.1} dB"
+        );
+    }
+
+    #[test]
+    fn the_station_reports_the_peak_it_actually_transmitted() {
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate as usize;
+        assert_eq!(station.tx_peak_dbfs(), None, "nothing transmitted yet");
+
+        station.tune(2.0).expect("tune");
+        let measured = drain_peak(&mut station, rate * 6);
+        let reported = station.tx_peak_dbfs().expect("a transmission finished");
+        assert!(
+            (reported - 20.0 * f64::from(measured).log10()).abs() < 0.01,
+            "reported {reported} dBFS against a measured peak of {measured}"
+        );
+        assert!(reported < 0.0, "a sane drive does not reach full scale");
+    }
+
+    #[test]
+    fn an_operator_can_cut_a_drive_check_short_but_not_a_session() {
+        let mut station = idle_station();
+        station.set_drive(4).expect("set drive");
+        assert!(station.tune_stop(), "the queued drive bursts are cut");
+        let mut out = vec![0.0f32; 4_096];
+        station.playback(&mut out).expect("playback");
+        assert!(
+            out.iter().all(|&x| x == 0.0),
+            "nothing is left to transmit once the operator stops it"
+        );
+    }
+
+    /// A station that will transmit on demand: no channel gate, no keying to fail.
+    fn idle_station() -> Station<NullPtt> {
+        Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        )
+    }
+
+    /// Run the station until it has nothing queued, returning the largest sample it played.
+    fn drain_peak(station: &mut Station<NullPtt>, samples: usize) -> f32 {
+        let mut out = vec![0.0f32; 2_048];
+        let mut peak = 0.0f32;
+        for _ in 0..samples.div_ceil(2_048) {
+            station.playback(&mut out).expect("playback");
+            for &x in &out {
+                peak = peak.max(x.abs());
+            }
+        }
+        peak
+    }
+
+    #[test]
     fn cfo_is_reported_only_when_the_acquisition_can_be_trusted() {
         // a decoded frame's offset is real, whatever its confidence
-        assert_eq!(reported_cfo(true, 0.5, 12.0), Some(12.0));
+        assert_eq!(reported_cfo(true, 0.5, 1.0, 12.0), Some(12.0));
         // a confident non-decode is a real near-miss: keep its offset
-        assert_eq!(reported_cfo(false, 2.0, -3.0), Some(-3.0));
+        assert_eq!(reported_cfo(false, 2.0, 1.0, -3.0), Some(-3.0));
         // a low-confidence non-decode is a noise trigger: its +55 Hz is the correlator on
         // noise, not a rig error, and is not reported
-        assert_eq!(reported_cfo(false, 0.8, 55.0), None);
+        assert_eq!(reported_cfo(false, 0.8, 1.0, 55.0), None);
+    }
+
+    #[test]
+    fn a_control_frame_is_judged_by_the_acquisition_it_cannot_judge_by_its_chips() {
+        // Only a DATA frame carries mode chips, so every CONTROL frame arrives here with a
+        // mode confidence of exactly 1.0 — a real poll and a noise trigger alike. Judging
+        // on that number alone suppressed the offset of every control frame there is,
+        // which is the whole floor family: connect, poll, acknowledge (OTA-2, finding 4).
+        let control_mode_confidence = 1.0;
+
+        // acquisition saw this one well clear of its threshold: it is a frame
+        assert_eq!(
+            reported_cfo(false, control_mode_confidence, 2.4, -1.8),
+            Some(-1.8)
+        );
+        // and this one barely at the threshold, which is what noise does
+        assert_eq!(reported_cfo(false, control_mode_confidence, 1.02, 30.5), None);
+    }
+
+    #[test]
+    fn acquisition_confidence_is_measured_against_the_threshold_of_its_own_family() {
+        use aether_phy::preamble::FrameType;
+        use aether_phy::rx::FrameSync;
+
+        let air = aether_phy::modes::air_interface(aether_phy::waveform::NARROW_500);
+        let sync = |floor, peak| FrameSync {
+            start: 0,
+            cfo_hz: 0.0,
+            frame_type: FrameType::Control,
+            floor,
+            timing_peak: peak,
+            type_confidence: 1.0,
+        };
+        // the two families are detected by different statistics against different
+        // thresholds, so the same raw peak means different things
+        let ordinary = air.acceptance_threshold(false);
+        let floor = air.acceptance_threshold(true);
+        assert!(floor < ordinary, "the floor threshold is the lower one");
+        assert!((sync(false, ordinary).detect_confidence(&air) - 1.0).abs() < 1e-9);
+        assert!((sync(true, floor).detect_confidence(&air) - 1.0).abs() < 1e-9);
+        // a peak that is ample for a floor candidate is a bare pass as an ordinary one
+        assert!(sync(true, ordinary).detect_confidence(&air) > 1.5);
     }
 
     /// Step two stations against each other through a channel, in blocks of audio.

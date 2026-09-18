@@ -78,6 +78,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "test.start"
             | "test.abort"
             | "tune"
+            | "drive.set"
             | "record.start"
             | "record.stop"
             | "record.notes"
@@ -492,6 +493,24 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
                 Err(reason) => Response::failed(
                     id,
                     ApiError::new("refused", format!("Cannot tune: {reason}."), true),
+                ),
+            }
+        }
+        "drive.set" => {
+            let bursts = params
+                .get("bursts")
+                .and_then(Value::as_u64)
+                .map_or(4, |n| n as usize);
+            // zero is "stop", as it is for a tune tone
+            if bursts == 0 {
+                let stopped = station.tune_stop();
+                return Response::ok(id, json!({ "stopped": stopped }));
+            }
+            match station.set_drive(bursts) {
+                Ok(()) => Response::ok(id, json!({ "accepted": true, "bursts": bursts })),
+                Err(reason) => Response::failed(
+                    id,
+                    ApiError::new("refused", format!("Cannot set drive: {reason}."), true),
                 ),
             }
         }
@@ -936,10 +955,15 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "transmitting": station.transmitting(),
         "receiving": station.receiving(),
         "audio": level_json(&station.audio_level()),
+        // the peak of the last burst this station transmitted, after the drive level: what
+        // the rig's ALC was actually shown, which a tune tone understates by 3-4.6 dB
+        "tx_peak_dbfs": station.tx_peak_dbfs(),
         // the last frame the receiver found: its SNR is the reading an operator calls
         // "the SNR", its offset is what the other station's dial is off by
         "snr_db": last.map(|f| f.snr_db),
-        "cfo_hz": last.and_then(|f| crate::station::reported_cfo(f.decoded, f.confidence, f.cfo_hz)),
+        "cfo_hz": last.and_then(|f| {
+            crate::station::reported_cfo(f.decoded, f.confidence, f.detect_confidence, f.cfo_hz)
+        }),
         "last_frame_s": last.map(|f| f.t_s),
         // what the other station reports hearing this one at
         "peer_snr_db": station.engine().peer_snr_db(),
@@ -974,8 +998,14 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "mode": frame.mode,
         "rv": frame.rv,
         "snr_db": frame.snr_db,
-        "cfo_hz": crate::station::reported_cfo(frame.decoded, frame.confidence, frame.cfo_hz),
+        "cfo_hz": crate::station::reported_cfo(
+            frame.decoded,
+            frame.confidence,
+            frame.detect_confidence,
+            frame.cfo_hz,
+        ),
         "confidence": frame.confidence,
+        "detect_confidence": frame.detect_confidence,
         "decoded": frame.decoded,
         "bytes": frame.bytes,
         "from": frame.from,

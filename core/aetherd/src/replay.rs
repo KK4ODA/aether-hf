@@ -130,6 +130,7 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
     let block = (BLOCK_S * params.audio_rate as f64) as usize;
     let fs = params.fs_baseband;
     let rate = params.audio_rate as f64;
+    let air = aether_phy::modes::air_interface(params);
     let mut found = Vec::new();
     let mut seen = 0usize;
     let mut absorb = |baseband: &[Complex], receiver: &mut StreamingReceiver| {
@@ -147,9 +148,11 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
                 cfo_hz: crate::station::reported_cfo(
                     decoded.ok(),
                     decoded.frame.mode_confidence,
+                    decoded.frame.sync.detect_confidence(&air),
                     decoded.frame.cfo_hz,
                 ),
                 confidence: decoded.frame.mode_confidence,
+                detect_confidence: decoded.frame.sync.detect_confidence(&air),
                 decoded: decoded.ok(),
                 bytes: decoded.payload.as_ref().map_or(0, Vec::len),
                 control: if decoded.frame.sync.frame_type == FrameType::Control {

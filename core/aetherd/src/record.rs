@@ -44,9 +44,16 @@ pub struct FrameRecord {
     #[serde(default)]
     pub cfo_hz: Option<f64>,
     /// Mode-chip confidence of the acquisition; below about 1.3 is a guess, and a
-    /// non-decoding frame that low is a noise trigger rather than a real signal.
+    /// non-decoding frame that low is a noise trigger rather than a real signal. Only a
+    /// DATA frame carries chips, so a CONTROL frame always reports 1.0 here.
     #[serde(default)]
     pub confidence: f64,
+    /// How far above its acceptance threshold acquisition saw the preamble; 1.0 is exactly
+    /// at it. Unlike `confidence` this is defined for a control frame too, so it is what
+    /// tells a real connect, poll or acknowledgement from a noise trigger. Absent from a
+    /// sidecar written before beta.32, which reads as 0.
+    #[serde(default)]
+    pub detect_confidence: f64,
     /// Whether the payload came through.
     pub decoded: bool,
     /// Payload length when it did.
@@ -420,6 +427,7 @@ mod tests {
             snr_3k_db: 7.25,
             cfo_hz: Some(-3.0),
             confidence: 2.4,
+            detect_confidence: 3.1,
             decoded: true,
             bytes: 144,
             control: None,

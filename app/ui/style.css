@@ -832,6 +832,16 @@ button.sort:focus-visible {
   color: var(--status-error);
 }
 
+/* The transmit peak. Full scale is 0 dB, so the closer it gets the less headroom the
+   waveform's peaks have — and those peaks, not its average, are what drive the rig's ALC. */
+#tx-peak.warn {
+  color: var(--warn);
+}
+
+#tx-peak.bad {
+  color: var(--status-error);
+}
+
 /* ── compact: the state strip and four readings, nothing else ────── */
 
 /* the page is as tall as what it shows, so the shell can size its window to it */

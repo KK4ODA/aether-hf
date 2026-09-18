@@ -87,6 +87,34 @@ pub struct FrameSync {
     /// The frame is of the floor family (ADR-0009): an eight-symbol preamble of the floor
     /// sequences and the floor layouts; `start` is then the first of the eight.
     pub floor: bool,
+    /// The normalised matched-filter peak that declared this preamble (1.0 is a perfect
+    /// match), or the floor statistic for a floor candidate. The model's `FrameSync` has
+    /// carried this since the detector was written; the port left it on `Acquisition`,
+    /// where the streaming receiver dropped it.
+    ///
+    /// Compare it against the threshold that accepted it —
+    /// [`AirInterface::acceptance_threshold`](crate::modes::AirInterface::acceptance_threshold)
+    /// — for [`detect_confidence`](Self::detect_confidence), which is the only number that
+    /// separates a real acquisition from noise on a **control** frame:
+    /// [`mode_confidence`](ReceivedFrame::mode_confidence) is read from the pilot chips,
+    /// which only a DATA frame carries, so a control frame always reports 1.0 there.
+    pub timing_peak: f64,
+    /// The winning frame type's bank peak over the other type's — how sure the DATA/CONTROL
+    /// decision is. The model calls this `header_confidence`.
+    pub type_confidence: f64,
+}
+
+impl FrameSync {
+    /// How far above the threshold that accepted it acquisition saw this frame.
+    ///
+    /// 1.0 is exactly at the threshold — no evidence beyond the bare minimum — and it rises
+    /// with the strength of the match, so it reads like
+    /// [`mode_confidence`](ReceivedFrame::mode_confidence) and can be compared the same way.
+    /// Unlike that one it is defined for every frame type, which is the point of it.
+    #[must_use]
+    pub fn detect_confidence(&self, air: &crate::modes::AirInterface) -> f64 {
+        self.timing_peak / air.acceptance_threshold(self.floor).max(1e-12)
+    }
 }
 
 /// One demodulated frame.
@@ -494,6 +522,8 @@ mod tests {
                 cfo_hz: 0.0,
                 frame_type: FrameType::Data,
                 floor: false,
+                timing_peak: 1.0,
+                type_confidence: 1.0,
             },
         )
     }
@@ -673,6 +703,8 @@ mod tests {
             cfo_hz: 0.0,
             frame_type: FrameType::Control,
             floor: false,
+            timing_peak: 1.0,
+            type_confidence: 1.0,
         };
 
         let rx = FrameReceiver::default();
@@ -736,6 +768,8 @@ mod tests {
             cfo_hz: 0.0,
             frame_type: FrameType::Data,
             floor: false,
+            timing_peak: 1.0,
+            type_confidence: 1.0,
         };
         assert!(rx.receive(&[(0.0, 0.0); 100], &sync, None).is_err());
     }

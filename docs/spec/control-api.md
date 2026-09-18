@@ -88,7 +88,7 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the mode table of the running waveform (`modes`: index, name, payload bytes and net bit rate *on the layout the mode goes out on*, AWGN threshold, `floor` — whether the mode rides the floor frame family of ADR-0009, four times as long as an ordinary frame; `usable_modes`), whether the PHY reports preambles, the SNR reference |
@@ -132,7 +132,8 @@ distinction matters to an operator watching a transfer and is why both exist.
 |---|---|---|
 | `devices.list` | — | input/output devices with names and default flags, serial ports as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys — and `gpio_interfaces` as `{path, name}`: the CM108-class interfaces that key through their codec's GPIO pin (`[ptt] kind = "cm108"`) |
 | `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light |
-| `tune` | `duration_s` (0.5–10, or 0 to stop) | keys and plays a steady tone at the transmit level, for setting drive by the rig's ALC. `audio.tx_level` is live and is applied as audio leaves, so the level can be moved while the tone plays; `0` cuts the tone short, and nothing but a tone is ever cut |
+| `tune` | `duration_s` (0.5–10, or 0 to stop) | keys and plays a steady tone at the transmit level — what an antenna tuner needs, and **not** how to set drive (use `drive.set`). `audio.tx_level` is live and is applied as audio leaves, so the level can be moved while the tone plays; `0` cuts it short, and only an operator's own test transmission is ever cut |
+| `drive.set` | `bursts` (1–10, default 4, or 0 to stop) | keys and sends that many real bursts at the fastest mode the station is allowed, so the rig's ALC is shown the peaks traffic will actually present it with. A tune tone is a sine and the daemon scales the waveform to the tone's RMS, so the waveform's peaks land about 6 dB (floor mode) to 7 dB (fastest) above anything the tone reaches — drive set on the tone is that far into limiting on traffic. The bursts carry filler, not protocol: a station that decodes one finds a data frame for a session it does not have and ignores it. `0` stops them, as for `tune` |
 | `audio.level` | — | the last three seconds of received audio: RMS and peak in dBFS, clipping fraction, and a sentence of advice |
 | `spectrum` | — | the last window of captured audio transformed: `bin_hz`, `bins_db` (dBFS per bin from 0 Hz to 4 kHz; empty until a window has been heard), `passband_hz` (where this modem's signal sits), `transmitting`. Polled, not streamed: it costs one transform per call and nothing otherwise |
 | `constellation` | — | the last frame's equalised symbols as `points` (`[i, q]` pairs, thinned to at most 1024) and the `frame` they came from, as the `frame` event describes it |
@@ -142,10 +143,10 @@ These exist because setup, not propagation, is what defeats most new users of an
 clipping can lead the operator through setup instead of leaving them to guess.
 
 `ptt.test` keys at once — an SSB transmitter keyed with no audio radiates nothing, and an
-operator watching a PTT light cannot be told "accepted" and kept waiting. `tune` is a
-transmission: refused during a session and while the channel is busy (refused, not deferred,
-because a tone that starts on its own a minute later would surprise the person holding the
-drive control). Neither can measure whether the *radio* keyed — only the operator can see
+operator watching a PTT light cannot be told "accepted" and kept waiting. `tune` and `drive.set` are
+transmissions: refused during a session and while the channel is busy (refused, not deferred,
+because a transmission that starts on its own a minute later would surprise the person
+holding the drive control). Neither can measure whether the *radio* keyed — only the operator can see
 that — which is why they exist: to let the operator look. `audio.level` is always on; it
 reports `settled: false` and "Still listening." until it has heard enough to mean anything,
 rather than a number that does not. `devices.list` also reports the sample rates each device
@@ -166,7 +167,7 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
-(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `decoded`, `bytes`), every event with
+(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `detect_confidence`, `decoded`, `bytes`), every event with
 the modem's state, when the transmitter was keyed and released, the counters at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (`rigctld`; a
 keying line cannot, and the field is null rather than a guess). Times are seconds from the
@@ -194,7 +195,7 @@ was on. Each change goes out as a `heard` event.
 |---|---|---|
 | `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
 | `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `channel_busy`, `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
-| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence`, `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only a DATA frame carries — a CONTROL frame always reports 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |

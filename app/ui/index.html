@@ -196,8 +196,13 @@
           <h3>Keying and drive</h3>
           <div class="row">
             <button id="wz-ptt" title="Key the radio for one second with no audio">Key for 1 s</button>
-            <button id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop" aria-pressed="false">Tune tone, 10 s</button>
-            <span class="sub" id="wz-tx-note" title="What the last key or tone did" role="status" aria-live="polite"></span>
+            <button id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop — for an antenna tuner, not for setting drive" aria-pressed="false">Tune tone, 10 s</button>
+            <button id="wz-drive" title="Send four real bursts at the fastest mode this station uses, so the rig's ALC sees the peaks traffic actually presents; press again to stop" aria-pressed="false">Set drive, 4 bursts</button>
+            <span class="sub" id="wz-tx-note" title="What the last key, tone or drive check did" role="status" aria-live="polite"></span>
+          </div>
+          <div class="row">
+            <span class="sub">Last transmit peak</span>
+            <span class="sub numerals" id="tx-peak" title="The loudest sample the modem handed the sound card on its last transmission, after the transmit level. Full scale is 0 dB; leave headroom, because the waveform's peaks are what drive the rig's ALC" aria-live="polite">—</span>
           </div>
           <div class="row">
             <label for="tx-level">Transmit level</label>
@@ -206,11 +211,17 @@
           </div>
           <p class="sub">
             <strong>Key</strong> puts the radio into transmit with no audio: watch the rig
-            and the interface's PTT light. <strong>Tune</strong> keys with a steady tone at
-            the transmit level; the level follows the slider while it plays, so set the
-            rig's ALC by ear and eye, then press the button again to stop. Both are refused
-            during a session, and a tone is refused while the channel is busy. The level is
-            saved when the slider is released.
+            and the interface's PTT light. <strong>Tune</strong> keys with a steady tone —
+            that is what an antenna tuner needs, and it is <em>not</em> how to set drive.
+            <strong>Set drive</strong> is: it sends the real waveform, at the fastest mode
+            this station uses. A tone is a sine and the data waveform is not, so at the same
+            average power the waveform's peaks land about 6 to 7 dB higher — and it is peaks
+            the ALC answers to. Drive set on the tone is that far into limiting on real
+            traffic, which smears the signal and costs far more than it saves. So: press
+            <strong>Set drive</strong>, watch the ALC over the bursts, and back the level off
+            until the ALC barely moves. The level follows the slider while either plays. All three are
+            refused during a session, and both transmissions are refused while the channel
+            is busy. The level is saved when the slider is released.
           </p>
         </div>
 

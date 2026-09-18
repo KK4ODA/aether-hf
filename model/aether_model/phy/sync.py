@@ -60,7 +60,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import signal
 
-from aether_model.frame.modes import PREAMBLE_SYMBOLS, air_interface
+from aether_model.frame.modes import PREAMBLE_SYMBOLS, AirInterface, air_interface
 from aether_model.phy.ofdm import OfdmDemodulator, OfdmModulator
 from aether_model.phy.passband import band_limit_taps
 from aether_model.phy.preamble import FrameHeader, FrameType, preamble
@@ -104,6 +104,20 @@ class FrameSync:
     floor: bool = False
     """The frame is of the floor family (ADR-0009): an eight-symbol preamble of the floor
     sequences and the floor layouts; ``start`` is then the first of the eight."""
+
+    def detect_confidence(self, air: AirInterface) -> float:
+        """How far above the threshold that accepted it acquisition saw this frame.
+
+        1.0 is exactly at the threshold — the bare minimum — and it rises with the strength
+        of the match, so it reads like ``ReceivedFrame.mode_confidence``. Unlike that one it
+        is defined for **every** frame type, which is the point of it: the mode chips only a
+        DATA frame carries are what ``mode_confidence`` reads, so a CONTROL frame always
+        reports 1.0 there and nothing can tell a real connect, poll or acknowledgement from
+        a noise trigger. The two families are detected by different statistics against
+        different thresholds, so a raw peak only means something next to its own.
+        """
+        threshold = air.floor_acquisition_threshold if self.floor else air.acquisition_threshold
+        return self.timing_peak / max(threshold, 1e-12)
 
 
 def _moving_sum(x: NDArray, length: int) -> NDArray:

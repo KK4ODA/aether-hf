@@ -286,6 +286,7 @@ function applyMetrics(metrics) {
   if (metrics.queued_bytes !== undefined) {
     $("v-queued").textContent = String(metrics.queued_bytes);
   }
+  applyTxPeak(metrics.tx_peak_dbfs);
   // the link: the receiver's last frame, what the other end reports, the account
   if (metrics.snr_db !== undefined) {
     const snr = metrics.snr_db;
@@ -2246,6 +2247,60 @@ function tuneButton(playing) {
   tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
 }
 
+// A drive check is real bursts, not a tone: measured at the sound card the waveform's peaks
+// sit 5.8 dB (floor mode) to 7.0 dB (fastest) above a tone of the same average power, and it
+// is peaks the rig's ALC answers to. Setting drive on the tone leaves the modem that far
+// into limiting on traffic.
+const DRIVE_BURSTS = 4;
+let driveTimer = null;
+
+function driveButton(sending) {
+  $("wz-drive").textContent = sending ? "Stop the bursts" : `Set drive, ${DRIVE_BURSTS} bursts`;
+  $("wz-drive").setAttribute("aria-pressed", String(sending));
+  clearTimeout(driveTimer);
+  // each burst is a keying with its own gap; a generous ceiling, and the daemon stops on its own
+  driveTimer = sending ? setTimeout(() => driveButton(false), DRIVE_BURSTS * 8000) : null;
+}
+
+async function toggleDrive() {
+  if ($("wz-drive").getAttribute("aria-pressed") === "true") {
+    driveButton(false);
+    try {
+      await call("drive.set", { bursts: 0 });
+      $("wz-tx-note").textContent = "Drive check stopped.";
+    } catch (error) {
+      $("wz-tx-note").textContent = error.message;
+    }
+    return;
+  }
+  $("wz-tx-note").textContent = "Drive check…";
+  try {
+    await call("drive.set", { bursts: DRIVE_BURSTS });
+    $("wz-tx-note").textContent = `${DRIVE_BURSTS} bursts — watch the ALC, back off until it barely moves.`;
+    log(`drive check, ${DRIVE_BURSTS} bursts`);
+    driveButton(true);
+  } catch (error) {
+    $("wz-tx-note").textContent = error.message;
+    log(error.message, true);
+  }
+}
+
+// The peak the modem actually handed the sound card on its last transmission. This is the
+// number the operator cannot read off the rig: an ALC meter shows that the rig is limiting,
+// not by how much, and nothing on the radio shows what arrived before its own gain stages.
+function applyTxPeak(dbfs) {
+  const box = $("tx-peak");
+  if (!box) return;
+  if (typeof dbfs !== "number" || !isFinite(dbfs)) {
+    box.textContent = "—";
+    box.classList.remove("warn", "bad");
+    return;
+  }
+  box.textContent = `${dbfs >= 0 ? "" : "−"}${Math.abs(dbfs).toFixed(1)} dB`;
+  box.classList.toggle("bad", dbfs > -1);
+  box.classList.toggle("warn", dbfs > -3 && dbfs <= -1);
+}
+
 async function toggleTune() {
   if ($("wz-tune").getAttribute("aria-pressed") === "true") {
     tuneButton(false);
@@ -2438,6 +2493,7 @@ function wire() {
   });
   $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));
   $("wz-tune").addEventListener("click", toggleTune);
+  $("wz-drive").addEventListener("click", toggleDrive);
   $("tx-level").addEventListener("input", () => showTxLevel(txLevel()));
   $("tx-level").addEventListener("change", saveTxLevel);
   $("wz-save").addEventListener("click", wizardSave);
