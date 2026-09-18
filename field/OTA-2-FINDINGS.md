@@ -122,6 +122,24 @@ of them is a frame. The cost of the false alarms is wasted work and a useless co
 signal, not deafness: a smaller claim than this section first made, and the measurement is
 why.
 
+### What they did cost — found by the operator, not the recordings
+
+Watching the panel on the next evening: the level never reached 6 dB over the floor, and
+the busy indicator stayed lit for seconds at a time. Every acquired preamble marked the
+channel busy for two seconds, extended the receive window by a frame, and told the link
+engine the other station was still transmitting — sound reasoning before the floor detector
+existed, and each phantom did all three. From these sidecars, with the two-second hold:
+
+| | held busy by phantoms | by real frames alone |
+|---|---|---|
+| base | **47 %** of the evening | 4 % |
+| mobile | **21 %** | 6 % |
+
+Gated on `detect_confidence` in beta.35. The engine being told a burst was still arriving
+held this station's own turn, so replies waited on frames that never existed — which
+belongs on the list of things that may have ended eleven sessions in eleven with a link
+timeout.
+
 The receiver's **6 s buffer bound** against a 26 s burst was the other structural suspect,
 and it is refuted the same way — replayed at `max_buffer_s = 40`, the collapse window gives
 40 detections and 0 decodes, identical to the shipped 6 s:
