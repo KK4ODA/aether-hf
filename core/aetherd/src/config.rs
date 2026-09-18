@@ -55,9 +55,7 @@ pub enum PttConfig {
         /// 0xA2 for an IC-9700 — the rig's menu shows it).
         #[serde(default)]
         civ_address: Option<u8>,
-        /// Yaesu only: which modulation input the radio transmits from when keyed this
-        /// way — `data` (the USB or DATA jack, which is where the modem's audio is) or
-        /// `mic`.
+        /// Accepted and ignored — see [`CatSource`]. The radio's mode chooses the input.
         #[serde(default)]
         source: CatSource,
     },
@@ -100,6 +98,12 @@ pub enum CatProtocol {
 }
 
 /// Which input a Yaesu radio transmits from when keyed over CAT.
+/// Which input a Yaesu was once told to transmit from. **It does nothing**, and is kept
+/// only so a configuration that names it still loads: the belief that `TX2;` keys the
+/// data input and `TX1;` the microphone was wrong — `TX1;` is the keying command and
+/// `TX2` is a status the radio reports when something other than CAT keyed it. Which
+/// input transmits is decided by the radio's mode (DATA-U transmits the DATA/USB input).
+/// Found on an FTDX10 that tuned over CAT and would not key (beta.33).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatSource {
@@ -1062,7 +1066,7 @@ tx_level = 0.25
 # protocol = "yaesu"                  # yaesu | kenwood | icom
 # baud = 38400                        # the rate set in the radio's menu
 # civ_address = 148                   # icom only: the CI-V address (0x94 = 148)
-# source = "data"                     # yaesu only: transmit from data | mic
+# source = "data"                     # ignored: a Yaesu's mode chooses the input, not CAT
 # kind = "cm108"                      # a DRA, URI or other CM108-class interface's GPIO pin
 # device = "..."                      # which one, when there are several: its path or name
 # gpio = 3                            # the pin wired to PTT (3 on the DRA and URI boards)

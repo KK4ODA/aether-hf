@@ -857,12 +857,12 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
             protocol,
             baud,
             civ_address,
-            source,
+            // `source` is accepted so a saved configuration still loads, and ignored: a
+            // Yaesu's keying command does not choose the input (see `ptt::CatProtocol`)
+            source: _,
         } => {
             let protocol = match protocol {
-                aetherd::config::CatProtocol::Yaesu => aetherd::ptt::CatProtocol::Yaesu {
-                    data: *source == aetherd::config::CatSource::Data,
-                },
+                aetherd::config::CatProtocol::Yaesu => aetherd::ptt::CatProtocol::Yaesu,
                 aetherd::config::CatProtocol::Kenwood => aetherd::ptt::CatProtocol::Kenwood,
                 aetherd::config::CatProtocol::Icom => aetherd::ptt::CatProtocol::Icom {
                     // validated to be present when the protocol is Icom

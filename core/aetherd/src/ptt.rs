@@ -482,10 +482,12 @@ mod tests {
 
     #[test]
     fn cat_commands_are_the_published_ones() {
-        let yaesu = CatProtocol::Yaesu { data: true };
-        assert_eq!(yaesu.keying(true), b"TX2;");
+        // TX1 and only TX1: TX2 is what the radio *reports* when its mic or data jack
+        // keyed it, and as a command an FTDX10 ignores it (Hamlib and flrig both send TX1)
+        let yaesu = CatProtocol::Yaesu;
+        assert_eq!(yaesu.keying(true), b"TX1;");
         assert_eq!(yaesu.keying(false), b"TX0;");
-        assert_eq!(CatProtocol::Yaesu { data: false }.keying(true), b"TX1;");
+        assert_ne!(yaesu.keying(true), b"TX2;", "a status code is not a command");
         assert_eq!(CatProtocol::Kenwood.keying(true), b"TX;");
         assert_eq!(CatProtocol::Kenwood.keying(false), b"RX;");
         let icom = CatProtocol::Icom { address: 0x94 };
@@ -504,7 +506,7 @@ mod tests {
 
     #[test]
     fn the_tuning_command_is_the_published_one_in_each_dialect() {
-        let yaesu = CatProtocol::Yaesu { data: true };
+        let yaesu = CatProtocol::Yaesu;
         assert_eq!(yaesu.frequency_set(14_107_000), b"FA014107000;");
         assert_eq!(
             CatProtocol::Kenwood.frequency_set(7_101_000),
@@ -527,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_frequency_answer_is_read_in_each_dialect() {
-        let yaesu = CatProtocol::Yaesu { data: true };
+        let yaesu = CatProtocol::Yaesu;
         assert_eq!(yaesu.parse_frequency(b"FA014107000;"), Some(14_107_000));
         assert_eq!(
             CatProtocol::Kenwood.parse_frequency(b"FA00007101000;"),
@@ -761,17 +763,22 @@ pub enum SerialLine {
 /// A radio's command set, as bytes on the wire: the published CAT protocols.
 ///
 /// Pure functions, so what goes down the port is tested without a port. The commands are
-/// the manufacturers' own: Yaesu's ASCII CAT (`TX2;` keys with the DATA input selected,
-/// `TX1;` with the microphone, `TX0;` releases; `FA;` asks the VFO-A frequency), Kenwood's
-/// (`TX;`, `RX;`, `FA;`), and Icom's CI-V frames (`FE FE <rig> <controller> 1C 00 <01|00> FD`
-/// to key, `03` to ask the frequency, which comes back as little-endian BCD).
+/// the manufacturers' own: Yaesu's ASCII CAT (`TX1;` keys, `TX0;` releases; `FA;` asks the
+/// VFO-A frequency), Kenwood's (`TX;`, `RX;`, `FA;`), and Icom's CI-V frames
+/// (`FE FE <rig> <controller> 1C 00 <01|00> FD` to key, `03` to ask the frequency, which
+/// comes back as little-endian BCD).
+///
+/// On a Yaesu the keying command is `TX1;` and only that. The protocol's `TX2` is a
+/// *status* the radio reports when something other than CAT keyed it — the microphone,
+/// the data jack, a key — and sending it as a command does nothing: an FTDX10 tuned
+/// happily over CAT and never keyed, until it was found that Hamlib's `newcat_set_ptt` and
+/// flrig's `FTdx10::set_PTT_control` both send `TX1;` for every kind of keying and never
+/// `TX2;`. Which input the radio transmits is its mode's business (DATA-U transmits the
+/// DATA/USB input), not the keying command's, so there is nothing to choose here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatProtocol {
-    /// Yaesu ASCII CAT; `data` says whether keying selects the DATA input or the mic.
-    Yaesu {
-        /// Transmit from the DATA/USB input rather than the microphone.
-        data: bool,
-    },
+    /// Yaesu ASCII CAT.
+    Yaesu,
     /// Kenwood's ASCII protocol, which Elecraft speaks too.
     Kenwood,
     /// Icom CI-V, addressed to one radio.
@@ -789,11 +796,13 @@ impl CatProtocol {
     #[must_use]
     pub fn keying(self, keyed: bool) -> Vec<u8> {
         match self {
-            Self::Yaesu { data } => match (keyed, data) {
-                (false, _) => b"TX0;".to_vec(),
-                (true, true) => b"TX2;".to_vec(),
-                (true, false) => b"TX1;".to_vec(),
-            },
+            Self::Yaesu => {
+                if keyed {
+                    b"TX1;".to_vec()
+                } else {
+                    b"TX0;".to_vec()
+                }
+            }
             Self::Kenwood => {
                 if keyed {
                     b"TX;".to_vec()
@@ -818,7 +827,7 @@ impl CatProtocol {
     #[must_use]
     pub fn frequency_query(self) -> Vec<u8> {
         match self {
-            Self::Yaesu { .. } | Self::Kenwood => b"FA;".to_vec(),
+            Self::Yaesu | Self::Kenwood => b"FA;".to_vec(),
             Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x03, 0xFD],
         }
     }
@@ -829,7 +838,7 @@ impl CatProtocol {
     #[must_use]
     pub fn frequency_set(self, hz: u64) -> Vec<u8> {
         match self {
-            Self::Yaesu { .. } => format!("FA{hz:09};").into_bytes(),
+            Self::Yaesu => format!("FA{hz:09};").into_bytes(),
             Self::Kenwood => format!("FA{hz:011};").into_bytes(),
             Self::Icom { address } => {
                 let mut bytes = vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x05];
@@ -849,7 +858,7 @@ impl CatProtocol {
     #[must_use]
     pub fn parse_frequency(self, reply: &[u8]) -> Option<u64> {
         match self {
-            Self::Yaesu { .. } | Self::Kenwood => {
+            Self::Yaesu | Self::Kenwood => {
                 // `FA014107000;` on a Yaesu, `FA00014107000;` on a Kenwood: the digits
                 // between the command and the terminator are the frequency in hertz
                 let text = std::str::from_utf8(reply).ok()?;
@@ -1014,8 +1023,7 @@ impl Ptt for CatPtt {
 
     fn describe(&self) -> String {
         let which = match self.protocol {
-            CatProtocol::Yaesu { data: true } => "Yaesu CAT (data input)",
-            CatProtocol::Yaesu { data: false } => "Yaesu CAT (mic input)",
+            CatProtocol::Yaesu => "Yaesu CAT",
             CatProtocol::Kenwood => "Kenwood CAT",
             CatProtocol::Icom { .. } => "Icom CI-V",
         };

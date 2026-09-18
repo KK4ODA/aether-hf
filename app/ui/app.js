@@ -1876,7 +1876,6 @@ function keyingChanges() {
       "ptt.port": chosen,
       "ptt.protocol": protocol,
       "ptt.baud": numberIn("ptt-baud") ?? 38400,
-      "ptt.source": "data",
     };
     if (protocol === "icom") {
       const address = parseInt($("ptt-civ").value.trim().replace(/^0x/i, ""), 16);
