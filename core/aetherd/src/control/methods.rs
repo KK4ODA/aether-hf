@@ -496,24 +496,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
                 ),
             }
         }
-        "drive.set" => {
-            let bursts = params
-                .get("bursts")
-                .and_then(Value::as_u64)
-                .map_or(4, |n| n as usize);
-            // zero is "stop", as it is for a tune tone
-            if bursts == 0 {
-                let stopped = station.tune_stop();
-                return Response::ok(id, json!({ "stopped": stopped }));
-            }
-            match station.set_drive(bursts) {
-                Ok(()) => Response::ok(id, json!({ "accepted": true, "bursts": bursts })),
-                Err(reason) => Response::failed(
-                    id,
-                    ApiError::new("refused", format!("Cannot set drive: {reason}."), true),
-                ),
-            }
-        }
+        "drive.set" => drive_set(station, params, id),
         "audio.level" => Response::ok(id, level_json(&station.audio_level())),
         "record.start" | "record.stop" | "record.notes" => record(station, request),
         "disconnect" => {
@@ -664,6 +647,28 @@ fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Strin
 
 /// The radio tuned to a dial, over CAT or `rigctld`; refused in a session or with a
 /// keying interface that cannot ask.
+/// `drive.set`: real bursts, so the rig's ALC is shown the peaks traffic presents.
+///
+/// Its own function because `dispatch_station` is at clippy's line budget.
+fn drive_set<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let bursts = params
+        .get("bursts")
+        .and_then(Value::as_u64)
+        .map_or(4, |n| n as usize);
+    // zero is "stop", as it is for a tune tone
+    if bursts == 0 {
+        let stopped = station.tune_stop();
+        return Response::ok(id, json!({ "stopped": stopped }));
+    }
+    match station.set_drive(bursts) {
+        Ok(()) => Response::ok(id, json!({ "accepted": true, "bursts": bursts })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new("refused", format!("Cannot set drive: {reason}."), true),
+        ),
+    }
+}
+
 fn tune_to<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
     let Some(hz) = params.get("hz").and_then(Value::as_u64) else {
         return Response::failed(

@@ -95,9 +95,34 @@ pub struct Recording {
     /// The station clock when the recording began, so `t_s` starts at zero.
     t0: f64,
     frames: Vec<FrameRecord>,
+    sent: Vec<SentRecord>,
     events: Vec<Value>,
     /// Who and what: callsigns, settings, the operator's notes.
     meta: Value,
+}
+
+/// One frame this station put on the air.
+///
+/// A sidecar recorded only what the station *heard*, which leaves half of a two-sided
+/// analysis to guesswork: with both stations' recordings in hand you can see every frame
+/// that arrived and none of the frames that were sent, so a burst that decoded nowhere is
+/// indistinguishable from a burst that was never transmitted — and the mode it went out on,
+/// which is usually the question, is not recoverable at all. OTA-2 turned on exactly that
+/// gap (`field/OTA-2-FINDINGS.md`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SentRecord {
+    /// Seconds since the recording started, by the station's audio clock.
+    pub t_s: f64,
+    /// `data` or `control`.
+    pub kind: String,
+    /// Mode index it was modulated at.
+    pub mode: usize,
+    /// Redundancy version.
+    pub rv: u8,
+    /// Whether it went out on the floor family's layout (ADR-0009).
+    pub floor: bool,
+    /// Payload length.
+    pub bytes: usize,
 }
 
 /// What `stop` reports.
@@ -148,6 +173,7 @@ impl Recording {
             started: crate::log::rfc3339(unix_ms()),
             t0: now_s,
             frames: Vec::new(),
+            sent: Vec::new(),
             events: Vec::new(),
             meta,
         };
@@ -195,6 +221,12 @@ impl Recording {
     pub fn frame(&mut self, mut record: FrameRecord) {
         record.t_s -= self.t0;
         self.frames.push(record);
+    }
+
+    /// A frame this station transmitted.
+    pub fn sent(&mut self, mut record: SentRecord) {
+        record.t_s -= self.t0;
+        self.sent.push(record);
     }
 
     /// Put something under `session` in the sidecar — a Test session's report, say —
@@ -259,6 +291,7 @@ impl Recording {
             "session": self.meta,
             "events": self.events,
             "frames": self.frames,
+            "sent": self.sent,
             "counters": counters,
         });
         // written beside and renamed over, so a reader never sees half a document
@@ -432,6 +465,14 @@ mod tests {
             bytes: 144,
             control: None,
         });
+        recording.sent(SentRecord {
+            t_s: 11.8,
+            kind: "data".into(),
+            mode: 9,
+            rv: 1,
+            floor: false,
+            bytes: 96,
+        });
         recording.event(12.0, "connected", "W4XYZ", "Connected");
         let summary = recording
             .finish(&json!({"frames_sent": 3}))
@@ -462,6 +503,14 @@ mod tests {
         assert_eq!(sidecar["session"]["callsign"], "W4ODA");
         // times are relative to the start of the recording
         assert!((sidecar["frames"][0]["t_s"].as_f64().unwrap() - 1.5).abs() < 1e-9);
+        // what the station sent is kept beside what it heard: the mode a burst went out on
+        // is the first question a failure raises and it is nowhere else in the recording
+        assert!((sidecar["sent"][0]["t_s"].as_f64().unwrap() - 1.8).abs() < 1e-9);
+        assert_eq!(sidecar["sent"][0]["mode"], 9);
+        assert_eq!(sidecar["sent"][0]["rv"], 1);
+        assert_eq!(sidecar["sent"][0]["kind"], "data");
+        assert_eq!(sidecar["sent"][0]["floor"], false);
+        assert_eq!(sidecar["sent"][0]["bytes"], 96);
         assert!((sidecar["events"][0]["t_s"].as_f64().unwrap() - 2.0).abs() < 1e-9);
         assert_eq!(sidecar["counters"]["frames_sent"], 3);
         assert!(sidecar["ended"].is_string());

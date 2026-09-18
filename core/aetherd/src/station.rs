@@ -1438,14 +1438,21 @@ impl<P: Ptt> Station<P> {
             self.transmitting = false;
             self.playing_test = false;
             self.tx_peak_last = Some(self.tx_peak_running);
+            let peak = self.tx_peak_running;
             self.tx_peak_running = 0.0;
             if let Some(recording) = &mut self.recording {
-                recording.event(
-                    now,
-                    "ptt",
-                    "released",
-                    &format!("{:?}", self.engine.state()),
-                );
+                let state = format!("{:?}", self.engine.state());
+                // `detail` on a ptt event is read back by the replay to find the intervals
+                // this station was deaf for (`replay.rs`), so it stays exactly "keyed" and
+                // "released" and nothing else.
+                recording.event(now, "ptt", "released", &state);
+                // The peak goes in an event of its own: a burst nobody decoded is a
+                // different story depending on whether the transmitter was being clipped
+                // at the time, and by the time anyone asks, the audio is all that is left.
+                if peak > 0.0 {
+                    let dbfs = 20.0 * f64::from(peak).log10();
+                    recording.event(now, "tx_peak", &format!("{dbfs:.1} dBFS"), &state);
+                }
             }
             self.ptt.unkey(now)?;
             // the queue drained now, and what the sound card still holds is the tail's
@@ -1799,6 +1806,8 @@ impl<P: Ptt> Station<P> {
             }
         };
 
+        self.record_sent(&frames, now);
+
         let mut baseband: Vec<Complex> = Vec::new();
         for frame in &frames {
             let burst = match frame.container {
@@ -1841,6 +1850,31 @@ impl<P: Ptt> Station<P> {
         self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
+    }
+
+    /// Record what this station is putting on the air, beside what it hears.
+    ///
+    /// Without it a sidecar cannot answer the first question a failed burst raises — what
+    /// mode was that? — and even with both stations' recordings in hand, half of the link
+    /// stays invisible: a burst that decoded nowhere looks exactly like a burst that was
+    /// never sent (`field/OTA-2-FINDINGS.md`).
+    fn record_sent(&mut self, frames: &[aether_link::TxFrame], now: f64) {
+        let Some(recording) = &mut self.recording else {
+            return;
+        };
+        for frame in frames {
+            recording.sent(crate::record::SentRecord {
+                t_s: now,
+                kind: match frame.container {
+                    Container::Data => "data".to_owned(),
+                    Container::Control => "control".to_owned(),
+                },
+                mode: frame.mode,
+                rv: frame.rv,
+                floor: frame.floor,
+                bytes: frame.payload.len(),
+            });
+        }
     }
 
     /// Put a Morse identifier at the end of this transmission, if one is due.
@@ -1996,13 +2030,69 @@ mod tests {
     }
 
     #[test]
+    fn a_recording_says_what_the_station_transmitted_not_only_what_it_heard() {
+        // OTA-2 could not answer "what mode did that burst go out on?" from either
+        // station's sidecar, because a recording held only what arrived. With both
+        // recordings in hand, half the link was still invisible.
+        let dir = std::env::temp_dir().join(format!("aether-sent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                record_dir: Some(dir.clone()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station
+            .start_recording(Some("sent"), None)
+            .expect("start the recording");
+
+        station.set_drive(1).expect("set drive");
+        let rate = station.config.params.audio_rate;
+        let _ = drain_peak(&mut station, rate * 20);
+        let summary = station.stop_recording().expect("a recording");
+
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let sent = sidecar["sent"].as_array().expect("a sent array");
+        assert!(!sent.is_empty(), "the burst it transmitted is recorded");
+        assert!(
+            sent[0]["mode"].as_u64().is_some(),
+            "and the mode it went out on: {}",
+            sent[0]
+        );
+        // the keying tells you how hard the transmitter was driven for it
+        let events = sidecar["events"].as_array().expect("events");
+        // the ptt details stay exactly "keyed" and "released" — the replay parses them
+        assert!(
+            events
+                .iter()
+                .any(|e| e["event"] == "ptt" && e["detail"] == "released"),
+            "the release event keeps the wording the replay reads back"
+        );
+        let peak = events
+            .iter()
+            .find(|e| e["event"] == "tx_peak")
+            .expect("a tx_peak event");
+        assert!(
+            peak["detail"].as_str().expect("detail").contains("dBFS"),
+            "and the burst's peak is recorded beside it: {peak}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn drive_is_set_against_the_waveform_not_against_a_tone() {
         // The point of the whole thing: a tune tone is a sine, the data waveform is OFDM,
         // and the daemon scales the waveform to the tone's RMS — so the waveform's peaks
         // land well above anything the tone reaches, and an ALC set on the tone is that far
         // into limiting on traffic (OTA-2, finding 1).
         let mut station = idle_station();
-        let rate = station.config.params.audio_rate as usize;
+        let rate = station.config.params.audio_rate;
 
         station.tune(2.0).expect("tune");
         let tone_peak = drain_peak(&mut station, rate * 6);
@@ -2021,7 +2111,7 @@ mod tests {
     #[test]
     fn the_station_reports_the_peak_it_actually_transmitted() {
         let mut station = idle_station();
-        let rate = station.config.params.audio_rate as usize;
+        let rate = station.config.params.audio_rate;
         assert_eq!(station.tx_peak_dbfs(), None, "nothing transmitted yet");
 
         station.tune(2.0).expect("tune");

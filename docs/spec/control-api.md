@@ -168,7 +168,11 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
 (`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `detect_confidence`, `decoded`, `bytes`), every event with
-the modem's state, when the transmitter was keyed and released, the counters at the end,
+every frame the station **sent** (`sent`: `t_s`, `kind`, `mode`, `rv`, `floor`, `bytes`),
+every event with the modem's state, when the transmitter was keyed and released, a
+`tx_peak` event after each transmission carrying its peak in dBFS — so a burst nobody
+decoded can be read against how hard the transmitter was being driven for it — the counters
+at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (`rigctld`; a
 keying line cannot, and the field is null rather than a guess). Times are seconds from the
 start of the file by the station's audio clock.
