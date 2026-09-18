@@ -118,14 +118,38 @@ compiled out and the binary verified to contain the change:
 | suppression disabled | 1199 | **0** |
 
 Suppression really is hiding a great many candidates — forty-six times as many — but not one
-of them is a frame. The real frames in the base's 26 s burst are not being blocked; they are
-not decodable from that audio at all. Whatever silenced phase 2 is upstream of acquisition,
-and finding it is open work: the leading candidates are the transmitter distortion of
-finding 1 at whatever mode the 1024-byte message went out on, and the receiver's 6 s buffer
-bound against a burst far longer than that.
+of them is a frame. The cost of the false alarms is wasted work and a useless confidence
+signal, not deafness: a smaller claim than this section first made, and the measurement is
+why.
 
-The cost of the false alarms is therefore wasted work and a useless confidence signal, not
-deafness — which is a smaller claim than this section first made, and the measurement is why.
+The receiver's **6 s buffer bound** against a 26 s burst was the other structural suspect,
+and it is refuted the same way — replayed at `max_buffer_s = 40`, the collapse window gives
+40 detections and 0 decodes, identical to the shipped 6 s:
+
+| | collapse window | decoded |
+|---|---|---|
+| buffer 6 s (shipped) | 40 | **0** |
+| buffer 40 s | 40 | **0** |
+
+So nothing in the receiver's bookkeeping is responsible. **The audio does not contain
+decodable frames**, and the cause is at the transmitter.
+
+### Which makes findings 1 and this the same finding
+
+The base's drive was set on a tune tone, so it was transmitting 6-7 dB into its ALC
+(finding 1, now measured). Clipping does not damage all modes alike: it costs a sparse
+constellation almost nothing and a dense one everything — ADR-0004's own table has 16-QAM 3/4
+going from zero frame errors to 0.45 against an ALC-like PA. Every frame that decoded all
+evening was QPSK (modes 2, 3, 4). The 1024-byte message is the one transmission that would
+have gone out faster than that.
+
+That is the whole shape of phase 2: **a clipped transmitter can carry the control frames and
+cannot carry the payload**, so the link establishes, converses, and then goes silent the
+moment it tries to move data. It also explains why the rate controller stepping *down* never
+rescued it — by then the burst was already in the air.
+
+Not proven, because a station does not record the modes it sends (see the action items).
+That one change would settle it from the sidecars already on disk.
 
 ## Finding 3 — a control frame never gets a real confidence
 
@@ -186,11 +210,12 @@ transmitted twice on top of a burst it had stopped being able to decode.
 2. **Raise the floor detector's threshold, or qualify it.** 13.6 false alarms a minute on a
    real band. Needs a measurement against recorded band noise, not AWGN — `tools/floor_trace.py`
    is the shape of the tool. ADR amendment to 0009.
-3. **Find what actually silenced the long burst.** Not the claimed spans — that was tested
-   and refuted (above). Next: replay with the receiver's `max_buffer_s` raised well past
-   the burst length, and establish what mode the 1024-byte message went out on, which the
-   transmitting station's sidecar does not currently record. **A station should record the
-   modes it sends**; without that, half of every two-sided analysis is guesswork.
+3. **Record the modes a station transmits.** Both structural explanations for the silent
+   26 s burst are refuted by measurement (claimed spans, and the receive buffer), which
+   leaves the transmitter — and the leading account is a clipped PA carrying QPSK control
+   frames but not a denser payload mode. It cannot be confirmed, because a sidecar records
+   only what the station *received*. Half of every two-sided analysis is guesswork until
+   this exists, and with it the recordings already on disk would settle item 1 as well.
 4. ~~**Give control frames a real confidence**~~ — **done** (beta.32). `FrameSync` carries
    the acquisition peak through to the receiver as the model's always did, and
    `detect_confidence` — the peak over the threshold that accepted it — is reported on the
