@@ -124,6 +124,11 @@
 
       <!-- ── session ────────────────────────────────────────────── -->
       <section id="panel-session" class="panel" role="tabpanel" aria-labelledby="tab-session" hidden>
+        <div class="dial-hero" title="The radio's dial right now, read over CAT or rigctld every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
+          <span class="sub dial-hero-label">Radio dial</span>
+          <span class="numerals dial-hero-hz" id="dial-hero" role="status" aria-live="polite">—</span>
+          <span class="sub" id="dial-hero-sub"></span>
+        </div>
         <div class="row">
           <label for="memory">Dial</label>
           <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
@@ -197,7 +202,7 @@
           <div class="row">
             <button id="wz-ptt" title="Key the radio for one second with no audio">Key for 1 s</button>
             <button id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop — for an antenna tuner, not for setting drive" aria-pressed="false">Tune tone, 10 s</button>
-            <button id="wz-drive" title="Send four real bursts at the fastest mode this station uses, so the rig's ALC sees the peaks traffic actually presents; press again to stop" aria-pressed="false">Set drive, 4 bursts</button>
+            <button id="wz-drive" title="Send four six-second bursts of the real waveform, five seconds apart, at the fastest mode this station uses — so the rig's ALC sees the peaks traffic actually presents, with time to adjust between them; press again to stop" aria-pressed="false">Set drive, 4 bursts</button>
             <span class="sub" id="wz-tx-note" title="What the last key, tone or drive check did" role="status" aria-live="polite"></span>
           </div>
           <div class="row">
@@ -218,7 +223,9 @@
             average power the waveform's peaks land about 6 to 7 dB higher — and it is peaks
             the ALC answers to. Drive set on the tone is that far into limiting on real
             traffic, which smears the signal and costs far more than it saves. So: press
-            <strong>Set drive</strong>, watch the ALC over the bursts, and back the level off
+            <strong>Set drive</strong>: four bursts of six seconds, five seconds apart. Watch
+            the ALC during a burst and move the slider — the level is live, so the meter
+            answers at once — then use the gap to see where it settled. Back the level off
             until the ALC barely moves. The level follows the slider while either plays. All three are
             refused during a session, and both transmissions are refused while the channel
             is busy. The level is saved when the slider is released.
@@ -392,7 +399,7 @@
               <div class="row">
                 <label for="op-grid">Grid</label>
                 <input id="op-grid" title="Maidenhead locator, four or six characters, for the field log" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
-                <span class="sub">Maidenhead locator, for the field log a recording becomes. Optional, like the rest of this.</span>
+                <span class="sub">Maidenhead locator, <strong>four or six characters</strong> — <code>EM73</code> places you within a square of about 100 × 200 km, <code>EM73tv</code> within about 5 × 8 km. Six is worth typing: the field log uses it to work out the path length between stations, and the four-character square can only do that to within half a square. Optional, like the rest of this.</span>
               </div>
               <div class="row">
                 <label for="op-rig">Rig</label>

@@ -832,6 +832,28 @@ button.sort:focus-visible {
   color: var(--status-error);
 }
 
+/* The radio's dial, large, at the head of the Session tab: the one number an operator
+   checks before every call, so it is not buried in a row of controls. */
+.dial-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.dial-hero-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dial-hero-hz {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+}
+
 /* The transmit peak. Full scale is 0 dB, so the closer it gets the less headroom the
    waveform's peaks have — and those peaks, not its average, are what drive the rig's ALC. */
 #tx-peak.warn {

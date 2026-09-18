@@ -208,6 +208,10 @@ enum Outgoing {
     /// rig's ALC sees the peaks traffic will actually present it with. The operator may cut
     /// it short like a tune tone.
     Drive(Vec<aether_link::TxFrame>),
+    /// A pause between drive bursts, with the transmitter unkeyed: time for the operator to
+    /// read the ALC and move the level before the next one lands. The clock starts when it
+    /// reaches the front of the queue. Cut with the bursts.
+    Pause { seconds: f64, until_s: Option<f64> },
     /// Audio to play as it is: a keying test, or a tune tone.
     Audio {
         samples: Vec<f32>,
@@ -222,6 +226,13 @@ enum Outgoing {
 /// How much later than the playback lead a sound card's capture of this station's own
 /// burst may still be arriving, over and above the lead itself: device buffering both ways.
 const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.15;
+
+/// How long each drive-setting burst runs: enough to read the ALC and move the level while
+/// it is still transmitting, since the level is live and the meter answers at once.
+const DRIVE_BURST_S: f64 = 6.0;
+/// The silence between drive bursts, unkeyed: time to see where the meter settled, decide,
+/// and be ready for the next one.
+const DRIVE_GAP_S: f64 = 5.0;
 
 /// The Morse identifier's amplitude as a fraction of the transmit level: a little below the
 /// data waveform's peak, because it is an identifier and not the signal, and scaled with
@@ -1155,16 +1166,28 @@ impl<P: Ptt> Station<P> {
         }
         // not all-zero: the codec refuses that block (ADR-0009)
         let payload = vec![0x5a_u8; bytes];
-        for _ in 0..bursts {
+        // A burst is several frames back to back, long enough to read the ALC and turn the
+        // knob against, and the bursts are spaced by as much silence: a one-frame burst is
+        // a second long, which is no time at all for a hand on a drive control.
+        let frame_s = air.data_layout(index).duration_s().max(0.1);
+        let per_burst = (DRIVE_BURST_S / frame_s).ceil().max(1.0) as usize;
+        let frame = aether_link::TxFrame {
+            container: aether_link::Container::Data,
+            payload,
+            mode: index,
+            rv: 0,
+            // a data frame's family follows its mode; this flag is for control frames
+            floor: false,
+        };
+        for n in 0..bursts {
+            if n > 0 {
+                self.pending.push_back(Outgoing::Pause {
+                    seconds: DRIVE_GAP_S,
+                    until_s: None,
+                });
+            }
             self.pending
-                .push_back(Outgoing::Drive(vec![aether_link::TxFrame {
-                    container: aether_link::Container::Data,
-                    payload: payload.clone(),
-                    mode: index,
-                    rv: 0,
-                    // a data frame's family follows its mode; this flag is for control frames
-                    floor: false,
-                }]));
+                .push_back(Outgoing::Drive(vec![frame.clone(); per_burst]));
         }
         Ok(())
     }
@@ -1181,7 +1204,7 @@ impl<P: Ptt> Station<P> {
         self.pending.retain(|next| {
             !matches!(
                 next,
-                Outgoing::Audio { tone: true, .. } | Outgoing::Drive(_)
+                Outgoing::Audio { tone: true, .. } | Outgoing::Drive(_) | Outgoing::Pause { .. }
             )
         });
         let mut stopped = self.pending.len() != queued;
@@ -1770,6 +1793,15 @@ impl<P: Ptt> Station<P> {
 
     /// Render the next queued burst into playable audio, if the channel allows.
     fn start_pending(&mut self, now: f64) {
+        if let Some(Outgoing::Pause { seconds, until_s }) = self.pending.front_mut() {
+            let deadline = *until_s.get_or_insert(now + *seconds);
+            if now < deadline {
+                return; // the operator's hands are on the drive control; leave them to it
+            }
+            self.pending.pop_front();
+            self.start_pending(now);
+            return;
+        }
         let Some(next) = self.pending.front() else {
             return;
         };
@@ -1792,6 +1824,8 @@ impl<P: Ptt> Station<P> {
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
         let frames = match outgoing {
             Outgoing::Frames(frames) | Outgoing::Drive(frames) => frames,
+            // handled above, before anything is popped
+            Outgoing::Pause { .. } => return,
             // raw audio goes out as it is, inside the same keying and lead and tail as a
             // burst, so a keying test exercises exactly the path a transmission uses
             Outgoing::Audio { samples, tone, .. } => {
@@ -2122,6 +2156,50 @@ mod tests {
             "reported {reported} dBFS against a measured peak of {measured}"
         );
         assert!(reported < 0.0, "a sane drive does not reach full scale");
+    }
+
+    #[test]
+    fn drive_bursts_are_long_and_leave_the_operator_time_between_them() {
+        // A one-frame burst is a second long, which is no time at all for a hand on a
+        // drive control: the bursts run several seconds and are spaced by silence with the
+        // transmitter unkeyed, so the meter can be read, the level moved, and the next one
+        // seen to land.
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate;
+        station.set_drive(2).expect("set drive");
+
+        let mut out = vec![0.0f32; 2_048];
+        let silence = vec![0.0f32; 2_048];
+        let mut keyed_runs: Vec<(usize, usize)> = Vec::new(); // (start, end) in samples
+        let mut was = false;
+        let mut at = 0usize;
+        for _ in 0..(rate * 30 / 2_048) {
+            // the station's clock is what it has captured, so the sound card's other
+            // direction is fed too, as it is live
+            station.capture(&silence).expect("capture");
+            station.playback(&mut out).expect("playback");
+            let now = station.transmitting();
+            if now && !was {
+                keyed_runs.push((at, at));
+            }
+            if now {
+                keyed_runs.last_mut().expect("a run").1 = at + out.len();
+            }
+            was = now;
+            at += out.len();
+        }
+        assert_eq!(keyed_runs.len(), 2, "two bursts, two keyings: {keyed_runs:?}");
+        let secs = |(a, b): (usize, usize)| (b - a) as f64 / rate as f64;
+        assert!(
+            secs(keyed_runs[0]) >= DRIVE_BURST_S - 0.5,
+            "the first burst runs about {DRIVE_BURST_S} s, not {:.1}",
+            secs(keyed_runs[0])
+        );
+        let gap = (keyed_runs[1].0 - keyed_runs[0].1) as f64 / rate as f64;
+        assert!(
+            gap >= DRIVE_GAP_S - 0.5,
+            "the gap between them is about {DRIVE_GAP_S} s of silence, not {gap:.1}"
+        );
     }
 
     #[test]

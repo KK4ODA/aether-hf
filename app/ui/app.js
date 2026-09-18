@@ -920,8 +920,12 @@ function applyDial(status) {
   // a first request lost to a slow start is asked again with the next status
   if (!memoriesLoaded) loadMemories();
   const reading = $("dial-reading");
+  const hero = $("dial-hero");
+  const heroSub = $("dial-hero-sub");
   if (status.frequency_hz) {
     reading.textContent = `radio: ${formatHz(status.frequency_hz)} Hz`;
+    hero.textContent = `${formatHz(status.frequency_hz)} Hz`;
+    heroSub.textContent = "";
     if (status.frequency_hz !== lastDialHz) {
       lastDialHz = status.frequency_hz;
       const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
@@ -929,8 +933,12 @@ function applyDial(status) {
     }
   } else if (canTune) {
     reading.textContent = "radio: no reading yet";
+    hero.textContent = "—";
+    heroSub.textContent = "no reading from the radio yet";
   } else {
     reading.textContent = "tuning needs CAT or rigctld keying (Setup step 2)";
+    hero.textContent = "—";
+    heroSub.textContent = "reading the dial needs CAT or rigctld keying (Setup step 2)";
   }
   updateTuneButton();
 }
@@ -991,6 +999,7 @@ async function tuneToMemory() {
   const ok = await act(() => call("frequency.set", { hz }), `tuned to ${entry ? memoryLabel(entry) : `${formatHz(hz)} Hz`}`);
   if (ok) {
     $("dial-reading").textContent = `radio: ${formatHz(hz)} Hz`;
+    $("dial-hero").textContent = `${formatHz(hz)} Hz`;
     lastDialHz = hz;
   }
 }
@@ -2251,14 +2260,19 @@ function tuneButton(playing) {
 // is peaks the rig's ALC answers to. Setting drive on the tone leaves the modem that far
 // into limiting on traffic.
 const DRIVE_BURSTS = 4;
+// the daemon's own rhythm: six seconds of waveform, five of silence, so a hand on the drive
+// control has time to read the meter, move, and see the next burst land
+const DRIVE_BURST_S = 6;
+const DRIVE_GAP_S = 5;
 let driveTimer = null;
 
 function driveButton(sending) {
   $("wz-drive").textContent = sending ? "Stop the bursts" : `Set drive, ${DRIVE_BURSTS} bursts`;
   $("wz-drive").setAttribute("aria-pressed", String(sending));
   clearTimeout(driveTimer);
-  // each burst is a keying with its own gap; a generous ceiling, and the daemon stops on its own
-  driveTimer = sending ? setTimeout(() => driveButton(false), DRIVE_BURSTS * 8000) : null;
+  // the whole check plus a little; the daemon stops on its own either way
+  const total = DRIVE_BURSTS * DRIVE_BURST_S + (DRIVE_BURSTS - 1) * DRIVE_GAP_S + 4;
+  driveTimer = sending ? setTimeout(() => driveButton(false), total * 1000) : null;
 }
 
 async function toggleDrive() {
@@ -2275,7 +2289,7 @@ async function toggleDrive() {
   $("wz-tx-note").textContent = "Drive check…";
   try {
     await call("drive.set", { bursts: DRIVE_BURSTS });
-    $("wz-tx-note").textContent = `${DRIVE_BURSTS} bursts — watch the ALC, back off until it barely moves.`;
+    $("wz-tx-note").textContent = `${DRIVE_BURSTS} bursts of ${DRIVE_BURST_S} s, ${DRIVE_GAP_S} s apart — watch the ALC, back the level off until it barely moves.`;
     log(`drive check, ${DRIVE_BURSTS} bursts`);
     driveButton(true);
   } catch (error) {
