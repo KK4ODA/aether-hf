@@ -224,13 +224,18 @@ pub fn describe(frame: &FrameRecord) -> String {
     let cfo = frame
         .cfo_hz
         .map_or_else(|| "     —".to_owned(), |hz| format!("{hz:>+6.1}"));
+    // both confidences, because they answer different questions: the chips say how sure
+    // the mode reading is (DATA frames only), the acquisition says whether there was a
+    // frame there at all — the number that separates a phantom from a signal
     format!(
-        "{:>8.2} s  {:<7} mode {:>2} rv {}  {:>+6.1} dB  cfo {cfo} Hz  {}",
+        "{:>8.2} s  {:<7} mode {:>2} rv {}  {:>+6.1} dB  cfo {cfo} Hz  acq {:>4.2} chip {:>4.2}  {}",
         frame.t_s,
         frame.kind,
         frame.mode,
         frame.rv,
         frame.snr_3k_db,
+        frame.detect_confidence,
+        frame.confidence,
         match (&frame.control, frame.decoded) {
             (Some(control), _) => control.clone(),
             (None, true) => format!("decoded {} bytes", frame.bytes),

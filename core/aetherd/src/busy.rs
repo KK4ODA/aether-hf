@@ -42,8 +42,12 @@
 //!
 //! * a **hangover** keeps the channel marked busy for a moment after the power drops, so the
 //!   gaps inside a burst do not read as a free channel;
-//! * a detected preamble marks the channel busy outright, because the receiver being able to
-//!   acquire a frame settles the question better than any power measurement can;
+//! * a **decoded frame** marks the channel busy outright — a frame that decoded is there,
+//!   whatever the power measurement says. A merely *acquired* preamble does not: on a real
+//!   band the acquisition false-alarms many times a minute, and its confidence overlaps
+//!   between a phantom and a weak real frame (measured on the OTA-2 recordings: phantoms
+//!   to 1.54 over their threshold, a real frame at 1.38), so no gate on it is clean. The
+//!   only evidence a phantom can never produce is a decode;
 //! * the detector is **told when this station transmits**, and discards those blocks. Its own
 //!   sidetone is not occupancy, and letting it into the floor estimate would poison it.
 
@@ -84,12 +88,58 @@ impl Default for BusyConfig {
     }
 }
 
+/// Why the channel was last marked busy.
+///
+/// The busy state is one number, `busy_until`, extended by more than one path; when the
+/// indicator lights with nothing 6 dB above the floor, the question is always which path
+/// did it, and this is the answer. It is reported with the state and logged on every
+/// transition (`field/OTA-2-FINDINGS.md`: the busy indicator was on for seconds while the
+/// operator watched a level that never crossed the threshold).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BusyReason {
+    /// The smoothed level stood at least the threshold above the learned floor.
+    Level {
+        /// The level at the moment, dBFS.
+        level_db: f64,
+        /// The floor at the moment, dBFS.
+        floor_db: f64,
+    },
+    /// A frame was acquired or decoded, at this acquisition confidence (1.0 is exactly at
+    /// the detector's threshold; a decoded frame reports its own).
+    Frame {
+        /// Acquisition peak over the threshold that accepted it.
+        detect_confidence: f64,
+    },
+}
+
+impl BusyReason {
+    /// A line for a log: the numbers that decided it.
+    #[must_use]
+    pub fn describe(&self, threshold_db: f64) -> String {
+        match self {
+            Self::Level { level_db, floor_db } => format!(
+                "level {level_db:.1} dBFS is {:+.1} dB over the floor {floor_db:.1} (threshold {threshold_db:.1})",
+                level_db - floor_db
+            ),
+            Self::Frame { detect_confidence } => {
+                format!("a frame acquired at confidence {detect_confidence:.2}")
+            }
+        }
+    }
+}
+
 /// Channel occupancy from the received baseband.
 #[derive(Debug, Clone)]
 pub struct BusyDetector {
     config: BusyConfig,
     block_samples: usize,
     window_blocks: usize,
+    /// Why `busy_until` was last extended, for the operator and the log.
+    reason: Option<BusyReason>,
+    /// The largest level-over-floor seen since the last time it was read: the decision is
+    /// made forty times a second on a 50 ms quantity and a display samples it twice a second,
+    /// so the excursions that trip the threshold are the ones a display never shows.
+    excess_peak_db: f64,
     /// Raw power per block and whether the level was steady when it was measured, newest
     /// last, capped at `window_blocks`.
     history: std::collections::VecDeque<(f64, bool)>,
@@ -141,6 +191,8 @@ impl BusyDetector {
             window_blocks,
             history: std::collections::VecDeque::with_capacity(window_blocks),
             partial: Vec::with_capacity(block_samples),
+            reason: None,
+            excess_peak_db: f64::NEG_INFINITY,
             smoothed: 0.0,
             busy_until: f64::NEG_INFINITY,
             level_db: f64::NEG_INFINITY,
@@ -175,6 +227,24 @@ impl BusyDetector {
         self.level_db - self.floor_db
     }
 
+    /// Why the channel was last marked busy, if it ever was.
+    #[must_use]
+    pub fn reason(&self) -> Option<BusyReason> {
+        self.reason
+    }
+
+    /// The largest level-over-floor since the last reset — what the threshold was actually
+    /// tested against in the meantime, which a reading sampled twice a second cannot show.
+    #[must_use]
+    pub fn excess_peak_db(&self) -> f64 {
+        self.excess_peak_db
+    }
+
+    /// Start a new peak interval; the publisher calls it after each reading goes out.
+    pub fn reset_excess_peak(&mut self) {
+        self.excess_peak_db = f64::NEG_INFINITY;
+    }
+
     /// Whether enough audio has gone by for the floor estimate to mean anything.
     ///
     /// Before this a caller should treat the channel as busy: not knowing is not the same as
@@ -184,12 +254,14 @@ impl BusyDetector {
         self.history.len() >= self.window_blocks / 2
     }
 
-    /// Mark the channel busy because a frame was detected.
+    /// Mark the channel busy because a frame was **decoded**.
     ///
-    /// The receiver acquiring a preamble is stronger evidence than any power measurement, and
-    /// it works below the threshold, which is the case that matters for politeness.
-    pub fn mark_frame(&mut self, now: f64) {
+    /// A decoded frame is there whatever the power measurement says, and it works below the
+    /// threshold, which is the case that matters for politeness. An acquisition alone is
+    /// not called here: see the module notes.
+    pub fn mark_frame(&mut self, now: f64, detect_confidence: f64) {
         self.busy_until = self.busy_until.max(now + self.config.frame_hold_s);
+        self.reason = Some(BusyReason::Frame { detect_confidence });
     }
 
     /// Discard audio captured while this station was transmitting.
@@ -259,8 +331,14 @@ impl BusyDetector {
                     .max(FLOOR);
                 self.floor_db = 10.0 * lowest.log10();
             }
-            if self.level_db - self.floor_db >= self.config.threshold_db {
+            let excess = self.level_db - self.floor_db;
+            self.excess_peak_db = self.excess_peak_db.max(excess);
+            if excess >= self.config.threshold_db {
                 self.busy_until = self.busy_until.max(now + self.config.hang_s);
+                self.reason = Some(BusyReason::Level {
+                    level_db: self.level_db,
+                    floor_db: self.floor_db,
+                });
             }
         }
         self.partial.drain(..consumed);
@@ -305,6 +383,142 @@ mod tests {
             detector.push(&samples, now);
         }
         now
+    }
+
+    /// A scripted channel, block by block, with every busy transition recorded alongside
+    /// the numbers that decided it. This is the controlled reproduction: noise only, a
+    /// signal ramping up through the threshold and back down, impulses shorter than a
+    /// block, a step in the floor, and a transmit gap — each stage checked against what
+    /// the detector must and must not say.
+    /// One stage of a script: its name, how many blocks it lasts, and the noise sigma at
+    /// each block of it.
+    type Stage<'a> = (&'a str, usize, Box<dyn Fn(usize) -> f64>);
+    /// A busy transition: the stage it happened in, when, the new state, and the excess.
+    type Transition = (String, f64, bool, f64);
+
+    fn scripted(detector: &mut BusyDetector, stages: &[Stage<'_>], seed: u64) -> Vec<Transition> {
+        let fs = detector.config().fs;
+        let block = detector.config().block_s;
+        let per_block = (block * fs) as usize;
+        let mut now = 0.0;
+        let mut was = false;
+        let mut log = Vec::new();
+        let mut n = 0u64;
+        for (name, blocks, sigma_of) in stages {
+            for index in 0..*blocks {
+                let samples = noise(per_block, sigma_of(index), seed.wrapping_add(n));
+                n += 1;
+                now += block;
+                let busy = detector.push(&samples, now);
+                if busy != was {
+                    log.push(((*name).to_owned(), now, busy, detector.excess_db()));
+                    was = busy;
+                }
+            }
+        }
+        log
+    }
+
+    #[test]
+    fn the_level_path_fires_only_when_the_level_really_clears_the_threshold() {
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let quiet = 0.01;
+        let stages: Vec<Stage<'_>> = vec![
+            // 8 s of noise alone: nothing may fire once the floor has settled
+            ("noise", 320, Box::new(move |_| quiet)),
+            // a signal ramping 0 -> +12 dB over 4 s: must fire, and not before ~+6
+            ("ramp up", 160, Box::new(move |i| quiet * 10f64.powf((i as f64 / 160.0) * 12.0 / 20.0))),
+            // holding at +12 dB
+            ("hold", 40, Box::new(move |_| quiet * 10f64.powf(12.0 / 20.0))),
+            // ramping back down over 4 s: must clear after the hangover
+            ("ramp down", 160, Box::new(move |i| quiet * 10f64.powf((1.0 - i as f64 / 160.0) * 12.0 / 20.0))),
+            ("noise again", 200, Box::new(move |_| quiet)),
+        ];
+        let log = scripted(&mut detector, &stages, 7);
+        let stage_of = |t: f64| -> &str {
+            let b = (t / 0.025).round() as usize;
+            if b <= 320 { "noise" } else if b <= 480 { "ramp up" } else if b <= 520 { "hold" } else if b <= 680 { "ramp down" } else { "noise again" }
+        };
+        for (stage, at, busy, excess) in &log {
+            eprintln!("BUSY {} at {at:.2}s in '{stage}' | excess {excess:+.1} dB | threshold 6.0", if *busy { "OFF -> ON " } else { "ON  -> OFF" });
+        }
+        assert!(
+            !log.iter().any(|(s, t, busy, _)| *busy && s == "noise" && *t > 2.5),
+            "noise alone lit the indicator: {log:?}"
+        );
+        let first_on = log.iter().find(|(_, _, busy, _)| *busy).expect("the ramp must light it");
+        assert_eq!(stage_of(first_on.1), "ramp up", "lit outside the ramp: {log:?}");
+        assert!(
+            first_on.3 >= 6.0 - 0.6,
+            "lit at only {:+.1} dB over the floor, below the 6 dB threshold",
+            first_on.3
+        );
+        assert!(
+            log.iter().any(|(s, _, busy, _)| !*busy && (s == "ramp down" || s == "noise again")),
+            "never cleared after the signal fell: {log:?}"
+        );
+        assert!(!detector.busy(0.025 * 880.0), "still busy on noise at the end");
+    }
+
+    #[test]
+    fn an_impulse_shorter_than_a_block_is_a_hangover_not_a_lockup() {
+        // A static crash: one block, 20 dB up. It legitimately trips the threshold — the
+        // detector cannot know it will not last — but the cost is bounded to the hangover,
+        // and the floor must not move. A display sampling twice a second will almost never
+        // show the block that did it, which is why the reason and the peak are reported.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let quiet = 0.01;
+        let stages: Vec<Stage<'_>> = vec![
+            ("noise", 320, Box::new(move |_| quiet)),
+            ("impulse", 1, Box::new(move |_| quiet * 10.0)),
+            ("noise", 120, Box::new(move |_| quiet)),
+        ];
+        let floor_before = {
+            let mut d = BusyDetector::new(BusyConfig::default());
+            feed(&mut d, 8.0, quiet, 7, 0.0);
+            d.floor_db
+        };
+        let log = scripted(&mut detector, &stages, 7);
+        let on = log.iter().filter(|(_, _, busy, _)| *busy).count();
+        assert_eq!(on, 1, "the impulse lights it exactly once: {log:?}");
+        let off = log.iter().find(|(_, _, busy, _)| !*busy).expect("and it clears");
+        let lit = log.iter().find(|(_, _, busy, _)| *busy).expect("lit");
+        let held = off.1 - lit.1;
+        // the smoother (one pole, two blocks) keeps the level over the threshold for a few
+        // blocks after a 20 dB impulse, and each of those re-arms the hangover: measured,
+        // 100 ms on top of it. Bounded and explicable; anything much beyond it is not.
+        let smoother_tail_s = 0.15;
+        assert!(
+            held <= detector.config().hang_s + smoother_tail_s,
+            "an impulse held the channel {held:.2} s, longer than the hangover and the              smoother's tail"
+        );
+        assert!(
+            (detector.floor_db - floor_before).abs() < 1.0,
+            "the impulse moved the floor: {} -> {}",
+            floor_before,
+            detector.floor_db
+        );
+        assert!(matches!(detector.reason(), Some(BusyReason::Level { .. })));
+    }
+
+    #[test]
+    fn a_step_down_in_the_noise_does_not_leave_the_channel_reading_busy() {
+        // The floor drops when the band goes quieter; the level drops with it, so nothing
+        // should be busy. A floor that failed to follow — or followed an artefact — would
+        // read the new quiet as +N dB over an old floor, or the old level as +N over a
+        // collapsed one. Neither may happen.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let stages: Vec<Stage<'_>> = vec![
+            ("loud noise", 320, Box::new(|_| 0.03)),
+            ("quieter noise", 320, Box::new(|_| 0.01)),
+            ("loud again", 320, Box::new(|_| 0.03)),
+        ];
+        let log = scripted(&mut detector, &stages, 11);
+        // the step back up is a genuine +9.5 dB over a floor learned on the quiet: it may
+        // fire, and must clear within the window once the floor catches up
+        let noise_lit: Vec<_> = log.iter().filter(|(s, _, b, _)| *b && s != "loud again").collect();
+        assert!(noise_lit.is_empty(), "stationary noise lit the indicator: {noise_lit:?}");
+        assert!(!detector.busy(0.025 * 960.0 + 1.0), "still busy long after the floor caught up");
     }
 
     #[test]
@@ -463,7 +677,7 @@ mod tests {
         let mut detector = BusyDetector::new(BusyConfig::default());
         let now = feed(&mut detector, 8.0, 0.01, 4, 0.0);
         assert!(!detector.busy(now));
-        detector.mark_frame(now);
+        detector.mark_frame(now, 3.0);
         assert!(detector.busy(now));
         assert!(detector.busy(now + 1.5));
         assert!(!detector.busy(now + 2.5), "it never let go");

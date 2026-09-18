@@ -956,7 +956,16 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "queued_bytes": station.engine().tx_pending_bytes(),
         "noise_floor_db": level(busy.floor_db),
         "level_db": level(busy.level_db),
+        // the largest level-over-floor since the last reading: the decision is made forty
+        // times a second on a 50 ms quantity, so the excursions that trip the threshold
+        // are the ones a twice-a-second sample almost never lands on
+        "excess_peak_db": level(busy.excess_peak_db()),
         "channel_busy": station.channel_busy(),
+        // which path last marked it: "level" (the threshold) or "frame" (an acquisition)
+        "busy_reason": busy.reason().map(|reason| match reason {
+            crate::busy::BusyReason::Level { .. } => "level",
+            crate::busy::BusyReason::Frame { .. } => "frame",
+        }),
         "transmitting": station.transmitting(),
         "receiving": station.receiving(),
         "audio": level_json(&station.audio_level()),

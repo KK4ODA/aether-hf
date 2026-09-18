@@ -343,9 +343,16 @@ function applyMetrics(metrics) {
     history.push({
       at,
       level: metrics.transmitting === true ? null : level,
+      // the largest level-over-floor the detector tested since the last sample: the decision
+      // is made forty times a second, and the bar is one sample of it in twenty
+      peak:
+        metrics.transmitting === true || typeof metrics.excess_peak_db !== "number"
+          ? null
+          : floor + metrics.excess_peak_db,
       floor,
       tx: metrics.transmitting === true,
       rx: metrics.receiving === true,
+      busy: metrics.channel_busy === true,
     });
     while (history.length && history[0].at < at - LEVEL_SPAN_MS) history.shift();
     drawChart();
@@ -354,9 +361,17 @@ function applyMetrics(metrics) {
   }
   if (level !== null && level !== undefined && floor !== null && floor !== undefined) {
     $("d-busy").textContent = metrics.channel_busy ? "busy" : "clear";
-    $("d-busy-sub").textContent = `level ${level.toFixed(1)} · floor ${floor.toFixed(1)} dBFS`;
+    const peak = typeof metrics.excess_peak_db === "number" ? ` · peak ${metrics.excess_peak_db >= 0 ? "+" : ""}${metrics.excess_peak_db.toFixed(1)} dB` : "";
+    $("d-busy-sub").textContent = `level ${level.toFixed(1)} · floor ${floor.toFixed(1)} dBFS${peak}`;
   }
-  setLamp("lamp-busy", metrics.channel_busy === true, metrics.channel_busy ? "Channel busy" : "Channel clear");
+  // the lamp says which path lit it: the level threshold, or a frame acquired
+  const why =
+    metrics.busy_reason === "frame"
+      ? "Channel busy: a frame was acquired"
+      : metrics.busy_reason === "level"
+        ? `Channel busy: the level crossed the threshold (${busyThresholdDb} dB over the floor)`
+        : "Channel busy";
+  setLamp("lamp-busy", metrics.channel_busy === true, metrics.channel_busy ? why : "Channel clear");
   if (metrics.transmitting !== undefined) {
     setLamp("lamp-ptt", metrics.transmitting === true, metrics.transmitting ? "Transmitter keyed" : "Transmitter off");
   }
@@ -549,6 +564,7 @@ function tokens() {
     tx: read("--status-tx", "#f59e0b"),
     rx: read("--status-rx", "#22d3ee"),
     error: read("--status-error", "#f87171"),
+    warn: read("--status-warning", "#fbbf24"),
     plot: read("--plot-bg", "#000"),
     numerals: read("--numerals", "monospace"),
   };
@@ -1532,7 +1548,7 @@ function drawChart() {
   let high = -Infinity;
   for (const point of history) {
     low = Math.min(low, point.floor);
-    high = Math.max(high, point.floor + 12, point.level ?? point.floor);
+    high = Math.max(high, point.floor + busyThresholdDb + 6, point.level ?? point.floor, point.peak ?? point.floor);
   }
   low = Math.floor((low - 3) / 5) * 5;
   high = Math.ceil((high + 3) / 5) * 5;
@@ -1553,6 +1569,13 @@ function drawChart() {
       ctx.fillStyle = point.rx ? c.rx : withAlpha(c.rx, 0.45);
       const top = Math.min(f.y(point.level), base - 1);
       ctx.fillRect(x0, top, bar, base - top);
+      // the peak the detector tested in this half second, above the sampled bar: when the
+      // busy lamp lights with the bars below the line, this is what crossed it
+      if (point.peak !== null && point.peak !== undefined && point.peak > point.level) {
+        ctx.fillStyle = point.busy ? c.warn : withAlpha(c.ink, 0.5);
+        const peakY = Math.min(f.y(point.peak), top - 1);
+        ctx.fillRect(x0, peakY, bar, Math.max(1, top - peakY));
+      }
     }
   }
 
@@ -1583,11 +1606,26 @@ function drawChart() {
   ctx.stroke();
   ctx.setLineDash([]);
 
+  // the busy threshold: the floor plus the configured margin, the line the lamp answers to
+  ctx.strokeStyle = withAlpha(c.warn, 0.8);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  history.forEach((point, index) => {
+    const y = f.y(point.floor + busyThresholdDb);
+    if (index === 0) ctx.moveTo(x(point.at), y);
+    else ctx.lineTo(x(point.at), y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
+
   drawLegend(f, [
     [c.ink2, "level, dBFS"],
     [c.rx, "▍ receiving"],
     [c.tx, "▍ transmitting"],
     [c.ink2, "- - noise floor"],
+    [c.warn, "· · busy threshold"],
+    [c.warn, "▏ peak that tripped it"],
   ]);
 }
 
@@ -1779,6 +1817,7 @@ async function loadConfig() {
   $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
+  busyThresholdDb = Number(radio.busy_threshold_db ?? 6);
   $("radio-max-key").value = String(radio.max_key_s ?? 30);
   $("radio-cwid").checked = radio.cw_id === true;
   $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
@@ -2217,6 +2256,9 @@ async function transmitTest(method, seconds, label) {
 // the file holds the amplitude, because that is what the modem multiplies by. The level is
 // live in the modem and applied as audio leaves, so moving it during a tune tone moves the
 // tone — the rig's ALC answers at once.
+
+// the busy detector's threshold over the floor, from the configuration, for the chart's line
+let busyThresholdDb = 6;
 
 const TUNE_SECONDS = 10;
 let tuneTimer = null;
@@ -2737,6 +2779,8 @@ function setLamp(id, on, label) {
   const lamp = $(id);
   lamp.classList.toggle("on", on);
   if (lamp.getAttribute("aria-label") !== label) lamp.setAttribute("aria-label", label);
+  // the same words on hover: a lamp that lights for a reason should say the reason
+  if (lamp.title !== label) lamp.title = label;
 }
 
 function log(message, bad = false) {

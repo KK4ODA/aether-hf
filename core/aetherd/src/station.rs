@@ -492,6 +492,8 @@ pub struct Station<P: Ptt> {
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
     /// nothing else may: a burst cut short is a session broken.
     playing_test: bool,
+    /// The busy state as last observed, so a change of it is logged exactly once.
+    was_busy: bool,
     /// Largest sample magnitude handed to the sound card during the transmission now
     /// running, after the transmit level is applied — what the rig's ALC is actually being
     /// shown.
@@ -603,6 +605,7 @@ impl<P: Ptt> Station<P> {
             audio_seen: 0,
             transmitting: false,
             playing_test: false,
+            was_busy: false,
             tx_peak_running: 0.0,
             tx_peak_last: None,
             held_since: None,
@@ -786,6 +789,11 @@ impl<P: Ptt> Station<P> {
     #[must_use]
     pub fn busy_detector(&self) -> &BusyDetector {
         &self.busy
+    }
+
+    /// Start a new interval for the detector's peak reading, once the last one has gone out.
+    pub fn reset_busy_peak(&mut self) {
+        self.busy.reset_excess_peak();
     }
 
     /// What the radio is keyed through.
@@ -1430,6 +1438,7 @@ impl<P: Ptt> Station<P> {
             }
             self.absorb(&baseband, now);
         }
+        self.note_busy_transition(now);
 
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
@@ -1570,7 +1579,8 @@ impl<P: Ptt> Station<P> {
             // beacon drew a reply would be unusable.
             if let Some(caller) = beacon_callsign(&decoded) {
                 self.stats.beacons_heard += 1;
-                self.busy.mark_frame(now);
+                self.busy
+                    .mark_frame(now, decoded.frame.sync.detect_confidence(&self.air()));
                 self.note(
                     "beacon",
                     &format!("{caller} at {:.1} dB", decoded.frame.snr_3k_db),
@@ -1600,7 +1610,7 @@ impl<P: Ptt> Station<P> {
             // that did not decode is a soft frame the engine may still combine, and it says
             // nothing about the channel: a phantom gets this far too.
             if decoded_ok {
-                self.busy.mark_frame(now);
+                self.busy.mark_frame(now, detected);
             }
             self.engine.on_frame(&frame, now);
         }
@@ -1892,13 +1902,19 @@ impl<P: Ptt> Station<P> {
     /// Act on the preambles acquisition found in this block: the start-of-frame signal.
     ///
     /// It tells the engine a burst is still running long before the frame itself arrives,
-    /// and it marks the channel busy at an SNR far below anything a power measurement
-    /// would catch. But only for an acquisition worth believing. On a crowded band the
-    /// detector false-alarms many times a minute (OTA-2: 13.6), and every phantom used to
-    /// silence this station for two seconds, extend its receive window by a frame and tell
-    /// the engine the other station was still talking — the busy indicator lit for seconds
-    /// with nothing 6 dB above the floor, and replies waited on frames that never existed.
-    /// A phantom sits just above its threshold; a frame clears it by a wide margin.
+    /// and lights the receive indicator. It does **not** mark the channel busy. It used
+    /// to — on the reasoning that acquiring a frame is better evidence than any power
+    /// measurement — and on a crowded band that lit the busy indicator for seconds with
+    /// nothing above the threshold, because the detector false-alarms many times a minute
+    /// (OTA-2: 13.6) and every phantom held the channel for two seconds. A confidence gate
+    /// was tried first and measured on the same recordings: phantoms reach 1.54 over their
+    /// threshold and a real frame at the base acquired at 1.38, so no cut on acquisition
+    /// confidence separates them. The one piece of evidence a phantom can never produce is
+    /// a decode, so busy is asserted by the level criterion and by decoded frames, and a
+    /// preamble alone asserts nothing (`field/OTA-2-FINDINGS.md`).
+    ///
+    /// The engine's timing signal and the receive indicator still take the gate: a phantom
+    /// telling the engine a burst is arriving held this station's own turn.
     fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], now: f64) {
         let air = self.air();
         let fs = self.config.params.fs_baseband;
@@ -1906,10 +1922,44 @@ impl<P: Ptt> Station<P> {
             if pending.sync.detect_confidence(&air) < DETECT_CONFIDENCE_TRUSTED {
                 continue;
             }
-            self.busy.mark_frame(now);
             self.rx_until = self.rx_until.max(now + air.long.duration_s());
             self.engine.on_preamble(pending.sync.start as f64 / fs, now);
         }
+    }
+
+    /// Log a change of the busy state with the numbers that decided it.
+    ///
+    /// `busy_until` is one number extended by several paths, and when the indicator lights
+    /// with nothing above the threshold the only useful question is which path did it. So
+    /// every transition says: the level and floor at that moment, the threshold, and the
+    /// reason the hold was last extended.
+    fn note_busy_transition(&mut self, now: f64) {
+        let busy = self.busy.busy(now);
+        if busy == self.was_busy {
+            return;
+        }
+        self.was_busy = busy;
+        let threshold = self.busy.config().threshold_db;
+        let detail = if busy {
+            let why = self
+                .busy
+                .reason()
+                .map_or_else(|| "no reason recorded".to_owned(), |r| r.describe(threshold));
+            format!(
+                "on: {why}; now level {:.1} floor {:.1} ({:+.1} dB)",
+                self.busy.level_db,
+                self.busy.floor_db,
+                self.busy.excess_db()
+            )
+        } else {
+            format!(
+                "off: level {:.1} floor {:.1} ({:+.1} dB)",
+                self.busy.level_db,
+                self.busy.floor_db,
+                self.busy.excess_db()
+            )
+        };
+        self.note("busy", &detail);
     }
 
     /// Record what this station is putting on the air, beside what it hears.
@@ -3457,12 +3507,57 @@ mod tests {
     }
 
     #[test]
-    fn a_phantom_acquisition_does_not_light_the_busy_indicator_but_a_frame_does() {
+    fn every_busy_transition_is_logged_with_the_numbers_that_decided_it() {
+        // The instrumentation: when the indicator lights, the log says which path did it
+        // and what the level, floor and threshold were at that moment — so the next report
+        // of "busy with nothing above the threshold" names its cause instead of guessing.
+        let mut station = idle_station();
+        let quiet: Vec<f32> = (0..4096).map(|i| 0.002 * ((i as f32 * 0.37).sin())).collect();
+        let loud: Vec<f32> = quiet.iter().map(|x| x * 40.0).collect(); // +32 dB
+        for _ in 0..80 {
+            station.capture(&quiet).expect("capture");
+        }
+        let _ = station.take_events();
+        assert!(!station.channel_busy(), "quiet to begin with");
+
+        for _ in 0..6 {
+            station.capture(&loud).expect("capture");
+        }
+        assert!(station.channel_busy(), "a level far over the floor lights it");
+        let events = station.take_events();
+        let on = events
+            .iter()
+            .find(|e| e.starts_with("busy:on:"))
+            .expect("the transition to busy is logged");
+        assert!(
+            on.contains("over the floor") && on.contains("threshold 6.0"),
+            "the log names the level path and the threshold: {on}"
+        );
+        assert!(
+            matches!(station.busy_detector().reason(), Some(crate::busy::BusyReason::Level { .. })),
+            "and the reason is the level"
+        );
+
+        // and back to quiet: the clearing is logged too, once the hang has run out
+        for _ in 0..40 {
+            station.capture(&quiet).expect("capture");
+        }
+        let events = station.take_events();
+        assert!(
+            events.iter().any(|e| e.starts_with("busy:off:")),
+            "the clearing is logged: {events:?}"
+        );
+        assert!(!station.channel_busy());
+    }
+
+    #[test]
+    fn no_acquisition_lights_the_busy_indicator_on_its_own_only_a_decode_does() {
         // The operator watched the level never reach 6 dB over the floor while the busy
         // indicator stayed on for seconds at a time. It was the acquisition path: every
         // preamble marked the channel busy for two seconds, and on a crowded band the
-        // detector finds a phantom every few seconds. A phantom sits just above its
-        // threshold; a real frame clears it by a wide margin (OTA-2: 1.0-1.5 against 2.8-4).
+        // detector finds a phantom every few seconds. Gating on acquisition confidence
+        // was tried and measured: phantoms reach 1.54 and a real frame acquired at 1.38,
+        // so there is no cut. Only a decode is evidence, so a preamble marks nothing.
         use aether_phy::preamble::FrameType;
         use aether_phy::rx::FrameSync;
 
@@ -3494,10 +3589,22 @@ mod tests {
             "a phantom acquisition must not silence the station"
         );
 
-        // well clear of it: what a frame produces
-        let real = preamble(air.acceptance_threshold(true) * 2.5);
-        station.heed_preambles(&[real], now);
-        assert!(station.channel_busy(), "a confident acquisition marks the channel");
+        // well clear of it, as a frame would be — still nothing: acquisition is not evidence
+        let confident = preamble(air.acceptance_threshold(true) * 2.5);
+        station.heed_preambles(&[confident], now);
+        assert!(
+            !station.channel_busy(),
+            "an acquisition alone must not mark the channel, however confident"
+        );
+        assert!(station.receiving(), "but the receive indicator does follow a confident one");
+
+        // a decoded frame is the evidence, and it does
+        station.busy.mark_frame(now, 1.38);
+        assert!(station.channel_busy(), "a decoded frame marks the channel busy");
+        assert!(matches!(
+            station.busy.reason(),
+            Some(crate::busy::BusyReason::Frame { .. })
+        ));
     }
 
     #[test]
@@ -3517,7 +3624,7 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        station.busy.mark_frame(now);
+        station.busy.mark_frame(now, 3.0);
         assert!(station.channel_busy());
         assert!(
             !station.channel_clear(now),

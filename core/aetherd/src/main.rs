@@ -621,6 +621,7 @@ fn serve(
         if control.subscriber_count() > 0 && last_metrics.elapsed() >= METRICS_INTERVAL {
             last_metrics = std::time::Instant::now();
             control.publish(&Event::new("metrics", metrics(station)));
+            station.reset_busy_peak();
         }
         // `ptt` reports the transmitter, not the session: a host uses it to know when the
         // radio is keyed, and a state change is a different thing entirely
