@@ -32,9 +32,21 @@ use aetherd::{
 };
 use serde_json::json;
 
-/// How much audio to keep queued for the sound card. Enough to ride out a scheduling hiccup,
-/// short enough that keying and audio stay in step.
-const PLAYBACK_BACKLOG_S: f64 = 0.25;
+/// How long a sample handed to the sound card is assumed to take to leave it: the card's
+/// own buffering, which its playback clock cannot see. The keying tail covers it, and the
+/// engine's timers are told of it. A quarter second is generous for a USB codec.
+///
+/// This used to be how much audio the loop kept queued ahead of the card, topping it up
+/// between blocks — and a block that cost the receiver more than that put a hole in the
+/// burst on the air, uncounted (`field/TX-ONSET-FINDINGS.md`). A whole burst is queued at
+/// once now; the constant only names the card's latency.
+const DEVICE_LATENCY_S: f64 = 0.25;
+/// A pass of the run loop slower than this is logged with what it was doing. It is the
+/// quarter second the card used to be kept ahead by: a pass this slow would have starved
+/// it, and still says the modem is not keeping up with its own audio.
+const LOOP_STALL_MS: f64 = 250.0;
+/// How often at most a slow pass is logged, so a slow machine does not fill its own log.
+const LOOP_STALL_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// How long to wait when there is nothing to do. Short enough that a burst is never late by
 /// an audible amount; long enough that an idle station does not spin a core.
 const IDLE_SLEEP: Duration = Duration::from_millis(5);
@@ -78,6 +90,10 @@ struct Args {
     dry_run: bool,
     replay: Option<PathBuf>,
     expect: Option<PathBuf>,
+    /// The block a replay feeds the receiver in, in milliseconds; the daemon's own 20 by
+    /// default. The receiver's cost is per call rather than per sample, so the same
+    /// recording at 100 ms tells whether the loop's passes are search-bound.
+    block_ms: Option<f64>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -87,6 +103,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         dry_run: false,
         replay: None,
         expect: None,
+        block_ms: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -157,6 +174,16 @@ fn parse_args() -> Result<Option<Args>, String> {
                     argv.next().ok_or("--expect needs a session sidecar")?,
                 ));
             }
+            "--block-ms" => {
+                let value = argv.next().ok_or("--block-ms needs a number of milliseconds")?;
+                let ms: f64 = value
+                    .parse()
+                    .map_err(|_| format!("--block-ms: {value:?} is not a number"))?;
+                if !(1.0..=1000.0).contains(&ms) {
+                    return Err("--block-ms is between 1 and 1000".to_owned());
+                }
+                args.block_ms = Some(ms);
+            }
             other => return Err(format!("unknown argument {other:?}; try --help")),
         }
     }
@@ -175,6 +202,8 @@ aetherd — the Aether HF station daemon
       --replay WAV    run a recording through the receiver and list what it finds
       --expect JSON   the recording's sidecar: mute where the transmitter was keyed,
                       and fail if fewer frames decode than did on the day
+      --block-ms N    feed the replay in blocks of N ms (default 20, the daemon's own);
+                      the receiver's cost per block is printed either way
       --list-devices  print the audio devices this machine offers
       --list-ports    print the serial ports this machine offers
       --example-config  print a commented configuration to start from
@@ -187,7 +216,8 @@ fn run() -> Result<Exit, String> {
         return Ok(Exit::Done);
     };
     if let Some(wav) = &args.replay {
-        return replay(wav, args.expect.as_deref()).map(|()| Exit::Done);
+        let block_s = args.block_ms.map_or(aetherd::replay::BLOCK_S, |ms| ms / 1000.0);
+        return replay(wav, args.expect.as_deref(), block_s).map(|()| Exit::Done);
     }
     let path = args
         .config
@@ -281,7 +311,7 @@ fn run() -> Result<Exit, String> {
 }
 
 /// `--replay`: the receiver over a recording, held to its sidecar if one is given.
-fn replay(wav: &Path, expect: Option<&Path>) -> Result<(), String> {
+fn replay(wav: &Path, expect: Option<&Path>, block_s: f64) -> Result<(), String> {
     use aetherd::replay::{Expectation, compare, describe};
     // the sidecar beside the WAV is the expectation unless told otherwise
     let beside = wav.with_extension("json");
@@ -292,10 +322,27 @@ fn replay(wav: &Path, expect: Option<&Path>) -> Result<(), String> {
     };
     let muted = expectation.as_ref().map_or(&[][..], |e| e.muted.as_slice());
     let bandwidth_hz = expectation.as_ref().map_or(2300, |e| e.bandwidth_hz);
-    let found = aetherd::replay::replay(wav, muted, bandwidth_hz)?;
+    let (found, timing) = aetherd::replay::replay_timed(wav, muted, bandwidth_hz, block_s)?;
     for frame in &found {
         println!("{}", describe(frame));
     }
+    // The daemon's loop is single-threaded, so what the receiver costs per block is what
+    // every pass of the loop costs, and used to be what put holes in transmissions when it
+    // exceeded the quarter second kept queued at the sound card (ADR-0010). The replay is
+    // where that cost can be measured without a radio.
+    let block_ms = block_s * 1000.0;
+    let audio_ms = timing.blocks as f64 * block_ms;
+    println!(
+        "receiver: {} blocks of {block_ms:.0} ms in {:.1} s ({:.2}x real time); slowest block \
+         {:.0} ms at {:.2} s; {} over 100 ms, {} over the daemon's 250 ms playback backlog",
+        timing.blocks,
+        timing.total_ms / 1000.0,
+        timing.total_ms / audio_ms.max(1.0),
+        timing.max_ms,
+        timing.max_at_s,
+        timing.over_100_ms,
+        timing.over_250_ms
+    );
     let Some(expectation) = expectation else {
         println!(
             "{} frames found, {} decoded (no sidecar to compare with)",
@@ -368,7 +415,8 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
         record_notes: config.record.notes.clone(),
-        playback_lead_s: PLAYBACK_BACKLOG_S,
+        record_tx_audio: config.record.tx_audio,
+        playback_lead_s: DEVICE_LATENCY_S,
         callsign: config.callsign.clone(),
         link: LinkConfig {
             max_mode: config.radio.fastest_mode(),
@@ -526,6 +574,103 @@ fn state_name(station: &Station<Box<dyn Ptt>>) -> String {
     format!("{:?}", station.state())
 }
 
+/// What the sound card has lost so far, as last reported, so each loss is logged once.
+#[derive(Debug, Default, Clone, Copy)]
+struct AudioLosses {
+    dropped: usize,
+    starved: usize,
+}
+
+/// Report what the sound card lost since the last pass: captured audio the modem could not
+/// keep up with, and — the one that matters on the air — silence the card had to play
+/// inside a transmission because the next samples had not reached it. Both go to the log
+/// and to the diagnostic bundle, never nowhere.
+fn note_audio_losses(
+    daemon: &mut DaemonState,
+    audio: &dyn AudioIo,
+    sample_rate: u32,
+    station: &Station<Box<dyn Ptt>>,
+    reported: &mut AudioLosses,
+) {
+    let dropped = audio.dropped();
+    if dropped > reported.dropped {
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "dropped {} captured samples: the modem is behind",
+                dropped - reported.dropped
+            ),
+            &state_name(station),
+        );
+        reported.dropped = dropped;
+        daemon.dropped_audio = dropped as u64;
+    }
+    let starved = audio.starved();
+    if starved > reported.starved {
+        let ms = (starved - reported.starved) as f64 * 1000.0 / f64::from(sample_rate);
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "the sound card ran dry for {ms:.0} ms inside a transmission: a hole on the \
+                 air (the modem loop stalled; see `loop` in diagnostics)"
+            ),
+            &state_name(station),
+        );
+        reported.starved = starved;
+        daemon.starved_audio = starved as u64;
+    }
+}
+
+/// Account for one pass of the run loop: keep the slowest on record for the diagnostic
+/// bundle, and log a pass slower than [`LOOP_STALL_MS`] with where the time went — the
+/// receiver's decode, a command, or the playback render — rate-limited so a slow machine
+/// says so once in a while rather than in every line.
+fn note_pass(
+    daemon: &mut DaemonState,
+    last_logged: &mut Option<std::time::Instant>,
+    station: &Station<Box<dyn Ptt>>,
+    [commands_ms, capture_ms, playback_ms]: [f64; 3],
+) {
+    let total_ms = commands_ms + capture_ms + playback_ms;
+    let phase = if capture_ms >= commands_ms && capture_ms >= playback_ms {
+        "capture"
+    } else if playback_ms >= commands_ms {
+        "playback"
+    } else {
+        "commands"
+    };
+    if total_ms > daemon.loop_slowest_ms {
+        daemon.loop_slowest_ms = total_ms;
+        phase.clone_into(&mut daemon.loop_slowest_phase);
+    }
+    if total_ms <= LOOP_STALL_MS {
+        return;
+    }
+    daemon.loop_stalls += 1;
+    let due = last_logged.is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL);
+    if !due {
+        return;
+    }
+    *last_logged = Some(std::time::Instant::now());
+    daemon.log.record(
+        Level::Warn,
+        "loop",
+        &format!(
+            "a pass took {total_ms:.0} ms (commands {commands_ms:.0}, capture {capture_ms:.0}, \
+             playback {playback_ms:.0}){}; {} such passes so far",
+            if station.transmitting() {
+                " while transmitting"
+            } else {
+                ""
+            },
+            daemon.loop_stalls
+        ),
+        &state_name(station),
+    );
+}
+
 /// How much a station event matters, from its name.
 fn level_of(name: &str) -> Level {
     match name {
@@ -548,10 +693,13 @@ fn serve(
     restarting: &std::sync::atomic::AtomicBool,
 ) -> Result<(), String> {
     let block = (0.02 * f64::from(config.audio.sample_rate)) as usize;
-    let backlog = (PLAYBACK_BACKLOG_S * f64::from(config.audio.sample_rate)) as usize;
-    let mut reported_drops = 0;
+    // the card's queue holds a whole transmission, and the loop hands everything the
+    // station has rendered to it at once — see the notes in `audio.rs`
+    let backlog = ((config.radio.max_key_s + 1.0) * f64::from(config.audio.sample_rate)) as usize;
+    let mut reported = AudioLosses::default();
     let mut last_metrics = std::time::Instant::now();
     let mut last_keyed = false;
+    let mut last_stall_logged: Option<std::time::Instant> = None;
     let mut heard_changed_at: Option<std::time::Instant> = None;
 
     loop {
@@ -560,15 +708,26 @@ fn serve(
             return Ok(());
         }
 
+        let pass_began = std::time::Instant::now();
         answer_commands(station, control, daemon, stopping, restarting);
+        let commands_ms = pass_began.elapsed().as_secs_f64() * 1000.0;
 
         let captured = audio.capture();
         let idle = captured.is_empty();
         if !idle {
             station.capture(&captured).map_err(|e| e.to_string())?;
         }
+        let capture_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms;
 
-        // top the sound card up, so it never runs dry in the middle of a burst
+        // A transmission cut short leaves the rest of it in the card's queue: drop it.
+        if station.take_device_flush() {
+            audio.clear();
+        }
+        // Hand the card everything the station has rendered. A burst goes over whole, the
+        // moment it is rendered, so nothing this loop does afterwards — a decode, a slow
+        // disk, the scheduler — can put a hole in it; the station releases the key against
+        // the card's own clock, when the last sample has really left.
+        station.device_played(audio.played());
         let mut buffer = vec![0.0f32; block];
         while audio.queued() < backlog {
             let count = station.playback(&mut buffer).map_err(|e| e.to_string())?;
@@ -577,6 +736,14 @@ fn serve(
             }
             audio.playback(&buffer[..count]);
         }
+        audio.set_playing(station.transmitting());
+        let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
+        note_pass(
+            daemon,
+            &mut last_stall_logged,
+            station,
+            [commands_ms, capture_ms, playback_ms],
+        );
 
         // frames before the state they produced: a host learns the SNR of the frame that
         // brought a session up (SN) before it hears CONNECTED, which is the order a modem
@@ -637,20 +804,7 @@ fn serve(
             control.publish(&Event::new("ptt", json!({ "on": keyed })));
         }
 
-        let dropped = audio.dropped();
-        if dropped > reported_drops {
-            daemon.log.record(
-                Level::Warn,
-                "audio",
-                &format!(
-                    "dropped {} captured samples: the modem is behind",
-                    dropped - reported_drops
-                ),
-                &state_name(station),
-            );
-            reported_drops = dropped;
-            daemon.dropped_audio = dropped as u64;
-        }
+        note_audio_losses(daemon, audio, config.audio.sample_rate, station, &mut reported);
 
         if idle {
             std::thread::sleep(IDLE_SLEEP);

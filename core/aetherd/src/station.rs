@@ -105,6 +105,10 @@ pub struct StationConfig {
     pub cw_id_interval_s: f64,
     /// Who and where, for the field log a recording becomes.
     pub operator: crate::config::OperatorSection,
+    /// Keep the exact audio of every transmission, as handed to the sound card, under
+    /// `tx/` in the recordings directory, with a sidecar describing its envelope: what
+    /// the modem *sent*, for holding the air against it (`[record] tx_audio`).
+    pub record_tx_audio: bool,
 }
 
 impl Default for StationConfig {
@@ -131,6 +135,7 @@ impl Default for StationConfig {
             record_notes: String::new(),
             cw_id_interval_s: 600.0,
             operator: crate::config::OperatorSection::default(),
+            record_tx_audio: false,
         }
     }
 }
@@ -475,6 +480,31 @@ pub struct StationStats {
     pub beacons_heard: usize,
 }
 
+/// The two playback clocks, and how the transmission now running stands against them.
+///
+/// A whole burst is handed to the sound card as soon as it is rendered (ADR-0010), so the
+/// station's own queue drains long before the audio has left; the key is released when
+/// the card has consumed as many samples since keying as the station handed it since
+/// keying. The card's clock runs through the idle time too and the station's does not, so
+/// only the spans since keying compare.
+#[derive(Debug, Default, Clone, Copy)]
+struct PlaybackClock {
+    /// Samples handed to the sound card so far, silence included.
+    handed: u64,
+    /// The sound card's own clock as last reported by the run loop — samples it has
+    /// consumed since it opened. `None` for a harness that never reports one, whose key is
+    /// released the moment the queue drains, as it always was.
+    device_played: Option<u64>,
+    /// Where each clock stood when the transmission now running was keyed.
+    handed_at_key: u64,
+    played_at_key: Option<u64>,
+    /// The transmission now running was cut short: what the card still held was dropped,
+    /// so the key is released as soon as the station's own queue is empty.
+    cut_short: bool,
+    /// Whether the run loop should drop what the sound card still holds.
+    flush_device: bool,
+}
+
 /// One station: link engine, physical layer, radio.
 pub struct Station<P: Ptt> {
     config: StationConfig,
@@ -513,6 +543,11 @@ pub struct Station<P: Ptt> {
     /// arrives after the key is released, and read as channel it would hold the next burst
     /// back for its own echo.
     deaf_until: f64,
+    /// The two playback clocks and how the transmission now running stands against them.
+    clock: PlaybackClock,
+    /// The exact audio of the transmission now running, when the operator asked for it
+    /// to be kept (`[record] tx_audio`).
+    tx_capture: Option<crate::record::TxCapture>,
     pending: VecDeque<Outgoing>,
     meter: LevelMeter,
     /// The session recording in progress, if one is.
@@ -615,6 +650,8 @@ impl<P: Ptt> Station<P> {
             tx_peak_last: None,
             held_since: None,
             deaf_until: f64::NEG_INFINITY,
+            clock: PlaybackClock::default(),
+            tx_capture: None,
             pending: VecDeque::new(),
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
@@ -674,6 +711,23 @@ impl<P: Ptt> Station<P> {
     #[must_use]
     pub fn transmitting(&self) -> bool {
         self.transmitting
+    }
+
+    /// The sound card's playback clock, as the run loop reads it before each top-up:
+    /// samples the card has consumed since it opened.
+    ///
+    /// A whole burst is handed to the card as soon as it is rendered, so the station's own
+    /// queue drains long before the audio has left; the key is released against this clock
+    /// instead, when the last sample has really played. A harness that never reports one
+    /// gets the old behaviour: release on drain.
+    pub fn device_played(&mut self, played: u64) {
+        self.clock.device_played = Some(played);
+    }
+
+    /// Whether the run loop should drop what the sound card still holds — set when a
+    /// transmission was cut short — and clear the request.
+    pub fn take_device_flush(&mut self) -> bool {
+        std::mem::take(&mut self.clock.flush_device)
     }
 
     /// Whether the channel is occupied.
@@ -1227,8 +1281,12 @@ impl<P: Ptt> Station<P> {
         let mut stopped = self.pending.len() != queued;
         if self.playing_test {
             // the keying tail goes with it; the transmitter unkeys as soon as the queue
-            // is empty, which is the point
+            // is empty, which is the point — and the sound card holds the rest of the
+            // burst, so the run loop is asked to drop that too, and the release does not
+            // wait for audio that will never play
             self.playback.clear();
+            self.clock.flush_device = true;
+            self.clock.cut_short = true;
             self.playing_test = false;
             stopped = true;
         }
@@ -1451,6 +1509,9 @@ impl<P: Ptt> Station<P> {
             self.stats.watchdog_trips += 1;
             self.playback.clear();
             self.pending.clear();
+            self.clock.flush_device = true;
+            self.clock.cut_short = false;
+            self.tx_capture = None;
             self.transmitting = false;
             self.ptt.unkey(now)?;
             self.engine.on_tx_done(now);
@@ -1475,12 +1536,30 @@ impl<P: Ptt> Station<P> {
         // queued burst here instead would run the two together with no gap and no release,
         // and the receiving station infers the end of a burst from the silence after it —
         // it would hear one endless burst and never answer.
+        //
+        // The whole burst is handed over as soon as it is rendered, so the queue here
+        // drains while the sound card still holds most of it; the key is released when
+        // the card's own clock has passed the last sample handed over. A harness that
+        // reports no clock releases on drain, as before.
         if self.playback.is_empty() && self.transmitting {
+            if !self.clock.cut_short
+                && let (Some(played), Some(played_at_key)) = (self.clock.device_played, self.clock.played_at_key)
+                && played.saturating_sub(played_at_key) < self.clock.handed - self.clock.handed_at_key
+            {
+                return Ok(0); // still leaving the sound card
+            }
+            self.clock.cut_short = false;
             self.transmitting = false;
             self.playing_test = false;
             self.tx_peak_last = Some(self.tx_peak_running);
             let peak = self.tx_peak_running;
             self.tx_peak_running = 0.0;
+            if let Some(capture) = self.tx_capture.take() {
+                match capture.finish(self.config.record_dir.as_deref()) {
+                    Ok(summary) => self.events.push(format!("tx:{summary}")),
+                    Err(error) => self.events.push(format!("error:tx capture: {error}")),
+                }
+            }
             if let Some(recording) = &mut self.recording {
                 let state = format!("{:?}", self.engine.state());
                 // `detail` on a ptt event is read back by the replay to find the intervals
@@ -1513,9 +1592,15 @@ impl<P: Ptt> Station<P> {
         if !self.transmitting {
             self.ptt.key(now)?;
             self.transmitting = true;
+            self.clock.handed_at_key = self.clock.handed;
+            self.clock.played_at_key = self.clock.device_played;
+            self.clock.cut_short = false;
             self.stats.transmissions += 1;
             if let Some(recording) = &mut self.recording {
                 recording.event(now, "ptt", "keyed", &format!("{:?}", self.engine.state()));
+            }
+            if let Some(capture) = &mut self.tx_capture {
+                capture.keyed(now);
             }
         }
         // the level is applied here, on the way out, so a change reaches a tone that is
@@ -1527,6 +1612,10 @@ impl<P: Ptt> Station<P> {
             // the ALC sees peaks, so this is the number that decides whether the rig is
             // being over-driven — measured after the level, which is where it is applied
             self.tx_peak_running = self.tx_peak_running.max(slot.abs());
+        }
+        self.clock.handed += count as u64;
+        if let Some(capture) = &mut self.tx_capture {
+            capture.push(&out[..count]);
         }
         Ok(count)
     }
@@ -1861,11 +1950,29 @@ impl<P: Ptt> Station<P> {
                 self.playback.extend(samples);
                 self.playback.extend(std::iter::repeat_n(0.0f32, tail));
                 self.playing_test = tone;
+                if self.config.record_tx_audio {
+                    self.tx_capture = Some(crate::record::TxCapture::begin(
+                        self.config.params.audio_rate as u32,
+                        self.config.tx_level,
+                        self.config.key_lead_s,
+                        self.config.key_tail_s,
+                        &[],
+                    ));
+                }
                 return;
             }
         };
 
         self.record_sent(&frames, now);
+        if self.config.record_tx_audio {
+            self.tx_capture = Some(crate::record::TxCapture::begin(
+                self.config.params.audio_rate as u32,
+                self.config.tx_level,
+                self.config.key_lead_s,
+                self.config.key_tail_s,
+                &frames,
+            ));
+        }
 
         let mut baseband: Vec<Complex> = Vec::new();
         for frame in &frames {
@@ -2415,6 +2522,9 @@ mod tests {
         gain: f32,
         noise_sigma: f32,
         state: u64,
+        /// The harness's playback clock: blocks taken from the stations so far, across
+        /// every `run` — a sound card's clock does not restart between calls either.
+        played: u64,
     }
 
     impl Air {
@@ -2444,6 +2554,7 @@ mod tests {
                 gain,
                 noise_sigma,
                 state: 0x1234_5678_9abc_def0,
+                played: 0,
             }
         }
 
@@ -2474,6 +2585,11 @@ mod tests {
             let mut from_a = vec![0.0f32; self.block];
             let mut from_b = vec![0.0f32; self.block];
             for _ in 0..blocks {
+                // the harness is the sound card: every block it takes has played by the
+                // time it takes the next, which is the clock the key is released against
+                self.a.device_played(self.played);
+                self.b.device_played(self.played);
+                self.played += self.block as u64;
                 self.a.playback(&mut from_a).expect("playback");
                 self.b.playback(&mut from_b).expect("playback");
 
@@ -2553,6 +2669,56 @@ mod tests {
         air.a.send(message);
         air.run(90.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received().as_slice(), message.as_slice());
+    }
+
+    #[test]
+    fn the_key_is_released_when_the_sound_card_has_played_the_burst_not_when_the_queue_drains() {
+        // The whole burst is handed over at once, so the station's queue drains long before
+        // the audio has left the card; the release waits for the card's own clock to pass
+        // the last sample handed over. ADR-0010.
+        let mut station = idle_station();
+        station.key_test(0.5).expect("idle");
+        let mut out = vec![0.0f32; 4800];
+        station.device_played(1_000_000); // the card has been running a while
+        let mut handed = 0usize;
+        loop {
+            let count = station.playback(&mut out).expect("playback");
+            if count == 0 {
+                break;
+            }
+            handed += count;
+        }
+        assert!(station.transmitting(), "the queue drained but nothing has played yet");
+        assert!(handed > 0);
+        // the card has played half of it: still keyed
+        station.device_played(1_000_000 + handed as u64 / 2);
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        assert!(station.transmitting(), "released with half the burst still in the card");
+        // the card has played all of it: released now
+        station.device_played(1_000_000 + handed as u64);
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        assert!(!station.transmitting(), "the burst has left the card");
+        assert!(!station.take_device_flush(), "nothing was cut short");
+    }
+
+    #[test]
+    fn a_cut_tone_flushes_the_card_and_releases_at_once() {
+        let mut station = idle_station();
+        station.tune(5.0).expect("idle");
+        let mut out = vec![0.0f32; 4800];
+        station.device_played(0);
+        // hand the card the whole tone, as the run loop does
+        while station.playback(&mut out).expect("playback") > 0 {}
+        assert!(station.transmitting());
+        assert!(station.tune_stop(), "there was a tone to stop");
+        assert!(
+            station.take_device_flush(),
+            "the card still held the tone: the loop must drop it"
+        );
+        // the card's clock has barely moved, and that no longer matters: the rest was dropped
+        station.device_played(4800);
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        assert!(!station.transmitting(), "a cut tone releases at once");
     }
 
     #[test]

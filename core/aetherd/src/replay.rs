@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::record::{FrameRecord, read_wav};
 
 /// The audio block a replay is fed in: twenty milliseconds, as the daemon's loop uses.
-const BLOCK_S: f64 = 0.02;
+pub const BLOCK_S: f64 = 0.02;
 
 /// An interval, in seconds of the recording, during which the receiver is muted.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,6 +105,19 @@ impl Expectation {
 /// If the file cannot be read, is not at the modem's sample rate, or names a bandwidth
 /// this version has no waveform for.
 pub fn replay(wav: &Path, muted: &[Muted], bandwidth_hz: u32) -> Result<Vec<FrameRecord>, String> {
+    replay_timed(wav, muted, bandwidth_hz, BLOCK_S).map(|(found, _)| found)
+}
+
+/// [`replay`] fed in blocks of `block_s` seconds, and how long the receiver took per block.
+///
+/// # Errors
+/// As [`replay`].
+pub fn replay_timed(
+    wav: &Path,
+    muted: &[Muted],
+    bandwidth_hz: u32,
+    block_s: f64,
+) -> Result<(Vec<FrameRecord>, BlockTiming), String> {
     let params: WaveformParams = match bandwidth_hz {
         2300 => WIDE_2300,
         500 => aether_phy::waveform::NARROW_500,
@@ -119,15 +132,55 @@ pub fn replay(wav: &Path, muted: &[Muted], bandwidth_hz: u32) -> Result<Vec<Fram
             audio.sample_rate
         ));
     }
-    Ok(run(&audio.samples, params, muted))
+    Ok(run_timed(&audio.samples, params, muted, block_s))
+}
+
+/// How long the receiver took per block, which is what the daemon's single loop spends on
+/// it between two top-ups of the sound card. The loop keeps a quarter second queued, so a
+/// block that costs more than that starves the card in the middle of a transmission — the
+/// number a replay can measure without a radio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlockTiming {
+    /// Blocks fed.
+    pub blocks: usize,
+    /// The slowest block, in milliseconds of wall clock.
+    pub max_ms: f64,
+    /// Where in the recording the slowest block was, in seconds.
+    pub max_at_s: f64,
+    /// Blocks that took over 100 ms.
+    pub over_100_ms: usize,
+    /// Blocks that took over 250 ms — the daemon's playback backlog.
+    pub over_250_ms: usize,
+    /// Wall clock over the whole run, in milliseconds.
+    pub total_ms: f64,
 }
 
 /// The receiver over samples already in memory.
 #[must_use]
 pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<FrameRecord> {
+    run_timed(samples, params, muted, BLOCK_S).0
+}
+
+/// [`run`] fed in blocks of `block_s` seconds, and how long each block took.
+#[must_use]
+pub fn run_timed(
+    samples: &[f32],
+    params: WaveformParams,
+    muted: &[Muted],
+    block_s: f64,
+) -> (Vec<FrameRecord>, BlockTiming) {
+    let mut timing = BlockTiming {
+        blocks: 0,
+        max_ms: 0.0,
+        max_at_s: 0.0,
+        over_100_ms: 0,
+        over_250_ms: 0,
+        total_ms: 0.0,
+    };
+    let started = std::time::Instant::now();
     let mut front = AudioToBaseband::new(params);
     let mut receiver = StreamingReceiver::new(params, 6.0, true);
-    let block = (BLOCK_S * params.audio_rate as f64) as usize;
+    let block = ((block_s * params.audio_rate as f64) as usize).max(1);
     let fs = params.fs_baseband;
     let rate = params.audio_rate as f64;
     let air = aether_phy::modes::air_interface(params);
@@ -168,6 +221,7 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
         receiver.take_preambles();
     };
     for chunk in samples.chunks(block) {
+        let began = std::time::Instant::now();
         let baseband = front.process(chunk);
         let t = seen as f64 / rate;
         seen += chunk.len();
@@ -180,12 +234,25 @@ pub fn run(samples: &[f32], params: WaveformParams, muted: &[Muted]) -> Vec<Fram
         } else {
             absorb(&baseband, &mut receiver);
         }
+        let ms = began.elapsed().as_secs_f64() * 1000.0;
+        timing.blocks += 1;
+        if ms > timing.max_ms {
+            timing.max_ms = ms;
+            timing.max_at_s = t;
+        }
+        if ms > 100.0 {
+            timing.over_100_ms += 1;
+        }
+        if ms > 250.0 {
+            timing.over_250_ms += 1;
+        }
     }
     // let the last frame out: the receiver holds samples back for its filters
     let tail = vec![0.0f32; block * 8];
     let baseband = front.process(&tail);
     absorb(&baseband, &mut receiver);
-    found
+    timing.total_ms = started.elapsed().as_secs_f64() * 1000.0;
+    (found, timing)
 }
 
 /// How a replay compares with what was recorded.

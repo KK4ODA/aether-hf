@@ -110,6 +110,17 @@ pub struct DaemonState {
     pub audio: String,
     /// Captured samples dropped because the modem fell behind, since the start.
     pub dropped_audio: u64,
+    /// Samples of silence the sound card played inside a transmission because the modem
+    /// had not handed it the next ones in time, since the start: holes on the air.
+    pub starved_audio: u64,
+    /// The slowest pass of the run loop so far, in milliseconds, and what it was doing.
+    pub loop_slowest_ms: f64,
+    /// Which phase the slowest pass spent its time in: `commands`, `capture`, `playback`.
+    pub loop_slowest_phase: String,
+    /// Passes of the run loop that took longer than the quarter second the sound card
+    /// used to be kept ahead by — the stalls that put holes in bursts before a whole
+    /// burst was queued at once.
+    pub loop_stalls: u64,
     /// Why the sound card could not be opened, when it could not. The station runs on
     /// silence until the devices are corrected, and the panel says so.
     pub audio_fault: Option<String>,
@@ -158,6 +169,10 @@ impl DaemonState {
             started: std::time::SystemTime::now(),
             audio: String::new(),
             dropped_audio: 0,
+            starved_audio: 0,
+            loop_slowest_ms: 0.0,
+            loop_slowest_phase: String::new(),
+            loop_stalls: 0,
             audio_fault: None,
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
@@ -379,6 +394,15 @@ fn diagnostics<P: Ptt>(
             json!({
                 "description": daemon.audio,
                 "dropped_samples": daemon.dropped_audio,
+                "starved_samples": daemon.starved_audio,
+            }),
+        );
+        object.insert(
+            "loop".into(),
+            json!({
+                "slowest_ms": (daemon.loop_slowest_ms * 10.0).round() / 10.0,
+                "slowest_phase": daemon.loop_slowest_phase,
+                "stalls": daemon.loop_stalls,
             }),
         );
         object.insert("log".into(), json!(daemon.log.recent()));

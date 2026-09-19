@@ -269,18 +269,40 @@ impl AudioIo for SimLink {
     }
 
     fn queued(&self) -> usize {
-        // the clock consumes what was played at the sample rate, and no faster than it
-        // was played: an idle stretch does not build up a debt
+        (self.played - self.consumed_now()) as usize
+    }
+
+    fn dropped(&self) -> usize {
+        0
+    }
+
+    fn played(&self) -> u64 {
+        self.consumed_now()
+    }
+
+    fn set_playing(&mut self, _playing: bool) {}
+
+    fn starved(&self) -> usize {
+        0
+    }
+
+    fn clear(&mut self) {
+        // what was handed to the peer has gone; the clock has nothing left to consume
+        let consumed = self.consumed_now();
+        self.played = consumed;
+    }
+}
+
+impl SimLink {
+    /// The playback clock: what has been consumed of what was played, at the sample rate
+    /// and no faster than it was played — an idle stretch does not build up a debt.
+    fn consumed_now(&self) -> u64 {
         let (since, consumed) = self.consumed.get();
         let now = Instant::now();
         let due = (now.duration_since(since).as_secs_f64() * f64::from(self.sample_rate)) as u64;
         let consumed = (consumed + due).min(self.played);
         self.consumed.set((now, consumed));
-        (self.played - consumed) as usize
-    }
-
-    fn dropped(&self) -> usize {
-        0
+        consumed
     }
 }
 

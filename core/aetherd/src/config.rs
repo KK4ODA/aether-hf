@@ -488,6 +488,12 @@ pub struct RecordSection {
     /// operator would have written down had they been at the radio when the call came.
     #[serde(default)]
     pub notes: String,
+    /// Keep the exact audio of every transmission, as handed to the sound card, under
+    /// `tx/` in the recordings directory, each with a sidecar describing its envelope. A
+    /// developer's option: it is what the modem *sent*, for holding a receiver's recording
+    /// or the rig's scope against, and it writes a file per burst.
+    #[serde(default)]
+    pub tx_audio: bool,
 }
 
 /// Panel preferences: choices the desktop panel makes that are not the modem's to keep,
@@ -829,6 +835,9 @@ impl Config {
             input: self.audio.input.clone(),
             output: self.audio.output.clone(),
             sample_rate: self.audio.sample_rate,
+            // a whole transmission is queued at once, so the queue must hold the longest
+            // one the station may make — and the tail after it — or its start is dropped
+            max_playback_s: self.radio.max_key_s + 2.0,
             ..AudioConfig::default()
         }
     }

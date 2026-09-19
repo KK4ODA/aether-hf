@@ -14,3 +14,4 @@ context → decision → alternatives considered → consequences.
 | [0007](0007-faster-climb.md) | The faster climb — a learned margin is given back at an accelerating rate | accepted |
 | [0008](0008-faster-start.md) | The faster start — a session begins where the connect frames measured it | accepted |
 | [0009](0009-the-floor.md) | The floor — a frame family for the SNR region below the mode table | accepted |
+| [0010](0010-whole-burst-to-the-card.md) | A whole burst goes to the sound card at once, and the key follows the card's clock | accepted |
