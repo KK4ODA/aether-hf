@@ -1703,9 +1703,16 @@ impl<P: Ptt> Station<P> {
         if self.reports.len() >= MAX_UNTAKEN_REPORTS {
             self.reports.remove(0);
         }
+        // the burst may go on: the next frame's preamble is a symbol or two away. But only
+        // a frame that decoded, or acquired past the gate the preamble path takes, says a
+        // burst is there at all — on a quiet band the detector tries a noise candidate
+        // every few seconds and every one of them ends here undecoded, and this half
+        // second lit the receive lamp for each of them (26 blinks in a 71 s recording of
+        // an empty frequency, none acquired above 1.16)
+        if report.decoded || report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED {
+            self.rx_until = self.rx_until.max(now + 0.5);
+        }
         self.reports.push(report);
-        // the burst may go on: the next frame's preamble is a symbol or two away
-        self.rx_until = self.rx_until.max(now + 0.5);
     }
 
     /// Note what crossed the air since last time, for the throughput reading: payload
@@ -3632,6 +3639,72 @@ mod tests {
             station.busy.reason(),
             Some(crate::busy::BusyReason::Frame { .. })
         ));
+    }
+
+    #[test]
+    fn a_noise_candidate_that_fails_to_decode_does_not_light_the_receive_lamp() {
+        // On an empty frequency the detector tries a candidate every few seconds and every
+        // one of them ends undecoded; the half second the lamp is kept lit after a frame,
+        // so a burst's next frame keeps it on, lit it for each of them — 26 blinks in a
+        // 71 s recording of a quiet band, none acquired above 1.16. The lamp takes the
+        // preamble path's gate: a decode, or a confident acquisition.
+        use aether_phy::preamble::FrameType;
+        use aether_phy::rx::FrameSync;
+
+        let mut station = idle_station();
+        let quiet = vec![0.0001f32; 4096];
+        for _ in 0..80 {
+            station.capture(&quiet).expect("capture");
+        }
+        let now = station.now();
+        let air = station.air();
+        let frame = |peak: f64, payload: Option<Vec<u8>>| aether_phy::DecodedFrame {
+            payload,
+            frame: ReceivedFrame {
+                sync: FrameSync {
+                    start: 0,
+                    cfo_hz: 0.0,
+                    frame_type: FrameType::Control,
+                    floor: false,
+                    timing_peak: peak,
+                    type_confidence: 1.0,
+                },
+                symbols: Vec::new(),
+                noise_var: Vec::new(),
+                snr_carrier_db: -5.0,
+                snr_3k_db: -12.0,
+                cfo_hz: 0.0,
+                mode: 0,
+                rv: 0,
+                chip_runner_up: 1,
+                mode_confidence: 1.0,
+            },
+            mode: aether_phy::CONTROL_MODE,
+        };
+        assert!(!station.receiving(), "dark to begin with");
+
+        // what noise produces: just over the threshold, and no payload
+        station.report(&frame(air.acceptance_threshold(false) * 1.05, None), now);
+        assert!(
+            !station.receiving(),
+            "a candidate that neither decoded nor acquired confidently lit the lamp"
+        );
+
+        // a frame that acquired well clear of the threshold is a burst even undecoded
+        station.report(&frame(air.acceptance_threshold(false) * 1.5, None), now);
+        assert!(station.receiving(), "a confident acquisition keeps the lamp lit");
+
+        // and a decode is a burst whatever its acquisition looked like
+        for _ in 0..12 {
+            station.capture(&quiet).expect("capture");
+        }
+        assert!(!station.receiving(), "the half second has run out a second later");
+        let later = station.now();
+        station.report(
+            &frame(air.acceptance_threshold(false) * 1.05, Some(vec![0u8; 7])),
+            later,
+        );
+        assert!(station.receiving(), "a decoded frame lights the lamp");
     }
 
     #[test]
