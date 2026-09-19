@@ -402,8 +402,16 @@ impl TxCapture {
         let rate = f64::from(self.sample_rate);
         let n = self.samples.len();
         let peak = self.samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-        let power: f64 = self.samples.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
-        let rms = if n == 0 { 0.0 } else { (power / n as f64).sqrt() };
+        let power: f64 = self
+            .samples
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum();
+        let rms = if n == 0 {
+            0.0
+        } else {
+            (power / n as f64).sqrt()
+        };
         let dbfs = |x: f64| {
             if x > 0.0 {
                 20.0 * x.log10()
@@ -687,7 +695,10 @@ mod tests {
         capture.push(&vec![0.0; 2400]);
         let analysis = capture.analyse();
         assert_eq!(analysis["keyed_at_s"], 12.5);
-        assert_eq!(analysis["onset_s"], 0.1, "the first audible sample follows the lead");
+        assert_eq!(
+            analysis["onset_s"], 0.1,
+            "the first audible sample follows the lead"
+        );
         assert!((analysis["peak_dbfs"].as_f64().unwrap() - (-6.0)).abs() < 0.2);
         // a sine's crest factor is 3 dB, spread over the silence in the rms: more than 3
         assert!(analysis["crest_db"].as_f64().unwrap() > 3.0);

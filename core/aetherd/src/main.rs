@@ -175,7 +175,9 @@ fn parse_args() -> Result<Option<Args>, String> {
                 ));
             }
             "--block-ms" => {
-                let value = argv.next().ok_or("--block-ms needs a number of milliseconds")?;
+                let value = argv
+                    .next()
+                    .ok_or("--block-ms needs a number of milliseconds")?;
                 let ms: f64 = value
                     .parse()
                     .map_err(|_| format!("--block-ms: {value:?} is not a number"))?;
@@ -216,7 +218,9 @@ fn run() -> Result<Exit, String> {
         return Ok(Exit::Done);
     };
     if let Some(wav) = &args.replay {
-        let block_s = args.block_ms.map_or(aetherd::replay::BLOCK_S, |ms| ms / 1000.0);
+        let block_s = args
+            .block_ms
+            .map_or(aetherd::replay::BLOCK_S, |ms| ms / 1000.0);
         return replay(wav, args.expect.as_deref(), block_s).map(|()| Exit::Done);
     }
     let path = args
@@ -844,7 +848,13 @@ fn serve(
             control.publish(&Event::new("ptt", json!({ "on": keyed })));
         }
 
-        note_audio_losses(daemon, audio, config.audio.sample_rate, station, &mut reported);
+        note_audio_losses(
+            daemon,
+            audio,
+            config.audio.sample_rate,
+            station,
+            &mut reported,
+        );
 
         if idle {
             std::thread::sleep(IDLE_SLEEP);

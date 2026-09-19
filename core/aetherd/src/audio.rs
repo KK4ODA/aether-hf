@@ -606,9 +606,20 @@ mod tests {
         shared.samples.extend([0.1, 0.2, 0.3, 0.4]);
         let mut data = [9.0f32; 12];
         fill_playback(&mut shared, &mut data, 2);
-        assert_eq!(&data[..4], &[0.1, 0.1, 0.2, 0.2], "the same sample on both channels");
-        assert_eq!(&data[8..], &[0.0; 4], "silence for want of anything to play");
-        assert_eq!(shared.played, 6, "the clock counts frames, played or silent");
+        assert_eq!(
+            &data[..4],
+            &[0.1, 0.1, 0.2, 0.2],
+            "the same sample on both channels"
+        );
+        assert_eq!(
+            &data[8..],
+            &[0.0; 4],
+            "silence for want of anything to play"
+        );
+        assert_eq!(
+            shared.played, 6,
+            "the clock counts frames, played or silent"
+        );
         assert_eq!(shared.starved, 0, "an idle station is not starving");
 
         shared.playing = true;
