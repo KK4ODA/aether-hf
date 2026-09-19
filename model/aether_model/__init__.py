@@ -5,4 +5,4 @@ Open-source HF modem protocol for amateur radio digital communications.
 Python prototype implementation.
 """
 
-__version__ = "0.2.0-beta.39"
+__version__ = "0.2.0-beta.40"
