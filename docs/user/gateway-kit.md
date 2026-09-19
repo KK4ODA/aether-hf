@@ -103,6 +103,14 @@ enabled = true            # so Winlink software can use it
 bind = "127.0.0.1:8300"
 ```
 
+The daemon keeps the station's settings as a **profile** too: on its first start it writes
+`profiles/Default.aetherprofile` beside the configuration (the portable settings as JSON —
+no paths, no token, no sockets) and `profiles.json` naming it. A profile exported from a
+desktop station can be copied into `profiles/` and loaded over the control API
+(`profile.list`, `profile.load`; `docs/spec/control-api.md` §4.9) or through the panel over
+an SSH tunnel; the gateway's own `[control]`, `[log] file` and `[record] dir` are kept
+whatever the file says.
+
 ---
 
 ## 4. Install as a service

@@ -82,6 +82,27 @@ for you, *Help > Restore the previous version…* goes back without a network. Y
 are never touched by an update or a restore; if a version changes the shape of the
 configuration file, the old file is backed up beside itself first (`station.toml.bak-v1`).
 
+### Profiles
+
+Everything on the Setup tab, the transmit level and the waterfall's controls are saved
+under a **profile**, chosen at the top of Setup. Your settings became the profile
+*Default* the first time this version started; **Save as…** keeps the current settings
+under another name (a second radio, the truck, a portable setup) and switching profiles
+changes the station to it — a sound card, port or callsign change restarts the modem, as
+a save does. A `*` after the name means the running settings have changed since the
+profile was last saved; **Save** writes them to it, and switching with unsaved changes
+asks first.
+
+A profile is a file — `profiles\<name>.aetherprofile` beside the configuration, JSON —
+so **Export…** saves a copy to keep or carry, and **Import…** on another computer brings
+it in. What is this computer's own (the panel's port, the log file, the recordings
+folder) is never in the file; a device the other computer does not have is shown as
+*not on this computer* in the device lists, with the port that has the same interface
+behind it named when there is one, and the modem stays receive-only until you choose.
+A profile written by an older version loads with defaults for what it does not have; one
+written by a newer version says so rather than loading half of itself. **More** holds the
+rest: a new profile from the defaults, rename, duplicate, delete.
+
 ---
 
 ## 2. The daemon on its own

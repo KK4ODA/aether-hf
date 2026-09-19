@@ -89,7 +89,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "counters.reset"
             | "frequencies.set"
             | "frequency.set"
-    )
+    ) || crate::control::profiles::is_mutating(method)
 }
 
 /// What the daemon knows that the modem does not: its configuration and where it came
@@ -142,6 +142,11 @@ pub struct DaemonState {
     pub memories: crate::memories::Memories,
     /// The host interface, when one is listening.
     pub host: Option<HostStatus>,
+    /// The profiles beside the configuration, and which one is active.
+    pub profiles: crate::profile::Store,
+    /// Whether the settings or the profiles changed since the run loop last told the
+    /// clients: set by the methods, taken by the loop, which publishes a `profile` event.
+    profiles_changed: bool,
 }
 
 /// The host (VARA-compatible) interface, as `status` reports it.
@@ -181,8 +186,20 @@ impl DaemonState {
                 path.with_file_name("frequencies.json"),
             )),
             host: None,
+            profiles: crate::profile::Store::open(Some(&path)),
+            profiles_changed: false,
             path,
         }
+    }
+
+    /// The settings or the profiles changed: the clients are told on the loop's next pass.
+    pub fn note_profiles_changed(&mut self) {
+        self.profiles_changed = true;
+    }
+
+    /// Whether the clients are owed a `profile` event, and forget that they were.
+    pub fn take_profiles_changed(&mut self) -> bool {
+        std::mem::take(&mut self.profiles_changed)
     }
 
     /// The host interface, as `status` reports it.
@@ -234,6 +251,15 @@ pub fn dispatch_with<P: Ptt>(
     daemon: Option<&mut DaemonState>,
     request: &Request,
 ) -> Response {
+    if crate::control::profiles::handles(&request.method) {
+        return crate::control::profiles::dispatch(
+            station,
+            daemon,
+            &request.method,
+            &request.params,
+            request.id.clone(),
+        );
+    }
     match request.method.as_str() {
         "config.get" => return config_get(daemon, request.id.clone()),
         "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
@@ -447,6 +473,7 @@ fn config_set<P: Ptt>(
         .collect();
     station.apply_live(&candidate);
     settings.config = candidate;
+    settings.note_profiles_changed();
 
     Response::ok(
         id,
@@ -636,6 +663,7 @@ fn frequencies_set(
             ),
         );
     }
+    daemon.note_profiles_changed();
     Response::ok(
         id,
         json!({ "memories": daemon.memories.entries(), "path": daemon.memories.path().map(|p| p.display().to_string()) }),
@@ -1449,8 +1477,11 @@ mod tests {
             std::path::PathBuf::from("station.toml"),
             crate::log::Log::memory(50),
         );
-        // and no file under the working directory for the stations heard
+        // and no file under the working directory for the stations heard, the dials or
+        // the profiles
         daemon.heard = crate::heard::HeardList::open(None);
+        daemon.memories = crate::memories::Memories::open(None);
+        daemon.profiles = crate::profile::Store::open(None);
         // not the machine's own: enumerating audio devices on a machine with no audio
         // service crashes inside the platform API, and a test must not depend on a sound card
         daemon.devices = || {

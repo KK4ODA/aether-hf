@@ -91,6 +91,7 @@ human-facing and may be localised.
 | `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
+| `config.schema` | — | the settings registry (§4.9): every setting with its `key`, `type`, `default`, `nullable`, `scope`, `live`, and its `min`/`max`/`options` and `why` where it has a bound; `live_keys`; the profile format's name and both schema numbers |
 | `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the mode table of the running waveform (`modes`: index, name, payload bytes and net bit rate *on the layout the mode goes out on*, AWGN threshold, `floor` — whether the mode rides the floor frame family of ADR-0009, four times as long as an ordinary frame; `usable_modes`), whether the PHY reports preambles, the SNR reference |
 | `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
 | `shutdown` | `restart?` | `stopping`; the transmitter is released on the way out. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know |
@@ -201,6 +202,7 @@ was on. Each change goes out as a `heard` event.
 | `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `excess_peak_db` (the largest level-over-floor the detector tested since the last reading — the decision is made forty times a second on a 50 ms quantity, so the excursions that cross the threshold are the ones a sampled reading almost never lands on), `shape_db` (the passband's highest spectral bin over its median bin, per 200 ms: flat noise reads about 6 dB, a narrowband signal — FT8, CW, PSK — 15 and up, and a receiver's AGC cannot compress it), `channel_busy`, `busy_reason` (`level` when the threshold last marked it, `shape` when the passband's spectrum did, `frame` when a decoded frame did, null if never — an acquired preamble alone never marks the channel busy: on a real band acquisition confidence overlaps between a phantom and a weak real frame, and only a decode is evidence), `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
 | `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only a DATA frame carries — a CONTROL frame always reports 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
+| `profile` | the settings, the dials or the profiles changed | what `profile.list` answers: `active`, `name`, `dirty`, `profiles` — so a panel's mark by the profile's name is never stale, whichever client made the change |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |
 | `busy` | channel busy detector changes | busy |
@@ -265,6 +267,55 @@ Three rules, because a settings interface that gets any of them wrong is worse t
   true a client may then ask `shutdown {"restart": true}` and the daemon is back on the new
   file in a few seconds; the panel does exactly that, and from a terminal, where nobody would
   start it again, it says what to restart instead.
+
+### 4.9 Profiles
+
+A profile is the station's settings as one portable file: everything the settings registry
+does not mark as this computer's, under a name, with the dial memories beside it. The
+daemon keeps them in `profiles/` beside the configuration, one `<name>.aetherprofile`
+each (JSON), and `profiles.json` says which is active. The configuration file stays what
+the daemon runs from; a profile is applied *to* it. `docs/adr/0011-profiles.md` is the
+design.
+
+| Method | Params | Result |
+|---|---|---|
+| `profile.list` | — | `active` (the id, or null), `name`, `dirty` (whether the running settings have moved from what the active profile says — null with no active profile), `profiles` (`id`, `name`, `created`, `modified`, `aether_version`, `path`, and `error` for a file that cannot be read), `dir`, `extension` |
+| `profile.save` | `name?` | the running settings written to the active profile; with `name`, to a new profile that becomes active (`conflict` if the name is taken, compared without regard to case). Answers as `profile.list`, plus `saved` |
+| `profile.load` | `id` | the profile applied: the file written, live keys taken on at once, the profile made active. Answers as `profile.list`, plus `loaded` and a `report`: `changed`, `restart_required`, `unknown` (settings this version does not have — a newer version's, or a typo — left out), `ignored` (this computer's own settings the file carried, kept as they were), `invalid` (values that failed their rule, each with `key`, `value`, `reason`; the default was kept), `missing_hardware` (devices this computer does not report: `key`, `name`, and `suggestion` — the one device with the same description behind it, when there is exactly one; offered, never chosen). `refused` when the settings will not work *together* — nothing is changed then |
+| `profile.create` | `name` | a new profile of the defaults, keeping the callsign and the operator's details, written and loaded; answers as `profile.load` |
+| `profile.rename` | `id`, `name` | the file moves with the name, and so does the active mark |
+| `profile.duplicate` | `id`, `name` | a copy under the new name, not made active |
+| `profile.delete` | `id` | `refused` for the active profile: switch first |
+| `profile.export` | `id?`, `name?` | `text` (the file's contents), `filename`, `path`; without an id, the running settings as a profile would hold them, under `name` or the callsign |
+| `profile.import` | `text`, `name?`, `replace?` | the file parsed, brought forward, checked against the running settings and this computer's devices, and written to the store — **not loaded**: the answer carries `imported` and the same `report` a load would give, so a client can say what it found before switching. `bad_params` for a file that is not a profile or was written by a newer version; `conflict` for a name in use unless `replace` is true |
+
+Four rules, the ones `config.set` keeps and one more:
+
+* **What a profile holds is decided in one place.** The settings registry
+  (`core/aetherd/src/settings.rs`) is derived from the configuration's own structure —
+  every leaf of it — and a short table of rules says which are *portable*, which name
+  *hardware* (portable, but checked against the machine on load), which are this
+  *machine*'s (`control.*`, `log.file`, `record.dir`, `sim.*`) and which are *secret*
+  (`control.token`). A setting added to the daemon is in the next profile saved without
+  anyone listing it; only a setting that must *not* travel needs a rule.
+* **A load is transactional.** The profile is applied to a copy of the running
+  configuration, one setting at a time, and the whole is validated as the file would be;
+  only then is anything written or taken on. A single bad value is reported and its
+  default kept, so the rest of the profile still loads; a rule between two settings that
+  fails refuses the whole load, and the station runs on as it was.
+* **A profile means the same station wherever it is loaded.** A portable setting the
+  profile does not name gets its default, not the running value — otherwise switching
+  profiles would carry settings from one to the next. This computer's own settings are
+  kept from the running configuration, whatever the file says.
+* **A device the computer does not have is named, not replaced.** The profile's device
+  names are applied as they are and reported; the daemon runs receive-only or silent on a
+  device it cannot open, as it always has, and says so. A serial port with the same
+  description behind it is *suggested* when there is exactly one.
+
+The first start after the upgrade that brought profiles adopts the running configuration
+as the profile *Default* — nothing in the file changes — so every existing station has a
+profile from the first day. `dirty` is computed, not tracked: it is whether loading the
+active profile again would change anything, so it is right after any client's change.
 
 ### 4.6 The diagnostic bundle
 
