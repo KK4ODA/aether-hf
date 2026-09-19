@@ -195,6 +195,40 @@ and nothing that is occupancy is that short. On this recording: 0.8 false trips 
 at 6 dB, none at 7, none on the quiet evening's audio, FT8 busy end to end, CW at 25 wpm
 busy for 98 % of its sending.
 
+### And what a receiver's AGC does to a level detector
+
+Parked on a strong FT8 signal with the median floor in place (beta.38), the floor rose into
+the signal again. Seventy seconds of the audio: two stations on alternate periods, one at
+−16.5 dBFS and one at −19.5, two seconds of real noise at −23 between them — the channel
+occupied nine seconds in ten. The strong station stood **6.0 dB** over the noise. Not
+because it was weak: because the receiver turns its gain down while it is there. Behind an
+AGC every strong signal comes out a few decibels over the noise, and no margin that rejects
+storm noise can catch that. No floor statistic can either — minimum, median, tenth
+percentile, minimum of short medians were all tried on that recording, and none made the
+strong station busy.
+
+What the AGC cannot hide is the passband's **shape**: it scales every frequency together, so
+a narrowband signal's peak stays the same distance above the bins beside it. Per 200 ms,
+highest spectral bin over median bin:
+
+| | p50 | never above |
+|---|---|---|
+| quiet noise | 6.0 dB | 9.3 |
+| storm noise | 6.2 dB | 10.8 |
+| FT8, weak station (+4.5 dB by level) | 18.4 dB | p10 15.0 |
+| FT8, strong station | 24.9 dB | p10 19.3 |
+
+So (beta.39) a second path into busy: two consecutive windows over 12 dB, one keeps it, and
+a peaked window's blocks are not floor evidence. On that recording the strong station reads
+busy 100 %, the weak one 99 %, the floor holds at −24.6. On a second recording (122 s, on
+the same signal, beta.39 live): busy 95 % of the peaked windows before the one-window hold
+and 98 % after, off in every gap, and the level path never moved — level within 2 dB of the
+floor throughout, which is the AGC. The floor on that channel could not be learned at all:
+occupied 85 % of the time, the rest a gain-recovery ramp the steady gate rightly rejects.
+On an FT8 frequency behind an AGC the shape path is the detector; the floor reading there
+is not to be trusted, and a signal as flat as noise — another OFDM modem — still needs the
+level path or a decode.
+
 ## Finding 3 — a control frame never gets a real confidence
 
 `rx.rs:307`:

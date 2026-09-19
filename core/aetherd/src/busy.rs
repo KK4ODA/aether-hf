@@ -72,10 +72,17 @@
 //! passband and compares its highest bin to its median bin. Measured: quiet noise sits at
 //! 6 dB and never passes 10; storm noise the same; the weakest FT8 station recorded —
 //! invisible to the level, 4.5 dB over the floor — sits at 15 dB and above, and a strong one
-//! at 19–25. Two consecutive windows over 12 dB is busy, and a block in such a window is
-//! not noise evidence, which is what keeps a floor from learning a channel that two FT8
-//! stations occupy nine seconds in ten. An OFDM signal like Aether's own is as flat as
-//! noise and is caught by the level path, or by decoding it.
+//! at 19–25. Two consecutive windows over 12 dB is busy, one window keeps it busy once it
+//! is, and a block in a peaked window is not noise evidence, which is what keeps a floor
+//! from learning a channel that two FT8 stations occupy nine seconds in ten. An OFDM
+//! signal like Aether's own is as flat as noise and is caught by the level path, or by
+//! decoding it.
+//!
+//! One limit, measured on a busy FT8 frequency behind an AGC: the passband was occupied
+//! 85 % of the time and the rest was the receiver's gain recovering — a ramp, never steady
+//! — so the true noise floor was never observable and the level path's floor stayed where
+//! it was first learned. That is the level path being blind, not the shape path, which
+//! carried the whole channel; the floor reading on such a channel is not to be trusted.
 //!
 //! On top of that:
 //!
@@ -416,9 +423,19 @@ impl BusyDetector {
                 self.shape_db = peak_db;
                 let peaked = peak_db >= self.config.shape_db;
                 self.peaked = [self.peaked[1], peaked];
-                if self.peaked.iter().all(|&p| p) {
+                // attack on two peaked windows in a row; once busy, one is enough to hold
+                // it. An FT8 tone hop that straddles a window boundary splits the energy
+                // between two bins and that window reads flat for 200 ms — measured, it
+                // dropped the channel for a second in the middle of a period, three times
+                // a minute. A signal that was there a moment ago and is still peaked in
+                // one window of two has not gone anywhere.
+                let attack = self.peaked.iter().all(|&p| p);
+                let hold = self.busy(now) && self.peaked.iter().any(|&p| p);
+                if attack || hold {
                     self.busy_until = self.busy_until.max(now + self.config.hang_s);
-                    self.reason = Some(BusyReason::Shape { peak_db });
+                    if attack {
+                        self.reason = Some(BusyReason::Shape { peak_db });
+                    }
                 }
                 peaked
             } else {
@@ -968,6 +985,34 @@ mod tests {
             "and the floor did not learn it: {floor_before:.1} -> {:.1}",
             detector.floor_db
         );
+    }
+
+    #[test]
+    fn one_flat_window_inside_a_narrowband_signal_does_not_drop_busy() {
+        // an FT8 tone hop straddling a window boundary reads flat for one window; the
+        // signal is still there and busy must not blink
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let fs = detector.config().fs;
+        let block = (detector.config().block_s * fs) as usize;
+        let mut now = 0.0;
+        for i in 0..secs(10.0) {
+            now += 0.025;
+            detector.push(&noise(block, 0.01, 300 + i as u64), now);
+        }
+        let mut phase = 0.0;
+        let mut feed = |d: &mut BusyDetector, now: &mut f64, blocks: usize, db: f64, seed: u64| {
+            for i in 0..blocks {
+                *now += 0.025;
+                d.push(&tone_over_noise(block, 0.01, db, 60.0, seed + i as u64, phase), *now);
+                phase += 2.0 * std::f64::consts::PI * 60.0 * block as f64 / fs;
+            }
+        };
+        feed(&mut detector, &mut now, SHAPE_BLOCKS * 4, 8.0, 2000); // four peaked windows
+        assert!(detector.busy(now), "busy on the signal");
+        feed(&mut detector, &mut now, SHAPE_BLOCKS, -30.0, 3000); // one window of noise alone
+        assert!(detector.busy(now), "one flat window must not drop it");
+        feed(&mut detector, &mut now, SHAPE_BLOCKS * 2, 8.0, 4000);
+        assert!(detector.busy(now), "and the signal carries on");
     }
 
     #[test]
