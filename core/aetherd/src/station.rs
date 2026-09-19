@@ -1549,8 +1549,10 @@ impl<P: Ptt> Station<P> {
         // reports no clock releases on drain, as before.
         if self.playback.is_empty() && self.transmitting {
             if !self.clock.cut_short
-                && let (Some(played), Some(played_at_key)) = (self.clock.device_played, self.clock.played_at_key)
-                && played.saturating_sub(played_at_key) < self.clock.handed - self.clock.handed_at_key
+                && let (Some(played), Some(played_at_key)) =
+                    (self.clock.device_played, self.clock.played_at_key)
+                && played.saturating_sub(played_at_key)
+                    < self.clock.handed - self.clock.handed_at_key
             {
                 return Ok(0); // still leaving the sound card
             }
@@ -2341,7 +2343,10 @@ mod tests {
         station.set_drive(1).expect("set drive");
         let burst_peak = drain_peak(&mut station, rate * 20);
 
-        assert!(tone_peak > 0.0 && burst_peak > 0.0, "both radiated something");
+        assert!(
+            tone_peak > 0.0 && burst_peak > 0.0,
+            "both radiated something"
+        );
         let gap_db = 20.0 * (burst_peak / tone_peak).log10();
         assert!(
             gap_db > 2.0,
@@ -2395,7 +2400,11 @@ mod tests {
             was = now;
             at += out.len();
         }
-        assert_eq!(keyed_runs.len(), 2, "two bursts, two keyings: {keyed_runs:?}");
+        assert_eq!(
+            keyed_runs.len(),
+            2,
+            "two bursts, two keyings: {keyed_runs:?}"
+        );
         let secs = |(a, b): (usize, usize)| (b - a) as f64 / rate as f64;
         assert!(
             secs(keyed_runs[0]) >= DRIVE_BURST_S - 0.5,
@@ -2488,7 +2497,10 @@ mod tests {
             Some(-1.8)
         );
         // and this one barely at the threshold, which is what noise does
-        assert_eq!(reported_cfo(false, control_mode_confidence, 1.02, 30.5), None);
+        assert_eq!(
+            reported_cfo(false, control_mode_confidence, 1.02, 30.5),
+            None
+        );
     }
 
     #[test]
@@ -2694,12 +2706,18 @@ mod tests {
             }
             handed += count;
         }
-        assert!(station.transmitting(), "the queue drained but nothing has played yet");
+        assert!(
+            station.transmitting(),
+            "the queue drained but nothing has played yet"
+        );
         assert!(handed > 0);
         // the card has played half of it: still keyed
         station.device_played(1_000_000 + handed as u64 / 2);
         assert_eq!(station.playback(&mut out).expect("playback"), 0);
-        assert!(station.transmitting(), "released with half the burst still in the card");
+        assert!(
+            station.transmitting(),
+            "released with half the burst still in the card"
+        );
         // the card has played all of it: released now
         station.device_played(1_000_000 + handed as u64);
         assert_eq!(station.playback(&mut out).expect("playback"), 0);
@@ -3727,7 +3745,10 @@ mod tests {
             let loud: Vec<f32> = quiet_block(500 + i).iter().map(|x| x * 40.0).collect();
             station.capture(&loud).expect("capture");
         }
-        assert!(station.channel_busy(), "a level far over the floor lights it");
+        assert!(
+            station.channel_busy(),
+            "a level far over the floor lights it"
+        );
         let events = station.take_events();
         let on = events
             .iter()
@@ -3738,7 +3759,10 @@ mod tests {
             "the log carries the level, floor, delta, margin and direction: {on}"
         );
         assert!(
-            matches!(station.busy_detector().reason(), Some(crate::busy::BusyReason::Level { .. })),
+            matches!(
+                station.busy_detector().reason(),
+                Some(crate::busy::BusyReason::Level { .. })
+            ),
             "and the reason is the level"
         );
 
@@ -3802,11 +3826,17 @@ mod tests {
             !station.channel_busy(),
             "an acquisition alone must not mark the channel, however confident"
         );
-        assert!(station.receiving(), "but the receive indicator does follow a confident one");
+        assert!(
+            station.receiving(),
+            "but the receive indicator does follow a confident one"
+        );
 
         // a decoded frame is the evidence, and it does
         station.busy.mark_frame(now, 1.38);
-        assert!(station.channel_busy(), "a decoded frame marks the channel busy");
+        assert!(
+            station.channel_busy(),
+            "a decoded frame marks the channel busy"
+        );
         assert!(matches!(
             station.busy.reason(),
             Some(crate::busy::BusyReason::Frame { .. })
@@ -3864,13 +3894,19 @@ mod tests {
 
         // a frame that acquired well clear of the threshold is a burst even undecoded
         station.report(&frame(air.acceptance_threshold(false) * 1.5, None), now);
-        assert!(station.receiving(), "a confident acquisition keeps the lamp lit");
+        assert!(
+            station.receiving(),
+            "a confident acquisition keeps the lamp lit"
+        );
 
         // and a decode is a burst whatever its acquisition looked like
         for _ in 0..12 {
             station.capture(&quiet).expect("capture");
         }
-        assert!(!station.receiving(), "the half second has run out a second later");
+        assert!(
+            !station.receiving(),
+            "the half second has run out a second later"
+        );
         let later = station.now();
         station.report(
             &frame(air.acceptance_threshold(false) * 1.05, Some(vec![0u8; 7])),

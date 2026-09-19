@@ -330,7 +330,6 @@ pub struct AirInterface {
 }
 
 impl AirInterface {
-
     /// The threshold a candidate of this family had to clear to be declared a preamble.
     ///
     /// The two families are detected by different statistics against different thresholds,

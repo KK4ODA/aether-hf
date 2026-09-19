@@ -487,7 +487,11 @@ mod tests {
         let yaesu = CatProtocol::Yaesu;
         assert_eq!(yaesu.keying(true), b"TX1;");
         assert_eq!(yaesu.keying(false), b"TX0;");
-        assert_ne!(yaesu.keying(true), b"TX2;", "a status code is not a command");
+        assert_ne!(
+            yaesu.keying(true),
+            b"TX2;",
+            "a status code is not a command"
+        );
         assert_eq!(CatProtocol::Kenwood.keying(true), b"TX;");
         assert_eq!(CatProtocol::Kenwood.keying(false), b"RX;");
         let icom = CatProtocol::Icom { address: 0x94 };

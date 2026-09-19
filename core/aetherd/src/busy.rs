@@ -521,7 +521,8 @@ impl BusyDetector {
             }
             for (slot, (i, &(re, im))) in scratch.iter_mut().zip(chunk.iter().enumerate()) {
                 // a Hann window, so a strong bin does not leak into its neighbours' median
-                let w = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / SHAPE_SAMPLES as f64).cos();
+                let w = 0.5
+                    - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / SHAPE_SAMPLES as f64).cos();
                 *slot = rustfft::num_complex::Complex64::new(re * w, im * w);
             }
             for slot in scratch.iter_mut().skip(SHAPE_SAMPLES) {
@@ -651,37 +652,74 @@ mod tests {
             // 8 s of noise alone: nothing may fire once the floor has settled
             ("noise", 320, Box::new(move |_| quiet)),
             // a signal ramping 0 -> +12 dB over 4 s: must fire, and not before ~+6
-            ("ramp up", 160, Box::new(move |i| quiet * 10f64.powf((i as f64 / 160.0) * 12.0 / 20.0))),
+            (
+                "ramp up",
+                160,
+                Box::new(move |i| quiet * 10f64.powf((i as f64 / 160.0) * 12.0 / 20.0)),
+            ),
             // holding at +12 dB
-            ("hold", 40, Box::new(move |_| quiet * 10f64.powf(12.0 / 20.0))),
+            (
+                "hold",
+                40,
+                Box::new(move |_| quiet * 10f64.powf(12.0 / 20.0)),
+            ),
             // ramping back down over 4 s: must clear after the hangover
-            ("ramp down", 160, Box::new(move |i| quiet * 10f64.powf((1.0 - i as f64 / 160.0) * 12.0 / 20.0))),
+            (
+                "ramp down",
+                160,
+                Box::new(move |i| quiet * 10f64.powf((1.0 - i as f64 / 160.0) * 12.0 / 20.0)),
+            ),
             ("noise again", 200, Box::new(move |_| quiet)),
         ];
         let log = scripted(&mut detector, &stages, 7);
         let stage_of = |t: f64| -> &str {
             let b = (t / 0.025).round() as usize;
-            if b <= 320 { "noise" } else if b <= 480 { "ramp up" } else if b <= 520 { "hold" } else if b <= 680 { "ramp down" } else { "noise again" }
+            if b <= 320 {
+                "noise"
+            } else if b <= 480 {
+                "ramp up"
+            } else if b <= 520 {
+                "hold"
+            } else if b <= 680 {
+                "ramp down"
+            } else {
+                "noise again"
+            }
         };
         for (stage, at, busy, excess) in &log {
-            eprintln!("BUSY {} at {at:.2}s in '{stage}' | excess {excess:+.1} dB | threshold 6.0", if *busy { "OFF -> ON " } else { "ON  -> OFF" });
+            eprintln!(
+                "BUSY {} at {at:.2}s in '{stage}' | excess {excess:+.1} dB | threshold 6.0",
+                if *busy { "OFF -> ON " } else { "ON  -> OFF" }
+            );
         }
         assert!(
-            !log.iter().any(|(s, t, busy, _)| *busy && s == "noise" && *t > 2.5),
+            !log.iter()
+                .any(|(s, t, busy, _)| *busy && s == "noise" && *t > 2.5),
             "noise alone lit the indicator: {log:?}"
         );
-        let first_on = log.iter().find(|(_, _, busy, _)| *busy).expect("the ramp must light it");
-        assert_eq!(stage_of(first_on.1), "ramp up", "lit outside the ramp: {log:?}");
+        let first_on = log
+            .iter()
+            .find(|(_, _, busy, _)| *busy)
+            .expect("the ramp must light it");
+        assert_eq!(
+            stage_of(first_on.1),
+            "ramp up",
+            "lit outside the ramp: {log:?}"
+        );
         assert!(
             first_on.3 >= 6.0 - 0.6,
             "lit at only {:+.1} dB over the floor, below the 6 dB threshold",
             first_on.3
         );
         assert!(
-            log.iter().any(|(s, _, busy, _)| !*busy && (s == "ramp down" || s == "noise again")),
+            log.iter()
+                .any(|(s, _, busy, _)| !*busy && (s == "ramp down" || s == "noise again")),
             "never cleared after the signal fell: {log:?}"
         );
-        assert!(!detector.busy(0.025 * 880.0), "still busy on noise at the end");
+        assert!(
+            !detector.busy(0.025 * 880.0),
+            "still busy on noise at the end"
+        );
     }
 
     #[test]
@@ -699,9 +737,18 @@ mod tests {
         let log = scripted(&mut detector, &stages, 11);
         // the step back up is a genuine +9.5 dB over a floor learned on the quiet: it may
         // fire, and must clear within the window once the floor catches up
-        let noise_lit: Vec<_> = log.iter().filter(|(s, _, b, _)| *b && s != "loud again").collect();
-        assert!(noise_lit.is_empty(), "stationary noise lit the indicator: {noise_lit:?}");
-        assert!(!detector.busy(0.025 * 960.0 + 1.0), "still busy long after the floor caught up");
+        let noise_lit: Vec<_> = log
+            .iter()
+            .filter(|(s, _, b, _)| *b && s != "loud again")
+            .collect();
+        assert!(
+            noise_lit.is_empty(),
+            "stationary noise lit the indicator: {noise_lit:?}"
+        );
+        assert!(
+            !detector.busy(0.025 * 960.0 + 1.0),
+            "still busy long after the floor caught up"
+        );
     }
 
     /// Block-by-block record of a scripted run: for every block, the stage, the time, the
@@ -741,7 +788,12 @@ mod tests {
 
     /// The floor, dBFS, at the last block of a stage.
     fn floor_at_end(trace: &Trace, stage: &str) -> f64 {
-        trace.iter().rev().find(|r| r.0 == stage).expect("stage present").3
+        trace
+            .iter()
+            .rev()
+            .find(|r| r.0 == stage)
+            .expect("stage present")
+            .3
     }
 
     #[test]
@@ -751,7 +803,12 @@ mod tests {
         let trace = traced(&mut detector, &stages, 3);
         let after_settle: Vec<_> = trace.iter().filter(|r| r.1 > 3.0).collect();
         let busy = after_settle.iter().filter(|r| r.4).count();
-        assert_eq!(busy, 0, "stationary noise lit the indicator {busy} blocks of {}", after_settle.len());
+        assert_eq!(
+            busy,
+            0,
+            "stationary noise lit the indicator {busy} blocks of {}",
+            after_settle.len()
+        );
         // and the floor sits where the noise is: within the block-to-block spread of it
         let level: Vec<f64> = after_settle.iter().map(|r| r.2).collect();
         let median = {
@@ -776,10 +833,16 @@ mod tests {
             ("noise after", secs(5.0), Box::new(|_| 0.01)),
         ];
         let trace = traced(&mut detector, &stages, 5);
-        assert!(!trace.iter().any(|r| r.4), "a single spike lit the indicator");
+        assert!(
+            !trace.iter().any(|r| r.4),
+            "a single spike lit the indicator"
+        );
         let before = floor_at_end(&trace, "noise");
         let after = floor_at_end(&trace, "noise after");
-        assert!((before - after).abs() < 0.5, "the spike moved the floor {before:.1} -> {after:.1}");
+        assert!(
+            (before - after).abs() < 0.5,
+            "the spike moved the floor {before:.1} -> {after:.1}"
+        );
     }
 
     #[test]
@@ -800,7 +863,10 @@ mod tests {
         );
         let before = floor_at_end(&trace, "noise");
         let after = floor_at_end(&trace, "noise after");
-        assert!((before - after).abs() < 1.0, "the impulses moved the floor {before:.1} -> {after:.1}");
+        assert!(
+            (before - after).abs() < 1.0,
+            "the impulses moved the floor {before:.1} -> {after:.1}"
+        );
     }
 
     #[test]
@@ -809,8 +875,16 @@ mod tests {
         let stages: Vec<Stage<'static>> = vec![
             ("noise", secs(10.0), Box::new(|_| 0.01)),
             // +15 dB over 6 s
-            ("ramp", secs(6.0), Box::new(|i| 0.01 * 10f64.powf(i as f64 / secs(6.0) as f64 * 15.0 / 20.0))),
-            ("hold", secs(4.0), Box::new(|_| 0.01 * 10f64.powf(15.0 / 20.0))),
+            (
+                "ramp",
+                secs(6.0),
+                Box::new(|i| 0.01 * 10f64.powf(i as f64 / secs(6.0) as f64 * 15.0 / 20.0)),
+            ),
+            (
+                "hold",
+                secs(4.0),
+                Box::new(|_| 0.01 * 10f64.powf(15.0 / 20.0)),
+            ),
         ];
         let trace = traced(&mut detector, &stages, 13);
         let first = trace.iter().find(|r| r.4).expect("the ramp lights it");
@@ -820,7 +894,10 @@ mod tests {
             "lit at only {:+.1} dB over the floor",
             first.2 - first.3
         );
-        assert!(busy_share(&trace, "hold") > 0.99, "not held busy through the hold");
+        assert!(
+            busy_share(&trace, "hold") > 0.99,
+            "not held busy through the hold"
+        );
     }
 
     #[test]
@@ -829,11 +906,18 @@ mod tests {
         let mut detector = BusyDetector::new(BusyConfig::default());
         let stages: Vec<Stage<'static>> = vec![
             ("noise", secs(15.0), Box::new(|_| 0.01)),
-            ("signal", secs(45.0), Box::new(|_| 0.01 * 10f64.powf(12.0 / 20.0))),
+            (
+                "signal",
+                secs(45.0),
+                Box::new(|_| 0.01 * 10f64.powf(12.0 / 20.0)),
+            ),
         ];
         let trace = traced(&mut detector, &stages, 17);
         let floor_before = floor_at_end(&trace, "noise");
-        let signal_blocks: Vec<_> = trace.iter().filter(|r| r.0 == "signal" && r.1 > 15.5).collect();
+        let signal_blocks: Vec<_> = trace
+            .iter()
+            .filter(|r| r.0 == "signal" && r.1 > 15.5)
+            .collect();
         let busy = signal_blocks.iter().filter(|r| r.4).count();
         assert_eq!(
             busy,
@@ -857,13 +941,25 @@ mod tests {
         let mut detector = BusyDetector::new(BusyConfig::default());
         let stages: Vec<Stage<'static>> = vec![
             ("noise", secs(15.0), Box::new(|_| 0.01)),
-            ("ft8", secs(12.64), Box::new(|_| 0.01 * 10f64.powf(10.0 / 20.0))),
+            (
+                "ft8",
+                secs(12.64),
+                Box::new(|_| 0.01 * 10f64.powf(10.0 / 20.0)),
+            ),
             ("gap", secs(2.36), Box::new(|_| 0.01)),
         ];
         let trace = traced(&mut detector, &stages, 19);
-        let ft8: Vec<_> = trace.iter().filter(|r| r.0 == "ft8" && r.1 > 15.2).collect();
+        let ft8: Vec<_> = trace
+            .iter()
+            .filter(|r| r.0 == "ft8" && r.1 > 15.2)
+            .collect();
         let busy = ft8.iter().filter(|r| r.4).count();
-        assert_eq!(busy, ft8.len(), "busy cleared {} blocks into an FT8 period", ft8.len() - busy);
+        assert_eq!(
+            busy,
+            ft8.len(),
+            "busy cleared {} blocks into an FT8 period",
+            ft8.len() - busy
+        );
         // the floor did not follow the signal
         let floor_before = floor_at_end(&trace, "noise");
         let floor_end = floor_at_end(&trace, "ft8");
@@ -878,7 +974,11 @@ mod tests {
         let mut detector = BusyDetector::new(BusyConfig::default());
         let stages: Vec<Stage<'static>> = vec![
             ("noise", secs(15.0), Box::new(|_| 0.01)),
-            ("signal", secs(20.0), Box::new(|_| 0.01 * 10f64.powf(12.0 / 20.0))),
+            (
+                "signal",
+                secs(20.0),
+                Box::new(|_| 0.01 * 10f64.powf(12.0 / 20.0)),
+            ),
             ("after", secs(10.0), Box::new(|_| 0.01)),
         ];
         let trace = traced(&mut detector, &stages, 23);
@@ -892,11 +992,17 @@ mod tests {
             "took {:.2} s to clear after the signal stopped",
             cleared as f64 * 0.025
         );
-        assert!(after.iter().skip(cleared).all(|r| !r.4), "busy came back on noise");
+        assert!(
+            after.iter().skip(cleared).all(|r| !r.4),
+            "busy came back on noise"
+        );
         // and the floor is where it was before the signal
         let before = floor_at_end(&trace, "noise");
         let recovered = floor_at_end(&trace, "after");
-        assert!((before - recovered).abs() < 1.0, "floor {before:.1} -> {recovered:.1}");
+        assert!(
+            (before - recovered).abs() < 1.0,
+            "floor {before:.1} -> {recovered:.1}"
+        );
     }
 
     #[test]
@@ -906,7 +1012,11 @@ mod tests {
         let mut detector = BusyDetector::new(BusyConfig::default());
         let mut stages: Vec<Stage<'static>> = vec![("noise", secs(15.0), Box::new(|_| 0.01))];
         for _ in 0..10 {
-            stages.push(("ft8", secs(12.64), Box::new(|_| 0.01 * 10f64.powf(10.0 / 20.0))));
+            stages.push((
+                "ft8",
+                secs(12.64),
+                Box::new(|_| 0.01 * 10f64.powf(10.0 / 20.0)),
+            ));
             stages.push(("gap", secs(2.36), Box::new(|_| 0.01)));
         }
         let trace = traced(&mut detector, &stages, 29);
@@ -920,7 +1030,11 @@ mod tests {
         // the on periods: busy, apart from the attack at the start of each
         let on: Vec<_> = trace.iter().filter(|r| r.0 == "ft8").collect();
         let share = on.iter().filter(|r| r.4).count() as f64 / on.len() as f64;
-        assert!(share > 0.98, "busy only {:.0}% of the FT8 periods", share * 100.0);
+        assert!(
+            share > 0.98,
+            "busy only {:.0}% of the FT8 periods",
+            share * 100.0
+        );
         // the gaps: busy only for the hangover at the start of each
         let off: Vec<_> = trace.iter().filter(|r| r.0 == "gap").collect();
         let share_off = off.iter().filter(|r| r.4).count() as f64 / off.len() as f64;
@@ -933,7 +1047,14 @@ mod tests {
 
     /// Noise plus a tone at `offset_hz` inside the passband, the tone `db` over the noise's
     /// power: what a narrowband signal looks like in baseband.
-    fn tone_over_noise(n: usize, sigma: f64, db: f64, offset_hz: f64, seed: u64, phase0: f64) -> Vec<Complex> {
+    fn tone_over_noise(
+        n: usize,
+        sigma: f64,
+        db: f64,
+        offset_hz: f64,
+        seed: u64,
+        phase0: f64,
+    ) -> Vec<Complex> {
         let amp = sigma * 10f64.powf(db / 20.0) * std::f64::consts::SQRT_2;
         noise(n, sigma, seed)
             .into_iter()
@@ -978,7 +1099,10 @@ mod tests {
             "the passband should read peaked: {:.1} dB",
             detector.shape_db
         );
-        assert!(detector.busy(now), "a narrowband signal under the level margin is busy by shape");
+        assert!(
+            detector.busy(now),
+            "a narrowband signal under the level margin is busy by shape"
+        );
         assert!(matches!(detector.reason(), Some(BusyReason::Shape { .. })));
         assert!(
             (detector.floor_db - floor_before).abs() < 1.0,
@@ -1003,7 +1127,10 @@ mod tests {
         let mut feed = |d: &mut BusyDetector, now: &mut f64, blocks: usize, db: f64, seed: u64| {
             for i in 0..blocks {
                 *now += 0.025;
-                d.push(&tone_over_noise(block, 0.01, db, 60.0, seed + i as u64, phase), *now);
+                d.push(
+                    &tone_over_noise(block, 0.01, db, 60.0, seed + i as u64, phase),
+                    *now,
+                );
                 phase += 2.0 * std::f64::consts::PI * 60.0 * block as f64 / fs;
             }
         };
@@ -1057,14 +1184,23 @@ mod tests {
                 d.push(&noise(block, 0.01, 1000 + *seed), *now);
             }
         };
-        let feed_tone = |d: &mut BusyDetector, now: &mut f64, s: f64, db: f64, hz: f64, seed: &mut u64| -> f64 {
+        let feed_tone = |d: &mut BusyDetector,
+                         now: &mut f64,
+                         s: f64,
+                         db: f64,
+                         hz: f64,
+                         seed: &mut u64|
+         -> f64 {
             let mut phase = 0.0;
             let mut busy_blocks = 0usize;
             let n = secs(s);
             for _ in 0..n {
                 *now += 0.025;
                 *seed += 1;
-                d.push(&tone_over_noise(block, 0.01, db, hz, 5000 + *seed, phase), *now);
+                d.push(
+                    &tone_over_noise(block, 0.01, db, hz, 5000 + *seed, phase),
+                    *now,
+                );
                 phase += 2.0 * std::f64::consts::PI * hz * block as f64 / fs;
                 if d.busy(*now) {
                     busy_blocks += 1;
@@ -1089,8 +1225,16 @@ mod tests {
             worst_floor - floor_before < 1.5,
             "the floor climbed into the stations: {floor_before:.1} -> {worst_floor:.1}"
         );
-        assert!(strong_share / 3.0 > 0.9, "the strong station busy only {:.0}%", strong_share / 3.0 * 100.0);
-        assert!(weak_share / 3.0 > 0.9, "the weak station busy only {:.0}%", weak_share / 3.0 * 100.0);
+        assert!(
+            strong_share / 3.0 > 0.9,
+            "the strong station busy only {:.0}%",
+            strong_share / 3.0 * 100.0
+        );
+        assert!(
+            weak_share / 3.0 > 0.9,
+            "the weak station busy only {:.0}%",
+            weak_share / 3.0 * 100.0
+        );
     }
 
     #[test]
