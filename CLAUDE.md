@@ -360,6 +360,30 @@ with its unit), the README has screenshots, and one bench run dropped after stat
 audio clock fell seven seconds behind the wall clock (`C:\Dev\AetherBench\sim\drop-2311`,
 unexplained; the control server is per-client-threaded).
 
+**The hole at the start of every burst (2026-09-19, ADR-0010, `field/TX-ONSET-FINDINGS.md`):**
+two videos of the FTDX10's scope during *Set drive* bursts (the rig monitors its own
+transmission through its receiver, so its AGC setting changes the picture) showed the
+signal vanish for 85–375 ms about a quarter second after the audio started. It was a real
+hole, and the modem's: the run loop is one thread, it kept only 250 ms queued at the sound
+card, the card's callback played silence uncounted when the queue was empty, and the
+receiver costs ~115 ms *per call* (the timed replay: 5–6× real time on 20 ms blocks and
+1.15× on 100 ms blocks — `--block-ms` — with blocks of 300–370 ms when a frame decodes),
+so a pass that decoded the candidate picked up just
+before keying overran the queue. The truck's OTA-2 recordings have the same 70–90 ms
+holes 250–290 ms into the base's bursts — the "choppy" audio. Now a whole burst is handed
+to the card the moment it is rendered (the queue holds `max_key_s` + 2 s), the key is
+released against the card's own clock (`AudioIo::played`; `Station::device_played`; a
+harness that reports none releases on drain as before), starvation is counted and logged
+(`audio: the sound card ran dry …`, `diagnostics.audio.starved_samples`), slow passes are
+logged with their phase (`loop:`, `diagnostics.loop`), `[record] tx_audio = true` keeps
+every transmission's exact audio under `tx/` with an envelope sidecar, `aetherd --replay`
+prints the receiver's cost per block, and `tools/tx_envelope.py` gives the same envelope
+numbers for any WAV. The waveform itself was measured clean (preamble at the data's power,
+at level within 20 ms, no holes); Mercury renders whole bursts, keys, writes the buffer once
+and holds the key by an absolute deadline — the shape adopted. Open: the receiver's
+per-call search cost (it should search only what is new), and a preamble drawn to the
+data's crest.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

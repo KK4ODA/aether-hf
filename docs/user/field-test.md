@@ -60,6 +60,40 @@ cannot know it was 40 m at dusk over 900 km.
 
 A minute of audio is 5.8 MB. Sessions of a few minutes are the useful size.
 
+### What the modem sent, not only what it heard
+
+A recording is what the *radio delivered*; the transmitter's side of the story is not in
+it. When a burst looks wrong on the air — unsteady on a scope, "choppy" at the other end —
+the question is where it went wrong: in the modem, at the sound card, in the transmitter,
+or only in the receiver's AGC. For that:
+
+```toml
+[record]
+tx_audio = true
+```
+
+keeps every transmission's exact audio as it was handed to the sound card — the transmit
+level applied, the keying lead and tail included — as a 32-bit float WAV under `tx/` in the
+recordings folder, with a sidecar giving its level, crest factor, clipped samples, the
+onset envelope at ten milliseconds and any holes, and one `tx:` line in the log. It writes a
+file per burst, so it is for a test session, not for a gateway. Then
+
+```
+python tools/tx_envelope.py recordings/tx/*.wav
+python tools/tx_envelope.py recordings/tx/*.wav other-end.wav --png bursts.png
+```
+
+prints the same numbers for the capture and for any recording of the same bursts — the
+other station's, the rig's monitor, another modem's — burst by burst: where the level
+settled, and every hole. A rendered burst has no holes and is at level within twenty
+milliseconds; whatever appears downstream was put there downstream.
+
+Two more lines in the log are for the same question. `audio: the sound card ran dry for
+N ms inside a transmission` means the modem did not hand the card its next samples in time
+and there was a hole on the air; it should never appear (a whole burst is queued the moment
+it is rendered, ADR-0010), and if it does the `loop:` line beside it says which part of
+the modem's pass took the time. Both counts are in the diagnostic bundle.
+
 ## 3. What a session should be
 
 | Step | Who | What to send |

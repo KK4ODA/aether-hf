@@ -321,6 +321,240 @@ fn wav_header(sample_rate: u32, samples: u64) -> [u8; 44] {
     header
 }
 
+/// The exact audio of one transmission, as the station handed it to the sound card — the
+/// transmit level applied, the keying lead and tail included — kept while it plays and
+/// written when the key is released (`[record] tx_audio`).
+///
+/// This is the one end of the chain that can be captured without a radio: what the modem
+/// sent. Held against a receiver's recording of the same burst, or against the rig's own
+/// scope, it says at which point an envelope went wrong — in the modem, at the sound card,
+/// in the transmitter, or only in the receiver's AGC. The sidecar carries the envelope of
+/// the first half second at ten-millisecond resolution, where a transmitter's ALC, a
+/// keying relay and a receiver's AGC all do their work, and any hole in the audio, which
+/// a rendered burst never has: a hole found on the air and not here is downstream.
+#[derive(Debug)]
+pub struct TxCapture {
+    sample_rate: u32,
+    tx_level: f64,
+    lead_s: f64,
+    tail_s: f64,
+    frames: Vec<SentRecord>,
+    keyed_at_s: Option<f64>,
+    samples: Vec<f32>,
+}
+
+/// Envelope resolution of the sidecar's onset record, in seconds.
+const ENVELOPE_STEP_S: f64 = 0.01;
+/// How much of the onset the sidecar records at that resolution, in seconds.
+const ENVELOPE_SPAN_S: f64 = 0.5;
+/// Below this, a stretch of audio counts as a hole, in dBFS.
+const HOLE_DBFS: f64 = -50.0;
+/// A hole shorter than this is a zero crossing, not a hole, in seconds.
+const HOLE_MIN_S: f64 = 0.005;
+
+impl TxCapture {
+    /// Start keeping a transmission's audio, before its first sample is handed over.
+    #[must_use]
+    pub fn begin(
+        sample_rate: u32,
+        tx_level: f64,
+        lead_s: f64,
+        tail_s: f64,
+        frames: &[aether_link::TxFrame],
+    ) -> Self {
+        Self {
+            sample_rate,
+            tx_level,
+            lead_s,
+            tail_s,
+            frames: frames
+                .iter()
+                .map(|frame| SentRecord {
+                    t_s: 0.0,
+                    kind: match frame.container {
+                        aether_link::Container::Data => "data".to_owned(),
+                        aether_link::Container::Control => "control".to_owned(),
+                    },
+                    mode: frame.mode,
+                    rv: frame.rv,
+                    floor: frame.floor,
+                    bytes: frame.payload.len(),
+                })
+                .collect(),
+            keyed_at_s: None,
+            samples: Vec::new(),
+        }
+    }
+
+    /// The station clock at which the radio was keyed.
+    pub fn keyed(&mut self, now_s: f64) {
+        self.keyed_at_s = Some(now_s);
+    }
+
+    /// Samples as handed to the sound card, level applied.
+    pub fn push(&mut self, samples: &[f32]) {
+        self.samples.extend_from_slice(samples);
+    }
+
+    /// What the capture holds, for the summary and the sidecar.
+    #[must_use]
+    pub fn analyse(&self) -> Value {
+        let rate = f64::from(self.sample_rate);
+        let n = self.samples.len();
+        let peak = self.samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        let power: f64 = self.samples.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        let rms = if n == 0 { 0.0 } else { (power / n as f64).sqrt() };
+        let dbfs = |x: f64| {
+            if x > 0.0 {
+                20.0 * x.log10()
+            } else {
+                f64::NEG_INFINITY
+            }
+        };
+        let clipped = self.samples.iter().filter(|&&x| x.abs() >= 1.0).count();
+        // the onset: the first sample above the hole threshold, and the last
+        let audible = |x: f32| dbfs(f64::from(x.abs())) > HOLE_DBFS;
+        let first = self.samples.iter().position(|&x| audible(x));
+        let last = self.samples.iter().rposition(|&x| audible(x));
+        let step = (ENVELOPE_STEP_S * rate) as usize;
+        let mut envelope = Vec::new();
+        if let Some(first) = first {
+            let until = (first + (ENVELOPE_SPAN_S * rate) as usize).min(n);
+            for chunk in self.samples[first..until].chunks(step.max(1)) {
+                let peak = chunk.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+                let power: f64 = chunk.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+                let rms = (power / chunk.len() as f64).sqrt();
+                envelope.push(json!({
+                    "rms_dbfs": round1(dbfs(rms)),
+                    "peak_dbfs": round1(dbfs(f64::from(peak))),
+                }));
+            }
+        }
+        // holes: stretches under the threshold between the first and the last audible
+        // sample, at least HOLE_MIN_S long — a rendered burst has none, so any found on
+        // the air and not here were put in downstream of the modem
+        let mut holes = Vec::new();
+        if let (Some(first), Some(last)) = (first, last) {
+            let block = (HOLE_MIN_S * rate).max(1.0) as usize;
+            let mut quiet_since: Option<usize> = None;
+            let mut at = first;
+            while at + block <= last {
+                let loud = self.samples[at..at + block].iter().any(|&x| audible(x));
+                match (loud, quiet_since) {
+                    (false, None) => quiet_since = Some(at),
+                    (true, Some(since)) => {
+                        holes.push(json!({
+                            "at_s": round3((since - first) as f64 / rate),
+                            "length_s": round3((at - since) as f64 / rate),
+                        }));
+                        quiet_since = None;
+                    }
+                    _ => {}
+                }
+                at += block;
+            }
+        }
+        json!({
+            "sample_rate": self.sample_rate,
+            "tx_level": self.tx_level,
+            "lead_s": self.lead_s,
+            "tail_s": self.tail_s,
+            "keyed_at_s": self.keyed_at_s,
+            "samples": n,
+            "seconds": round3(n as f64 / rate),
+            "frames": self.frames,
+            "peak_dbfs": round1(dbfs(f64::from(peak))),
+            "rms_dbfs": round1(dbfs(rms)),
+            "crest_db": round1(dbfs(f64::from(peak)) - dbfs(rms)),
+            "clipped_samples": clipped,
+            "onset_s": first.map(|i| round3(i as f64 / rate)),
+            "signal_end_s": last.map(|i| round3((i + 1) as f64 / rate)),
+            "envelope_step_s": ENVELOPE_STEP_S,
+            "envelope": envelope,
+            "holes": holes,
+        })
+    }
+
+    /// Write the audio and its sidecar under `tx/` in `dir`, and return the one-line
+    /// summary for the log. Without a directory, the summary alone.
+    ///
+    /// # Errors
+    /// If the files cannot be written.
+    pub fn finish(self, dir: Option<&Path>) -> std::io::Result<String> {
+        let analysis = self.analyse();
+        let summary = format!(
+            "{} frames, {:.2} s, peak {} dBFS, rms {} dBFS, crest {} dB, {} clipped, onset {} s, {} hole(s)",
+            self.frames.len(),
+            analysis["seconds"].as_f64().unwrap_or(0.0),
+            analysis["peak_dbfs"],
+            analysis["rms_dbfs"],
+            analysis["crest_db"],
+            analysis["clipped_samples"],
+            analysis["onset_s"],
+            analysis["holes"].as_array().map_or(0, Vec::len),
+        );
+        let Some(dir) = dir else {
+            return Ok(summary);
+        };
+        let dir = dir.join("tx");
+        std::fs::create_dir_all(&dir)?;
+        let stamp = crate::log::rfc3339(unix_ms())
+            .replace([':', '-'], "")
+            .replace('T', "-");
+        let stamp = stamp.get(..15).unwrap_or(&stamp).to_owned();
+        let wav = dir.join(format!("{stamp}_tx.wav"));
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&wav)?);
+        file.write_all(&float_wav_header(self.sample_rate, self.samples.len()))?;
+        let mut bytes = Vec::with_capacity(self.samples.len() * 4);
+        for &sample in &self.samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        file.write_all(&bytes)?;
+        file.flush()?;
+        let mut document = analysis;
+        document["format"] = json!("aether-hf-tx/1");
+        document["wav"] = json!(wav.file_name().and_then(|n| n.to_str()).unwrap_or(""));
+        std::fs::write(
+            dir.join(format!("{stamp}_tx.json")),
+            serde_json::to_string_pretty(&document)?,
+        )?;
+        Ok(format!("{summary} -> {}", wav.display()))
+    }
+}
+
+fn round1(x: f64) -> Value {
+    if x.is_finite() {
+        json!((x * 10.0).round() / 10.0)
+    } else {
+        Value::Null
+    }
+}
+
+fn round3(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
+}
+
+/// A WAV header for 32-bit float mono: the samples exactly as the sound card was given
+/// them, with no 16-bit rounding between the modem and the analysis.
+fn float_wav_header(sample_rate: u32, samples: usize) -> [u8; 44] {
+    let data_bytes = u32::try_from(samples * 4).unwrap_or(u32::MAX);
+    let mut header = [0u8; 44];
+    header[0..4].copy_from_slice(b"RIFF");
+    header[4..8].copy_from_slice(&(36 + data_bytes).to_le_bytes());
+    header[8..12].copy_from_slice(b"WAVE");
+    header[12..16].copy_from_slice(b"fmt ");
+    header[16..20].copy_from_slice(&16u32.to_le_bytes());
+    header[20..22].copy_from_slice(&3u16.to_le_bytes()); // IEEE float
+    header[22..24].copy_from_slice(&1u16.to_le_bytes()); // mono
+    header[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+    header[28..32].copy_from_slice(&(sample_rate * 4).to_le_bytes());
+    header[32..34].copy_from_slice(&4u16.to_le_bytes());
+    header[34..36].copy_from_slice(&32u16.to_le_bytes());
+    header[36..40].copy_from_slice(b"data");
+    header[40..44].copy_from_slice(&data_bytes.to_le_bytes());
+    header
+}
+
 /// The name a recording gets: when, who, and with whom.
 #[must_use]
 pub fn session_name(callsign: &str, remote: Option<&str>) -> String {
@@ -434,6 +668,40 @@ fn unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transmission_capture_measures_its_onset_its_crest_and_any_hole() {
+        // lead silence, a 0.5 s tone at 0.5, a 40 ms hole, another 0.5 s of tone, tail silence
+        let rate = 48_000u32;
+        let mut capture = TxCapture::begin(rate, 0.5, 0.1, 0.05, &[]);
+        capture.keyed(12.5);
+        let tone = |n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|i| 0.5 * (2.0 * std::f32::consts::PI * 1500.0 * i as f32 / rate as f32).sin())
+                .collect()
+        };
+        capture.push(&vec![0.0; 4800]);
+        capture.push(&tone(24_000));
+        capture.push(&vec![0.0; 1920]);
+        capture.push(&tone(24_000));
+        capture.push(&vec![0.0; 2400]);
+        let analysis = capture.analyse();
+        assert_eq!(analysis["keyed_at_s"], 12.5);
+        assert_eq!(analysis["onset_s"], 0.1, "the first audible sample follows the lead");
+        assert!((analysis["peak_dbfs"].as_f64().unwrap() - (-6.0)).abs() < 0.2);
+        // a sine's crest factor is 3 dB, spread over the silence in the rms: more than 3
+        assert!(analysis["crest_db"].as_f64().unwrap() > 3.0);
+        assert_eq!(analysis["clipped_samples"], 0);
+        let holes = analysis["holes"].as_array().expect("holes");
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        assert!((holes[0]["at_s"].as_f64().unwrap() - 0.5).abs() < 0.01);
+        assert!((holes[0]["length_s"].as_f64().unwrap() - 0.04).abs() < 0.01);
+        let envelope = analysis["envelope"].as_array().expect("envelope");
+        assert_eq!(envelope.len(), 50, "half a second at ten milliseconds");
+        assert!((envelope[0]["peak_dbfs"].as_f64().unwrap() - (-6.0)).abs() < 0.2);
+        let summary = capture.finish(None).expect("no files");
+        assert!(summary.contains("1 hole(s)"), "{summary}");
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("aether-rec-{tag}-{}", std::process::id()));

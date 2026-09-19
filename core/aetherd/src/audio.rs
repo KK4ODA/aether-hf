@@ -13,6 +13,20 @@
 //! arrived. The queues are bounded: a modem that has fallen behind must drop old audio rather
 //! than grow until the machine runs out of memory, and it says so when it does, because
 //! silently losing audio looks exactly like a bad band.
+//!
+//! # Why the playback queue holds a whole burst
+//!
+//! The playback callback plays silence when the queue is empty — it has nothing else to
+//! play — and a transmission with a hole in it is what that silence is when the transmitter
+//! is keyed. The modem thread used to keep a quarter second queued and top it up between
+//! blocks, so any single block that cost it more than that — a frame of somebody else's
+//! landing in the decoder, a slow disk, the scheduler — put a hole in the burst on the air,
+//! and nothing counted it (`field/TX-ONSET-FINDINGS.md`). So the modem now hands the whole
+//! rendered burst over as soon as it is rendered, the queue is bounded by the longest
+//! transmission rather than by a fraction of a second, and the callback counts every sample
+//! of silence it had to play while a burst was supposed to be running. The key is released
+//! from the callback's own clock ([`AudioIo::played`]), when the last sample has really
+//! left, not when the modem has nothing more to hand over.
 
 use std::{
     collections::VecDeque,
@@ -31,6 +45,18 @@ pub trait AudioIo {
     fn queued(&self) -> usize;
     /// Samples dropped because a queue was full, since the device was opened.
     fn dropped(&self) -> usize;
+    /// The playback clock: samples the device has consumed since it was opened, whether
+    /// they came from the queue or were silence played for want of any. A sample queued
+    /// when this reads `n` leaves the device when it reads `n + queued()`.
+    fn played(&self) -> u64;
+    /// Whether a burst is in flight, so that silence played for an empty queue counts as
+    /// starvation rather than as the idle state of a station with nothing to say.
+    fn set_playing(&mut self, playing: bool);
+    /// Samples of silence the device played while a burst was in flight, since it was
+    /// opened: every one of them is a hole in a transmission.
+    fn starved(&self) -> usize;
+    /// Drop whatever is queued for playback, for a transmission cut short.
+    fn clear(&mut self);
 }
 
 /// Anything that went wrong with a sound card.
@@ -80,9 +106,32 @@ impl core::error::Error for AudioError {}
 struct Shared {
     samples: VecDeque<f32>,
     dropped: usize,
+    /// Frames the playback device has consumed, from the queue or as silence.
+    played: u64,
+    /// Whether the modem says a burst is in flight.
+    playing: bool,
+    /// Frames of silence played for an empty queue while a burst was in flight.
+    starved: usize,
 }
 
 type Queue = Arc<Mutex<Shared>>;
+
+/// Fill one playback callback's buffer from the queue: the same sample on every channel,
+/// silence when the queue is empty, and the accounting the modem reads back.
+///
+/// Kept apart from the callback so it can be tested without a sound card.
+fn fill_playback(shared: &mut Shared, data: &mut [f32], channels: usize) {
+    for frame in data.chunks_mut(channels.max(1)) {
+        let sample = shared.samples.pop_front().unwrap_or_else(|| {
+            if shared.playing {
+                shared.starved += 1;
+            }
+            0.0
+        });
+        frame.fill(sample);
+        shared.played += 1;
+    }
+}
 
 fn push_bounded(queue: &Queue, samples: &[f32], limit: usize) {
     let Ok(mut shared) = queue.lock() else { return };
@@ -103,10 +152,15 @@ pub struct AudioConfig {
     pub output: Option<String>,
     /// Sample rate. Must match the waveform's audio rate.
     pub sample_rate: u32,
-    /// Longest backlog either queue may hold, in seconds. Past this, old audio is dropped:
-    /// a modem that has fallen behind cannot catch up by buffering, and unbounded queues turn
-    /// a slow machine into a crash.
+    /// Longest backlog the capture queue may hold, in seconds. Past this, old audio is
+    /// dropped: a modem that has fallen behind cannot catch up by buffering, and unbounded
+    /// queues turn a slow machine into a crash.
     pub max_backlog_s: f64,
+    /// Longest the playback queue may hold, in seconds: a whole transmission, since the
+    /// modem hands a burst over in one piece (see the module notes). Past this the oldest
+    /// audio is dropped, which is the *start* of a burst — so this must exceed the longest
+    /// transmission the station is allowed to make.
+    pub max_playback_s: f64,
 }
 
 impl Default for AudioConfig {
@@ -116,6 +170,7 @@ impl Default for AudioConfig {
             output: None,
             sample_rate: 48_000,
             max_backlog_s: 2.0,
+            max_playback_s: 40.0,
         }
     }
 }
@@ -193,7 +248,7 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, AudioError> {
 pub struct SoundCard {
     captured: Queue,
     to_play: Queue,
-    limit: usize,
+    playback_limit: usize,
     /// The capture stream. Held so it keeps running; cpal stops a stream when it is dropped.
     _input: cpal::Stream,
     /// The playback stream.
@@ -227,6 +282,7 @@ impl SoundCard {
         let input_device = pick(&host, config.input.as_deref(), true)?;
         let output_device = pick(&host, config.output.as_deref(), false)?;
         let limit = (config.max_backlog_s * f64::from(config.sample_rate)) as usize;
+        let playback_limit = (config.max_playback_s * f64::from(config.sample_rate)) as usize;
 
         let in_name = input_device.name().unwrap_or_else(|_| "?".to_owned());
         let out_name = output_device.name().unwrap_or_else(|_| "?".to_owned());
@@ -264,10 +320,7 @@ impl SoundCard {
                         data.fill(0.0);
                         return;
                     };
-                    for frame in data.chunks_mut(out_channels) {
-                        let sample = shared.samples.pop_front().unwrap_or(0.0);
-                        frame.fill(sample);
-                    }
+                    fill_playback(&mut shared, data, out_channels);
                 },
                 |error| eprintln!("aetherd: playback stream: {error}"),
                 None,
@@ -284,7 +337,7 @@ impl SoundCard {
         Ok(Self {
             captured,
             to_play,
-            limit,
+            playback_limit,
             _input: input,
             _output: output,
             description: format!(
@@ -305,7 +358,7 @@ impl AudioIo for SoundCard {
     }
 
     fn playback(&mut self, samples: &[f32]) {
-        push_bounded(&self.to_play, samples, self.limit);
+        push_bounded(&self.to_play, samples, self.playback_limit);
     }
 
     fn queued(&self) -> usize {
@@ -316,6 +369,26 @@ impl AudioIo for SoundCard {
         let captured = self.captured.lock().map_or(0, |shared| shared.dropped);
         let played = self.to_play.lock().map_or(0, |shared| shared.dropped);
         captured + played
+    }
+
+    fn played(&self) -> u64 {
+        self.to_play.lock().map_or(0, |shared| shared.played)
+    }
+
+    fn set_playing(&mut self, playing: bool) {
+        if let Ok(mut shared) = self.to_play.lock() {
+            shared.playing = playing;
+        }
+    }
+
+    fn starved(&self) -> usize {
+        self.to_play.lock().map_or(0, |shared| shared.starved)
+    }
+
+    fn clear(&mut self) {
+        if let Ok(mut shared) = self.to_play.lock() {
+            shared.samples.clear();
+        }
     }
 }
 
@@ -410,6 +483,8 @@ pub struct Loopback {
     queue: VecDeque<f32>,
     /// Attenuation applied on the way round, so a test can set a signal-to-noise ratio.
     pub gain: f32,
+    /// Samples handed back so far: the loopback's playback clock.
+    played: u64,
 }
 
 impl Loopback {
@@ -419,12 +494,14 @@ impl Loopback {
         Self {
             queue: VecDeque::new(),
             gain: 1.0,
+            played: 0,
         }
     }
 }
 
 impl AudioIo for Loopback {
     fn capture(&mut self) -> Vec<f32> {
+        self.played += self.queue.len() as u64;
         self.queue.drain(..).map(|x| x * self.gain).collect()
     }
 
@@ -438,6 +515,20 @@ impl AudioIo for Loopback {
 
     fn dropped(&self) -> usize {
         0
+    }
+
+    fn played(&self) -> u64 {
+        self.played
+    }
+
+    fn set_playing(&mut self, _playing: bool) {}
+
+    fn starved(&self) -> usize {
+        0
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
     }
 }
 
@@ -487,11 +578,59 @@ impl AudioIo for Silence {
     fn dropped(&self) -> usize {
         0
     }
+
+    fn played(&self) -> u64 {
+        // what would have played by now: the same clock the capture side runs on
+        (self.started.elapsed().as_secs_f64() * self.rate) as u64
+    }
+
+    fn set_playing(&mut self, _playing: bool) {}
+
+    fn starved(&self) -> usize {
+        0
+    }
+
+    fn clear(&mut self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_playback_callback_counts_its_clock_and_the_silence_it_had_to_play() {
+        // the queue holds four samples and the device asks for six frames of stereo: it
+        // plays the four, then two frames of silence — which only count as starvation
+        // while the modem says a burst is in flight
+        let mut shared = Shared::default();
+        shared.samples.extend([0.1, 0.2, 0.3, 0.4]);
+        let mut data = [9.0f32; 12];
+        fill_playback(&mut shared, &mut data, 2);
+        assert_eq!(&data[..4], &[0.1, 0.1, 0.2, 0.2], "the same sample on both channels");
+        assert_eq!(&data[8..], &[0.0; 4], "silence for want of anything to play");
+        assert_eq!(shared.played, 6, "the clock counts frames, played or silent");
+        assert_eq!(shared.starved, 0, "an idle station is not starving");
+
+        shared.playing = true;
+        let mut data = [9.0f32; 6];
+        fill_playback(&mut shared, &mut data, 2);
+        assert_eq!(shared.played, 9);
+        assert_eq!(shared.starved, 3, "every silent frame in a burst is a hole");
+    }
+
+    #[test]
+    fn the_loopback_clock_follows_what_it_handed_back_and_a_clear_empties_it() {
+        let mut audio = Loopback::new();
+        audio.playback(&[0.5; 100]);
+        assert_eq!(audio.played(), 0, "nothing has left until it is captured");
+        assert_eq!(audio.capture().len(), 100);
+        assert_eq!(audio.played(), 100);
+        audio.playback(&[0.5; 50]);
+        audio.clear();
+        assert_eq!(audio.queued(), 0);
+        assert!(audio.capture().is_empty());
+        assert_eq!(audio.played(), 100, "cleared audio never played");
+    }
 
     #[test]
     fn silence_keeps_the_clock_rather_than_stopping_it() {
