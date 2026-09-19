@@ -389,6 +389,44 @@
       <!-- ── setup ──────────────────────────────────────────────── -->
       <section id="panel-setup" class="panel" role="tabpanel" aria-labelledby="tab-setup" hidden>
         <div class="wizard" id="wizard">
+          <div class="card profile-bar" id="profile-bar" title="Profiles: every setting on this tab, the transmit level and the waterfall, saved under a name. One per radio or per place; a file you can back up or carry to another computer.">
+            <div class="row">
+              <label for="profile-select" id="profile-label" title="The profile the running settings came from; a * means they have changed since it was saved">Profile</label>
+              <select id="profile-select" title="The saved profile these settings come from; pick another to switch the station to it" aria-label="Active profile"></select>
+              <button id="profile-save" class="primary" title="Write the current settings to this profile">Save</button>
+              <button id="profile-save-as" title="Keep the current settings as a new profile, and switch to it">Save as…</button>
+              <button id="profile-import" title="Bring in a profile from an .aetherprofile file; it is checked and listed, and loaded only when you say">Import…</button>
+              <button id="profile-export" title="Save this profile as an .aetherprofile file to back up or carry to another computer">Export…</button>
+              <details class="menu" id="profile-more" title="New, rename, duplicate, delete">
+                <summary id="profile-more-summary" title="More: new, rename, duplicate, delete">More ▾</summary>
+                <div class="menu-list" id="profile-menu" title="The less-used profile actions">
+                  <button id="profile-new" title="Start a new profile from the defaults, keeping your callsign and operator details">New profile…</button>
+                  <button id="profile-rename" title="Give this profile another name">Rename…</button>
+                  <button id="profile-duplicate" title="Copy this profile under a new name, without switching to it">Duplicate…</button>
+                  <button id="profile-delete" class="danger" title="Delete a profile other than the active one">Delete…</button>
+                </div>
+              </details>
+              <input id="profile-file" type="file" accept=".aetherprofile,application/json" title="The profile file to import" aria-label="Profile file to import" hidden />
+            </div>
+            <div class="row" id="profile-name-form" title="Name the profile" hidden>
+              <label for="profile-name" id="profile-name-label" title="What the profile is called">Name</label>
+              <input id="profile-name" type="text" class="prose" maxlength="60" placeholder="Home FTDX10" autocomplete="off" title="The profile's name; the file is named after it" aria-label="Profile name" />
+              <select id="profile-pick" title="Which profile" aria-label="Which profile" hidden></select>
+              <button id="profile-name-ok" class="primary" title="Go ahead">OK</button>
+              <button id="profile-name-cancel" title="Close without changing anything">Cancel</button>
+            </div>
+            <div class="row" id="profile-prompt" title="The current profile has changes that are not saved to it" hidden>
+              <span class="sub" id="profile-prompt-text" title="What is about to happen"></span>
+              <button id="profile-prompt-save" class="primary" title="Save the changes to the current profile first, then go on">Save and continue</button>
+              <button id="profile-prompt-discard" title="Leave the current profile as it was last saved and go on">Discard changes</button>
+              <button id="profile-prompt-cancel" title="Stay where you are, changes and all">Cancel</button>
+            </div>
+            <p class="sub" id="profile-note" title="What the last profile action did" role="status" aria-live="polite">
+              Every setting below, the transmit level and the waterfall are saved under the
+              profile's name. Switch profiles to change radios or places; Export writes a file
+              you can back up or carry to another computer.
+            </p>
+          </div>
           <ol class="steps">
             <li class="step" data-step="1">
               <h3>1. Callsign</h3>
@@ -488,6 +526,7 @@
                 as a SignaLink, or to listen only.
               </p>
               <p class="note warn" id="rate-note" title="Something to check about the CAT rate" role="alert" hidden></p>
+              <p class="note warn" id="hardware-note" title="A device the configuration names that this computer does not have" role="alert" hidden></p>
             </li>
             <li class="step" data-step="3">
               <h3>3. Receive level</h3>
@@ -655,6 +694,7 @@
           <h3>Getting on the air</h3>
           <ol class="help-steps">
             <li><strong>Setup</strong>: callsign, the radio interface and its three devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
+            <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in. A device the other computer does not have is shown as <em>not on this computer</em> until you choose one.</li>
             <li><strong>Session → Keying and drive</strong>: <em>Key for 1 s</em> should light the rig's transmit indicator; the <em>Tune tone</em> with the level slider sets the drive so the ALC barely moves.</li>
             <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>

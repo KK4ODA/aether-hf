@@ -158,21 +158,17 @@ pub struct OperatorSection {
 }
 
 impl OperatorSection {
-    /// The grid must be a locator and the power a number of watts, when given at all.
+    /// The grid must be a locator, when given at all. The power's bounds are the settings
+    /// registry's, checked with everyone else's.
     ///
     /// # Errors
-    /// When either is not.
+    /// When it is not.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if !self.grid.is_empty() && crate::grid::locator(&self.grid).is_none() {
             return Err(ConfigError::Invalid(format!(
                 "[operator] grid {:?} is not a Maidenhead locator (EM73 or EM73tv)",
                 self.grid
             )));
-        }
-        if self.power_w.is_some_and(|w| !(w > 0.0 && w <= 2000.0)) {
-            return Err(ConfigError::Invalid(
-                "[operator] power_w must be watts, above zero".into(),
-            ));
         }
         Ok(())
     }
@@ -499,15 +495,68 @@ pub struct RecordSection {
 /// Panel preferences: choices the desktop panel makes that are not the modem's to keep,
 /// stored here so they survive a restart. Nothing in this section changes what the modem
 /// does; the daemon only holds it and hands it back.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PanelSection {
-    /// The radio-interface profile the operator chose in Setup, by its stable id. The
+    /// The radio-interface preset the operator chose in Setup, by its stable id. The
     /// devices it selected are saved in their own sections; this keeps the panel's
     /// Interface dropdown on the operator's choice instead of re-guessing it from the
     /// devices every time the panel loads.
     #[serde(default)]
     pub interface: Option<String>,
+    /// How the waterfall is drawn.
+    #[serde(default)]
+    pub waterfall: WaterfallSection,
+}
+
+/// The waterfall's controls, as any waterfall has them. Kept here rather than in the
+/// browser so they are the station's — they travel in a profile — and not the window's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaterfallSection {
+    /// Let the floor follow the quietest fifth of the spectrum.
+    #[serde(default = "default_true")]
+    pub auto: bool,
+    /// The floor when it does not, dBFS.
+    #[serde(default = "default_waterfall_floor")]
+    pub floor_db: f64,
+    /// The range drawn above the floor, dB.
+    #[serde(default = "default_waterfall_gain")]
+    pub gain_db: f64,
+    /// Lines per second.
+    #[serde(default = "default_waterfall_speed")]
+    pub speed: u32,
+    /// The palette's name, as the panel lists them; one it does not know is drawn in its own.
+    #[serde(default = "default_waterfall_palette")]
+    pub palette: String,
+}
+
+fn default_waterfall_floor() -> f64 {
+    -90.0
+}
+
+fn default_waterfall_gain() -> f64 {
+    45.0
+}
+
+fn default_waterfall_speed() -> u32 {
+    8
+}
+
+fn default_waterfall_palette() -> String {
+    "aether".to_owned()
+}
+
+impl Default for WaterfallSection {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            floor_db: default_waterfall_floor(),
+            gain_db: default_waterfall_gain(),
+            speed: default_waterfall_speed(),
+            palette: default_waterfall_palette(),
+        }
+    }
 }
 
 /// Where the daemon's log goes.
@@ -609,7 +658,7 @@ pub struct Config {
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// The version a file is when it does not say: the first one shipped.
-const fn first_schema() -> u32 {
+pub(crate) const fn first_schema() -> u32 {
     1
 }
 
@@ -624,7 +673,7 @@ pub const MIGRATIONS: &[Migration] = &[];
 ///
 /// Returns the version it ended at. Separated from the file handling so the machinery can
 /// be tested with a made-up chain of steps while the real chain is still empty.
-fn migrate_with(table: &mut toml::Table, from: u32, migrations: &[Migration]) -> u32 {
+pub(crate) fn migrate_with(table: &mut toml::Table, from: u32, migrations: &[Migration]) -> u32 {
     let mut version = from;
     while let Some(step) = usize::try_from(version.saturating_sub(1))
         .ok()
@@ -670,6 +719,27 @@ impl From<PttError> for ConfigError {
 }
 
 impl Config {
+    /// The smallest configuration: a callsign and every default — what a file that says
+    /// only `callsign = "…"` parses to.
+    #[must_use]
+    pub fn with_callsign(callsign: &str) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            callsign: callsign.to_owned(),
+            operator: OperatorSection::default(),
+            audio: AudioSection::default(),
+            ptt: PttConfig::default(),
+            radio: RadioSection::default(),
+            control: ControlSection::default(),
+            host: HostSection::default(),
+            log: LogSection::default(),
+            update: UpdateSection::default(),
+            record: RecordSection::default(),
+            sim: SimSection::default(),
+            panel: PanelSection::default(),
+        }
+    }
+
     /// Parse a configuration from TOML text.
     ///
     /// # Errors
@@ -740,51 +810,32 @@ impl Config {
         }
         crate::ptt::validate_callsign(&self.callsign)?;
         self.operator.validate()?;
+        // Every bound a single setting has — a level between 0 and 1, a pin from 1 to 8, a
+        // bandwidth this version has a waveform for — is written once, in the settings
+        // registry, and checked here for all of them at once. What follows is what a
+        // registry cannot say: a rule between two settings, or one that holds only
+        // sometimes.
+        let document = serde_json::to_value(self)
+            .map_err(|e| ConfigError::Invalid(format!("cannot read the settings: {e}")))?;
+        crate::settings::check_bounds(&document)?;
         if let PttConfig::Cat {
             protocol,
             civ_address,
-            baud,
             ..
         } = &self.ptt
+            && *protocol == CatProtocol::Icom
+            && civ_address.is_none()
         {
-            if *protocol == CatProtocol::Icom && civ_address.is_none() {
-                return Err(ConfigError::Invalid(
-                    "[ptt] protocol = \"icom\" needs civ_address, the radio's CI-V address \
-                     (0x94 for an IC-7300, 0xA4 for an IC-705, 0xA2 for an IC-9700)"
-                        .into(),
-                ));
-            }
-            if *baud == 0 {
-                return Err(ConfigError::Invalid(
-                    "[ptt] baud must be a serial rate".into(),
-                ));
-            }
-        }
-        if let PttConfig::Cm108 { gpio, .. } = &self.ptt
-            && !(1..=8).contains(gpio)
-        {
-            return Err(ConfigError::Invalid(format!(
-                "[ptt] gpio must be 1–8, not {gpio}; the DRA and URI boards key on 3"
-            )));
+            return Err(ConfigError::Invalid(
+                "[ptt] protocol = \"icom\" needs civ_address, the radio's CI-V address \
+                 (0x94 for an IC-7300, 0xA4 for an IC-705, 0xA2 for an IC-9700)"
+                    .into(),
+            ));
         }
         if self.sim.listen.is_some() && self.sim.connect.is_some() {
             return Err(ConfigError::Invalid(
                 "[sim] listen and connect are alternatives; set one of them".into(),
             ));
-        }
-        if self.audio.sample_rate != default_rate() {
-            return Err(ConfigError::Invalid(format!(
-                "the waveform is built around {} Hz and nothing resamples; {} Hz will not work",
-                default_rate(),
-                self.audio.sample_rate
-            )));
-        }
-        if !(0.0..=1.0).contains(&self.audio.tx_level) || self.audio.tx_level <= 0.0 {
-            return Err(ConfigError::Invalid(format!(
-                "tx_level is a fraction of full scale, so it must be above 0 and at most 1; \
-                 got {}",
-                self.audio.tx_level
-            )));
         }
         if self.radio.cw_id && !(5.0..=40.0).contains(&self.radio.cw_id_wpm) {
             return Err(ConfigError::Invalid(format!(
@@ -793,26 +844,13 @@ impl Config {
                 self.radio.cw_id_wpm
             )));
         }
-        if self.radio.max_key_s <= 0.0 {
-            return Err(ConfigError::Invalid(
-                "max_key_s must be positive: a watchdog that can never fire is not one".into(),
-            ));
-        }
-        if self.radio.params().is_none() {
-            return Err(ConfigError::Invalid(format!(
-                "bandwidth must be 2300 or 500, not {}: those are the waveforms this version \
-                 has",
-                self.radio.bandwidth
-            )));
-        }
-        // the widest table's size; a narrower table clamps (`RadioSection::fastest_mode`)
-        // rather than refuses, so `bandwidth = 500` with everything else left alone works
-        if self.radio.max_mode >= aether_link::AWGN_THRESHOLD_DB.len() {
-            return Err(ConfigError::Invalid(format!(
-                "max_mode must be below {}, the number of modes this version defines",
-                aether_link::AWGN_THRESHOLD_DB.len()
-            )));
-        }
+        // the registry bounds `max_mode` to the widest table; a narrower table clamps
+        // (`RadioSection::fastest_mode`) rather than refuses, so `bandwidth = 500` with
+        // everything else left alone works
+        debug_assert!(
+            self.radio.params().is_some(),
+            "the registry lists a bandwidth the physical layer does not have"
+        );
         // The control interface can key a transmitter, so an address the network can reach
         // is refused here rather than started open and warned about.
         if self.control.enabled
@@ -922,12 +960,17 @@ pub const LIVE_KEYS: &[&str] = &[
     "operator.power_w",
     "operator.antenna",
     "panel.interface",
+    "panel.waterfall.auto",
+    "panel.waterfall.floor_db",
+    "panel.waterfall.gain_db",
+    "panel.waterfall.speed",
+    "panel.waterfall.palette",
 ];
 
 /// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
 /// the panel sends whole numbers as integers and the file round-trips them as floats, and a
 /// "change" between the two once restarted the modem on every save.
-fn same_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+pub(crate) fn same_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     match (a.as_f64(), b.as_f64()) {
         // exact on purpose: the question is whether the same number was written twice
         (Some(x), Some(y)) => x.to_bits() == y.to_bits() || (x - y).abs() < f64::EPSILON,
@@ -1162,6 +1205,8 @@ check = true
 # [panel]
 # The desktop panel keeps its own choices here; it writes this itself.
 # interface = "yaesu-usb"             # the Setup interface the operator picked
+# [panel.waterfall]                   # how the waterfall is drawn: auto, floor_db,
+#                                     # gain_db, speed, palette
 auto = false
 # What every automatic recording says about the station: the band, the antenna, the
 # frequency when there is no rig control to ask (with [ptt] kind = "rigctld" the frequency

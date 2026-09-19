@@ -1405,6 +1405,96 @@ button[aria-pressed="true"] {
   color: var(--text);
 }
 
+/* ── the profile bar at the top of Setup ── */
+
+.profile-bar {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.profile-bar > .row > label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+#profile-select {
+  min-width: 180px;
+}
+
+/* unsaved changes: the name carries a star, and the field says so in colour */
+#profile-select[data-dirty="true"] {
+  border-color: var(--status-warning);
+}
+
+#profile-label[data-dirty="true"]::after {
+  content: " *";
+  color: var(--status-warning);
+}
+
+/* the less-used actions, behind one control that opens a small list */
+details.menu {
+  position: relative;
+}
+
+details.menu > summary {
+  list-style: none;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 6px 13px;
+  font-weight: 500;
+  user-select: none;
+}
+
+details.menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.menu > summary:hover {
+  background: color-mix(in srgb, var(--surface-3) 85%, var(--text) 15%);
+  border-color: var(--text-3);
+}
+
+details.menu[open] > summary {
+  border-color: var(--accent);
+}
+
+details.menu > .menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+details.menu > .menu-list > button {
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+}
+
+details.menu > .menu-list > button:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: transparent;
+}
+
+#profile-note[data-state="warn"] {
+  color: var(--status-warning);
+}
+
+#profile-note[data-state="error"] {
+  color: var(--status-error);
+}
+
 /* ── text panes: received text, the log, the running configuration ── */
 
 .split {

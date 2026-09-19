@@ -1,0 +1,85 @@
+{
+  "format": "aether-hf-profile",
+  "schema": 1,
+  "settings_schema": 1,
+  "aether_version": "0.2.0-beta.43",
+  "name": "Home FTDX10",
+  "created": "2026-09-19T18:00:00.000Z",
+  "modified": "2026-09-19T18:00:00.000Z",
+  "settings": {
+    "audio": {
+      "input": "FTDX10 (USB AUDIO  CODEC)",
+      "output": "FTDX10 (USB AUDIO  CODEC)",
+      "sample_rate": 48000,
+      "tx_level": 0.2
+    },
+    "callsign": "KK4ODA",
+    "host": {
+      "bind": "127.0.0.1:8300",
+      "enabled": true,
+      "trace": false
+    },
+    "log": {
+      "format": "json",
+      "keep": 300
+    },
+    "operator": {
+      "antenna": "EFHW at 10 m",
+      "grid": "EM73tv",
+      "power_w": 30.0,
+      "rig": "FTDX10"
+    },
+    "panel": {
+      "interface": "yaesu-usb",
+      "waterfall": {
+        "auto": false,
+        "floor_db": -100.0,
+        "gain_db": 50.0,
+        "palette": "blue",
+        "speed": 4
+      }
+    },
+    "ptt": {
+      "kind": "serial",
+      "line": "rts",
+      "port": "COM7"
+    },
+    "radio": {
+      "answer_only": true,
+      "bandwidth": 500,
+      "busy_threshold_db": 8.0,
+      "compress": true,
+      "cw_id": true,
+      "cw_id_interval_s": 540.0,
+      "cw_id_wpm": 18.0,
+      "max_key_s": 25.0,
+      "max_mode": 11,
+      "wait_for_clear": true
+    },
+    "record": {
+      "auto": false,
+      "notes": "40 m, EFHW",
+      "tx_audio": true
+    },
+    "update": {
+      "channel": "stable",
+      "check": true
+    }
+  },
+  "hardware": {
+    "ptt_port": {
+      "name": "COM7",
+      "description": "Silicon Labs CP210x USB to UART Bridge Standard COM Port"
+    }
+  },
+  "memories": [
+    {
+      "hz": 7101000,
+      "name": "40 m — Aether calling (proposed)"
+    },
+    {
+      "hz": 14107000,
+      "name": "20 m"
+    }
+  ]
+}

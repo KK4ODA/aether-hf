@@ -384,6 +384,25 @@ and holds the key by an absolute deadline — the shape adopted. Open: the recei
 per-call search cost (it should search only what is new), and a preamble drawn to the
 data's crest.
 
+**Profiles (2026-09-19, ADR-0011):** `station.toml` stays what the daemon runs from; a
+profile is its *portable projection* under a name — `core/aetherd/src/settings.rs` is the
+settings registry (every leaf of `Config` enumerated from a template, plus a short table
+of rules: scope portable/hardware/machine/secret, bounds, options, the *why*; `validate()`
+runs the registry's bounds, so a range is written once, and `config.schema` serves it),
+`profile.rs` is the file (`profiles/<name>.aetherprofile`, JSON, `profiles.json` names the
+active one; envelope migrations of its own, the settings through `config::MIGRATIONS`),
+the transactional per-key `apply` (unknown/ignored/invalid/missing-hardware reported, the
+default kept for a bad value, the whole validated before anything is written, a missing
+device left as named and *suggested* by description never chosen) and the `Store`;
+`control/profiles.rs` the `profile.*` methods and the `profile` event (dirty = "loading
+the active profile would change something", computed). The first start adopts the running
+file as *Default*. **A new setting is in profiles unless it gets a rule**; an `Option`
+field needs a line in `settings::TEMPLATE` or a test says so. The waterfall's controls
+moved into `[panel.waterfall]` (live). The panel's Profile bar is at the top of Setup;
+`PROFILES`/`wz-profile` in `app.js` are the older *interface presets*, not profiles.
+Fixtures: `tests/data/profiles/`. To try it: the dry-run daemon on another port with a
+scratch `station.toml` under `C:\Dev\AetherBench\`.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

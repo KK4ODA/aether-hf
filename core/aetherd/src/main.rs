@@ -236,6 +236,7 @@ fn run() -> Result<Exit, String> {
     // The log comes up before anything that can fail loudly, so that what fails is on record.
     let log = open_log(&config, &path)?;
     let mut daemon = DaemonState::new(config.clone(), path, log);
+    adopt_profile(&mut daemon);
 
     // A dry run keys nothing, whatever the file says. Somebody checking their configuration
     // must not put a carrier on the air to find out that they had the wrong serial port.
@@ -364,6 +365,37 @@ fn replay(wav: &Path, expect: Option<&Path>, block_s: f64) -> Result<(), String>
              has lost something it once had",
             verdict.replayed, verdict.recorded
         ))
+    }
+}
+
+/// The first start with profiles: the running configuration becomes the *Default* profile,
+/// so an upgrade changes nothing the operator can see and the Setup tab has a name to show.
+/// Done once; a store that has been touched is left alone.
+fn adopt_profile(daemon: &mut DaemonState) {
+    let inventory = aetherd::profile::Inventory::from_json(&(daemon.devices)());
+    let adopted = daemon.profiles.adopt(
+        &daemon.config,
+        daemon.memories.entries(),
+        Some(&inventory),
+        &aetherd::profile::now(),
+    );
+    match adopted {
+        Ok(Some(entry)) => daemon.log.record(
+            Level::Info,
+            "profile",
+            &format!(
+                "the running settings were saved as the profile {:?} ({})",
+                entry.name, entry.path
+            ),
+            "Idle",
+        ),
+        Ok(None) => {}
+        Err(error) => daemon.log.record(
+            Level::Warn,
+            "profile",
+            &format!("the running settings could not be saved as a profile: {error}"),
+            "Idle",
+        ),
     }
 }
 
@@ -540,6 +572,14 @@ fn answer_commands(
             );
         }
         let _ = command.reply.send(response);
+    }
+    // a change to the settings, the dials or the profiles moves the station on or off
+    // its profile: every panel is told, so the mark by the profile's name is never stale
+    if daemon.take_profiles_changed() {
+        control.publish(&Event::new(
+            "profile",
+            aetherd::control::profiles::status_json(daemon),
+        ));
     }
 }
 

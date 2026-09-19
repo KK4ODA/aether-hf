@@ -46,7 +46,8 @@ the spectrum, the waterfall, and every frame the receiver found:
 * **Desktop:** download the installer for Windows, Linux or macOS from
   [Releases](https://github.com/KK4ODA/aether-hf/releases) and follow
   [`docs/user/install.md`](docs/user/install.md). The setup wizard finds the sound card and
-  the rig, tests keying, and sets the transmit level. The Windows installer is not yet
+  the rig, tests keying, and sets the transmit level; the settings are kept as *profiles*,
+  one per radio or place, exportable as a file for another computer. The Windows installer is not yet
   Authenticode-signed, so SmartScreen will ask, and the macOS build (Apple Silicon) is
   unsigned and untested on a real Mac — the guide says how to open it; `SHA256SUMS` is
   beside every asset.

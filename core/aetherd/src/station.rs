@@ -764,6 +764,12 @@ impl<P: Ptt> Station<P> {
         self.config.params
     }
 
+    /// What the station is running with, as last applied.
+    #[must_use]
+    pub fn config(&self) -> &StationConfig {
+        &self.config
+    }
+
     /// Frames reported since the last call.
     pub fn take_frame_reports(&mut self) -> Vec<FrameReport> {
         std::mem::take(&mut self.reports)

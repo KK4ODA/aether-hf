@@ -2,6 +2,7 @@
 //!
 //! * [`protocol`] — the wire messages, and the channel between a connection and the modem.
 //! * [`methods`] — what each method does, as a function of a request and a station.
+//! * [`profiles`] — the `profile.*` methods: a station's settings as one portable file.
 //! * [`server`] — the socket: WebSocket for a session, `POST /v1/<method>` for a one-shot.
 //!
 //! The split is deliberate. Everything above the socket can be tested by calling it, so the
@@ -10,6 +11,7 @@
 //! refused — are checked in the test suite rather than by hand against a running daemon.
 
 pub mod methods;
+pub mod profiles;
 pub mod protocol;
 pub mod server;
 

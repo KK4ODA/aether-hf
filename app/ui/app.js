@@ -58,6 +58,7 @@ function connect() {
     // overwrite what the file says
     await loadDevices();
     await loadConfig();
+    loadProfiles();
   });
 
   socket.addEventListener("message", (message) => {
@@ -117,6 +118,7 @@ function setLink(up) {
   ]) {
     $(id).disabled = !up;
   }
+  renderProfiles();
 }
 
 // ── events ──────────────────────────────────────────────────────────
@@ -140,6 +142,10 @@ function onEvent(frame) {
       break;
     case "heard":
       noteHeard(data);
+      break;
+    case "profile":
+      // the settings, the dials or the profiles changed: the star by the name follows
+      applyProfiles(data);
       break;
     case "data":
       onReceivedData(data.data ?? "");
@@ -1242,26 +1248,31 @@ function wireWaterfallControls() {
     waterfall.auto = $("wf-auto").checked;
     if (!waterfall.auto) waterfall.floor = Math.round(waterfallFloor);
     saveWaterfallSettings();
+    pushWaterfallSettings();
     showWaterfallSettings();
   });
   $("wf-floor").addEventListener("input", () => {
     waterfall.floor = Number($("wf-floor").value);
     saveWaterfallSettings();
+    pushWaterfallSettings();
     showWaterfallSettings();
   });
   $("wf-gain").addEventListener("input", () => {
     waterfall.gain = Number($("wf-gain").value);
     saveWaterfallSettings();
+    pushWaterfallSettings();
     showWaterfallSettings();
   });
   $("wf-speed").addEventListener("change", () => {
     waterfall.speed = Number($("wf-speed").value);
     saveWaterfallSettings();
+    pushWaterfallSettings();
   });
   $("wf-palette").addEventListener("change", () => {
     waterfall.palette = $("wf-palette").value;
     palette = null;
     saveWaterfallSettings();
+    pushWaterfallSettings();
   });
   showWaterfallSettings();
 }
@@ -1940,6 +1951,8 @@ async function loadConfig() {
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
+  takeWaterfallSettings(liveConfig.panel?.waterfall);
+  noteMissingDevices();
   // the file's devices, not the profile's guess, are what the warning should be about
   checkRates();
   checkModemSettings();
@@ -2111,6 +2124,409 @@ async function applied(answer) {
   }
   log(`the modem is restarting to apply ${restart.join(", ")}`);
   return `The modem is restarting to apply: ${restart.join(", ")}.`;
+}
+
+// ── profiles ────────────────────────────────────────────────────────
+//
+// A profile is every portable setting under a name, kept by the daemon beside its
+// configuration (`profile.*` in docs/spec/control-api.md). The panel is a client of
+// those methods and nothing more: it never reads or writes a profile file itself, so
+// what a profile holds is decided in one place. The `PROFILES` further down are the
+// radio-interface presets of Setup step 2, an older use of the word.
+
+let profiles = { active: null, name: null, dirty: null, list: [], dir: "" };
+// what the name form is for once OK is pressed: "save-as", "new", "rename",
+// "duplicate" or "delete"
+let profilePurpose = null;
+// what to do once the unsaved-changes question is answered
+let profileAfterPrompt = null;
+// the devices the last profile load could not find, with the daemon's suggestions
+let profileMissing = [];
+
+function noteProfile(text, state) {
+  const note = $("profile-note");
+  note.textContent = text;
+  if (state) note.dataset.state = state;
+  else delete note.dataset.state;
+}
+
+async function loadProfiles() {
+  try {
+    applyProfiles(await call("profile.list"));
+  } catch (error) {
+    // a daemon without a configuration file keeps no profiles; the bar says so and
+    // offers nothing
+    profiles = { active: null, name: null, dirty: null, list: [], dir: "" };
+    renderProfiles();
+    noteProfile(error.message, "warn");
+  }
+}
+
+function applyProfiles(status) {
+  profiles = {
+    active: status.active ?? null,
+    name: status.name ?? null,
+    dirty: status.dirty ?? null,
+    list: status.profiles ?? [],
+    dir: status.dir ?? "",
+  };
+  renderProfiles();
+}
+
+function renderProfiles() {
+  const select = $("profile-select");
+  select.replaceChildren();
+  if (!profiles.active) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = profiles.list.length ? "— pick a profile —" : "— no profile saved yet —";
+    select.append(none);
+  }
+  for (const entry of profiles.list) {
+    const option = document.createElement("option");
+    option.value = entry.id;
+    const active = entry.id === profiles.active;
+    option.textContent = `${entry.name}${active && profiles.dirty ? " *" : ""}`;
+    if (entry.error) {
+      option.textContent += " — cannot be read";
+      option.disabled = true;
+    }
+    option.title = entry.error
+      ? `${entry.path}: ${entry.error}`
+      : `${entry.path}${entry.modified ? ` — saved ${entry.modified}` : ""}`;
+    select.append(option);
+  }
+  select.value = profiles.active ?? "";
+  select.dataset.dirty = String(profiles.dirty === true);
+  $("profile-label").dataset.dirty = String(profiles.dirty === true);
+  select.title = profiles.dirty
+    ? `${profiles.name}: changed since it was saved — Save writes the changes to it`
+    : "The saved profile these settings come from; pick another to switch the station to it";
+  const connected = socket && socket.readyState === WebSocket.OPEN;
+  const hasActive = Boolean(profiles.active);
+  $("profile-save").disabled = !connected || !hasActive;
+  $("profile-save").title = hasActive
+    ? profiles.dirty
+      ? `Write the changes to ${profiles.name}`
+      : `${profiles.name} is up to date`
+    : "No profile is active: use Save as…";
+  $("profile-rename").disabled = !hasActive;
+  $("profile-duplicate").disabled = !hasActive;
+  $("profile-export").disabled = !connected;
+  $("profile-delete").disabled = profiles.list.filter((p) => p.id !== profiles.active).length === 0;
+  for (const id of ["profile-save-as", "profile-import", "profile-new"]) $(id).disabled = !connected;
+}
+
+/// The form for a name (or, for a delete, a choice), with what OK will do.
+function openProfileForm(purpose) {
+  profilePurpose = purpose;
+  $("profile-more").open = false;
+  const form = $("profile-name-form");
+  const name = $("profile-name");
+  const pick = $("profile-pick");
+  const labels = {
+    "save-as": ["Save as", "A name for the new profile", "OK"],
+    new: ["New profile", "A name for the new profile — it starts from the defaults", "Create"],
+    rename: ["Rename to", "The profile's new name", "Rename"],
+    duplicate: ["Copy as", "A name for the copy", "Copy"],
+    delete: ["Delete", "Which profile to delete", "Delete"],
+  };
+  const [label, hint, ok] = labels[purpose];
+  $("profile-name-label").textContent = label;
+  $("profile-name-ok").textContent = ok;
+  $("profile-name-ok").classList.toggle("danger", purpose === "delete");
+  $("profile-name-ok").classList.toggle("primary", purpose !== "delete");
+  name.hidden = purpose === "delete";
+  pick.hidden = purpose !== "delete";
+  name.title = hint;
+  if (purpose === "delete") {
+    pick.replaceChildren();
+    for (const entry of profiles.list.filter((p) => p.id !== profiles.active)) {
+      const option = document.createElement("option");
+      option.value = entry.id;
+      option.textContent = entry.name;
+      pick.append(option);
+    }
+  } else {
+    name.value = purpose === "rename" ? (profiles.name ?? "") : "";
+    if (purpose === "duplicate" && profiles.name) name.value = `${profiles.name} copy`;
+  }
+  form.hidden = false;
+  (purpose === "delete" ? pick : name).focus();
+  if (purpose !== "delete") name.select();
+}
+
+function closeProfileForm() {
+  $("profile-name-form").hidden = true;
+  profilePurpose = null;
+}
+
+async function profileFormOk() {
+  const purpose = profilePurpose;
+  const name = $("profile-name").value.trim();
+  if (purpose !== "delete" && !name) {
+    $("profile-name").focus();
+    return;
+  }
+  closeProfileForm();
+  try {
+    if (purpose === "save-as") {
+      applyProfiles(await call("profile.save", { name }));
+      noteProfile(`Saved as ${name}, now the active profile.`);
+      log(`profile saved as ${name}`);
+    } else if (purpose === "new") {
+      const answer = await call("profile.create", { name });
+      await afterProfileLoad(answer, `New profile ${name}: the defaults, with your callsign and operator details.`);
+    } else if (purpose === "rename") {
+      applyProfiles(await call("profile.rename", { id: profiles.active, name }));
+      noteProfile(`Renamed to ${name}.`);
+    } else if (purpose === "duplicate") {
+      applyProfiles(await call("profile.duplicate", { id: profiles.active, name }));
+      noteProfile(`Copied to ${name}. The station stays on ${profiles.name}; pick ${name} to switch.`);
+    } else if (purpose === "delete") {
+      const id = $("profile-pick").value;
+      if (!id) return;
+      const entry = profiles.list.find((p) => p.id === id);
+      if (!window.confirm(`Delete the profile ${entry?.name ?? id}? Its file is removed; the running settings are not touched.`)) return;
+      applyProfiles(await call("profile.delete", { id }));
+      noteProfile(`Deleted ${entry?.name ?? id}.`);
+    }
+  } catch (error) {
+    noteProfile(error.message, "error");
+    log(error.message, true);
+  }
+}
+
+/// Everything a load reported, in the operator's terms: what was left out, what could
+/// not be found, what needs a restart — and the restart itself, when there is somebody
+/// to do it.
+async function afterProfileLoad(answer, lead) {
+  applyProfiles(answer);
+  const report = answer.report ?? {};
+  profileMissing = report.missing_hardware ?? [];
+  const parts = [lead];
+  if ((report.unknown ?? []).length) {
+    parts.push(
+      `Left out — this version has no setting called ${report.unknown.join(", ")}${answer.aether_version ? ` (the profile was written by Aether HF ${answer.aether_version})` : ""}.`,
+    );
+  }
+  if ((report.invalid ?? []).length) {
+    parts.push(`Kept at the default: ${report.invalid.map((r) => r.reason).join("; ")}.`);
+  }
+  if (profileMissing.length) {
+    parts.push(`Not on this computer: ${describeMissing(profileMissing)}. Choose a device under Modem devices and save.`);
+  }
+  parts.push(await applied(report));
+  noteProfile(parts.join(" "), profileMissing.length || (report.invalid ?? []).length ? "warn" : undefined);
+  log(`profile ${answer.loaded?.name ?? profiles.name ?? ""} loaded (${(report.changed ?? []).length} settings changed)`);
+  await loadConfig();
+  loadMemories();
+  refreshStatus();
+}
+
+const MISSING_WORDS = {
+  "audio.input": "capture device",
+  "audio.output": "playback device",
+  "ptt.port": "keying port",
+  "ptt.device": "keying interface",
+};
+
+function describeMissing(missing) {
+  return missing
+    .map((m) => {
+      const what = `${MISSING_WORDS[m.key] ?? m.key} ${m.name}`;
+      return m.suggestion ? `${what} (${m.suggestion} has the same interface behind it)` : what;
+    })
+    .join(", ");
+}
+
+async function loadProfile(id) {
+  const entry = profiles.list.find((p) => p.id === id);
+  try {
+    const answer = await call("profile.load", { id });
+    await afterProfileLoad(answer, `Switched to ${entry?.name ?? id}.`);
+  } catch (error) {
+    noteProfile(`${entry?.name ?? id} was not loaded: ${error.message} Nothing was changed.`, "error");
+    log(error.message, true);
+    renderProfiles();
+  }
+}
+
+/// A switch, a new profile or an import with unsaved changes on the current one asks
+/// first: the changes are in the modem and would stay there, but the profile they
+/// belong to would not have them.
+function withProfileSaved(what, go) {
+  $("profile-more").open = false;
+  if (profiles.dirty !== true || !profiles.active) {
+    go();
+    return;
+  }
+  profileAfterPrompt = go;
+  $("profile-prompt-text").textContent = `${profiles.name} has changes that are not saved to it. Save them before ${what}?`;
+  $("profile-prompt").hidden = false;
+  $("profile-prompt-save").focus();
+}
+
+async function answerProfilePrompt(choice) {
+  $("profile-prompt").hidden = true;
+  const go = profileAfterPrompt;
+  profileAfterPrompt = null;
+  if (choice === "cancel" || !go) {
+    renderProfiles();
+    return;
+  }
+  if (choice === "save") {
+    try {
+      applyProfiles(await call("profile.save", {}));
+    } catch (error) {
+      noteProfile(error.message, "error");
+      renderProfiles();
+      return;
+    }
+  }
+  go();
+}
+
+async function saveProfile() {
+  try {
+    const answer = await call("profile.save", {});
+    applyProfiles(answer);
+    noteProfile(`Saved to ${answer.saved?.name ?? profiles.name} at ${new Date().toLocaleTimeString()}.`);
+    log(`profile ${answer.saved?.name ?? ""} saved`);
+  } catch (error) {
+    noteProfile(error.message, "error");
+    log(error.message, true);
+  }
+}
+
+async function exportProfile() {
+  $("profile-more").open = false;
+  try {
+    const answer = await call("profile.export", profiles.active ? { id: profiles.active } : {});
+    const blob = new Blob([answer.text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = answer.filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    noteProfile(
+      `${answer.filename} is being saved by the browser${answer.path ? `; the modem's own copy is ${answer.path}` : ""}.`,
+    );
+  } catch (error) {
+    noteProfile(error.message, "error");
+    log(error.message, true);
+  }
+}
+
+async function importProfileFile(file) {
+  let text;
+  try {
+    text = await file.text();
+  } catch (error) {
+    noteProfile(`${file.name} could not be read: ${error.message}`, "error");
+    return;
+  }
+  let answer;
+  try {
+    answer = await call("profile.import", { text });
+  } catch (error) {
+    if (!/already exists/.test(error.message)) {
+      noteProfile(`${file.name}: ${error.message}`, "error");
+      log(error.message, true);
+      return;
+    }
+    if (!window.confirm(`${error.message} Replace it with the file's?`)) return;
+    try {
+      answer = await call("profile.import", { text, replace: true });
+    } catch (again) {
+      noteProfile(`${file.name}: ${again.message}`, "error");
+      return;
+    }
+  }
+  applyProfiles(answer);
+  const name = answer.imported?.name ?? file.name;
+  const report = answer.report ?? {};
+  const remarks = [];
+  if ((report.unknown ?? []).length) remarks.push(`settings this version does not have: ${report.unknown.join(", ")}`);
+  if ((report.invalid ?? []).length) remarks.push(`values that will be kept at the default: ${report.invalid.map((r) => r.key).join(", ")}`);
+  if ((report.missing_hardware ?? []).length) remarks.push(`devices not on this computer: ${describeMissing(report.missing_hardware)}`);
+  const written = answer.aether_version ? ` (written by Aether HF ${answer.aether_version})` : "";
+  noteProfile(`Imported ${name}${written}.${remarks.length ? ` ${remarks.join("; ")}.` : ""}`, remarks.length ? "warn" : undefined);
+  log(`profile ${name} imported`);
+  if (window.confirm(`Load ${name} now?${remarks.length ? `\n\n${remarks.join(".\n")}.` : ""}`)) {
+    withProfileSaved("switching", () => loadProfile(answer.imported.id));
+  }
+}
+
+/// The devices the configuration names that this machine does not list: shown in the
+/// device lists as what they are, and said under them, so a profile from another
+/// computer — or a radio that is unplugged — is never mistaken for "system default".
+function noteMissingDevices() {
+  const missing = [];
+  const check = (select, name, key, word) => {
+    if (!name) return;
+    if ([...select.options].some((o) => o.value === name)) return;
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = `${name} — not on this computer`;
+    option.dataset.missing = "true";
+    select.append(option);
+    select.value = name;
+    const hint = profileMissing.find((m) => m.key === key);
+    missing.push({ key, name, suggestion: hint?.suggestion, word });
+  };
+  const ptt = liveConfig?.ptt ?? {};
+  check($("dev-in"), liveConfig?.audio?.input, "audio.input");
+  check($("dev-out"), liveConfig?.audio?.output, "audio.output");
+  if (ptt.kind === "serial" || ptt.kind === "cat") check($("dev-ptt"), ptt.port, "ptt.port");
+  if (ptt.kind === "cm108" && ptt.device) {
+    const listed = [...$("dev-ptt").options].some((o) => o.value === `gpio:${ptt.device}`);
+    if (!listed) missing.push({ key: "ptt.device", name: ptt.device });
+  }
+  const note = $("hardware-note");
+  note.hidden = missing.length === 0;
+  note.textContent = missing.length
+    ? `Not on this computer: ${describeMissing(missing)}. The modem cannot use it; choose a device that is here and save.`
+    : "";
+}
+
+// ── the waterfall's settings in the profile ──
+//
+// The waterfall's controls are the station's, not the window's: they are written to the
+// modem's `[panel.waterfall]` (live keys) so they travel in a profile, and kept in the
+// browser as well so a panel that cannot reach the modem still draws as it was left.
+let waterfallPushTimer = null;
+
+function pushWaterfallSettings() {
+  if (!liveConfig?.panel) return;
+  clearTimeout(waterfallPushTimer);
+  waterfallPushTimer = setTimeout(() => {
+    waterfallPushTimer = null;
+    call("config.set", {
+      "panel.waterfall.auto": waterfall.auto,
+      "panel.waterfall.floor_db": waterfall.floor,
+      "panel.waterfall.gain_db": waterfall.gain,
+      "panel.waterfall.speed": waterfall.speed,
+      "panel.waterfall.palette": waterfall.palette,
+    }).catch(() => {});
+  }, 400);
+}
+
+function takeWaterfallSettings(section) {
+  if (!section) return;
+  const before = JSON.stringify(waterfall);
+  if (typeof section.auto === "boolean") waterfall.auto = section.auto;
+  if (Number.isFinite(section.floor_db)) waterfall.floor = section.floor_db;
+  if (Number.isFinite(section.gain_db)) waterfall.gain = section.gain_db;
+  if (Number.isFinite(section.speed)) waterfall.speed = section.speed;
+  if (typeof section.palette === "string" && section.palette in PALETTES) waterfall.palette = section.palette;
+  if (JSON.stringify(waterfall) === before) return;
+  palette = null;
+  saveWaterfallSettings();
+  showWaterfallSettings();
 }
 
 // ── the setup wizard ────────────────────────────────────────────────
@@ -2650,6 +3066,45 @@ function wire() {
   $("tx-level").addEventListener("input", () => showTxLevel(txLevel()));
   $("tx-level").addEventListener("change", saveTxLevel);
   $("wz-save").addEventListener("click", wizardSave);
+  $("profile-select").addEventListener("change", () => {
+    const id = $("profile-select").value;
+    if (!id || id === profiles.active) return;
+    withProfileSaved("switching", () => loadProfile(id));
+  });
+  $("profile-save").addEventListener("click", saveProfile);
+  $("profile-save-as").addEventListener("click", () => openProfileForm("save-as"));
+  $("profile-new").addEventListener("click", () => withProfileSaved("starting a new one", () => openProfileForm("new")));
+  $("profile-rename").addEventListener("click", () => openProfileForm("rename"));
+  $("profile-duplicate").addEventListener("click", () => openProfileForm("duplicate"));
+  $("profile-delete").addEventListener("click", () => openProfileForm("delete"));
+  $("profile-export").addEventListener("click", exportProfile);
+  $("profile-import").addEventListener("click", () => {
+    $("profile-more").open = false;
+    $("profile-file").value = "";
+    $("profile-file").click();
+  });
+  $("profile-file").addEventListener("change", () => {
+    const file = $("profile-file").files?.[0];
+    if (file) importProfileFile(file);
+  });
+  $("profile-name-ok").addEventListener("click", profileFormOk);
+  $("profile-name-cancel").addEventListener("click", closeProfileForm);
+  $("profile-name").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      profileFormOk();
+    } else if (event.key === "Escape") {
+      closeProfileForm();
+    }
+  });
+  $("profile-prompt-save").addEventListener("click", () => answerProfilePrompt("save"));
+  $("profile-prompt-discard").addEventListener("click", () => answerProfilePrompt("discard"));
+  $("profile-prompt-cancel").addEventListener("click", () => answerProfilePrompt("cancel"));
+  // the More menu closes when the pointer goes elsewhere
+  document.addEventListener("click", (event) => {
+    const menu = $("profile-more");
+    if (menu.open && !menu.contains(event.target)) menu.open = false;
+  });
   $("btn-copy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(asToml(formChanges()));
