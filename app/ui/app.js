@@ -353,6 +353,9 @@ function applyMetrics(metrics) {
       tx: metrics.transmitting === true,
       rx: metrics.receiving === true,
       busy: metrics.channel_busy === true,
+      // which path last lit the lamp — level, shape or frame — so the chart can say so
+      // where the bars alone would contradict it
+      why: typeof metrics.busy_reason === "string" ? metrics.busy_reason : null,
     });
     while (history.length && history[0].at < at - LEVEL_SPAN_MS) history.shift();
     drawChart();
@@ -583,6 +586,7 @@ function tokens() {
     rx: read("--status-rx", "#22d3ee"),
     error: read("--status-error", "#f87171"),
     warn: read("--status-warning", "#fbbf24"),
+    busy: read("--status-busy", "#fb923c"),
     plot: read("--plot-bg", "#000"),
     numerals: read("--numerals", "monospace"),
   };
@@ -1601,8 +1605,17 @@ function renderCounters(counters) {
 // received, and a short tick at the baseline where this station was transmitting and its
 // receiver was muted. A faint dashed rule marks every change between the two, so the
 // rhythm of a session — burst, acknowledgement, burst — is read off the top of the chart.
+//
+// The busy lamp has three paths and the level is only one of them: behind a receiver's
+// AGC a narrowband signal sits within a decibel or two of the floor and is caught by the
+// passband's shape, and a decoded frame marks the channel on its own. The bars and the
+// threshold line show the level path alone, so a band along the top of the plot says
+// when the lamp was lit and in which path's colour, and a peak is drawn red only when it
+// is over the line — otherwise the chart shows bars under the line with the lamp on and
+// looks wrong when it is right.
 
 const history = [];
+const BUSY_BAND = 4;
 
 function drawChart() {
   const now = Date.now();
@@ -1625,6 +1638,9 @@ function drawChart() {
     [null, "- - noise floor"],
     [null, "· · busy threshold"],
     [null, "▏ peak that tripped it"],
+    [null, "▬ busy: level"],
+    [null, "▬ busy: shape"],
+    [null, "▬ busy: frame"],
   ];
   const f = chartFrame("chart", 450, 180, low, high, legend);
   const { ctx, c } = f;
@@ -1643,10 +1659,13 @@ function drawChart() {
       ctx.fillStyle = point.rx ? c.rx : withAlpha(c.rx, 0.45);
       const top = Math.min(f.y(point.level), base - 1);
       ctx.fillRect(x0, top, bar, base - top);
-      // the peak the detector tested in this half second, above the sampled bar: when the
-      // busy lamp lights with the bars below the line, this is what crossed it
+      // the peak the detector tested in this half second, above the sampled bar. Red only
+      // when it is over the line and the channel was busy — a peak that tripped it, or
+      // helped to; a peak under the line is grey whatever the lamp says, and the band at
+      // the top names the path that lit it when the level did not
       if (point.peak !== null && point.peak !== undefined && point.peak > point.level) {
-        ctx.fillStyle = point.busy ? c.error : withAlpha(c.ink, 0.5);
+        const crossed = point.peak - point.floor >= busyThresholdDb - 1e-6;
+        ctx.fillStyle = point.busy && crossed ? c.error : withAlpha(c.ink, 0.5);
         const peakY = Math.min(f.y(point.peak), top - 1);
         ctx.fillRect(x0, peakY, bar, Math.max(1, top - peakY));
       }
@@ -1693,7 +1712,18 @@ function drawChart() {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.error];
+  // the band along the top while the channel was busy, in the colour of the path that
+  // marked it: red for the level (the line crossed), the lamp's own orange for the
+  // passband's shape, and the decoded-frame teal of the SNR chart for a frame. Slot-wide,
+  // so consecutive samples join into one span
+  const reasonColour = { level: c.error, shape: c.busy, frame: c.accent };
+  for (const point of history) {
+    if (!point.busy) continue;
+    ctx.fillStyle = reasonColour[point.why] ?? c.busy;
+    ctx.fillRect(x(point.at) - slot, f.top, slot, BUSY_BAND);
+  }
+
+  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.error, c.error, c.busy, c.accent];
   drawLegend(f, legend.map(([, text], i) => [colours[i], text]));
 }
 

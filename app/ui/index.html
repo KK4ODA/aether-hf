@@ -23,7 +23,7 @@
       <div class="indicators" role="group" aria-label="Indicators">
         <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
         <span class="lamp" id="lamp-rx" title="Receive: lit while a burst is arriving" role="img" aria-label="Nothing arriving">RX</span>
-        <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal above the busy threshold" role="img" aria-label="Channel clear">BUSY</span>
+        <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">BUSY</span>
         <span class="lamp" id="lamp-link" title="Link: the panel's connection to the modem" role="status" aria-label="Not connected to the modem">LINK</span>
       </div>
       <div class="head-right">
@@ -109,7 +109,7 @@
           </figure>
           <figure class="chart">
             <figcaption>Channel and activity, last two minutes</figcaption>
-            <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line"></canvas>
+            <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — the level, the passband's shape or a decoded frame — and a peak drawn red only where it crossed the line" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
           </figure>
         </div>
 
