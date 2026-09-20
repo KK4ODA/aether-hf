@@ -16,9 +16,12 @@
 //! the modem's clock is the audio it has heard, so this backend has to do the same: every
 //! call to [`AudioIo::capture`] returns as many samples as the wall clock says have elapsed,
 //! taken from what the peer sent and padded with silence (and noise) when it sent nothing.
-//! What this side plays goes to the peer as soon as it is queued, which is up to a quarter
-//! of a second ahead of real time — the daemon's own playback backlog — so a loop that
-//! stalls for less than that leaves no gap in the peer's copy.
+//! What this side plays goes to the peer the moment it is queued — a whole burst at once,
+//! so nothing the loop does afterwards can put a hole in the peer's copy — and the peer
+//! hears it a card's latency ([`DEVICE_LATENCY_S`]) after this side's playback clock says
+//! it played, which is when a real card's converter would have put it on the air. The
+//! keying tail is sized for exactly that delay, and without it the peer's reply reached a
+//! station inside its own tail, while it was still deaf.
 
 use std::{
     collections::VecDeque,
@@ -32,7 +35,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::audio::AudioIo;
+use crate::audio::{AudioIo, DEVICE_LATENCY_S};
 
 /// How the two ends find each other.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,11 +66,50 @@ pub struct SimConfig {
 struct Shared {
     /// What the peer sent, not yet delivered as captured audio.
     from_peer: VecDeque<f32>,
+    /// The runs it arrived in, oldest first: a run is delivered a card's latency after
+    /// its first sample arrived, no sooner, and as one piece.
+    arrivals: VecDeque<Run>,
     /// Whether the peer has been found.
     connected: bool,
     /// Whether it has since gone away.
     lost: bool,
 }
+
+impl Shared {
+    /// Samples off the socket: into the queue, and onto the run they belong to.
+    fn arrived(&mut self, samples: Vec<f32>, now: Instant) {
+        match self.arrivals.back_mut() {
+            Some(run) if now.duration_since(run.last) < RUN_GAP => {
+                run.last = now;
+                run.samples += samples.len();
+            }
+            _ => self.arrivals.push_back(Run {
+                first: now,
+                last: now,
+                samples: samples.len(),
+            }),
+        }
+        self.from_peer.extend(samples);
+    }
+}
+
+/// Samples that arrived close together — a burst, handed over whole at the other end —
+/// and are delivered together, from a card's latency after the first of them arrived. One
+/// stamp for the run rather than one per socket read, because a run's reads land a few
+/// milliseconds apart and a capture falling between their due times would deliver half
+/// the burst and pad the rest with silence: a hole in a burst that had none.
+#[derive(Debug)]
+struct Run {
+    /// When the first sample arrived.
+    first: Instant,
+    /// When the latest did.
+    last: Instant,
+    /// How many are still to be delivered.
+    samples: usize,
+}
+
+/// Samples that arrive within this much of the previous ones join their run.
+const RUN_GAP: Duration = Duration::from_millis(100);
 
 /// The backend.
 pub struct SimLink {
@@ -76,6 +118,8 @@ pub struct SimLink {
     running: Arc<AtomicBool>,
     sample_rate: u32,
     noise_sigma: f32,
+    /// How long after the peer played a sample this side hears it: the card's latency.
+    latency: Duration,
     /// Where the clock was when capture last ran.
     last_capture: Instant,
     /// Fractional samples carried between captures, so the rate is exact over time.
@@ -160,7 +204,7 @@ impl SimLink {
                                 .collect();
                             pending.drain(..whole);
                             if let Ok(mut shared) = reader_shared.lock() {
-                                shared.from_peer.extend(samples);
+                                shared.arrived(samples, Instant::now());
                             }
                         }
                     }
@@ -202,6 +246,7 @@ impl SimLink {
             running,
             sample_rate: config.sample_rate,
             noise_sigma: noise_sigma(config.snr_db, config.signal_rms) as f32,
+            latency: Duration::from_secs_f64(DEVICE_LATENCY_S),
             last_capture: now,
             carry: 0.0,
             played: 0,
@@ -251,8 +296,28 @@ impl AudioIo for SimLink {
 
         let mut out = Vec::with_capacity(count);
         if let Ok(mut shared) = self.shared.lock() {
-            let have = shared.from_peer.len().min(count);
+            // only what arrived a card's latency ago is on the air yet
+            let due: usize = shared
+                .arrivals
+                .iter()
+                .take_while(|run| now.duration_since(run.first) >= self.latency)
+                .map(|run| run.samples)
+                .sum();
+            let have = due.min(shared.from_peer.len()).min(count);
             out.extend(shared.from_peer.drain(..have));
+            let mut taken = have;
+            while taken > 0 {
+                let Some(run) = shared.arrivals.front_mut() else {
+                    break;
+                };
+                if run.samples <= taken {
+                    taken -= run.samples;
+                    shared.arrivals.pop_front();
+                } else {
+                    run.samples -= taken;
+                    taken = 0;
+                }
+            }
         }
         out.resize(count, 0.0);
         if self.noise_sigma > 0.0 {
@@ -406,14 +471,15 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        // a plays a tone; b captures it at the wall clock's pace
+        // a plays a tone; b captures it at the wall clock's pace, a card's latency later
+        let latency = Duration::from_secs_f64(DEVICE_LATENCY_S);
         let tone: Vec<f32> = (0..9_600).map(|i| 0.25 * (i as f32 * 0.2).sin()).collect();
         a.playback(&tone);
         assert!(
             a.queued() > 0,
             "the backlog should be visible until the clock eats it"
         );
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(250) + latency);
         let mut heard = Vec::new();
         for round in 0..5 {
             heard.extend(b.capture());
@@ -445,9 +511,15 @@ mod tests {
         let rms = (tail.iter().map(|x| x * x).sum::<f32>() / 1_000.0).sqrt();
         assert!(rms < 0.01, "the padding is not quiet: {rms}");
 
-        // and the other way
+        // and the other way: nothing until the latency has passed, then the tone
         b.playback(&tone);
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(50));
+        let early = a.capture();
+        assert!(
+            early.iter().all(|x| x.abs() < 0.2),
+            "the tone arrived inside the card's latency"
+        );
+        std::thread::sleep(Duration::from_millis(100) + latency);
         let back = a.capture();
         assert!(
             back.iter().any(|x| x.abs() > 0.2),

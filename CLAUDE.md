@@ -382,7 +382,15 @@ numbers for any WAV. The waveform itself was measured clean (preamble at the dat
 at level within 20 ms, no holes); Mercury renders whole bursts, keys, writes the buffer once
 and holds the key by an absolute deadline — the shape adopted. Open: the receiver's
 per-call search cost (it should search only what is new), and a preamble drawn to the
-data's crest.
+data's crest. **The mirror at the burst's end** (2026-09-20, ADR-0010 §5): a captured block
+is muted only up to where the card's clock says this station's transmission ended, not
+whole — a slow pass had muted the start of the peer's reply with the tail, which CI saw as
+the mode ladder losing the first frame of a burst at 25 dB — and the simulated channel now
+delivers a card's latency late (`DEVICE_LATENCY_S`, in `audio.rs`), as the keying tail
+assumes. A two-daemon test that fails in CI leaves its daemons' logs and sidecars as the
+`two-daemons-<os>` artifact. WSL with a user-prefix ALSA (`apt-get download libasound2-dev`,
+`dpkg-deb -x`, `PKG_CONFIG_PATH` at its `alsa.pc`) and `taskset -c 0` is how a Linux CI
+timing failure is reproduced on the author's machine.
 
 **Profiles (2026-09-19, ADR-0011):** `station.toml` stays what the daemon runs from; a
 profile is its *portable projection* under a name — `core/aetherd/src/settings.rs` is the
