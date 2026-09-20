@@ -35,6 +35,17 @@ use std::{
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+/// How long a sample handed to the sound card is assumed to take to leave it: the card's
+/// own buffering, which its playback clock cannot see. The keying tail covers it, the
+/// engine's timers are told of it, and the simulated channel delivers what a station plays
+/// this much later, as a card would. A quarter second is generous for a USB codec.
+///
+/// This used to be how much audio the loop kept queued ahead of the card, topping it up
+/// between blocks — and a block that cost the receiver more than that put a hole in the
+/// burst on the air, uncounted (`field/TX-ONSET-FINDINGS.md`). A whole burst is queued at
+/// once now; the constant only names the card's latency.
+pub const DEVICE_LATENCY_S: f64 = 0.25;
+
 /// Anything the run loop can take audio from and give audio to.
 pub trait AudioIo {
     /// Take whatever has been captured since the last call.

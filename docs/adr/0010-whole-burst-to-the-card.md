@@ -63,3 +63,25 @@ second in, and OTA-2's "choppy" audio was it.
 * `[record] tx_audio` keeps each transmission's exact audio for holding the air against.
 * The receiver's search cost per call is the open item: it belongs to the receiver, not
   to the transmit path, and it is measured now.
+
+## 5. Amendment (2026-09-20): the deafness ends with the transmission, not with the pass
+
+Releasing the key on the card's clock moved the end of the station's *deafness* — the
+receiver is fed silence for every captured block that arrives while `transmitting` — to the
+true end of the tail, a quarter second later than the queue-drain release it replaced, and
+a block is muted whole. On a slow pass the block that carries the end of the tail also
+carries the start of the peer's reply, and that start was muted with the tail: the first
+frame of the burst after every slow pass, on a loaded machine. CI showed it as the Test
+session's mode ladder decoding one frame of two at 25 dB on the simulated channel, and a
+run of two daemons pinned to one CPU reproduced it, the recording holding the whole burst
+the receiver never saw the start of.
+
+Two changes. The station now takes the card's clock *before* each block and mutes only as
+far as the transmission's last sample (`captured_after_transmission`); the transmission is
+finished there, inside the block, and the rest of the block is heard. And the simulated
+channel delivers what a station plays a card's latency (`DEVICE_LATENCY_S`) after that
+station's playback clock says it played — grouped into the runs it arrived in, so a burst
+handed over whole is delivered whole — because the keying tail is sized for that delay and
+without it the peer's reply reached a station inside its own tail on the wire and never on
+the air. The simulated channel's timing now matches a sound card's rather than flattering
+it; `CI` keeps a failed two-daemon test's daemon logs and sidecars as an artifact.

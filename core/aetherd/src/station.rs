@@ -505,6 +505,32 @@ struct PlaybackClock {
     flush_device: bool,
 }
 
+impl PlaybackClock {
+    /// How many samples the sound card has played past the last one handed to it for the
+    /// transmission now running: `Some(0)` while that is still leaving, `None` for a
+    /// harness that reports no clock.
+    fn played_past_transmission(&self) -> Option<u64> {
+        let (played, at_key) = (self.device_played?, self.played_at_key?);
+        Some(
+            played
+                .saturating_sub(at_key)
+                .saturating_sub(self.handed - self.handed_at_key),
+        )
+    }
+
+    /// Whether the card's clock has reached the last sample handed for this transmission.
+    /// A harness that reports no clock is taken at its word the moment the queue drains,
+    /// as it always was.
+    fn caught_up(&self) -> bool {
+        match (self.device_played, self.played_at_key) {
+            (Some(played), Some(at_key)) => {
+                played.saturating_sub(at_key) >= self.handed - self.handed_at_key
+            }
+            _ => true,
+        }
+    }
+}
+
 /// One station: link engine, physical layer, radio.
 pub struct Station<P: Ptt> {
     config: StationConfig,
@@ -1494,9 +1520,26 @@ impl<P: Ptt> Station<P> {
             // from two pieces of signal that were never adjacent. Measured, that cost 40 dB
             // and made every burst that overlapped one of our own acknowledgements
             // undecodable. Muted is not the same as paused.
+            //
+            // The deafness ends where the transmission did, though, not where the loop
+            // noticed: the card's clock says how much of this block came in after the last
+            // sample had left, and that much is the channel again and is heard. A pass slow
+            // enough to bring in the end of our own tail and the start of the peer's reply
+            // together used to mute the reply's start with the tail — the first frame of
+            // the burst after every slow pass, on a loaded machine.
             self.busy.skip(&baseband);
-            let muted = vec![(0.0, 0.0); baseband.len()];
-            self.absorb(&muted, now);
+            let after = self.captured_after_transmission(audio.len(), baseband.len());
+            if after == 0 || !self.playback.is_empty() {
+                let muted = vec![(0.0, 0.0); baseband.len()];
+                self.absorb(&muted, now);
+            } else {
+                let during = baseband.len() - after;
+                let ended = now - after as f64 * self.config.params.fs_baseband.recip();
+                let muted = vec![(0.0, 0.0); during];
+                self.absorb(&muted, ended);
+                self.finish_transmission(ended)?;
+                self.absorb(&baseband[during..], now);
+            }
         } else {
             // the receiver hears everything; the busy detector is spared the tail of this
             // station's own burst, which the card delivers a lead after the key is released
@@ -1548,46 +1591,10 @@ impl<P: Ptt> Station<P> {
         // the card's own clock has passed the last sample handed over. A harness that
         // reports no clock releases on drain, as before.
         if self.playback.is_empty() && self.transmitting {
-            if !self.clock.cut_short
-                && let (Some(played), Some(played_at_key)) =
-                    (self.clock.device_played, self.clock.played_at_key)
-                && played.saturating_sub(played_at_key)
-                    < self.clock.handed - self.clock.handed_at_key
-            {
+            if !self.clock.cut_short && !self.clock.caught_up() {
                 return Ok(0); // still leaving the sound card
             }
-            self.clock.cut_short = false;
-            self.transmitting = false;
-            self.playing_test = false;
-            self.tx_peak_last = Some(self.tx_peak_running);
-            let peak = self.tx_peak_running;
-            self.tx_peak_running = 0.0;
-            if let Some(capture) = self.tx_capture.take() {
-                match capture.finish(self.config.record_dir.as_deref()) {
-                    Ok(summary) => self.events.push(format!("tx:{summary}")),
-                    Err(error) => self.events.push(format!("error:tx capture: {error}")),
-                }
-            }
-            if let Some(recording) = &mut self.recording {
-                let state = format!("{:?}", self.engine.state());
-                // `detail` on a ptt event is read back by the replay to find the intervals
-                // this station was deaf for (`replay.rs`), so it stays exactly "keyed" and
-                // "released" and nothing else.
-                recording.event(now, "ptt", "released", &state);
-                // The peak goes in an event of its own: a burst nobody decoded is a
-                // different story depending on whether the transmitter was being clipped
-                // at the time, and by the time anyone asks, the audio is all that is left.
-                if peak > 0.0 {
-                    let dbfs = 20.0 * f64::from(peak).log10();
-                    recording.event(now, "tx_peak", &format!("{dbfs:.1} dBFS"), &state);
-                }
-            }
-            self.ptt.unkey(now)?;
-            // the queue drained now, and what the sound card still holds is the tail's
-            // silence: the burst itself has already left
-            self.engine.on_tx_done(now);
-            self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
-            self.pump();
+            self.finish_transmission(now)?;
             return Ok(0);
         }
         if self.playback.is_empty() {
@@ -1626,6 +1633,62 @@ impl<P: Ptt> Station<P> {
             capture.push(&out[..count]);
         }
         Ok(count)
+    }
+
+    /// The transmission is over — its queue drained and, by the card's clock, its last
+    /// sample gone: release the key, tell the engine, close the capture of what was sent.
+    fn finish_transmission(&mut self, now: f64) -> Result<(), PttError> {
+        self.clock.cut_short = false;
+        self.transmitting = false;
+        self.playing_test = false;
+        self.tx_peak_last = Some(self.tx_peak_running);
+        let peak = self.tx_peak_running;
+        self.tx_peak_running = 0.0;
+        if let Some(capture) = self.tx_capture.take() {
+            match capture.finish(self.config.record_dir.as_deref()) {
+                Ok(summary) => self.events.push(format!("tx:{summary}")),
+                Err(error) => self.events.push(format!("error:tx capture: {error}")),
+            }
+        }
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            // `detail` on a ptt event is read back by the replay to find the intervals
+            // this station was deaf for (`replay.rs`), so it stays exactly "keyed" and
+            // "released" and nothing else.
+            recording.event(now, "ptt", "released", &state);
+            // The peak goes in an event of its own: a burst nobody decoded is a
+            // different story depending on whether the transmitter was being clipped
+            // at the time, and by the time anyone asks, the audio is all that is left.
+            if peak > 0.0 {
+                let dbfs = 20.0 * f64::from(peak).log10();
+                recording.event(now, "tx_peak", &format!("{dbfs:.1} dBFS"), &state);
+            }
+        }
+        self.ptt.unkey(now)?;
+        // the queue drained now, and what the sound card still holds is the tail's
+        // silence: the burst itself has already left
+        self.engine.on_tx_done(now);
+        self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
+        self.pump();
+        Ok(())
+    }
+
+    /// How many of the baseband samples of the block just captured came in after the
+    /// transmission now running had wholly left the sound card. The card's playback clock
+    /// and the capture run at one rate, so what the card has played past the transmission's
+    /// last sample is what the capture holds past it — near enough: a card captures its own
+    /// tail a little later still, and that is silence either way. `captured` audio samples
+    /// became `baseband` baseband ones.
+    fn captured_after_transmission(&self, captured: usize, baseband: usize) -> usize {
+        let past = self
+            .clock
+            .played_past_transmission()
+            .map_or(0, |past| usize::try_from(past).unwrap_or(usize::MAX));
+        if past == 0 || captured == 0 {
+            return 0;
+        }
+        let after = past.min(captured) as f64 * baseband as f64 / captured as f64;
+        (after.round() as usize).min(baseband)
     }
 
     // ── internals ─────────────────────────────────────────────────────
@@ -2723,6 +2786,70 @@ mod tests {
         assert_eq!(station.playback(&mut out).expect("playback"), 0);
         assert!(!station.transmitting(), "the burst has left the card");
         assert!(!station.take_device_flush(), "nothing was cut short");
+    }
+
+    /// Everything a station hands to the sound card for its next transmission.
+    fn handed_audio(station: &mut Station<NullPtt>) -> Vec<f32> {
+        let mut out = vec![0.0f32; 4800];
+        let mut audio = Vec::new();
+        loop {
+            let count = station.playback(&mut out).expect("playback");
+            if count == 0 {
+                break;
+            }
+            audio.extend_from_slice(&out[..count]);
+        }
+        audio
+    }
+
+    #[test]
+    fn a_block_that_outlasts_the_transmission_is_heard_past_its_end() {
+        // A slow pass on a loaded machine brings in the end of this station's own tail and
+        // the start of the peer's reply together. The reply is heard: the deafness ends
+        // where the card's clock says the transmission did, not where the loop noticed.
+        let rate = WIDE_2300.audio_rate;
+        let mut caller = Station::new(
+            StationConfig {
+                callsign: "KK4XYZ".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            2,
+        );
+        caller.connect("W4ODA").expect("idle");
+        let request = handed_audio(&mut caller);
+        assert!(request.len() > rate / 2, "a connect request was rendered");
+
+        // half a second past the tail, then the peer's request, then the room the receiver
+        // needs after a frame — a quarter second — all in one block
+        let quiet = rate / 2;
+        let mut arrives = vec![0.0f32; quiet];
+        arrives.extend_from_slice(&request);
+        arrives.extend(std::iter::repeat_n(0.0f32, rate / 4));
+
+        for (past_end, heard) in [(0usize, false), (arrives.len(), true)] {
+            let mut station = idle_station();
+            station.key_test(0.2).expect("idle");
+            station.device_played(0);
+            let handed = handed_audio(&mut station).len();
+            assert!(station.transmitting(), "the burst is still in the card");
+            // the block: the transmission's last `arrives.len() - past_end` samples, and then
+            // what came in after it
+            let mut block = vec![0.0f32; arrives.len() - past_end];
+            block.extend_from_slice(&arrives[arrives.len() - past_end..]);
+            station.device_played(handed as u64 + past_end as u64);
+            station.capture(&block).expect("capture");
+            assert_eq!(
+                station.stats.frames_detected > 0,
+                heard,
+                "{past_end} samples of the block came in after the transmission"
+            );
+            assert!(
+                !station.transmitting() || past_end == 0,
+                "the transmission ended inside the block"
+            );
+        }
     }
 
     #[test]

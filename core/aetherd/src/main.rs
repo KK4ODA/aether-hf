@@ -18,7 +18,7 @@ use std::{
 
 use aether_link::LinkConfig;
 use aetherd::{
-    audio::{AudioIo, Loopback, SoundCard, list_devices},
+    audio::{AudioIo, DEVICE_LATENCY_S, Loopback, SoundCard, list_devices},
     config::{Config, EXAMPLE, PttConfig},
     control::{
         ControlServer, channel,
@@ -32,15 +32,6 @@ use aetherd::{
 };
 use serde_json::json;
 
-/// How long a sample handed to the sound card is assumed to take to leave it: the card's
-/// own buffering, which its playback clock cannot see. The keying tail covers it, and the
-/// engine's timers are told of it. A quarter second is generous for a USB codec.
-///
-/// This used to be how much audio the loop kept queued ahead of the card, topping it up
-/// between blocks — and a block that cost the receiver more than that put a hole in the
-/// burst on the air, uncounted (`field/TX-ONSET-FINDINGS.md`). A whole burst is queued at
-/// once now; the constant only names the card's latency.
-const DEVICE_LATENCY_S: f64 = 0.25;
 /// A pass of the run loop slower than this is logged with what it was doing. It is the
 /// quarter second the card used to be kept ahead by: a pass this slow would have starved
 /// it, and still says the modem is not keeping up with its own audio.
@@ -756,6 +747,9 @@ fn serve(
         answer_commands(station, control, daemon, stopping, restarting);
         let commands_ms = pass_began.elapsed().as_secs_f64() * 1000.0;
 
+        // the card's clock goes in ahead of the block, so a block that outlasts this
+        // station's own transmission is muted only up to where the transmission ended
+        station.device_played(audio.played());
         let captured = audio.capture();
         let idle = captured.is_empty();
         if !idle {
