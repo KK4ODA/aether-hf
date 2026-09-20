@@ -20,10 +20,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -59,7 +59,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -90,7 +90,7 @@ jobs:
       # difference means the model changed without the core being re-checked against it,
       # which is exactly the drift ADR-0001 forbids.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -104,10 +104,32 @@ jobs:
         run: uv run python tools/check_vectors.py
 
       # Release, not debug: this is signal processing, and an unoptimised build runs the
-      # acquisition search about twenty times slower for no extra coverage.
+      # acquisition search about twenty times slower for no extra coverage. The two-daemon
+      # tests write their daemons' logs and recordings under the temporary directory and
+      # remove them on success; pointing that at the runner's own keeps what a failure
+      # leaves where the step below can find it.
       - name: Tests
         working-directory: core
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: cargo test --release --all-features
+
+      # What the daemons said, for a two-daemon test that failed on a runner: the loop's
+      # slow passes, the busy transitions, and the sidecars with every frame each side
+      # heard. A failure there is a timing failure, and the logs are the only witness.
+      - name: Keep the daemons' logs of a failed two-daemon test
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: two-daemons-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/aether-*/*.log
+            ${{ runner.temp }}/aether-*/*.toml
+            ${{ runner.temp }}/aether-*/recordings/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   app:
     name: app · ${{ matrix.os }}
@@ -117,7 +139,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
