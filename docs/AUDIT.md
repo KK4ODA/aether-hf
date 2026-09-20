@@ -9,6 +9,8 @@ suspected defects numerically. All numbers below are reproducible with those two
 > `model/aether_model/`, deleted `fec/ldpc.py`, `dsp/channel.py` and both old test files, and
 > encoded every finding below as a strict `xfail` test in `model/tests/test_legacy_*.py`
 > (marker `audit`). A finding is closed by removing its `xfail` marker in the PR that fixes it.
+> Phase 1 then replaced every module the probes import, so the two scripts run at commit
+> `8874dae` — the last tree with those modules — and not at a later one.
 
 ---
 

@@ -9,14 +9,14 @@ jobs:
   full:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
       - run: uv sync --locked
       - name: Full test set including slow benchmarks
         run: uv run pytest -p no:cacheprovider
-      - name: Audit probes still reproduce the documented findings
-        run: |
-          uv run python tools/audit_probe_fec_mapping.py
-          uv run python tools/audit_probe_phy_audio.py
+      # The audit probes (`tools/audit_probe_*.py`) are frozen evidence against the tree
+      # the audit read. Phase 1 retired every module they import and closed the findings
+      # they measured, so they run at commit 8874dae — the last tree with those modules —
+      # and nowhere later; a step that ran them here failed every night from the start.

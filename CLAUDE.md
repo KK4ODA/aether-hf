@@ -15,7 +15,8 @@ IDs), `docs/COMMUNITY-CONCERNS.md` (what users will judge us on), `docs/adr/` (d
   the finding (marker `audit`) and loses the marker in the PR that fixes it. **Never** loosen
   an assertion to make a test pass — add an ADR if a target genuinely changes.
   `test_vectors.py` pins the transmitter bit-exactly to `vectors/`.
-- `tools/audit_probe_*.py` — frozen evidence scripts from the audit; excluded from lint.
+- `tools/audit_probe_*.py` — frozen evidence scripts from the audit; excluded from lint, and
+  they only run at `8874dae`, the last tree with the modules they probe (not in CI).
 - `core/` — the shipped Rust workspace (ADR-0001). `aether-fec` is done and is **bit-exact
   with the model**: `cargo test` in `core/` runs both its own tests and the cross-validation
   against `tests/data/fec_vectors.json`. Regenerate those vectors with
