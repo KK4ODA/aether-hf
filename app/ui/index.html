@@ -212,12 +212,12 @@
           </div>
           <div class="row">
             <span class="sub">Last transmit peak</span>
-            <span class="sub numerals" id="tx-peak" title="The loudest sample the modem handed the sound card on its last transmission, after the transmit level. Full scale is 0 dB; leave headroom, because the waveform's peaks are what drive the rig's ALC" aria-live="polite">—</span>
+            <span class="numerals drive-reading" id="tx-peak" title="The loudest sample the modem handed the sound card on its last transmission, after the transmit level. Full scale is 0 dB; leave headroom, because the waveform's peaks are what drive the rig's ALC" aria-live="polite">—</span>
           </div>
           <div class="row">
             <label for="tx-level">Transmit level</label>
             <input id="tx-level" title="Transmit audio level in dB below full scale; saved when the slider is released" type="range" min="-34" max="0" step="1" value="-12" aria-describedby="tx-level-reading" />
-            <span class="sub numerals" id="tx-level-reading" title="The transmit level now" aria-live="polite">−12 dB</span>
+            <span class="numerals drive-reading" id="tx-level-reading" title="The transmit level now, in dB below full scale: the default is −12 dB (0.25), −32 dB is a tenth of that" aria-live="polite">−12 dB</span>
           </div>
           <p class="sub">
             <strong>Key</strong> puts the radio into transmit with no audio: watch the rig

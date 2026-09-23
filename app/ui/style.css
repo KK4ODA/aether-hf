@@ -1348,6 +1348,15 @@ input[type="range"] {
   min-width: 6ch;
 }
 
+/* The two numbers an operator sets drive by — the transmit level and the last transmission's
+   peak — large enough to read from across the shack or over a remote desktop. They were
+   secondary text, and an operator setting drive on the air never saw them. */
+.drive-reading {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
 input.port {
   font-family: var(--numerals);
   width: 7ch;

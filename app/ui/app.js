@@ -2938,7 +2938,7 @@ async function toggleDrive() {
   try {
     await call("drive.set", { bursts: DRIVE_BURSTS });
     $("wz-tx-note").textContent = `${DRIVE_BURSTS} bursts of ${DRIVE_BURST_S} s, ${DRIVE_GAP_S} s apart — watch the ALC, back the level off until it barely moves.`;
-    log(`drive check, ${DRIVE_BURSTS} bursts`);
+    log(`drive check, ${DRIVE_BURSTS} bursts at transmit level ${$("tx-level-reading").textContent}`);
     driveButton(true);
   } catch (error) {
     $("wz-tx-note").textContent = error.message;
