@@ -381,9 +381,16 @@ every transmission's exact audio under `tx/` with an envelope sidecar, `aetherd 
 prints the receiver's cost per block, and `tools/tx_envelope.py` gives the same envelope
 numbers for any WAV. The waveform itself was measured clean (preamble at the data's power,
 at level within 20 ms, no holes); Mercury renders whole bursts, keys, writes the buffer once
-and holds the key by an absolute deadline — the shape adopted. Open: the receiver's
-per-call search cost (it should search only what is new), and a preamble drawn to the
-data's crest. **The mirror at the burst's end** (2026-09-20, ADR-0010 §5): a captured block
+and holds the key by an absolute deadline — the shape adopted. Open: a preamble drawn to the
+data's crest. **The receiver computes each bank row once** (2026-09-23, ADR-0010 §6): the
+streaming receiver used to re-run the correlation bank over `block + 2·lookback` on every
+20 ms block, repeating ~90 % of its work, and a mini PC at 50 % CPU fell 10–20× behind real
+time mid-session — late ACKs, holes in its own bursts. Rows are now cached by absolute
+position (`StreamingReceiver::rows`, `FrameDetector::bank_row`/`detect_with`) and the
+unchanged peak-picker sees the same window, so acquisition is identical; the phantom-storm
+session replays at 0.79× real time (was 10.4×), the idle listen at 0.18× (was 0.55×). The
+residual cost is the 500 Hz floor detector's false alarms (OTA-2 item 2). **The mirror at the
+burst's end** (2026-09-20, ADR-0010 §5): a captured block
 is muted only up to where the card's clock says this station's transmission ended, not
 whole — a slow pass had muted the start of the peer's reply with the tail, which CI saw as
 the mode ladder losing the first frame of a burst at 25 dB — and the simulated channel now
@@ -411,6 +418,20 @@ moved into `[panel.waterfall]` (live). The panel's Profile bar is at the top of 
 `PROFILES`/`wz-profile` in `app.js` are the older *interface presets*, not profiles.
 Fixtures: `tests/data/profiles/`. To try it: the dry-run daemon on another port with a
 scratch `station.toml` under `C:\Dev\AetherBench\`.
+
+**The first 10-mile test (2026-09-23) and what it found.** The busy indicator sat on with
+nothing on the air: the shape path judged a narrowband peak against the passband's own
+median, which the band filter's skirt bins drag toward zero, so a station's own faint spur
+(present with the antenna off, 42 dB "peaked" at −52 dBFS) latched it on any dial. The peak
+is now weighed against the *learned floor* too (`SHAPE_PEAK_FLOOR_MARGIN_DB`, `busy.rs`): a
+real signal's peak stands at or above the floor even under an AGC, a spur sits ~12 dB below
+it. Measured on recordings: antenna-off and the 7076 kHz listen dropped from 100 % to
+1–3 % shape-busy, FT8 stayed ~70 %. The operator could not tell when the stations
+connected: the panel now has a session banner across every tab (`#session-banner`, big
+type, green up / amber calling / red ended-with-reason) and a two-note chime on connect and
+disconnect (Web Audio, unlocked by the first click; the *Chime* box on the Session tab,
+kept in `localStorage`). Lesson: a fixed narrowband artefact is invisible on a waterfall
+(it auto-scales it away) and inaudible over RDP; the antenna-off recording is the test.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
