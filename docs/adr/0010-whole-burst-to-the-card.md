@@ -61,8 +61,8 @@ second in, and OTA-2's "choppy" audio was it.
 * `AudioIo` grew `played`, `set_playing`, `starved` and `clear`; every backend (cpal, the
   loopback, the silent card, the simulated channel) implements them.
 * `[record] tx_audio` keeps each transmission's exact audio for holding the air against.
-* The receiver's search cost per call is the open item: it belongs to the receiver, not
-  to the transmit path, and it is measured now.
+* The receiver's search cost per call was the open item: it belongs to the receiver, not
+  to the transmit path, and it is measured now — and closed in §6.
 
 ## 5. Amendment (2026-09-20): the deafness ends with the transmission, not with the pass
 
@@ -85,3 +85,37 @@ handed over whole is delivered whole — because the keying tail is sized for th
 without it the peer's reply reached a station inside its own tail on the wire and never on
 the air. The simulated channel's timing now matches a sound card's rather than flattering
 it; `CI` keeps a failed two-daemon test's daemon logs and sidecars as an artifact.
+
+## 6. Amendment (2026-09-23): the receiver computes each bank row once
+
+The open item of §4. The streaming receiver searched `[searched − lookback, seen)` on every
+call, and `searched` trailed `seen` by a lookback, so every 20 ms block re-ran the
+correlation bank over `block + 2·lookback` positions — about 1 650 on the wide air, 4 600
+on the narrow — of which only the block's ~160 were new. Ninety percent of every pass was
+repeated work, and the first ten-mile session (a mini PC at half its CPU) showed what that
+costs: passes of 250–424 ms, 12–20× behind real time, acknowledgements late past the peer's
+window and the station's own bursts holed.
+
+A bank row at a position depends only on the samples of its own reference window and never
+changes once they have arrived. The receiver now keeps one row per position from
+`buffer_start` (`StreamingReceiver::rows`), computes rows only for positions whose window
+has just completed (`FrameDetector::bank_row` over a persistent `BankState`, which holds the
+floor family's ring and the scratch buffers so a position allocates nothing), and hands the
+unchanged peak-picker (`detect_with`) the very same window it searched before, built from the
+cached rows. The offline `bank()` is the same `bank_row` in a loop, so there is one
+implementation of the per-position mathematics and the streaming-equals-offline test still
+pins them together. The one term that was non-local — the normalisation floor taken from the
+region's mean power — is taken from the buffer's mean instead; it only bites on a window
+sixty decibels under the mean, where nothing is detectable either way.
+
+Measured with `aetherd --replay --block-ms 20`, the same frames found before and after:
+
+| recording | before | after |
+|---|---|---|
+| 10-mile session of 2026-09-23 (500 Hz, 1 597 acquisitions in 45 s) | 10.38× real time, slowest block 392 ms, 780 blocks over 250 ms | 0.79×, slowest 135 ms, none over 250 ms |
+| idle 2.3 kHz listen (156 s) | 0.55×, slowest 124 ms | 0.18×, slowest 66 ms |
+
+What remains of the cost is per candidate, not per position: the fine offset, the repetition
+check and a decode attempt for every acquisition, and on the narrow air the floor detector
+false-alarms often enough on a real band (OTA-2 finding 2) to keep that bill high. That is
+the floor detector's threshold, a separate matter (ADR-0009).
