@@ -47,6 +47,12 @@ const METRICS_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a changed list of stations heard waits before it is written. A burst
 /// of frames is one write, not one per frame.
 const HEARD_SAVE_DELAY: Duration = Duration::from_secs(5);
+/// If the sound card delivers no audio for this long while the radio is keyed, the card has
+/// stopped under a keyed transmitter — a dropped USB device, a sample-rate change. The key
+/// is released against the card's own clock, which is now frozen, so nothing else would ever
+/// bring it up: the loop forces it up on the wall clock instead. Comfortably longer than the
+/// slowest loop pass, and well inside the key-time watchdog's own limit.
+const AUDIO_STALL_RELEASE: Duration = Duration::from_secs(2);
 
 /// The exit status that asks a supervisor to start the daemon again.
 ///
@@ -706,6 +712,84 @@ fn note_pass(
     );
 }
 
+/// Hand the sound card everything the station has rendered, up to the backlog, and mark
+/// whether it is transmitting. A whole burst goes over at once so nothing the loop does
+/// afterwards can put a hole in it; a keying failure is logged and the burst abandoned
+/// rather than taking the daemon down and stranding the key.
+fn fill_card(
+    station: &mut Station<Box<dyn Ptt>>,
+    audio: &mut dyn AudioIo,
+    backlog: usize,
+    block: usize,
+    daemon: &mut DaemonState,
+    last_ptt_fault: &mut Option<std::time::Instant>,
+) {
+    let mut buffer = vec![0.0f32; block];
+    while audio.queued() < backlog {
+        let count = match station.playback(&mut buffer) {
+            Ok(count) => count,
+            Err(error) => {
+                note_ptt_failure(daemon, station, &error, last_ptt_fault);
+                break;
+            }
+        };
+        if count == 0 {
+            break;
+        }
+        audio.playback(&buffer[..count]);
+    }
+    audio.set_playing(station.transmitting());
+}
+
+/// The sound card stopped delivering audio while the radio was keyed. The key is released
+/// against the card's own clock, which is frozen now, so nothing else would ever bring it
+/// up — and the audio clock the session's timers ride is frozen too, so this is also the
+/// only way the daemon notices a dead card at all. Force the key up before the transmitter
+/// sits there keyed.
+fn release_on_stall(daemon: &mut DaemonState, station: &mut Station<Box<dyn Ptt>>) {
+    daemon.log.record(
+        Level::Error,
+        "audio",
+        "the sound card stopped delivering audio while transmitting; releasing the key",
+        &state_name(station),
+    );
+    if let Err(error) = station.abandon_tx() {
+        daemon.log.record(
+            Level::Error,
+            "ptt",
+            &format!("the radio would not release after the card stalled: {error}"),
+            &state_name(station),
+        );
+    }
+}
+
+/// A keying failure in the run loop: log it, rate-limited so a dead rig does not fill the
+/// log, and abandon the transmission in progress so the loop keeps receiving instead of
+/// spinning on a burst it cannot key. The session is left to the engine's own timers, which
+/// retry or end it — a keying hiccup should cost a burst, not the daemon and not the key.
+fn note_ptt_failure(
+    daemon: &mut DaemonState,
+    station: &mut Station<Box<dyn Ptt>>,
+    error: &PttError,
+    last_logged: &mut Option<std::time::Instant>,
+) {
+    if last_logged.is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL) {
+        *last_logged = Some(std::time::Instant::now());
+        daemon.log.record(
+            Level::Error,
+            "ptt",
+            &format!(
+                "the radio would not key or release ({error}); the modem is receiving only \
+                 until the keying interface recovers"
+            ),
+            &state_name(station),
+        );
+    }
+    // best effort: drop the burst and bring the key up; a further error here is already
+    // covered by the line above
+    let _ = station.abandon_tx();
+}
+
 /// How much a station event matters, from its name.
 fn level_of(name: &str) -> Level {
     match name {
@@ -735,7 +819,9 @@ fn serve(
     let mut last_metrics = std::time::Instant::now();
     let mut last_keyed = false;
     let mut last_stall_logged: Option<std::time::Instant> = None;
+    let mut last_ptt_fault: Option<std::time::Instant> = None;
     let mut heard_changed_at: Option<std::time::Instant> = None;
+    let mut last_audio = std::time::Instant::now();
 
     loop {
         if stopping.load(std::sync::atomic::Ordering::SeqCst) {
@@ -753,7 +839,15 @@ fn serve(
         let captured = audio.capture();
         let idle = captured.is_empty();
         if !idle {
-            station.capture(&captured).map_err(|e| e.to_string())?;
+            last_audio = std::time::Instant::now();
+            if let Err(error) = station.capture(&captured) {
+                note_ptt_failure(daemon, station, &error, &mut last_ptt_fault);
+            }
+        } else if station.transmitting() && last_audio.elapsed() >= AUDIO_STALL_RELEASE {
+            // The card has stopped delivering audio while the radio is keyed: nothing else
+            // will bring the key up (see `release_on_stall`), so force it on the wall clock.
+            release_on_stall(daemon, station);
+            last_audio = std::time::Instant::now();
         }
         let capture_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms;
 
@@ -766,15 +860,7 @@ fn serve(
         // disk, the scheduler — can put a hole in it; the station releases the key against
         // the card's own clock, when the last sample has really left.
         station.device_played(audio.played());
-        let mut buffer = vec![0.0f32; block];
-        while audio.queued() < backlog {
-            let count = station.playback(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            audio.playback(&buffer[..count]);
-        }
-        audio.set_playing(station.transmitting());
+        fill_card(station, audio, backlog, block, daemon, &mut last_ptt_fault);
         let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
         note_pass(
             daemon,
