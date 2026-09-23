@@ -431,4 +431,47 @@ mod tests {
         // indexes runs exactly that far behind its input
         assert_eq!(rx.samples_seen(), 60 * 8000 - rx.blanker_latency());
     }
+
+    #[test]
+    #[ignore = "known defect: the streaming receiver cannot acquire a floor frame (see the \
+                comment); a repro, not yet a fix"]
+    fn a_floor_frame_streams_the_same_as_one_offline_call() {
+        // ADR-0009's floor family carries connect, poll and acknowledgement when a narrow
+        // link runs its slowest modes. A floor frame spans 4.2 s (33 728 samples), but the
+        // streaming receiver only ever searches a window of `block + 2·lookback` ≈ 4 500
+        // samples (`search`, above), so `detect_floor`'s "the whole frame must be present"
+        // rule (`sync.rs`) can never pass live: the family decodes offline over a buffer
+        // that holds it whole, and never on the air. Accepting the candidate on its preamble
+        // instead mis-locks by a symbol — an 8-symbol repeated preamble is only pinned to the
+        // exact symbol once the preamble→data boundary is in — so the real fix is a
+        // floor-aware search-back (announce-triggered, or a dedicated lookback) with a cost
+        // measurement, not a one-line change. Tracked as the top OTA risk; this test is the
+        // repro. Run with `--ignored` to see it fail.
+        use crate::waveform::NARROW_500;
+        let mut modem = Modem::new(NARROW_500, true);
+        let mode = modem.modes()[0]; // mode 0 is a floor mode on the narrow air
+        let n = modem.payload_bytes(Some(mode));
+        let payload: Vec<u8> = (0..n)
+            .map(|i| (i as u8).wrapping_mul(5).wrapping_add(1))
+            .collect();
+        let mut signal = vec![(0.0f64, 0.0f64); 600];
+        signal.extend(modem.data_burst(&payload, mode, 0).expect("encode"));
+        signal.extend(std::iter::repeat_n((0.0, 0.0), 4000));
+
+        let offline = Modem::new(NARROW_500, true).decode_buffer(&signal, 4);
+        assert_eq!(
+            offline.len(),
+            1,
+            "the offline reference must find the floor frame"
+        );
+        assert_eq!(offline[0].payload.as_ref(), Some(&payload));
+
+        let mut rx = StreamingReceiver::new(NARROW_500, 6.0, true);
+        let mut got = Vec::new();
+        for block in signal.chunks(1600) {
+            got.extend(rx.feed(block));
+        }
+        assert_eq!(got.len(), 1, "the streaming receiver found no floor frame");
+        assert_eq!(got[0].payload.as_ref(), Some(&payload));
+    }
 }
