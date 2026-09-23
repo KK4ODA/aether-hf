@@ -263,6 +263,17 @@ const STEADY_BLOCKS: usize = 8;
 /// dB. HF noise over 200 ms stayed within it two blocks in three on the recording; an AGC
 /// ramp of 15 dB/s or faster crosses it.
 const STEADY_RANGE_DB: f64 = 3.0;
+/// A narrowband peak in the passband counts as a signal only if the peak also stands within
+/// this many dB of the learned noise floor. A real signal — even one an AGC has held down to
+/// a few decibels over the noise — has its peak at or above the floor; a receiver spur or a
+/// local birdie sits well below it, yet is just as "peaked" against the passband's own
+/// median, which the band filter's near-zero skirt bins drag down. Judging the peak against
+/// that median alone called any faint narrowband thing on an otherwise-quiet channel busy —
+/// a station's own spur held the indicator on with nothing on the air, whatever the dial.
+/// Measured across recordings: a genuine narrowband signal's peak sat about 5 dB below a
+/// (signal-contaminated) floor estimate and a spur about 12 dB below, so the gate splits
+/// them with margin either way.
+const SHAPE_PEAK_FLOOR_MARGIN_DB: f64 = 10.0;
 
 impl BusyDetector {
     /// Build a detector.
@@ -402,45 +413,9 @@ impl BusyDetector {
                 });
                 high <= low.max(FLOOR) * 10f64.powf(STEADY_RANGE_DB / 10.0)
             };
-            // the shape path: every eight blocks, the passband's periodogram
+            // the shape path: a narrowband signal an AGC held down out of the level reading
             self.shape_buffer.extend_from_slice(block);
-            let peaked_now = if self.shape_buffer.len() >= SHAPE_BLOCKS * self.block_samples {
-                // digital silence has no shape: a muted sound card, or nothing on the
-                // input, is not judged — its spectrum is numerical noise and can look
-                // peaked, and it says nothing about the channel
-                let window_power = self
-                    .shape_buffer
-                    .iter()
-                    .map(|&(re, im)| re.mul_add(re, im * im))
-                    .sum::<f64>()
-                    / self.shape_buffer.len() as f64;
-                let peak_db = if window_power > SILENCE {
-                    self.passband_peak_db()
-                } else {
-                    f64::NAN
-                };
-                self.shape_buffer.clear();
-                self.shape_db = peak_db;
-                let peaked = peak_db >= self.config.shape_db;
-                self.peaked = [self.peaked[1], peaked];
-                // attack on two peaked windows in a row; once busy, one is enough to hold
-                // it. An FT8 tone hop that straddles a window boundary splits the energy
-                // between two bins and that window reads flat for 200 ms — measured, it
-                // dropped the channel for a second in the middle of a period, three times
-                // a minute. A signal that was there a moment ago and is still peaked in
-                // one window of two has not gone anywhere.
-                let attack = self.peaked.iter().all(|&p| p);
-                let hold = self.busy(now) && self.peaked.iter().any(|&p| p);
-                if attack || hold {
-                    self.busy_until = self.busy_until.max(now + self.config.hang_s);
-                    if attack {
-                        self.reason = Some(BusyReason::Shape { peak_db });
-                    }
-                }
-                peaked
-            } else {
-                self.peaked[1]
-            };
+            let peaked_now = self.note_shape(now);
 
             // The separation the whole detector rests on: the busy decision is made on this
             // block's energy against the floor learned *before* it, and the block only
@@ -510,7 +485,65 @@ impl BusyDetector {
     /// The passband's highest spectral bin over its median bin, in dB, from the blocks
     /// gathered since the last window: four 50 ms transforms averaged, so a bin is
     /// judged on 200 ms and not on one noisy periodogram.
-    fn passband_peak_db(&self) -> f64 {
+    /// Judge the passband's shape once the running buffer (filled by the caller) holds a
+    /// whole window — eight blocks, 200 ms — and otherwise carry the last verdict forward.
+    /// Returns whether this window was peaked as a narrowband signal's spectrum is, and — on
+    /// an attack, or while it holds — marks the channel busy. See [`SHAPE_PEAK_FLOOR_MARGIN_DB`]
+    /// for why the peak is weighed against the learned floor, not the passband's own median.
+    fn note_shape(&mut self, now: f64) -> bool {
+        if self.shape_buffer.len() < SHAPE_BLOCKS * self.block_samples {
+            return self.peaked[1];
+        }
+        let window_power = self
+            .shape_buffer
+            .iter()
+            .map(|&(re, im)| re.mul_add(re, im * im))
+            .sum::<f64>()
+            / self.shape_buffer.len() as f64;
+        let (peak_db, peaked) = if window_power > SILENCE {
+            let (peak_over_median, peak_share) = self.passband_shape();
+            // The peak over the passband's own median says how narrowband it is; that alone
+            // cannot tell a real weak signal from a spur. Its absolute level, weighed against
+            // the learned noise floor, can: a signal an AGC has held down still stands at the
+            // floor, a spur sits below it. Before the floor is known there is nothing to
+            // weigh it against, so nothing is called busy on shape yet.
+            let peak_abs_db = 10.0 * window_power.log10() + peak_share;
+            let over_floor = self.floor_db.is_finite()
+                && peak_abs_db >= self.floor_db - SHAPE_PEAK_FLOOR_MARGIN_DB;
+            (
+                peak_over_median,
+                peak_over_median >= self.config.shape_db && over_floor,
+            )
+        } else {
+            // digital silence has no shape: a muted sound card, or nothing on the input, is
+            // numerical noise and can look peaked, and it says nothing about the channel
+            (f64::NAN, false)
+        };
+        self.shape_buffer.clear();
+        self.shape_db = peak_db;
+        self.peaked = [self.peaked[1], peaked];
+        // attack on two peaked windows in a row; once busy, one is enough to hold it. An FT8
+        // tone hop that straddles a window boundary splits its energy between two bins and
+        // that window reads flat for 200 ms — measured, it dropped the channel for a second
+        // in the middle of a period. A signal peaked in one window of two has not gone.
+        let attack = self.peaked.iter().all(|&p| p);
+        let hold = self.busy(now) && self.peaked.iter().any(|&p| p);
+        if attack || hold {
+            self.busy_until = self.busy_until.max(now + self.config.hang_s);
+            if attack {
+                self.reason = Some(BusyReason::Shape { peak_db });
+            }
+        }
+        peaked
+    }
+
+    /// The passband's shape, from its periodogram: the highest bin over the *median* bin
+    /// (how far a narrowband peak stands above the noise between the bins — noise sits near
+    /// 6 dB, a signal far higher), and the highest bin over the *whole passband's* power
+    /// (the peak's share of the energy: near unity for a lone tone, `1/bins` for spread
+    /// noise), which the caller turns into the peak's absolute level to weigh against the
+    /// learned floor. Both in dB; `(NaN, -inf)` when the passband holds no power.
+    fn passband_shape(&self) -> (f64, f64) {
         let bin_hz = self.config.fs / SHAPE_FFT as f64;
         let half = (self.config.passband_hz / 2.0 / bin_hz).round() as usize;
         let mut power = vec![0.0f64; SHAPE_FFT];
@@ -538,12 +571,13 @@ impl BusyDetector {
             .map(|k| power[k])
             .chain((1..=half).map(|k| power[SHAPE_FFT - k]))
             .collect();
+        let sum: f64 = band.iter().sum();
         match median(band.iter().copied()) {
-            Some(mid) if mid > 0.0 => {
+            Some(mid) if mid > 0.0 && sum > 0.0 => {
                 let peak = band.iter().copied().fold(0.0, f64::max);
-                10.0 * (peak / mid).log10()
+                (10.0 * (peak / mid).log10(), 10.0 * (peak / sum).log10())
             }
-            _ => f64::NAN,
+            _ => (f64::NAN, f64::NEG_INFINITY),
         }
     }
 }
@@ -1108,6 +1142,55 @@ mod tests {
             (detector.floor_db - floor_before).abs() < 1.0,
             "and the floor did not learn it: {floor_before:.1} -> {:.1}",
             detector.floor_db
+        );
+    }
+
+    #[test]
+    fn a_faint_spur_far_below_the_floor_is_not_busy_though_it_is_peaked() {
+        // A local birdie or a receiver spur sits well below the band noise, but on an
+        // otherwise-quiet passband its peak stands tens of dB over the median, so the shape
+        // path called the channel busy with nothing on the air — a station's own spur held
+        // the indicator on whatever the dial (a real recording read 50-67 dB peaked at
+        // -52 dBFS). A real signal's peak stands at or above the noise floor even when an
+        // AGC has held it down; a spur's is far below it, and that is what the gate weighs.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let fs = detector.config().fs;
+        let block = (detector.config().block_s * fs) as usize;
+        let mut now = 0.0;
+        // learn the band-noise floor from a real, audible band
+        for i in 0..secs(10.0) {
+            now += 0.025;
+            detector.push(&noise(block, 0.1, 40 + i as u64), now);
+        }
+        assert!(
+            detector.settled() && !detector.busy(now),
+            "quiet band noise is clear"
+        );
+        let floor = detector.floor_db;
+        // then a near-silent passband with a faint tone: strongly peaked against the quiet
+        // median, but its absolute level is ~15 dB below the floor just learned
+        let mut phase = 0.0;
+        for i in 0..secs(3.0) {
+            now += 0.025;
+            detector.push(
+                &tone_over_noise(block, 0.003, 15.0, 60.0, 900 + i as u64, phase),
+                now,
+            );
+            phase += 2.0 * std::f64::consts::PI * 60.0 * block as f64 / fs;
+        }
+        assert!(
+            detector.shape_db >= detector.config().shape_db,
+            "the spur really is narrowband/peaked against the median: {:.1} dB",
+            detector.shape_db
+        );
+        assert!(
+            detector.level_db < floor - SHAPE_PEAK_FLOOR_MARGIN_DB,
+            "the spur is meant to sit well below the floor: level {:.1}, floor {floor:.1}",
+            detector.level_db
+        );
+        assert!(
+            !detector.busy(now),
+            "a faint spur below the floor was called busy on shape alone"
         );
     }
 
