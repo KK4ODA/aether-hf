@@ -1039,6 +1039,35 @@ impl<P: Ptt> Station<P> {
         self.ptt.unkey(self.now())
     }
 
+    /// Give up on the transmission in progress: drop what is queued and what the sound card
+    /// still holds, release the key, and tell the engine the transmission is over so its
+    /// timers run again. For the run loop when the radio or the sound card has failed under
+    /// it — a keying error, or a card that has stopped delivering audio while keyed. Unlike
+    /// [`shut_down`](Self::shut_down) the session is left intact: the engine's own timeouts
+    /// then retransmit or end it, rather than the modem going silent mid-contact.
+    ///
+    /// # Errors
+    /// If the radio refuses to release. The local state is cleared either way, so the next
+    /// pass can try again.
+    pub fn abandon_tx(&mut self) -> Result<(), PttError> {
+        let was_transmitting = self.transmitting;
+        self.playback.clear();
+        self.pending.clear();
+        self.clock.flush_device = true;
+        self.clock.cut_short = false;
+        self.tx_capture = None;
+        self.transmitting = false;
+        self.playing_test = false;
+        self.tx_peak_running = 0.0;
+        let now = self.now();
+        let result = self.ptt.unkey(now);
+        if was_transmitting {
+            self.engine.on_tx_done(now);
+            self.pump();
+        }
+        result
+    }
+
     /// As the receiving station, demand the sending role.
     pub fn request_break(&mut self) {
         self.engine.request_break();
@@ -1992,7 +2021,14 @@ impl<P: Ptt> Station<P> {
         };
         // silence radiates nothing, so a keying test does not wait for the channel
         let radiates = !matches!(next, Outgoing::Audio { silent: true, .. });
-        if radiates && self.config.wait_for_clear && !self.channel_clear(now) {
+        // A probe answer is a response to a frame addressed to this station (§97.221(c)),
+        // not a transmission this station is starting — and the very frame it answers has
+        // just marked the channel busy for two seconds (`mark_frame`), so holding it for
+        // that meant every probe to a station with `wait_for_clear` on reported "no answer".
+        // A connect answer never reaches here held: the station is Connected by then and
+        // `channel_clear` lets a session's frames through.
+        let responding = matches!(next, Outgoing::Frames(frames) if is_probe_answer(frames));
+        if radiates && !responding && self.config.wait_for_clear && !self.channel_clear(now) {
             self.stats.deferred_for_busy += 1;
             // the engine's timers move with the burst, or a retry fires against a burst
             // that has not left yet and the two go out back to back when the channel clears
@@ -2225,6 +2261,16 @@ impl<P: Ptt> Station<P> {
         }
         self.busy.settled() && !self.busy.busy(now)
     }
+}
+
+/// Whether a queued burst is a probe answer: one data frame carrying a `ProbeAck`. Such a
+/// burst is a response to a frame addressed to this station and is not held for a busy
+/// channel (see [`Station::start_pending`]).
+fn is_probe_answer(frames: &[aether_link::TxFrame]) -> bool {
+    frames.len() == 1
+        && frames[0].container == Container::Data
+        && decode_data(&frames[0].payload)
+            .is_ok_and(|(header, _)| header.kind == DataKind::ProbeAck)
 }
 
 /// The callsign in a beacon frame, if that is what this is.
@@ -2704,6 +2750,28 @@ mod tests {
         );
         assert_eq!(air.a.role(), Role::Iss);
         assert_eq!(air.b.role(), Role::Irs);
+    }
+
+    #[test]
+    fn a_probe_is_answered_even_with_wait_for_clear_on() {
+        // The probe a station decodes marks its own channel busy for two seconds; before the
+        // fix that held the station's own answer for that long, longer than the prober waits,
+        // so every probe to a station with `wait_for_clear` on reported "no answer" (the
+        // OTA-2 test sessions: "probe: no answer; calling anyway"). A probe answer is a
+        // response to a frame addressed to us and now goes out despite the busy channel.
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            wait_for_clear: true,
+            ..config
+        });
+        // let both busy detectors learn the noise floor and settle
+        air.run(4.0, |_, _| false);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(30.0, |a, _| a.engine().last_probe().is_some());
+        assert!(
+            air.a.engine().last_probe().is_some(),
+            "the probe went unanswered with wait_for_clear on; b answered {} probe(s)",
+            air.b.engine().stats.probes_answered
+        );
     }
 
     #[test]
