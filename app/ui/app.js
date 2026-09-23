@@ -134,7 +134,14 @@ function onEvent(frame) {
       break;
     case "state":
       log(`${data.name}: ${data.detail}`);
-      if (data.name === "connected") resetReceived();
+      if (data.name === "connected") {
+        resetReceived();
+        showBanner("connected", `CONNECTED — ${data.remote || data.detail}`);
+        chime("up");
+      } else if (data.name === "disconnected") {
+        showBanner("ended", `SESSION ENDED — ${data.detail}`, 15000);
+        chime("down");
+      }
       refreshStatus();
       break;
     case "frame":
@@ -176,6 +183,90 @@ function noteProbe(detail) {
   line.dataset.state = unanswered ? "warn" : "ok";
 }
 
+// ── the session banner and chime ────────────────────────────────────
+// A session coming up or ending is the one thing at the radio that must not be missed,
+// and the state strip is small and on one tab: a banner across every tab says it in large
+// type, and a chime says it out loud. A browser plays sound only once the page has been
+// touched, so the first click or key unlocks it; until then the banner does the telling.
+
+let chimeContext = null;
+function unlockChime() {
+  if (chimeContext) return;
+  try {
+    chimeContext = new (window.AudioContext || window.webkitAudioContext)();
+  } catch {
+    chimeContext = null;
+  }
+}
+document.addEventListener("pointerdown", unlockChime, { once: true });
+document.addEventListener("keydown", unlockChime, { once: true });
+
+function chimeEnabled() {
+  try {
+    return localStorage.getItem("aether.chime") !== "off";
+  } catch {
+    return true;
+  }
+}
+
+// two rising notes for a session up, two falling for one ended
+function chime(kind) {
+  if (!chimeContext || !chimeEnabled()) return;
+  if (chimeContext.state === "suspended") chimeContext.resume();
+  const notes = kind === "up" ? [[660, 0], [880, 0.16]] : [[660, 0], [440, 0.16]];
+  const t0 = chimeContext.currentTime + 0.02;
+  for (const [hz, at] of notes) {
+    const osc = chimeContext.createOscillator();
+    const gain = chimeContext.createGain();
+    osc.type = "sine";
+    osc.frequency.value = hz;
+    gain.gain.setValueAtTime(0.0001, t0 + at);
+    gain.gain.exponentialRampToValueAtTime(0.3, t0 + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.24);
+    osc.connect(gain).connect(chimeContext.destination);
+    osc.start(t0 + at);
+    osc.stop(t0 + at + 0.26);
+  }
+}
+
+let bannerTimer = null;
+// Show the banner in a state, pulsing once so the change is seen; `hideAfterMs` takes it
+// down again — an ended session need not stay on the screen for ever.
+function showBanner(state, text, hideAfterMs = 0) {
+  const banner = $("session-banner");
+  clearTimeout(bannerTimer);
+  banner.dataset.state = state;
+  $("session-banner-text").textContent = text;
+  banner.hidden = false;
+  banner.classList.remove("pulse");
+  requestAnimationFrame(() => requestAnimationFrame(() => banner.classList.add("pulse")));
+  if (hideAfterMs > 0) {
+    bannerTimer = setTimeout(() => {
+      banner.hidden = true;
+    }, hideAfterMs);
+  }
+}
+
+// Keep the banner true to the status the panel just read: a reload lands on a session
+// already up, a call placed by a host program shows as calling, and an idle modem with
+// nothing announced takes a stale banner down.
+function syncBanner(status) {
+  const banner = $("session-banner");
+  const showing = banner.hidden ? "" : banner.dataset.state;
+  if (status.state === "connected") {
+    const role = { iss: ", sending", irs: ", receiving" }[status.role] ?? "";
+    const text = `CONNECTED — ${status.remote || "?"}${role}`;
+    if (showing === "connected") $("session-banner-text").textContent = text;
+    else showBanner("connected", text);
+  } else if (status.state === "connecting") {
+    if (showing !== "calling") showBanner("calling", `CALLING ${status.remote || ""}…`);
+  } else if (status.state === "disconnecting") {
+    if (showing !== "calling") showBanner("calling", `CLOSING — ${status.remote || ""}`);
+  } else if (showing === "connected" || showing === "calling") {
+    banner.hidden = true;
+  }
+}
+
 // ── status ──────────────────────────────────────────────────────────
 
 const STATE_TEXT = {
@@ -206,6 +297,7 @@ async function refreshStatus() {
   const who = status.remote ? ` with ${status.remote}` : "";
   const role = { iss: " — sending", irs: " — receiving" }[status.role] ?? "";
   setState(status.state, name + who, detail + role);
+  syncBanner(status);
 
   $("callsign").textContent = status.callsign || "—";
   // a first run: the configuration still has the placeholder callsign, so the wizard is
@@ -2945,6 +3037,17 @@ function wire() {
     delete $("probe-result").dataset.state;
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
+  });
+  const chimeBox = $("chime-enabled");
+  chimeBox.checked = chimeEnabled();
+  chimeBox.addEventListener("change", () => {
+    try {
+      localStorage.setItem("aether.chime", chimeBox.checked ? "on" : "off");
+    } catch {
+      // storage blocked: the choice holds for this page only
+    }
+    unlockChime();
+    if (chimeBox.checked) chime("up"); // hear what it sounds like
   });
   $("btn-test").addEventListener("click", async () => {
     if (testRunning) {
