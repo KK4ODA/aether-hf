@@ -31,6 +31,7 @@ use crate::{
     fir::Fir,
     modem::{DecodedFrame, Modem},
     rx::FrameSync,
+    sync::{BankOutput, BankRow, BankState},
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -61,6 +62,14 @@ pub struct StreamingReceiver {
     fresh: Vec<PendingFrame>,
     max_buffer: usize,
     lookback: usize,
+    /// The bank's row for every position from `buffer_start`, each computed once: a row
+    /// depends only on the samples of its own reference window and never changes once they
+    /// have arrived. The search used to re-run the whole bank over `block + 2·lookback` on
+    /// every call, so a 20 ms pass repeated about ninety percent of its correlation work —
+    /// the cost ADR-0010 left open, and what put a modest machine 10–20× behind real time.
+    rows: VecDeque<BankRow>,
+    /// The bank's running state: the floor family's ring, and scratch space.
+    bank: BankState,
     /// Frames decoded since the receiver was built, whether or not their check passed.
     pub frames_decoded: usize,
 }
@@ -99,11 +108,14 @@ impl StreamingReceiver {
             + blanker
                 .as_ref()
                 .map_or(0, StreamingBlanker::latency_samples);
+        let bank = modem.detector().bank_state();
         Self {
             blanker,
             band,
             delay_samples,
             modem,
+            rows: VecDeque::new(),
+            bank,
             buffer: Vec::new(),
             buffer_start: 0,
             searched: 0,
@@ -172,9 +184,57 @@ impl StreamingReceiver {
         out
     }
 
+    /// The bank's row for every position whose reference window has arrived and has not
+    /// been computed yet. Each is computed exactly once; the search then reads rows instead
+    /// of re-running the bank over its whole lookback on every block.
+    fn extend_rows(&mut self, reference_len: usize) {
+        let seen = self.samples_seen();
+        if seen < reference_len {
+            return;
+        }
+        // the last position whose reference window is complete
+        let last = seen - reference_len;
+        if self.buffer_start + self.rows.len() > last {
+            return;
+        }
+        // the normalisation floor, as the offline bank takes it from its region: this
+        // buffer. It only bites on a window sixty decibels under the mean, so rows computed
+        // against slightly different buffers agree wherever anything can be detected.
+        let mean_power = self
+            .buffer
+            .iter()
+            .map(|&(re, im)| re * re + im * im)
+            .sum::<f64>()
+            / self.buffer.len().max(1) as f64;
+        let floor = 1e-3 * mean_power.sqrt() * (reference_len as f64).sqrt();
+        let detector = self.modem.detector();
+        while self.buffer_start + self.rows.len() <= last {
+            let relative = self.rows.len();
+            let absolute = self.buffer_start + relative;
+            let window: f64 = self.buffer[relative..relative + reference_len]
+                .iter()
+                .map(|&(re, im)| re * re + im * im)
+                .sum();
+            let energy = window.max(1e-30).sqrt().max(floor);
+            let (row, floor_row) =
+                detector.bank_row(&mut self.bank, &self.buffer, relative, absolute, energy);
+            self.rows.push_back(row);
+            if let Some((back, floor_row)) = floor_row
+                && let Some(target) = self.rows.get_mut(back)
+            {
+                target.floor_stat = floor_row.stat;
+                target.floor_cfo = floor_row.cfo;
+                target.floor_other = floor_row.other;
+                target.floor_winner = floor_row.winner;
+            }
+        }
+    }
+
     /// Search the part of the buffer nothing has looked at yet.
     fn search(&mut self) {
         let symbol = self.params.symbol_samples();
+        let reference_len = self.modem.detector().reference_len();
+        self.extend_rows(reference_len);
         let search_start = self
             .buffer_start
             .max(self.searched.saturating_sub(self.lookback));
@@ -183,7 +243,13 @@ impl StreamingReceiver {
             return;
         }
         let region = &self.buffer[offset..];
-        let found = self.modem.detector().detect(region, MAX_FRAMES_PER_SEARCH);
+        // the bank over exactly this region — the rows already computed for its positions
+        let positions = region.len().saturating_sub(reference_len) + 1;
+        let output = BankOutput::from_rows(self.rows.iter().skip(offset).take(positions));
+        let found = self
+            .modem
+            .detector()
+            .detect_with(region, &output, MAX_FRAMES_PER_SEARCH);
         for acquisition in found {
             let start = acquisition.sync.start + search_start;
             let known = self
@@ -274,6 +340,8 @@ impl StreamingReceiver {
         let drop = keep - self.buffer_start;
         if drop > 0 {
             self.buffer.drain(..drop);
+            // the rows run from `buffer_start` too, so they go with it
+            self.rows.drain(..drop.min(self.rows.len()));
             self.buffer_start += drop;
         }
     }

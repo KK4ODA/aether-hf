@@ -229,6 +229,29 @@ impl FrameDetector {
         self.floor_symbols
     }
 
+    /// The segmented partial correlations of one reference at one position, written into
+    /// `out` (one entry per segment) so the bank allocates nothing per position.
+    fn partials_into(
+        samples: &[Complex],
+        position: usize,
+        reference: &[Complex],
+        out: &mut [Complex64],
+    ) {
+        for (segment, slot) in out.iter_mut().enumerate() {
+            let mut accumulator = Complex64::new(0.0, 0.0);
+            for offset in 0..SEGMENT_LEN {
+                let sample = samples[position + segment * SEGMENT_LEN + offset];
+                let r = reference[segment * SEGMENT_LEN + offset];
+                // correlate: sample * conj(reference)
+                accumulator += Complex64::new(
+                    sample.0 * r.0 + sample.1 * r.1,
+                    sample.1 * r.0 - sample.0 * r.1,
+                );
+            }
+            *slot = accumulator;
+        }
+    }
+
     /// The segmented partial correlations of one reference at one position.
     fn partials(
         &self,
@@ -236,34 +259,159 @@ impl FrameDetector {
         position: usize,
         reference: &[Complex],
     ) -> Vec<Complex64> {
-        (0..self.n_segments)
-            .map(|segment| {
-                let mut accumulator = Complex64::new(0.0, 0.0);
-                for offset in 0..SEGMENT_LEN {
-                    let sample = samples[position + segment * SEGMENT_LEN + offset];
-                    let r = reference[segment * SEGMENT_LEN + offset];
-                    // correlate: sample * conj(reference)
-                    accumulator += Complex64::new(
-                        sample.0 * r.0 + sample.1 * r.1,
-                        sample.1 * r.0 - sample.0 * r.1,
-                    );
+        let mut out = vec![Complex64::new(0.0, 0.0); self.n_segments];
+        Self::partials_into(samples, position, reference, &mut out);
+        out
+    }
+
+    /// The running state for a bank fed one stream of positions in order.
+    #[must_use]
+    pub fn bank_state(&self) -> BankState {
+        let n_bins = self.usable_bins.len();
+        // The floor statistic at q averages the floor references' normalised magnitude rows
+        // at q, q + P, …, q + 6P, so rows are kept in a ring that far back.
+        let span = (self.floor_windows - 1) * self.period;
+        let ring_len = span + 1;
+        BankState {
+            rings: if self.has_floor {
+                vec![vec![0.0f64; ring_len * n_bins]; self.floor_references.len()]
+            } else {
+                Vec::new()
+            },
+            ring_len,
+            span,
+            spectrum: vec![Complex64::new(0.0, 0.0); FFT_LEN],
+            parts: vec![Complex64::new(0.0, 0.0); self.n_segments],
+        }
+    }
+
+    /// The transform of the partials now in `state.parts`, and its strongest usable bin:
+    /// the bin's magnitude and index.
+    fn top_bin(&self, state: &mut BankState) -> (f64, usize) {
+        state.spectrum[..self.n_segments].copy_from_slice(&state.parts);
+        state.spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
+        self.coarse_fft.process(&mut state.spectrum);
+        let mut top = 0.0f64;
+        let mut top_bin = 0usize;
+        for &bin in &self.usable_bins {
+            let magnitude = state.spectrum[bin].norm();
+            if magnitude > top {
+                top = magnitude;
+                top_bin = bin;
+            }
+        }
+        (top, top_bin)
+    }
+
+    /// One position's bank result. `position` indexes `samples` (its reference window must
+    /// be in them), `ring_pos` is the same position in whatever numbering the caller keeps
+    /// its stream in — the floor ring is indexed by it, so it must advance by one per call
+    /// with no gaps — and `energy` is the reference window's normalisation, already floored.
+    /// Returns the ordinary row for `position` and, once the floor family's averaging span
+    /// has passed, the floor row for the position that span back (with its index).
+    pub fn bank_row(
+        &self,
+        state: &mut BankState,
+        samples: &[Complex],
+        position: usize,
+        ring_pos: usize,
+        energy: f64,
+    ) -> (BankRow, Option<(usize, FloorRow)>) {
+        let mut best = [0.0f64; FRAME_TYPES.len()];
+        let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
+        for (type_index, reference) in self.references.iter().enumerate() {
+            Self::partials_into(samples, position, reference, &mut state.parts);
+            // Every bin of the transform is a sum of the same partial correlations with
+            // unit-magnitude phases, so no bin can exceed the sum of their magnitudes.
+            // Where that bound is already under the threshold there is nothing to find and
+            // the transform can be skipped. This is exact rather than a heuristic - it can
+            // never discard a position that would have passed - and the bound is loose
+            // (about eight times the peak on noise), so it skips only the quietest
+            // positions: worth about 38 % of the bank's time, not an order of magnitude.
+            let bound: f64 = state.parts.iter().map(|p| p.norm()).sum();
+            if bound / energy < self.min_timing_peak {
+                continue;
+            }
+            let (top, top_bin) = self.top_bin(state);
+            best[type_index] = top / energy;
+            best_cfo[type_index] = self.bin_hz[top_bin];
+        }
+        let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
+        let row = BankRow {
+            peak: best[win],
+            cfo: best_cfo[win],
+            other: best[lose],
+            winner: win,
+            ..BankRow::default()
+        };
+        if !self.has_floor {
+            return (row, None);
+        }
+
+        let n_bins = self.usable_bins.len();
+        let slot = ring_pos % state.ring_len;
+        for type_index in 0..self.floor_references.len() {
+            Self::partials_into(
+                samples,
+                position,
+                &self.floor_references[type_index],
+                &mut state.parts,
+            );
+            state.spectrum[..self.n_segments].copy_from_slice(&state.parts);
+            state.spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
+            self.coarse_fft.process(&mut state.spectrum);
+            let ring_row = &mut state.rings[type_index][slot * n_bins..(slot + 1) * n_bins];
+            for (value, &bin) in ring_row.iter_mut().zip(&self.usable_bins) {
+                *value = state.spectrum[bin].norm() / energy;
+            }
+        }
+        if position < state.span {
+            return (row, None);
+        }
+        let q = position - state.span;
+        let q_ring = ring_pos - state.span;
+        let mut best = [0.0f64; FRAME_TYPES.len()];
+        let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
+        for (type_index, ring) in state.rings.iter().enumerate() {
+            let mut top = 0.0f64;
+            let mut top_bin = 0usize;
+            for (b, &bin) in self.usable_bins.iter().enumerate() {
+                let mut sum = 0.0f64;
+                for k in 0..self.floor_windows {
+                    let at = (q_ring + k * self.period) % state.ring_len;
+                    sum += ring[at * n_bins + b];
                 }
-                accumulator
-            })
-            .collect()
+                let mean = sum / self.floor_windows as f64;
+                if mean > top {
+                    top = mean;
+                    top_bin = bin;
+                }
+            }
+            best[type_index] = top;
+            best_cfo[type_index] = self.bin_hz[top_bin];
+        }
+        let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
+        let floor = FloorRow {
+            stat: best[win],
+            cfo: best_cfo[win],
+            other: best[lose],
+            winner: win,
+        };
+        (row, Some((q, floor)))
     }
 
     /// The matched-filter bank: for every start position, the best normalised peak over both
     /// frame types, the offset of the winning bin, the other type's peak, and which type won.
     /// On an air with a floor family the floor statistic — the floor references' normalised
-    /// peak averaged over the seven windows a floor preamble fills — comes alongside.
+    /// peak averaged over the seven windows a floor preamble fills — comes alongside. Each
+    /// position is one [`bank_row`](Self::bank_row); the streaming receiver computes the same
+    /// rows once each and keeps them, rather than calling this over its whole lookback.
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn bank(&self, samples: &[Complex]) -> BankOutput {
-        let positions = samples.len().saturating_sub(self.reference_len) + 1;
         if samples.len() < self.reference_len {
             return BankOutput::default();
         }
+        let positions = samples.len() - self.reference_len + 1;
         // running energy over the reference window, for normalisation
         let mut cumulative = vec![0.0f64; samples.len() + 1];
         for (index, &(re, im)) in samples.iter().enumerate() {
@@ -272,122 +420,20 @@ impl FrameDetector {
         let mean_power = cumulative[samples.len()] / samples.len() as f64;
         let floor = 1e-3 * mean_power.sqrt() * (self.reference_len as f64).sqrt();
 
-        let mut peak = vec![0.0f64; positions];
-        let mut cfo = vec![0.0f64; positions];
-        let mut other = vec![0.0f64; positions];
-        let mut winner = vec![0usize; positions];
-        let mut floor_stat = vec![0.0f64; positions];
-        let mut floor_cfo = vec![0.0f64; positions];
-        let mut floor_other = vec![0.0f64; positions];
-        let mut floor_winner = vec![0usize; positions];
-
-        // The floor statistic at q averages the floor references' normalised magnitude rows
-        // at q, q + P, …, q + 6P, so rows are kept in a ring that far back.
-        let n_bins = self.usable_bins.len();
-        let span = (self.floor_windows - 1) * self.period;
-        let ring_len = span + 1;
-        let mut rings: Vec<Vec<f64>> = if self.has_floor {
-            vec![vec![0.0f64; ring_len * n_bins]; self.floor_references.len()]
-        } else {
-            Vec::new()
-        };
-
-        let mut spectrum = vec![Complex64::new(0.0, 0.0); FFT_LEN];
+        let mut state = self.bank_state();
+        let mut output = BankOutput::sized(positions);
         for position in 0..positions {
             let energy = (cumulative[position + self.reference_len] - cumulative[position])
                 .max(1e-30)
                 .sqrt()
                 .max(floor);
-            let mut best = [0.0f64; FRAME_TYPES.len()];
-            let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
-            for (type_index, reference) in self.references.iter().enumerate() {
-                let parts = self.partials(samples, position, reference);
-                // Every bin of the transform is a sum of the same partial correlations with
-                // unit-magnitude phases, so no bin can exceed the sum of their magnitudes.
-                // Where that bound is already under the threshold there is nothing to find and
-                // the transform can be skipped. This is exact rather than a heuristic - it can
-                // never discard a position that would have passed - and the bound is loose
-                // (about eight times the peak on noise), so it skips only the quietest
-                // positions: worth about 38 % of the bank's time, not an order of magnitude.
-                let bound: f64 = parts.iter().map(|p| p.norm()).sum();
-                if bound / energy < self.min_timing_peak {
-                    continue;
-                }
-                spectrum[..self.n_segments].copy_from_slice(&parts);
-                spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
-                self.coarse_fft.process(&mut spectrum);
-                let mut top = 0.0f64;
-                let mut top_bin = 0usize;
-                for &bin in &self.usable_bins {
-                    let magnitude = spectrum[bin].norm();
-                    if magnitude > top {
-                        top = magnitude;
-                        top_bin = bin;
-                    }
-                }
-                best[type_index] = top / energy;
-                best_cfo[type_index] = self.bin_hz[top_bin];
+            let (row, floor_row) = self.bank_row(&mut state, samples, position, position, energy);
+            output.set(position, &row);
+            if let Some((q, floor_row)) = floor_row {
+                output.set_floor(q, &floor_row);
             }
-            let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
-            peak[position] = best[win];
-            cfo[position] = best_cfo[win];
-            other[position] = best[lose];
-            winner[position] = win;
-
-            if !self.has_floor {
-                continue;
-            }
-            let slot = position % ring_len;
-            for (type_index, reference) in self.floor_references.iter().enumerate() {
-                let parts = self.partials(samples, position, reference);
-                spectrum[..self.n_segments].copy_from_slice(&parts);
-                spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
-                self.coarse_fft.process(&mut spectrum);
-                let row = &mut rings[type_index][slot * n_bins..(slot + 1) * n_bins];
-                for (value, &bin) in row.iter_mut().zip(&self.usable_bins) {
-                    *value = spectrum[bin].norm() / energy;
-                }
-            }
-            if position < span {
-                continue;
-            }
-            let q = position - span;
-            let mut best = [0.0f64; FRAME_TYPES.len()];
-            let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
-            for (type_index, ring) in rings.iter().enumerate() {
-                let mut top = 0.0f64;
-                let mut top_bin = 0usize;
-                for (b, &bin) in self.usable_bins.iter().enumerate() {
-                    let mut sum = 0.0f64;
-                    for k in 0..self.floor_windows {
-                        let at = (q + k * self.period) % ring_len;
-                        sum += ring[at * n_bins + b];
-                    }
-                    let mean = sum / self.floor_windows as f64;
-                    if mean > top {
-                        top = mean;
-                        top_bin = bin;
-                    }
-                }
-                best[type_index] = top;
-                best_cfo[type_index] = self.bin_hz[top_bin];
-            }
-            let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
-            floor_stat[q] = best[win];
-            floor_cfo[q] = best_cfo[win];
-            floor_other[q] = best[lose];
-            floor_winner[q] = win;
         }
-        BankOutput {
-            peak,
-            cfo,
-            other,
-            winner,
-            floor_stat,
-            floor_cfo,
-            floor_other,
-            floor_winner,
-        }
+        output
     }
 
     /// Carrier offset at a known ordinary preamble position: the segmented filter on a fine
@@ -707,6 +753,22 @@ impl FrameDetector {
     #[must_use]
     pub fn detect(&self, samples: &[Complex], max_frames: usize) -> Vec<Acquisition> {
         let output = self.bank(samples);
+        self.detect_with(samples, &output, max_frames)
+    }
+
+    /// [`detect`](Self::detect) over a bank already computed for `samples`: the streaming
+    /// receiver's, which keeps a row per position and computes each once rather than
+    /// re-running the bank over its whole lookback on every block.
+    ///
+    /// # Panics
+    /// As [`detect`](Self::detect).
+    #[must_use]
+    pub fn detect_with(
+        &self,
+        samples: &[Complex],
+        output: &BankOutput,
+        max_frames: usize,
+    ) -> Vec<Acquisition> {
         let mut ordinary: Vec<Acquisition> = Vec::new();
         if output.peak.is_empty() {
             return ordinary;
@@ -787,7 +849,7 @@ impl FrameDetector {
         }
 
         let mut found = if self.has_floor {
-            let floor = self.detect_floor(samples, &output, max_frames);
+            let floor = self.detect_floor(samples, output, max_frames);
             if floor.is_empty() {
                 floor
             } else {
@@ -826,6 +888,102 @@ pub struct BankOutput {
     pub floor_other: Vec<f64>,
     /// Which frame type's floor reference won.
     pub floor_winner: Vec<usize>,
+}
+
+impl BankOutput {
+    /// Zeroed output for `positions` positions.
+    #[must_use]
+    pub fn sized(positions: usize) -> Self {
+        Self {
+            peak: vec![0.0; positions],
+            cfo: vec![0.0; positions],
+            other: vec![0.0; positions],
+            winner: vec![0; positions],
+            floor_stat: vec![0.0; positions],
+            floor_cfo: vec![0.0; positions],
+            floor_other: vec![0.0; positions],
+            floor_winner: vec![0; positions],
+        }
+    }
+
+    /// The output over a run of rows, in order.
+    pub fn from_rows<'a>(rows: impl Iterator<Item = &'a BankRow>) -> Self {
+        let mut out = Self::default();
+        for row in rows {
+            out.peak.push(row.peak);
+            out.cfo.push(row.cfo);
+            out.other.push(row.other);
+            out.winner.push(row.winner);
+            out.floor_stat.push(row.floor_stat);
+            out.floor_cfo.push(row.floor_cfo);
+            out.floor_other.push(row.floor_other);
+            out.floor_winner.push(row.floor_winner);
+        }
+        out
+    }
+
+    fn set(&mut self, position: usize, row: &BankRow) {
+        self.peak[position] = row.peak;
+        self.cfo[position] = row.cfo;
+        self.other[position] = row.other;
+        self.winner[position] = row.winner;
+    }
+
+    fn set_floor(&mut self, position: usize, floor: &FloorRow) {
+        self.floor_stat[position] = floor.stat;
+        self.floor_cfo[position] = floor.cfo;
+        self.floor_other[position] = floor.other;
+        self.floor_winner[position] = floor.winner;
+    }
+}
+
+/// One position's bank result: the ordinary statistic for that position and — once the
+/// floor family's averaging span has run past it — the floor statistic for it too.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BankRow {
+    /// Best normalised peak over both frame types.
+    pub peak: f64,
+    /// Carrier offset of the winning bin, in hertz.
+    pub cfo: f64,
+    /// The losing frame type's peak.
+    pub other: f64,
+    /// Which frame type won.
+    pub winner: usize,
+    /// The floor statistic (ADR-0009); zero until finalised, and without a floor family.
+    pub floor_stat: f64,
+    /// Carrier offset of the floor statistic's winning bin, in hertz.
+    pub floor_cfo: f64,
+    /// The losing floor reference's statistic.
+    pub floor_other: f64,
+    /// Which frame type's floor reference won.
+    pub floor_winner: usize,
+}
+
+/// The floor statistic for one position, finalised a preamble's averaging span after it.
+#[derive(Debug, Clone, Copy)]
+pub struct FloorRow {
+    /// The winning floor reference's averaged, normalised peak.
+    pub stat: f64,
+    /// Its carrier offset, in hertz.
+    pub cfo: f64,
+    /// The losing reference's statistic.
+    pub other: f64,
+    /// Which frame type's floor reference won.
+    pub winner: usize,
+}
+
+/// The bank's running state over one stream of positions: the floor family's ring of
+/// per-position rows — the floor statistic at `q` averages the rows at `q, q+P, …, q+6P`,
+/// so rows are kept that far back — and scratch space, so a position allocates nothing.
+/// Positions are fed in order with no gaps; one per stream, from
+/// [`FrameDetector::bank_state`].
+#[derive(Debug, Clone)]
+pub struct BankState {
+    rings: Vec<Vec<f64>>,
+    ring_len: usize,
+    span: usize,
+    spectrum: Vec<Complex64>,
+    parts: Vec<Complex64>,
 }
 
 #[cfg(test)]
