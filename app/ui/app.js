@@ -385,6 +385,7 @@ function applyMetrics(metrics) {
     $("v-queued").textContent = String(metrics.queued_bytes);
   }
   applyTxPeak(metrics.tx_peak_dbfs);
+  applyPassband(metrics.rx_passband_hz, metrics.occupied_hz);
   // the link: the receiver's last frame, what the other end reports, the account
   if (metrics.snr_db !== undefined) {
     const snr = metrics.snr_db;
@@ -2944,6 +2945,27 @@ async function toggleDrive() {
     $("wz-tx-note").textContent = error.message;
     log(error.message, true);
   }
+}
+
+// The receiver's passband against what the modem needs. The modem measures the passband
+// from the noise between signals, so a radio filter set narrower than the signal — the
+// mismatch that carries only the middle of every burst and looks like a dead band — is
+// caught without asking the rig. Warn only when it is clearly narrower, and never before
+// the modem has heard enough noise to say (a null reading).
+function applyPassband(measured, needed) {
+  const note = $("rx-passband-note");
+  if (!note) return;
+  if (typeof measured !== "number" || typeof needed !== "number" || measured >= needed - 400) {
+    note.hidden = true;
+    return;
+  }
+  const round = (hz) => Math.round(hz / 50) * 50;
+  note.textContent =
+    `The radio's receive filter looks about ${round(measured)} Hz wide, but the modem's ` +
+    `signal needs about ${Math.round(needed)} Hz — it is carrying only the middle of every ` +
+    `burst. Widen the radio's filter (roofing or DSP width) to pass the whole signal, or set ` +
+    `the modem to 500 Hz in Setup.`;
+  note.hidden = false;
 }
 
 // The peak the modem actually handed the sound card on its last transmission. This is the

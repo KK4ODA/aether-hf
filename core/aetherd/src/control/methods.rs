@@ -1041,6 +1041,10 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "rate_snr_db": rate_snr_db,
         "margin_db": margin_db,
         "throughput_bps": station.throughput_bps(),
+        // the receiver's passband, learned from the noise, against the width the modem needs:
+        // materially narrower means the radio's filter is set too narrow for the signal
+        "rx_passband_hz": station.rx_passband_hz(),
+        "occupied_hz": station.occupied_bandwidth_hz(),
         "link": link_json(station),
     })
 }
