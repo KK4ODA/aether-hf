@@ -503,6 +503,71 @@ code {
   --state: var(--status-error);
 }
 
+/* The session, unmissably: a banner across every tab when it comes up, is being called, or
+   has ended. The state strip is small and lives on one tab; a glance at the wrong one
+   missed the whole session on the air. */
+.session-banner {
+  --state: var(--status-idle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--s3);
+  padding: var(--s3) var(--s4);
+  border: 2px solid var(--state);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--state) 20%, var(--surface));
+  color: var(--text);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.session-banner[hidden] {
+  display: none;
+}
+
+.session-banner[data-state="connected"] {
+  --state: var(--status-link);
+}
+
+.session-banner[data-state="calling"] {
+  --state: var(--status-warning);
+}
+
+.session-banner[data-state="ended"] {
+  --state: var(--status-error);
+}
+
+.session-banner.pulse {
+  animation: session-banner-pulse 1.2s ease-out 1;
+}
+
+@keyframes session-banner-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--state) 70%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 22px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-banner.pulse {
+    animation: none;
+  }
+}
+
+.session-chime {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+
 /* a state in flight breathes, gently, so a glance tells it apart from one that is settled */
 .state-strip[data-state="connecting"]::before,
 .state-strip[data-state="disconnecting"]::before,
