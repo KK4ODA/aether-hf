@@ -568,6 +568,34 @@ code {
   user-select: none;
 }
 
+/* The drive-setting procedure, where the buttons are: a new user gets it wrong more than
+   anything else, and it is the one setup that most decides whether they are decoded. */
+.drive-guide {
+  margin-bottom: var(--s3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  padding: var(--s2) var(--s3);
+}
+
+.drive-guide > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.drive-guide ol {
+  margin: var(--s2) 0 0;
+  padding-left: 1.4em;
+  display: grid;
+  gap: var(--s2);
+}
+
+.drive-guide li strong {
+  color: var(--text);
+}
+
 /* a state in flight breathes, gently, so a glance tells it apart from one that is settled */
 .state-strip[data-state="connecting"]::before,
 .state-strip[data-state="disconnecting"]::before,
