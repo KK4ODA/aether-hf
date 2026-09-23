@@ -45,7 +45,7 @@ use crate::{
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
-    spectrum::{Spectrum, SpectrumAnalyser},
+    spectrum::{PassbandMonitor, Spectrum, SpectrumAnalyser},
 };
 
 /// How a station is set up.
@@ -451,6 +451,17 @@ struct FrequencyCache {
 /// How far back the throughput reading looks, seconds.
 const THROUGHPUT_WINDOW_S: f64 = 30.0;
 
+/// The audio the modem occupies is centred here; the radio's receive filter must pass a band
+/// of the occupied width around it, and the passband monitor measures the width at this
+/// centre.
+const AUDIO_CENTER_HZ: f64 = 1500.0;
+/// The receiver's passband is folded into the monitor no more often than this, in seconds of
+/// station time: a couple of times a second, not every block.
+const PASSBAND_SAMPLE_S: f64 = 0.5;
+/// Below this block level there is no real noise to read a passband from — a muted card, a
+/// disconnected antenna — so the passband is not sampled then. −70 dBFS, the silence floor.
+const PASSBAND_MIN_LEVEL_DBFS: f64 = -70.0;
+
 /// The most constellation points kept from a frame, for the display.
 const CONSTELLATION_POINTS: usize = 1024;
 
@@ -593,6 +604,12 @@ pub struct Station<P: Ptt> {
     last_symbols: Vec<Complex>,
     /// What the sound card is delivering, for the spectrum display.
     spectrum: SpectrumAnalyser,
+    /// The receiver's passband, learned from the noise it delivers between signals, so a
+    /// radio filter set narrower than the modem's bandwidth is caught without asking the rig.
+    passband: PassbandMonitor,
+    /// Station time the passband was last sampled: it is folded in about twice a second, not
+    /// every block, and only when the channel is quiet.
+    passband_next_s: f64,
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
@@ -690,6 +707,8 @@ impl<P: Ptt> Station<P> {
             last_frame: None,
             last_symbols: Vec::new(),
             spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
+            passband: PassbandMonitor::new(),
+            passband_next_s: 0.0,
             rx_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
@@ -814,6 +833,24 @@ impl<P: Ptt> Station<P> {
         self.last_frame
             .as_ref()
             .map(|frame| (frame, self.last_symbols.as_slice()))
+    }
+
+    /// The receiver's passband width in hertz, learned from the noise between signals, once
+    /// enough quiet audio has been heard. Materially below [`occupied_bandwidth_hz`] means
+    /// the radio's filter is set narrower than the modem's signal — it carries only the
+    /// middle of every burst, which looks like a dead band. `None` until it has heard enough.
+    ///
+    /// [`occupied_bandwidth_hz`]: Self::occupied_bandwidth_hz
+    #[must_use]
+    pub fn rx_passband_hz(&self) -> Option<f64> {
+        self.passband.width_hz(AUDIO_CENTER_HZ)
+    }
+
+    /// The audio bandwidth the modem's signal occupies, in hertz: what the radio's receive
+    /// filter has to pass for a burst to arrive whole.
+    #[must_use]
+    pub fn occupied_bandwidth_hz(&self) -> f64 {
+        self.config.params.occupied_bandwidth_hz()
     }
 
     /// A spectrum of the last window of captured audio, once one has been heard.
@@ -1580,6 +1617,7 @@ impl<P: Ptt> Station<P> {
             self.absorb(&baseband, now);
         }
         self.note_busy_transition(now);
+        self.sample_passband(now);
 
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
@@ -2159,6 +2197,28 @@ impl<P: Ptt> Station<P> {
     /// with nothing above the threshold the only useful question is which path did it. So
     /// every transition says: the level and floor at that moment, the threshold, and the
     /// reason the hold was last extended.
+    /// Fold the receiver's noise spectrum into the passband monitor, at most a couple of
+    /// times a second and only when the channel is quiet: the detector has learned the floor,
+    /// nothing is on the channel, we are not hearing our own tail, and there is real noise to
+    /// measure. So what it learns is the receiver's own passband, not a signal that is on.
+    fn sample_passband(&mut self, now: f64) {
+        if now < self.passband_next_s {
+            return;
+        }
+        let quiet = self.busy.settled()
+            && !self.busy.busy(now)
+            && !self.transmitting
+            && now >= self.deaf_until
+            && self.busy.level_db > PASSBAND_MIN_LEVEL_DBFS;
+        if !quiet {
+            return;
+        }
+        if let Some(spectrum) = self.spectrum.compute() {
+            self.passband.observe(&spectrum);
+            self.passband_next_s = now + PASSBAND_SAMPLE_S;
+        }
+    }
+
     fn note_busy_transition(&mut self, now: f64) {
         let busy = self.busy.busy(now);
         if busy == self.was_busy {
