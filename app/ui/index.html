@@ -205,6 +205,16 @@
 
         <div class="card">
           <h3>Keying and drive</h3>
+          <details class="drive-guide" open>
+            <summary>How to set your drive</summary>
+            <ol class="sub">
+              <li><strong>Press Set drive.</strong> It sends the real waveform in six-second bursts, five seconds apart, so the rig's ALC sees the peaks real traffic presents — a tune tone will not.</li>
+              <li><strong>Watch the radio's ALC meter.</strong> Raise the <em>Transmit level</em> below until the ALC just begins to move, then back it off until the ALC barely tickles. The level is live; the gaps between bursts let you see where it settled.</li>
+              <li><strong>If the ALC moves even with the level low, turn down the radio's USB (rear) data input gain</strong> and press Set drive again. That coarse gain and this fine slider both feed the ALC, and the rig's is usually the one set too high.</li>
+              <li><strong>Keep the peak in the green.</strong> <em>Last transmit peak</em> should read about −6 to −12 dB, never red — that is the modem's own headroom, before the rig.</li>
+              <li><strong>For more power, turn up the radio's power control, not the slider.</strong> A clean signal at flat ALC is what gets decoded. The waveform's average power is a fraction of its peaks, so a few watts average is normal and plenty; raise the rig's power and the clean drive scales up with it.</li>
+            </ol>
+          </details>
           <div class="row">
             <button id="wz-ptt" title="Key the radio for one second with no audio">Key for 1 s</button>
             <button id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop — for an antenna tuner, not for setting drive" aria-pressed="false">Tune tone, 10 s</button>
@@ -221,20 +231,15 @@
             <span class="numerals drive-reading" id="tx-level-reading" title="The transmit level now, in dB below full scale: the default is −12 dB (0.25), −32 dB is a tenth of that" aria-live="polite">−12 dB</span>
           </div>
           <p class="sub">
-            <strong>Key</strong> puts the radio into transmit with no audio: watch the rig
-            and the interface's PTT light. <strong>Tune</strong> keys with a steady tone —
-            that is what an antenna tuner needs, and it is <em>not</em> how to set drive.
-            <strong>Set drive</strong> is: it sends the real waveform, at the fastest mode
-            this station uses. A tone is a sine and the data waveform is not, so at the same
-            average power the waveform's peaks land about 6 to 7 dB higher — and it is peaks
-            the ALC answers to. Drive set on the tone is that far into limiting on real
-            traffic, which smears the signal and costs far more than it saves. So: press
-            <strong>Set drive</strong>: four bursts of six seconds, five seconds apart. Watch
-            the ALC during a burst and move the slider — the level is live, so the meter
-            answers at once — then use the gap to see where it settled. Back the level off
-            until the ALC barely moves. The level follows the slider while either plays. All three are
-            refused during a session, and both transmissions are refused while the channel
-            is busy. The level is saved when the slider is released.
+            <strong>Key</strong> keys the radio with no audio, to check the PTT light.
+            <strong>Tune</strong> is a steady tone for an antenna tuner — <em>not</em> for
+            setting drive: a tone is a sine, and the data waveform's peaks land 6 to 7 dB
+            higher, so drive set on the tone runs that far into ALC limiting on real traffic.
+            Two gains feed the rig's ALC — this <em>Transmit level</em> and the radio's own
+            USB (rear) data input gain — while the rig's power control sets how many watts
+            the clean signal makes. All three keys are refused during a session, and Tune and
+            Set drive while the channel is busy. The level is saved when the slider is
+            released.
           </p>
         </div>
 
@@ -701,7 +706,7 @@
           <ol class="help-steps">
             <li><strong>Setup</strong>: callsign, the radio interface and its three devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
             <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in. A device the other computer does not have is shown as <em>not on this computer</em> until you choose one.</li>
-            <li><strong>Session → Keying and drive</strong>: <em>Key for 1 s</em> should light the rig's transmit indicator; the <em>Tune tone</em> with the level slider sets the drive so the ALC barely moves.</li>
+            <li><strong>Session → Keying and drive</strong>: <em>Key for 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider. The <em>How to set your drive</em> note on the Session tab walks through it.</li>
             <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
           </ol>
