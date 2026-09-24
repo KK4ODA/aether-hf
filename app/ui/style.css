@@ -559,7 +559,8 @@ code {
   }
 }
 
-.session-chime {
+/* a checkbox with its words, beside the buttons it goes with (Chime, Enter sends, Sound) */
+.check {
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
@@ -1090,6 +1091,12 @@ tbody tr:hover {
 
 .section-head h2 {
   margin: 0;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
 }
 
 .counters .section-head {
@@ -1634,6 +1641,24 @@ details.menu > .menu-list > button:hover:not(:disabled) {
 .rx-drop {
   color: var(--text-3);
   font-style: italic;
+}
+
+/* a message on its own line, the time it arrived in the gutter; the time is not part of what
+ * a drag-select or the Copy button takes */
+.rx-line {
+  min-height: 1.55em;
+}
+
+.rx-line .when {
+  color: var(--text-3);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* where a session begins, so one conversation is not read as the end of the last */
+.rx-session {
+  color: var(--text-3);
+  margin: 0.35em 0 0.15em;
 }
 
 .config {

@@ -136,6 +136,7 @@ function onEvent(frame) {
       log(`${data.name}: ${data.detail}`);
       if (data.name === "connected") {
         resetReceived();
+        markSession(data.remote || data.detail);
         showBanner("connected", `CONNECTED — ${data.remote || data.detail}`);
         chime("up");
       } else if (data.name === "disconnected") {
@@ -211,9 +212,14 @@ function chimeEnabled() {
 
 // two rising notes for a session up, two falling for one ended
 function chime(kind) {
-  if (!chimeContext || !chimeEnabled()) return;
+  if (!chimeEnabled()) return;
+  playNotes(kind === "up" ? [[660, 0], [880, 0.16]] : [[660, 0], [440, 0.16]], 0.3, 0.24);
+}
+
+// `notes` are [hertz, start in seconds]; each rises to `peak` and dies away over `length`
+function playNotes(notes, peak, length) {
+  if (!chimeContext) return;
   if (chimeContext.state === "suspended") chimeContext.resume();
-  const notes = kind === "up" ? [[660, 0], [880, 0.16]] : [[660, 0], [440, 0.16]];
   const t0 = chimeContext.currentTime + 0.02;
   for (const [hz, at] of notes) {
     const osc = chimeContext.createOscillator();
@@ -221,11 +227,11 @@ function chime(kind) {
     osc.type = "sine";
     osc.frequency.value = hz;
     gain.gain.setValueAtTime(0.0001, t0 + at);
-    gain.gain.exponentialRampToValueAtTime(0.3, t0 + at + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.24);
+    gain.gain.exponentialRampToValueAtTime(peak, t0 + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + length);
     osc.connect(gain).connect(chimeContext.destination);
     osc.start(t0 + at);
-    osc.stop(t0 + at + 0.26);
+    osc.stop(t0 + at + length + 0.02);
   }
 }
 
@@ -3060,6 +3066,27 @@ function wire() {
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
   });
+  // Enter sends and the received-text note: ticked unless turned off, and remembered
+  for (const [id, key] of [
+    ["enter-sends", "aether.entersends"],
+    ["rx-sound", "aether.rxsound"],
+  ]) {
+    const box = $(id);
+    try {
+      box.checked = localStorage.getItem(key) !== "off";
+    } catch {
+      box.checked = true;
+    }
+    box.addEventListener("change", () => {
+      try {
+        localStorage.setItem(key, box.checked ? "on" : "off");
+      } catch {
+        // storage blocked: the choice holds for this page only
+      }
+      unlockChime();
+      if (id === "rx-sound" && box.checked) playReceivedNote(); // hear what it sounds like
+    });
+  }
   const chimeBox = $("chime-enabled");
   chimeBox.checked = chimeEnabled();
   chimeBox.addEventListener("change", () => {
@@ -3109,6 +3136,7 @@ function wire() {
   $("btn-open-recordings").addEventListener("click", openRecordingsFolder);
   $("btn-copy-recordings").addEventListener("click", () => copyRecordingsPath(false));
   $("btn-copy-received").addEventListener("click", copyReceived);
+  $("btn-clear-received").addEventListener("click", clearReceived);
   $("btn-reset-counters").addEventListener("click", async () => {
     await act(() => call("counters.reset"), "counters reset");
   });
@@ -3124,14 +3152,12 @@ function wire() {
     const notes = $("record-notes").value.trim();
     call("record.notes", { notes: notes || null }).catch(() => {});
   });
-  $("btn-send").addEventListener("click", async () => {
-    const text = $("outgoing").value;
-    if (!text) return;
-    const ok = await act(
-      () => call("send", { data: toBase64(text) }),
-      `queued ${text.length} bytes`,
-    );
-    if (ok) $("outgoing").value = "";
+  $("btn-send").addEventListener("click", sendOutgoing);
+  $("outgoing").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    if (!$("enter-sends").checked) return;
+    event.preventDefault(); // Enter sends; Shift+Enter still starts a new line
+    sendOutgoing();
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-heard-clear").addEventListener("click", clearHeard);
@@ -3404,8 +3430,28 @@ async function copyRecordingsPath(fallback = false) {
   }
 }
 
+// A message ends its line, so the other end shows each message on a line of its own —
+// with the time it arrived — instead of running them together: the link is a byte stream
+// and carries no message boundaries of its own.
+async function sendOutgoing() {
+  const box = $("outgoing");
+  const text = box.value;
+  if (!text.trim()) return;
+  if ($("btn-send").disabled) {
+    $("send-note").textContent = "Connect to a station first — the text stays here.";
+    return;
+  }
+  const message = /[\r\n]$/.test(text) ? text : `${text}\n`;
+  const bytes = new TextEncoder().encode(message).length;
+  const ok = await act(() => call("send", { data: toBase64(message) }), `queued ${bytes} bytes`);
+  if (ok) box.value = "";
+}
+
+// the messages, a line each, without the times in the gutter
 async function copyReceived() {
-  const text = $("incoming").innerText;
+  const text = [...$("incoming").children]
+    .map((line) => line.querySelector(".rx-text")?.textContent ?? line.textContent)
+    .join("\n");
   try {
     await navigator.clipboard.writeText(text);
     $("send-note").textContent = "Received text copied.";
@@ -3481,10 +3527,36 @@ function log(message, bad = false) {
 // as a count instead. This is what keeps garbage out of the message window.
 let rxDecoder = null;
 let rxDropped = 0;
+// The line text is being added to, or null once the last one has ended. A line ends at a
+// line break (CR LF, CR or LF; a CR LF split between two frames is one break), and every
+// message this panel sends ends with one, so each message starts a line with its own time.
+let rxLine = null;
+let rxCarriageReturn = false;
+let rxNoteAt = 0;
 
 function resetReceived() {
   rxDecoder = new TextDecoder("utf-8", { fatal: true });
   rxDropped = 0;
+  rxLine = null;
+  rxCarriageReturn = false;
+}
+
+// A line where a session begins, so one conversation is not read as the end of the last.
+function markSession(remote) {
+  const pane = $("incoming");
+  const mark = document.createElement("div");
+  mark.className = "rx-session";
+  mark.textContent = `── ${remote} · ${new Date().toLocaleTimeString()} ──`;
+  pane.append(mark);
+  rxLine = null;
+  pane.scrollTop = pane.scrollHeight;
+}
+
+// Empty the window. The session and the decoder go on: a message half arrived still
+// finishes, on a line of its own.
+function clearReceived() {
+  $("incoming").replaceChildren();
+  rxLine = null;
 }
 
 function onReceivedData(base64) {
@@ -3508,19 +3580,56 @@ function appendReceived(text) {
   const pane = $("incoming");
   // keep the reader's place and any selection if they have scrolled up to read
   const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 4;
-  pane.appendChild(document.createTextNode(text));
+  let body = text;
+  if (rxCarriageReturn && body.startsWith("\n")) body = body.slice(1);
+  rxCarriageReturn = body.endsWith("\r");
+  const parts = body.replace(/\r\n?/g, "\n").split("\n");
+  parts.forEach((part, index) => {
+    if (index > 0) rxLine = null; // a line break ended the line before
+    if (part === "" && index === parts.length - 1) return; // the next text starts a line
+    if (!rxLine) rxLine = newReceivedLine(pane, part !== "");
+    rxLine.append(part);
+  });
   if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+// A new line of received text: the time it began to arrive in the gutter (a blank line has
+// none), and the note that says text has come, once for a flurry of lines.
+function newReceivedLine(pane, stamped) {
+  const line = document.createElement("div");
+  line.className = "rx-line";
+  if (stamped) {
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = `${new Date().toLocaleTimeString()}  `;
+    line.append(when);
+  }
+  const body = document.createElement("span");
+  body.className = "rx-text";
+  line.append(body);
+  pane.append(line);
+  if (stamped && $("rx-sound").checked && Date.now() - rxNoteAt > 1500) {
+    rxNoteAt = Date.now();
+    playReceivedNote();
+  }
+  return body;
+}
+
+// one short high note: not either of the session chime's two-note figures
+function playReceivedNote() {
+  playNotes([[1175, 0]], 0.22, 0.18);
 }
 
 function noteDropped() {
   const pane = $("incoming");
-  let tag = pane.querySelector(".rx-drop:last-child");
-  if (!tag || tag !== pane.lastElementChild) {
-    tag = document.createElement("span");
+  let tag = pane.lastElementChild;
+  if (!tag || !tag.classList.contains("rx-drop")) {
+    tag = document.createElement("div");
     tag.className = "rx-drop";
     pane.appendChild(tag);
   }
-  tag.textContent = `\n[${rxDropped} bytes of non-text data were not shown]\n`;
+  tag.textContent = `[${rxDropped} bytes of non-text data were not shown]`;
+  rxLine = null;
   pane.scrollTop = pane.scrollHeight;
 }
 
