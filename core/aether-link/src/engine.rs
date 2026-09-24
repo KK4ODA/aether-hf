@@ -56,8 +56,19 @@ pub struct LinkConfig {
     pub disc_retries: usize,
     /// An idle sender polls the receiver this often.
     pub keepalive_s: f64,
-    /// No valid frame from the peer for this long ends the session.
+    /// No valid frame from the peer for this long ends the session — or longer where the
+    /// link runs long frames: see [`LinkConfig::link_timeout_exchanges`].
     pub link_timeout_s: f64,
+    /// Silence ends a session only after at least this many whole exchanges' air time at
+    /// the family the link runs in — a full burst, its acknowledgement and both turnarounds
+    /// (ADR-0012). On the ordinary layouts that is well inside `link_timeout_s`; on the
+    /// 500 Hz floor one exchange is nearly half a minute, and a fixed 45 s dropped two
+    /// sessions in three at −4 dB on the fading bench that four exchanges carried.
+    pub link_timeout_exchanges: f64,
+    /// Usable modes the sending station steps its own recommendation down by for every
+    /// burst that goes unanswered (ADR-0012): a burst and its acknowledgement fade together,
+    /// and the recommendation otherwise moves only when an acknowledgement brings one.
+    pub silence_step: usize,
     /// Slack added to every wait for a peer response.
     pub ack_margin_s: f64,
     /// Silence after a data frame that marks the end of a burst.
@@ -85,6 +96,8 @@ impl Default for LinkConfig {
             disc_retries: 3,
             keepalive_s: 10.0,
             link_timeout_s: 45.0,
+            link_timeout_exchanges: 4.0,
+            silence_step: 2,
             ack_margin_s: 0.4,
             burst_gap_s: 0.2,
             initial_mode: 0,
@@ -839,13 +852,21 @@ impl LinkEngine {
     /// instead of taking a whole frame of silence as the end of the burst. Optional — a
     /// physical layer that cannot report preambles simply leaves
     /// [`PhyTiming::preamble_detect_s`] unset.
-    pub fn on_preamble(&mut self, t_start: f64, now: f64) {
+    ///
+    /// `frame_s` is the announced frame's own air time, which its preamble names (the layout,
+    /// and with it the family: a floor frame is four times an ordinary one). Without it the
+    /// receiving station assumes the longest frame the peer may send next — a guess that
+    /// went wrong when a session's first burst dropped into the floor after ordinary connect
+    /// frames: the acknowledgement fired inside every floor frame and trampled it
+    /// (ADR-0012).
+    pub fn on_preamble(&mut self, t_start: f64, now: f64, frame_s: Option<f64>) {
         self.now = self.now.max(now);
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
             return;
         }
-        let deadline = t_start + self.peer_data_frame_s() + self.irs_reply_delay();
+        let length = frame_s.unwrap_or_else(|| self.peer_data_frame_s());
+        let deadline = t_start + length + self.irs_reply_delay();
         let current = self.deadline_of(Timer::Ack).unwrap_or(0.0);
         self.set_deadline(Timer::Ack, deadline.max(current));
     }
@@ -995,6 +1016,35 @@ impl LinkEngine {
     fn reencode_target(&self, body_len: usize, from_mode: usize, to_mode: usize) -> Option<usize> {
         (to_mode..from_mode.min(self.timing.data_capacity.len()))
             .find(|&mode| self.fits(body_len, mode))
+    }
+
+    /// An unanswered burst is evidence too: step the recommendation down
+    /// [`LinkConfig::silence_step`] usable modes, never below the table's first. The frames
+    /// stranded above are re-encoded on the way, after `max_combines` transmissions, and the
+    /// next acknowledgement puts the peer's own recommendation back.
+    fn back_off(&mut self) {
+        let modes = self.rate.modes();
+        let current = self.recommended.min(self.config.max_mode);
+        let index = modes.iter().rposition(|&m| m <= current).unwrap_or(0);
+        self.recommended = modes[index.saturating_sub(self.config.silence_step)];
+    }
+
+    /// How long the peer may stay silent before the session ends: the configured time, or
+    /// [`LinkConfig::link_timeout_exchanges`] whole exchanges at the family the link runs in
+    /// — the longest data frame either side sends or may send next, and that family's
+    /// control frame — whichever is longer.
+    fn link_timeout(&self) -> f64 {
+        let frame = self
+            .peer_data_frame_s()
+            .max(self.timing.data_frame_s_for(self.burst_mode()));
+        let floor = self.peer_floor || self.timing.is_floor(self.burst_mode());
+        let exchange = self.config.burst_frames as f64 * frame
+            + self.timing.control_frame_s_for(floor)
+            + 2.0 * self.timing.turnaround_s
+            + self.config.burst_gap_s;
+        self.config
+            .link_timeout_s
+            .max(self.config.link_timeout_exchanges * exchange)
     }
 
     /// The longest DATA frame the peer may send next: the family of what we recommended
@@ -1220,8 +1270,12 @@ impl LinkEngine {
             return;
         }
         match what {
-            // same composition: nothing was acknowledged
-            Some(Waiting::Ack) => self.send_burst(),
+            // same composition: nothing was acknowledged — at a mode no higher than the
+            // silence says the path can carry
+            Some(Waiting::Ack) => {
+                self.back_off();
+                self.send_burst();
+            }
             Some(Waiting::Poll) => self.send_poll(),
             _ => {}
         }
@@ -1631,7 +1685,7 @@ impl LinkEngine {
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
         self.note_peer_data(record.mode);
-        self.arm(Timer::Link, self.config.link_timeout_s);
+        self.arm(Timer::Link, self.link_timeout());
         self.stats.frames_received += 1;
 
         match header.kind {
@@ -1759,7 +1813,7 @@ impl LinkEngine {
             return;
         }
         self.peer_floor = frame.floor();
-        self.arm(Timer::Link, self.config.link_timeout_s);
+        self.arm(Timer::Link, self.link_timeout());
         match control.kind {
             ControlKind::Disc => {
                 let reply = self.control(ControlKind::DiscAck, 0, 0, 0, None, 0);
@@ -1928,7 +1982,7 @@ impl LinkEngine {
         self.peer_capabilities = request.caps;
         self.state = State::Connected;
         self.role = Role::Irs;
-        self.arm(Timer::Link, self.config.link_timeout_s);
+        self.arm(Timer::Link, self.link_timeout());
         // the request is the first measurement of how the caller is heard: the
         // controller starts from it, and the acceptance carries it back so the caller's
         // first burst can too (P9-2)
@@ -1962,7 +2016,7 @@ impl LinkEngine {
         self.peer_capabilities = accept.caps;
         self.state = State::Connected;
         self.role = Role::Iss;
-        self.arm(Timer::Link, self.config.link_timeout_s);
+        self.arm(Timer::Link, self.link_timeout());
         let detail = format!("{} (iss)", self.remote_call);
         self.actions.push(Action::Event {
             name: "connected",
@@ -2028,5 +2082,97 @@ impl LinkEngine {
             name: "disconnected",
             detail: reason.to_owned(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES};
+
+    /// The 500 Hz air's timing, with its floor family (ADR-0009): the durations the model's
+    /// harness hands the engine.
+    fn narrow() -> PhyTiming {
+        PhyTiming {
+            data_frame_s: NARROW_FRAME_S[2],
+            control_frame_s: 0.434,
+            turnaround_s: 0.25,
+            detect_latency_s: 0.15,
+            tx_latency_s: 0.0,
+            preamble_detect_s: Some(0.31),
+            data_capacity: NARROW_PAYLOAD_BYTES.to_vec(),
+            mode_threshold_db: NARROW_AWGN_THRESHOLD_DB.to_vec(),
+            floor_data_frame_s: Some(NARROW_FRAME_S[0]),
+            floor_control_frame_s: Some(2.232),
+            floor_modes: 2,
+        }
+    }
+
+    fn engine(timing: PhyTiming) -> LinkEngine {
+        LinkEngine::new(
+            "W4ODA",
+            timing,
+            LinkConfig {
+                max_mode: 12,
+                ..LinkConfig::default()
+            },
+            1,
+        )
+    }
+
+    #[test]
+    fn the_link_timeout_spans_whole_exchanges_at_the_floor() {
+        // ADR-0012: 45 s on the ordinary layouts, four whole exchanges on the floor, where one
+        // exchange is nearly half a minute
+        let mut e = engine(narrow());
+        e.recommended = 0;
+        let exchange = 6.0 * NARROW_FRAME_S[0] + 2.232 + 2.0 * 0.25 + 0.2;
+        assert!(
+            (e.link_timeout() - 4.0 * exchange).abs() < 0.01,
+            "{}",
+            e.link_timeout()
+        );
+        e.recommended = 6;
+        e.rate.seed(15.0);
+        assert!(
+            (e.link_timeout() - 45.0).abs() < 1e-9,
+            "{}",
+            e.link_timeout()
+        );
+    }
+
+    #[test]
+    fn an_unanswered_burst_steps_the_recommendation_down() {
+        let mut e = engine(narrow());
+        let modes = e.rate.modes().to_vec();
+        e.recommended = modes[8];
+        e.back_off();
+        assert_eq!(e.recommended, modes[6]);
+        e.recommended = modes[1];
+        e.back_off();
+        assert_eq!(e.recommended, modes[0]);
+        e.back_off();
+        assert_eq!(e.recommended, modes[0]);
+    }
+
+    #[test]
+    fn the_ack_waits_for_the_frame_the_preamble_announced() {
+        // an IRS expecting ordinary frames (the connect frames were) must not answer inside a
+        // floor frame four times as long: the preamble names the frame and the ACK waits for
+        // its end
+        let mut e = engine(narrow());
+        e.role = Role::Irs;
+        e.state = State::Connected;
+        e.peer_mode = Some(3);
+        e.rate.seed(10.0);
+        assert!(e.peer_data_frame_s() < 2.0);
+        let floor_frame = NARROW_FRAME_S[0];
+        e.on_preamble(100.0, 100.3, Some(floor_frame));
+        let deadline = e.deadline_of(Timer::Ack).expect("armed");
+        assert!(deadline >= 100.0 + floor_frame, "{deadline}");
+        e.deadlines.clear();
+        e.on_preamble(100.0, 100.3, None);
+        let guessed = e.deadline_of(Timer::Ack).expect("armed");
+        assert!(guessed < 100.0 + floor_frame, "{guessed}");
     }
 }

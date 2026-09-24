@@ -2187,7 +2187,12 @@ impl<P: Ptt> Station<P> {
                 continue;
             }
             self.rx_until = self.rx_until.max(now + air.long.duration_s());
-            self.engine.on_preamble(pending.sync.start as f64 / fs, now);
+            // the preamble named the frame's layout: its own air time, not a guess from the
+            // peer's last mode — a floor frame after ordinary connect frames is four times
+            // as long, and an answer timed for an ordinary one tramples it (ADR-0012)
+            let frame_s = pending.end.saturating_sub(pending.sync.start) as f64 / fs;
+            self.engine
+                .on_preamble(pending.sync.start as f64 / fs, now, Some(frame_s));
         }
     }
 

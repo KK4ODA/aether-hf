@@ -176,6 +176,13 @@ impl Default for RateController {
 }
 
 impl RateController {
+    /// The modes this controller recommends from, ascending: the throughput/threshold
+    /// Pareto front of its table.
+    #[must_use]
+    pub fn modes(&self) -> &[usize] {
+        &self.modes
+    }
+
     /// Build one for the wide waveform's table.
     #[must_use]
     pub fn new(config: RateConfig) -> Self {
