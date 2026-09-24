@@ -3645,6 +3645,58 @@ mod tests {
     }
 
     #[test]
+    fn two_narrow_stations_connect_and_carry_a_message_on_the_floor() {
+        // −9 dB, 3 kHz reference: below every ordinary narrow mode (the connect mode stops at
+        // −5.2), inside the floor family's range (ADR-0009). A floor frame is 2.2–4.2 s and
+        // the receiver searches a fraction of that per block, so this is the live receiver's
+        // test as much as the protocol's: the family decoded offline and never through the
+        // streaming receiver until it learned to take a floor frame as final while the frame
+        // was still arriving (ADR-0009 §8), and nothing connected on the air below −5 dB.
+        let narrow = |config: StationConfig| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        };
+        // the waveform's RMS is tx_level/√2 and the noise is white across 24 kHz, so the
+        // noise in 3 kHz is an eighth of its variance
+        let gain = 0.1_f32;
+        let signal_power = (0.25 * f64::from(gain)).powi(2) / 2.0;
+        let snr_db = -9.0_f64;
+        let sigma = (8.0 * signal_power / 10f64.powf(snr_db / 10.0)).sqrt() as f32;
+        let mut air = Air::with(gain, sigma, narrow);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(150.0, |a, b| a.connected() && b.connected());
+        let reports = air.b.take_frame_reports();
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "no session at {snr_db} dB: {reports:?}"
+        );
+        let message = b"On the floor at -9 dB.";
+        air.a.send(message);
+        air.run(150.0, |_, b| b.received_len() >= message.len());
+        let mut reports = reports;
+        reports.extend(air.b.take_frame_reports());
+        assert_eq!(air.b.take_received(), message, "{reports:?}");
+        // what carried it was the floor: its modes are the table's first two
+        let floor_modes = air.a.engine().timing().floor_modes;
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.kind == "data" && r.decoded && r.mode < floor_modes),
+            "{reports:?}"
+        );
+        // and the channel was as stated: every decoded frame measured within a few decibels
+        let measured: Vec<f64> = reports
+            .iter()
+            .filter(|r| r.decoded)
+            .map(|r| r.snr_db)
+            .collect();
+        assert!(
+            measured.iter().all(|&snr| (snr - snr_db).abs() < 3.0),
+            "{measured:?}"
+        );
+    }
+
+    #[test]
     fn a_wide_station_does_not_hear_a_narrow_call() {
         // the two waveforms do not decode each other's preambles: a 500 Hz call at a
         // 2 300 Hz station is silence, which is the point of stating the bandwidth
