@@ -28,6 +28,11 @@ weak-signal design, taken from textbooks and public sources, not from any other 
 The family sits at the centre of the passband and inside 500 Hz, so the same frames serve
 both air interfaces. What it costs is rate: tens of bits per second, the bottom of a table
 rather than a replacement for it.
+
+The **fast kinds** (P9-9, ADR-0014) fill the 2 300 Hz table's gap between the floor and the
+OFDM modes with the same frame: its sync blocks, its length, its code — and two or four data
+symbols a slot, at 50 or 100 Bd on tones 50 or 100 Hz apart, so the data spreads over 800 or
+1 600 Hz and the same detector finds every kind, far below where any of them decodes.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ from aether_model.frame.modes import (
     SYNC_SYMBOLS,
     TONE_CONTROL,
     TONE_DATA,
+    TONE_FAST,
     TONE_NUMEROLOGY,
     ToneKind,
     ToneNumerology,
@@ -68,23 +74,46 @@ link layer compares the two families in one currency."""
 def modulate(
     tones: IntArray, num: ToneNumerology = TONE_NUMEROLOGY, gain_db: float = 0.0
 ) -> ComplexArray:
-    """Continuous-phase FSK: the frequency glides between tones over ``ramp_samples`` on a
-    raised cosine, the phase accumulates, and only the frame's own fade in and out touches
-    the amplitude — a constant envelope, at ``gain_db`` above unit power."""
+    """Continuous-phase FSK at one numerology (:func:`cpfsk`)."""
     t = np.asarray(tones, dtype=np.int64)
-    n = num.symbol_samples
-    hz = num.tone_hz(t)
-    freq = np.repeat(hz, n)
-    ramp = num.ramp_samples
-    if ramp > 0 and len(t) > 1:
+    return cpfsk(
+        num.tone_hz(t),
+        np.full(len(t), num.symbol_samples),
+        np.full(len(t), num.ramp_samples),
+        num.fs,
+        edge=num.edge_samples,
+        gain_db=gain_db,
+    )
+
+
+def cpfsk(
+    hz: FloatArray,
+    lengths: IntArray,
+    ramps: IntArray,
+    fs: float,
+    *,
+    edge: int,
+    gain_db: float = 0.0,
+) -> ComplexArray:
+    """Continuous-phase FSK: symbol ``i`` holds ``hz[i]`` for ``lengths[i]`` samples, the
+    frequency glides into it over ``ramps[i]`` samples on a raised cosine centred on its
+    first sample, the phase accumulates, and only the frame's own fade in and out over
+    ``edge`` samples touches the amplitude — a constant envelope, at ``gain_db`` above unit
+    power."""
+    hz = np.asarray(hz, dtype=np.float64)
+    lengths = np.asarray(lengths, dtype=np.int64)
+    starts = np.concatenate(([0], np.cumsum(lengths)[:-1]))
+    freq = np.repeat(hz, lengths)
+    for i in np.flatnonzero(np.diff(hz)) + 1:
+        ramp = int(ramps[i])
+        if ramp <= 0:
+            continue
         shape = 0.5 - 0.5 * np.cos(np.pi * (np.arange(ramp) + 0.5) / ramp)
-        for i in np.flatnonzero(np.diff(t)) + 1:
-            start = i * n - ramp // 2
-            freq[start : start + ramp] = hz[i - 1] + (hz[i] - hz[i - 1]) * shape
+        start = int(starts[i]) - ramp // 2
+        freq[start : start + ramp] = hz[i - 1] + (hz[i] - hz[i - 1]) * shape
     # the phase at the *start* of each sample, so the first sample has phase zero
-    phase = (2.0 * np.pi / num.fs) * np.concatenate(([0.0], np.cumsum(freq[:-1])))
+    phase = (2.0 * np.pi / fs) * np.concatenate(([0.0], np.cumsum(freq[:-1])))
     x = np.exp(1j * phase) * 10.0 ** (gain_db / 20.0)
-    edge = num.edge_samples
     if edge > 0:
         win = 0.5 - 0.5 * np.cos(np.pi * (np.arange(edge) + 0.5) / edge)
         x[:edge] *= win
@@ -92,17 +121,43 @@ def modulate(
     return np.asarray(x, dtype=np.complex128)
 
 
+def frame_symbols(
+    kind: ToneKind, data: IntArray, rv: int = 0
+) -> tuple[IntArray, NDArray[np.bool_]]:
+    """The whole frame's tones in time order, and which of them are sync symbols: a sync
+    slot is one symbol at the sync numerology, a data slot :attr:`ToneKind.speed` symbols at
+    the data's."""
+    layout = kind.layout(rv)
+    sync = layout >= 0
+    is_sync = np.repeat(sync, np.where(sync, 1, kind.speed))
+    tones = np.empty(len(is_sync), dtype=np.int64)
+    tones[is_sync] = layout[sync]
+    tones[~is_sync] = data
+    return tones, is_sync
+
+
 def frame_tones(kind: ToneKind, data: IntArray, rv: int = 0) -> IntArray:
     """The whole frame's tones: the sync blocks with the data between them."""
-    out = kind.layout(rv)
-    out[out < 0] = data
-    return out
+    return frame_symbols(kind, data, rv)[0]
+
+
+def modulate_frame(
+    kind: ToneKind, tones: IntArray, is_sync: NDArray[np.bool_], gain_db: float = 0.0
+) -> ComplexArray:
+    """A frame's tones on the air: each at its own numerology, a glide between two symbols
+    as short as the shorter of their own, the frame's edges the sync numerology's."""
+    s, d = kind.num, kind.data
+    hz = np.where(is_sync, s.tone_hz(tones), d.tone_hz(tones))
+    lengths = np.where(is_sync, s.symbol_samples, d.symbol_samples)
+    own = np.where(is_sync, s.ramp_samples, d.ramp_samples)
+    ramps = np.minimum(own, np.concatenate((own[:1], own[:-1])))
+    return cpfsk(hz, lengths, ramps, s.fs, edge=s.edge_samples, gain_db=gain_db)
 
 
 def burst(kind: ToneKind, payload: bytes, rv: int = 0) -> ComplexArray:
     """A frame as the transmitter sends it: at :data:`TONE_GAIN_DB` above an OFDM frame."""
-    tones = frame_tones(kind, tone_codec(kind).encode(payload, rv), rv)
-    return modulate(tones, kind.num, TONE_GAIN_DB)
+    tones, is_sync = frame_symbols(kind, tone_codec(kind).encode(payload, rv), rv)
+    return modulate_frame(kind, tones, is_sync, TONE_GAIN_DB)
 
 
 # ── demodulation ───────────────────────────────────────────────────────
@@ -148,15 +203,41 @@ def symbol_metrics(energies: FloatArray, layout: IntArray, noise: float) -> Floa
     sets the weight of the symbols it covers."""
     e = energies / noise
     known = layout >= 0
-    idx = np.flatnonzero(known)
-    held = np.clip(e[idx, layout[idx]] - 1.0, 0.0, None)
-    # one estimate per sync block, at the block's middle; linear between, flat outside
-    blocks = idx.reshape(-1, SYNC_SYMBOLS)
-    centres = blocks.mean(axis=1)
-    levels = held.reshape(-1, SYNC_SYMBOLS).mean(axis=1)
+    centres, levels = block_levels(e, layout)
     data = np.flatnonzero(~known)
     s = np.maximum(np.interp(data, centres, levels), 0.1)
-    arg = 2.0 * np.sqrt(e[data] * s[:, None])
+    return _log_i0(2.0 * np.sqrt(e[data] * s[:, None]))
+
+
+def block_levels(e: FloatArray, layout: IntArray) -> tuple[FloatArray, FloatArray]:
+    """The symbol SNR each sync block measures (its sync tones' normalised energy less the
+    noise's one), at the block's middle slot — one estimate per block, from slot energies
+    already divided by the noise."""
+    idx = np.flatnonzero(layout >= 0)
+    held = np.clip(e[idx, layout[idx]] - 1.0, 0.0, None)
+    centres = idx.reshape(-1, SYNC_SYMBOLS).mean(axis=1)
+    return centres, held.reshape(-1, SYNC_SYMBOLS).mean(axis=1)
+
+
+def fast_metrics(
+    kind: ToneKind, energies: FloatArray, layout: IntArray, noise: float, data: FloatArray
+) -> FloatArray:
+    """:func:`symbol_metrics` for a fast kind (ADR-0014): the sync blocks' levels come from
+    the slot energies at the sync numerology, the data symbols' energies at their own. A
+    data symbol is ``speed`` times shorter than a slot and carries that much less energy, so
+    the level interpolated at its middle is scaled down by the same factor; each family is
+    divided by its own noise, measured on its own bins."""
+    centres, levels = block_levels(energies / noise, layout)
+    speed = kind.speed
+    slots = np.flatnonzero(layout < 0)
+    at = np.repeat(slots, speed) + (np.tile(np.arange(speed), len(slots)) + 0.5) / speed - 0.5
+    s = np.maximum(np.interp(at, centres, levels) / speed, 0.1)
+    e = data / noise_level(data, np.full(len(data), -1, dtype=np.int64))
+    return _log_i0(2.0 * np.sqrt(e * s[:, None]))
+
+
+def _log_i0(arg: FloatArray) -> FloatArray:
+    """``log I0``, exact below 3 and by its asymptotic series above."""
     big = np.maximum(arg, 3.0)
     return np.asarray(
         np.where(
@@ -166,6 +247,28 @@ def symbol_metrics(energies: FloatArray, layout: IntArray, noise: float) -> Floa
         ),
         dtype=np.float64,
     )
+
+
+def data_energies(x: ComplexArray, kind: ToneKind, start: int, cfo_hz: float) -> FloatArray:
+    """Energy of every tone in every data symbol of a fast kind's frame, at the data's
+    numerology (data symbols × tones), segment by segment between the sync blocks."""
+    slot = kind.num.symbol_samples
+    return np.concatenate(
+        [
+            tone_energies(x, start + first * slot, cfo_hz, slots * kind.speed, kind.data)
+            for first, slots in kind.data_segments()
+        ]
+    )
+
+
+def sync_noise(energies: FloatArray, layout: IntArray, kind: ToneKind) -> float:
+    """The noise per bin at the sync numerology: :func:`noise_level` over the whole frame for
+    the floor's own kinds, over the sync slots alone for a fast one — whose data slots, read
+    at a sync symbol's length, hold its data's energy smeared across the bins."""
+    if kind.speed == 1:
+        return noise_level(energies, layout)
+    known = layout >= 0
+    return noise_level(energies[known], layout[known])
 
 
 def bit_llrs(metrics: FloatArray, bits: int) -> FloatArray:
@@ -202,8 +305,13 @@ def demodulate(x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo_hz: flo
     """Soft bits and SNR of a frame of ``kind`` at a known start and carrier offset."""
     layout = kind.layout(rv)
     energies = tone_energies(x, start, cfo_hz, kind.symbols, kind.num)
-    noise = noise_level(energies, layout)
-    llr = bit_llrs(symbol_metrics(energies, layout, noise), kind.num.bits_per_symbol)
+    noise = sync_noise(energies, layout, kind)
+    if kind.speed == 1:
+        metrics = symbol_metrics(energies, layout, noise)
+    else:
+        data = data_energies(x, kind, start, cfo_hz)
+        metrics = fast_metrics(kind, energies, layout, noise, data)
+    llr = bit_llrs(metrics, kind.data.bits_per_symbol)
     idx = np.flatnonzero(layout >= 0)
     es = float(np.mean(energies[idx, layout[idx]])) / noise - 1.0
     return ToneFrame(kind, rv, llr, snr_from_es(es, kind.num))
@@ -258,14 +366,14 @@ class ToneDetector:
 
     def __init__(
         self,
-        kinds: tuple[ToneKind, ...] = (TONE_CONTROL, *TONE_DATA),
+        kinds: tuple[ToneKind, ...] = (TONE_CONTROL, *TONE_DATA, *TONE_FAST),
         max_cfo_hz: float = 100.0,
         threshold: float = 3.0,
     ) -> None:
         self.kinds = kinds
         self.num = kinds[0].num
         if any(k.num != self.num for k in kinds):
-            raise ValueError("one numerology per detector")
+            raise ValueError("one sync numerology per detector")
         self.hop = self.num.symbol_samples // self.HOP_DIV
         self.nfft = self.num.symbol_samples * self.BIN_DIV
         self.bin_hz = self.num.fs / self.nfft
@@ -397,7 +505,7 @@ class ToneDetector:
         layout = kind.layout(rv)
         e = tone_energies(x, start, cfo, kind.symbols, kind.num)
         idx = np.flatnonzero(layout >= 0)
-        return float(np.mean(e[idx, layout[idx]])) / noise_level(e, layout)
+        return float(np.mean(e[idx, layout[idx]])) / sync_noise(e, layout, kind)
 
     def sync_energies(
         self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfos: FloatArray
@@ -491,14 +599,25 @@ class ToneStream:
     hop after its end. A frame whose *first* sync block is in, above
     :data:`ANNOUNCE_THRESHOLD` and the largest within :attr:`ANNOUNCE_LOOKAHEAD` hops, is
     announced as arriving meanwhile (:attr:`arriving`), 0.44 s after it starts: what a
-    receiving station needs to hold its acknowledgement while a burst is still coming."""
+    receiving station needs to hold its acknowledgement while a burst is still coming.
+
+    Two frames of a half-duplex burst never overlap, and two rules act on it (ADR-0014). A
+    first block inside a frame already arriving is that frame's own middle or end block and
+    is not announced — unless it is somewhere else, and stronger: then the arrival it falls
+    in was the false one, and it gives way. And a candidate is not taken while a frame
+    announced as arriving starts inside it with a first block as strong as the candidate's
+    whole: that is the hypothesis read a block-spacing early, its middle block on the
+    frame's first and its first in the silence before the burst, which a fast kind's data
+    under its end block can carry past :meth:`ToneDetector.confirmed`."""
 
     LOOKAHEAD = 4
     ANNOUNCE_LOOKAHEAD = 12
     """Hops either side a first block must beat to be announced: three symbols, because a
     block read two or three symbols early against the true one can put five of eight of
     another pattern's tones on top — only at part-symbol offsets, only on a strong frame,
-    and always below the true start's eight."""
+    and always below the true start's eight. A hypothesis further off that still shares a
+    symbol or two with the true block and passes on noise is announced, and gives way to the
+    true block when that is announced inside it."""
 
     def __init__(
         self, detector: ToneDetector | None = None, announce_threshold: float = ANNOUNCE_THRESHOLD
@@ -611,6 +730,8 @@ class ToneStream:
             near = [x[1] for x in self._candidates if abs(x[0] - h) <= self.LOOKAHEAD]
             if v < max(near) or self._overlaps((start, start + kind.samples)):
                 continue
+            if self._announced_inside(start, start + kind.samples, v):
+                continue
             sync = self.det.refine(buf, kind, rv, start - abs0, c * self.det.bin_hz)
             if not self.det.confirmed(buf, sync):
                 continue
@@ -633,10 +754,14 @@ class ToneStream:
             near = [x[1] for x in self._firsts if abs(x[0] - h) <= self.ANNOUNCE_LOOKAHEAD]
             if v < max(near) or self._overlaps((start, start + kind.samples)):
                 continue
-            if any(a.start - hop < start < a.end - hop for a in self.arriving):
+            inside = [a for a in self.arriving if a.start - hop < start < a.end - hop]
+            if any(self._own_block(a, start) or v <= a.statistic for a in inside):
                 # inside a frame already arriving: its own middle or end sync block, which
-                # repeats the first — never a frame of its own, in a half-duplex burst
+                # repeats the first, or a weaker reading than it — never a frame of its own,
+                # in a half-duplex burst
                 continue
+            # stronger, and not one of its blocks: the arrival it falls in was the false one
+            self.arriving = [a for a in self.arriving if a not in inside]
             self.arriving.append(ToneArrival(start, kind, rv, v))
         self._firsts = keep
         # an announcement lasts until its frame is taken or its end has passed
@@ -646,6 +771,22 @@ class ToneStream:
             for a in self.arriving
             if a.end > now - hop and not self._overlaps((a.start + hop, a.end - hop))
         ]
+
+    def _own_block(self, arrival: ToneArrival, start: int) -> bool:
+        """Whether a first block at ``start`` is ``arrival``'s own middle or end block, to a
+        symbol."""
+        n = self.det.num.symbol_samples
+        return any(
+            abs(start - (arrival.start + o * n)) <= n for o in arrival.kind.block_offsets[1:]
+        )
+
+    def _announced_inside(self, start: int, end: int, statistic: float) -> bool:
+        """Whether a frame announced as arriving starts inside ``start``–``end`` — more than a
+        symbol after its start — with a first block at least ``statistic``."""
+        n = self.det.num.symbol_samples
+        return any(
+            start + n < a.start < end - n and a.statistic >= statistic for a in self.arriving
+        )
 
     def _overlaps(self, span: tuple[int, int]) -> bool:
         """Whether ``span`` overlaps a frame taken, by more than the hop or two a coarse

@@ -88,16 +88,16 @@ class LinkConfig:
     """Slack added to every wait for a peer response."""
     burst_gap_s: float = 0.2
     """Silence after a DATA frame that marks the end of a burst (the IRS then ACKs)."""
-    rate: dict[str, float | int] = field(default_factory=dict)
+    rate: dict[str, float | int | None] = field(default_factory=dict)
     """Overrides for the rate controller's tunables (``RateController`` fields by name),
     for benches that compare one controller against another; empty means the defaults."""
     initial_mode: int = 0
     """The slowest mode a session's first burst goes out at. The acceptance's SNR report
     picks the first mode (P9-2); this is the floor under it, which a bench that pins a
     mode sets along with :attr:`max_mode`."""
-    max_mode: int = 15
+    max_mode: int = 19
     """The fastest rung the station sends at: the top of the widest ladder (2 300 Hz,
-    ADR-0013) by default — a recommendation never leaves the air's own table."""
+    ADR-0014) by default — a recommendation never leaves the air's own table."""
     bursts_before_turn: int = 3
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
     silence_step: int = 2
@@ -1142,7 +1142,7 @@ class LinkEngine:
             flags |= ControlFlags.WANT_TX
         if self._break_requested:
             flags |= ControlFlags.BREAK | ControlFlags.WANT_TX
-        self._ack_counter = (self._ack_counter + 1) % 16
+        self._ack_counter = (self._ack_counter + 1) % 8
         self.stats.acks_sent += 1
         self._transmit(
             [

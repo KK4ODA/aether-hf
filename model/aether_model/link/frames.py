@@ -193,12 +193,14 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
     return (caps & ~CAP_BANDWIDTH_MASK & 0xFF) | (code << CAP_BANDWIDTH_SHIFT)
 
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 """The link protocol a station speaks, in the connect body's version byte. 2 since the tone
 floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 above the OFDM mode of version 1 — so a session between the two would run on numbers that
 mean different frames at either end; a station ignores a call or an acceptance of another
-version, and says so."""
+version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
+air, between the floor's two and the OFDM modes, and a control frame whose recommended mode
+has five bits and its counter three."""
 
 
 @dataclass(frozen=True)
@@ -294,7 +296,11 @@ class ControlFrame:
     bitmap: int = 0
     snr_db: float | None = None
     recommended_mode: int = 0
+    """A rung of the air's ladder: five bits, room for 32 — the 2 300 Hz ladder has 20 since
+    the fast kinds (ADR-0014), past the four bits of protocol version 2."""
     counter: int = 0
+    """The sender's count of its acknowledgements, modulo 8: a label for logs, which no
+    receiver acts on."""
 
     def encode(self) -> bytes:
         snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
@@ -306,7 +312,7 @@ class ControlFrame:
                 (self.bitmap >> 8) & 0xFF,
                 self.bitmap & 0xFF,
                 snr & 0xFF,
-                ((self.recommended_mode & 0x0F) << 4) | (self.counter & 0x0F),
+                ((self.recommended_mode & 0x1F) << 3) | (self.counter & 0x07),
             ]
         )
 
@@ -326,8 +332,8 @@ class ControlFrame:
             base=payload[2],
             bitmap=(payload[3] << 8) | payload[4],
             snr_db=snr,
-            recommended_mode=payload[6] >> 4,
-            counter=payload[6] & 0x0F,
+            recommended_mode=payload[6] >> 3,
+            counter=payload[6] & 0x07,
         )
 
     def received(self, seq: int) -> bool:

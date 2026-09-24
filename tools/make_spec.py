@@ -30,6 +30,7 @@ from aether_model.frame.modes import (
     SYNC_SYMBOLS,
     TONE_CONTROL,
     TONE_DATA,
+    TONE_FAST,
     TONE_NUMEROLOGY,
     WIDE,
     AirInterface,
@@ -126,7 +127,7 @@ def layout_block(air: AirInterface = WIDE) -> str:
 
 
 def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
-    """The air's ladder: every rung, the tone floor's kinds first (ADR-0013)."""
+    """The air's ladder: every rung, the tone floor's kinds first (ADR-0013, ADR-0014)."""
     thresholds = AWGN_THRESHOLD_DB if air is WIDE else NARROW_AWGN_THRESHOLD_DB
     rows = []
     for r in air.ladder:
@@ -136,8 +137,8 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
                 [
                     str(r.index),
                     k.name,
-                    "TONE",
-                    str(k.num.bits_per_symbol),
+                    f"TONE, {round(1 / k.data.symbol_s)} Bd data",
+                    str(k.data.bits_per_symbol),
                     f"{k.rate:.2f}",
                     f"BG{k.base_graph}",
                     str(k.lifting_size),
@@ -188,8 +189,10 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
 
 
 def tone_block() -> str:
-    """The tone floor's numerology, frame kinds and detector constants (ADR-0013)."""
+    """The tone floor's numerology, frame kinds and detector constants (ADR-0013), and its
+    fast kinds' data numerologies (ADR-0014)."""
     num = TONE_NUMEROLOGY
+    fast = sorted({k.data for k in TONE_FAST}, key=lambda n: -n.symbol_samples)
     det = tone.ToneDetector()
     rows = [
         ["Tones", f"{num.tones}", f"{num.bits_per_symbol} Gray-labelled coded bits a symbol"],
@@ -210,6 +213,16 @@ def tone_block() -> str:
             "raised-cosine frequency glide centred on the boundary; continuous phase",
         ],
         ["Frame edges", f"{num.edge_samples} samples", "raised-cosine amplitude fade in and out"],
+        *(
+            [
+                f"Fast data, {1 / n.symbol_s:.0f} Bd",
+                f"{n.symbol_samples} samples ({n.symbol_s * 1e3:.0f} ms), "
+                f"{n.spacing_hz:.0f} Hz apart, span {n.span_hz:.0f} Hz",
+                f"{num.symbol_samples // n.symbol_samples} data symbols a slot; tone change "
+                f"{n.ramp_samples} samples, the shorter glide at a boundary with a sync symbol",
+            ]
+            for n in fast
+        ),
         [
             "Level",
             f"+{tone.TONE_GAIN_DB:.1f} dB",
@@ -218,7 +231,8 @@ def tone_block() -> str:
         [
             "Sync blocks",
             f"3 x {SYNC_SYMBOLS} symbols",
-            "start, middle, end; 45 % of the data before the middle one",
+            "start, middle, end; 45 % of the data slots before the middle one; the same "
+            "for every kind",
         ],
         [
             "Detector",
@@ -239,12 +253,17 @@ def tone_block() -> str:
         ],
     ]
     kinds = []
-    for k in (TONE_CONTROL, *TONE_DATA):
+    for k in (TONE_CONTROL, *TONE_DATA, *TONE_FAST):
+        data = (
+            str(k.data_symbols)
+            if k.speed == 1
+            else f"{k.data_symbols} at {1 / k.data.symbol_s:.0f} Bd in {k.data_slots}"
+        )
         kinds.append(
             [
                 k.name,
                 str(k.payload_bytes),
-                f"{k.data_symbols} + 3 x {SYNC_SYMBOLS} = {k.symbols}",
+                f"{data} + 3 x {SYNC_SYMBOLS} = {k.symbols}",
                 f"{k.duration_s:.2f} s",
                 ", ".join(str(o) for o in k.block_offsets),
                 f"{k.rate:.2f}",
@@ -252,7 +271,7 @@ def tone_block() -> str:
                 ", ".join(str(p) for p in k.patterns),
                 f"{TONE_CONTROL_THRESHOLD_DB:+.1f}"
                 if k.control
-                else f"{AWGN_THRESHOLD_DB[TONE_DATA.index(k)]:+.1f}",
+                else f"{AWGN_THRESHOLD_DB[WIDE.tone_data.index(k)]:+.1f}",
             ]
         )
     patterns = [[str(i), " ".join(str(t) for t in p)] for i, p in enumerate(SYNC_PATTERNS)]
@@ -263,7 +282,7 @@ def tone_block() -> str:
                 [
                     "Kind",
                     "Payload B",
-                    "Symbols",
+                    "Data + sync = slots",
                     "Duration",
                     "Sync blocks at",
                     "Rate",

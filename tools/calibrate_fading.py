@@ -1,6 +1,7 @@
 """Calibrate the fading pipe's effective-SNR mapping to the modem's measured curves (P9-6).
 
-    python tools/calibrate_fading.py [--realizations 400] [--out bench/baselines/fading_pipe.csv]
+    python tools/calibrate_fading.py [--realizations 400] [--jobs 4]
+                                     [--out bench/baselines/fading_pipe.csv]
 
 The fading pipe (``aether_model.link.fading``) puts every frame through its own stretch of
 a two-ray ITU-R F.1487 channel and judges it at the exponential effective SNR of its
@@ -23,6 +24,8 @@ import argparse
 import csv
 import math
 import sys
+from dataclasses import dataclass
+from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +97,38 @@ def calibrate(gains: np.ndarray, awgn_db: float, target_db: float) -> tuple[floa
     return beta, crossing(gains, beta, awgn_db), False
 
 
+@dataclass(frozen=True)
+class Fit:
+    """One frame on one class: what its β is fitted from."""
+
+    bandwidth_hz: int
+    frame: str
+    channel: str
+    duration_s: float
+    carriers_hz: tuple[float, ...]
+    awgn_db: float
+    target_db: float
+    realizations: int
+    seed: int
+
+
+def fit(job: Fit) -> dict[str, object]:
+    """The job's ensemble and the β that puts its crossing on the target — deterministic, so
+    the fits may run in any order and on any number of processes."""
+    gains = ensemble(job.channel, job.duration_s, job.carriers_hz, job.realizations, job.seed)
+    beta, fitted, clamped = calibrate(gains, job.awgn_db, job.target_db)
+    return {
+        "bandwidth_hz": job.bandwidth_hz,
+        "frame": job.frame,
+        "channel": job.channel,
+        "awgn_db": round(job.awgn_db, 2),
+        "target_db": round(job.target_db, 2),
+        "beta": round(beta, 4),
+        "fitted_db": round(fitted, 2),
+        "clamped": int(clamped),
+    }
+
+
 def frames_of(air: AirInterface) -> list[tuple[str, TxFrame]]:
     """Every frame the air sends, by the name the pipe looks it up by (``frame_key``): each
     rung's DATA frame, the ordinary control frame and the tone floor's."""
@@ -106,16 +141,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--realizations", type=int, default=400)
     ap.add_argument("--seed", type=int, default=11)
+    ap.add_argument("--jobs", type=int, default=1, help="processes to fit on")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    rows: list[dict[str, object]] = []
+    jobs: list[Fit] = []
     for air, fer_csv in ((WIDE, "phy_fer.csv"), (NARROW, "phy_fer_500.csv")):
         awgn, _ = table_for(air)
         tables = channel_thresholds(Path("bench/baselines") / fer_csv, awgn=awgn, air=air)
         timing = phy_timing(air.params)
         awgn_controls = control_thresholds_for(timing)
-        controls = control_thresholds(Path(CONTROL_CSV[air]), awgn_controls, tables, awgn)
+        controls = control_thresholds(Path(CONTROL_CSV[air]), awgn_controls, tables, awgn, air=air)
         shape = shapes_for(air)
         for label, frame in frames_of(air):
             s = shape(frame)
@@ -126,26 +162,30 @@ def main() -> int:
                 base = awgn[frame.mode]
                 targets = {c: tables[c][frame.mode] for c in CLASSES if c in tables}
             for channel, target in targets.items():
-                gains = ensemble(channel, s.duration_s, s.carriers_hz, args.realizations, args.seed)
-                beta, fitted, clamped = calibrate(gains, base, target)
-                rows.append(
-                    {
-                        "bandwidth_hz": air.params.bandwidth.value,
-                        "frame": label,
-                        "channel": channel,
-                        "awgn_db": round(base, 2),
-                        "target_db": round(target, 2),
-                        "beta": round(beta, 4),
-                        "fitted_db": round(fitted, 2),
-                        "clamped": int(clamped),
-                    }
+                jobs.append(
+                    Fit(
+                        air.params.bandwidth.value,
+                        label,
+                        channel,
+                        s.duration_s,
+                        s.carriers_hz,
+                        base,
+                        target,
+                        args.realizations,
+                        args.seed,
+                    )
                 )
-                print(
-                    f"{air.params.bandwidth.value:5d} Hz {label:14s} {channel:9s} "
-                    f"awgn {base:6.1f}  target {target:6.1f}  beta {beta:9.3f}  "
-                    f"fit {fitted:6.1f}{'  CLAMPED' if clamped else ''}",
-                    flush=True,
-                )
+    rows: list[dict[str, object]] = []
+    with Pool(max(1, args.jobs)) as pool:
+        for row in pool.imap(fit, jobs):
+            rows.append(row)
+            print(
+                f"{row['bandwidth_hz']:5d} Hz {row['frame']:14s} {row['channel']:9s} "
+                f"awgn {row['awgn_db']:6.1f}  target {row['target_db']:6.1f}  "
+                f"beta {row['beta']:9.3f}  fit {row['fitted_db']:6.1f}"
+                f"{'  CLAMPED' if row['clamped'] else ''}",
+                flush=True,
+            )
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)

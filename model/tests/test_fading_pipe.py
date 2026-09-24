@@ -82,3 +82,10 @@ def test_frames_are_shaped_by_the_layout_they_go_out_on() -> None:
     tone = wide(TxFrame(Container.DATA, b"", mode=0))
     assert tone == floor_data
     assert len(tone.carriers_hz) == 16 and max(tone.carriers_hz) - min(tone.carriers_hz) == 375.0
+    # a fast kind (ADR-0014) is sampled across its data's tones: 800 or 1 600 Hz, the frame
+    # as long as the floor's
+    for rung, span in ((2, 750.0), (5, 1500.0)):
+        fast = wide(TxFrame(Container.DATA, b"", mode=rung))
+        assert fast.duration_s == tone.duration_s
+        assert len(fast.carriers_hz) == 16
+        assert max(fast.carriers_hz) - min(fast.carriers_hz) == span

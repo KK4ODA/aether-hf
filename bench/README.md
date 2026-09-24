@@ -347,6 +347,29 @@ At 500 Hz the gain is below −6 dB, and from −4 to +2 dB on Moderate and Poor
 quarter slower, the OFDM floor's 78 bit/s mode gone. ADR-0013 §4.5 has the table and the
 rate controller's rules at the boundary.
 
+## Fast tones (`tone_floor.csv`, `link_fast_tones.csv`, P9-9 / ADR-0014)
+
+The 2 300 Hz air's four fast kinds are the tone floor's frame with its data at 50 and 100 Bd;
+`bench_tone.py` measures them with the floor's own, through the same detector (now looking
+for every kind — the floor's rows came out as before). 10 % FER through the detector:
+
+| | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| tone50-51, 76 bit/s | −16.0 dB | −8.6 | −11.2 | −11.8 |
+| tone50-75, 112 bit/s | −14.2 | −5.7 | −8.2 | −7.5 |
+| tone100-105, 157 bit/s | −13.1 | −6.5 | −8.2 | −8.4 |
+| tone100-153, 228 bit/s | −11.2 | −3.2 | −4.3 | −4.1 |
+| (BPSK ⅕, 197 bit/s, the OFDM rung they displace) | −5.1 | +2.0 | +1.2 | −0.3 |
+
+ADR-0014's gate — 3 dB over the displaced rung at the same rate on Good and Moderate — passes
+by 5.2 and 5.5 dB at a higher rate. `link_fast_tones.csv` is the link bench on the fading
+pipe, 30 sessions a point, beta.52's code from a worktree against the same calibration and
+this one, with the wide air's floor-boundary cap on (as shipped) and off: at 2 300 Hz from
+−10 to 0 dB every point is faster (two to three times on the fading classes from −6 to −2 dB)
+but −2 dB on AWGN, which ties; nothing is slower elsewhere, and 500 Hz is unchanged. The
+calibration fills an unmeasured rung's fading threshold from its own family's rungs now, and
+`calibrate_fading.py --jobs 4` fits on four processes.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,

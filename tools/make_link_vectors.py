@@ -130,7 +130,8 @@ def control_frame_cases() -> list[dict]:  # type: ignore[type-arg]
     cases = [
         (ControlKind.ACK, ControlFlags.NONE, 0, 0, None, 0, 0),
         (ControlKind.ACK, ControlFlags.WANT_TX, 100, 0b1011, -7.0, 6, 5),
-        (ControlKind.ACK, ControlFlags.BREAK | ControlFlags.WANT_TX, 255, 0xFFFF, 40.0, 13, 15),
+        (ControlKind.ACK, ControlFlags.BREAK | ControlFlags.WANT_TX, 255, 0xFFFF, 40.0, 19, 7),
+        (ControlKind.ACK, ControlFlags.NONE, 3, 0b1, 2.0, 31, 6),
         (ControlKind.POLL, ControlFlags.NONE, 7, 0, 12.5, 3, 1),
         (ControlKind.TURN, ControlFlags.NONE, 0, 0, None, 0, 0),
         (ControlKind.DISC, ControlFlags.NONE, 0, 0, -40.0, 0, 0),

@@ -105,8 +105,10 @@ def channel_thresholds(
     air's ladder, and the tone floor's from ``tone_csv``.
 
     Rungs the sweeps did not cover are filled by shifting the AWGN table by the mean measured
-    penalty of that channel — crude, but it keeps the whole ladder available to the rate
-    controller instead of leaving holes it would have to skip.
+    penalty of that channel *in the rung's own family* — crude, but it keeps the whole ladder
+    available to the rate controller instead of leaving holes it would have to skip. The
+    family matters: a tone kind's penalty over AWGN is not an OFDM mode's, and with the four
+    fast kinds (ADR-0014) in the mean an unmeasured OFDM rung's fill moved by half a decibel.
     """
     if not csv_path.exists():
         return {}
@@ -143,10 +145,18 @@ def channel_thresholds(
 
     out: dict[str, dict[int, float]] = {}
     for channel, table in measured.items():
-        penalties = [table[m] - awgn[m] for m in table if m in awgn]
-        shift = statistics.fmean(penalties) if penalties else 0.0
-        out[channel] = {m: table.get(m, awgn[m] + shift) for m in awgn}
+        shift = {
+            family: mean_penalty(table, awgn, [m for m in awgn if air.is_floor(m) == family])
+            for family in (False, True)
+        }
+        out[channel] = {m: table.get(m, awgn[m] + shift[air.is_floor(m)]) for m in awgn}
     return out
+
+
+def mean_penalty(table: dict[int, float], awgn: dict[int, float], rungs: list[int]) -> float:
+    """The mean of ``table``'s penalty over AWGN on the ``rungs`` it has; nothing if none."""
+    penalties = [table[m] - awgn[m] for m in rungs if m in table and m in awgn]
+    return statistics.fmean(penalties) if penalties else 0.0
 
 
 FADING_CSV = "bench/baselines/fading_pipe.csv"
@@ -216,11 +226,13 @@ def control_thresholds(
     awgn_data: dict[int, float],
     target_fer: float = 0.10,
     tone_csv: Path = Path(TONE_CSV),
+    air: AirInterface = WIDE,
 ) -> dict[str, dict[bool, float]]:
     """Per-channel thresholds of the two control frames (keyed by family), interpolated from
     ``bench_floor.py``'s rows ``control short`` and ``bench_tone.py``'s ``tone-control``. A
     channel or frame the sweeps did not cover gets its AWGN value shifted by that channel's
-    mean data penalty, as :func:`channel_thresholds` fills a rung it did not measure."""
+    mean data penalty in the frame's own family, as :func:`channel_thresholds` fills a rung
+    it did not measure."""
     rows: list[dict[str, str]] = []
     if csv_path.exists():
         with csv_path.open(encoding="utf-8") as f:
@@ -249,12 +261,19 @@ def control_thresholds(
     out: dict[str, dict[bool, float]] = {}
     for channel in sorted(set(tables) | {c for c, _ in points}):
         table = tables.get(channel, {})
-        penalties = [table[m] - awgn_data[m] for m in table if m in awgn_data]
-        shift = statistics.fmean(penalties) if penalties else 0.0
+        shift = {
+            family: mean_penalty(
+                table, awgn_data, [m for m in awgn_data if air.is_floor(m) == family]
+            )
+            for family in (False, True)
+        }
         short = crossing(points.get((channel, False), []))
-        short = short if short is not None else awgn[False] + shift
+        short = short if short is not None else awgn[False] + shift[False]
         floor = crossing(points.get((channel, True), []))
-        out[channel] = {False: short, True: floor if floor is not None else awgn[True] + shift}
+        out[channel] = {
+            False: short,
+            True: floor if floor is not None else awgn[True] + shift[True],
+        }
     return out
 
 
@@ -492,8 +511,10 @@ def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, in
 
 def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     """One run of the engines against a recorded session."""
+    from field_ingest import FORMATS
+
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("format") not in ("aether-hf-session/1", "aether-hf-session/2"):
+    if document.get("format") not in FORMATS:
         raise ValueError(f"{path}: not a session sidecar")
     session = document.get("session") or {}
     test = session.get("test") or {}
@@ -531,13 +552,18 @@ def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     return row
 
 
-def overrides(text: str) -> dict[str, float | int]:
-    """``key=value,key=value`` as a dict of numbers."""
-    out: dict[str, float | int] = {}
+def overrides(text: str) -> dict[str, float | int | None]:
+    """``key=value,key=value`` as a dict of numbers; ``none`` for a setting that can be
+    absent (``floor_margin_db=none``: the learned margin in charge)."""
+    out: dict[str, float | int | None] = {}
     for item in text.split(","):
         if item.strip():
             key, value = item.split("=", 1)
-            out[key.strip()] = int(value) if value.strip().lstrip("-").isdigit() else float(value)
+            value = value.strip()
+            if value.lower() == "none":
+                out[key.strip()] = None
+            else:
+                out[key.strip()] = int(value) if value.lstrip("-").isdigit() else float(value)
     return out
 
 
@@ -608,7 +634,9 @@ def main() -> int:
     if args.backend == "sim" and not tables:
         print(f"warning: {fer_csv} not found; every channel modelled as AWGN", flush=True)
     awgn_controls = control_thresholds_for(phy_timing(air.params))
-    controls = control_thresholds(Path(CONTROL_CSV[air]), awgn_controls, tables, table_for(air)[0])
+    controls = control_thresholds(
+        Path(CONTROL_CSV[air]), awgn_controls, tables, table_for(air)[0], air=air
+    )
     channels = [c.strip() for c in args.channels.split(",") if c.strip()]
     snrs = [float(s) for s in args.snr.split(",") if s.strip()]
     payload = bytes((i * 37) % 256 for i in range(args.bytes))

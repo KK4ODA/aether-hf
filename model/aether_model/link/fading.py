@@ -36,7 +36,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from aether_model.channel import RayleighFadingProcess, get_profile
-from aether_model.frame.modes import AirInterface
+from aether_model.frame.modes import AirInterface, ToneKind
 from aether_model.link.phy import Container, TxFrame
 from aether_model.phy.ofdm import CarrierMap
 
@@ -180,18 +180,20 @@ def shapes_for(air: AirInterface) -> Callable[[TxFrame], FrameShape]:
 
     # the tone floor sends one tone at a time over 400 Hz: its frame is sampled at every one
     # of its sixteen tones — four missed the notch between them on ITU Poor and Moderate,
-    # and no β could make the pipe as hard on the frame as the modem measured
-    num = air.tone_control.num
-    tones = tuple(float(f) for f in num.tone_hz(np.arange(num.tones)))
+    # and no β could make the pipe as hard on the frame as the modem measured. A fast kind
+    # (ADR-0014) is sampled at its data's tones, 800 or 1 600 Hz across: what it decodes on
+    def tones(kind: ToneKind) -> tuple[float, ...]:
+        num = kind.data
+        return tuple(float(f) for f in num.tone_hz(np.arange(num.tones)))
 
     def shape(frame: TxFrame) -> FrameShape:
         if frame.container is Container.CONTROL:
             if frame.floor:
-                return FrameShape(air.tone_control.duration_s, tones)
+                return FrameShape(air.tone_control.duration_s, tones(air.tone_control))
             return FrameShape(air.short.duration_s, carriers)
         rung = air.ladder[frame.mode]
         if rung.tone is not None:
-            return FrameShape(rung.tone.duration_s, tones)
+            return FrameShape(rung.tone.duration_s, tones(rung.tone))
         return FrameShape(air.data_layout(frame.mode).duration_s, carriers)
 
     return shape

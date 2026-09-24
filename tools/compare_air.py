@@ -39,11 +39,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from aether_model.frame.modes import NARROW, WIDE
 from aether_model.link.engine import LinkEngine
 from aether_model.link.harness import phy_timing
 from aether_model.link.sim import TwoStationSim
 from aether_model.waveform import WIDE_2300
 from bench_link import channel_thresholds
+from field_ingest import FORMATS, sidecar_rung
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSES = ("awgn", "good", "moderate", "poor")
@@ -128,7 +130,7 @@ def goodput_curves(path: Path) -> dict[str, list[tuple[float, float]]]:
 
 def report(sidecar: Path, channel: str | None, baselines: Path, simulate: bool) -> int:
     document = json.loads(sidecar.read_text(encoding="utf-8"))
-    if document.get("format") != "aether-hf-session/1":
+    if document.get("format") not in FORMATS:
         sys.exit(f"{sidecar}: not a session sidecar")
     frames = document.get("frames", [])
     data = [f for f in frames if f["kind"] == "data"]
@@ -150,16 +152,23 @@ def report(sidecar: Path, channel: str | None, baselines: Path, simulate: bool) 
     print(
         f"\n{'mode':>4} {'frames':>6} {'failed':>6} {'SNR dB':>7} {'FER meas':>9} {'FER AWGN':>9}"
     )
+    # the sidecar's mode numbers onto the ladder (older formats numbered it otherwise), and
+    # a rung onto the OFDM mode the curve is kept by; a tone kind's curve is not in it
+    air = NARROW if session.get("bandwidth_hz") == 500 else WIDE
     by_mode: dict[int, list[dict[str, float]]] = defaultdict(list)
     for frame in data:
-        by_mode[int(frame["mode"])].append(frame)
+        rung = sidecar_rung(document, int(frame["mode"]))
+        if rung is not None:
+            by_mode[rung].append(frame)
     snrs = [float(f["snr_3k_db"]) for f in data]
     for mode in sorted(by_mode):
         heard = by_mode[mode]
         failed = sum(1 for f in heard if not f["decoded"])
         snr = statistics.mean(float(f["snr_3k_db"]) for f in heard)
         measured = failed / len(heard)
-        expected = interpolate(fer.get(mode, []), snr)
+        ofdm = air.ladder[mode].mode if mode < air.n_rungs else None
+        curve = fer.get(ofdm.index, []) if ofdm is not None and air is WIDE else []
+        expected = interpolate(curve, snr)
         shown = f"{expected:9.3f}" if expected is not None else f"{'-':>9}"
         print(f"{mode:>4} {len(heard):>6} {failed:>6} {snr:>7.1f} {measured:>9.3f} {shown}")
 

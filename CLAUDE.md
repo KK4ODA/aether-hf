@@ -470,8 +470,24 @@ the burst it sent. Port: `aether-phy/src/tone.rs` (codec, detector, `ToneStream`
 `Received::{Ofdm, Tone}`, the streaming receiver keeps the longest tone frame and announces
 arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons go at
 `control_rung()` (they were going out at rung 0). A wide station hears a narrow station's
-floor calls — the frames are the same — and ignores them by the bandwidth bits. Owed: tone
-floor sessions on the air; P9-9 only if the −4…+2 dB transition needs it; next P9-5.
+floor calls — the frames are the same — and ignores them by the bandwidth bits.
+**P9-9 fast tones** (ADR-0014, beta.53; the author's "phase 4"): the floor's frame with its
+data at 50 and 100 Bd (two or four data symbols a slot, 800/1 600 Hz, 2 300 Hz only) —
+`tone50-51`, `tone50-75`, `tone100-105`, `tone100-153` (76–228 bit/s) are rungs 2–5 of a
+twenty-rung wide ladder (OFDM mode *m* = rung *m* + 6; BPSK ⅕ at rung 6 is beaten on both
+counts and kept only as the ordinary family's robust mode); `ToneKind.data_num`/`speed`,
+25 Costas patterns (the seeded search carried on), one detector (`ToneDetector::for_kinds`: the
+narrow air never looks for the fast kinds). Link protocol 3 (control byte 6: mode in five
+bits, counter in three), configuration schema 3 (`fast_rungs`: a wide `max_mode` from 2 up
++4), `max_mode` 19, sidecars `aether-hf-session/3`. Two stream rules: a candidate is not
+taken while an announced frame starts inside it with a first block ≥ its statistic (the early
+reading after a station's own silence, with fast data under its end block, passed
+confirmation), and a stronger first block inside an arrival, not at its block positions,
+replaces it. The fading pipe fills an unmeasured rung from its own family's penalty.
+Gate: 5.2/5.5 dB over BPSK ⅕ on Good/Moderate at a higher rate; sessions 2–3× faster from −6
+to −2 dB on the fading classes, nothing slower; the 1 dB floor-boundary cap still pays. Owed:
+tone floor and fast tones on the air (beta.52 and beta.53 do not connect: protocol 2 vs 3);
+next P9-5.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -10,7 +10,9 @@ generator bit for bit — and the whole point of the tables is that the two impl
 agree. One block per waveform: the wide one and, since P7-0, the narrow one, each with its
 carrier map, its sequences, its chip-correlation bound, its acquisition threshold and the
 OFDM modes on its ladder; and one block for the tone floor (ADR-0013), which both airs share:
-its numerology, sync patterns, frame kinds and detector constants.
+its numerology, sync patterns, frame kinds — the fast ones of ADR-0014 with their data
+numerologies — and detector constants. Each waveform block names the tone kinds on its
+ladder.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from aether_model.frame.modes import (
     SYNC_SYMBOLS,
     TONE_CONTROL,
     TONE_DATA,
+    TONE_FAST,
     TONE_NUMEROLOGY,
     WIDE,
     AirInterface,
@@ -83,7 +86,8 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
         "acquisition_threshold": air.acquisition_threshold,
         "mode_chips": chip_table,
         "control_mode_index": air.control_mode_index,
-        # the ladder (ADR-0013): the tone floor's data kinds, then these OFDM modes
+        # the ladder (ADR-0013, ADR-0014): the tone kinds, then these OFDM modes
+        "tone_data": [k.name for k in air.tone_data],
         "ofdm_ladder": list(air.ofdm_ladder),
         "layouts": [
             {
@@ -107,6 +111,9 @@ def tone_kind(kind: ToneKind) -> dict[str, object]:
         "data_symbols": kind.data_symbols,
         "patterns": list(kind.patterns),
         "control": kind.control,
+        # the data's numerology (ADR-0014): the sync blocks' own for the floor's kinds
+        "data_symbol_samples": kind.data.symbol_samples,
+        "data_ramp_samples": kind.data.ramp_samples,
     }
 
 
@@ -125,6 +132,7 @@ def tone_block() -> dict[str, object]:
         "sync_patterns": [list(p) for p in SYNC_PATTERNS],
         "control": tone_kind(TONE_CONTROL),
         "data": [tone_kind(k) for k in TONE_DATA],
+        "fast": [tone_kind(k) for k in TONE_FAST],
         "detector": {
             "hop_div": det.HOP_DIV,
             "bin_div": det.BIN_DIV,

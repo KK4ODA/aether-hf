@@ -255,6 +255,14 @@ class ToneNumerology:
 
 TONE_NUMEROLOGY = ToneNumerology()
 
+FAST50 = ToneNumerology(symbol_samples=160, ramp_samples=16, edge_samples=8)
+"""The fast kinds' 50 Bd data (ADR-0014): the floor's sixteen tones at twice the rate and
+twice the spacing — 800 Hz, the 2 300 Hz air only. Its glide keeps the floor's proportion of
+a symbol; its edges are never used, because every frame starts and ends on a sync block."""
+FAST100 = ToneNumerology(symbol_samples=80, ramp_samples=8, edge_samples=4)
+"""The fast kinds' 100 Bd data (ADR-0014): 10 ms symbols, five times ITU Poor's delay spread,
+on tones 100 Hz apart — 1 600 Hz."""
+
 SYNC_SYMBOLS = 8
 SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
     (11, 5, 8, 1, 15, 2, 4, 10),
@@ -266,6 +274,22 @@ SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
     (2, 0, 12, 15, 1, 9, 13, 6),
     (11, 14, 1, 15, 10, 6, 8, 0),
     (8, 1, 14, 4, 6, 15, 10, 13),
+    (11, 4, 2, 3, 6, 14, 1, 10),
+    (12, 9, 5, 15, 1, 0, 6, 13),
+    (15, 13, 4, 3, 0, 10, 6, 14),
+    (13, 3, 11, 7, 6, 8, 9, 1),
+    (7, 2, 13, 11, 15, 5, 14, 3),
+    (12, 7, 13, 2, 0, 14, 8, 10),
+    (0, 3, 14, 1, 2, 11, 8, 7),
+    (13, 8, 12, 11, 14, 5, 3, 0),
+    (9, 2, 4, 12, 3, 13, 1, 15),
+    (12, 8, 0, 3, 9, 14, 15, 6),
+    (1, 4, 3, 13, 2, 14, 8, 12),
+    (2, 7, 11, 5, 15, 10, 9, 0),
+    (0, 13, 6, 7, 15, 12, 4, 9),
+    (3, 9, 6, 13, 14, 10, 0, 15),
+    (8, 13, 15, 14, 11, 0, 10, 2),
+    (15, 0, 4, 6, 1, 14, 5, 10),
 )
 """The tone floor's sync blocks: eight symbols over sixteen tones, each a *Costas sequence* —
 every displacement (Δsymbol, Δtone) between two of its symbols occurs once, so a shifted
@@ -275,7 +299,9 @@ search). A bound at zero offset alone is not enough: every block of a frame repe
 pattern at the same places, so two patterns that overlap in three symbols three symbols
 apart put nine of a frame's 24 sync symbols on a hypothesis of the other kind read three
 symbols early — which, with the data's coincidences on top, passed for a frame. The first
-is the control frame's; then four for each data kind, one per redundancy version. Drawn by
+is the control frame's; then four for each data kind, one per redundancy version, in the
+order of :data:`TONE_DATA` and :data:`TONE_FAST` — the fast kinds' sixteen are the same
+search carried on (ADR-0014), so the first nine are unchanged. Drawn by
 :func:`search_sync_patterns` and pinned: they are part of the air interface."""
 PATTERN_SHIFT = 8
 """Tone shifts over which :data:`SYNC_PATTERNS` are mutually distinct."""
@@ -331,7 +357,13 @@ def search_sync_patterns(
 @dataclass(frozen=True)
 class ToneKind:
     """One kind of tone-floor frame: what it carries, how long it is, and the sync patterns
-    that name it — one per redundancy version (a control frame has one)."""
+    that name it — one per redundancy version (a control frame has one).
+
+    A frame is a row of *slots*, each one sync symbol long: three sync blocks of
+    :data:`SYNC_SYMBOLS` slots and the data slots between them. The floor's own kinds send
+    one data symbol a slot; a fast kind (ADR-0014) sends two or four, at its
+    :attr:`data_num`, under the same sync blocks — so one detector finds every kind, and
+    every data kind's frame is as long as every other's."""
 
     name: str
     payload_bytes: int
@@ -340,6 +372,23 @@ class ToneKind:
     """Indices into :data:`SYNC_PATTERNS`, by redundancy version."""
     control: bool = False
     num: ToneNumerology = field(default=TONE_NUMEROLOGY)
+    """The sync blocks' numerology: the floor's, for every kind."""
+    data_num: ToneNumerology | None = None
+    """The data symbols' numerology; ``None`` is :attr:`num`'s own."""
+
+    @property
+    def data(self) -> ToneNumerology:
+        """The numerology the data symbols go out at."""
+        return self.num if self.data_num is None else self.data_num
+
+    @property
+    def speed(self) -> int:
+        """Data symbols a slot: 1, 2 or 4."""
+        return self.num.symbol_samples // self.data.symbol_samples
+
+    @property
+    def data_slots(self) -> int:
+        return self.data_symbols // self.speed
 
     @property
     def info_bits(self) -> int:
@@ -347,7 +396,7 @@ class ToneKind:
 
     @property
     def coded_bits(self) -> int:
-        return self.data_symbols * self.num.bits_per_symbol
+        return self.data_symbols * self.data.bits_per_symbol
 
     @property
     def rate(self) -> float:
@@ -363,7 +412,8 @@ class ToneKind:
 
     @property
     def symbols(self) -> int:
-        return self.data_symbols + 3 * SYNC_SYMBOLS
+        """The frame's length in slots (sync symbols)."""
+        return self.data_slots + 3 * SYNC_SYMBOLS
 
     @property
     def samples(self) -> int:
@@ -379,23 +429,30 @@ class ToneKind:
 
     @property
     def block_offsets(self) -> tuple[int, int, int]:
-        """First symbol of each sync block: start, middle, end. The data is split unevenly
+        """First slot of each sync block: start, middle, end. The data is split unevenly
         between them — 45 % before the middle block — so the three distances between blocks
         all differ and no shift of a frame lines up more than one of its blocks with
         another's: with an even split a frame read one block-spacing early has its middle
         and end blocks on the true frame's first and middle, sixteen of 24 sync symbols."""
-        first = self.data_symbols * 9 // 20
+        first = self.data_slots * 9 // 20
         return (0, SYNC_SYMBOLS + first, self.symbols - SYNC_SYMBOLS)
 
     def sync(self, rv: int = 0) -> tuple[int, ...]:
         return SYNC_PATTERNS[self.patterns[rv]]
 
     def layout(self, rv: int = 0) -> NDArray[np.int64]:
-        """Each symbol's role: ``-1`` a data symbol, otherwise the sync tone."""
+        """Each slot's role: ``-1`` a data slot, otherwise the sync tone."""
         out = np.full(self.symbols, -1, dtype=np.int64)
         for o in self.block_offsets:
             out[o : o + SYNC_SYMBOLS] = self.sync(rv)
         return out
+
+    def data_segments(self) -> tuple[tuple[int, int], ...]:
+        """The data's runs of slots between the sync blocks, as ``(first slot, slots)``."""
+        b = self.block_offsets
+        return tuple(
+            (b[i] + SYNC_SYMBOLS, b[i + 1] - b[i] - SYNC_SYMBOLS) for i in range(len(b) - 1)
+        )
 
 
 TONE_CONTROL = ToneKind("tone-control", 7, 56, (0,), control=True)
@@ -407,6 +464,15 @@ TONE_DATA: tuple[ToneKind, ...] = (
 )
 """The data kinds, slowest first, on one 134-symbol frame (5.36 s): 24 bytes at rate 0.49
 (36 bit/s) — enough for a connect request — and 36 at rate 0.71 (54 bit/s)."""
+TONE_FAST: tuple[ToneKind, ...] = (
+    ToneKind("tone50-51", 51, 220, (9, 10, 11, 12), data_num=FAST50),
+    ToneKind("tone50-75", 75, 220, (13, 14, 15, 16), data_num=FAST50),
+    ToneKind("tone100-105", 105, 440, (17, 18, 19, 20), data_num=FAST100),
+    ToneKind("tone100-153", 153, 440, (21, 22, 23, 24), data_num=FAST100),
+)
+"""The fast kinds (ADR-0014), the 2 300 Hz air's middle rungs: the floor's frame — its sync
+blocks, its 5.36 s — with two or four data symbols a slot, at the floor's two code rates:
+51 and 75 bytes at 50 Bd (76 and 112 bit/s), 105 and 153 at 100 Bd (157 and 228 bit/s)."""
 
 
 # ── the ladder ────────────────────────────────────────────────────────
@@ -552,7 +618,16 @@ class AirInterface:
         return (self.long, self.short)
 
 
-WIDE = AirInterface(WIDE_2300, LONG, SHORT, MODES, 0.2, 0.36, ofdm_ladder=tuple(range(len(MODES))))
+WIDE = AirInterface(
+    WIDE_2300,
+    LONG,
+    SHORT,
+    MODES,
+    0.2,
+    0.36,
+    ofdm_ladder=tuple(range(len(MODES))),
+    tone_data=(*TONE_DATA, *TONE_FAST),
+)
 NARROW = AirInterface(
     NARROW_500,
     NARROW_LONG,

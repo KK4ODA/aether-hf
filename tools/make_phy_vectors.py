@@ -39,6 +39,7 @@ from aether_model.frame.modes import (
     SHORT,
     TONE_CONTROL,
     TONE_DATA,
+    TONE_FAST,
 )
 from aether_model.phy import tone
 from aether_model.phy.constellation import constellation
@@ -284,7 +285,17 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
-TONE_CASES = ((TONE_CONTROL, 0), (TONE_DATA[0], 0), (TONE_DATA[0], 2), (TONE_DATA[1], 1))
+TONE_CASES = (
+    (TONE_CONTROL, 0),
+    (TONE_DATA[0], 0),
+    (TONE_DATA[0], 2),
+    (TONE_DATA[1], 1),
+    # the fast kinds (ADR-0014), after the floor's so those cases keep their payloads
+    (TONE_FAST[0], 0),
+    (TONE_FAST[1], 3),
+    (TONE_FAST[2], 1),
+    (TONE_FAST[3], 0),
+)
 
 
 def tone_frame_cases() -> list[dict[str, object]]:
@@ -337,7 +348,7 @@ def tone_receive_cases() -> list[dict[str, object]]:
         payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
         if rv:
             rv = 0  # a lone RV other than 0 is not decodable; the pattern search is exercised
-        lead, cfo = 1500 + 211 * i, -37.5 + 23.25 * i
+        lead, cfo = 1500 + 211 * i, -37.5 + 23.25 * (i % 4)
         x = tone.burst(kind, payload, rv)
         n = lead + len(x) + 2000
         y = np.zeros(n, dtype=np.complex128)

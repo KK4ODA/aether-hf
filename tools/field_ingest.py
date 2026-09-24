@@ -28,25 +28,32 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FORMAT = "aether-hf-session/2"
+FORMAT = "aether-hf-session/3"
 """The sidecar format this tool writes rows from: its mode numbers are rungs of the air's
-ladder (ADR-0013). ``aether-hf-session/1`` — every sidecar before the tone floor — numbered
-the OFDM modes; :func:`sidecar_rung` maps those onto the ladder."""
+ladder (ADR-0014). Older sidecars are read onto it by :func:`sidecar_rung`:
+``aether-hf-session/2`` (the tone floor, ADR-0013) numbered the ladder before the fast kinds,
+and ``aether-hf-session/1`` — every sidecar before the tone floor — the OFDM modes."""
 LEGACY_FORMAT = "aether-hf-session/1"
+FLOOR_FORMAT = "aether-hf-session/2"
+FORMATS = (LEGACY_FORMAT, FLOOR_FORMAT, FORMAT)
 
 
 def sidecar_rung(document: dict[str, object], mode: int) -> int | None:
     """The rung of the ladder a sidecar's mode number names. A ``/1`` sidecar numbered the
-    OFDM modes: on the 2 300 Hz air they sit two rungs up, above the tone floor's two; on
-    the 500 Hz air modes 2–12 keep their number and modes 0 and 1 were the OFDM floor
-    ADR-0013 retired, which is on no rung (``None``)."""
-    if document.get("format") != LEGACY_FORMAT:
+    OFDM modes: on the 500 Hz air modes 2–12 keep their number and modes 0 and 1 were the
+    OFDM floor ADR-0013 retired, which is on no rung (``None``); on the 2 300 Hz air they
+    sat two rungs up on the ``/2`` ladder, above the tone floor's two. On the 2 300 Hz air a
+    ``/2`` rung from 2 up sits four higher now, above the fast kinds (ADR-0014)."""
+    fmt = document.get("format")
+    if fmt not in (LEGACY_FORMAT, FLOOR_FORMAT):
         return mode
     session = document.get("session") or {}
     bandwidth = session.get("bandwidth_hz") if isinstance(session, dict) else None
     if bandwidth == 500:
-        return mode if mode >= 2 else None
-    return mode + 2
+        return mode if fmt == FLOOR_FORMAT or mode >= 2 else None
+    if fmt == LEGACY_FORMAT:
+        mode += 2
+    return mode + 4 if mode >= 2 else mode
 
 
 BANDS: list[tuple[float, float, str]] = [
@@ -117,7 +124,7 @@ def _number(value: object) -> float | None:
 
 def summarise(document: dict[str, object], recording: str) -> Session:
     """The session a sidecar describes."""
-    if document.get("format") not in (FORMAT, LEGACY_FORMAT):
+    if document.get("format") not in FORMATS:
         raise ValueError(f"{recording}: not a session sidecar ({document.get('format')})")
     session = document.get("session") or {}
     assert isinstance(session, dict)
