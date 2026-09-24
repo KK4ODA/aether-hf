@@ -343,7 +343,9 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    // the ladder stops at the operator's fastest mode: six rungs keep the test short
+    // the ladder stops at the operator's fastest mode: six rungs, every one a tone kind — the
+    // floor's two and the fast four (ADR-0014) — at a frame a rung and small transfers, so
+    // the five-second frames keep the test inside its deadline
     let mut a = Daemon::start_with(
         &dir,
         "a",
@@ -359,7 +361,7 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
 
     let started = a.call(
         "test.start",
-        &json!({ "remote": "KK4XYZ", "message_bytes": 512, "file_bytes": 1024, "rung_frames": 2 }),
+        &json!({ "remote": "KK4XYZ", "message_bytes": 256, "file_bytes": 512, "rung_frames": 1 }),
     );
     assert_eq!(started["ok"], true, "{started}");
     let deadline = Instant::now() + Duration::from_secs(300);

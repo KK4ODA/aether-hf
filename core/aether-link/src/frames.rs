@@ -378,8 +378,10 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 /// above the OFDM mode of version 1 — so a session between the two would run on numbers that
 /// mean different frames at either end; a station ignores a call or an acceptance of another
-/// version, and says so.
-pub const PROTOCOL_VERSION: u8 = 2;
+/// version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
+/// air, between the floor's two and the OFDM modes, and a control frame whose recommended
+/// mode has five bits and its counter three.
+pub const PROTOCOL_VERSION: u8 = 3;
 
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
@@ -511,9 +513,11 @@ pub struct ControlFrame {
     pub bitmap: u16,
     /// Measured SNR in dB (3 kHz reference), or `None` if not measured.
     pub snr_db: Option<f64>,
-    /// Mode the receiver recommends.
+    /// Mode the receiver recommends: a rung of the air's ladder, five bits — room for 32; the
+    /// 2 300 Hz ladder has 20 since the fast kinds (ADR-0014).
     pub recommended_mode: u8,
-    /// Wrapping counter, so repeated ACKs can be told apart.
+    /// The sender's count of its acknowledgements, modulo 8: a label for logs, which no
+    /// receiver acts on.
     pub counter: u8,
 }
 
@@ -529,7 +533,7 @@ impl ControlFrame {
             ((self.bitmap >> 8) & 0xFF) as u8,
             (self.bitmap & 0xFF) as u8,
             snr,
-            ((self.recommended_mode & 0x0F) << 4) | (self.counter & 0x0F),
+            ((self.recommended_mode & 0x1F) << 3) | (self.counter & 0x07),
         ]
     }
 
@@ -551,8 +555,8 @@ impl ControlFrame {
             base: payload[2],
             bitmap: (u16::from(payload[3]) << 8) | u16::from(payload[4]),
             snr_db,
-            recommended_mode: payload[6] >> 4,
-            counter: payload[6] & 0x0F,
+            recommended_mode: payload[6] >> 3,
+            counter: payload[6] & 0x07,
         })
     }
 

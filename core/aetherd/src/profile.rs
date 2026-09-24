@@ -1284,7 +1284,7 @@ mod tests {
             .expect("settings")
             .remove("update");
         let applied = profile.apply(&running, None).expect("apply");
-        assert_eq!(applied.config.radio.max_mode, 15);
+        assert_eq!(applied.config.radio.max_mode, 19);
         assert!(!applied.config.radio.cw_id);
         assert_eq!(
             applied.config.update,
@@ -1367,7 +1367,7 @@ mod tests {
         assert_eq!(applied.config.radio.bandwidth, 2300);
         assert!(applied.config.radio.wait_for_clear);
         assert!((applied.config.audio.tx_level - 0.25).abs() < 1e-9);
-        assert_eq!(applied.config.radio.max_mode, 15);
+        assert_eq!(applied.config.radio.max_mode, 19);
         // and what was fine arrived
         assert_eq!(applied.config.callsign, "KK4ODA");
         assert!((applied.config.radio.busy_threshold_db - 7.5).abs() < 1e-9);
@@ -1557,8 +1557,8 @@ mod tests {
         assert_eq!(profile.memories, None);
         let applied = profile.apply(&station(), None).expect("apply");
         assert_eq!(applied.config.callsign, "W4ODA");
-        // the OFDM mode 6 it named is rung 8 of the wide ladder (ADR-0013)
-        assert_eq!(applied.config.radio.max_mode, 8);
+        // the OFDM mode 6 it named is rung 12 of the wide ladder (ADR-0013, ADR-0014)
+        assert_eq!(applied.config.radio.max_mode, 12);
         assert_eq!(applied.config.ptt, PttConfig::None);
         assert_eq!(
             applied.memories, None,
@@ -1576,7 +1576,7 @@ mod tests {
         profile.settings_schema = crate::config::first_schema();
         profile.migrate_settings().expect("migrates");
         assert_eq!(profile.settings_schema, crate::config::SCHEMA_VERSION);
-        assert_eq!(profile.settings["radio"]["max_mode"], 15);
+        assert_eq!(profile.settings["radio"]["max_mode"], 19);
         assert!(
             profile.settings["audio"].get("input").is_none(),
             "a null is an absent setting"
@@ -1673,7 +1673,7 @@ mod tests {
             truck.settings["ptt"]["kind"], "none",
             "everything else is the default"
         );
-        assert_eq!(truck.settings["radio"]["max_mode"], 15);
+        assert_eq!(truck.settings["radio"]["max_mode"], 19);
         let entry = store.write(&truck, None).expect("write");
         assert_eq!(
             entry.id, "Truck - IC-705",

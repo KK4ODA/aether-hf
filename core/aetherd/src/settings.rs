@@ -180,8 +180,8 @@ pub const RULES: &[Rule] = &[
         // the wide ladder's last rung; a narrower ladder clamps rather than refuses, and a
         // test holds this number to the ladder
         min: Some(0.0),
-        max: Some(15.0),
-        why: "the ladder has sixteen rungs: the tone floor's two and the fourteen OFDM modes",
+        max: Some(19.0),
+        why: "the ladder has twenty rungs: the tone floor's six and the fourteen OFDM modes",
         ..rule("radio.max_mode")
     },
     // ── this installation ──────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ wait_for_clear = true
 busy_threshold_db = 6.0
 bandwidth = 2300
 answer_only = false
-max_mode = 15
+max_mode = 19
 compress = false
 cw_id = false
 cw_id_wpm = 20.0

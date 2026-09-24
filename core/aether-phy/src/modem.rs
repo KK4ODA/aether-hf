@@ -176,7 +176,7 @@ impl Received {
         }
         match self {
             Self::Ofdm(frame) => air.rung_of(frame.mode),
-            Self::Tone(_, sync) => air.tone_data().iter().position(|k| k == sync.kind),
+            Self::Tone(_, sync) => air.tone_data().iter().position(|&k| k == sync.kind),
         }
     }
 
@@ -256,7 +256,7 @@ impl Modem {
             tx: FrameTransmitter::new(params),
             detector: FrameDetector::new(params),
             rx: FrameReceiver::new(params),
-            tone_detector: ToneDetector::new(),
+            tone_detector: ToneDetector::for_kinds(&air_interface(params).tone_kinds()),
             blanker: blank_impulses.then(NoiseBlanker::default),
             band_taps: band_limit_taps(&params),
             codecs: HashMap::new(),
@@ -651,7 +651,8 @@ mod tests {
         assert_eq!(decoded.len(), 1, "expected exactly one frame");
         assert_eq!(decoded[0].payload.as_deref(), Some(payload.as_slice()));
         assert_eq!(mode_of(&decoded[0]), mode.index);
-        assert_eq!(decoded[0].frame.rung(&modem.air()), Some(4 + 2));
+        // the wide ladder puts OFDM mode m at rung m + 6, above the tone floor's six (ADR-0014)
+        assert_eq!(decoded[0].frame.rung(&modem.air()), Some(4 + 6));
     }
 
     #[test]

@@ -21,15 +21,17 @@
 /// Minimum usable SNR (3 kHz, 10 % frame error rate) per rung of the 2 300 Hz ladder on
 /// AWGN.
 ///
-/// Every entry is measured: the tone floor's two (rungs 0–1, ADR-0013) by
-/// `tools/bench_tone.py` (`bench/baselines/tone_floor.csv`), at equal peak power and so in
-/// the OFDM frames' reference; the OFDM modes (rungs 2–15, OFDM modes 0–13) by
+/// Every entry is measured: the tone floor's six (rungs 0–5: its own two, ADR-0013, and the
+/// fast kinds, ADR-0014) by `tools/bench_tone.py` (`bench/baselines/tone_floor.csv`), at
+/// equal peak power and so in the OFDM frames' reference; the OFDM modes (rungs 6–19, OFDM
+/// modes 0–13) by
 /// `bench_phy.py` (`bench/baselines/phy_fer_awgn14.csv`). Interpolated guesses used to sit
 /// here and were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate controller
 /// had no way to discover except by losing frames. Mirrors the model; the vector test pins
 /// it.
-pub const AWGN_THRESHOLD_DB: [f64; 16] = [
-    -19.0, -17.3, -5.1, -3.2, -1.8, -0.4, 1.4, 2.9, 4.7, 6.9, 6.0, 8.9, 9.9, 13.9, 15.6, 16.9,
+pub const AWGN_THRESHOLD_DB: [f64; 20] = [
+    -19.0, -17.3, -16.0, -14.2, -13.1, -11.2, -5.1, -3.2, -1.8, -0.4, 1.4, 2.9, 4.7, 6.9, 6.0, 8.9,
+    9.9, 13.9, 15.6, 16.9,
 ];
 
 /// The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
@@ -55,17 +57,17 @@ pub const NARROW_CONTROL_THRESHOLD_DB: [f64; 2] = [-4.5, TONE_CONTROL_THRESHOLD_
 pub const WIDE_FLOOR_MARGIN_DB: f64 = 1.0;
 
 /// Payload bytes per frame of each rung of the 2 300 Hz ladder.
-pub const PAYLOAD_BYTES: [usize; 16] = [
-    24, 36, 26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
+pub const PAYLOAD_BYTES: [usize; 20] = [
+    24, 36, 51, 75, 105, 153, 26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
 ];
 
-/// Air time of each wide rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
-/// 31 ms on the ordinary layout (the link layer's copy of the frames; the vector test pins
-/// it) — what [`usable_modes_by_rate`] needs to compare the floor's long frames with the
-/// ordinary ones.
-pub const FRAME_S: [f64; 16] = [
-    5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
-    1.054, 1.054,
+/// Air time of each wide rung's DATA frame: 134 slots of 40 ms on the tone floor, its fast
+/// kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy of the
+/// frames; the vector test pins it) — what [`usable_modes_by_rate`] needs to compare the
+/// floor's long frames with the ordinary ones.
+pub const FRAME_S: [f64; 20] = [
+    5.36, 5.36, 5.36, 5.36, 5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+    1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
 ];
 
 /// The 500 Hz waveform's ladder (P7-0, ADR-0013), 3 kHz-referenced like the wide one, so the
@@ -93,8 +95,8 @@ pub const NARROW_FRAME_S: [f64; 13] = [
 
 /// Rungs on the throughput/threshold Pareto front, ascending, for the wide ladder.
 ///
-/// A rung another rung beats on both counts is never worth choosing; rung 9 (8-PSK 2/3) is in
-/// that position, beaten by rung 10 (16-QAM 1/2) on the same payload at a lower threshold.
+/// A rung another rung beats on both counts is never worth choosing; rung 13 (8-PSK 2/3) is in
+/// that position, beaten by rung 14 (16-QAM 1/2) on the same payload at a lower threshold.
 #[must_use]
 pub fn usable_modes() -> Vec<usize> {
     usable_modes_by_rate(&AWGN_THRESHOLD_DB, &PAYLOAD_BYTES, &FRAME_S)
@@ -289,7 +291,7 @@ impl RateController {
             clean_since_decay: 0,
             ever_failed: false,
             decay_step_db: 0.0,
-            floor_modes: 2,
+            floor_modes: 6,
             floor_margin_db: None,
             boundary_failures: 0,
         }
@@ -500,11 +502,12 @@ mod tests {
     }
 
     #[test]
-    fn rung_nine_is_dominated_and_never_recommended() {
-        // 8-PSK 2/3, OFDM mode 7, two rungs up the ladder since the tone floor (ADR-0013)
+    fn the_dominated_rungs_are_never_recommended() {
+        // 8-PSK 2/3, OFDM mode 7, six rungs up the ladder since the fast kinds (ADR-0014);
+        // and BPSK 1/5, OFDM mode 0, which the fastest tone kind beats on rate and threshold
         let modes = usable_modes();
-        assert!(!modes.contains(&9), "{modes:?}");
-        assert_eq!(modes.len(), 15);
+        assert!(!modes.contains(&13) && !modes.contains(&6), "{modes:?}");
+        assert_eq!(modes.len(), 18);
         assert!(modes.windows(2).all(|w| w[0] < w[1]));
     }
 
@@ -526,11 +529,23 @@ mod tests {
 
     #[test]
     fn a_clean_link_converges_in_a_few_bursts() {
+        // from the bottom of the ladder two things pace the climb and nothing else: the step,
+        // `max_up_step` usable modes a burst, and the margin, which gives up `down_step_db` a
+        // clean burst before the first failure; one burst more for the first measurement
+        let config = RateConfig::default();
+        let decay = ((config.margin_db - config.min_margin_db) / config.down_step_db).ceil();
         for snr in [0.0, 8.0, 14.0, 20.0] {
             let final_mode = settle(snr);
             let mut rc = RateController::default();
+            let position = rc
+                .modes()
+                .iter()
+                .position(|&m| m == final_mode)
+                .expect("a usable mode");
+            let climb = position.div_ceil(config.max_up_step);
+            let bound = climb.max(decay as usize) + 1;
             let mut bursts = 0;
-            for index in 1..=20 {
+            for index in 1..=30 {
                 rc.observe(Some(snr), 6, 0, None);
                 if rc.recommend() == final_mode {
                     bursts = index;
@@ -538,8 +553,8 @@ mod tests {
                 }
             }
             assert!(
-                bursts > 0 && bursts <= 8,
-                "snr {snr}: {bursts} bursts to settle"
+                bursts > 0 && bursts <= bound,
+                "snr {snr}: {bursts} bursts to settle, {bound} allowed"
             );
         }
     }
@@ -611,6 +626,8 @@ mod tests {
         // far below every mode but the slowest: the slowest
         assert_eq!(rc.first_mode(-25.0), usable_modes()[0]);
         let config = RateConfig::default();
+        // within the family the fit is in: a fit on the OFDM rungs does not start on the floor
+        let ordinary = rc.first_ordinary();
         for snr in [4.0, 9.0, 15.0, 20.0] {
             let modes = rc.modes().to_vec();
             let top = modes
@@ -619,9 +636,10 @@ mod tests {
                     AWGN_THRESHOLD_DB[m] + rc.margin_db() + config.up_hysteresis_db <= snr
                 })
                 .expect("something fits");
+            let lowest = if top >= ordinary { ordinary } else { 0 };
             assert_eq!(
                 rc.first_mode(snr),
-                modes[top.saturating_sub(config.first_mode_back)],
+                modes[top.saturating_sub(config.first_mode_back).max(lowest)],
                 "{snr}"
             );
         }
@@ -634,61 +652,68 @@ mod tests {
 
     #[test]
     fn the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() {
-        // ADR-0013 §4: the step between the tone floor and the first OFDM rung is a factor
-        // of four in rate, not the third the margin and the hysteresis were tuned on
+        // ADR-0013 §4, ADR-0014: the floor's frames are five times as long as an OFDM frame;
+        // the first OFDM rung is the first *usable* one — the wide ladder's BPSK 1/5 is beaten
+        // by its fastest tone kind and never recommended
         let config = RateConfig::default();
-        let rc = RateController::default(); // the wide ladder: rungs 0 and 1 are the floor
-        assert_eq!(rc.floor_modes(), 2);
-        assert_eq!(&rc.modes()[..3], &[0, 1, 2]);
-        let fits_rung_3 = AWGN_THRESHOLD_DB[3] + rc.margin_db() + config.up_hysteresis_db;
+        let rc = RateController::default(); // the wide ladder: rungs 0–5 are the floor
+        assert_eq!(rc.floor_modes(), 6);
+        assert_eq!(&rc.modes()[..6], &[0, 1, 2, 3, 4, 5]);
+        let first = rc.modes()[rc.first_ordinary()];
+        let second = rc.modes()[rc.first_ordinary() + 1];
+        let fits_second = AWGN_THRESHOLD_DB[second] + rc.margin_db() + config.up_hysteresis_db;
         assert_eq!(
-            rc.first_mode(fits_rung_3),
-            2,
+            rc.first_mode(fits_second),
+            first,
             "not two steps down, on the floor"
         );
         assert!(
-            rc.first_mode(-12.0) < 2,
+            rc.first_mode(-12.0) < 6,
             "nothing above the floor fits: the floor"
         );
 
         let wound = |cap: Option<f64>| {
-            let mut rc = RateController::default().with_floor(2, cap);
-            rc.seed(AWGN_THRESHOLD_DB[2] + 1.5);
-            rc.index = rc.modes.iter().position(|&m| m == 2).expect("rung 2");
+            let mut rc = RateController::default().with_floor(6, cap);
+            rc.seed(AWGN_THRESHOLD_DB[first] + 1.5);
+            rc.index = rc
+                .modes
+                .iter()
+                .position(|&m| m == first)
+                .expect("the first OFDM rung");
             rc.margin_db = 8.0; // a fading channel's learned margin
             rc
         };
         let mut capped = wound(Some(1.0));
         let snr = capped.snr_db();
-        capped.observe(snr, 0, 6, Some(2));
+        capped.observe(snr, 0, 6, Some(first));
         assert_eq!(
             capped.recommend(),
-            2,
-            "one lost burst: still four times the floor"
+            first,
+            "one lost burst on the capped rung: held"
         );
-        capped.observe(snr, 0, 6, Some(2));
-        assert!(capped.recommend() < 2, "two in a row: the floor");
+        capped.observe(snr, 0, 6, Some(first));
+        assert!(capped.recommend() < first, "two in a row: the floor");
         for _ in 0..3 {
             capped.observe(snr, 6, 0, None);
         }
         assert!(
-            capped.recommend() < 2,
+            capped.recommend() < first,
             "the cap and the hysteresis are not met there"
         );
-        let enough = AWGN_THRESHOLD_DB[2] + 1.0 + config.up_hysteresis_db + 0.5;
+        let enough = AWGN_THRESHOLD_DB[first] + 1.0 + config.up_hysteresis_db + 0.5;
         for _ in 0..6 {
             capped.observe(Some(enough), 6, 0, None);
         }
         assert!(
-            capped.recommend() >= 2,
+            capped.recommend() >= first,
             "they are here, whatever the learned margin"
         );
 
-        // uncapped (the narrow air) the learned margin decides, as between any two rungs
+        // uncapped the learned margin decides, as between any two rungs
         let mut plain = wound(None);
         let snr = plain.snr_db();
-        plain.observe(snr, 0, 6, Some(2));
-        assert!(plain.recommend() < 2);
+        plain.observe(snr, 0, 6, Some(first));
+        assert!(plain.recommend() < first);
     }
 
     #[test]

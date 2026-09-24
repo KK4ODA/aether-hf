@@ -19,9 +19,10 @@
 //! Below both tables is the **tone floor** (ADR-0013, [`crate::tone`]): a steady-envelope
 //! sixteen-tone FSK family, sent at the OFDM frames' peak amplitude and detected by energy.
 //! What the link layer calls "mode N" is a rung of the air's **ladder**: the tone floor's data
-//! kinds, then the air's OFDM modes, most robust first ([`Rung`], [`AirInterface::ladder`]).
-//! An OFDM frame's chips carry its OFDM mode index, which is not its rung: the wide ladder
-//! puts OFDM mode 0 at rung 2, the narrow one skips the OFDM modes the floor replaced.
+//! kinds — on the 2 300 Hz air with its fast kinds (ADR-0014) — then the air's OFDM modes,
+//! most robust first ([`Rung`], [`AirInterface::ladder`]). An OFDM frame's chips carry its
+//! OFDM mode index, which is not its rung: the wide ladder puts OFDM mode 0 at rung 6, the
+//! narrow one skips the OFDM modes the floor replaced.
 //! [`AirInterface`] bundles a waveform with its layouts, modes and ladder; [`air_interface`]
 //! finds the one for a [`WaveformParams`].
 
@@ -279,7 +280,7 @@ const NARROW_OFDM_LADDER: [usize; 11] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 /// call "mode N": a tone-floor kind, or an OFDM mode on the layout it goes out on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Rung {
-    /// A tone-floor data kind (ADR-0013).
+    /// A tone-floor data kind (ADR-0013, ADR-0014).
     Tone(&'static ToneKind),
     /// An OFDM mode on its data layout.
     Ofdm(Mode, FrameLayout),
@@ -361,6 +362,9 @@ pub struct AirInterface {
     /// The OFDM mode ordinary control frames, connect requests, beacons and probes go out
     /// at: the slowest whose SHORT frame carries a control frame.
     pub control_mode_index: usize,
+    /// Whether the ladder carries the tone floor's fast kinds (ADR-0014) above its own two:
+    /// the 2 300 Hz air's does; their 800 and 1 600 Hz do not fit in 500.
+    pub fast_tones: bool,
 }
 
 impl AirInterface {
@@ -371,10 +375,25 @@ impl AirInterface {
         self.modes[self.control_mode_index]
     }
 
-    /// The tone floor's data kinds: the ladder's first rungs.
+    /// The tone floor's data kinds on this air, slowest first: the ladder's first rungs —
+    /// the floor's own two, then on the 2 300 Hz air the fast kinds (ADR-0014).
     #[must_use]
-    pub fn tone_data(&self) -> &'static [ToneKind] {
-        tone::data_kinds()
+    pub fn tone_data(&self) -> Vec<&'static ToneKind> {
+        let fast: &'static [ToneKind] = if self.fast_tones {
+            tone::fast_kinds()
+        } else {
+            &[]
+        };
+        tone::data_kinds().iter().chain(fast).collect()
+    }
+
+    /// Every tone kind a receiver on this air looks for: the control frame and the data
+    /// kinds of [`tone_data`](Self::tone_data).
+    #[must_use]
+    pub fn tone_kinds(&self) -> Vec<&'static ToneKind> {
+        std::iter::once(self.tone_control())
+            .chain(self.tone_data())
+            .collect()
     }
 
     /// The tone floor's control frame: control frames while the link runs the floor.
@@ -387,7 +406,12 @@ impl AirInterface {
     /// first OFDM one.
     #[must_use]
     pub fn floor_modes(&self) -> usize {
-        self.tone_data().len()
+        tone::data_kinds().len()
+            + if self.fast_tones {
+                tone::fast_kinds().len()
+            } else {
+                0
+            }
     }
 
     /// Every rung, most robust first: the tone floor's data kinds, then the OFDM modes of
@@ -395,7 +419,7 @@ impl AirInterface {
     #[must_use]
     pub fn ladder(&self) -> Vec<Rung> {
         self.tone_data()
-            .iter()
+            .into_iter()
             .map(Rung::Tone)
             .chain(
                 self.ofdm_ladder
@@ -413,7 +437,7 @@ impl AirInterface {
     pub fn rung(&self, index: usize) -> Rung {
         let floor = self.floor_modes();
         if index < floor {
-            return Rung::Tone(&self.tone_data()[index]);
+            return Rung::Tone(self.tone_data()[index]);
         }
         let mode = *self
             .ofdm_ladder
@@ -488,6 +512,7 @@ pub const WIDE: AirInterface = AirInterface {
     acquisition_threshold: 0.36,
     ofdm_ladder: &WIDE_OFDM_LADDER,
     control_mode_index: 0,
+    fast_tones: true,
 };
 
 /// The 500 Hz air interface.
@@ -500,6 +525,7 @@ pub const NARROW: AirInterface = AirInterface {
     acquisition_threshold: 0.56,
     ofdm_ladder: &NARROW_OFDM_LADDER,
     control_mode_index: NARROW_CONTROL_MODE_INDEX,
+    fast_tones: false,
 };
 
 /// The air interface a waveform belongs to, by bandwidth.
@@ -609,18 +635,21 @@ mod tests {
 
     #[test]
     fn the_ladders_are_the_models() {
-        // ADR-0013: the tone floor's two data kinds under each air's OFDM rungs
+        // ADR-0013: the tone floor's two data kinds under each air's OFDM rungs; ADR-0014:
+        // on the wide air its four fast kinds between them
         let wide: Vec<(String, usize)> = WIDE
             .ladder()
             .iter()
             .map(|r| (r.name(), r.payload_bytes()))
             .collect();
-        assert_eq!(wide.len(), 16);
-        assert_eq!(WIDE.n_rungs(), 16);
+        assert_eq!(wide.len(), 20);
+        assert_eq!(WIDE.n_rungs(), 20);
         assert_eq!(wide[0], ("tone-24".to_string(), 24));
         assert_eq!(wide[1], ("tone-36".to_string(), 36));
-        assert_eq!(wide[2], ("BPSK-1/5".to_string(), 26));
-        assert_eq!(wide[15], ("QAM64-5/6".to_string(), 732));
+        assert_eq!(wide[2], ("tone50-51".to_string(), 51));
+        assert_eq!(wide[5], ("tone100-153".to_string(), 153));
+        assert_eq!(wide[6], ("BPSK-1/5".to_string(), 26));
+        assert_eq!(wide[19], ("QAM64-5/6".to_string(), 732));
         assert_eq!(
             NARROW
                 .ladder()
@@ -629,16 +658,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![24, 36, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137]
         );
-        assert_eq!((WIDE.floor_modes(), NARROW.floor_modes()), (2, 2));
-        assert_eq!((WIDE.control_rung(), NARROW.control_rung()), (2, 3));
+        assert_eq!((WIDE.floor_modes(), NARROW.floor_modes()), (6, 2));
+        assert_eq!((WIDE.control_rung(), NARROW.control_rung()), (6, 3));
         assert_eq!(NARROW.rung_of(0), None);
         assert_eq!(NARROW.rung_of(2), Some(2));
-        assert!(WIDE.is_floor(1) && !WIDE.is_floor(2));
-        assert_eq!(WIDE.rung(2).ofdm_mode(), Some(MODES[0]));
+        assert!(WIDE.is_floor(5) && !WIDE.is_floor(6));
+        assert_eq!(WIDE.rung(6).ofdm_mode(), Some(MODES[0]));
         assert!(NARROW.rung(0).is_floor());
-        // bytes per second climb the ladder, which is what the rate controller steps along
+        assert_eq!(WIDE.tone_kinds().len(), 7);
+        assert_eq!(NARROW.tone_kinds().len(), 3);
+        // bytes per second climb the ladder, which is what the rate controller steps along —
+        // but for the first OFDM rung of the wide air, which its fastest tone kind beats and
+        // which stays on the ladder as the ordinary family's robust mode
         for air in [WIDE, NARROW] {
-            let rates: Vec<f64> = air.ladder().iter().map(Rung::net_bps).collect();
+            let rates: Vec<f64> = air
+                .ladder()
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| !(air.fast_tones && i == air.floor_modes()))
+                .map(|(_, r)| r.net_bps())
+                .collect();
             assert!(rates.windows(2).all(|w| w[0] <= w[1] + 1e-9), "{rates:?}");
         }
     }

@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(daemon.config.operator.grid, "EM73tv");
         assert_eq!(daemon.config.ptt, crate::config::PttConfig::None);
         assert_eq!(daemon.config.audio.input, None);
-        assert_eq!(daemon.config.radio.max_mode, 15);
+        assert_eq!(daemon.config.radio.max_mode, 19);
         assert_eq!(
             daemon.config.control.token.as_deref(),
             None,
