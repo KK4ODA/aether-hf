@@ -1,0 +1,101 @@
+frame,payload_bytes,net_bps,channel,snr_3k_db,frames,acquired,decoded,genie_decoded
+mode 0 BPSK-1/5 long,26,197.3,awgn,-18,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-17,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-16,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-15,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-14,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-13,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-12,20,2,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-11,20,4,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-10,20,2,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-9,20,10,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-8,20,17,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-7,20,20,0,0
+mode 0 BPSK-1/5 long,26,197.3,awgn,-6,20,20,6,6
+mode 0 BPSK-1/5 long,26,197.3,awgn,-5,20,20,20,20
+mode 0 BPSK-1/5 long,26,197.3,awgn,-4,20,20,20,20
+mode 0 BPSK-1/5 long,26,197.3,awgn,-3,20,20,20,20
+mode 0 BPSK-1/5 long,26,197.3,awgn,-2,20,20,20,20
+mode 0 BPSK-1/5 long,26,197.3,good,-16,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,good,-14,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,good,-12,20,2,0,0
+mode 0 BPSK-1/5 long,26,197.3,good,-10,20,5,1,1
+mode 0 BPSK-1/5 long,26,197.3,good,-8,20,9,3,2
+mode 0 BPSK-1/5 long,26,197.3,good,-6,20,11,4,3
+mode 0 BPSK-1/5 long,26,197.3,good,-4,20,15,11,11
+mode 0 BPSK-1/5 long,26,197.3,good,-2,20,18,14,14
+mode 0 BPSK-1/5 long,26,197.3,good,0,20,20,19,18
+mode 0 BPSK-1/5 long,26,197.3,good,2,20,20,19,17
+mode 0 BPSK-1/5 long,26,197.3,good,4,20,19,19,16
+mode 0 BPSK-1/5 long,26,197.3,moderate,-16,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,moderate,-14,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,moderate,-12,20,1,0,0
+mode 0 BPSK-1/5 long,26,197.3,moderate,-10,20,4,0,0
+mode 0 BPSK-1/5 long,26,197.3,moderate,-8,20,8,2,2
+mode 0 BPSK-1/5 long,26,197.3,moderate,-6,20,16,6,4
+mode 0 BPSK-1/5 long,26,197.3,moderate,-4,20,17,11,10
+mode 0 BPSK-1/5 long,26,197.3,moderate,-2,20,20,17,17
+mode 0 BPSK-1/5 long,26,197.3,moderate,0,20,19,18,16
+mode 0 BPSK-1/5 long,26,197.3,moderate,2,20,19,19,18
+mode 0 BPSK-1/5 long,26,197.3,moderate,4,20,20,20,19
+mode 0 BPSK-1/5 long,26,197.3,poor,-16,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,poor,-14,20,0,0,0
+mode 0 BPSK-1/5 long,26,197.3,poor,-12,20,3,0,0
+mode 0 BPSK-1/5 long,26,197.3,poor,-10,20,1,0,0
+mode 0 BPSK-1/5 long,26,197.3,poor,-8,20,5,0,1
+mode 0 BPSK-1/5 long,26,197.3,poor,-6,20,14,6,7
+mode 0 BPSK-1/5 long,26,197.3,poor,-4,20,15,12,15
+mode 0 BPSK-1/5 long,26,197.3,poor,-2,20,16,12,13
+mode 0 BPSK-1/5 long,26,197.3,poor,0,20,20,20,17
+mode 0 BPSK-1/5 long,26,197.3,poor,2,20,18,18,18
+mode 0 BPSK-1/5 long,26,197.3,poor,4,20,20,20,18
+control short,7,129.0,awgn,-18,20,0,0,0
+control short,7,129.0,awgn,-17,20,0,0,0
+control short,7,129.0,awgn,-16,20,0,0,0
+control short,7,129.0,awgn,-15,20,0,0,0
+control short,7,129.0,awgn,-14,20,0,0,0
+control short,7,129.0,awgn,-13,20,0,0,0
+control short,7,129.0,awgn,-12,20,0,0,0
+control short,7,129.0,awgn,-11,20,3,0,0
+control short,7,129.0,awgn,-10,20,7,0,0
+control short,7,129.0,awgn,-9,20,10,0,0
+control short,7,129.0,awgn,-8,20,14,0,0
+control short,7,129.0,awgn,-7,20,18,2,2
+control short,7,129.0,awgn,-6,20,19,10,11
+control short,7,129.0,awgn,-5,20,20,19,19
+control short,7,129.0,awgn,-4,20,20,20,20
+control short,7,129.0,awgn,-3,20,20,20,20
+control short,7,129.0,awgn,-2,20,20,20,20
+control short,7,129.0,good,-16,20,0,0,0
+control short,7,129.0,good,-14,20,0,0,0
+control short,7,129.0,good,-12,20,0,0,0
+control short,7,129.0,good,-10,20,1,0,0
+control short,7,129.0,good,-8,20,7,2,1
+control short,7,129.0,good,-6,20,8,5,4
+control short,7,129.0,good,-4,20,15,12,12
+control short,7,129.0,good,-2,20,16,14,14
+control short,7,129.0,good,0,20,20,18,18
+control short,7,129.0,good,2,20,20,20,20
+control short,7,129.0,good,4,20,20,20,19
+control short,7,129.0,moderate,-16,20,0,0,0
+control short,7,129.0,moderate,-14,20,0,0,0
+control short,7,129.0,moderate,-12,20,1,0,0
+control short,7,129.0,moderate,-10,20,4,0,0
+control short,7,129.0,moderate,-8,20,7,1,1
+control short,7,129.0,moderate,-6,20,12,8,8
+control short,7,129.0,moderate,-4,20,14,7,7
+control short,7,129.0,moderate,-2,20,18,14,12
+control short,7,129.0,moderate,0,20,20,19,19
+control short,7,129.0,moderate,2,20,18,17,17
+control short,7,129.0,moderate,4,20,20,18,15
+control short,7,129.0,poor,-16,20,0,0,0
+control short,7,129.0,poor,-14,20,0,0,0
+control short,7,129.0,poor,-12,20,1,0,0
+control short,7,129.0,poor,-10,20,1,0,0
+control short,7,129.0,poor,-8,20,6,1,2
+control short,7,129.0,poor,-6,20,11,5,3
+control short,7,129.0,poor,-4,20,19,12,9
+control short,7,129.0,poor,-2,20,18,11,12
+control short,7,129.0,poor,0,20,20,19,19
+control short,7,129.0,poor,2,20,20,20,19
+control short,7,129.0,poor,4,20,20,20,19

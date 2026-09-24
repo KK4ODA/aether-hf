@@ -49,10 +49,13 @@ from collections.abc import Callable
 from itertools import pairwise
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.engine import LinkConfig, LinkEngine
+from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
 from aether_model.link.harness import phy_timing, two_modem_sim
 from aether_model.link.phy import Container, TxFrame
 from aether_model.link.rate import (
@@ -112,6 +115,31 @@ def channel_thresholds(
         shift = statistics.fmean(penalties) if penalties else 0.0
         out[channel] = {m: table.get(m, awgn[m] + shift) for m in awgn}
     return out
+
+
+FADING_CSV = "bench/baselines/fading_pipe.csv"
+"""``tools/calibrate_fading.py``: the fading pipe's effective-SNR constant per frame type and
+channel class."""
+
+
+def fading_pipe(csv_path: Path, air: AirInterface, channel: str, seed: int) -> FadingPipe:
+    """A fading channel for one run: the class's two-ray process, shared by both stations,
+    and each frame's calibrated effective-SNR mapping (P9-6). AWGN is the static channel,
+    judged on the same steep waterfall."""
+    betas: dict[str, float] = {}
+    if csv_path.exists():
+        with csv_path.open(encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                if int(r["bandwidth_hz"]) == air.params.bandwidth.value and r["channel"] == channel:
+                    betas[r["frame"]] = float(r["beta"])
+    if channel != "awgn" and not betas:
+        raise SystemExit(f"{csv_path}: no calibration for {channel}; run tools/calibrate_fading.py")
+    return FadingPipe(
+        SharedFading(channel, seed),
+        shapes_for(air),
+        lambda frame: betas.get(frame_key(frame), 1.0),
+        np.random.default_rng(seed + 99),
+    )
 
 
 PEAK_CSV = "bench/baselines/peak_to_average.csv"
@@ -226,6 +254,8 @@ def run_point(
     schedule: Callable[[float], float] | None = None,
     controls: dict[bool, float] | None = None,
     peak: bool = False,
+    fading: bool = False,
+    continuous: bool = False,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
     cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
@@ -240,8 +270,30 @@ def run_point(
             return top - span * phase / half if phase < half else top - span * (2 - phase / half)
 
     if backend == "phy":
-        sim = two_modem_sim(a, b, channel=channel, snr_db=snr_db, seed=seed, params=air.params)
+        sim = two_modem_sim(
+            a,
+            b,
+            channel=channel,
+            snr_db=snr_db,
+            seed=seed,
+            params=air.params,
+            continuous=continuous,
+        )
         sim.snr_schedule = schedule
+    elif fading:
+        # every frame through its own stretch of the class's fade, judged at the AWGN
+        # thresholds on the modem's waterfall at its effective SNR
+        sim = TwoStationSim(
+            a,
+            b,
+            snr_db=snr_db,
+            seed=seed,
+            thresholds=table_for(air)[0],
+            snr_schedule=schedule,
+            control_thresholds=control_thresholds_for(timing),
+            frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
+            fading=fading_pipe(Path(FADING_CSV), air, channel, seed),
+        )
     else:
         sim = TwoStationSim(
             a,
@@ -284,6 +336,11 @@ def run_point(
         "channel": channel,
         "snr_db": round(snr_db, 1),
         "snr_reference": "peak" if peak else "average",
+        "pipe": (
+            ("phy-continuous" if continuous else "phy")
+            if backend == "phy"
+            else ("fading" if fading else "logistic")
+        ),
         "ramp": "" if ramp is None else f"+/-{ramp[0] / 2:.0f}dB/{ramp[1]:.0f}s",
         "bytes": len(payload),
         "seconds": round(seconds, 1),
@@ -458,6 +515,18 @@ def main() -> int:
         help="read the SNR axis at equal transmitter peak power: each frame's SNR is the "
         "axis less its own peak-to-average ratio (bench/baselines/peak_to_average.csv)",
     )
+    ap.add_argument(
+        "--fading",
+        action="store_true",
+        help="the fading pipe: each frame through its own stretch of the class's two-ray "
+        "fade, judged at its calibrated effective SNR (bench/baselines/fading_pipe.csv)",
+    )
+    ap.add_argument(
+        "--continuous",
+        action="store_true",
+        help="with --backend phy: one fade for the whole session, shared by both "
+        "directions, instead of a fresh channel per frame",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -504,6 +573,8 @@ def main() -> int:
                     rate,
                     controls=controls.get(channel, awgn_controls),
                     peak=args.peak,
+                    fading=args.fading,
+                    continuous=args.continuous,
                 )
                 rows.append(row)
                 print(

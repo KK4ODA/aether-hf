@@ -27,6 +27,17 @@ mode 0 QPSK-1/10 floor-long,19,36.1,good,-2,20,20,20,20
 mode 0 QPSK-1/10 floor-long,19,36.1,good,0,20,20,20,19
 mode 0 QPSK-1/10 floor-long,19,36.1,good,2,20,20,20,20
 mode 0 QPSK-1/10 floor-long,19,36.1,good,4,20,20,20,20
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-16,20,2,0,2
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-14,20,13,1,2
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-12,20,11,7,7
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-10,20,15,12,14
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-8,20,15,15,18
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-6,20,14,14,20
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-4,20,20,20,20
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,-2,20,19,19,19
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,0,20,19,19,20
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,2,20,20,20,19
+mode 0 QPSK-1/10 floor-long,19,36.1,moderate,4,20,20,20,18
 mode 0 QPSK-1/10 floor-long,19,36.1,poor,-16,20,7,0,0
 mode 0 QPSK-1/10 floor-long,19,36.1,poor,-14,20,6,2,2
 mode 0 QPSK-1/10 floor-long,19,36.1,poor,-12,20,15,12,10
@@ -66,6 +77,17 @@ mode 1 QPSK-1/5 floor-long,41,77.8,good,-2,20,20,19,19
 mode 1 QPSK-1/5 floor-long,41,77.8,good,0,20,20,20,19
 mode 1 QPSK-1/5 floor-long,41,77.8,good,2,20,20,20,19
 mode 1 QPSK-1/5 floor-long,41,77.8,good,4,20,20,20,20
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-16,20,4,0,0
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-14,20,10,0,0
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-12,20,13,2,2
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-10,20,16,6,7
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-8,20,18,11,14
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-6,20,14,14,13
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-4,20,18,18,19
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,-2,20,14,14,18
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,0,20,19,19,19
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,2,20,20,20,20
+mode 1 QPSK-1/5 floor-long,41,77.8,moderate,4,20,20,20,20
 mode 1 QPSK-1/5 floor-long,41,77.8,poor,-16,20,1,0,0
 mode 1 QPSK-1/5 floor-long,41,77.8,poor,-14,20,7,0,0
 mode 1 QPSK-1/5 floor-long,41,77.8,poor,-12,20,13,0,0
@@ -105,6 +127,17 @@ mode 2 QPSK-1/3 long,15,113.9,good,-2,20,14,14,15
 mode 2 QPSK-1/3 long,15,113.9,good,0,20,19,19,19
 mode 2 QPSK-1/3 long,15,113.9,good,2,20,18,17,17
 mode 2 QPSK-1/3 long,15,113.9,good,4,20,19,18,19
+mode 2 QPSK-1/3 long,15,113.9,moderate,-16,20,0,0,0
+mode 2 QPSK-1/3 long,15,113.9,moderate,-14,20,1,0,1
+mode 2 QPSK-1/3 long,15,113.9,moderate,-12,20,3,0,0
+mode 2 QPSK-1/3 long,15,113.9,moderate,-10,20,5,0,2
+mode 2 QPSK-1/3 long,15,113.9,moderate,-8,20,11,3,5
+mode 2 QPSK-1/3 long,15,113.9,moderate,-6,20,12,9,11
+mode 2 QPSK-1/3 long,15,113.9,moderate,-4,20,17,11,12
+mode 2 QPSK-1/3 long,15,113.9,moderate,-2,20,18,15,15
+mode 2 QPSK-1/3 long,15,113.9,moderate,0,20,19,18,16
+mode 2 QPSK-1/3 long,15,113.9,moderate,2,20,20,20,17
+mode 2 QPSK-1/3 long,15,113.9,moderate,4,20,20,20,19
 mode 2 QPSK-1/3 long,15,113.9,poor,-16,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,poor,-14,20,0,0,0
 mode 2 QPSK-1/3 long,15,113.9,poor,-12,20,2,1,1
@@ -144,6 +177,17 @@ control short,7,129.0,good,-2,20,17,15,15
 control short,7,129.0,good,0,20,20,17,17
 control short,7,129.0,good,2,20,19,18,18
 control short,7,129.0,good,4,20,19,19,17
+control short,7,129.0,moderate,-16,20,1,0,0
+control short,7,129.0,moderate,-14,20,2,0,0
+control short,7,129.0,moderate,-12,20,2,0,0
+control short,7,129.0,moderate,-10,20,7,1,1
+control short,7,129.0,moderate,-8,20,9,4,4
+control short,7,129.0,moderate,-6,20,14,8,7
+control short,7,129.0,moderate,-4,20,17,9,9
+control short,7,129.0,moderate,-2,20,17,14,14
+control short,7,129.0,moderate,0,20,19,13,11
+control short,7,129.0,moderate,2,20,20,17,16
+control short,7,129.0,moderate,4,20,20,19,17
 control short,7,129.0,poor,-16,20,0,0,0
 control short,7,129.0,poor,-14,20,0,0,0
 control short,7,129.0,poor,-12,20,2,0,0
@@ -183,6 +227,17 @@ control floor,8,28.7,good,-2,20,18,18,20
 control floor,8,28.7,good,0,20,20,20,20
 control floor,8,28.7,good,2,20,20,20,20
 control floor,8,28.7,good,4,20,20,20,20
+control floor,8,28.7,moderate,-16,20,4,0,1
+control floor,8,28.7,moderate,-14,20,14,5,5
+control floor,8,28.7,moderate,-12,20,9,8,15
+control floor,8,28.7,moderate,-10,20,15,11,11
+control floor,8,28.7,moderate,-8,20,15,15,19
+control floor,8,28.7,moderate,-6,20,16,16,17
+control floor,8,28.7,moderate,-4,20,19,19,17
+control floor,8,28.7,moderate,-2,20,17,17,19
+control floor,8,28.7,moderate,0,20,20,20,17
+control floor,8,28.7,moderate,2,20,20,20,19
+control floor,8,28.7,moderate,4,20,19,19,20
 control floor,8,28.7,poor,-16,20,4,0,0
 control floor,8,28.7,poor,-14,20,3,0,2
 control floor,8,28.7,poor,-12,20,12,9,6

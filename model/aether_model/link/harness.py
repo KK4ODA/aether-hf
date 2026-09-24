@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from aether_model.channel import make_channel
+from aether_model.channel import WattersonChannel, make_channel
 from aether_model.frame.modes import air_interface
 from aether_model.link.engine import LinkEngine
 from aether_model.link.frames import with_bandwidth
@@ -108,8 +108,16 @@ class PhyBridge:
         params: WaveformParams = WIDE_2300,
         lead: int = 900,
         tail: int = 900,
+        continuous: bool = False,
     ) -> None:
         self.modem = Modem(params)
+        self.continuous = continuous
+        """One fade for the whole session, shared by both directions and running on through
+        every gap (P9-6), instead of a fresh channel per frame: consecutive frames, and a
+        burst and its acknowledgement, then see the same fade, as they do on the air."""
+        self._fading = WattersonChannel(channel, params.fs_baseband, seed=seed + 7)
+        self._clock = 0.0
+        """Channel time already consumed, seconds: where the next burst's fade starts."""
         self.channel = channel
         self.snr_db = snr_db
         self.lead = lead
@@ -147,12 +155,23 @@ class PhyBridge:
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
     ) -> SoftFrame | None:
         self.rendered += 1
-        buf = self.padded(self._burst(frame))
+        burst = self._burst(frame)
         seed = int(self._rng.integers(0, 2**31))
         cfo = float(self._rng.uniform(-100, 100))
-        ch = make_channel(
-            self.channel, snr_db=snr_db, fs=self.fs, seed=seed, signal_power=1.0, cfo_hz=cfo
-        )
+        if self.continuous:
+            # the burst through the session's fade at its own time; the silence either side
+            # carries only noise, so the fade need not run through it
+            self._fading.skip(max(0, round((t_start - self._clock) * self.fs)))
+            burst = self._fading.process(burst)
+            self._clock = max(self._clock, t_start) + len(burst) / self.fs
+            ch = make_channel(
+                "awgn", snr_db=snr_db, fs=self.fs, seed=seed, signal_power=1.0, cfo_hz=cfo
+            )
+        else:
+            ch = make_channel(
+                self.channel, snr_db=snr_db, fs=self.fs, seed=seed, signal_power=1.0, cfo_hz=cfo
+            )
+        buf = self.padded(burst)
         y = self.modem.detector.condition(ch.process(buf))
         syncs = self.modem.detector.detect(y, max_frames=1)
         if not syncs:
@@ -190,10 +209,13 @@ def two_modem_sim(
     snr_db: float = 10.0,
     seed: int = 0,
     params: WaveformParams = WIDE_2300,
+    continuous: bool = False,
 ) -> TwoStationSim:
     """A :class:`TwoStationSim` whose channel is the real PHY. Both directions share one
     bridge (one modem, one RNG stream) — fine because the pipe is half-duplex."""
-    bridge = PhyBridge(channel=channel, snr_db=snr_db, seed=seed, params=params)
+    bridge = PhyBridge(
+        channel=channel, snr_db=snr_db, seed=seed, params=params, continuous=continuous
+    )
     sim = TwoStationSim(a, b, snr_db=snr_db, seed=seed, frame_factory=bridge.factory)
     sim.bridge = bridge  # type: ignore[attr-defined]
     return sim

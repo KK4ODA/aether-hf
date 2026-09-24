@@ -308,3 +308,16 @@ def test_noise_can_be_disabled() -> None:
     x = tone(300.0, FS, 1000)
     y = make_channel("awgn", snr_db=None, fs=FS).process(x)
     np.testing.assert_array_equal(y, x)
+
+
+def test_a_skipped_gap_fades_on_exactly_as_one_generated() -> None:
+    """P9-6: a session's fade runs on through the silence between bursts. Skipping a gap
+    must leave the process where generating it would have — the same low-rate draws — so a
+    continuous harness is the same channel whether or not anything was sent in between."""
+    from aether_model.channel import RayleighFadingProcess
+
+    a = RayleighFadingProcess(8000.0, 1.0, np.random.default_rng(5))
+    b = RayleighFadingProcess(8000.0, 1.0, np.random.default_rng(5))
+    through = a.next(12_345 + 4000)[12_345:]
+    b.skip(12_345)
+    np.testing.assert_allclose(b.next(4000), through, rtol=0, atol=1e-12)

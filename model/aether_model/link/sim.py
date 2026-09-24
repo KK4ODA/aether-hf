@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from aether_model.link.engine import Deliver, Event, LinkEngine, Transmit
+from aether_model.link.fading import FadingPipe, success_probability
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -76,6 +77,11 @@ class SimFrame:
     payload: bytes
     _draw: float
     floor: bool = False
+    _decode_snr_db: float | None = None
+    """The SNR this frame decodes at, when a fading channel has put it through its
+    effective-SNR mapping (:mod:`aether_model.link.fading`): judged on the modem's steep
+    AWGN waterfall. Unset, the frame is judged at its reported SNR on the pipe's soft
+    logistic, the per-class average."""
     _threshold: float | None = None
     """The SNR at which this frame decodes nine times in ten on the channel being modelled:
     a DATA frame's mode's, a CONTROL frame's family's. The AWGN table's for its mode when
@@ -87,7 +93,11 @@ class SimFrame:
         threshold = self._threshold
         if threshold is None:
             threshold = AWGN_THRESHOLD_DB.get(self.mode, 0.0)
-        if self._draw <= _success_prob(threshold, self.snr_db, gained):
+        if self._decode_snr_db is not None:
+            p = success_probability(self._decode_snr_db + gained, threshold)
+        else:
+            p = _success_prob(threshold, self.snr_db, gained)
+        if self._draw <= p:
             return self.payload, gained
         return None, gained
 
@@ -126,6 +136,7 @@ class TwoStationSim:
         snr_schedule: Callable[[float], float] | None = None,
         control_thresholds: dict[bool, float] | None = None,
         frame_snr_offset: Callable[[TxFrame], float] | None = None,
+        fading: FadingPipe | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -148,6 +159,11 @@ class TwoStationSim:
         fixed *peak*, so a frame's average power — the SNR the far end measures — is that
         peak less its own peak-to-average ratio: with the offset each frame's negative
         ratio, :attr:`snr_db` is the SNR at equal peak power (P9-6)."""
+        self.fading = fading
+        """A fading channel both stations share (P9-6): each frame's reported SNR and the
+        SNR it decodes at come from its own stretch of the fade, and the per-mode
+        thresholds are then the AWGN table's. Unset, every frame sees the channel SNR and
+        the per-class averages of :attr:`thresholds`."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
@@ -161,6 +177,9 @@ class TwoStationSim:
         else:
             table = self.thresholds or timing.mode_threshold_db or AWGN_THRESHOLD_DB
             threshold = table.get(frame.mode, 0.0)
+        decode_snr_db = None
+        if self.fading is not None:
+            snr_db, decode_snr_db = self.fading.judge(frame, snr_db, t_start, t_end)
         return SimFrame(
             container=frame.container,
             mode=frame.mode,
@@ -171,6 +190,7 @@ class TwoStationSim:
             payload=frame.payload,
             _draw=self.rng.random(),
             floor=floor,
+            _decode_snr_db=decode_snr_db,
             _threshold=threshold,
         )
 
