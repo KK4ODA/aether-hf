@@ -1,0 +1,37 @@
+"""The PHY benchmark tools still run against the model as it stands.
+
+The release gate (``tools/bench_gate.py``) sweeps ``tools/bench_phy.py`` on every tag, and
+nothing else ran it: when the ladder of ADR-0013 renumbered the modes, the bench asked for an
+OFDM mode's layout by a rung number and the beta.51 release stopped at its gate. One frame a
+point on each air is enough to catch that class of break.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+
+import bench_phy  # noqa: E402
+from aether_model.frame.modes import air_interface  # noqa: E402
+from aether_model.phy.pipeline import Modem  # noqa: E402
+from aether_model.waveform import NARROW_500, WIDE_2300  # noqa: E402
+
+
+@pytest.mark.parametrize("params", [WIDE_2300, NARROW_500], ids=["2300", "500"])
+def test_a_bench_point_runs_on_every_ofdm_mode_the_gate_and_the_curves_use(params: object) -> None:
+    modem = Modem(params)  # type: ignore[arg-type]
+    air = air_interface(params)  # type: ignore[arg-type]
+    # the gate's modes on the wide air, the ladder's OFDM modes on the narrow one
+    modes = (0, 4, 8, 13) if params is WIDE_2300 else air.ofdm_ladder[:2]
+    for mode in modes:
+        row = bench_phy.run_point(modem, "awgn", mode, 30.0, 1, 11)
+        assert row["mode"] == mode
+        assert row["decoded"] == 1, row
+        assert row["throughput_bps"] == round(
+            8 * modem.payload_bytes(air.modes[mode]) / air.long.duration_s
+        )
