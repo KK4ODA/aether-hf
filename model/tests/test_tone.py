@@ -26,7 +26,8 @@ from aether_model.phy.preamble import FrameHeader, FrameType
 from aether_model.waveform import NARROW_500, WIDE_2300
 
 FLOOR_KINDS = (M.TONE_CONTROL, *M.TONE_DATA)
-KINDS = (*FLOOR_KINDS, *M.TONE_FAST)
+KINDS = (*FLOOR_KINDS, *M.TONE_FAST, *M.TONE_NARROW)
+NARROW_DETECTOR_KINDS = (M.NARROW.tone_control, *M.NARROW.tone_data)
 
 
 def _payload(rng: np.random.Generator, kind: M.ToneKind) -> bytes:
@@ -64,8 +65,17 @@ def test_the_numerology_is_sixteen_tones_at_twenty_five_baud_inside_500_hz() -> 
     assert num.tone_hz(np.arange(16))[[0, -1]].tolist() == [-187.5, 187.5]
 
 
-def test_the_sync_patterns_are_the_pinned_search_and_costas_and_mutually_distinct() -> None:
+def test_the_first_sync_patterns_are_the_pinned_search() -> None:
+    # the floor's and the fast kinds' 25 are 77 thousand draws in; the rest, millions
+    assert M.search_sync_patterns(25) == M.SYNC_PATTERNS[:25]
+
+
+@pytest.mark.slow
+def test_every_sync_pattern_is_the_pinned_search() -> None:
     assert M.search_sync_patterns(len(M.SYNC_PATTERNS)) == M.SYNC_PATTERNS
+
+
+def test_the_sync_patterns_are_costas_and_mutually_distinct() -> None:
     for i, a in enumerate(M.SYNC_PATTERNS):
         assert len(a) == M.SYNC_SYMBOLS
         assert M.is_costas(a)
@@ -123,7 +133,28 @@ def test_the_fast_kinds_are_the_floors_frame_with_faster_data() -> None:
         assert k.rate == pytest.approx(slow.rate)
     ladder = (*M.TONE_DATA, *M.TONE_FAST)
     assert [round(k.net_bps) for k in ladder] == [36, 54, 76, 112, 157, 228]
-    assert M.WIDE.tone_data == ladder and M.NARROW.tone_data == M.TONE_DATA
+    assert M.WIDE.tone_data == ladder
+
+
+def test_the_narrow_middle_kinds_are_the_floors_frame_on_four_tones() -> None:
+    """ADR-0015: the floor's frame again — its sync blocks, its 5.36 s, its two code rates —
+    with four data symbols a slot on four tones 100 Hz apart, the floor's own 400 Hz: 880
+    coded bits a frame, twice the floor's. The 500 Hz air's ladder runs through them between
+    the floor's kinds and the OFDM modes; the 2 300 Hz air never looks for them."""
+    assert [k.payload_bytes for k in M.TONE_NARROW] == [51, 75]
+    floor = M.TONE_DATA[0]
+    for k, slow in zip(M.TONE_NARROW, M.TONE_DATA, strict=True):
+        assert k.num == M.TONE_NUMEROLOGY and not k.control and len(k.patterns) == 4
+        assert (k.data.tones, k.data.spacing_hz, k.data.span_hz, k.speed) == (4, 100.0, 400.0, 4)
+        assert k.data.span_hz == k.num.span_hz
+        assert k.data_slots == floor.data_slots and k.symbols == floor.symbols
+        assert k.block_offsets == floor.block_offsets and k.samples == floor.samples
+        assert k.coded_bits == 2 * floor.coded_bits == 880
+        assert k.info_bits == 2 * slow.info_bits and k.rate == pytest.approx(slow.rate)
+    ladder = (*M.TONE_DATA, *M.TONE_NARROW)
+    assert [round(k.net_bps) for k in ladder] == [36, 54, 76, 112]
+    assert M.NARROW.tone_data == ladder
+    assert not set(M.TONE_NARROW) & set(M.WIDE.tone_data)
 
 
 def test_each_sync_block_starts_where_the_layout_says() -> None:
@@ -140,7 +171,7 @@ def test_each_sync_block_starts_where_the_layout_says() -> None:
 
 def test_the_envelope_is_constant_at_the_ofdm_peak() -> None:
     rng = np.random.default_rng(1)
-    for kind in (M.TONE_DATA[0], *M.TONE_FAST):
+    for kind in (M.TONE_DATA[0], *M.TONE_FAST, *M.TONE_NARROW):
         x = T.burst(kind, _payload(rng, kind))
         edge = kind.num.edge_samples
         mag = np.abs(x[edge:-edge])
@@ -160,9 +191,9 @@ def test_the_envelope_is_constant_at_the_ofdm_peak() -> None:
         assert papr_db >= T.TONE_GAIN_DB
 
 
-def test_the_phase_is_continuous_and_the_spectrum_stays_inside_500_hz() -> None:
+@pytest.mark.parametrize("kind", [M.TONE_DATA[1], *M.TONE_NARROW], ids=lambda k: k.name)
+def test_the_phase_is_continuous_and_the_spectrum_stays_inside_500_hz(kind: M.ToneKind) -> None:
     rng = np.random.default_rng(2)
-    kind = M.TONE_DATA[1]
     x = T.burst(kind, _payload(rng, kind))
     step = np.angle(x[1:] / x[:-1])
     # no sample-to-sample phase step larger than the highest tone's advance
@@ -170,7 +201,8 @@ def test_the_phase_is_continuous_and_the_spectrum_stays_inside_500_hz() -> None:
     spec = np.abs(np.fft.fftshift(np.fft.fft(x, 1 << 18))) ** 2
     f = np.fft.fftshift(np.fft.fftfreq(1 << 18, 1 / kind.num.fs))
     # 99.9 % inside the 500 Hz channel; −35 dB past ±300 Hz, −50 dB past ±500 Hz (measured
-    # −32, −39 and −56 over the three kinds)
+    # −32, −39 and −56 over the floor's three kinds; −30.5, −35.1 and −54 over the narrow
+    # middle kinds, whose 100 Bd data glides over the floor's 32 samples to stay inside)
     inside = spec[np.abs(f) <= 250.0].sum() / spec.sum()
     assert inside > 0.999
     assert spec[np.abs(f) > 300.0].sum() / spec.sum() < 10 ** (-35 / 10)
@@ -293,12 +325,47 @@ def test_the_detector_finds_a_fast_kind_as_well_as_the_floors(kind: M.ToneKind) 
     assert math.sqrt(np.mean(np.square(cfo_err))) < 0.9
 
 
-@pytest.mark.parametrize("kind", [M.TONE_DATA[0], M.TONE_FAST[3]], ids=lambda k: k.name)
+@pytest.mark.parametrize("kind", M.TONE_NARROW, ids=lambda k: k.name)
+def test_the_500_hz_detector_finds_a_middle_kind_and_no_other_air_does(kind: M.ToneKind) -> None:
+    """A middle kind's sync blocks are the floor's, so the 500 Hz air's detector names and
+    places it as surely as a floor kind; the 2 300 Hz air's does not look for it and finds
+    nothing in a strong one, and the 500 Hz air's finds nothing in a strong fast kind — the
+    patterns that name them are the search's last eight, mutually distinct from every other."""
+    rng = np.random.default_rng(14)
+    narrow = _detector(kind)
+    cfo_err = []
+    for i in range(8):
+        rv = i % len(kind.patterns)
+        lead = int(rng.integers(0, 4000))
+        cfo = float(rng.uniform(-100, 100))
+        y = _received(
+            kind, _payload(rng, kind), snr_db=-14.0, lead=lead, cfo_hz=cfo, seed=80 + i, rv=rv
+        )
+        syncs = narrow.detect(y)
+        assert [(s.kind, s.rv) for s in syncs] == [(kind, rv)]
+        assert abs(syncs[0].start - lead) <= kind.num.symbol_samples // 16
+        cfo_err.append(syncs[0].cfo_hz - cfo)
+    assert max(abs(e) for e in cfo_err) < 2.0
+    strong = _received(kind, _payload(rng, kind), snr_db=10.0, lead=1000, cfo_hz=0.0, seed=90)
+    assert T.ToneDetector().detect(strong) == []
+    fast = M.TONE_FAST[3]
+    strong = _received(fast, _payload(rng, fast), snr_db=10.0, lead=1000, cfo_hz=0.0, seed=91)
+    assert narrow.detect(strong) == []
+
+
+def _detector(kind: M.ToneKind) -> T.ToneDetector:
+    """The detector of the air ``kind`` is on: the 500 Hz air's for its middle kinds."""
+    return T.ToneDetector(NARROW_DETECTOR_KINDS) if kind in M.TONE_NARROW else T.ToneDetector()
+
+
+@pytest.mark.parametrize(
+    "kind", [M.TONE_DATA[0], M.TONE_FAST[3], M.TONE_NARROW[1]], ids=lambda k: k.name
+)
 def test_the_snr_is_reported_in_the_ofdm_reference(kind: M.ToneKind) -> None:
     rng = np.random.default_rng(7)
     for snr in (-18.0, -12.0, -6.0):
         y = _received(kind, _payload(rng, kind), snr_db=snr, lead=800, cfo_hz=20.0, seed=int(-snr))
-        s = T.ToneDetector().detect(y)[0]
+        s = _detector(kind).detect(y)[0]
         frame = T.demodulate(y, kind, s.rv, s.start, s.cfo_hz)
         assert frame.snr_db == pytest.approx(snr, abs=1.0)
 
@@ -422,14 +489,25 @@ def test_a_fast_frame_after_silence_is_not_taken_for_its_early_reading() -> None
     first, and the real frame, overlapping it, was lost — once in 160 strong bursts. The real
     frame is announced as arriving long before the early reading ends, and a candidate that
     an announced frame starts inside, with a first block as strong as the candidate's whole,
-    is not taken."""
+    is not taken. Since ADR-0015 the reading fails confirmation as well: its end block lies
+    over the frame's data, whose strong tones stand where the pattern wants its own —
+    contradictions — and the stream's rule stays as the second defence."""
     kind = M.TONE_FAST[1]
     det = T.ToneDetector()
     y, start, payload = _after_silence(310, kind=kind)
     early = start - kind.block_offsets[1] * kind.num.symbol_samples
     reading = det.refine(y, kind, 0, early, 0.0)
     assert det.block_hits(y, kind, 0, reading.start, reading.cfo_hz) == [0, 8, 4]
-    assert det.confirmed(y, reading)
+    assert det.contradictions(y, reading) > det.MAX_CONTRADICTIONS
+    assert not det.confirmed(y, reading)
+    # the stream announces the real frame inside the reading's span, stronger than its whole
+    stream = T.ToneStream(det)
+    for i in range(0, start + 12 * kind.num.symbol_samples, 160):
+        stream.feed(y[: i + 160], 0)
+    arrival = next(a for a in stream.arriving if abs(a.start - start) <= 160)
+    span = (early, early + kind.samples)
+    assert stream._announced_inside(*span, arrival.statistic)
+    assert not stream._announced_inside(*span, arrival.statistic + 1e-9)
     for found in (det.detect(y), _streamed(y)):
         assert [(s.kind, s.rv) for s in found] == [(kind, 0)], found
         assert abs(found[0].start - start) <= 4

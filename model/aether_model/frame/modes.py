@@ -25,16 +25,19 @@ family, sent at the OFDM frames' peak amplitude and detected by energy, whose fr
 named by Costas-sequence sync blocks rather than a preamble and chips. Its frame
 definitions — numerology, sync patterns, kinds — are here beside the OFDM layouts; the
 signal processing is :mod:`aether_model.phy.tone`. What the link layer calls "mode N" is
-a rung of the air's **ladder**: the tone floor's data kinds, then the air's OFDM modes, most
-robust first (:class:`Rung`, :attr:`AirInterface.ladder`). An OFDM frame's chips carry its
-OFDM mode index, which is not its rung: the wide ladder puts OFDM mode 0 at rung 2, the
-narrow one skips the OFDM modes the floor replaced. :class:`AirInterface` bundles a
+a rung of the air's **ladder**: the tone floor's data kinds — its own two, then the air's
+middle kinds, the fast ones at 2 300 Hz (ADR-0014) and the four-tone ones at 500 Hz
+(ADR-0015) — then the air's OFDM modes, most robust first (:class:`Rung`,
+:attr:`AirInterface.ladder`). An OFDM frame's chips carry its OFDM mode index, which is not
+its rung: the wide ladder puts OFDM mode 0 at rung 6, the narrow one puts OFDM mode 2 at
+rung 4 and skips the OFDM modes the floor replaced. :class:`AirInterface` bundles a
 waveform with its layouts, modes and ladder; :func:`air_interface` finds the one for a
 :class:`WaveformParams`.
 """
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -262,6 +265,16 @@ a symbol; its edges are never used, because every frame starts and ends on a syn
 FAST100 = ToneNumerology(symbol_samples=80, ramp_samples=8, edge_samples=4)
 """The fast kinds' 100 Bd data (ADR-0014): 10 ms symbols, five times ITU Poor's delay spread,
 on tones 100 Hz apart — 1 600 Hz."""
+QUAD100 = ToneNumerology(symbol_samples=80, tones=4, ramp_samples=32, edge_samples=4)
+"""The 500 Hz air's middle kinds' data (ADR-0015): four tones at 100 Bd, 100 Hz apart — the
+floor's own 400 Hz, so the frame stays inside 500 Hz. Two bits a symbol where the floor's
+sixteen tones carry four, at four times the rate: twice the floor's bits a second in the
+same span. Eight tones at 50 Bd, and the floor's sixteen with a lighter code, were measured
+too: on the fading classes both reach less far at the same rate. The glide is the floor's
+own 32 samples, two fifths of a symbol here: against a tenth (8 samples, the fast kinds'
+proportion) it puts 5 dB less power outside ±250 Hz (−30.5 dB of the frame's after the
+transmit filter, where the 500 Hz OFDM frames put −15) and costs nothing measurable — 100
+frames a point on AWGN and the three ITU classes, genie timing."""
 
 SYNC_SYMBOLS = 8
 SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
@@ -290,6 +303,14 @@ SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
     (3, 9, 6, 13, 14, 10, 0, 15),
     (8, 13, 15, 14, 11, 0, 10, 2),
     (15, 0, 4, 6, 1, 14, 5, 10),
+    (3, 9, 1, 14, 15, 13, 10, 0),
+    (3, 14, 15, 10, 2, 1, 13, 6),
+    (10, 2, 13, 15, 0, 7, 5, 14),
+    (7, 6, 0, 15, 8, 14, 2, 5),
+    (2, 9, 5, 0, 14, 13, 1, 10),
+    (6, 13, 5, 14, 10, 4, 2, 15),
+    (0, 3, 1, 5, 11, 12, 14, 4),
+    (4, 13, 11, 0, 8, 15, 2, 14),
 )
 """The tone floor's sync blocks: eight symbols over sixteen tones, each a *Costas sequence* —
 every displacement (Δsymbol, Δtone) between two of its symbols occurs once, so a shifted
@@ -300,8 +321,8 @@ pattern at the same places, so two patterns that overlap in three symbols three 
 apart put nine of a frame's 24 sync symbols on a hypothesis of the other kind read three
 symbols early — which, with the data's coincidences on top, passed for a frame. The first
 is the control frame's; then four for each data kind, one per redundancy version, in the
-order of :data:`TONE_DATA` and :data:`TONE_FAST` — the fast kinds' sixteen are the same
-search carried on (ADR-0014), so the first nine are unchanged. Drawn by
+order of :data:`TONE_DATA`, :data:`TONE_FAST` and :data:`TONE_NARROW` — each family's are
+the same search carried on (ADR-0014, ADR-0015), so the earlier ones never change. Drawn by
 :func:`search_sync_patterns` and pinned: they are part of the air interface."""
 PATTERN_SHIFT = 8
 """Tone shifts over which :data:`SYNC_PATTERNS` are mutually distinct."""
@@ -336,21 +357,70 @@ def cross_hits(
 
 
 def search_sync_patterns(
-    count: int, symbols: int = SYNC_SYMBOLS, tones: int = 16
+    count: int, symbols: int = SYNC_SYMBOLS, tones: int = 16, draws: int = 5_000_000
 ) -> tuple[tuple[int, ...], ...]:
     """How :data:`SYNC_PATTERNS` were drawn: random selections of ``symbols`` distinct tones
-    from a seeded generator, kept if Costas and within :data:`PATTERN_CROSS` of every
-    earlier one."""
+    from a seeded generator, kept if Costas (:func:`is_costas`) and within
+    :data:`PATTERN_CROSS` of every earlier one (:func:`cross_hits`, over every offset).
+
+    The later patterns lie millions of draws in — the 33rd at 4.45 million — so the search
+    runs a batch at a time and never one pair at a time: ``permuted`` shuffles each row of a
+    batch exactly as successive ``permutation`` calls would, from the same generator, and
+    both tests are vectorised. A block is Costas when no two of its displacements *the same
+    distance apart* are equal: one bit per tone difference, the sum of a distance's bits
+    equals their OR only if none repeats. And two Costas blocks share three symbols under
+    some offset and shift — one more than :data:`PATTERN_CROSS` — exactly when three symbols
+    of one, a *triangle*, are a translate of a triangle of the other with a shift within
+    :data:`PATTERN_SHIFT` (any offset is within a block's own length); so every chosen block's
+    56 triangles go into a table of shapes, and a candidate's are looked up in it."""
+    if PATTERN_CROSS != 2:
+        raise ValueError("the triangle table is the bound at two shared symbols")
+    batch = 1 << 14
     rng = np.random.default_rng(20260924)
+    lo, hi = np.triu_indices(symbols, 1)
+    order = np.argsort(hi - lo, kind="stable")
+    lo, hi = lo[order], hi[order]
+    distances = np.searchsorted(hi - lo, np.arange(1, symbols))
+    span = 2 * tones - 1
+    vectors = (symbols - 1) * span
+    a, b, c = np.array(list(itertools.combinations(range(symbols), 3)), dtype=np.int64).T
+
+    def shapes(blocks: NDArray[np.int64]) -> NDArray[np.int64]:
+        """Each triangle's two displacements from its first symbol, as one code."""
+        first = (b - a - 1) * span + blocks[:, b] - blocks[:, a] + tones - 1
+        second = (c - a - 1) * span + blocks[:, c] - blocks[:, a] + tones - 1
+        return np.asarray(first * vectors + second, dtype=np.int64)
+
+    # the first symbol's tone of every chosen triangle, by shape; far off where there is none
+    table: dict[int, list[int]] = {}
+    held = np.full((vectors * vectors, 1), -4 * tones, dtype=np.int64)
+
+    def clear(blocks: NDArray[np.int64]) -> NDArray[np.bool_]:
+        near = np.abs(blocks[:, a, None] - held[shapes(blocks)]) <= PATTERN_SHIFT
+        return np.asarray(~near.any(axis=(1, 2)))
+
     chosen: list[tuple[int, ...]] = []
-    for _ in range(200_000):
-        cand = tuple(int(v) for v in rng.permutation(tones)[:symbols])
-        if is_costas(cand) and all(
-            cross_hits(cand, c, symbols - 1) <= PATTERN_CROSS for c in chosen
-        ):
-            chosen.append(cand)
+    for _ in range(0, draws, batch):
+        rows = np.tile(np.arange(tones, dtype=np.int64), (batch, 1))
+        cand = rng.permuted(rows, axis=1)[:, :symbols]
+        bits = np.left_shift(np.int64(1), cand[:, hi] - cand[:, lo] + tones - 1)
+        costas = np.add.reduceat(bits, distances, axis=1) == np.bitwise_or.reduceat(
+            bits, distances, axis=1
+        )
+        cand = cand[costas.all(axis=1)]
+        cand = cand[clear(cand)]
+        while len(cand):
+            new = cand[0]
+            chosen.append(tuple(int(v) for v in new))
             if len(chosen) == count:
                 return tuple(chosen)
+            for code, tone in zip(shapes(new[None, :])[0], new[a], strict=True):
+                table.setdefault(int(code), []).append(int(tone))
+            width = max(map(len, table.values()))
+            held = np.full((vectors * vectors, width), -4 * tones, dtype=np.int64)
+            for code, held_tones in table.items():
+                held[code, : len(held_tones)] = held_tones
+            cand = cand[1:][clear(cand[1:])]
     raise ValueError(f"only {len(chosen)} patterns found")
 
 
@@ -473,6 +543,13 @@ TONE_FAST: tuple[ToneKind, ...] = (
 """The fast kinds (ADR-0014), the 2 300 Hz air's middle rungs: the floor's frame — its sync
 blocks, its 5.36 s — with two or four data symbols a slot, at the floor's two code rates:
 51 and 75 bytes at 50 Bd (76 and 112 bit/s), 105 and 153 at 100 Bd (157 and 228 bit/s)."""
+TONE_NARROW: tuple[ToneKind, ...] = (
+    ToneKind("tone4x100-51", 51, 440, (25, 26, 27, 28), data_num=QUAD100),
+    ToneKind("tone4x100-75", 75, 440, (29, 30, 31, 32), data_num=QUAD100),
+)
+"""The 500 Hz air's middle rungs (ADR-0015): the floor's frame with four data symbols a slot
+on :data:`QUAD100`'s four tones — 880 coded bits, as the 50 Bd fast kinds have, at the
+floor's two code rates: 51 and 75 bytes (76 and 112 bit/s)."""
 
 
 # ── the ladder ────────────────────────────────────────────────────────
@@ -637,6 +714,7 @@ NARROW = AirInterface(
     0.56,
     ofdm_ladder=tuple(range(2, len(NARROW_MODES))),
     control_mode_index=NARROW_CONTROL_MODE_INDEX,
+    tone_data=(*TONE_DATA, *TONE_NARROW),
 )
 
 AIR_INTERFACES: dict[Bandwidth, AirInterface] = {
@@ -678,7 +756,7 @@ def mode_table(
                         "mode": r.index,
                         "name": k.name,
                         "layout": f"tone, {k.symbols} symbols",
-                        "bits_per_symbol": k.num.bits_per_symbol,
+                        "bits_per_symbol": k.data.bits_per_symbol,
                         "code_rate": f"{k.rate:.2f}",
                         "coded_bits": k.coded_bits,
                         "payload_bytes": k.payload_bytes,

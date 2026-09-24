@@ -1,16 +1,18 @@
 """Where the tone floor breaks (P9-8, ADR-0013): acquisition, decode and genie decode per kind.
 
     python tools/bench_tone.py [--frames 100] [--channels awgn,good,moderate,poor]
-                               [--kinds tone-control,tone-24,...,tone100-153] [--jobs 3]
+                               [--kinds tone-control,tone-24,...,tone4x100-75] [--jobs 3]
                                [--out bench/baselines/tone_floor.csv]
 
 For every tone-floor kind, ``--frames`` frames a point, three things are counted, as
 ``bench_floor.py`` counts them for the OFDM frames: frames the detector found with the right
 kind and redundancy version within a quarter symbol of the truth; frames that decoded through
 the detector; and frames that decoded with *genie* timing and carrier offset. Each frame has a
-random start and a carrier offset uniform in ±100 Hz. The detector is the 2 300 Hz air's, which
-looks for every kind — the floor's and the fast ones of ADR-0014 — so a kind is also tested
-against being taken for another.
+random start and a carrier offset uniform in ±100 Hz. The detector is the kind's own air's —
+the 2 300 Hz air's, which looks for the floor's kinds and the fast ones of ADR-0014, for all
+but the 500 Hz air's middle kinds of ADR-0015, which the 500 Hz air's looks for beside the
+floor's — so a kind is also tested against being taken for another. Rows of kinds not run
+are kept from ``--out``.
 
 The SNR is the OFDM reference (3 kHz, against an OFDM frame's average power at the same
 transmit level), and the tone frames go out :data:`~aether_model.phy.tone.TONE_GAIN_DB`
@@ -32,7 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.channel import make_channel
-from aether_model.frame.modes import WIDE
+from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.phy import tone as T
 
 RANGES = {
@@ -41,9 +43,13 @@ RANGES = {
     "moderate": range(-26, -3, 2),
     "poor": range(-26, -3, 2),
 }
-"""The floor's own kinds' SNRs; a fast kind's run :data:`FAST_SHIFT_DB` higher."""
+"""The floor's own kinds' SNRs; a fast or middle kind's run :data:`FAST_SHIFT_DB` higher."""
 FAST_SHIFT_DB = 6
-KINDS = {k.name: k for k in (WIDE.tone_control, *WIDE.tone_data)}
+AIRS: dict[str, AirInterface] = {
+    k.name: air for air in (NARROW, WIDE) for k in (air.tone_control, *air.tone_data)
+}
+"""Each kind's air — the 2 300 Hz air's for the kinds both airs share."""
+KINDS = {k.name: k for air in (WIDE, NARROW) for k in (air.tone_control, *air.tone_data)}
 
 
 def snrs(name: str, channel: str) -> range:
@@ -55,7 +61,8 @@ def snrs(name: str, channel: str) -> range:
 def run(job: tuple[str, str, int, int, int]) -> dict[str, object]:
     name, channel, snr, frames, seed = job
     kind = KINDS[name]
-    det = T.ToneDetector(tuple(KINDS.values()))
+    air = AIRS[name]
+    det = T.ToneDetector((air.tone_control, *air.tone_data))
     rng = np.random.default_rng(seed)
     acquired = decoded = genie = 0
     tail = 2000
@@ -116,7 +123,12 @@ def main() -> int:
         )
     ]
     t0 = time.time()
-    rows = []
+    run_kinds = set(args.kinds.split(","))
+    out = Path(args.out)
+    rows: list[dict[str, object]] = []
+    if out.exists():
+        with out.open(encoding="utf-8") as f:
+            rows = [r for r in csv.DictReader(f) if r["frame"] not in run_kinds]
     with Pool(args.jobs) as pool:
         for row in pool.imap(run, jobs):
             rows.append(row)
@@ -126,10 +138,11 @@ def main() -> int:
                 f"genie {row['genie_decoded']:3d}   [{time.time() - t0:5.0f} s]",
                 flush=True,
             )
-    out = Path(args.out)
+    order = list(KINDS)
+    rows.sort(key=lambda r: order.index(str(r["frame"])) if r["frame"] in KINDS else len(order))
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
+        w = csv.DictWriter(f, fieldnames=list(rows[-1]), lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     print("wrote", out)

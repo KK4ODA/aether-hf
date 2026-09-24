@@ -271,6 +271,18 @@ def sync_noise(energies: FloatArray, layout: IntArray, kind: ToneKind) -> float:
     return noise_level(energies[known], layout[known])
 
 
+def _block_hits(e: FloatArray, kind: ToneKind, rv: int) -> list[int]:
+    """Per sync block, the symbols whose own tone is the strongest of the slot's energies
+    ``e`` (a frame's, at the sync numerology); a silent symbol is no hit."""
+    layout = kind.layout(rv)
+    out = []
+    for o in kind.block_offsets:
+        rows = e[o : o + SYNC_SYMBOLS]
+        hit = (rows.argmax(axis=1) == layout[o : o + SYNC_SYMBOLS]) & (rows.max(axis=1) > 0)
+        out.append(int(np.sum(hit)))
+    return out
+
+
 def bit_llrs(metrics: FloatArray, bits: int) -> FloatArray:
     """Soft bits (positive = 0) from the per-tone metrics: log-sum over the tones labelled 0
     less the log-sum over those labelled 1, bit by bit, in transmission order."""
@@ -363,6 +375,20 @@ class ToneDetector:
     reached twelve, and a receiver taking frames as they end took it first — found by two
     daemons over ``[sim]``, where it was the silence a station keeps while it transmits."""
     MIN_FIRST_HITS = 5
+    CONTRADICTION = 12.0
+    """A sync symbol *contradicts* its frame when its strongest tone is another one, at least
+    this many times the noise per bin — which noise alone reaches once in ten thousand
+    symbols — and not a tone that is as strong across the frame's sync symbols (a carrier or
+    a spur on it, steady, is interference the frame may still decode through; see
+    :meth:`contradictions`)."""
+    MAX_CONTRADICTIONS = 2
+    """Contradictions a confirmed frame may have. Found with the 500 Hz air's middle kinds
+    (ADR-0015): a strong frame of one air's kinds, read by the other air's detector — which
+    does not look for it — at a part-symbol and part-bin offset has two of its tones in every
+    window, and one pattern of the other's matched twelve and fourteen of 24 sync symbols
+    there; the other twelve were full of the real frame's tones. Measured: 8–12 contradictions
+    for every such ghost, at most one for a real frame of any kind from its decode threshold
+    to 30 dB on AWGN and ITU Poor."""
 
     def __init__(
         self,
@@ -472,14 +498,7 @@ class ToneDetector:
         is the strongest of the sixteen. A symbol with no energy at all is no evidence: a
         receiver hears exact silence only while it is muted — its own transmission — and
         there every tone ties."""
-        layout = kind.layout(rv)
-        e = tone_energies(x, start, cfo, kind.symbols, kind.num)
-        out = []
-        for o in kind.block_offsets:
-            rows = e[o : o + SYNC_SYMBOLS]
-            hit = (rows.argmax(axis=1) == layout[o : o + SYNC_SYMBOLS]) & (rows.max(axis=1) > 0)
-            out.append(int(np.sum(hit)))
-        return out
+        return _block_hits(tone_energies(x, start, cfo, kind.symbols, kind.num), kind, rv)
 
     def sync_hits(self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float) -> int:
         """Sync symbols of a frame placed at ``start``/``cfo`` whose own tone is the strongest
@@ -494,9 +513,38 @@ class ToneDetector:
         which can lift the statistic over the threshold; they do not make the pattern's tones
         the strongest at half the positions, which a frame at its decode threshold does 999
         times in 1000. A hypothesis a block-spacing off a strong frame has eight hits in one
-        block and chance in the others, which the second condition refuses."""
-        hits = sorted(self.block_hits(x, sync.kind, sync.rv, sync.start, sync.cfo_hz))
-        return sum(hits) >= self.MIN_HITS and hits[-2] >= self.MIN_BLOCK_HITS
+        block and chance in the others, which the second condition refuses. And no more than
+        :attr:`MAX_CONTRADICTIONS` of its sync symbols may hold another tone, strong
+        (:meth:`contradictions`): a pattern read at a part-symbol offset inside a strong frame
+        it does not name matches half its symbols and is contradicted in the rest."""
+        kind = sync.kind
+        e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
+        hits = sorted(_block_hits(e, kind, sync.rv))
+        return (
+            sum(hits) >= self.MIN_HITS
+            and hits[-2] >= self.MIN_BLOCK_HITS
+            and self._contradictions(e, kind, sync.rv) <= self.MAX_CONTRADICTIONS
+        )
+
+    def contradictions(self, x: ComplexArray, sync: ToneSync) -> int:
+        """Sync symbols of ``sync`` whose strongest tone is not their own, holds at least
+        :attr:`CONTRADICTION` times the noise per bin, and at least four times its own median
+        over the frame's sync symbols — so a steady carrier or spur, strong in every symbol,
+        contradicts nothing."""
+        kind = sync.kind
+        e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
+        return self._contradictions(e, kind, sync.rv)
+
+    def _contradictions(self, e: FloatArray, kind: ToneKind, rv: int) -> int:
+        layout = kind.layout(rv)
+        idx = np.flatnonzero(layout >= 0)
+        rows = e[idx]
+        top = rows.argmax(axis=1)
+        peak = rows[np.arange(len(idx)), top]
+        steady = np.median(rows, axis=0)[top]
+        noise = sync_noise(e, layout, kind)
+        against = (top != layout[idx]) & (peak >= self.CONTRADICTION * noise) & (peak >= 4 * steady)
+        return int(np.sum(against))
 
     def sync_statistic(
         self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float

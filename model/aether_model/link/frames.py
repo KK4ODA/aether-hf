@@ -193,14 +193,16 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
     return (caps & ~CAP_BANDWIDTH_MASK & 0xFF) | (code << CAP_BANDWIDTH_SHIFT)
 
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 """The link protocol a station speaks, in the connect body's version byte. 2 since the tone
 floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 above the OFDM mode of version 1 — so a session between the two would run on numbers that
 mean different frames at either end; a station ignores a call or an acceptance of another
 version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
 air, between the floor's two and the OFDM modes, and a control frame whose recommended mode
-has five bits and its counter three."""
+has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two more
+rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz ladder is
+as it was, but one number says what both ladders are)."""
 
 
 @dataclass(frozen=True)
