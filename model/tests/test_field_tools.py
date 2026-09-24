@@ -52,8 +52,8 @@ def _sidecar(tmp_path: Path, name: str = "20260916-200000_KK4ODA_W1AW_test") -> 
         for i in range(30)
     ]
     document = {
-        "format": "aether-hf-session/2",
-        "version": "0.2.0-beta.51",
+        "format": "aether-hf-session/3",
+        "version": "0.2.0-beta.53",
         "started": "2026-09-16T20:00:00.000Z",
         "ended": "2026-09-16T20:03:00.000Z",
         "audio": {
@@ -109,9 +109,10 @@ def test_a_contributed_session_is_folded_into_the_log_once(tmp_path: Path) -> No
     assert "FTDX10, 30 W, EFHW" in row and "from the bench" in row
     paths_rows = paths.read_text(encoding="utf-8").splitlines()
     assert len(paths_rows) == 2 and paths_rows[0].startswith("date,recording,")
-    assert ",moderate,complete,12.0,12.0,11.5,819.2,1310.7,1310.7,16," in paths_rows[1]
+    rungs = len(AWGN_THRESHOLD_DB)
+    assert f",moderate,complete,12.0,12.0,11.5,819.2,1310.7,1310.7,{rungs}," in paths_rows[1]
     ladder_rows = ladders.read_text(encoding="utf-8").splitlines()
-    assert len(ladder_rows) == 1 + 16
+    assert len(ladder_rows) == 1 + rungs
     assert ladder_rows[1].endswith(",0,6,6,0.000,12.0")
     # a second pass adds nothing
     again = field_ingest.ingest(
@@ -123,22 +124,34 @@ def test_a_contributed_session_is_folded_into_the_log_once(tmp_path: Path) -> No
 
 def test_a_sidecar_from_before_the_ladder_is_read_onto_it(tmp_path: Path) -> None:
     """A sidecar recorded before the tone floor (``aether-hf-session/1``) numbered the OFDM
-    modes: on the wide air two rungs below where they sit now; on the narrow air modes 0 and
-    1 were the retired OFDM floor, which is on no rung (ADR-0013)."""
+    modes: on the wide air six rungs below where they sit now, two for the tone floor's own
+    kinds (ADR-0013) and four for its fast ones (ADR-0014); on the narrow air modes 0 and 1
+    were the retired OFDM floor, which is on no rung. One recorded with the tone floor and
+    before the fast kinds (``/2``) numbered the wide ladder's rungs from 2 up four lower."""
     legacy = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 2300}}
-    assert [field_ingest.sidecar_rung(legacy, m) for m in (0, 5, 13)] == [2, 7, 15]
+    assert [field_ingest.sidecar_rung(legacy, m) for m in (0, 5, 13)] == [6, 11, 19]
     narrow = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 500}}
     assert [field_ingest.sidecar_rung(narrow, m) for m in (0, 1, 2, 12)] == [None, None, 2, 12]
-    current = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 2300}}
-    assert field_ingest.sidecar_rung(current, 0) == 0
+    floor = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 2300}}
+    assert [field_ingest.sidecar_rung(floor, m) for m in (0, 1, 2, 15)] == [0, 1, 6, 19]
+    floor_narrow = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 500}}
+    assert [field_ingest.sidecar_rung(floor_narrow, m) for m in (0, 1, 2, 12)] == [0, 1, 2, 12]
+    current = {"format": "aether-hf-session/3", "session": {"bandwidth_hz": 2300}}
+    assert [field_ingest.sidecar_rung(current, m) for m in (0, 2, 19)] == [0, 2, 19]
     document = json.loads(_sidecar(tmp_path).read_text(encoding="utf-8"))
     document["format"] = "aether-hf-session/1"
     document["session"]["test"]["ladder"] = [
         {"mode": m, "frames": 6, "decoded": 6, "snr_db": 12.0} for m in range(14)
     ]
     session = field_ingest.summarise(document, "old")
-    assert [r.mode for r in session.rungs] == list(range(2, 16))
-    assert [o[0] for o in bench_link.sidecar_observations(document)] == list(range(2, 16))
+    assert [r.mode for r in session.rungs] == list(range(6, 20))
+    assert [o[0] for o in bench_link.sidecar_observations(document)] == list(range(6, 20))
+    document["format"] = "aether-hf-session/2"
+    document["session"]["test"]["ladder"] = [
+        {"mode": m, "frames": 6, "decoded": 6, "snr_db": 12.0} for m in range(16)
+    ]
+    session = field_ingest.summarise(document, "floor")
+    assert [r.mode for r in session.rungs] == [0, 1, *range(6, 20)]
 
 
 def test_a_plain_session_is_summarised_from_its_frames() -> None:
@@ -167,7 +180,7 @@ def test_the_replay_fits_the_penalty_the_ladder_shows(tmp_path: Path) -> None:
     sidecar = _sidecar(tmp_path)
     document = json.loads(sidecar.read_text(encoding="utf-8"))
     observations = bench_link.sidecar_observations(document)
-    assert len(observations) == 16
+    assert len(observations) == len(AWGN_THRESHOLD_DB)
     penalty = bench_link.fit_penalty(observations, dict(AWGN_THRESHOLD_DB))
     assert abs(penalty - 4.0) <= 0.5, penalty
     assert bench_link.fit_penalty([], dict(AWGN_THRESHOLD_DB)) == 0.0

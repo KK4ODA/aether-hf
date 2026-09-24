@@ -18,3 +18,4 @@ context → decision → alternatives considered → consequences.
 | [0011](0011-profiles.md) | Profiles — a station's settings as one portable file, projected through a settings registry | accepted |
 | [0012](0012-holding-the-link.md) | Holding the link on a fading path — the timeout spans whole exchanges, silence steps the mode down, the ACK waits for the announced frame | accepted |
 | [0013](0013-the-tone-floor.md) | The tone floor — a steady-envelope FSK family under both ladders; the ladder; crossing the floor boundary by what the rungs are worth | accepted |
+| [0014](0014-fast-tones.md) | Fast tones — the floor's frame with its data at 50 and 100 baud, the 2 300 Hz ladder's middle rungs; link protocol 3 | accepted |

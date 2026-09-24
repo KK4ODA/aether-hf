@@ -26,54 +26,64 @@ from dataclasses import dataclass, field
 AWGN_THRESHOLD_DB: dict[int, float] = {
     0: -19.0,
     1: -17.3,
-    2: -5.1,
-    3: -3.2,
-    4: -1.8,
-    5: -0.4,
-    6: 1.4,
-    7: 2.9,
-    8: 4.7,
-    9: 6.9,
-    10: 6.0,
-    11: 8.9,
-    12: 9.9,
-    13: 13.9,
-    14: 15.6,
-    15: 16.9,
+    2: -16.0,
+    3: -14.2,
+    4: -13.1,
+    5: -11.2,
+    6: -5.1,
+    7: -3.2,
+    8: -1.8,
+    9: -0.4,
+    10: 1.4,
+    11: 2.9,
+    12: 4.7,
+    13: 6.9,
+    14: 6.0,
+    15: 8.9,
+    16: 9.9,
+    17: 13.9,
+    18: 15.6,
+    19: 16.9,
 }
 """Minimum usable SNR (3 kHz, FER ≤ 10 %) per rung of the 2 300 Hz ladder on AWGN. **Every
-rung is measured**: the tone floor's two (rungs 0–1, ADR-0013) by ``tools/bench_tone.py``
-(``bench/baselines/tone_floor.csv``), at equal peak power and so in the OFDM frames'
-reference; the OFDM modes (rungs 2–15, OFDM modes 0–13) by ``bench_phy.py``
-(``bench/baselines/phy_fer_awgn14.csv``, the current air interface including ADR-0004
-peak reduction) — regenerate with ``tools/update_rate_table.py --apply``. The interpolated
-guesses the OFDM entries replaced were optimistic by up to 1.4 dB on the 64-QAM modes,
-which the rate controller had no way to discover except by losing frames."""
+rung is measured**: the tone floor's six (rungs 0–5: its own two, ADR-0013, and the fast
+kinds, ADR-0014) by ``tools/bench_tone.py`` (``bench/baselines/tone_floor.csv``), at equal
+peak power and so in the OFDM frames' reference; the OFDM modes (rungs 6–19, OFDM modes
+0–13) by ``bench_phy.py`` (``bench/baselines/phy_fer_awgn14.csv``, the current air
+interface including ADR-0004 peak reduction) — regenerate with
+``tools/update_rate_table.py --apply``. The interpolated guesses the OFDM entries replaced
+were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate controller had no way to
+discover except by losing frames."""
 
 PAYLOAD_BYTES: dict[int, float] = {
     0: 24,
     1: 36,
-    2: 26,
-    3: 46,
-    4: 70,
-    5: 95,
-    6: 144,
-    7: 193,
-    8: 217,
-    9: 291,
-    10: 291,
-    11: 389,
-    12: 438,
-    13: 585,
-    14: 658,
-    15: 732,
+    2: 51,
+    3: 75,
+    4: 105,
+    5: 153,
+    6: 26,
+    7: 46,
+    8: 70,
+    9: 95,
+    10: 144,
+    11: 193,
+    12: 217,
+    13: 291,
+    14: 291,
+    15: 389,
+    16: 438,
+    17: 585,
+    18: 658,
+    19: 732,
 }
 """Payload bytes per frame of each rung of the 2 300 Hz ladder."""
 
-FRAME_S: dict[int, float] = {m: (5.36 if m < 2 else 1.054) for m in range(16)}
-"""Air time of each wide rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
-31 ms on the ordinary layout (the link layer's copy of the frames; tested against them) —
-what :func:`usable_modes` needs to compare the floor's long frames with the ordinary ones."""
+FRAME_S: dict[int, float] = {m: (5.36 if m < 6 else 1.054) for m in range(20)}
+"""Air time of each wide rung's DATA frame: 134 slots of 40 ms on the tone floor, its fast
+kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy of the
+frames; tested against them) — what :func:`usable_modes` needs to compare the floor's long
+frames with the ordinary ones."""
 
 
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
@@ -205,11 +215,10 @@ class RateController:
     first_mode_back: int = 2
     """Steps kept in hand by :meth:`first_mode`: how far below the fastest mode one
     measurement supports a session's first burst goes out."""
-    floor_modes: int = 2
-    """How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013 — whose
-    frames carry a quarter of the first OFDM rung's rate or less. The step across that
-    boundary is not a step between neighbours a third apart in rate, which is what the
-    learned margin was built for: see :attr:`floor_margin_db`."""
+    floor_modes: int = 6
+    """How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013, and
+    on the 2 300 Hz air its fast kinds, ADR-0014 — whose frames are five times as long as an
+    OFDM frame: see :meth:`first_mode` and :attr:`floor_margin_db`."""
     floor_margin_db: float | None = None
     """The most margin the first OFDM rung is held to against the floor, however wide the
     learned margin has grown — on an air whose first rung stays productive on a fading path

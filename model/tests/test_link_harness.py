@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from aether_model.frame.modes import WIDE
 from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.harness import PhyBridge, phy_timing, two_modem_sim
 from aether_model.waveform import NARROW_500, WIDE_2300
@@ -34,10 +35,11 @@ def test_real_phy_connect_transfer_disconnect(timing: object) -> None:
 
 
 def test_real_phy_harq_ir_rescue_below_threshold(timing: object) -> None:
-    """QPSK ½ (rung 6) pinned and driven at 0 dB (≈ 1 dB below its single-shot threshold):
-    the transfer completes only because the receiver soft-combines real LLRs across
-    redundancy versions."""
-    cfg = LinkConfig(initial_mode=6, max_mode=6, max_retries=40)
+    """QPSK ½ pinned and driven at 0 dB (≈ 1 dB below its single-shot threshold): the
+    transfer completes only because the receiver soft-combines real LLRs across redundancy
+    versions."""
+    rung = WIDE.rung_of(4)
+    cfg = LinkConfig(initial_mode=rung, max_mode=rung, max_retries=40)
     a = LinkEngine("W4ODA", timing, cfg, seed=1)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
     sim = two_modem_sim(a, b, channel="awgn", snr_db=0.0, seed=3)

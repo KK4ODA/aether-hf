@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
+import math
 from itertools import pairwise
 
 import pytest
 
-from aether_model.frame.modes import LONG, MODES, SHORT
+from aether_model.frame.modes import LONG, MODES, SHORT, WIDE
 from aether_model.link.engine import LinkConfig, LinkEngine, ProbeResult, Role, State, Transmit
 from aether_model.link.frames import (
     CAP_COMPRESSION,
@@ -33,7 +34,7 @@ from aether_model.link.sim import TwoStationSim
 
 @pytest.fixture(scope="module")
 def timing() -> PhyTiming:
-    """The wide air's ladder — the tone floor's two rungs, then the OFDM modes — as the
+    """The wide air's ladder — the tone floor's six rungs, then the OFDM modes — as the
     model's PHY reports it, but without preamble reports (the engine's safe fallback)."""
     from aether_model.link.harness import phy_timing
     from aether_model.waveform import WIDE_2300
@@ -137,15 +138,18 @@ def test_a_session_starts_at_the_mode_the_connect_frames_measured(timing: PhyTim
 def test_the_first_mode_keeps_a_step_in_hand() -> None:
     rc = RateController()
     # far below every mode but the slowest: the slowest
-    assert rc.first_mode(-10.0) == usable_modes()[0]
-    # one step below the fastest that fits with margin and hysteresis
+    assert rc.first_mode(-20.0) == usable_modes()[0]
+    # steps below the fastest that fits with margin and hysteresis — within the family it is
+    # in: a fit on the OFDM rungs does not start on the floor
+    ordinary = next(i for i, m in enumerate(rc.modes) if m >= rc.floor_modes)
     for snr in (4.0, 9.0, 15.0, 20.0):
         modes = rc.modes
         fits = [
             m for m in modes if AWGN_THRESHOLD_DB[m] + rc.margin_db + rc.up_hysteresis_db <= snr
         ]
         top = modes.index(fits[-1])
-        assert rc.first_mode(snr) == modes[max(0, top - rc.first_mode_back)], snr
+        lowest = ordinary if top >= ordinary else 0
+        assert rc.first_mode(snr) == modes[max(lowest, top - rc.first_mode_back)], snr
     # seeding places the controller there and takes the measurement, once
     rc.seed(15.0)
     assert rc.recommend() == rc.first_mode(15.0)
@@ -155,42 +159,46 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
 
 
 def test_the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() -> None:
-    """ADR-0013 §4: the step between the tone floor and the first OFDM rung is a factor of
-    four in rate, not the third the margin and the hysteresis were tuned on. A session the
-    SNR puts on the first OFDM rungs does not start on the floor; on an air that caps the
-    first rung's margin (the wide one) the rung is held against the floor to its threshold
+    """ADR-0013 §4, ADR-0014: the floor's frames are five times as long as an OFDM frame. A
+    session the SNR puts on the first OFDM rungs does not start on the floor; on an air that
+    caps the first OFDM rung's margin the rung is held against the floor to its threshold
     plus the cap, however wide the learned margin, and one failed burst there does not leave
     for the floor — a second in a row does; the climb back asks for the cap and the
-    hysteresis."""
-    rc = RateController()  # the wide ladder: rungs 0 and 1 are the tone floor
-    assert rc.floor_modes == 2 and rc.modes[:3] == [0, 1, 2]
-    fits_rung_3 = AWGN_THRESHOLD_DB[3] + rc.margin_db + rc.up_hysteresis_db
-    assert rc.first_mode(fits_rung_3) == 2  # not two steps down, on the floor
-    assert rc.first_mode(-12.0) in (0, 1)  # nothing above the floor fits: the floor
+    hysteresis. The first OFDM rung is the first *usable* one: an OFDM mode the floor beats
+    on rate and threshold both is on the ladder and never recommended."""
+    rc = RateController()  # the wide ladder: rungs 0–5 are the tone floor
+    assert rc.floor_modes == 6 and rc.modes[:6] == list(range(6))
+    first = rc.modes[rc._first_ordinary()]
+    second = rc.modes[rc._first_ordinary() + 1]
+    fits_second = AWGN_THRESHOLD_DB[second] + rc.margin_db + rc.up_hysteresis_db
+    assert rc.first_mode(fits_second) == first  # not two steps down, on the floor
+    assert rc.first_mode(-12.0) < rc.floor_modes  # nothing above the floor fits: the floor
 
     capped = RateController(floor_margin_db=1.0)
-    capped.seed(AWGN_THRESHOLD_DB[2] + 1.5)
-    capped._index = capped.modes.index(2)
+    capped.seed(AWGN_THRESHOLD_DB[first] + 1.5)
+    capped._index = capped.modes.index(first)
     capped.margin_db = 8.0  # a fading channel's learned margin
     snr = capped.snr_db
-    capped.observe(snr, ok=0, failed=6, mode=2)
-    assert capped.recommend() == 2  # one lost burst: still worth four times the floor
-    capped.observe(snr, ok=0, failed=6, mode=2)
-    assert capped.recommend() < 2  # two in a row: the floor
+    capped.observe(snr, ok=0, failed=6, mode=first)
+    assert capped.recommend() == first  # one lost burst on the capped rung: held
+    capped.observe(snr, ok=0, failed=6, mode=first)
+    assert capped.recommend() < first  # two in a row: the floor
     for _ in range(3):
         capped.observe(snr, ok=6, failed=0)
-    assert capped.recommend() < 2  # the cap and the hysteresis are not met at that SNR
+    assert capped.recommend() < first  # the cap and the hysteresis are not met at that SNR
     for _ in range(6):
-        capped.observe(AWGN_THRESHOLD_DB[2] + 1.0 + capped.up_hysteresis_db + 0.5, ok=6, failed=0)
-    assert capped.recommend() >= 2  # they are here, whatever the learned margin
+        capped.observe(
+            AWGN_THRESHOLD_DB[first] + 1.0 + capped.up_hysteresis_db + 0.5, ok=6, failed=0
+        )
+    assert capped.recommend() >= first  # they are here, whatever the learned margin
 
-    # uncapped (the narrow air) the learned margin decides, as between any two rungs
+    # uncapped the learned margin decides, as between any two rungs
     plain = RateController(floor_margin_db=None)
-    plain.seed(AWGN_THRESHOLD_DB[2] + 1.5)
-    plain._index = plain.modes.index(2)
+    plain.seed(AWGN_THRESHOLD_DB[first] + 1.5)
+    plain._index = plain.modes.index(first)
     plain.margin_db = 8.0
-    plain.observe(plain.snr_db, ok=0, failed=6, mode=2)
-    assert plain.recommend() < 2
+    plain.observe(plain.snr_db, ok=0, failed=6, mode=first)
+    assert plain.recommend() < first
 
 
 def test_probe_body_round_trips_and_clamps_its_snr() -> None:
@@ -239,8 +247,8 @@ def test_ack_received_semantics() -> None:
 def test_usable_modes_are_pareto_and_sorted() -> None:
     modes = usable_modes()
     assert modes == sorted(modes)
-    # rung 9 (8-PSK 2/3) is dominated by rung 10 (16-QAM 1/2): more payload, lower threshold
-    assert 9 not in modes
+    # 8-PSK 2/3 is dominated by 16-QAM 1/2: more payload, lower threshold
+    assert WIDE.rung_of(7) not in modes and WIDE.rung_of(8) in modes
     for m in modes:
         assert not any(
             AWGN_THRESHOLD_DB[o] <= AWGN_THRESHOLD_DB[m] and o != m and o in modes
@@ -269,12 +277,19 @@ def test_rate_recommendation_climbs_with_snr() -> None:
 
 def test_rate_controller_converges_quickly() -> None:
     """A clean link must reach its final mode in a handful of bursts, not crawl up the table
-    one mode at a time for half a minute."""
+    one mode at a time for half a minute. From the bottom of the ladder two things pace it
+    and nothing else: the climb, :attr:`RateController.max_up_step` usable modes a burst,
+    and the margin, which gives up :attr:`RateController.down_step_db` a clean burst before
+    the first failure — a mode that fits only at the least margin waits for it. One burst
+    more for the first measurement. (With the ladder of ADR-0013, sixteen rungs, the bound
+    at 20 dB was the eight bursts this test once stated.)"""
     for snr in (0.0, 8.0, 14.0, 20.0):
         rc = RateController()
+        climb = -(-rc.modes.index(_settle(RateController(), snr)) // rc.max_up_step)
+        decay = math.ceil((rc.margin_db - rc.min_margin_db) / rc.down_step_db)
         final = _settle(RateController(), snr)
-        track = [rc.observe(snr, ok=6, failed=0) or rc.recommend() for _ in range(20)]
-        assert track.index(final) + 1 <= 8, (snr, track)
+        track = [rc.observe(snr, ok=6, failed=0) or rc.recommend() for _ in range(30)]
+        assert track.index(final) + 1 <= max(climb, decay) + 1, (snr, track)
 
 
 def _boundary_track(rc: RateController, snr_db: float, bursts: int) -> list[int]:
@@ -382,9 +397,10 @@ def test_throughput_increases_with_snr(timing: PhyTiming) -> None:
 
 
 def test_harq_ir_rescues_below_threshold(timing: PhyTiming) -> None:
-    """Mode pinned to QPSK ½ (threshold ≈ +1 dB) and driven at −3 dB: the transfer only
+    """Mode pinned to BPSK ½ (threshold ≈ −1.8 dB) and driven at −3 dB: the transfer only
     completes because retransmissions are soft-combined."""
-    cfg = LinkConfig(initial_mode=4, max_mode=4, max_retries=60)
+    rung = WIDE.rung_of(2)
+    cfg = LinkConfig(initial_mode=rung, max_mode=rung, max_retries=60)
     a = LinkEngine("W4ODA", timing, cfg, seed=1)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
     sim = TwoStationSim(a, b, snr_db=-3.0, seed=99)
@@ -702,13 +718,23 @@ def test_rate_control_beats_a_fixed_conservative_mode(timing: PhyTiming) -> None
 # ── P2-2a / P2-2b ─────────────────────────────────────────────────────
 
 
+def _ofdm_ladder() -> tuple[dict[int, int], dict[int, float]]:
+    """A ladder of the wide air's OFDM modes alone, numbered by mode: the capacities and the
+    AWGN thresholds of the rungs they sit on — what the harness tests below run, without the
+    tone floor's frames."""
+    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    thresholds = {m.index: AWGN_THRESHOLD_DB[WIDE.rung_of(m.index)] for m in MODES}
+    return caps, thresholds
+
+
 def _latent_transfer(prop_s: float, tx_latency_s: float) -> tuple[bool, int]:
     """A transfer with real transport latency, the sender told (or not) about its own."""
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    caps, thresholds = _ofdm_ladder()
     t = PhyTiming(
         data_frame_s=LONG.duration_s,
         control_frame_s=SHORT.duration_s,
         data_capacity=caps,
+        mode_threshold_db=thresholds,
         tx_latency_s=tx_latency_s,
     )
     a, b = LinkEngine("W4ODA", t, None, seed=1), LinkEngine("KK4XYZ", t, None, seed=2)
@@ -738,9 +764,12 @@ def test_an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() ->
     """The other half of the same stall: the late acknowledgement was accepted while the
     re-poll was on the air, and the burst it should have started was dropped because the
     transmitter was busy — and nothing tried again. ``on_tx_done`` now does."""
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    caps, thresholds = _ofdm_ladder()
     t = PhyTiming(
-        data_frame_s=LONG.duration_s, control_frame_s=SHORT.duration_s, data_capacity=caps
+        data_frame_s=LONG.duration_s,
+        control_frame_s=SHORT.duration_s,
+        data_capacity=caps,
+        mode_threshold_db=thresholds,
     )
     a, b = LinkEngine("W4ODA", t, None, seed=1), LinkEngine("KK4XYZ", t, None, seed=2)
     sim = TwoStationSim(a, b, snr_db=20.0, seed=5)
@@ -790,12 +819,13 @@ def test_a_burst_held_back_by_a_busy_channel_moves_the_timers_with_it(timing: Ph
 
 
 def _timing(*, start_of_frame: bool) -> PhyTiming:
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
+    caps, thresholds = _ofdm_ladder()
     return PhyTiming(
         data_frame_s=LONG.duration_s,
         control_frame_s=SHORT.duration_s,
         preamble_detect_s=4 * LONG.waveform.symbol_period_s if start_of_frame else None,
         data_capacity=caps,
+        mode_threshold_db=thresholds,
     )
 
 
@@ -1029,23 +1059,27 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
 # ── holding the link on a fading path (P9-7) ──────────────────────────
 
 
-def test_a_call_in_another_link_protocol_is_ignored_and_said_so(timing: PhyTiming) -> None:
-    """Version 2 of the link protocol numbers modes as rungs of the ladder (ADR-0013): a
-    station of version 1 means other frames by the same numbers, so a call from one is not
-    a session to start — it is ignored, with an event saying why."""
+@pytest.mark.parametrize("version", [1, 2])
+def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
+    timing: PhyTiming, version: int
+) -> None:
+    """Version 3 of the link protocol numbers modes as rungs of the ladder with the fast
+    kinds (ADR-0014), version 2 as rungs of the ladder before them (ADR-0013), version 1 as
+    OFDM modes: a station of another version means other frames by the same numbers, so a
+    call from one is not a session to start — it is ignored, with an event saying why."""
     from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
     from aether_model.link.phy import Container, TxFrame
 
-    assert PROTOCOL_VERSION == 2 and ConnectBody("A", "B").version == 2
+    assert PROTOCOL_VERSION == 3 and ConnectBody("A", "B").version == 3
     b = LinkEngine("KK4XYZ", timing, None, seed=2)
-    body = ConnectBody("W4ODA", "KK4XYZ", version=1).encode()
+    body = ConnectBody("W4ODA", "KK4XYZ", version=version).encode()
     payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))
     sim = TwoStationSim(LinkEngine("W4ODA", timing, None, seed=1), b, snr_db=10.0, seed=3)
     frame = sim._synthetic_frame(TxFrame(Container.DATA, payload, mode=2), 10.0, 0.0, 1.0)
     assert frame is not None
     b.on_frame(frame, 1.0)
     assert b.state is State.IDLE
-    assert any("link protocol 1" in str(e) for e in b.actions)
+    assert any(f"link protocol {version}" in str(e) for e in b.actions)
 
 
 @pytest.mark.parametrize("reports", [False, True], ids=["no-preamble-reports", "reports"])

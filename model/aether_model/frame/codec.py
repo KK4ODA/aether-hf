@@ -156,7 +156,7 @@ class ToneCodec:
             raise ValueError("information block does not fit the selected lifting size")
         n = kind.coded_bits
         self._perm = (np.arange(n, dtype=np.int64) * coprime_stride(n)) % n
-        m = kind.num.bits_per_symbol
+        m = kind.data.bits_per_symbol
         self._weights = 1 << np.arange(m - 1, -1, -1)
         self._tone_of_label = np.argsort(gray_labels(m) @ self._weights)
 
@@ -174,7 +174,7 @@ class ToneCodec:
         e = self._matcher(rv).match(self.code.encode(info))
         bits = np.empty_like(e)
         bits[self._perm] = e
-        label = bits.reshape(-1, self.kind.num.bits_per_symbol).astype(np.int64) @ self._weights
+        label = bits.reshape(-1, self.kind.data.bits_per_symbol).astype(np.int64) @ self._weights
         return np.asarray(self._tone_of_label[label], dtype=np.int64)
 
     def decode(
