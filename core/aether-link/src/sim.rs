@@ -161,7 +161,7 @@ impl Rng {
 #[derive(Debug, Clone)]
 enum EvKind {
     Arrive { frame: TxFrame, t0: f64, t1: f64 },
-    Preamble { t0: f64 },
+    Preamble { t0: f64, frame_s: f64 },
     TxDone,
 }
 
@@ -365,8 +365,16 @@ impl TwoStationSim {
                 && frame.container == Container::Data
             {
                 // acquisition succeeds far below every mode's decode threshold (P2-3 measured
-                // 100 % at −5 dB), so a listening receiver is assumed to see every preamble
-                self.push(t + sof, peer, EvKind::Preamble { t0: t });
+                // 100 % at −5 dB), so a listening receiver is assumed to see every preamble —
+                // and the layout it names, so the frame's own length
+                self.push(
+                    t + sof,
+                    peer,
+                    EvKind::Preamble {
+                        t0: t,
+                        frame_s: duration,
+                    },
+                );
             }
             self.push(
                 t + duration,
@@ -434,15 +442,16 @@ impl TwoStationSim {
         self.pump(rx, arrival);
     }
 
-    /// Tell a listening receiver a frame's preamble was detected.
-    fn announce(&mut self, rx: usize, t_start: f64, at: f64) {
+    /// Tell a listening receiver a frame's preamble was detected, and how long the frame it
+    /// names is.
+    fn announce(&mut self, rx: usize, t_start: f64, at: f64, frame_s: f64) {
         if self.busy(rx, t_start, at) {
             return;
         }
         self.stations[rx].engine.tick(at);
         self.stations[rx]
             .engine
-            .on_preamble(t_start + self.prop_s, at);
+            .on_preamble(t_start + self.prop_s, at, Some(frame_s));
         self.pump(rx, at);
     }
 
@@ -483,7 +492,7 @@ impl TwoStationSim {
                 }
                 match ev.kind {
                     EvKind::Arrive { frame, t0, t1 } => self.deliver(ev.who, &frame, t0, t1),
-                    EvKind::Preamble { t0 } => self.announce(ev.who, t0, ev.t),
+                    EvKind::Preamble { t0, frame_s } => self.announce(ev.who, t0, ev.t, frame_s),
                     EvKind::TxDone => {
                         self.stations[ev.who].engine.on_tx_done(next);
                         self.pump(ev.who, next);
