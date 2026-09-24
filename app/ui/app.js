@@ -1880,7 +1880,7 @@ async function loadCapabilities() {
     row.dataset.usable = String(usable.has(mode.index));
     for (const [text, numeric] of [
       [String(mode.index), true],
-      // a floor mode rides the long floor frame (ADR-0009): its bytes are per 4.2 s
+      // a floor rung is the tone floor's (ADR-0013): its bytes are per 5.4 s frame
       [mode.floor ? `${mode.name} · floor` : mode.name, false],
       [String(mode.payload_bytes), true],
       [`${Math.round(mode.net_bit_rate)} bit/s`, true],
@@ -2021,7 +2021,7 @@ async function loadConfig() {
   fillModes();
   select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
   $("radio-answer-only").checked = radio.answer_only === true;
-  select($("radio-max-mode"), String(radio.max_mode ?? 13));
+  select($("radio-max-mode"), String(radio.max_mode ?? 15));
   $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);

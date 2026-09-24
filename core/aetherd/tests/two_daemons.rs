@@ -74,11 +74,13 @@ impl Daemon {
         std::fs::write(
             &config,
             format!(
-                "callsign = \"{callsign}\"\n\
+                "schema_version = {schema}\ncallsign = \"{callsign}\"\n\
                  [radio]\nwait_for_clear = false\n{radio}\n\
                  [control]\nbind = \"127.0.0.1:{control}\"\n\
                  [record]\nauto = true\n\
-                 [sim]\n{sim}\nsnr_db = 25.0\n"
+                 [sim]\n{sim}\nsnr_db = 25.0\n",
+                // the current schema, so the settings a test names mean what they say today
+                schema = aetherd::config::SCHEMA_VERSION,
             ),
         )
         .expect("config");
@@ -288,9 +290,10 @@ fn two_daemons_complete_a_session_at_500_hz() {
     let caps = a.call("capabilities", &json!({}))["result"].clone();
     assert_eq!(caps["bandwidth_hz"], 500, "{caps}");
     assert_eq!(caps["modes"].as_array().map(Vec::len), Some(13));
-    // the floor family (ADR-0009) leads the table; the control mode is QPSK 1/2 at 3
-    assert_eq!(caps["modes"][0]["name"], "QPSK-1/10");
+    // the tone floor (ADR-0013) leads the ladder; the control mode, QPSK 1/2, is rung 3
+    assert_eq!(caps["modes"][0]["name"], "tone-24");
     assert_eq!(caps["modes"][0]["floor"], true);
+    assert_eq!(caps["modes"][2]["name"], "QPSK-1/3");
     assert_eq!(caps["modes"][3]["name"], "QPSK-1/2");
     assert_eq!(caps["modes"][3]["floor"], false);
 

@@ -92,14 +92,15 @@ human-facing and may be localised.
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `config.schema` | — | the settings registry (§4.9): every setting with its `key`, `type`, `default`, `nullable`, `scope`, `live`, and its `min`/`max`/`options` and `why` where it has a bound; `live_keys`; the profile format's name and both schema numbers |
-| `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the mode table of the running waveform (`modes`: index, name, payload bytes and net bit rate *on the layout the mode goes out on*, AWGN threshold, `floor` — whether the mode rides the floor frame family of ADR-0009, four times as long as an ordinary frame; `usable_modes`), whether the PHY reports preambles, the SNR reference |
+| `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the ladder of the running waveform (`modes`, one entry a rung: index, name, payload bytes and net bit rate *of the frame the rung goes out on*, AWGN threshold, `floor` — whether the rung is the tone floor's (ADR-0013), whose frames are five times as long as an ordinary one; `usable_modes`), whether the PHY reports preambles, the SNR reference |
 | `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
 | `shutdown` | `restart?` | `stopping`; the transmitter is released on the way out. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
-what keeps this document PHY-agnostic. The table depends on the bandwidth: fourteen modes
-from BPSK ⅕ at 2 300 Hz, ten from QPSK ½ at 500 Hz, and a mode index means nothing without
-the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
+what keeps this document PHY-agnostic. A mode number is a rung of the waveform's **ladder**
+(ADR-0013): the tone floor's two kinds, then the OFDM modes — sixteen rungs at 2 300 Hz (the
+fourteen OFDM modes from BPSK ⅕ at rungs 2–15), thirteen at 500 Hz (QPSK ⅓ up at rungs
+2–12) — and a mode number means nothing without the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
 restart; `[radio] answer_only` (live) makes the station take calls and make none — what
 §97.221(c) allows an unattended station at 500 Hz outside the automatic sub-bands, and
 what `connect`, `beacon` and `probe` are refused with while it is set.

@@ -1131,6 +1131,7 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
     use aether_phy::waveform::Bandwidth;
 
     let air = aether_phy::modes::air_interface(params);
+    let ladder = air.ladder();
     let (thresholds, payload): (&[f64], &[usize]) = match params.bandwidth {
         Bandwidth::Narrow500 => (
             &aether_link::rate::NARROW_AWGN_THRESHOLD_DB,
@@ -1141,19 +1142,19 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
             &aether_link::rate::PAYLOAD_BYTES,
         ),
     };
-    let modes: Vec<Value> = air
-        .modes
+    // the rungs of the air's ladder: the tone floor's two (ADR-0013), whose frames are five
+    // times as long as an ordinary one, then the OFDM modes
+    let modes: Vec<Value> = ladder
         .iter()
-        .map(|mode| {
+        .enumerate()
+        .map(|(index, rung)| {
             json!({
-                "index": mode.index,
-                "name": mode.name(),
-                // on the layout the mode goes out on: a floor mode's frame is four times
-                // as long as the ordinary one (ADR-0009)
-                "payload_bytes": mode.payload_bytes(&air.data_layout(mode.index)),
-                "net_bit_rate": mode.net_bit_rate(&air.data_layout(mode.index)),
-                "floor": air.is_floor(mode.index),
-                "threshold_db": thresholds[mode.index],
+                "index": index,
+                "name": rung.name(),
+                "payload_bytes": rung.payload_bytes(),
+                "net_bit_rate": rung.net_bps(),
+                "floor": rung.is_floor(),
+                "threshold_db": thresholds[index],
             })
         })
         .collect();
@@ -1163,14 +1164,13 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
         "bandwidth_hz": params.bandwidth.hz(),
         "bandwidths_hz": [2300, 500],
         "modes": modes,
-        // by bytes per second, since a floor mode's frame is four times as long (ADR-0009)
+        // by bytes per second, since a floor rung's frame is five times as long
         "usable_modes": aether_link::rate::usable_modes_by_rate(
             thresholds,
             payload,
-            &air
-                .modes
+            &ladder
                 .iter()
-                .map(|m| air.data_layout(m.index).duration_s())
+                .map(aether_phy::Rung::duration_s)
                 .collect::<Vec<f64>>(),
         ),
         "reports_preambles": true,
@@ -1281,7 +1281,11 @@ mod tests {
     fn capabilities_carries_the_mode_table_and_names_no_modulation_in_its_shape() {
         let caps = capabilities(aether_phy::waveform::WIDE_2300);
         let modes = caps["modes"].as_array().expect("modes");
-        assert_eq!(modes.len(), aether_phy::modes::MODES.len());
+        // the rungs of the ladder: the tone floor's two, then the fourteen OFDM modes
+        assert_eq!(modes.len(), aether_phy::modes::WIDE.n_rungs());
+        assert_eq!(modes[0]["floor"], true);
+        assert_eq!(modes[2]["name"], "BPSK-1/5");
+        assert_eq!(modes[2]["floor"], false);
         assert!(modes[0]["threshold_db"].is_number());
         assert!(modes[0]["payload_bytes"].is_number());
         assert_eq!(caps["snr_reference_hz"], 3000);

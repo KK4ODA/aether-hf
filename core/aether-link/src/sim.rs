@@ -17,7 +17,7 @@
 //!   about 3 dB of "energy" per combine, and the combined frame succeeds once the summed
 //!   energy clears the threshold — the same qualitative behaviour as LDPC HARQ-IR.
 //! * Each frame is judged at its own threshold: a DATA frame at its mode's, a CONTROL frame at
-//!   its family's control frame's (the ordinary SHORT frame or the floor one, ADR-0009).
+//!   its family's control frame's (the ordinary SHORT frame or the tone floor's, ADR-0013).
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
@@ -25,7 +25,7 @@ use crate::{
     engine::{Action, LinkEngine},
     phy::PhyTiming,
     phy::{Container, HarqBuffer, SoftFrame, TxFrame},
-    rate::{AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, NARROW_CONTROL_THRESHOLD_DB},
+    rate::{AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB},
 };
 
 /// Logistic steepness of frame error rate against SNR, in dB; larger is a sharper waterfall.
@@ -37,15 +37,11 @@ fn success_prob(threshold: f64, snr_db: f64, energy_db: f64) -> f64 {
     1.0 / (1.0 + (-STEEP * (snr_db + energy_db - threshold)).exp())
 }
 
-/// The AWGN thresholds of an air's two control frames, indexed by family (ordinary, floor):
-/// the narrow air's when it has a floor family, the wide air's otherwise.
+/// The AWGN thresholds of an air's two control frames, indexed by family (ordinary, floor),
+/// as its timing carries them — the wide air's when it does not.
 #[must_use]
 pub fn control_thresholds_for(timing: &PhyTiming) -> [f64; 2] {
-    if timing.floor_modes > 0 {
-        NARROW_CONTROL_THRESHOLD_DB
-    } else {
-        CONTROL_THRESHOLD_DB
-    }
+    timing.control_threshold_db.unwrap_or(CONTROL_THRESHOLD_DB)
 }
 
 /// A frame as delivered to the receiving engine.

@@ -108,11 +108,10 @@ impl FrameTransmitter {
         for index in 0..layout.data_symbols {
             if pilots.contains(&index) {
                 let chips = match header.frame_type {
-                    FrameType::Data => Some(self.preamble.mode_chips_for(
+                    FrameType::Data => Some(self.preamble.mode_chips(
                         header.mode,
                         pilot_number,
                         header.rv,
-                        layout,
                     )),
                     FrameType::Control => None,
                 };

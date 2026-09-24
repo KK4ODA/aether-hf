@@ -1,28 +1,32 @@
 //! Streaming receiver: feed baseband blocks of any size, get decoded frames out.
 //!
-//! Wraps the offline detector and receiver in a rolling buffer so live audio — a sound card,
+//! Wraps the offline detectors and receivers in a rolling buffer so live audio — a sound card,
 //! a recording being replayed — can be processed block by block:
 //!
 //! * blocks are appended to a buffer that keeps at most `max_buffer_s` seconds;
-//! * detection runs over the part of the buffer that has not been searched yet, extended
+//! * OFDM detection runs over the part of the buffer that has not been searched yet, extended
 //!   backwards by the detector's [`stream_lookback`](crate::sync::FrameDetector::stream_lookback),
-//!   so a preamble straddling a block boundary is still found once enough of what follows it
-//!   has arrived — a symbol for an ordinary frame, eighteen for a floor one (ADR-0009 §8);
-//! * a detected frame is decoded only when its last sample — plus the transform window's
+//!   so a preamble straddling a block boundary is still found once a symbol of what follows
+//!   it has arrived;
+//! * a detected OFDM frame is decoded only when its last sample — plus the transform window's
 //!   margin — is in the buffer; until then it stays pending;
+//! * the tone floor (ADR-0013) runs alongside on the same band-limited stream: a
+//!   [`ToneStream`] keeps its spectrogram rows by absolute hop, hands over each tone frame a
+//!   symbol after it ends, and announces one as arriving once its first sync block is in;
 //! * absolute sample indices are kept, so a reported position stays meaningful after the
 //!   buffer is trimmed. They refer to the band-limited stream, which lags the raw input by
 //!   the filter's group delay, [`StreamingReceiver::delay_samples`].
 //!
 //! The decoded output is the same as [`Modem::decode_buffer`] on the concatenated input, so
-//! real-time behaviour never diverges from the offline model — a test pins that.
+//! real-time behaviour never diverges from the offline model — tests pin that.
 //!
-//! # Preambles, reported early
+//! # Frames, reported early
 //!
 //! [`take_preambles`](StreamingReceiver::take_preambles) reports a frame the moment
-//! acquisition finds it, before its payload has arrived. That is what the link layer's
-//! start-of-frame signal is: without it a receiving station has to treat a whole data frame
-//! of silence as the end of a burst, which measurement put at about 13 % of the throughput.
+//! acquisition finds it, before its payload has arrived: an OFDM frame by its preamble, a
+//! tone frame by its first sync block. That is what the link layer's start-of-frame signal
+//! is: without it a receiving station has to treat a whole data frame of silence as the end
+//! of a burst, which measurement put at about 13 % of the throughput.
 
 use std::collections::VecDeque;
 
@@ -30,19 +34,39 @@ use crate::{
     Complex,
     blanker::StreamingBlanker,
     fir::Fir,
-    modem::{DecodedFrame, Modem},
+    modem::{DecodedFrame, Modem, Received},
+    preamble::FrameType,
     rx::FrameSync,
-    sync::{Acquisition, BankOutput, BankRow, BankState, FLOOR_OVER_ORDINARY},
+    sync::{Acquisition, BankOutput, BankRow, BankState},
+    tone::{ToneStream, ToneSync},
     waveform::{WIDE_2300, WaveformParams},
 };
 
-/// A frame acquisition has located but whose payload has not fully arrived.
+/// A frame acquisition has found whose payload has not fully arrived — the start-of-frame
+/// signal: an OFDM frame's preamble, or a tone frame's first sync block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PendingFrame {
-    /// Where it is and what it announced, in absolute sample indices.
-    pub sync: FrameSync,
-    /// Absolute index one past the frame's last sample.
+    /// Absolute index of its first sample.
+    pub start: usize,
+    /// Absolute index one past its last sample.
     pub end: usize,
+    /// How far above the threshold that found it acquisition saw it; 1.0 is exactly at it.
+    /// An OFDM preamble's threshold sits at the noise maximum, so this is what separates a
+    /// real one from a phantom; a tone frame is announced only above a threshold set over
+    /// the noise maximum of its first block.
+    pub detect_confidence: f64,
+    /// Whether it is the tone floor's.
+    pub tone: bool,
+    /// Whether it is a control frame.
+    pub control: bool,
+}
+
+/// An OFDM frame acquisition has located, in absolute sample indices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Pending {
+    sync: FrameSync,
+    /// Absolute index one past the frame's last sample.
+    end: usize,
 }
 
 /// Feed it baseband, take frames out.
@@ -57,12 +81,10 @@ pub struct StreamingReceiver {
     buffer: Vec<Complex>,
     buffer_start: usize,
     searched: usize,
-    pending: Vec<PendingFrame>,
+    pending: Vec<Pending>,
     done: VecDeque<(usize, usize)>,
     announced: VecDeque<usize>,
     fresh: Vec<PendingFrame>,
-    /// Floor frames the last search saw arriving but could not take as final yet.
-    arriving: Vec<PendingFrame>,
     max_buffer: usize,
     lookback: usize,
     /// The bank's row for every position from `buffer_start`, each computed once: a row
@@ -71,8 +93,13 @@ pub struct StreamingReceiver {
     /// every call, so a 20 ms pass repeated about ninety percent of its correlation work —
     /// the cost ADR-0010 left open, and what put a modest machine 10–20× behind real time.
     rows: VecDeque<BankRow>,
-    /// The bank's running state: the floor family's ring, and scratch space.
+    /// The bank's scratch space.
     bank: BankState,
+    /// The tone floor's detector, on the same stream.
+    tone: ToneStream,
+    /// Samples always kept for the tone floor: its longest frame and half a second — a tone
+    /// frame is taken a symbol after it ends and refined against its own samples.
+    tone_keep: usize,
     /// Frames decoded since the receiver was built, whether or not their check passed.
     pub frames_decoded: usize,
 }
@@ -97,9 +124,12 @@ impl Default for StreamingReceiver {
 const MAX_FRAMES_PER_SEARCH: usize = 8;
 /// How many finished frames to remember, so a late duplicate detection is recognised.
 const DONE_MEMORY: usize = 20;
+/// Samples kept beyond the tone floor's longest frame (half a second at 8 kHz).
+const TONE_KEEP_EXTRA: usize = 4000;
 
 impl StreamingReceiver {
-    /// Build a receiver with a buffer of `max_buffer_s` seconds.
+    /// Build a receiver with a buffer of `max_buffer_s` seconds — at least the tone floor's
+    /// longest frame and half a second, which the tone floor needs whatever is asked.
     #[must_use]
     pub fn new(params: WaveformParams, max_buffer_s: f64, blank_impulses: bool) -> Self {
         let modem = Modem::new(params, blank_impulses);
@@ -113,6 +143,14 @@ impl StreamingReceiver {
                 .map_or(0, StreamingBlanker::latency_samples);
         let bank = modem.detector().bank_state();
         let lookback = modem.detector().stream_lookback();
+        let tone_keep = modem
+            .air()
+            .tone_data()
+            .iter()
+            .map(crate::tone::ToneKind::samples)
+            .max()
+            .unwrap_or(0)
+            + TONE_KEEP_EXTRA;
         Self {
             blanker,
             band,
@@ -127,11 +165,11 @@ impl StreamingReceiver {
             done: VecDeque::new(),
             announced: VecDeque::new(),
             fresh: Vec::new(),
-            arriving: Vec::new(),
-            max_buffer: (max_buffer_s * params.fs_baseband) as usize,
-            // a symbol after an ordinary candidate, and far enough past a floor one that
-            // nothing still to come could claim it (ADR-0009 §8)
+            max_buffer: ((max_buffer_s * params.fs_baseband) as usize).max(tone_keep),
+            // a symbol after a preamble, so the sidelobe guard can see the real peak
             lookback,
+            tone: ToneStream::new(),
+            tone_keep,
             frames_decoded: 0,
             params,
         }
@@ -168,15 +206,15 @@ impl StreamingReceiver {
     /// Frames acquisition has found since the last call, whose payloads may not have arrived.
     ///
     /// Each frame is reported once. This is the start-of-frame signal the link layer wants:
-    /// it tells a receiving station a burst is still running, roughly two preamble symbols
-    /// into a frame rather than a whole frame later. A floor frame is reported as soon as
-    /// its preamble is in, well before acquisition takes it as final; should the final start
-    /// differ, it is reported again there.
+    /// it tells a receiving station a burst is still running — roughly two preamble symbols
+    /// into an OFDM frame, [`announce_delay_s`](crate::tone::announce_delay_s) into a tone
+    /// frame — rather than a whole frame later.
     pub fn take_preambles(&mut self) -> Vec<PendingFrame> {
         std::mem::take(&mut self.fresh)
     }
 
-    /// Feed a block of baseband and take out whatever finished.
+    /// Feed a block of baseband and take out whatever finished, in the order the frames
+    /// start.
     pub fn feed(&mut self, block: &[Complex]) -> Vec<DecodedFrame> {
         let blanked = self
             .blanker
@@ -186,8 +224,10 @@ impl StreamingReceiver {
         self.buffer.extend_from_slice(&filtered);
 
         self.search();
-        let out = self.harvest();
+        let mut out = self.harvest();
+        out.extend(self.tone_floor());
         self.trim();
+        out.sort_by_key(|d| d.frame.start());
         out
     }
 
@@ -217,27 +257,17 @@ impl StreamingReceiver {
         let detector = self.modem.detector();
         while self.buffer_start + self.rows.len() <= last {
             let relative = self.rows.len();
-            let absolute = self.buffer_start + relative;
             let window: f64 = self.buffer[relative..relative + reference_len]
                 .iter()
                 .map(|&(re, im)| re * re + im * im)
                 .sum();
             let energy = window.max(1e-30).sqrt().max(floor);
-            let (row, floor_row) =
-                detector.bank_row(&mut self.bank, &self.buffer, relative, absolute, energy);
+            let row = detector.bank_row(&mut self.bank, &self.buffer, relative, energy);
             self.rows.push_back(row);
-            if let Some((back, floor_row)) = floor_row
-                && let Some(target) = self.rows.get_mut(back)
-            {
-                target.floor_stat = floor_row.stat;
-                target.floor_cfo = floor_row.cfo;
-                target.floor_other = floor_row.other;
-                target.floor_winner = floor_row.winner;
-            }
         }
     }
 
-    /// Search the part of the buffer nothing has looked at yet.
+    /// Search the part of the buffer nothing has looked at yet for OFDM preambles.
     fn search(&mut self) {
         let symbol = self.params.symbol_samples();
         let reference_len = self.modem.detector().reference_len();
@@ -253,48 +283,32 @@ impl StreamingReceiver {
         // the bank over exactly this region — the rows already computed for its positions
         let positions = region.len().saturating_sub(reference_len) + 1;
         let output = BankOutput::from_rows(self.rows.iter().skip(offset).take(positions));
-        // a floor frame is taken once nothing still to come could claim it — long before its
-        // end — so its span keeps its own body's phantoms out (ADR-0009 §8)
         let found = self
             .modem
             .detector()
-            .detect_streaming(region, &output, MAX_FRAMES_PER_SEARCH);
-        for acquisition in &found.frames {
+            .detect_with(region, &output, MAX_FRAMES_PER_SEARCH);
+        let air = self.modem.air();
+        for acquisition in &found {
             let frame = self.absolute(acquisition, search_start);
-            if frame.sync.floor && !self.settle_floor(&frame) {
-                continue; // an ordinary frame it clashes with is the stronger
-            }
             if self.known(&frame) {
                 continue; // a duplicate, or inside a frame already known about
             }
             self.pending.push(frame);
-            self.announce(frame);
-        }
-        self.arriving = found
-            .arriving
-            .iter()
-            .map(|acquisition| self.absolute(acquisition, search_start))
-            .collect();
-        // a floor frame on its way is announced now, not when it is final: that is up to
-        // eighteen symbols in, and the link layer's reply delay expects the signal within ten
-        for frame in self.arriving.clone() {
-            let explained = self.pending.iter().any(|p| {
-                !p.sync.floor
-                    && overlap(p, &frame)
-                    && frame.sync.timing_peak < FLOOR_OVER_ORDINARY * p.sync.timing_peak
+            self.announce(PendingFrame {
+                start: frame.sync.start,
+                end: frame.end,
+                detect_confidence: frame.sync.detect_confidence(&air),
+                tone: false,
+                control: frame.sync.frame_type == FrameType::Control,
             });
-            if !explained && !self.known(&frame) {
-                self.announce(frame);
-            }
         }
-        // the detector needs a symbol after an ordinary candidate and far more after a floor
-        // one (ADR-0009 §8), so leave that much unsearched
+        // the detector needs a symbol after a candidate, so leave that much unsearched
         self.searched = self
             .searched
             .max(self.samples_seen().saturating_sub(self.lookback));
     }
 
-    /// Decode every pending frame whose samples have all arrived.
+    /// Decode every pending OFDM frame whose samples have all arrived.
     fn harvest(&mut self) -> Vec<DecodedFrame> {
         // the transform window reaches a little past a frame's nominal last sample
         let margin = self.modem.receiver().fft_offset() + self.params.symbol_samples();
@@ -304,7 +318,7 @@ impl StreamingReceiver {
         let mut out = Vec::new();
         let mut still = Vec::new();
         for frame in std::mem::take(&mut self.pending) {
-            if frame.end + margin > seen || self.held(&frame) {
+            if frame.end + margin > seen {
                 still.push(frame);
                 continue;
             }
@@ -316,14 +330,14 @@ impl StreamingReceiver {
                 start: frame.sync.start - self.buffer_start,
                 ..frame.sync
             };
-            let buffer = std::mem::take(&mut self.buffer);
-            let decoded = self.modem.decode_sync(&buffer, &local, None);
-            self.buffer = buffer;
+            let decoded = self.modem.decode_sync(&self.buffer, &local, None);
             // A frame that will not demodulate — it ran off the end after all, or its
             // length does not match the layout — is simply not a frame. Acquisition
             // occasionally locks onto noise, and there is nothing to report about it.
             if let Ok(mut decoded) = decoded {
-                decoded.frame.sync = frame.sync; // report absolute positions
+                if let Received::Ofdm(received) = &mut decoded.frame {
+                    received.sync = frame.sync; // report absolute positions
+                }
                 out.push(decoded);
                 self.frames_decoded += 1;
             }
@@ -332,14 +346,44 @@ impl StreamingReceiver {
         out
     }
 
+    /// The tone floor on the same stream: the tone frames now final, decoded, and the ones
+    /// arriving announced.
+    fn tone_floor(&mut self) -> Vec<DecodedFrame> {
+        let found = self.tone.feed(&self.buffer, self.buffer_start);
+        let mut out = Vec::new();
+        for sync in found {
+            let local = ToneSync {
+                start: sync.start - self.buffer_start,
+                ..sync
+            };
+            if let Ok(mut decoded) = self.modem.decode_tone(&self.buffer, &local) {
+                if let Received::Tone(_, at) = &mut decoded.frame {
+                    *at = sync; // report absolute positions
+                }
+                out.push(decoded);
+                self.frames_decoded += 1;
+            }
+        }
+        for arrival in self.tone.arriving.clone() {
+            self.announce(PendingFrame {
+                start: arrival.start,
+                end: arrival.end(),
+                detect_confidence: arrival.detect_confidence(),
+                tone: true,
+                control: arrival.kind.control,
+            });
+        }
+        out
+    }
+
     /// An acquisition found `base` samples into the stream, with its span, in absolute indices.
-    fn absolute(&self, acquisition: &Acquisition, base: usize) -> PendingFrame {
+    fn absolute(&self, acquisition: &Acquisition, base: usize) -> Pending {
         let span = self.modem.receiver().frame_span(&FrameSync {
             start: 0,
             ..acquisition.sync
         });
         let start = acquisition.sync.start + base;
-        PendingFrame {
+        Pending {
             sync: FrameSync {
                 start,
                 ..acquisition.sync
@@ -349,7 +393,7 @@ impl StreamingReceiver {
     }
 
     /// Whether a frame duplicates, or starts inside, one already pending or handed out.
-    fn known(&self, frame: &PendingFrame) -> bool {
+    fn known(&self, frame: &Pending) -> bool {
         let symbol = self.params.symbol_samples();
         let start = frame.sync.start;
         self.pending
@@ -361,48 +405,20 @@ impl StreamingReceiver {
 
     /// Report a frame to [`take_preambles`](Self::take_preambles), once per start.
     fn announce(&mut self, frame: PendingFrame) {
-        if self.announced.contains(&frame.sync.start) {
+        if self.announced.contains(&frame.start) {
             return;
         }
-        self.announced.push_back(frame.sync.start);
+        self.announced.push_back(frame.start);
         if self.announced.len() > DONE_MEMORY {
             self.announced.pop_front();
         }
         self.fresh.push(frame);
     }
 
-    /// An ordinary frame a floor frame still arriving would settle away — the phantom a
-    /// floor preamble can raise on the ordinary references, complete long before the floor
-    /// frame is final — waits for that decision instead of being decoded first.
-    fn held(&self, frame: &PendingFrame) -> bool {
-        !frame.sync.floor
-            && self.arriving.iter().any(|f| {
-                overlap(f, frame)
-                    && f.sync.timing_peak >= FLOOR_OVER_ORDINARY * frame.sync.timing_peak
-            })
-    }
-
-    /// A floor candidate, taken while its frame is still arriving, against the pending
-    /// ordinary frames it clashes with — above all the phantoms its own body produced before
-    /// the floor candidate was final, which offline settles in the same pass. As offline
-    /// ([`FrameDetector::detect`]'s settling of the families): the floor frame stays, and
-    /// they go, where its statistic is at least [`FLOOR_OVER_ORDINARY`] of theirs; otherwise
-    /// it is dropped.
-    ///
-    /// [`FrameDetector::detect`]: crate::sync::FrameDetector::detect
-    fn settle_floor(&mut self, floor: &PendingFrame) -> bool {
-        let clashes = |p: &PendingFrame| !p.sync.floor && overlap(p, floor);
-        if self.pending.iter().any(|p| {
-            clashes(p) && floor.sync.timing_peak < FLOOR_OVER_ORDINARY * p.sync.timing_peak
-        }) {
-            return false;
-        }
-        self.pending.retain(|p| !clashes(p));
-        true
-    }
-
-    /// Drop what nothing still needs, without ever discarding a pending frame's start.
+    /// Drop what nothing still needs, without ever discarding a pending frame's start or the
+    /// tone floor's longest frame.
     fn trim(&mut self) {
+        let seen = self.samples_seen();
         let keep = self
             .pending
             .iter()
@@ -410,7 +426,8 @@ impl StreamingReceiver {
             .min()
             .unwrap_or(usize::MAX)
             .min(self.searched.saturating_sub(self.lookback))
-            .max(self.samples_seen().saturating_sub(self.max_buffer))
+            .min(seen.saturating_sub(self.tone_keep))
+            .max(seen.saturating_sub(self.max_buffer))
             .max(self.buffer_start);
         let drop = keep - self.buffer_start;
         if drop > 0 {
@@ -420,11 +437,6 @@ impl StreamingReceiver {
             self.buffer_start += drop;
         }
     }
-}
-
-/// Whether two frames' spans overlap.
-fn overlap(a: &PendingFrame, b: &PendingFrame) -> bool {
-    a.sync.start < b.end && b.sync.start < a.end
 }
 
 #[cfg(test)]
@@ -479,7 +491,10 @@ mod tests {
                     streamed.payload, expected.payload,
                     "block size {chunk}: payload"
                 );
-                assert_eq!(streamed.mode.index, expected.mode.index);
+                assert_eq!(
+                    streamed.frame.ofdm().map(|f| f.mode),
+                    expected.frame.ofdm().map(|f| f.mode)
+                );
             }
         }
     }
@@ -498,7 +513,7 @@ mod tests {
         assert_eq!(got.len(), 2);
         for (decoded, (mode, payload)) in got.iter().zip(&payloads) {
             assert_eq!(decoded.payload.as_ref(), Some(payload), "mode {mode}");
-            assert_eq!(decoded.mode.index, *mode);
+            assert_eq!(decoded.frame.ofdm().map(|f| f.mode), Some(*mode));
         }
     }
 
@@ -569,7 +584,10 @@ mod tests {
         for _ in 0..60 {
             rx.feed(&silence);
         }
-        let limit = (2.0 * WIDE_2300.fs_baseband) as usize + 8000;
+        // what was asked for, or the tone floor's longest frame and half a second where
+        // that is more (ADR-0013): a tone frame is refined against its own samples
+        let limit = ((2.0 * WIDE_2300.fs_baseband) as usize).max(rx.tone_keep) + 8000;
+        assert_eq!(rx.tone_keep, 134 * 320 + 4000);
         assert!(
             rx.buffer.len() <= limit,
             "buffer grew to {} samples, limit {limit}",
@@ -580,30 +598,23 @@ mod tests {
         assert_eq!(rx.samples_seen(), 60 * 8000 - rx.blanker_latency());
     }
 
-    /// A narrow floor frame — data (4.2 s) or control (2.2 s) — with a little noise either
+    /// A tone-floor frame — a data rung or the control frame — with a little noise either
     /// side, and its payload.
-    fn floor_burst(control: bool) -> (Vec<Complex>, Vec<u8>) {
-        use crate::waveform::NARROW_500;
-        let mut modem = Modem::new(NARROW_500, true);
+    fn tone_burst(params: WaveformParams, control: bool) -> (Vec<Complex>, Vec<u8>) {
+        let mut modem = Modem::new(params, true);
         let (burst, payload) = if control {
-            let n = modem.payload_bytes(None);
-            let payload: Vec<u8> = (0..n)
-                .map(|i| (i as u8).wrapping_mul(11).wrapping_add(3))
+            let payload: Vec<u8> = (0..7u8)
+                .map(|i| i.wrapping_mul(11).wrapping_add(3))
                 .collect();
             (
                 modem.control_burst_of(&payload, 0, true).expect("encode"),
                 payload,
             )
         } else {
-            let mode = modem.modes()[0]; // mode 0 is a floor mode on the narrow air
-            let n = modem.payload_bytes(Some(mode));
-            let payload: Vec<u8> = (0..n)
+            let payload: Vec<u8> = (0..modem.rung_payload_bytes(1))
                 .map(|i| (i as u8).wrapping_mul(5).wrapping_add(1))
                 .collect();
-            (
-                modem.data_burst(&payload, mode, 0).expect("encode"),
-                payload,
-            )
+            (modem.rung_burst(&payload, 1, 0).expect("encode"), payload)
         };
         // a little noise, not digital silence: a receiver never delivers exact zeros
         let mut state = 0x2545_f491_u64;
@@ -620,54 +631,66 @@ mod tests {
     }
 
     #[test]
-    fn a_floor_frame_streams_the_same_as_one_offline_call() {
-        // ADR-0009's floor family carries connect, poll and acknowledgement when a narrow
-        // link runs its slowest modes — the one set of modes that holds a link at −10 dB. A
-        // floor frame spans 4.2 s (data) or 2.2 s (control), but the streaming search region
-        // is a fraction of that, so until the receiver learned to take a floor frame as final
-        // once nothing still to come could claim it (ADR-0009 §8), the family decoded
-        // offline and never live. Every block size, the daemon's own 20 ms included — and
-        // the frame is announced within the ten symbols the link layer's reply delay allows.
+    fn a_tone_frame_streams_the_same_as_one_offline_call() {
+        // ADR-0013: the tone floor is taken a symbol after its frame ends, from the same
+        // band-limited stream the offline detector reads — the same payload at the same
+        // start, at every block size, the daemon's own 20 ms included — and announced once
+        // its first sync block is in, long before
         use crate::waveform::NARROW_500;
-        for control in [false, true] {
-            let (signal, payload) = floor_burst(control);
-            let offline = Modem::new(NARROW_500, true).decode_buffer(&signal, 4);
-            assert_eq!(offline.len(), 1, "offline must find the floor frame alone");
-            // the floor control container holds a byte more than `payload_bytes` sizes, so a
-            // control payload comes back zero-padded
-            let expected = offline[0].payload.clone().expect("offline decodes it");
-            assert_eq!(&expected[..payload.len()], payload.as_slice());
-            for block in [160usize, 512, 1600, 4096] {
-                let mut rx = StreamingReceiver::new(NARROW_500, 6.0, true);
-                let mut got = Vec::new();
-                let mut announced_at = None;
-                for chunk in signal.chunks(block) {
-                    got.extend(rx.feed(chunk));
-                    if announced_at.is_none() && !rx.take_preambles().is_empty() {
-                        announced_at = Some(rx.samples_seen());
+        for params in [WIDE_2300, NARROW_500] {
+            for control in [false, true] {
+                let (signal, payload) = tone_burst(params, control);
+                let offline = Modem::new(params, true).decode_buffer(&signal, 4);
+                assert_eq!(offline.len(), 1, "offline must find the tone frame alone");
+                assert_eq!(offline[0].payload.as_deref(), Some(payload.as_slice()));
+                let symbol = crate::tone::symbol_samples();
+                for block in [160usize, 512, 1600, 4096] {
+                    let mut rx = StreamingReceiver::new(params, 6.0, true);
+                    let mut got = Vec::new();
+                    let mut announced = Vec::new();
+                    for chunk in signal.chunks(block) {
+                        got.extend(rx.feed(chunk));
+                        for pending in rx.take_preambles() {
+                            announced.push((pending, rx.samples_seen()));
+                        }
                     }
+                    let what = format!("{params:?} control {control}, block {block}");
+                    assert_eq!(got.len(), 1, "{what}: {} frames", got.len());
+                    assert_eq!(got[0].payload, offline[0].payload, "{what}: payload");
+                    let start = got[0].frame.start();
+                    assert_eq!(start, offline[0].frame.start(), "{what}: start");
+                    assert_eq!(announced.len(), 1, "{what}: announced {announced:?}");
+                    let (pending, at) = announced[0];
+                    assert!(pending.tone && pending.control == control, "{what}");
+                    assert!(pending.start.abs_diff(start) <= symbol / 4, "{what}");
+                    assert!(pending.detect_confidence >= 1.0, "{what}");
+                    let budget = (crate::tone::SYNC_SYMBOLS + 4) * symbol + block;
+                    assert!(
+                        at <= start + budget,
+                        "{what}: announced {} symbols in",
+                        (at - start) as f64 / symbol as f64
+                    );
                 }
-                let payloads: Vec<Option<Vec<u8>>> =
-                    got.iter().map(|f| f.payload.clone()).collect();
-                assert_eq!(
-                    payloads,
-                    vec![Some(expected.clone())],
-                    "control {control}, block {block}: streamed differs from offline"
-                );
-                let start = got[0].frame.sync.start;
-                assert_eq!(
-                    start, offline[0].frame.sync.start,
-                    "control {control}, block {block}: start differs from offline"
-                );
-                let symbol = NARROW_500.symbol_samples();
-                let budget = (rx.modem().air().longest_preamble() + 2) * symbol + block;
-                let announced = announced_at.expect("the floor frame was never announced");
-                assert!(
-                    announced <= start + budget,
-                    "control {control}, block {block}: announced {} symbols in",
-                    (announced - start) as f64 / symbol as f64
-                );
             }
         }
+    }
+
+    #[test]
+    fn an_ofdm_burst_raises_no_tone_frame_and_a_tone_frame_no_ofdm_one() {
+        // the two families share the stream: neither detector may take the other's frames
+        let mut modem = Modem::default();
+        let ofdm = burst(
+            &mut modem,
+            &[(3, payload_for(3, 7)), (9, payload_for(9, 2))],
+        );
+        let mut rx = StreamingReceiver::default();
+        let got: Vec<DecodedFrame> = ofdm.chunks(160).flat_map(|c| rx.feed(c)).collect();
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|f| !f.frame.is_tone() && f.ok()));
+        let (tone, _) = tone_burst(WIDE_2300, false);
+        let mut rx = StreamingReceiver::default();
+        let got: Vec<DecodedFrame> = tone.chunks(160).flat_map(|c| rx.feed(c)).collect();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].frame.is_tone() && got[0].ok());
     }
 }

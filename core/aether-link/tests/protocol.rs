@@ -8,25 +8,52 @@
 //! the model is in `model_vectors.rs`.
 
 use aether_link::{
-    LinkConfig, LinkEngine, PhyTiming, Role, State, TwoStationSim, rate::PAYLOAD_BYTES,
+    LinkConfig, LinkEngine, PhyTiming, Role, State, TwoStationSim,
+    rate::{
+        AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB,
+        NARROW_CONTROL_THRESHOLD_DB, WIDE_FLOOR_MARGIN_DB,
+    },
 };
-use aether_phy::modes::{LONG, SHORT};
+use aether_phy::{
+    modes::{PREAMBLE_SYMBOLS, Rung, air_interface},
+    waveform::{NARROW_500, WIDE_2300, WaveformParams},
+};
 
-/// Timing from the real waveform tables, optionally with a start-of-frame signal.
-fn timing(start_of_frame: bool) -> PhyTiming {
+/// The timing the model's harness gives an air (`phy_timing`): its ladder — the tone floor's
+/// two rungs (ADR-0013), then its OFDM modes — optionally with a start-of-frame signal.
+fn air_timing(params: WaveformParams, start_of_frame: bool) -> PhyTiming {
+    let air = air_interface(params);
+    let wide = params == WIDE_2300;
     PhyTiming {
-        data_frame_s: LONG.duration_s(),
-        control_frame_s: SHORT.duration_s(),
+        data_frame_s: air.long.duration_s(),
+        control_frame_s: air.short.duration_s(),
         turnaround_s: 0.25,
         detect_latency_s: 0.15,
         tx_latency_s: 0.0,
-        preamble_detect_s: start_of_frame.then(|| 4.0 * LONG.waveform.symbol_period_s()),
-        data_capacity: PAYLOAD_BYTES.to_vec(),
-        mode_threshold_db: Vec::new(),
-        floor_data_frame_s: None,
-        floor_control_frame_s: None,
-        floor_modes: 0,
+        preamble_detect_s: start_of_frame
+            .then(|| (PREAMBLE_SYMBOLS + 2) as f64 * params.symbol_period_s()),
+        data_capacity: air.ladder().iter().map(Rung::payload_bytes).collect(),
+        mode_threshold_db: if wide {
+            AWGN_THRESHOLD_DB.to_vec()
+        } else {
+            NARROW_AWGN_THRESHOLD_DB.to_vec()
+        },
+        floor_data_frame_s: Some(air.tone_data()[0].duration_s()),
+        floor_control_frame_s: Some(air.tone_control().duration_s()),
+        floor_modes: air.floor_modes(),
+        control_threshold_db: Some(if wide {
+            CONTROL_THRESHOLD_DB
+        } else {
+            NARROW_CONTROL_THRESHOLD_DB
+        }),
+        floor_margin_db: wide.then_some(WIDE_FLOOR_MARGIN_DB),
+        floor_preamble_detect_s: start_of_frame.then(|| aether_phy::tone::announce_delay_s(0.1)),
     }
+}
+
+/// The wide air's timing, optionally with a start-of-frame signal.
+fn timing(start_of_frame: bool) -> PhyTiming {
+    air_timing(WIDE_2300, start_of_frame)
 }
 
 fn pair(timing: &PhyTiming, config: &LinkConfig) -> (LinkEngine, LinkEngine) {
@@ -950,7 +977,7 @@ fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
     // that drops into the floor, does not strand the session
     let t = timing(false);
     let (mut a, b) = pair(&t, &LinkConfig::default());
-    let top = PAYLOAD_BYTES.len() - 1;
+    let top = t.data_capacity.len() - 1;
     a.pin_mode(Some(top), Some(16)).expect("the top mode");
     let message: Vec<u8> = (0..48u8).collect();
     let mut sim = TwoStationSim::new(a, b, 0.0, 7);
@@ -972,27 +999,13 @@ fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
 
 #[test]
 fn a_narrow_session_at_the_floor_completes_through_the_pipe() {
-    use aether_link::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES};
     use aether_link::sim::control_thresholds_for;
-    // at −8 dB on AWGN only the 500 Hz floor family decodes (ADR-0009): its data modes and
-    // its control frame. The pipe delivers each frame's family and judges a control frame at
-    // its own family's threshold — at data mode 0's, as it did before P9-6, an ordinary
-    // acknowledgement went through eight decibels below where the modem decodes it
-    let params = aether_phy::waveform::NARROW_500;
-    let air = aether_phy::modes::air_interface(params);
-    let t = PhyTiming {
-        data_frame_s: air.long.duration_s(),
-        control_frame_s: air.short.duration_s(),
-        turnaround_s: 0.25,
-        detect_latency_s: 0.15,
-        tx_latency_s: 0.0,
-        preamble_detect_s: Some((air.longest_preamble() + 2) as f64 * params.symbol_period_s()),
-        data_capacity: NARROW_PAYLOAD_BYTES.to_vec(),
-        mode_threshold_db: NARROW_AWGN_THRESHOLD_DB.to_vec(),
-        floor_data_frame_s: air.floor_long.map(|l| l.duration_s()),
-        floor_control_frame_s: air.floor_short.map(|l| l.duration_s()),
-        floor_modes: air.floor_modes,
-    };
+    // at −8 dB on AWGN only the floor decodes — the tone floor since ADR-0013: its data
+    // rungs and its control frame. The pipe delivers each frame's family and judges a
+    // control frame at its own family's threshold — at data mode 0's, as it did before P9-6,
+    // an ordinary acknowledgement went through eight decibels below where the modem decodes
+    // it
+    let t = air_timing(NARROW_500, true);
     let [ordinary, floor] = control_thresholds_for(&t);
     assert!(ordinary > -8.0 && -8.0 > floor, "{ordinary} {floor}");
     let config = LinkConfig {
@@ -1013,4 +1026,113 @@ fn a_narrow_session_at_the_floor_completes_through_the_pipe() {
         sim.events(0),
         sim.events(1)
     );
+    assert!(sim.engine(1).stats.frames_received > 0);
+}
+
+/// A frame handed straight to an engine: a payload that always decodes.
+struct Handed {
+    payload: Vec<u8>,
+    mode: usize,
+}
+
+impl aether_link::SoftFrame for Handed {
+    fn container(&self) -> aether_link::Container {
+        aether_link::Container::Data
+    }
+    fn mode(&self) -> usize {
+        self.mode
+    }
+    fn floor(&self) -> bool {
+        false
+    }
+    fn rv(&self) -> u8 {
+        0
+    }
+    fn snr_db(&self) -> f64 {
+        10.0
+    }
+    fn t_start(&self) -> f64 {
+        0.0
+    }
+    fn t_end(&self) -> f64 {
+        1.0
+    }
+    fn decode(
+        &self,
+        _buffer: Option<&aether_link::HarqBuffer>,
+    ) -> (Option<Vec<u8>>, aether_link::HarqBuffer) {
+        (Some(self.payload.clone()), Vec::new())
+    }
+}
+
+#[test]
+fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
+    use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
+    // version 2 of the link protocol numbers modes as rungs of the ladder (ADR-0013): a
+    // station of version 1 means other frames by the same numbers, so a call from one is not
+    // a session to start — it is ignored, with an event saying why
+    assert_eq!(PROTOCOL_VERSION, 2);
+    let t = timing(false);
+    let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
+    let body = ConnectBody {
+        src: "W4ODA".into(),
+        dst: "KK4XYZ".into(),
+        caps: 0,
+        version: 1,
+        snr_db: None,
+    }
+    .encode()
+    .expect("body");
+    let header = DataHeader {
+        kind: DataKind::ConnectReq,
+        seq: 0,
+        session: 7,
+    };
+    let payload = encode_data(&header, &body, t.capacity(2)).expect("frame");
+    b.on_frame(&Handed { payload, mode: 2 }, 1.0);
+    assert_eq!(b.state(), State::Idle);
+    let events: Vec<String> = b
+        .drain()
+        .into_iter()
+        .filter_map(|action| match action {
+            aether_link::Action::Event { name, detail } => Some(format!("{name}:{detail}")),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        events.iter().any(|e| e.contains("link protocol 1")),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn the_iss_waits_out_the_irs_quiet_after_a_floor_burst() {
+    // the ISS sizes its wait for an ACK by the quiet the IRS keeps after a burst. It has to
+    // ask about the burst it sent — a floor burst straight after an ordinary acceptance — not
+    // the family it last heard: asked the other way it under-waited by the difference, a
+    // whole tone frame without preamble reports, and a floor session pinned at 16 dB died of
+    // ACK timeouts (ADR-0013)
+    for reports in [false, true] {
+        let t = timing(reports);
+        let config = LinkConfig {
+            max_mode: 0,
+            ..LinkConfig::default()
+        };
+        let (mut a, b) = pair(&t, &config);
+        a.connect("KK4XYZ").expect("idle");
+        let message = vec![0u8; 600];
+        a.send(&message);
+        a.disconnect();
+        let mut sim = TwoStationSim::new(a, b, 16.0, 21);
+        sim.run(1200.0, 3.0);
+        assert_eq!(sim.delivered(1), message.as_slice(), "reports {reports}");
+        assert_eq!(
+            (
+                sim.engine(0).stats.ack_timeouts,
+                sim.engine(1).stats.ack_timeouts
+            ),
+            (0, 0),
+            "reports {reports}"
+        );
+    }
 }

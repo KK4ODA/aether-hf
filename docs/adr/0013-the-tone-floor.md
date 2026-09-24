@@ -214,7 +214,25 @@ tone frame) and every tool read the ladder. Consequences found on the way:
   same — but the handshake still requires both to run one; negotiating across is not built.
 * Not measured on the air.
 
-## 7. Rejected
+## 7. The port
+
+`aether-phy` has `tone.rs` — the codec, the modulator, the detector and `ToneStream`, the
+numerology, sync patterns and kinds compiled in from the model's export — and the ladder in
+`modes.rs` (`Rung`, `AirInterface::ladder`, `rung_of`, `control_rung`). Against the model's
+vectors the tones are exact, and the waveform, the detector's start, offset and statistic,
+the SNR and the soft bits agree to the vector file's tolerances (`tone_frames`,
+`tone_receive`). A decoded frame is either family (`Received::Ofdm` / `Received::Tone`), the
+streaming receiver runs the tone stream on the same band-limited buffer and keeps the tone
+floor's longest frame whatever buffer it is asked for, and a tone frame on its way is
+announced (`PendingFrame { tone }`) once its first sync block has won. `aether-link` has the
+timing fields, the ladder's tables and the boundary rules; the daemon's `phy_timing` is the
+harness's. The configuration file's schema is 2: its first migration moves a wide station's
+`max_mode` two rungs up, and profiles go through it.
+
+Found in the port: the daemon sent beacons at the control mode's *OFDM* index, which on the
+wide ladder is rung 0 — a tone frame. Beacons go out at `control_rung()`.
+
+## 8. Rejected
 
 Eight tones at 32 ms (0.4 dB worse at every rate, measured); four tones at 16 ms (1.5 dB
 worse); per-bin median normalisation; the energy statistic; patterns bounded at zero offset

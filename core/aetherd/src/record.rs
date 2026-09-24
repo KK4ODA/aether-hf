@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The sidecar's `format` field: bumped when its shape changes.
-pub const FORMAT: &str = "aether-hf-session/1";
+pub const FORMAT: &str = "aether-hf-session/2";
 
 /// One frame the receiver found, as the sidecar records it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,7 +33,9 @@ pub struct FrameRecord {
     pub t_s: f64,
     /// `data` or `control`.
     pub kind: String,
-    /// Mode index read from the pilot chips (or the control mode).
+    /// The rung of the air's ladder a DATA frame was sent at — the tone floor's two, then
+    /// the OFDM modes (ADR-0013) — or 0 for a control frame. A `/1` sidecar numbered the
+    /// OFDM modes (`tools/field_ingest.py` maps them onto the ladder).
     pub mode: usize,
     /// Redundancy version.
     pub rv: u8,

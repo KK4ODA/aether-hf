@@ -446,6 +446,33 @@ disconnect (Web Audio, unlocked by the first click; the *Chime* box on the Sessi
 kept in `localStorage`). Lesson: a fixed narrowband artefact is invisible on a waterfall
 (it auto-scales it away) and inaudible over RDP; the antenna-off recording is the test.
 
+**The weak-signal plan (2026-09-23/24, `docs/ROADMAP.md` "The weak-signal plan").** Started
+from the author's VARA HF P2P experience (VARA starts slow and climbs). **P9-6** trustworthy
+benches: the link bench's fading pipe (`aether_model/link/fading.py`, EESM β calibrated per
+frame class, `bench/baselines/fading_pipe.csv`). **P9-7** holding the link (ADR-0012,
+beta.50): starting lower bought nothing on the calibrated bench; the link timeout spans four
+whole exchanges at the family in use, an unanswered burst steps the mode down two, and the
+ACK waits for the frame its preamble announced. **P9-8 the tone floor** (ADR-0013): 16-FSK,
+40 ms symbols, 25 Hz spacing, 400 Hz span, one tone at a time with continuous phase — a
+constant envelope sent 5.5 dB above the OFDM average (equal peak) and detected by energy;
+three eight-symbol Costas sync blocks (start, after 45 % of the data, end) name the kind and
+RV; the OFDM codec chain ends in four Gray bits a tone. Kinds: `tone-control` (7 B, 3.2 s),
+`tone-24` (36 bit/s) and `tone-36` (54 bit/s), 5.36 s — **rungs 0–1 of both ladders**: a
+link-level "mode N" is now a rung (`AirInterface::ladder`, `Rung`), the wide OFDM modes sit
+two rungs up, the narrow ladder skips OFDM modes 0–1 (ADR-0009's OFDM floor is gone). Gate
+passed by 6.0/7.7/8.5/11.5 dB at 36 bit/s (AWGN/Good/Moderate/Poor); 2 300 Hz sessions now
+complete down to −14 dB. Consequences: link protocol version 2 (a call of another version is
+ignored, and said so), `max_mode` default 15, the configuration's **schema 2** (its first
+migration: a wide station's `max_mode` +2; profiles go through it), sidecars
+`aether-hf-session/2` (`field_ingest.sidecar_rung` maps `/1`), `PhyTiming.floor_margin_db`
+(1 dB wide, `WIDE_FLOOR_MARGIN_DB`) and the "once" boundary rule, the ISS's ACK wait sized for
+the burst it sent. Port: `aether-phy/src/tone.rs` (codec, detector, `ToneStream`),
+`Received::{Ofdm, Tone}`, the streaming receiver keeps the longest tone frame and announces
+arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons go at
+`control_rung()` (they were going out at rung 0). A wide station hears a narrow station's
+floor calls — the frames are the same — and ignores them by the bandwidth bits. Owed: tone
+floor sessions on the air; P9-9 only if the −4…+2 dB transition needs it; next P9-5.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

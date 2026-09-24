@@ -374,6 +374,13 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
     (caps & !CAP_BANDWIDTH_MASK) | (code << CAP_BANDWIDTH_SHIFT)
 }
 
+/// The link protocol a station speaks, in the connect body's version byte. 2 since the tone
+/// floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
+/// above the OFDM mode of version 1 — so a session between the two would run on numbers that
+/// mean different frames at either end; a station ignores a call or an acceptance of another
+/// version, and says so.
+pub const PROTOCOL_VERSION: u8 = 2;
+
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
 
