@@ -983,3 +983,108 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
     # a data frame's family is its mode's
     data = sim._synthetic_frame(TxFrame(Container.DATA, b"x", mode=1), -8.0, 0.0, 1.0)
     assert data is not None and data.floor is True
+
+
+# ── holding the link on a fading path (P9-7) ──────────────────────────
+
+
+def test_the_link_timeout_spans_whole_exchanges_at_the_floor() -> None:
+    """Silence ends a session after 45 s on the ordinary layouts, and only after four whole
+    exchanges where the link runs the 500 Hz floor (ADR-0009): one exchange there is nearly
+    half a minute, and a slow fade outlasts one missed exchange far more often than a link
+    really fails."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500, WIDE_2300
+
+    wide = LinkEngine("W4ODA", phy_timing(WIDE_2300), LinkConfig())
+    assert wide._link_timeout() == 45.0
+    narrow = LinkEngine("W4ODA", phy_timing(NARROW_500), LinkConfig(max_mode=12))
+    narrow._recommended = 0  # a floor mode
+    exchange = 6 * 4.216 + 2.232 + 2 * 0.25 + 0.2
+    assert narrow._link_timeout() == pytest.approx(4 * exchange, rel=0.01)
+    # the ordinary layouts on both sides: what the peer recommends and what it may send
+    narrow._recommended = 6
+    narrow.rate.seed(15.0)
+    assert narrow._link_timeout() == 45.0
+
+
+def test_an_unanswered_burst_steps_the_recommendation_down(timing: PhyTiming) -> None:
+    """A burst and its acknowledgement fade together, so a silence is evidence: the ISS steps
+    down two usable modes a time, and the next acknowledgement puts the peer's own
+    recommendation back."""
+    a, _ = _pair(timing)
+    modes = a.rate.modes
+    a._recommended = modes[8]
+    a._back_off()
+    assert a._recommended == modes[6]
+    a._recommended = modes[1]
+    a._back_off()
+    assert a._recommended == modes[0]
+    a._back_off()
+    assert a._recommended == modes[0]
+
+
+def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
+    """An IRS that expects ordinary frames (the connect frames were) must not answer in the
+    middle of a floor frame four times as long: the preamble names the frame's length and
+    the acknowledgement waits for its end. Guessing from the peer's last mode, it fired
+    inside every floor frame of a burst and trampled it until the link timed out."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    timing = phy_timing(NARROW_500)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=12))
+    b.role, b.state = Role.IRS, State.CONNECTED
+    b._peer_mode = 3  # the ordinary connect mode
+    b.rate.seed(10.0)  # and a recommendation on the ordinary layouts
+    guessed = b._peer_data_frame_s()
+    assert guessed < 2.0
+    floor_frame = timing.data_frame_s_for(0)
+    b.on_preamble(100.0, 100.3, floor_frame)
+    assert b._deadlines["ack"] >= 100.0 + floor_frame
+    b._deadlines.clear()
+    b.on_preamble(100.0, 100.3)
+    assert b._deadlines["ack"] < 100.0 + floor_frame  # the old guess, for a PHY that cannot say
+
+
+def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
+    """The three P9-7 changes together, on the fading pipe (P9-6): at −4 dB on ITU Good the
+    500 Hz floor carries a 1 kB session that the fixed 45 s timeout dropped two times in
+    three."""
+    import numpy as np
+
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.rate import NARROW_AWGN_THRESHOLD_DB
+    from aether_model.link.sim import control_thresholds_for
+
+    # the calibrated constants of the frames this session uses (bench/baselines/fading_pipe.csv)
+    beta = {"mode 0": 0.026, "mode 1": 0.056, "control floor": 0.05, "control short": 0.3}
+    timing = phy_timing(NARROW.params)
+    done = 0
+    for seed in range(6):
+        a = LinkEngine("W4ODA", timing, LinkConfig(max_mode=12), seed=seed)
+        b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=12), seed=seed + 1)
+        pipe = FadingPipe(
+            SharedFading("good", seed),
+            shapes_for(NARROW),
+            lambda f: beta.get(frame_key(f), 1.0),
+            np.random.default_rng(seed),
+        )
+        sim = TwoStationSim(
+            a,
+            b,
+            snr_db=-4.0,
+            seed=seed,
+            thresholds=dict(NARROW_AWGN_THRESHOLD_DB),
+            control_thresholds=control_thresholds_for(timing),
+            fading=pipe,
+        )
+        message = bytes(range(250)) * 4
+        a.connect("KK4XYZ")
+        a.send(message)
+        a.disconnect()
+        sim.run(until=900)
+        done += sim.delivered(1) == message
+    assert done >= 5, done

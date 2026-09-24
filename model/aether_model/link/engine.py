@@ -73,7 +73,16 @@ class LinkConfig:
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
     link_timeout_s: float = 45.0
-    """No valid frame from the peer for this long ends the session."""
+    """No valid frame from the peer for this long ends the session — or longer where the
+    link runs long frames: see :attr:`link_timeout_exchanges`."""
+    link_timeout_exchanges: float = 4.0
+    """Silence ends a session only after at least this many whole exchanges' air time at
+    the family the link runs in — a full burst, its acknowledgement and both turnarounds
+    (P9-7). On the ordinary layouts that is well inside :attr:`link_timeout_s`; on the
+    500 Hz floor (ADR-0009) one exchange is nearly half a minute, and a fixed 45 s dropped
+    two sessions in three at −4 dB on the fading bench (Good, Moderate) that 85 s carried
+    to the end: a slow fade outlasts one missed exchange far more often than a real link
+    fails."""
     ack_margin_s: float = 0.4
     """Slack added to every wait for a peer response."""
     burst_gap_s: float = 0.2
@@ -88,6 +97,16 @@ class LinkConfig:
     max_mode: int = 13
     bursts_before_turn: int = 3
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
+    silence_step: int = 2
+    """Usable modes the ISS steps its own recommendation down by for every burst that goes
+    unanswered (P9-7). The recommendation otherwise moves only when an acknowledgement
+    brings one, and on a fading path the burst and its acknowledgement fade together: a
+    session whose first bursts went out on a connect frame measured at a peak repeated
+    them at a mode the path could not carry until the link timed out, one session in
+    twenty at 0–3 dB on the 500 Hz fading bench. Two steps a silence reaches the bottom of
+    either table within the retries, and the frames stranded up there are re-encoded on
+    the way (after :attr:`max_combines`); the next acknowledgement puts the peer's own
+    recommendation back."""
     max_combines: int = 4
     """HARQ buffers are reset after this many failed combines (guards a wrong inference)."""
     capabilities: int = 0
@@ -487,17 +506,24 @@ class LinkEngine:
         else:
             self._on_data(frame)
 
-    def on_preamble(self, t_start: float, now: float) -> None:
+    def on_preamble(self, t_start: float, now: float, frame_s: float | None = None) -> None:
         """The PHY has detected a frame starting at ``t_start`` but has not decoded it yet.
 
         This is what lets the IRS answer a burst promptly: it now knows the burst is still
         running and can hold its ACK until that frame has finished, instead of assuming a
         whole frame of silence means the burst ended. Optional — a PHY that cannot report
-        preambles simply leaves :attr:`PhyTiming.preamble_detect_s` unset."""
+        preambles simply leaves :attr:`PhyTiming.preamble_detect_s` unset.
+
+        ``frame_s`` is the announced frame's own air time, which its preamble names (the
+        layout, and with it the family: a floor frame is four times an ordinary one). Without
+        it the IRS assumes the longest frame the peer may send next — a guess that went wrong
+        when a session's first burst dropped into the floor after the connect frames were
+        ordinary: the ACK fired in the middle of every floor frame and trampled it (P9-7)."""
         self.now = max(self.now, now)
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
-        deadline = t_start + self._peer_data_frame_s() + self._irs_reply_delay()
+        length = frame_s if frame_s is not None else self._peer_data_frame_s()
+        deadline = t_start + length + self._irs_reply_delay()
         self._deadlines["ack"] = max(self._deadlines.get("ack", 0.0), deadline)
 
     # ── timers ────────────────────────────────────────────────────────
@@ -616,6 +642,30 @@ class LinkEngine:
         if self._peer_mode is not None:
             modes.append(self._peer_mode)
         return max(self.timing.data_frame_s_for(m) for m in modes)
+
+    def _back_off(self) -> None:
+        """An unanswered burst is evidence too: step the recommendation down
+        :attr:`LinkConfig.silence_step` usable modes (never below the table's first)."""
+        modes = self.rate.modes
+        current = min(self._recommended, self.cfg.max_mode)
+        below = [m for m in modes if m <= current]
+        index = modes.index(below[-1]) if below else 0
+        self._recommended = modes[max(0, index - self.cfg.silence_step)]
+
+    def _link_timeout(self) -> float:
+        """How long the peer may stay silent before the session ends: the configured time,
+        or :attr:`LinkConfig.link_timeout_exchanges` whole exchanges at the family the link
+        runs in — the longest data frame either side sends or may send next, and the
+        control frame of that family — whichever is longer."""
+        frame = max(self._peer_data_frame_s(), self.timing.data_frame_s_for(self._burst_mode()))
+        floor = self._peer_floor or self.timing.is_floor(self._burst_mode())
+        exchange = (
+            self.cfg.burst_frames * frame
+            + self.timing.control_frame_s_for(floor)
+            + 2 * self.timing.turnaround_s
+            + self.cfg.burst_gap_s
+        )
+        return max(self.cfg.link_timeout_s, self.cfg.link_timeout_exchanges * exchange)
 
     def _robust_mode(self, floor: bool) -> int:
         """The slowest mode of the given family whose frame carries a connect body (with a
@@ -736,6 +786,7 @@ class LinkEngine:
             self._end_session("no response")
             return
         if what == "ack":
+            self._back_off()
             self._send_burst()  # same composition: nothing was acknowledged
         elif what == "poll":
             self._send_poll()
@@ -1004,7 +1055,7 @@ class LinkEngine:
             return
         self._note_peer_frame(rec.frame)
         self._last_peer_frame = self.now
-        self._arm("link", self.cfg.link_timeout_s)
+        self._arm("link", self._link_timeout())
         rec.seq = header.seq
         self.stats.frames_received += 1
         if header.kind is DataKind.CONNECT_REQ:
@@ -1107,7 +1158,7 @@ class LinkEngine:
         ):
             return
         self._last_peer_frame = self.now
-        self._arm("link", self.cfg.link_timeout_s)
+        self._arm("link", self._link_timeout())
         if ctl.kind is ControlKind.DISC:
             self._transmit([self._control(ControlKind.DISC_ACK)])
             self._end_session("peer disconnected")
@@ -1227,7 +1278,7 @@ class LinkEngine:
         self.role = Role.IRS
         self._confirmed = False
         self._last_peer_frame = self.now
-        self._arm("link", self.cfg.link_timeout_s)
+        self._arm("link", self._link_timeout())
         # the request is the first measurement of how the caller is heard: the
         # controller starts from it, and the acceptance carries it back so the caller's
         # first burst can too (P9-2)
@@ -1253,7 +1304,7 @@ class LinkEngine:
         self.role = Role.ISS
         self._confirmed = True
         self._last_peer_frame = self.now
-        self._arm("link", self.cfg.link_timeout_s)
+        self._arm("link", self._link_timeout())
         self.actions.append(Event("connected", f"{self.remote_call} (iss)"))
         # the acceptance says how the request was heard: the first burst starts at what
         # that supports, less a step, instead of at the slowest mode; the acceptance's

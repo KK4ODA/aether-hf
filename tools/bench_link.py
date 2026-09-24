@@ -256,9 +256,10 @@ def run_point(
     peak: bool = False,
     fading: bool = False,
     continuous: bool = False,
+    link: dict[str, float | int] | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
-    cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
+    cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
     a = LinkEngine("W4ODA", timing, cfg, seed=seed)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
     if ramp is not None:
@@ -333,6 +334,7 @@ def run_point(
         "backend": backend,
         "bandwidth_hz": air.params.bandwidth.value,
         "rate": ",".join(f"{k}={v}" for k, v in sorted((rate or {}).items())),
+        "link": ",".join(f"{k}={v}" for k, v in sorted((link or {}).items())),
         "channel": channel,
         "snr_db": round(snr_db, 1),
         "snr_reference": "peak" if peak else "average",
@@ -482,6 +484,16 @@ def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     return row
 
 
+def overrides(text: str) -> dict[str, float | int]:
+    """``key=value,key=value`` as a dict of numbers."""
+    out: dict[str, float | int] = {}
+    for item in text.split(","):
+        if item.strip():
+            key, value = item.split("=", 1)
+            out[key.strip()] = int(value) if value.strip().lstrip("-").isdigit() else float(value)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--backend", choices=("sim", "phy"), default="sim")
@@ -501,6 +513,12 @@ def main() -> int:
         default="",
         help="rate-controller overrides, key=value pairs separated by commas "
         "(RateController fields), to compare one controller against another",
+    )
+    ap.add_argument(
+        "--link",
+        default="",
+        help="link-engine overrides, key=value pairs separated by commas (LinkConfig "
+        "fields), to compare one engine against another",
     )
     ap.add_argument(
         "--replay",
@@ -537,11 +555,8 @@ def main() -> int:
     fer_csv = args.fer_csv or (
         "bench/baselines/phy_fer_500.csv" if air is NARROW else "bench/baselines/phy_fer.csv"
     )
-    rate: dict[str, float | int] = {}
-    for item in args.rate.split(","):
-        if item.strip():
-            key, value = item.split("=", 1)
-            rate[key.strip()] = int(value) if value.strip().lstrip("-").isdigit() else float(value)
+    rate = overrides(args.rate)
+    link = overrides(args.link)
     tables = channel_thresholds(Path(fer_csv), awgn=table_for(air)[0])
     if args.backend == "sim" and not tables:
         print(f"warning: {fer_csv} not found; every channel modelled as AWGN", flush=True)
@@ -575,6 +590,7 @@ def main() -> int:
                     peak=args.peak,
                     fading=args.fading,
                     continuous=args.continuous,
+                    link=link,
                 )
                 rows.append(row)
                 print(

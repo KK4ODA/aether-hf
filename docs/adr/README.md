@@ -16,3 +16,4 @@ context → decision → alternatives considered → consequences.
 | [0009](0009-the-floor.md) | The floor — a frame family for the SNR region below the mode table | accepted |
 | [0010](0010-whole-burst-to-the-card.md) | A whole burst goes to the sound card at once, and the key follows the card's clock | accepted |
 | [0011](0011-profiles.md) | Profiles — a station's settings as one portable file, projected through a settings registry | accepted |
+| [0012](0012-holding-the-link.md) | Holding the link on a fading path — the timeout spans whole exchanges, silence steps the mode down, the ACK waits for the announced frame | accepted |
