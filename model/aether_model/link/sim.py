@@ -225,8 +225,9 @@ class TwoStationSim:
             dur = st.engine.timing.frame_s(frame)
             if sof is not None and frame.container is Container.DATA:
                 # acquisition succeeds far below every mode's decode threshold (P2-3: 100 %
-                # at −5 dB), so a listening receiver is assumed to see every preamble
-                self._push(t + sof, "preamble", 1 - who, (t, t + sof))
+                # at −5 dB), so a listening receiver is assumed to see every preamble — and
+                # the layout it names, so the frame's own length
+                self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur))
             self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur))
             t += dur
         st.tx_end = t
@@ -250,13 +251,14 @@ class TwoStationSim:
         eng.on_frame(sf, arrival)
         self._pump(rx, arrival)
 
-    def _announce(self, rx: int, t_start: float, at: float) -> None:
-        """Tell a listening receiver that a frame's preamble was detected (P2-2a)."""
+    def _announce(self, rx: int, t_start: float, at: float, frame_s: float) -> None:
+        """Tell a listening receiver that a frame's preamble was detected (P2-2a), and how
+        long the frame it names is."""
         if self._busy(rx, t_start, at):
             return
         eng = self.st[rx].engine
         eng.tick(at)
-        eng.on_preamble(t_start + self.prop_s, at)
+        eng.on_preamble(t_start + self.prop_s, at, frame_s)
         self._pump(rx, at)
 
     # ── run loop ──────────────────────────────────────────────────────
@@ -287,8 +289,8 @@ class TwoStationSim:
                     fr, t0, t1 = cast("tuple[TxFrame, float, float]", ev.data)
                     self._deliver(ev.who, fr, t0, t1)
                 elif ev.kind == "preamble":
-                    t0, t1 = cast("tuple[float, float]", ev.data)
-                    self._announce(ev.who, t0, t1)
+                    t0, t1, frame_s = cast("tuple[float, float, float]", ev.data)
+                    self._announce(ev.who, t0, t1, frame_s)
                 elif ev.kind == "tx_done":
                     self.st[ev.who].engine.on_tx_done(nt)
                     self._pump(ev.who, nt)
