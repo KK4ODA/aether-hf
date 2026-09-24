@@ -4,8 +4,10 @@
                               [--frames 30] [--step 1.0] [--out bench/baselines/phy_fer.csv]
                               [--bandwidth 2300|500]
 
-``--bandwidth 500`` sweeps the narrow air interface (its own ten-mode table, P7-0); the
-default output for it is ``bench/baselines/phy_fer_500.csv``. SNR stays referenced to
+``--bandwidth 500`` sweeps the narrow air interface (its own OFDM mode table, P7-0 — by
+default the modes on its ladder, ADR-0013); the default output for it is
+``bench/baselines/phy_fer_500.csv``. Modes are OFDM mode indices, as the chips carry them,
+not rungs of the ladder: the tone floor below them has its own bench, ``bench_tone.py``. SNR stays referenced to
 3 kHz for both, so the two tables are comparable as an operator would compare them: the
 same transmitter power into the same noise.
 
@@ -101,9 +103,11 @@ def run_point(
             sro_ppm=float(rng.uniform(-50, 50)),
         )
         y = ch.process(burst)
-        result = modem.decode_buffer(y, max_frames=1)
+        # the OFDM frame: the tone floor's detector runs in decode_buffer too
+        result = [d for d in modem.decode_buffer(y, max_frames=2) if d.frame is not None][:1]
         if result:
             f = result[0]
+            assert f.frame is not None
             # multipath can lock onto a path up to a few samples late; that still counts
             if abs(f.frame.sync.start - lead) <= 8 and f.frame.mode == mode_idx:
                 acquired += 1
@@ -119,10 +123,8 @@ def run_point(
         "acquired": acquired,
         "decoded": decoded,
         "fer": round(fer, 4),
-        # per second of the frame the mode goes out on: a floor frame is four times as long
-        "throughput_bps": round(
-            8 * n_payload * (1 - fer) / modem.air.data_layout(mode.index).duration_s
-        ),
+        # per second of an OFDM data frame: every OFDM mode goes out on LONG
+        "throughput_bps": round(8 * n_payload * (1 - fer) / modem.air.long.duration_s),
         "mean_reported_snr_db": round(float(np.mean(snr_est)), 2) if snr_est else "",
         "seconds": round(time.perf_counter() - t0, 1),
     }
@@ -149,7 +151,7 @@ def main() -> int:
         else ("bench/baselines/phy_fer_500.csv")
     )
     modes_default = (
-        "0,2,4,6,8,10,13" if args.bandwidth == 2300 else ",".join(str(m.index) for m in air.modes)
+        "0,2,4,6,8,10,13" if args.bandwidth == 2300 else ",".join(str(m) for m in air.ofdm_ladder)
     )
     rows: list[dict[str, float | int | str]] = []
     for channel in args.channels.split(","):
