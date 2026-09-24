@@ -212,3 +212,71 @@ diversity, which is where the Good numbers of §2 move; re-encoding stranded fra
 mode on `FLOOR_LONG` if the eight-symbol detector holds at −15 dB. A JS8-class emergency
 mode — 2–5 bit/s at −20 dB and below, thirty-second frames, non-coherent MFSK — is a
 different waveform, not a mode of this table; it stays a roadmap question, not a promise.
+
+## 8. Amendment (2026-09-23): the floor frame on a live receiver
+
+**What was wrong.** Everything in §6 was measured offline — `decode_buffer` over a whole
+buffer, and the link harness, which decodes that way. The streaming receiver the daemon runs
+searches `block + 2·lookback` at a time (nine symbols of lookback), and the detector took a
+floor candidate only with its whole frame in the buffer: 72 or 136 symbols, never inside a
+search region. So the family decoded on the bench and never on the air — the pre-OTA review
+of 2026-09-22 found it (`field/REVIEW-2026-09-22.md`) — and a fading path like the one to
+W4TGA on 2026-09-23 (−3 to +2.5 dB), the kind the floor exists for, had nothing below the
+ordinary table.
+
+**Tried and rejected.** Taking a floor candidate once its preamble and one symbol more are
+in, and re-finding it with the whole frame at harvest. Eight identical symbols score above
+the floor threshold (0.32) at a symbol's alignment and at part-symbol offsets — where the
+bank's search over frequency makes up the phase — up to about four symbols *before* the true
+start (0.47–0.58 at high SNR), and while the true start's statistic, which needs its eight
+symbols, is still arriving, those are the best candidates in the region. At 512-sample blocks
+a data frame was taken a symbol and a half early and *as a control frame*: harvested after
+the control span, confirmed as nothing, and its body left to raise phantoms.
+
+**Decision.**
+
+1. *A candidate that cannot be used yet still claims.* A floor candidate that passes the
+   repetition check but is not usable claims what an accepted one would — its span and the
+   seven symbols before it — so none of its own early sidelobes is taken in its place.
+   Offline this changes only a frame cut off by the end of the buffer, whose sidelobes are no
+   longer reported as frames of their own.
+2. *Final when nothing still to come could claim it.* Streaming, a floor candidate is taken
+   once the input reaches `FrameDetector.floor_settle_samples` past its statistic position:
+   the claim's skirt (7 symbols), two half refinement windows (3) and the eight symbols the
+   evaluation of the last candidate that could claim it reads — eighteen symbols, 0.56 s into
+   a 2.2 or 4.2 s frame. Every candidate the decision depends on has then been evaluated in
+   full, so start, type, offset and peak are offline's, and the pending frame's span keeps its
+   own body's phantoms out as before. The lookback grows from nine symbols to ten
+   (`stream_lookback`: a region must hold half a refinement window before a candidate and
+   the settle distance after it).
+3. *Announced when it is arriving.* The link layer's start-of-frame signal is budgeted at ten
+   symbols on the narrow air (`preamble_detect_s`), and a later one lets the receiving station
+   decide a burst is over in the middle of the next frame. The detector also returns the floor
+   candidates whose preamble is in but which are not final (`Detection.arriving` in the port);
+   `take_preambles` reports such a frame at once — about eight symbols in — and again at its
+   final start should that differ. Nothing else about it is committed.
+4. *An ordinary phantom waits for the floor decision.* At high SNR a floor preamble raises a
+   0.565 candidate on the ordinary control reference; a SHORT frame there is complete fourteen
+   symbols later, before the floor frame is final, and would be decoded (as nothing) where
+   offline settles it away. An ordinary pending frame that an arriving floor candidate would
+   settle away (§4: at least `FLOOR_OVER_ORDINARY` of its peak) is held at harvest until the
+   floor decision evicts it or the candidate goes.
+
+**Measured.** Model and port: a floor data and a floor control frame stream exactly as
+`decode_buffer` finds them — same frames, same start — at blocks of 160 samples (the daemon's
+20 ms), 512, 800, 1 600 and 4 096, at high SNR and at −9 dB with a 23 Hz offset
+(`test_hal_stream.py`, `stream.rs`); a model sweep over −11, −8, 0 and 25 dB, three seeds, two
+block sizes and both types matched offline in all 48 cases. The port announces the frame
+within the ten-symbol budget at every block size. Two stations over real 48 kHz audio at −9 dB
+— below every ordinary narrow mode — connect on the floor and deliver a message
+(`two_narrow_stations_connect_and_carry_a_message_on_the_floor`). On the air: the 500 Hz
+mobile-to-home recording of 2026-09-23 15:13 holds a floor data frame (mode 1, 41 bytes) at
+−8.1 dB that the live receiver missed; replayed at the daemon's 20 ms blocks it decodes, at
+0.32× real time on the author's mini PC (worst block 82 ms). Three 2 300 Hz recordings of the
+same evening replay to exactly the frames they decoded on the day.
+
+**Costs and limits.** A floor frame is final eighteen symbols in rather than nine, which costs
+nothing: it is decoded at its end either way and announced at eight. The search region is two
+symbols longer. A chain of floor candidates each within eight and a half symbols of the next —
+overlapping floor frames, a collision — can still be decided differently from offline, where
+the first of three is claimed by the third through the second.

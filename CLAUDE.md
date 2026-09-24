@@ -271,7 +271,20 @@ third try; `usable_modes` compares bytes per *second*; the codec refuses the all
 block and session ids are 1–255. Measured through the real modem: floor frame acquired
 19/20 at −12 dB, decoded 20/20 at −11; a session completes at −10 dB AWGN (nothing
 connected below −5.5 before). Tools: `tools/bench_floor.py` (acquisition/decode/genie per
-frame). Found on the way: `test_the_first_mode_keeps_a_step_in_hand` had been red on
+frame). **Live only since 2026-09-23 (ADR-0009 §8):** those numbers were offline; the
+streaming receiver never held a whole floor frame in its search region, so the family never
+decoded on the air. Now a floor candidate is final once the input is
+`floor_settle_samples` (18 symbols) past it — nothing still to come can claim it, so the
+decision is offline's — the lookback is `stream_lookback` (10 symbols narrow), a candidate
+not usable yet still claims its span (its own early sidelobes, 0.47–0.58 up to four symbols
+before the true start, were being taken), `detect_streaming` returns the not-yet-final ones
+as `arriving` and `take_preambles` announces them at ~8 symbols (the link's
+`preamble_detect_s` budget is 10), and an ordinary pending frame an arriving floor frame
+would settle away is held at harvest. Streamed = offline at blocks 160…4096 in both suites;
+`two_narrow_stations_connect_and_carry_a_message_on_the_floor` runs at −9 dB; the 500 Hz
+recording `20260923-151317_KK4ODA-1_KK4ODA-2` replays a mode-1 floor frame at −8.1 dB that
+the live receiver had missed.
+Found on the way: `test_the_first_mode_keeps_a_step_in_hand` had been red on
 master since ADR-0008 (CI was failing) — fixed to `first_mode_back`. Next:
 P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),

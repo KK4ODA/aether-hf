@@ -635,23 +635,42 @@ impl FrameDetector {
         best_at
     }
 
-    /// Floor-family candidates, best first; each accepted one masks its whole span and the
+    /// Floor-family candidates, best first; each accepted one claims its whole span and the
     /// seven symbols before it (where the averaged statistic still sees part of its
     /// preamble). The contest with the ordinary pass is settled in [`Self::detect`].
+    ///
+    /// A candidate that repeats like a floor preamble but cannot be used yet claims the same,
+    /// so nothing it would have claimed is taken in its place. That matters above all to a
+    /// streaming receiver: eight identical symbols score well above the threshold at a
+    /// symbol's alignment and at part-symbol offsets a few symbols *before* the true start,
+    /// and while the true start's statistic is still arriving those are the best candidates
+    /// there are (ADR-0009 §8).
+    ///
+    /// Offline, a candidate is usable when its whole frame is in `samples`. A streaming
+    /// receiver cannot wait for that inside its search window — a floor frame is 4.2 s, the
+    /// window a fraction of it — so with `streaming` a candidate is usable once every
+    /// candidate that could still claim it has been evaluated in full
+    /// ([`Self::floor_settle_samples`]): the decision is then the one offline makes, taken
+    /// while the frame is still arriving.
+    ///
+    /// Returns the accepted candidates and, streaming, the ones whose preamble is in but
+    /// which are not final yet — the receiver's evidence that a floor frame is arriving.
     fn detect_floor(
         &self,
         samples: &[Complex],
         output: &BankOutput,
         max_frames: usize,
-    ) -> Vec<Acquisition> {
+        streaming: bool,
+    ) -> (Vec<Acquisition>, Vec<Acquisition>) {
         let mut found = Vec::new();
+        let mut arriving = Vec::new();
         let mut eligible: Vec<bool> = output
             .floor_stat
             .iter()
             .map(|&s| s >= self.min_floor_peak)
             .collect();
         let half = 3 * self.period / 2;
-        let skirt = self.floor_windows * self.period;
+        let skirt = self.min_gap.max(self.floor_windows * self.period);
         for _ in 0..self.max_candidates {
             if found.len() >= max_frames {
                 break;
@@ -677,16 +696,23 @@ impl FrameDetector {
                 .air
                 .layout_for_family(frame_type == FrameType::Data, true)
                 .samples();
-            if d + span + self.fft_offset > samples.len() {
-                eligible[lo..hi].fill(false); // too close to the end to be usable yet
-                continue;
-            }
-            let cfo_hz = self.fine_cfo_of(samples, d, frame_type, self.floor_symbols, true);
             if self.repetition(samples, d, self.floor_symbols) < FLOOR_REPETITION_MIN {
                 eligible[lo..hi].fill(false); // the bank liked it; the symbols do not repeat
                 continue;
             }
-            found.push(Acquisition {
+            let usable = if streaming {
+                c + self.floor_settle_samples() <= samples.len()
+            } else {
+                d + span + self.fft_offset <= samples.len()
+            };
+            // used or not, nothing it would claim goes in its place
+            let claim_to = (d + span).min(eligible.len());
+            eligible[d.saturating_sub(skirt).min(claim_to)..claim_to].fill(false);
+            if !(usable || streaming) {
+                continue; // offline, the frame runs off the end of the buffer
+            }
+            let cfo_hz = self.fine_cfo_of(samples, d, frame_type, self.floor_symbols, true);
+            let acquisition = Acquisition {
                 sync: FrameSync {
                     start: d,
                     cfo_hz,
@@ -698,12 +724,41 @@ impl FrameDetector {
                 timing_peak: output.floor_stat[c],
                 type_confidence: output.floor_stat[c] / output.floor_other[c].max(1e-12),
                 coarse_cfo_hz: output.floor_cfo[c],
-            });
-            let a = d.saturating_sub(self.min_gap.max(skirt));
-            let b = (d + span).min(eligible.len());
-            eligible[a..b].fill(false);
+            };
+            if usable {
+                found.push(acquisition);
+            } else if streaming {
+                arriving.push(acquisition);
+            }
         }
-        found
+        (found, arriving)
+    }
+
+    /// How far past a floor candidate's statistic position the input must reach before a
+    /// streaming receiver takes the candidate as final. A candidate is claimed by an accepted
+    /// one whose refined start lies up to the claim's skirt after it; that one's statistic
+    /// sits up to half the refinement window further on, and evaluating it in full —
+    /// refinement, repetition — reads eight symbols past its own refinement window.
+    #[must_use]
+    pub fn floor_settle_samples(&self) -> usize {
+        let half = 3 * self.period / 2;
+        let skirt = self.min_gap.max(self.floor_windows * self.period);
+        skirt + 2 * half + self.floor_symbols * self.period
+    }
+
+    /// How far a streaming receiver searches back behind what it has already searched, so
+    /// that every candidate is decided in a region that holds all it depends on. The region
+    /// runs two lookbacks behind the newest sample: an ordinary candidate needs a symbol past
+    /// its preamble; a floor candidate [`Self::floor_settle_samples`] past its statistic
+    /// position and half a refinement window before it.
+    #[must_use]
+    pub fn stream_lookback(&self) -> usize {
+        let ordinary = (self.air.longest_preamble() + 1) * self.period;
+        if !self.has_floor {
+            return ordinary;
+        }
+        let need = self.floor_settle_samples() + 3 * self.period / 2;
+        ordinary.max(need.div_ceil(2 * self.period) * self.period)
     }
 
     /// Where a frame of this acquisition starts and ends.
@@ -756,9 +811,7 @@ impl FrameDetector {
         self.detect_with(samples, &output, max_frames)
     }
 
-    /// [`detect`](Self::detect) over a bank already computed for `samples`: the streaming
-    /// receiver's, which keeps a row per position and computes each once rather than
-    /// re-running the bank over its whole lookback on every block.
+    /// [`detect`](Self::detect) over a bank already computed for `samples`.
     ///
     /// # Panics
     /// As [`detect`](Self::detect).
@@ -769,9 +822,37 @@ impl FrameDetector {
         output: &BankOutput,
         max_frames: usize,
     ) -> Vec<Acquisition> {
+        self.acquire(samples, output, max_frames, false).frames
+    }
+
+    /// [`detect_with`](Self::detect_with) for a streaming receiver's search region, whose
+    /// bank is the rows it keeps — a row per position, each computed once rather than the
+    /// bank re-run over the whole lookback on every block. A floor candidate is taken once it
+    /// is final rather than once its whole frame is in ([`Self::floor_settle_samples`]); the
+    /// floor candidates whose preamble is in but which are not final yet come back as well.
+    ///
+    /// # Panics
+    /// As [`detect`](Self::detect).
+    #[must_use]
+    pub fn detect_streaming(
+        &self,
+        samples: &[Complex],
+        output: &BankOutput,
+        max_frames: usize,
+    ) -> Detection {
+        self.acquire(samples, output, max_frames, true)
+    }
+
+    fn acquire(
+        &self,
+        samples: &[Complex],
+        output: &BankOutput,
+        max_frames: usize,
+        streaming: bool,
+    ) -> Detection {
         let mut ordinary: Vec<Acquisition> = Vec::new();
         if output.peak.is_empty() {
-            return ordinary;
+            return Detection::default();
         }
         let mut eligible: Vec<bool> = output
             .peak
@@ -848,23 +929,36 @@ impl FrameDetector {
             eligible[low..high].fill(false);
         }
 
-        let mut found = if self.has_floor {
-            let floor = self.detect_floor(samples, output, max_frames);
+        let (mut found, arriving) = if self.has_floor {
+            let (floor, arriving) = self.detect_floor(samples, output, max_frames, streaming);
             if floor.is_empty() {
-                floor
+                (floor, arriving)
             } else {
                 let (floor, kept) = self.settle_families(floor, ordinary);
                 ordinary = kept;
-                floor
+                (floor, arriving)
             }
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         found.append(&mut ordinary);
         found.sort_by_key(|acquisition| acquisition.sync.start);
         found.truncate(max_frames);
-        found
+        Detection {
+            frames: found,
+            arriving,
+        }
     }
+}
+
+/// What a streaming search found.
+#[derive(Debug, Clone, Default)]
+pub struct Detection {
+    /// Frames to take: as [`FrameDetector::detect`] finds them.
+    pub frames: Vec<Acquisition>,
+    /// Floor frames whose preamble is in but which are not final yet: evidence that one is
+    /// arriving, a timing signal and nothing more.
+    pub arriving: Vec<Acquisition>,
 }
 
 /// What [`FrameDetector::bank`] produced, one entry per start position.
