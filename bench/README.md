@@ -279,6 +279,46 @@ modem's measured FER curves are cliffs a decibel wide (`phy_fer_500.csv`, mode 8
 8 dB, 0 % at 9 dB), so the pipe fails the odd frame a few dB above threshold that the modem
 would not. Anything that turns on FER near threshold is settled on the `phy` backend.
 
+## Link layer, the fading pipe (`fading_pipe.csv`, `link_pipe_check.csv`, P9-6)
+
+The logistic pipe above gives every frame the channel's SNR and the per-class *average*
+frame error rate, each frame independent of the last — and, found in P9-6, it centres its
+soft 1.2 dB⁻¹ logistic on each 10 % point as if it were the 50 % point, about 1.8 dB
+pessimistic there. `bench_link.py --fading` replaces it: one ITU-R F.1487 two-ray fade
+both stations share, each frame's resource elements at the mean SNR times `|H(f,t)|²`, the
+frame decoded on the modem's steep AWGN waterfall at its exponential effective SNR (EESM)
+with the constant fitted by `tools/calibrate_fading.py` so each frame type's ensemble 10 %
+point on each class is the real modem's (86 of 90 fits exact; four clamped by 0.1–1.9 dB,
+all on Good, where a 20-frame measurement lies beyond what a frame's own mean SNR allows).
+
+Checked against the real modem with one continuous fade per session (`--backend phy
+--continuous`, which also carries the fade through the gaps between frames), 2 kB at
+2300 Hz and 1 kB at 500 Hz, 4 sessions a point on the modem and 40 on each pipe:
+
+| point | real modem | fading pipe | logistic pipe |
+|---|---|---|---|
+| 2300 Hz Good 6 dB | 4/4, 504 bit/s | 40/40, 404 | 40/40, 196 |
+| 2300 Hz Moderate 10 dB | 4/4, 867 | 40/40, 777 | 40/40, 595 |
+| 2300 Hz Poor 3 dB | 4/4, 234 | 40/40, 266 | 40/40, 168 |
+| 500 Hz Moderate 3 dB | 4/4, 81 | 38/40, 81 | 24/40, 29 |
+| 500 Hz Good 6 dB | 4/4, 186 | 39/40, 182 | 35/40, 79 |
+| 500 Hz AWGN −8 dB | 4/4, 25 | 40/40, 25 | 32/40, 23 |
+
+The fading pipe is within about a fifth of the modem everywhere; the logistic pipe was two
+to three times pessimistic at the low SNRs, which is where the start of a session and the
+rate controller's margin were tuned on it (ADR-0007, ADR-0008). Questions of the start and
+the rate control are settled on `--fading` from P9-6 on.
+
+## Peak-to-average as transmitted (`peak_to_average.csv`, P9-6)
+
+A transmitter is driven to a fixed peak, so a frame's average power is that peak less its
+peak-to-average ratio. As the modem transmits them — ADR-0004's clip-and-filter included —
+PSK frames peak 5.9 dB above their mean and QAM frames 7.5 dB, the control frames as their
+modulation (`tools/bench_peak.py`, 24 frames each). A steady tone would put about 6 dB more
+average power on the air from the same peak. `bench_link.py --peak` reads the SNR axis at
+equal peak power (each frame gets the axis less its own ratio), and `bench_peak.py --table`
+prints each mode's threshold per channel both ways.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
