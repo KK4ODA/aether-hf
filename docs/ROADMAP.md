@@ -649,6 +649,48 @@ call, not ours — the bench proves the modem side; the policy conversation is s
 BPQ32 is the open-source gateway route and reaches AX.25 as well. **Back burner:** Phase
 10 (Aether FM) and Phase 8 (the phone).
 
+### The weak-signal plan from 2026-09-23 — what is left, in order
+
+Decided with the author after the first 10-mile test and the sessions with W4TGA. Those
+sessions ran their data at mode 0 — the slowest 2300 Hz mode — at −4 to +2 dB and still lost
+about 40 % of the frames: the session had not started too high, the table has nothing below
+mode 0, and mode 0 needs about +2 dB on ITU Good against −5.2 on AWGN (the per-class 10 %
+crossings `bench_link.channel_thresholds` reads from `phy_fer.csv`; +1.2 Moderate, −0.3
+Poor; the 500 Hz floor's mode 0 −2.0 on Good). VARA HF's published v4.3 speed-level table
+puts narrowband noncoherent FSK at the bottom (18–175 bit/s; the two lowest levels the same
+in every bandwidth), a few carriers in the middle and the full band only at the top; the
+author's videos of VARA calling at 2300 Hz show a call a few tones and about 150 Hz wide,
+whose envelope measured 6–7 dB peak-to-average through the speaker, against 7.6 dB for
+Aether's frames after ADR-0004 (10.6 without). The benches compare modes at equal *average*
+power while a transmitter's ALC limits *peak* power — the author's 50 W setting gave 8–10 W
+average — so neither concentrating the power nor a steadier envelope has ever been counted.
+On the link bench, starting lower changed no 2300 Hz outcome and cost time; at 500 Hz a
+margin sized for fading carried the marginal cases (Moderate 0 dB 2/20 → 19/20, Good 3 dB
+13/20 → 20/20) at 2–3× the time on a clean channel, and starting at mode 0 alone made Good
+worse (7/20) — the lever is knowing the channel, not the first mode.
+
+The rule stands: VARA is a black box; its public documents describe an architecture, not
+numbers to copy. Every design below comes from public standards and open literature, is
+built in the model first, and ships only with its curve on Good, Moderate and Poor.
+
+| Order | Item | Done when |
+|---|---|---|
+| 1 | **P9-6** trustworthy benches: the pipe's floor bug, a fading pipe, the equal-peak-power view | simulated 500 Hz floor sessions complete; the pipe agrees with the real modem at spot checks; every curve readable at equal peak power |
+| 2 | **P9-7** a start that assumes a fading path | the marginal 500 Hz fading cases complete ≥ 90 % (2–14/20 today), a clean channel loses ≤ ~15 % in time; a beta; one on-air session on a marginal path |
+| 3 | **P9-8** the tone floor | it beats the best existing frame at the same bit rate by ≥ 3 dB at equal peak power on Good and Moderate — the gate: if not, it does not ship; then a beta and the air in both bandwidths |
+| 4 | **P9-9** middle modes on a few carriers | only if P9-6 and P9-8's curves show a gap between the top of the tone floor and the full-width modes at equal peak power |
+| 5 | **P9-5** time diversity | its gain on the Good and Moderate curves |
+| 6 | **P9-1** the A/B against VARA through the channel cable | a baseline any time; the comparison after P9-8; the author's runs |
+| — | **P9-3** the top end after these; **P6-6** the air throughout | |
+
+Dropped by decision: making the 500 Hz floor frames the bottom of the 2300 Hz table. The tone
+floor does that job better and in both bandwidths, and the 2300 Hz receiver would pay about
+three times its CPU for the narrow floor's detector (0.32× against 0.09–0.10× real time on the
+author's mini PC). Folded into P9-8: sturdier acknowledgements — they travel in the tone floor
+when the link is weak; if P9-6 finds two decibels or more for free in lower-peak control
+frames, that small step joins P9-7. Until P9-8 ships, weak paths use 500 Hz: its floor has
+decoded live since beta.49 (ADR-0009 §8).
+
 ---
 
 ### Phase 7 — The 500 Hz waveform and the link probe (next)
@@ -704,6 +746,10 @@ records why P2-6 was measured and *not* adopted; the same standard applies).
 | P9-2 ✅ | **A faster start** — done 2026-09-16 (ADR-0008; the faster *climb* ADR-0007 the same day)**.** Every session begins at mode 0 and climbs (0→2→4→6→9→10 in six bursts on the bench): ten seconds of a short message spent proving what the connect frames already measured. The CONNECT_ACK carries the SNR the called station measured on the request (a byte, 3 kHz-referenced, as `metrics` reports it), the caller starts at the rate controller's recommendation for it less one step of margin, and the request's own SNR is measured on the acknowledgement for the called station's first burst. Model first (`engine.py`, `rate.py`), the frame format in `air-interface.md`, then the port; the gain is a bench number before it is a claim | P9-1 |
 | P9-3 | **Peak throughput: the deferred ADR-0002 experiments.** (a) **Sparser pilots** — every 8th carrier and a pilot symbol every 4th, ~13 % overhead instead of ~34 %, which ADR-0002 deferred until Poor-channel curves existed to compare against; they exist now. (b) **A shorter cyclic prefix** for everyday paths — the 6 ms prefix covers ITU Poor with 3× margin and NVIS's 7 ms is already the extended-CP option; a short-CP option for Good/Moderate paths, negotiated at connect. (c) **2 750 Hz** — 68 carriers, the bandwidth Winlink Express asks for first and VARA's widest, ~20 % more air; needs the bandwidth in the connect handshake (shared with P7-0) and `BW2750` accepted. Each is an ADR amendment with its curves, and each is a separate mode-table entry so that nothing already fielded changes underneath a station | P7-0 |
 | P9-4 ✅ | **The floor: modes below 200 bit/s** — done 2026-09-16 (ADR-0009). The narrow air gained a *floor frame family*: two layouts behind an eight-symbol preamble of their own twelve-carrier PN sequences (136 symbols, 4.2 s, for data and connect; 72, 2.2 s, for control) and three modes below the former table — QPSK 1/10 and ⅕ on the floor frame (19 and 41 bytes), QPSK ⅓ on the ordinary one — with control frames on the floor layout while the link runs a floor mode, a connect request that alternates families after two unanswered tries, one family per burst, HARQ buffers that remember their mode, the all-zero block refused, session 0 never assigned. Measured through the real modem: the floor frame is acquired 19/20 at −12 dB where the two-symbol detector stopped at −9, decodes 20/20 at −11 (16/20 at −12), and a session completes at −10 dB AWGN where nothing connected before (−5.5 dB); on ITU Poor the floor frame decodes 14/20 at −8 dB against the old mode 0's 18/20 at +2. Curves in `bench/baselines/floor_500.csv` and `phy_fer_500.csv`. Not built, by decision: the DSSS/FSK "emergency" concept of the first design — a JS8-class mode (2–5 bit/s below −20 dB, thirty-second frames, non-coherent MFSK) is a different waveform, not a mode of this table, and stays a question for the field. Left for later: the full session grid at the floor SNRs (`bench_link.py --backend phy --bandwidth 500` at −8/−10/−12 dB AWGN and −2/0/+2 Good — one −10 dB session is measured, the grid is owed); a wide floor family by the same mechanism measured against the narrow one; re-encoding a frame stranded at an ordinary mode when the link drops into the floor; P9-5 | P7-0, P9-1 |
+| P9-6 🔁 | **Trustworthy benches** (the weak-signal plan's first step, 2026-09-23). (a) The link bench's lossy pipe never set a delivered frame's family, and the engine rightly drops a floor-mode frame whose flag disagrees with its mode, so every simulated 500 Hz session that reached the floor failed — found 2026-09-23; ADR-0009's session numbers came from the real modem and stand — and it judged every control frame at mode 0's threshold rather than its own. Fixed in the model and in the port's pipe, with a test each. (b) **A fading pipe**: the SNR each frame sees drawn from a Watterson two-path process per ITU class, so a lucky reading on the connect frame and a fade lasting several frames happen as they do on the air, each frame judged at its effective SNR through a mapping calibrated to the measured per-class FER curves, and spot-checked against `--backend phy`. (c) **Equal peak power**: every frame family's peak-to-average ratio as transmitted, and the benches able to report thresholds and sessions at the same transmitter peak power — the ALC's view — beside the average-power one | — |
+| P9-7 | **A start that assumes a fading path** (amends ADR-0008). Sessions start at the margin a fading path needs (the measured per-class penalty over AWGN) and relax toward today's only once the frame-to-frame SNR shows a steady channel; the learned margin of ADR-0007 takes over after that. A shorter first burst is measured again beside it. Model first, the fading pipe and the real modem as judges, then the port and a beta | P9-6 |
+| P9-8 | **The tone floor** (ADR-0012). A steady-envelope multi-tone FSK frame family, the same in both bandwidths, carrying calls, answers, acknowledgements and the slowest data — tens of bit/s to about 200. Designed from public sources: MIL-STD-188-141's 8-FSK automatic link establishment, the published FT8/FT4 design and its synchronisation on a fixed tone pattern, and textbook noncoherent FSK detection with soft decisions into Aether's LDPC. A call in the tone floor is heard by a station of either bandwidth, which then negotiates. Model, then the equal-peak-power curves (the gate in the plan above), then the link layer, then the port within the receiver's CPU budget on a modest PC, then a beta and the air | P9-6 |
+| P9-9 | **Middle modes on a few carriers**, built only if the equal-peak-power curves of P9-6 and P9-8 show a gap between the top of the tone floor and the full-width modes | P9-6, P9-8 |
 | P9-5 | **Time diversity for slow fading.** ITU Good and Moderate fade slowly compared with a frame, and a frame that falls entirely into a fade is lost however low its rate. Two candidates, measured: coding spread across frames (an interleaver spanning a burst, so one fade costs part of several codewords instead of all of one), and shorter frames with HARQ at the low modes, so a retransmission lands in a different fade. This is what moves the Poor and Good columns of the mode table, which P9-4's rate alone does not | P9-4 |
 
 Acceptance: the A/B table in `bench/ab/` and the alternated on-air sessions in `field/LOG.md`
@@ -755,8 +801,13 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
 8. ~~**P9-4** The floor~~ — done 2026-09-16 (ADR-0009): the floor frame family at 500 Hz,
    −12 dB acquisition and −11 dB decode through the real modem, a session at −10 dB.
 9. **P9-1** ~~`tools/channel_cable.py` and the A/B protocol~~ (built 2026-09-16); the runs when the author can.
-10. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor.
+10. **P9-3**, then **P9-5**, each with its curve on Good, Moderate and Poor — reordered on
+    2026-09-23 by the weak-signal plan (item 12).
 11. Between any two of the above: ~~CM108 keying; the panel's SNR history across a reload~~
     (both done 2026-09-16);
     whatever the air finds. Host benches owed: Winlink Express P2P at 500 Hz, RMS Trimode
     + Relay as a gateway over `[sim]` (both human; see the small-things paragraph above).
+12. **The weak-signal plan** (from 2026-09-23; its section above Phase 7 has the evidence and
+    the gates): **P9-6** trustworthy benches (*in progress*), **P9-7** a start that assumes a
+    fading path, **P9-8** the tone floor, **P9-9** only if the curves ask for it, then **P9-5**
+    and the **P9-1** runs; **P9-3** after them.
