@@ -1179,9 +1179,11 @@ impl<P: Ptt> Station<P> {
             seq: 0,
             session: 0,
         };
-        // beacons go out at the control mode: the slowest ordinary mode whose frame carries
-        // a callsign — its rung of the ladder, above the tone floor's two (ADR-0013)
-        let mode = self.transmitter.air().control_rung();
+        // beacons go out on the tone floor, where calls and probes start (ADR-0016): the
+        // slowest kind that carries a connect frame carries a callsign, and a beacon exists to
+        // be heard by somebody who can hear nothing else — a station of either bandwidth, as
+        // the floor's frames are the same on both airs
+        let mode = self.engine.robust_mode(true);
         let capacity = self.engine.timing().capacity(mode);
         let payload =
             encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
@@ -3052,6 +3054,9 @@ mod tests {
 
     #[test]
     fn the_burst_has_the_rms_the_tx_level_documents() {
+        // a call's first try is a tone frame (ADR-0016), which goes out at the OFDM frames'
+        // peak — `tone::gain_db()` above their average — and its second an OFDM frame, whose
+        // RMS is what `tx_level` documents
         let mut station = Station::new(
             StationConfig {
                 callsign: "W4ODA".to_owned(),
@@ -3065,24 +3070,49 @@ mod tests {
         station.connect("KK4XYZ").expect("idle");
         let mut out = vec![0.0f32; 4096];
         let mut audio: Vec<f32> = Vec::new();
-        for _ in 0..60 {
+        for _ in 0..1200 {
             let count = station.playback(&mut out).expect("playback");
             audio.extend_from_slice(&out[..count]);
             station.capture(&vec![0.0f32; 4096]).expect("capture");
+            if station.stats.transmissions >= 2 && !station.transmitting() {
+                break;
+            }
         }
-        // the burst proper, without the keying lead and tail
-        let loud: Vec<f32> = audio.iter().copied().filter(|x| x.abs() > 1e-4).collect();
-        let rms = (loud.iter().map(|x| x * x).sum::<f32>() / loud.len() as f32).sqrt();
+        // each burst proper, without the keying lead and tail: runs of sound apart by more
+        // than a tenth of a second of silence
+        let mut bursts: Vec<Vec<f32>> = Vec::new();
+        let mut quiet = usize::MAX;
+        for &x in &audio {
+            if x.abs() > 1e-4 {
+                if quiet > 4800 {
+                    bursts.push(Vec::new());
+                }
+                bursts.last_mut().expect("started").push(x);
+                quiet = 0;
+            } else {
+                quiet = quiet.saturating_add(1);
+            }
+        }
+        assert_eq!(bursts.len(), 2, "two tries of the call");
+        let rms = |b: &[f32]| (b.iter().map(|x| x * x).sum::<f32>() / b.len() as f32).sqrt();
         let expected = 0.25 / std::f32::consts::SQRT_2;
+        let tone = expected * 10f32.powf(aether_phy::tone::gain_db() as f32 / 20.0);
+        let (floor, ordinary) = (rms(&bursts[0]), rms(&bursts[1]));
         assert!(
-            (rms / expected - 1.0).abs() < 0.1,
-            "burst RMS {rms:.4}; tx_level / sqrt 2 is {expected:.4}"
+            (floor / tone - 1.0).abs() < 0.1,
+            "tone burst RMS {floor:.4}; the OFDM frames' peak is {tone:.4}"
         );
-        let peak = loud.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(
-            peak < 0.7,
-            "peak {peak} leaves no headroom at tx_level 0.25"
+            (ordinary / expected - 1.0).abs() < 0.1,
+            "OFDM burst RMS {ordinary:.4}; tx_level / sqrt 2 is {expected:.4}"
         );
+        for burst in &bursts {
+            let peak = burst.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+            assert!(
+                peak < 0.7,
+                "peak {peak} leaves no headroom at tx_level 0.25"
+            );
+        }
     }
 
     #[test]
@@ -3526,7 +3556,10 @@ mod tests {
         assert_eq!(beacon.from.as_deref(), Some("W4ODA"));
         assert_eq!(beacon.to, None);
         assert!(beacon.decoded);
-        assert!(beacon.snr_db > 20.0, "a wire reads {} dB", beacon.snr_db);
+        // a beacon is a tone frame (ADR-0016), whose SNR reading tops out near +17 dB however
+        // clean the path — an OFDM frame's reads past +20 on a wire, checked below — and which
+        // has no constellation to show
+        assert!(beacon.snr_db > 15.0, "a wire reads {} dB", beacon.snr_db);
         assert!(
             beacon.cfo_hz.abs() < 5.0,
             "a wire has no offset: {}",
@@ -3535,9 +3568,7 @@ mod tests {
         assert!(beacon.confidence >= 1.0);
         let (last, points) = air.b.constellation().expect("a frame was heard");
         assert_eq!(last, beacon);
-        assert!(!points.is_empty() && points.len() <= CONSTELLATION_POINTS);
-        // decoded on a wire, the points sit on their constellation: none is near the origin
-        assert!(points.iter().all(|(i, q)| i.hypot(*q) > 0.2));
+        assert!(points.is_empty(), "a tone frame has no constellation");
         assert!(
             air.b.take_frame_reports().is_empty(),
             "reports are taken once"
@@ -3565,6 +3596,14 @@ mod tests {
             acks.iter()
                 .all(|r| r.control.as_deref().is_some_and(|c| c.starts_with("Ack")))
         );
+        // the acknowledgements of OFDM bursts are OFDM frames at the control mode, as beacons
+        // were before ADR-0016: a wire reads past +20 dB, and the last one's symbols sit on
+        // their constellation — none near the origin
+        assert!(acks.iter().all(|r| r.snr_db > 20.0), "{acks:?}");
+        let (last, points) = air.a.constellation().expect("a frame was heard");
+        assert_eq!(last.kind, "control");
+        assert!(!points.is_empty() && points.len() <= CONSTELLATION_POINTS);
+        assert!(points.iter().all(|(i, q)| i.hypot(*q) > 0.2));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! the model is in `model_vectors.rs`.
 
 use aether_link::{
-    LinkConfig, LinkEngine, PhyTiming, Role, State, TwoStationSim,
+    LinkConfig, LinkEngine, PhyTiming, RateConfig, RateController, Role, State, TwoStationSim,
     rate::{
         AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB,
         NARROW_CONTROL_THRESHOLD_DB, WIDE_FLOOR_MARGIN_DB,
@@ -588,13 +588,16 @@ fn a_transfer_survives_a_slow_fade() {
     a.disconnect();
     let mut sim = TwoStationSim::new(a, b, 18.0, 13).with_snr_schedule(Box::new(schedule));
 
-    // sample the sender's mode as the run proceeds, rather than instrumenting the engine
+    // sample the sender's mode as the run proceeds, rather than instrumenting the engine,
+    // until both stations are idle again — not until a step brings nothing: a call on the
+    // tone floor (ADR-0016) is on the air longer than a step
     let mut track: Vec<usize> = Vec::new();
-    while sim.t < 3000.0 {
-        let before = sim.t;
-        sim.run(before + 5.0, 3.0);
+    let mut until = 0.0;
+    while until < 3000.0 {
+        until += 5.0;
+        sim.run(until, 3.0);
         track.push(sim.engine(0).current_mode());
-        if (sim.t - before).abs() < 1e-9 {
+        if sim.engine(0).state() == State::Idle && sim.engine(1).state() == State::Idle {
             break;
         }
     }
@@ -1036,6 +1039,122 @@ fn a_narrow_session_at_the_floor_completes_through_the_pipe() {
         sim.events(1)
     );
     assert!(sim.engine(1).stats.frames_received > 0);
+}
+
+#[test]
+fn a_call_starts_on_the_tone_floor_and_alternates() {
+    // ADR-0016: a call is made before anything is known of the path, so it goes where the
+    // path most likely carries it — the tone floor, 14 dB below the ordinary family's control
+    // rung — on its first try and every other one after, the ordinary family between
+    let t = timing(false);
+    let config = LinkConfig {
+        connect_retries: 4,
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    a.connect("N0BODY").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 24);
+    sim.run(900.0, 3.0);
+    assert!(
+        sim.events(0).iter().any(|e| e == "disconnected:no answer"),
+        "{:?}",
+        sim.events(0)
+    );
+    let robust = air_interface(WIDE_2300).control_rung();
+    assert_eq!(sim.modes_sent(), &[0, robust, 0, robust]);
+}
+
+#[test]
+fn a_probe_goes_out_on_the_floor_and_is_answered_in_its_family() {
+    use aether_link::frames::{DataHeader, DataKind, ProbeBody, encode_data};
+    // ADR-0016: a probe exists to measure a weak path, so it goes out on the tone floor, and
+    // it is answered in the family it arrived in — a station of an earlier version probes in
+    // the ordinary family and hears its answer there
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.probe("KK4XYZ", None).expect("idle");
+    let mut sim = TwoStationSim::new(a, b, -14.0, 26);
+    sim.run(120.0, 3.0);
+    assert_eq!(sim.engine(0).stats.probe_replies, 1, "{:?}", sim.events(0));
+    assert_eq!(sim.modes_sent(), &[0, 0]);
+    let robust = air_interface(WIDE_2300).control_rung();
+    let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
+    let body = ProbeBody {
+        src: "N0CALL".into(),
+        dst: "KK4XYZ".into(),
+        snr_db: None,
+        caps: 0,
+    }
+    .encode()
+    .expect("body");
+    let header = DataHeader {
+        kind: DataKind::Probe,
+        seq: 0,
+        session: 0,
+    };
+    let payload = encode_data(&header, &body, t.capacity(robust)).expect("fits");
+    b.on_frame(
+        &Handed {
+            payload,
+            mode: robust,
+        },
+        1.0,
+    );
+    let modes: Vec<usize> = b
+        .drain()
+        .into_iter()
+        .filter_map(|action| match action {
+            aether_link::Action::Transmit { frames, .. } => Some(frames[0].mode),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(modes, vec![robust]);
+}
+
+#[test]
+fn a_strong_path_called_on_the_floor_climbs_from_its_first_ordinary_burst() {
+    // ADR-0016: the tone floor's SNR estimate reads a few decibels on a strong dispersive
+    // path whatever the SNR. The session's first burst goes out where that reading puts it;
+    // the called station's controller, seeded from it, starts again from the first clean
+    // burst it measures on an ordinary frame — so the second burst goes out where an ordinary
+    // connect frame would have started the session, not two rungs a burst up
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    // a controller as the engine builds one for this air, to say where a measurement puts it
+    let frame_s: Vec<f64> = (0..t.mode_threshold_db.len())
+        .map(|m| t.data_frame_s_for(m))
+        .collect();
+    let fresh = RateController::for_table_timed(
+        RateConfig::default(),
+        &t.mode_threshold_db,
+        &t.data_capacity,
+        &frame_s,
+    )
+    .with_floor(t.floor_modes, t.floor_margin_db);
+    let message = vec![0u8; 20000];
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&message);
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 20.0, 41).with_floor_reading_cap(4.0);
+    sim.run(900.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    // the caller's bursts: past the connect frames, on the floor's first rung, every frame
+    // of a burst goes at the burst's mode
+    let bursts: Vec<usize> = sim
+        .modes_sent()
+        .iter()
+        .copied()
+        .skip_while(|&m| m == 0)
+        .collect::<Vec<_>>()
+        .chunk_by(|x, y| x == y)
+        .map(|run| run[0])
+        .collect();
+    assert_eq!(bursts[0], fresh.first_mode(4.0), "{bursts:?}");
+    assert_eq!(bursts[1], fresh.first_mode(20.0), "{bursts:?}");
+    assert!(
+        bursts[1] > bursts[0] + RateConfig::default().max_up_step,
+        "{bursts:?}"
+    );
 }
 
 /// A frame handed straight to an engine: a payload that always decodes.

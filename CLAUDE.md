@@ -266,8 +266,8 @@ ordinary candidates were tried and rejected (see the ADR). Link layer: `PhyTimin
 `floor_data_frame_s`/`floor_control_frame_s`/`floor_modes` and `frame_s(frame)`; `TxFrame`
 and `SoftFrame` carry `floor`; control frames go in the family of what the station sends
 (ISS) or last decoded (IRS); one family per burst (the other family's retransmissions go
-alone); HARQ buffers remember their mode; a connect request alternates families from the
-third try; `usable_modes` compares bytes per *second*; the codec refuses the all-zero
+alone); HARQ buffers remember their mode; a connect request alternates families (from the
+first try on the floor since ADR-0016); `usable_modes` compares bytes per *second*; the codec refuses the all-zero
 block and session ids are 1–255. Measured through the real modem: floor frame acquired
 19/20 at −12 dB, decoded 20/20 at −11; a session completes at −10 dB AWGN (nothing
 connected below −5.5 before). Tools: `tools/bench_floor.py` (acquisition/decode/genie per
@@ -468,8 +468,8 @@ migration: a wide station's `max_mode` +2; profiles go through it), sidecars
 (1 dB wide, `WIDE_FLOOR_MARGIN_DB`) and the "once" boundary rule, the ISS's ACK wait sized for
 the burst it sent. Port: `aether-phy/src/tone.rs` (codec, detector, `ToneStream`),
 `Received::{Ofdm, Tone}`, the streaming receiver keeps the longest tone frame and announces
-arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons go at
-`control_rung()` (they were going out at rung 0). A wide station hears a narrow station's
+arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons went at
+`control_rung()` (they had been going out at rung 0; since ADR-0016 they go on the floor). A wide station hears a narrow station's
 floor calls — the frames are the same — and ignores them by the bandwidth bits.
 **P9-9 fast tones** (ADR-0014, beta.53; the author's "phase 4"): the floor's frame with its
 data at 50 and 100 Bd (two or four data symbols a slot, 800/1 600 Hz, 2 300 Hz only) —
@@ -512,6 +512,29 @@ built — if at all — as an experimental opt-in mode, off by default; the firs
 interleaver: 10–40 % faster sessions in most fading regimes on the pipe, at the cost of the
 burst becoming the unit a receiver decodes) is in the roadmap's P9-5 row. **Now: field testing
 of the daemon as it is.**
+**P9-11 calls, probes and beacons on the tone floor** (ADR-0016, beta.55; from the author's
+question whether the start was still optimistic): a call's first try is on the floor and the
+tries alternate (`_connect_floor`: even tries); probes and beacons go on the floor
+(`robust_mode(true)`, public in the port) and a probe is answered in its own family
+(`_peer_floor`); the ISS waits for an acknowledgement in the longer of its burst's family and
+the one the IRS last heard (the IRS answers in the latter when it decoded none of the burst);
+a caller or prober that hears a frame arriving (`on_preamble` while `Connecting`/probing)
+moves its next try or deadline past it — a connected called station whose acceptance was lost
+answers the caller's undecodable next try on the floor, and the try after that ran into it;
+the sims now announce control frames' preambles too, as the daemon does. **The floor's SNR
+reading is a lower bound** (`tools/bench_tone_snr.py`, `tone_snr_reading.csv`): the glide
+between tones caps it at 17.5 dB on AWGN, the echo at 15.5/12/5 on Good/Moderate/Poor, so
+`RateController.seed(snr, lower_bound)` (the family of the connect frame) re-seeds, upward
+only and once, from the first clean ordinary burst reading more than `reseed_margin_db` (3 dB)
+above it. Sims: `floor_reading_cap_db` / `with_floor_reading_cap`; `bench_link.py
+--floor-cap` (`FLOOR_READING_CAP_DB`); `tools/bench_calls.py` (`--tree` runs a worktree's
+model). Measured: probes answered down to −12 dB (none below −4 before), weak calls 20 → 11 s,
+strong calls 3 → 11 s — a 2 kB session at +24 dB 8 → 21–23 s, the handshake's price; the
+re-seed takes Poor +24 dB 36 → 23 s. The daemon tests that took a call's, beacon's or probe's
+frame for OFDM measure the tone frame (RMS `tone::gain_db()` above, SNR > 15 on the wire, no
+constellation) and check OFDM on the call's second try and the session's ACKs. Not taken:
+answering a strong floor call in OFDM (asymmetric paths). No protocol change: beta.54 and
+beta.55 interoperate.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
