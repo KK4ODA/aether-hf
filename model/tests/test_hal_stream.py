@@ -46,6 +46,75 @@ def _three_frames(modem: Modem, rng: np.random.Generator) -> tuple[list[bytes], 
 # ── streaming receiver ────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("block", [160, 512, 800, 1600, 4096])
+@pytest.mark.parametrize("control", [False, True])
+def test_a_floor_frame_streams_the_same_as_offline(
+    block: int, control: bool, rng: np.random.Generator
+) -> None:
+    """ADR-0009's floor family carries connect, poll and acknowledgement when a 500 Hz link
+    runs its slowest modes. A floor frame spans 4.2 s (data) or 2.2 s (control), but the
+    streaming search region is a fraction of that, so until the receiver learned to acquire a
+    floor frame on its preamble and confirm it with the whole frame at harvest, the family
+    decoded offline and never live — the one set of modes that carries a link at -10 dB."""
+    from aether_model.frame.modes import air_interface
+    from aether_model.waveform import NARROW_500
+
+    modem = Modem(NARROW_500)
+    if control:
+        payload = rng.integers(1, 256, modem.payload_bytes(None), dtype=np.uint8).tobytes()
+        burst = modem.control_burst(payload, floor=True)
+    else:
+        mode = air_interface(NARROW_500).modes[0]  # a floor mode on the narrow air
+        payload = rng.integers(1, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
+        burst = modem.data_burst(payload, mode)
+    noise = 0.01 * (rng.standard_normal(20_000) + 1j * rng.standard_normal(20_000))
+    x = np.concatenate([noise[:600], burst, noise[600:4600]])
+    offline = [f.payload for f in Modem(NARROW_500).decode_buffer(x, max_frames=4)]
+    # the floor control container holds a byte more than the ordinary one `payload_bytes`
+    # sizes, so a control payload comes back zero-padded; the frame itself must be found alone
+    assert len(offline) == 1 and offline[0] is not None, "offline must find the floor frame alone"
+    assert offline[0][: len(payload)] == payload
+    rx = StreamingReceiver(NARROW_500)
+    streamed = []
+    for i in range(0, len(x), block):
+        streamed += [f.payload for f in rx.feed(x[i : i + block])]
+    assert streamed == offline
+
+
+@pytest.mark.parametrize("block", [160, 1600])
+@pytest.mark.parametrize("control", [False, True])
+def test_a_floor_frame_near_its_threshold_streams_the_same_as_offline(
+    block: int, control: bool
+) -> None:
+    """The same at −9 dB with a carrier offset — where the floor family is the only one that
+    carries a link, and where the statistic's ordering is closest to the noise: the stream
+    must reach offline's decision, not a neighbouring candidate's."""
+    from aether_model.frame.modes import air_interface
+    from aether_model.waveform import NARROW_500
+
+    modem = Modem(NARROW_500)
+    rng = np.random.default_rng(90)
+    if control:
+        payload = rng.integers(1, 256, modem.payload_bytes(None), dtype=np.uint8).tobytes()
+        burst = modem.control_burst(payload, floor=True)
+    else:
+        mode = air_interface(NARROW_500).modes[0]
+        payload = rng.integers(1, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
+        burst = modem.data_burst(payload, mode)
+    x = np.concatenate([np.zeros(3000, dtype=complex), burst, np.zeros(6000, dtype=complex)])
+    y = make_channel(
+        "awgn", snr_db=-9.0, fs=NARROW_500.fs_baseband, seed=4, signal_power=1.0, cfo_hz=23.0
+    ).process(x)
+    offline = [f.payload for f in Modem(NARROW_500).decode_buffer(y, max_frames=4)]
+    assert len(offline) == 1 and offline[0] is not None, "offline must find the floor frame alone"
+    assert offline[0][: len(payload)] == payload
+    rx = StreamingReceiver(NARROW_500)
+    streamed = []
+    for i in range(0, len(y), block):
+        streamed += [f.payload for f in rx.feed(y[i : i + block])]
+    assert streamed == offline
+
+
 @pytest.mark.parametrize("block", [1024, 2048, 7777])
 def test_streaming_matches_offline_for_any_block_size(
     modem: Modem, block: int, rng: np.random.Generator
