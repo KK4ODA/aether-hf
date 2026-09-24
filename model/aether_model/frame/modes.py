@@ -202,8 +202,9 @@ by its position in it, and are on no rung of the ladder. Mode 2, QPSK ⅓, is th
 first OFDM rung. Mode 3 is QPSK ½: the slowest mode whose SHORT frame carries a control
 frame and whose LONG frame carries a connect request, and — with the narrow waveform's
 per-carrier advantage — one that reaches about the same 3 kHz SNR as the wide table's BPSK
-⅕; ordinary control frames, connect requests, beacons and probes go out at it. Thirteen
-modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25."""
+⅕; ordinary control frames go out at it, and a connect request's ordinary tries (beacons,
+probes and a request's first try go out on the tone floor, ADR-0016). Thirteen modes is what
+the 32-chip sequence set holds at |ρ| ≤ 0.25."""
 
 NARROW_CONTROL_MODE_INDEX = 3
 NARROW_CONTROL_MODE = NARROW_MODES[NARROW_CONTROL_MODE_INDEX]
@@ -620,7 +621,7 @@ class AirInterface:
     ofdm_ladder: tuple[int, ...] = ()
     """The OFDM modes on the ladder, ascending, above the tone floor's rungs."""
     control_mode_index: int = 0
-    """The OFDM mode ordinary control frames, connect requests, beacons and probes go out
+    """The OFDM mode ordinary control frames and a connect request's ordinary tries go out
     at: the slowest whose SHORT frame carries a control frame — mode 0 on the wide air,
     mode 3 (QPSK ½) on the narrow one, where mode 2 (QPSK ⅓) is a data mode whose SHORT
     frame would carry three bytes."""
@@ -631,7 +632,7 @@ class AirInterface:
 
     @property
     def control_mode(self) -> Mode:
-        """The OFDM mode ordinary control frames, connect requests, beacons and probes go
+        """The OFDM mode ordinary control frames and a connect request's ordinary tries go
         out at."""
         return self.modes[self.control_mode_index]
 

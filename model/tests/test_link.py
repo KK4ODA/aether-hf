@@ -27,7 +27,7 @@ from aether_model.link.frames import (
     unpack_callsign,
     with_bandwidth,
 )
-from aether_model.link.phy import PhyTiming
+from aether_model.link.phy import PhyTiming, TxFrame
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
 from aether_model.link.sim import TwoStationSim
 
@@ -156,6 +156,40 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
     assert rc.snr_db == 15.0
     rc.seed(2.0)
     assert rc.snr_db == 15.0  # a second seed changes nothing
+
+
+def test_a_seed_from_the_tone_floor_is_a_lower_bound() -> None:
+    """ADR-0016: calls start on the tone floor, whose SNR estimate reads low on a strong path
+    (it saturates near +17 dB on AWGN and reads a few decibels on a dispersive path). A
+    controller seeded from it seeds again from the first clean burst measured on an ordinary
+    frame — upward, past the estimates' own spread, and once; a failed burst or a floor
+    burst does not."""
+    rc = RateController()
+    ordinary = rc.modes[rc._first_ordinary()]
+    rc.seed(4.0, lower_bound=True)
+    assert rc.recommend() == rc.first_mode(4.0)
+    rc.observe(20.0, ok=6, failed=0, mode=0)  # a floor burst: a lower bound again
+    assert rc.snr_db == pytest.approx(0.7 * 4.0 + 0.3 * 20.0)
+    rc.observe(20.0, ok=3, failed=3, mode=ordinary)  # a failure says nothing of the path
+    assert rc.recommend() < rc.first_mode(20.0)
+    rc.observe(20.0, ok=6, failed=0, mode=ordinary)
+    assert rc.snr_db == 20.0
+    assert rc.recommend() == rc.first_mode(20.0)
+    rc.observe(10.0, ok=6, failed=0, mode=ordinary)  # once: then smoothed as ever
+    assert rc.snr_db == pytest.approx(0.7 * 20.0 + 0.3 * 10.0)
+
+    high = RateController()  # upward only
+    high.seed(15.0, lower_bound=True)
+    high.observe(10.0, ok=6, failed=0, mode=ordinary)
+    assert high.snr_db == pytest.approx(0.7 * 15.0 + 0.3 * 10.0)
+    near = RateController()  # within the estimates' own spread: smoothed, not replaced
+    near.seed(10.0, lower_bound=True)
+    near.observe(10.0 + near.reseed_margin_db, ok=6, failed=0, mode=ordinary)
+    assert near.snr_db == pytest.approx(0.7 * 10.0 + 0.3 * (10.0 + near.reseed_margin_db))
+    plain = RateController()  # an ordinary connect frame's measurement is not a lower bound
+    plain.seed(4.0)
+    plain.observe(20.0, ok=6, failed=0, mode=ordinary)
+    assert plain.snr_db == pytest.approx(0.7 * 4.0 + 0.3 * 20.0)
 
 
 def test_the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() -> None:
@@ -591,6 +625,153 @@ def test_a_probe_is_not_answered_during_a_session_or_in_another_bandwidth(
         a.probe("KK4XYZ")
 
 
+# ── calls, probes and their answers on the tone floor (ADR-0016) ─────────
+
+
+def _modes_sent(engine: LinkEngine) -> list[int]:
+    """Record the mode of every frame ``engine`` puts on the air from now on."""
+    sent: list[int] = []
+    original = engine._transmit
+
+    def record(frames: list[TxFrame]) -> None:
+        sent.extend(f.mode for f in frames)
+        original(frames)
+
+    engine._transmit = record  # type: ignore[method-assign]
+    return sent
+
+
+def test_a_strong_path_called_on_the_floor_climbs_from_its_first_ordinary_burst(
+    timing: PhyTiming,
+) -> None:
+    """ADR-0016: the tone floor's SNR estimate reads a few decibels on a strong dispersive
+    path whatever the SNR. The session's first burst goes out where that reading puts it; the
+    called station's controller, seeded from it, starts again from the first clean burst it
+    measures on an ordinary frame — so the second burst goes out where an ordinary connect
+    frame would have started the session, not two rungs a burst up from the floor's reading."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=41, floor_reading_cap_db=4.0)
+    bursts: list[int] = []
+    original = a._send_burst
+
+    def wrapped() -> None:
+        bursts.append(min(a._recommended, a.cfg.max_mode))
+        original()
+
+    a._send_burst = wrapped  # type: ignore[method-assign]
+    fresh = LinkEngine("N0CALL", timing, None, seed=3).rate
+    a.connect("KK4XYZ")
+    a.send(bytes(20000))
+    a.disconnect()
+    sim.run(until=900)
+    assert sim.delivered(1) == bytes(20000)
+    assert bursts[0] == fresh.first_mode(4.0), bursts
+    assert bursts[1] == fresh.first_mode(20.0), bursts
+    assert bursts[1] > bursts[0] + fresh.max_up_step, bursts
+
+
+def test_a_call_starts_on_the_tone_floor_and_alternates(timing: PhyTiming) -> None:
+    """A call is made before anything is known of the path, so it goes where the path most
+    likely carries it: the tone floor, 14 dB below the ordinary family's control rung, on its
+    first try and every other one after, the ordinary family between (ADR-0016). ADR-0009 had
+    the first two tries ordinary, and a weak path's first two were wasted."""
+    a, b = _pair(timing, LinkConfig(connect_retries=4))
+    sent = _modes_sent(a)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=24)
+    a.connect("N0BODY")
+    sim.run(until=900)
+    assert "disconnected:no answer" in sim.events(0)
+    assert (a._robust_mode(True), a._robust_mode(False)) == (0, WIDE.control_rung)
+    assert sent == [0, WIDE.control_rung, 0, WIDE.control_rung], sent
+
+
+def test_a_call_answered_on_the_floor_connects_on_its_first_try(timing: PhyTiming) -> None:
+    """At −14 dB only the floor carries a frame: the first try reaches the station, the
+    acceptance comes back on the floor, and the session needs no second try."""
+    a, b = _pair(timing)
+    sent = _modes_sent(a)
+    sim = TwoStationSim(a, b, snr_db=-14.0, seed=25)
+    a.connect("KK4XYZ")
+    sim.run(until=120)
+    assert a.connected and b.connected
+    assert sent[0] == 0 and a._connect_tries == 1, sent
+
+
+def test_a_probe_goes_out_on_the_floor_and_is_answered_in_its_family(
+    timing: PhyTiming,
+) -> None:
+    """A probe exists to measure a weak path, so it goes out on the tone floor, and it is
+    answered in the family it arrived in, as an acceptance is — a station of an earlier
+    version probes in the ordinary family and hears its answer there (ADR-0016)."""
+    from aether_model.link.frames import DataHeader, encode_data
+    from aether_model.link.phy import Container
+    from aether_model.link.sim import SimFrame
+
+    a, b = _pair(timing)
+    sent_a, sent_b = _modes_sent(a), _modes_sent(b)
+    sim = TwoStationSim(a, b, snr_db=-14.0, seed=26)
+    a.probe("KK4XYZ")
+    sim.run(until=120)
+    assert a.stats.probe_replies == 1, sim.events(0)
+    assert sent_a == [0] and sent_b == [0], (sent_a, sent_b)
+    # an ordinary-family probe: answered in the ordinary family
+    robust = WIDE.control_rung
+    body = ProbeBody("N0CALL", "KK4XYZ", None).encode()
+    payload = encode_data(DataHeader(DataKind.PROBE, 0, 0), body, timing.capacity(robust))
+    b.on_frame(SimFrame(Container.DATA, robust, 0, 12.0, 0.0, 1.0, payload, 0.0), b.now)
+    assert b.stats.probes_answered == 2
+    assert sent_b == [0, robust], sent_b
+
+
+def test_the_iss_waits_for_an_answer_in_the_family_the_irs_last_heard(
+    timing: PhyTiming,
+) -> None:
+    """The IRS answers in the family it last heard from the ISS: a first OFDM burst after a
+    call on the floor that it decodes none of is answered on the floor. The ISS waits for
+    that floor acknowledgement, not only for the OFDM one its burst would bring — waiting for
+    its own family's gave up a second into it, and the recommendation it carried was lost
+    (ADR-0016)."""
+
+    def wait_after_burst(peer_floor: bool) -> float:
+        a, _ = _pair(timing)
+        a.state, a.role, a.session = State.CONNECTED, Role.ISS, 7
+        a._peer_floor = peer_floor
+        a._recommended = WIDE.rung_of(1)  # BPSK 1/3, an OFDM rung
+        a.send(bytes(100))
+        assert a._waiting_for == "ack"
+        return a._deadlines["wait"] - a._tx_busy_until
+
+    ordinary, after_floor = wait_after_burst(False), wait_after_burst(True)
+    longer = timing.control_frame_s_for(True) - timing.control_frame_s_for(False)
+    assert after_floor >= ordinary + longer - 1e-9, (ordinary, after_floor)
+
+
+def test_a_caller_does_not_call_over_a_frame_it_hears_arriving(timing: PhyTiming) -> None:
+    """A called station whose acceptance was lost is connected, and answers the undecodable
+    preamble of the caller's next try with an acknowledgement on the floor; the caller's try
+    after that ran into it, again and again, until the caller gave up — two of thirty calls
+    at −14 dB on ITU Moderate. A caller waits out a frame it hears arriving, and a prober its
+    answer (ADR-0016)."""
+    floor_control = timing.control_frame_s_for(True)
+    a, _ = _pair(timing)
+    a.connect("KK4XYZ")
+    due = a._deadlines["connect"]
+    a.on_preamble(due - 1.0, due - 0.5, floor_control)
+    assert a._deadlines["connect"] >= due - 1.0 + floor_control + timing.turnaround_s
+    # a frame that ends before the next try was due changes nothing
+    a2, _ = _pair(timing)
+    a2.connect("KK4XYZ")
+    due2 = a2._deadlines["connect"]
+    a2.on_preamble(due2 - 10.0, due2 - 9.5, 1.0)
+    assert a2._deadlines["connect"] == due2
+    # a probe's answer heard arriving is waited for
+    p, _ = _pair(timing)
+    p.probe("KK4XYZ")
+    due3 = p._deadlines["probe"]
+    p.on_preamble(due3 - 1.0, due3 - 0.5, floor_control)
+    assert p._deadlines["probe"] >= due3 - 1.0 + floor_control
+
+
 def test_a_call_stating_another_bandwidth_is_not_answered(timing: PhyTiming) -> None:
     # the bandwidth bits are a statement of the waveform the frame was sent in; a station
     # set up for 2 300 Hz that is called by a frame claiming 500 Hz leaves it alone
@@ -940,7 +1121,7 @@ def test_a_pinned_mode_goes_out_whatever_the_peer_recommends(timing: PhyTiming) 
     """P6-7's ladder: while a mode is pinned every new frame goes out at it, the peer's
     recommendation notwithstanding, and each pinned burst leaves a rung saying how many
     of its frames the peer acknowledged at what SNR."""
-    from aether_model.link.phy import Container, TxFrame
+    from aether_model.link.phy import Container
 
     a, b = _pair(timing)
     sim = TwoStationSim(a, b, snr_db=15.0, seed=31)
