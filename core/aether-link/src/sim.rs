@@ -12,17 +12,20 @@
 //! * Half-duplex: a station hears a frame only if it was not transmitting for any part of it.
 //! * Simultaneous transmissions collide and both frames are lost (this is what makes the
 //!   connect race a real race).
-//! * Loss: each frame draws once from a uniform; it is lost if the draw exceeds the mode's
+//! * Loss: each frame draws once from a uniform; it is lost if the draw exceeds the frame's
 //!   success probability at the channel SNR. A retransmission of the same block accumulates
 //!   about 3 dB of "energy" per combine, and the combined frame succeeds once the summed
-//!   energy clears the mode's threshold — the same qualitative behaviour as LDPC HARQ-IR.
+//!   energy clears the threshold — the same qualitative behaviour as LDPC HARQ-IR.
+//! * Each frame is judged at its own threshold: a DATA frame at its mode's, a CONTROL frame at
+//!   its family's control frame's (the ordinary SHORT frame or the floor one, ADR-0009).
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
 use crate::{
     engine::{Action, LinkEngine},
+    phy::PhyTiming,
     phy::{Container, HarqBuffer, SoftFrame, TxFrame},
-    rate::AWGN_THRESHOLD_DB,
+    rate::{AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, NARROW_CONTROL_THRESHOLD_DB},
 };
 
 /// Logistic steepness of frame error rate against SNR, in dB; larger is a sharper waterfall.
@@ -30,9 +33,19 @@ const STEEP: f64 = 1.2;
 /// Soft-combining energy gained per retransmission of the same block, in dB.
 const HARQ_GAIN_DB: f64 = 3.0;
 
-fn success_prob(mode: usize, snr_db: f64, energy_db: f64, thresholds: &[f64; 14]) -> f64 {
-    let threshold = thresholds.get(mode).copied().unwrap_or(0.0);
+fn success_prob(threshold: f64, snr_db: f64, energy_db: f64) -> f64 {
     1.0 / (1.0 + (-STEEP * (snr_db + energy_db - threshold)).exp())
+}
+
+/// The AWGN thresholds of an air's two control frames, indexed by family (ordinary, floor):
+/// the narrow air's when it has a floor family, the wide air's otherwise.
+#[must_use]
+pub fn control_thresholds_for(timing: &PhyTiming) -> [f64; 2] {
+    if timing.floor_modes > 0 {
+        NARROW_CONTROL_THRESHOLD_DB
+    } else {
+        CONTROL_THRESHOLD_DB
+    }
 }
 
 /// A frame as delivered to the receiving engine.
@@ -49,7 +62,9 @@ pub struct SimFrame {
     t_end: f64,
     payload: Vec<u8>,
     draw: f64,
-    thresholds: [f64; 14],
+    /// The SNR at which this frame decodes nine times in ten on the channel being modelled:
+    /// a DATA frame's mode's, a CONTROL frame's family's.
+    threshold: f64,
     floor: bool,
 }
 
@@ -74,7 +89,7 @@ impl SimFrame {
             t_end,
             payload,
             draw: 0.0,
-            thresholds: AWGN_THRESHOLD_DB,
+            threshold: AWGN_THRESHOLD_DB.get(mode).copied().unwrap_or(0.0),
             floor: false,
         }
     }
@@ -112,7 +127,7 @@ impl SoftFrame for SimFrame {
     fn decode(&self, buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
         let prior = buffer.and_then(|b| b.first().copied()).unwrap_or(0.0);
         let gained = prior + if buffer.is_some() { HARQ_GAIN_DB } else { 0.0 };
-        if self.draw <= success_prob(self.mode, self.snr_db, gained, &self.thresholds) {
+        if self.draw <= success_prob(self.threshold, self.snr_db, gained) {
             (Some(self.payload.clone()), vec![gained])
         } else {
             (None, vec![gained])
@@ -214,7 +229,12 @@ pub struct TwoStationSim {
     seq: u64,
     /// Current simulation time.
     pub t: f64,
-    thresholds: [f64; 14],
+    /// Per-mode thresholds of the channel modelled; the air's AWGN table when unset (the one
+    /// its timing hands the rate controller, the wide table without one).
+    thresholds: Option<Vec<f64>>,
+    /// The two control frames' thresholds, indexed by family; the air's AWGN values when
+    /// unset.
+    control_thresholds: Option<[f64; 2]>,
     snr_schedule: Option<Box<dyn Fn(f64) -> f64>>,
     /// The mode of every DATA frame put on the pipe, in order: what the rate control did.
     modes_sent: Vec<usize>,
@@ -232,7 +252,8 @@ impl TwoStationSim {
             queue: BinaryHeap::new(),
             seq: 0,
             t: 0.0,
-            thresholds: AWGN_THRESHOLD_DB,
+            thresholds: None,
+            control_thresholds: None,
             modes_sent: Vec::new(),
             snr_schedule: None,
         }
@@ -241,7 +262,15 @@ impl TwoStationSim {
     /// Use per-mode thresholds other than the AWGN table — a fading channel, say.
     #[must_use]
     pub fn with_thresholds(mut self, thresholds: [f64; 14]) -> Self {
-        self.thresholds = thresholds;
+        self.thresholds = Some(thresholds.to_vec());
+        self
+    }
+
+    /// The two control frames' thresholds on the channel modelled, indexed by family
+    /// (ordinary, floor).
+    #[must_use]
+    pub fn with_control_thresholds(mut self, thresholds: [f64; 2]) -> Self {
+        self.control_thresholds = Some(thresholds);
         self
     }
 
@@ -370,9 +399,23 @@ impl TwoStationSim {
         }
         let arrival = t1 + self.prop_s;
         // a data frame's family is its mode's; a control frame says which it went out on
+        let timing = self.stations[rx].engine.timing();
         let floor = match frame.container {
-            Container::Data => self.stations[rx].engine.timing().is_floor(frame.mode),
+            Container::Data => timing.is_floor(frame.mode),
             Container::Control => frame.floor,
+        };
+        let threshold = match frame.container {
+            Container::Control => self
+                .control_thresholds
+                .unwrap_or_else(|| control_thresholds_for(timing))[usize::from(floor)],
+            Container::Data => {
+                let table: &[f64] = match &self.thresholds {
+                    Some(table) => table,
+                    None if timing.mode_threshold_db.is_empty() => &AWGN_THRESHOLD_DB,
+                    None => &timing.mode_threshold_db,
+                };
+                table.get(frame.mode).copied().unwrap_or(0.0)
+            }
         };
         let sim = SimFrame {
             container: frame.container,
@@ -383,7 +426,7 @@ impl TwoStationSim {
             t_end: arrival,
             payload: frame.payload.clone(),
             draw: self.rng.next_unit(),
-            thresholds: self.thresholds,
+            threshold,
             floor,
         };
         self.stations[rx].engine.tick(arrival);

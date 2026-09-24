@@ -27,6 +27,17 @@ pub const AWGN_THRESHOLD_DB: [f64; 14] = [
     -5.1, -3.2, -1.8, -0.4, 1.4, 2.9, 4.7, 6.9, 6.0, 8.9, 9.9, 13.9, 15.6, 16.9,
 ];
 
+/// The 2 300 Hz control frame's 10 % FER point on AWGN, indexed by family (ordinary, floor):
+/// the control mode on the SHORT layout, which the lossy pipe ([`crate::sim`]) judges a
+/// control frame by; the rate controller never reads it. The wide air has no floor family,
+/// so both entries are the one frame. Mirrors the model; the vector test pins it.
+pub const CONTROL_THRESHOLD_DB: [f64; 2] = [-5.1, -5.1];
+
+/// The two 500 Hz control frames' 10 % FER points on AWGN, indexed by family: the ordinary
+/// SHORT frame at the control mode and the floor one (ADR-0009), measured by
+/// `tools/bench_floor.py` into `bench/baselines/floor_500.csv`. Mirrors the model.
+pub const NARROW_CONTROL_THRESHOLD_DB: [f64; 2] = [-4.5, -11.3];
+
 /// Payload bytes per frame for each mode, on the LONG layout.
 pub const PAYLOAD_BYTES: [usize; 14] = [
     26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,

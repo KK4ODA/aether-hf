@@ -76,6 +76,14 @@
   1.054,
   1.054
  ],
+ "control_thresholds": [
+  -5.1,
+  -5.1
+ ],
+ "narrow_control_thresholds": [
+  -4.5,
+  -11.3
+ ],
  "narrow_usable_modes": [
   0,
   1,
