@@ -38,7 +38,7 @@ use crate::{
     preamble::FrameType,
     rx::FrameSync,
     sync::{Acquisition, BankOutput, BankRow, BankState},
-    tone::{ToneStream, ToneSync},
+    tone::{ToneDetector, ToneStream, ToneSync},
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -147,10 +147,11 @@ impl StreamingReceiver {
             .air()
             .tone_data()
             .iter()
-            .map(crate::tone::ToneKind::samples)
+            .map(|k| k.samples())
             .max()
             .unwrap_or(0)
             + TONE_KEEP_EXTRA;
+        let tone = ToneStream::with_detector(ToneDetector::for_kinds(&modem.air().tone_kinds()));
         Self {
             blanker,
             band,
@@ -168,7 +169,7 @@ impl StreamingReceiver {
             max_buffer: ((max_buffer_s * params.fs_baseband) as usize).max(tone_keep),
             // a symbol after a preamble, so the sidelobe guard can see the real peak
             lookback,
-            tone: ToneStream::new(),
+            tone,
             tone_keep,
             frames_decoded: 0,
             params,

@@ -1281,11 +1281,14 @@ mod tests {
     fn capabilities_carries_the_mode_table_and_names_no_modulation_in_its_shape() {
         let caps = capabilities(aether_phy::waveform::WIDE_2300);
         let modes = caps["modes"].as_array().expect("modes");
-        // the rungs of the ladder: the tone floor's two, then the fourteen OFDM modes
+        // the rungs of the ladder: the tone floor's six (ADR-0013, ADR-0014), then the
+        // fourteen OFDM modes
         assert_eq!(modes.len(), aether_phy::modes::WIDE.n_rungs());
         assert_eq!(modes[0]["floor"], true);
-        assert_eq!(modes[2]["name"], "BPSK-1/5");
-        assert_eq!(modes[2]["floor"], false);
+        assert_eq!(modes[2]["name"], "tone50-51");
+        assert_eq!(modes[5]["floor"], true);
+        assert_eq!(modes[6]["name"], "BPSK-1/5");
+        assert_eq!(modes[6]["floor"], false);
         assert!(modes[0]["threshold_db"].is_number());
         assert!(modes[0]["payload_bytes"].is_number());
         assert_eq!(caps["snr_reference_hz"], 3000);

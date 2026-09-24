@@ -20,7 +20,7 @@ use aether_phy::{
 };
 
 /// The timing the model's harness gives an air (`phy_timing`): its ladder — the tone floor's
-/// two rungs (ADR-0013), then its OFDM modes — optionally with a start-of-frame signal.
+/// rungs (ADR-0013, ADR-0014), then its OFDM modes — optionally with a start-of-frame signal.
 fn air_timing(params: WaveformParams, start_of_frame: bool) -> PhyTiming {
     let air = air_interface(params);
     let wide = params == WIDE_2300;
@@ -136,11 +136,14 @@ fn throughput_rises_with_snr() {
 
 #[test]
 fn soft_combining_rescues_frames_below_a_mode_threshold() {
-    // pinned to QPSK 1/2 (threshold about +1 dB) and driven at −3 dB: the transfer only
+    // pinned to BPSK 1/2 (threshold about −1.8 dB) and driven at −3 dB: the transfer only
     // completes because retransmissions are combined with what came before
+    let rung = air_interface(WIDE_2300)
+        .rung_of(2)
+        .expect("BPSK 1/2 is on the ladder");
     let config = LinkConfig {
-        initial_mode: 4,
-        max_mode: 4,
+        initial_mode: rung,
+        max_mode: rung,
         max_retries: 60,
         ..LinkConfig::default()
     };
@@ -947,9 +950,14 @@ fn a_pinned_mode_goes_out_whatever_the_peer_recommends() {
     sim.engine_mut(0).disconnect();
     sim.run(300.0, 3.0);
     assert_eq!(sim.delivered(1), &message[..]);
-    // connect frames go at the robust mode; every data frame went at the pin
+    // connect frames go at a robust mode — the floor's, or the ordinary family's (rung 6,
+    // BPSK 1/5); every data frame went at the pin, a fast tone kind (ADR-0014)
+    let robust = air_interface(WIDE_2300).control_rung();
     let modes = sim.modes_sent();
-    assert!(modes.iter().all(|&m| m == 0 || m == 2), "{modes:?}");
+    assert!(
+        modes.iter().all(|&m| m == 0 || m == robust || m == 2),
+        "{modes:?}"
+    );
     assert!(modes.iter().filter(|&&m| m == 2).count() >= 13, "{modes:?}");
     // 16-byte bodies: 200 bytes are 13 frames, six to a burst
     let rungs = sim.engine_mut(0).take_ladder();
@@ -1068,41 +1076,46 @@ impl aether_link::SoftFrame for Handed {
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
-    // version 2 of the link protocol numbers modes as rungs of the ladder (ADR-0013): a
-    // station of version 1 means other frames by the same numbers, so a call from one is not
-    // a session to start — it is ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 2);
-    let t = timing(false);
-    let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
-    let body = ConnectBody {
-        src: "W4ODA".into(),
-        dst: "KK4XYZ".into(),
-        caps: 0,
-        version: 1,
-        snr_db: None,
+    // version 3 of the link protocol numbers modes as rungs of the ladder with the fast kinds
+    // (ADR-0014), version 2 as rungs of the ladder before them (ADR-0013), version 1 as OFDM
+    // modes: a station of another version means other frames by the same numbers, so a call
+    // from one is not a session to start — it is ignored, with an event saying why
+    assert_eq!(PROTOCOL_VERSION, 3);
+    for version in [1u8, 2] {
+        let t = timing(false);
+        let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
+        let body = ConnectBody {
+            src: "W4ODA".into(),
+            dst: "KK4XYZ".into(),
+            caps: 0,
+            version,
+            snr_db: None,
+        }
+        .encode()
+        .expect("body");
+        let header = DataHeader {
+            kind: DataKind::ConnectReq,
+            seq: 0,
+            session: 7,
+        };
+        let payload = encode_data(&header, &body, t.capacity(2)).expect("frame");
+        b.on_frame(&Handed { payload, mode: 2 }, 1.0);
+        assert_eq!(b.state(), State::Idle);
+        let events: Vec<String> = b
+            .drain()
+            .into_iter()
+            .filter_map(|action| match action {
+                aether_link::Action::Event { name, detail } => Some(format!("{name}:{detail}")),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.contains(&format!("link protocol {version}"))),
+            "{events:?}"
+        );
     }
-    .encode()
-    .expect("body");
-    let header = DataHeader {
-        kind: DataKind::ConnectReq,
-        seq: 0,
-        session: 7,
-    };
-    let payload = encode_data(&header, &body, t.capacity(2)).expect("frame");
-    b.on_frame(&Handed { payload, mode: 2 }, 1.0);
-    assert_eq!(b.state(), State::Idle);
-    let events: Vec<String> = b
-        .drain()
-        .into_iter()
-        .filter_map(|action| match action {
-            aether_link::Action::Event { name, detail } => Some(format!("{name}:{detail}")),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        events.iter().any(|e| e.contains("link protocol 1")),
-        "{events:?}"
-    );
 }
 
 #[test]

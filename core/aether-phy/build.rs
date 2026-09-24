@@ -6,7 +6,8 @@
 //! by reimplementing the model's random number generator. One [`Tables`] per waveform: the
 //! wide 2 300 Hz one and the narrow 500 Hz one, which have different carrier maps, different
 //! chip sets, different acquisition thresholds and different OFDM modes on their ladders but
-//! the same shape; and one `TONE` block for the tone floor (ADR-0013), the same on both.
+//! the same shape; and one `TONE` block for the tone floor (ADR-0013), the same on both, with
+//! the fast kinds of ADR-0014 that only the wide ladder carries.
 
 use std::{env, fmt::Write as _, fs, path::PathBuf};
 
@@ -65,6 +66,18 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
         ladder.len(),
         ladder.join(", ")
     );
+    let tone_data: Vec<String> = doc["tone_data"]
+        .as_array()
+        .expect("tone_data")
+        .iter()
+        .map(|v| format!("{:?}", v.as_str().expect("a kind's name")))
+        .collect();
+    let _ = writeln!(
+        out,
+        "static {prefix}_TONE_DATA: [&str; {}] = [{}];",
+        tone_data.len(),
+        tone_data.join(", ")
+    );
     for (name, key) in [("SC_DATA", "DATA"), ("SC_CONTROL", "CONTROL")] {
         let hex = doc["schmidl_cox"][key].as_str().expect("sc sequence");
         let _ = writeln!(
@@ -111,7 +124,8 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
          sc_control: &{prefix}_SC_CONTROL,\n    mode_chips: &{prefix}_MODE_CHIPS,\n    \
          pilot_sequence: &{prefix}_PILOT_SEQUENCE,\n    \
          control_mode_index: {control_mode_index},\n    \
-         ofdm_ladder: &{prefix}_OFDM_LADDER,\n}};",
+         ofdm_ladder: &{prefix}_OFDM_LADDER,\n    \
+         tone_data: &{prefix}_TONE_DATA,\n}};",
         doc["chip_correlation_bound"]
             .as_f64()
             .expect("chip_correlation_bound"),
@@ -125,13 +139,35 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
 fn tone_kind(doc: &serde_json::Value) -> String {
     format!(
         "ToneKind {{ name: {:?}, payload_bytes: {}, data_symbols: {}, patterns: &[{}], \
-         control: {} }}",
+         control: {}, data_symbol_samples: {}, data_ramp_samples: {} }}",
         doc["name"].as_str().expect("name"),
         doc["payload_bytes"].as_u64().expect("payload_bytes"),
         doc["data_symbols"].as_u64().expect("data_symbols"),
         usizes(&doc["patterns"]).join(", "),
         doc["control"].as_bool().expect("control"),
+        doc["data_symbol_samples"]
+            .as_u64()
+            .expect("data_symbol_samples"),
+        doc["data_ramp_samples"]
+            .as_u64()
+            .expect("data_ramp_samples"),
     )
+}
+
+/// A list of kinds as a static array named `name`.
+fn tone_kinds(out: &mut String, name: &str, list: &serde_json::Value) {
+    let kinds: Vec<String> = list
+        .as_array()
+        .expect("tone kinds")
+        .iter()
+        .map(tone_kind)
+        .collect();
+    let _ = writeln!(
+        out,
+        "static {name}: [ToneKind; {}] = [\n    {},\n];",
+        kinds.len(),
+        kinds.join(",\n    ")
+    );
 }
 
 /// The tone floor's block (ADR-0013).
@@ -160,24 +196,15 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
         let _ = writeln!(out, "    [{}],", usizes(p).join(", "));
     }
     out.push_str("];\n");
-    let data: Vec<String> = doc["data"]
-        .as_array()
-        .expect("tone data kinds")
-        .iter()
-        .map(tone_kind)
-        .collect();
-    let _ = writeln!(
-        out,
-        "static TONE_DATA_KINDS: [ToneKind; {}] = [\n    {},\n];",
-        data.len(),
-        data.join(",\n    ")
-    );
+    tone_kinds(out, "TONE_DATA_KINDS", &doc["data"]);
+    tone_kinds(out, "TONE_FAST_KINDS", &doc["fast"]);
     let _ = writeln!(
         out,
         "pub(crate) static TONE: ToneTables = ToneTables {{\n    fs: {:?},\n    \
          symbol_samples: {},\n    tones: {},\n    ramp_samples: {},\n    edge_samples: {},\n    \
          gain_db: {:?},\n    sync_symbols: {sync},\n    sync_patterns: &TONE_SYNC_PATTERNS,\n    \
-         control: {},\n    data: &TONE_DATA_KINDS,\n    hop_div: {},\n    bin_div: {},\n    \
+         control: {},\n    data: &TONE_DATA_KINDS,\n    fast: &TONE_FAST_KINDS,\n    \
+         hop_div: {},\n    bin_div: {},\n    \
          clip: {:?},\n    max_cfo_hz: {:?},\n    threshold: {:?},\n    min_hits: {},\n    \
          min_block_hits: {},\n    min_first_hits: {},\n    announce_threshold: {:?},\n    \
          lookahead: {},\n    \
@@ -238,7 +265,9 @@ fn main() {
              pub pilot_sequence: &'static [(f64, f64)],\n    \
              pub control_mode_index: usize,\n    \
              /// The OFDM modes on the ladder, ascending, above the tone floor's rungs.\n    \
-             pub ofdm_ladder: &'static [usize],\n\
+             pub ofdm_ladder: &'static [usize],\n    \
+             /// The tone kinds on the ladder, by name, below the OFDM modes (ADR-0014).\n    \
+             pub tone_data: &'static [&'static str],\n\
          }\n\n\
          /// One kind of tone-floor frame (ADR-0013): what it carries, how long it is, and the\n\
          /// sync patterns that name it, one per redundancy version.\n\
@@ -253,7 +282,12 @@ fn main() {
              /// Indices into the sync patterns, by redundancy version.\n    \
              pub patterns: &'static [usize],\n    \
              /// Whether it is the control frame.\n    \
-             pub control: bool,\n\
+             pub control: bool,\n    \
+             /// Samples in a data symbol: a sync symbol's for the floor's own kinds, a half or\n    \
+             /// a quarter of one for the fast kinds (ADR-0014).\n    \
+             pub data_symbol_samples: usize,\n    \
+             /// The data's glide between tones, in samples.\n    \
+             pub data_ramp_samples: usize,\n\
          }\n\n\
          /// The tone floor's constants (ADR-0013).\n\
          #[derive(Debug)]\n\
@@ -268,6 +302,7 @@ fn main() {
              pub sync_patterns: &'static [[usize; 8]],\n    \
              pub control: ToneKind,\n    \
              pub data: &'static [ToneKind],\n    \
+             pub fast: &'static [ToneKind],\n    \
              pub hop_div: usize,\n    \
              pub bin_div: usize,\n    \
              pub clip: f64,\n    \

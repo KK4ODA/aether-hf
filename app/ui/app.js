@@ -1846,8 +1846,8 @@ document.addEventListener("visibilitychange", scopesWanted);
 // ── capabilities and devices ────────────────────────────────────────
 
 /// The fastest-mode list, from the mode table the modem reports. The table is the
-/// running waveform's; when the operator picks the other bandwidth the list shrinks or
-/// grows to that table's size (ten modes at 500 Hz, fourteen at 2300) and the modem
+/// running waveform's ladder; when the operator picks the other bandwidth the list shrinks
+/// or grows to that ladder's size (thirteen rungs at 500 Hz, twenty at 2300) and the modem
 /// reports the real names once it has restarted into it.
 function fillModes() {
   const select = $("radio-max-mode");
@@ -2021,7 +2021,7 @@ async function loadConfig() {
   fillModes();
   select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
   $("radio-answer-only").checked = radio.answer_only === true;
-  select($("radio-max-mode"), String(radio.max_mode ?? 15));
+  select($("radio-max-mode"), String(radio.max_mode ?? 19));
   $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
@@ -3165,8 +3165,9 @@ function wire() {
     button.addEventListener("click", () => sortHeard(button.dataset.sort));
   }
   $("radio-bandwidth").addEventListener("change", () => {
-    // the narrow table has thirteen modes: a fastest mode past it would be refused on save
-    const modes = $("radio-bandwidth").value === "500" ? 13 : 14;
+    // the narrow ladder has thirteen rungs and the wide one twenty (ADR-0014): a fastest mode
+    // past the ladder would be refused on save
+    const modes = $("radio-bandwidth").value === "500" ? 13 : 20;
     const fastest = $("radio-max-mode");
     for (const option of fastest.options) option.hidden = Number(option.value) >= modes;
     if (Number(fastest.value) >= modes) fastest.value = String(modes - 1);

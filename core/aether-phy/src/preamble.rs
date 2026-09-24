@@ -180,10 +180,13 @@ impl Preamble {
                 && (tables.acquisition_threshold - air.acquisition_threshold).abs() < 1e-12,
             "the air interface's bound or threshold differs from the model's export"
         );
-        // the same for the control mode and the ladder's OFDM rungs (ADR-0013)
+        // the same for the control mode and the ladder's OFDM rungs (ADR-0013) and tone
+        // kinds (ADR-0014)
+        let tone_names: Vec<&str> = air.tone_data().iter().map(|k| k.name).collect();
         assert!(
             tables.control_mode_index == air.control_mode_index
-                && tables.ofdm_ladder == air.ofdm_ladder,
+                && tables.ofdm_ladder == air.ofdm_ladder
+                && tables.tone_data == tone_names.as_slice(),
             "the air interface's control mode or ladder differs from the model's export"
         );
         let scale = (map.n_carriers() as f64 / even.len() as f64).sqrt();

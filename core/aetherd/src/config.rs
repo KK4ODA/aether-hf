@@ -293,7 +293,7 @@ fn default_busy_threshold() -> f64 {
 }
 
 fn default_max_mode() -> usize {
-    15
+    19
 }
 
 fn default_bandwidth() -> u32 {
@@ -302,7 +302,7 @@ fn default_bandwidth() -> u32 {
 
 impl RadioSection {
     /// The fastest rung the station will use, within the ladder of its bandwidth: the
-    /// configured `max_mode`, clamped to the ladder's last rung. The default, 15, is the
+    /// configured `max_mode`, clamped to the ladder's last rung. The default, 19, is the
     /// wide ladder's last; at 500 Hz it means the narrow ladder's last, rung 12, so a station
     /// switched to 500 Hz with nothing else touched runs every rung it has.
     #[must_use]
@@ -656,7 +656,7 @@ pub struct Config {
 /// backed up before it is rewritten, and a file from a *newer* version is refused rather
 /// than read with its unknown keys dropped — a downgrade that silently loses settings is
 /// worse than one that says so.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -668,7 +668,7 @@ pub type Migration = fn(&mut toml::Table);
 
 /// The steps from the first schema to the current one. `MIGRATIONS[i]` takes a file at
 /// version `i + 1` to version `i + 2`.
-pub const MIGRATIONS: &[Migration] = &[ladder_rungs];
+pub const MIGRATIONS: &[Migration] = &[ladder_rungs, fast_rungs];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
 /// ladder where it numbered the OFDM modes. On the 2 300 Hz air every OFDM mode sits two
@@ -686,6 +686,24 @@ fn ladder_rungs(table: &mut toml::Table) {
         // the same mode, renumbered; a number no table ever had stays out of range and is
         // refused as before
         *mode += 2;
+    }
+}
+
+/// Schema 2 → 3, the fast kinds (ADR-0014): the 2 300 Hz ladder has four more rungs between
+/// the tone floor's two and the OFDM modes, so a number from rung 2 up moves four up with its
+/// mode; the floor's two keep theirs, and so does every rung at 500 Hz, which has no room for
+/// the fast kinds.
+fn fast_rungs(table: &mut toml::Table) {
+    let Some(toml::Value::Table(radio)) = table.get_mut("radio") else {
+        return;
+    };
+    if matches!(radio.get("bandwidth"), Some(toml::Value::Integer(500))) {
+        return;
+    }
+    if let Some(toml::Value::Integer(mode)) = radio.get_mut("max_mode")
+        && *mode >= 2
+    {
+        *mode += 4;
     }
 }
 
@@ -1112,7 +1130,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 2
+schema_version = 3
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1166,10 +1184,10 @@ bandwidth = 2300
 # Answer calls but never make one, and never beacon: how an unattended station is left on
 # a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).
 answer_only = false
-# The fastest mode this station will use: a rung of the ladder — the tone floor's two, then
-# the OFDM modes — 0 to 15 at 2300 Hz; at 500 Hz the ladder has thirteen rungs and anything
-# past 12 means 12.
-max_mode = 15
+# The fastest mode this station will use: a rung of the ladder — the tone floor's kinds (six
+# at 2300 Hz, two at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has
+# thirteen rungs and anything past 12 means 12.
+max_mode = 19
 # Offer payload compression. Used only if the other station offers it too. Off by default:
 # it is deflate over the whole session, so on a weak path one corrupted frame can desync the
 # stream and spoil the rest.
@@ -1539,17 +1557,17 @@ mod tests {
         // the waveform is the modem: a change to it is a restart
         assert!(!Config::is_live("radio.bandwidth"));
         // a station switched to 500 Hz with nothing else touched runs every narrow rung:
-        // the wide default of 15 clamps to the narrow ladder's last, 12
+        // the wide default of 19 clamps to the narrow ladder's last, 12
         let narrow = Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\n")
             .expect("a narrow station");
         assert_eq!(
             narrow.radio.params(),
             Some(aether_phy::waveform::NARROW_500)
         );
-        assert_eq!(narrow.radio.max_mode, 15);
+        assert_eq!(narrow.radio.max_mode, 19);
         assert_eq!(narrow.radio.fastest_mode(), 12);
         let wide =
-            Config::parse("schema_version = 2\ncallsign = \"W4ODA\"\n[radio]\nmax_mode = 8\n")
+            Config::parse("schema_version = 3\ncallsign = \"W4ODA\"\n[radio]\nmax_mode = 8\n")
                 .expect("a wide station");
         assert_eq!(wide.radio.fastest_mode(), 8);
         assert!(!Config::is_live("audio.input"));
@@ -1607,8 +1625,8 @@ mod tests {
                 .expect("parse");
         assert_eq!(written_at, 1);
         assert_eq!(
-            config.radio.max_mode, 10,
-            "the same mode, two rungs up the ladder"
+            config.radio.max_mode, 14,
+            "the same mode, six rungs up the ladder: the tone floor's two, its fast kinds' four"
         );
         assert_eq!(config.schema_version, SCHEMA_VERSION);
         // and it is written out saying which it now is, so the next version can tell
@@ -1623,28 +1641,40 @@ mod tests {
     fn the_ladder_migration_renumbers_the_fastest_mode_on_the_wide_air_only() {
         // schema 1 -> 2 (ADR-0013): max_mode numbers the rungs of the ladder, where it
         // numbered the OFDM modes — two rungs up at 2300 Hz, above the tone floor's two;
-        // at 500 Hz the OFDM modes on the ladder keep their numbers
-        let migrated = |text: &str| {
+        // at 500 Hz the OFDM modes on the ladder keep their numbers. Schema 2 -> 3 (ADR-0014):
+        // at 2300 Hz a rung from 2 up moves four more, above the fast kinds
+        let migrated = |text: &str, from: u32| {
             let mut table: toml::Table = toml::from_str(text).expect("toml");
-            assert_eq!(migrate_with(&mut table, 1, MIGRATIONS), 2);
+            assert_eq!(migrate_with(&mut table, from, MIGRATIONS), SCHEMA_VERSION);
             table["radio"].get("max_mode").cloned()
         };
         assert_eq!(
-            migrated("[radio]\nmax_mode = 13\n"),
-            Some(toml::Value::Integer(15))
+            migrated("[radio]\nmax_mode = 13\n", 1),
+            Some(toml::Value::Integer(19))
         );
         assert_eq!(
-            migrated("[radio]\nbandwidth = 2300\nmax_mode = 0\n"),
-            Some(toml::Value::Integer(2))
+            migrated("[radio]\nbandwidth = 2300\nmax_mode = 0\n", 1),
+            Some(toml::Value::Integer(6))
         );
         assert_eq!(
-            migrated("[radio]\nbandwidth = 500\nmax_mode = 9\n"),
+            migrated("[radio]\nbandwidth = 500\nmax_mode = 9\n", 1),
             Some(toml::Value::Integer(9))
         );
         assert_eq!(
-            migrated("[radio]\nmax_key_s = 20.0\n"),
+            migrated("[radio]\nmax_key_s = 20.0\n", 1),
             None,
             "the default applies"
+        );
+        // from schema 2: the floor's two rungs keep their numbers, the rest move four
+        for (from, to) in [(0, 0), (1, 1), (2, 6), (15, 19)] {
+            assert_eq!(
+                migrated(&format!("[radio]\nmax_mode = {from}\n"), 2),
+                Some(toml::Value::Integer(to))
+            );
+        }
+        assert_eq!(
+            migrated("[radio]\nbandwidth = 500\nmax_mode = 12\n", 2),
+            Some(toml::Value::Integer(12))
         );
         // a file with no [radio] at all is left alone
         let mut table: toml::Table = toml::from_str("callsign = \"W4ODA\"\n").expect("toml");
@@ -1782,7 +1812,7 @@ mod tests {
         let older = "callsign = \"W4ODA\"\n[radio]\nmax_mode = 11\n";
         std::fs::write(&path, older).expect("write");
         let config = Config::load(&path).expect("load");
-        assert_eq!(config.radio.max_mode, 13);
+        assert_eq!(config.radio.max_mode, 17);
         let backup = backup_path(&path, 1);
         assert_eq!(
             backup.file_name().and_then(|n| n.to_str()),

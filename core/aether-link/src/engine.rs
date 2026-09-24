@@ -76,7 +76,7 @@ pub struct LinkConfig {
     /// Mode a session starts on.
     pub initial_mode: usize,
     /// Fastest mode — rung of the ladder — this station will use: the top of the widest
-    /// ladder (2 300 Hz, ADR-0013) by default; a recommendation never leaves the air's own
+    /// ladder (2 300 Hz, ADR-0014) by default; a recommendation never leaves the air's own
     /// table.
     pub max_mode: usize,
     /// With a peer that wants to send, hand over after this many bursts of our own.
@@ -103,7 +103,7 @@ impl Default for LinkConfig {
             ack_margin_s: 0.4,
             burst_gap_s: 0.2,
             initial_mode: 0,
-            max_mode: 15,
+            max_mode: 19,
             bursts_before_turn: 3,
             max_combines: 4,
             capabilities: 0,
@@ -1816,7 +1816,7 @@ impl LinkEngine {
         if self.break_requested {
             flags |= control_flags::BREAK | control_flags::WANT_TX;
         }
-        self.ack_counter = (self.ack_counter + 1) % 16;
+        self.ack_counter = (self.ack_counter + 1) % 8;
         self.stats.acks_sent += 1;
         let base = self.rx_base;
         let recommended = self.rate.recommend() as u8;
@@ -2177,11 +2177,12 @@ mod tests {
     /// The 2 300 Hz air's, the same way.
     fn wide() -> PhyTiming {
         PhyTiming {
-            data_frame_s: FRAME_S[2],
+            data_frame_s: FRAME_S[6],
             control_frame_s: 0.434,
             data_capacity: PAYLOAD_BYTES.to_vec(),
             mode_threshold_db: AWGN_THRESHOLD_DB.to_vec(),
             floor_data_frame_s: Some(FRAME_S[0]),
+            floor_modes: 6,
             control_threshold_db: Some(CONTROL_THRESHOLD_DB),
             floor_margin_db: Some(1.0),
             ..narrow()
