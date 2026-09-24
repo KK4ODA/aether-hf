@@ -61,7 +61,7 @@ from aether_model.link.rate import (
     PAYLOAD_BYTES,
     usable_modes,
 )
-from aether_model.link.sim import TwoStationSim
+from aether_model.link.sim import TwoStationSim, control_thresholds_for
 
 CHANNEL_ORDER = ("awgn", "good", "moderate", "poor")
 
@@ -113,6 +113,60 @@ def channel_thresholds(
     return out
 
 
+CONTROL_CSV = {
+    WIDE: "bench/baselines/floor_2300.csv",
+    NARROW: "bench/baselines/floor_500.csv",
+}
+"""``tools/bench_floor.py``'s measurements of each air's control frames, per channel."""
+
+
+def control_thresholds(
+    csv_path: Path,
+    awgn: dict[bool, float],
+    tables: dict[str, dict[int, float]],
+    awgn_data: dict[int, float],
+    has_floor: bool,
+    target_fer: float = 0.10,
+) -> dict[str, dict[bool, float]]:
+    """Per-channel thresholds of the two control frames (keyed by family), interpolated from
+    ``bench_floor.py``'s rows ``control short`` and ``control floor``. A channel or frame the
+    sweep did not cover gets its AWGN value shifted by that channel's mean data penalty, as
+    :func:`channel_thresholds` fills a mode it did not measure. An air without a floor family
+    has one control frame, which serves both keys."""
+    rows: list[dict[str, str]] = []
+    if csv_path.exists():
+        with csv_path.open(encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    points: dict[tuple[str, bool], list[tuple[float, float]]] = defaultdict(list)
+    for r in rows:
+        if r["frame"] not in ("control short", "control floor"):
+            continue
+        fer = 1.0 - int(r["decoded"]) / max(int(r["frames"]), 1)
+        points[(r["channel"], r["frame"] == "control floor")].append((float(r["snr_3k_db"]), fer))
+
+    def crossing(pts: list[tuple[float, float]]) -> float | None:
+        prev: tuple[float, float] | None = None
+        for snr, fer in sorted(pts):
+            if fer <= target_fer:
+                if prev is None or prev[1] == fer:
+                    return snr
+                s0, f0 = prev
+                return s0 + (f0 - target_fer) / (f0 - fer) * (snr - s0)
+            prev = (snr, fer)
+        return None
+
+    out: dict[str, dict[bool, float]] = {}
+    for channel in sorted(set(tables) | {c for c, _ in points}):
+        table = tables.get(channel, {})
+        penalties = [table[m] - awgn_data[m] for m in table if m in awgn_data]
+        shift = statistics.fmean(penalties) if penalties else 0.0
+        short = crossing(points.get((channel, False), []))
+        short = short if short is not None else awgn[False] + shift
+        floor = crossing(points.get((channel, True), [])) if has_floor else short
+        out[channel] = {False: short, True: floor if floor is not None else awgn[True] + shift}
+    return out
+
+
 def ideal_bps(thresholds: dict[int, float], snr_db: float, air: AirInterface = WIDE) -> float:
     """Payload rate of the fastest mode the channel supports at this SNR, ignoring every
     protocol cost — the ceiling the link layer is measured against."""
@@ -145,6 +199,7 @@ def run_point(
     air: AirInterface = WIDE,
     rate: dict[str, float | int] | None = None,
     schedule: Callable[[float], float] | None = None,
+    controls: dict[bool, float] | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
     cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
@@ -169,6 +224,7 @@ def run_point(
             seed=seed,
             thresholds=thresholds or table_for(air)[0],
             snr_schedule=schedule,
+            control_thresholds=controls,
         )
 
     modes: list[int] = []
@@ -307,6 +363,7 @@ def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     observations = sidecar_observations(document)
     penalty = fit_penalty(observations, awgn)
     thresholds = {m: t + penalty for m, t in awgn.items()}
+    controls = {k: t + penalty for k, t in control_thresholds_for(phy_timing(air.params)).items()}
     schedule = sidecar_schedule(document)
     snrs = [s for *_, s in observations] or [
         float(f["snr_3k_db"]) for f in document.get("frames") or [] if "snr_3k_db" in f
@@ -325,7 +382,9 @@ def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
         measured = 8.0 * size / seconds if size and seconds > 0 else None
     size = max(size, 512)
     payload = bytes((i * 37) % 256 for i in range(size))
-    row = run_point("sim", "replay", mean_snr, payload, seed, thresholds, None, air, None, schedule)
+    row = run_point(
+        "sim", "replay", mean_snr, payload, seed, thresholds, None, air, None, schedule, controls
+    )
     row["replay_of"] = path.stem
     row["penalty_db"] = penalty
     row["observations"] = len(observations)
@@ -378,6 +437,10 @@ def main() -> int:
     tables = channel_thresholds(Path(fer_csv), awgn=table_for(air)[0])
     if args.backend == "sim" and not tables:
         print(f"warning: {fer_csv} not found; every channel modelled as AWGN", flush=True)
+    awgn_controls = control_thresholds_for(phy_timing(air.params))
+    controls = control_thresholds(
+        Path(CONTROL_CSV[air]), awgn_controls, tables, table_for(air)[0], air.floor_long is not None
+    )
     channels = [c.strip() for c in args.channels.split(",") if c.strip()]
     snrs = [float(s) for s in args.snr.split(",") if s.strip()]
     payload = bytes((i * 37) % 256 for i in range(args.bytes))
@@ -400,6 +463,7 @@ def main() -> int:
                     ramp,
                     air,
                     rate,
+                    controls=controls.get(channel, awgn_controls),
                 )
                 rows.append(row)
                 print(

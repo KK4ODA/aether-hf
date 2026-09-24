@@ -34,7 +34,9 @@ from aether_model.link.frames import (
 )
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
+    CONTROL_THRESHOLD_DB,
     NARROW_AWGN_THRESHOLD_DB,
+    NARROW_CONTROL_THRESHOLD_DB,
     NARROW_FRAME_S,
     NARROW_PAYLOAD_BYTES,
     RateController,
@@ -215,6 +217,9 @@ def main() -> int:
             int(NARROW_PAYLOAD_BYTES[m]) for m in sorted(NARROW_PAYLOAD_BYTES)
         ],
         "narrow_frame_s": [float(NARROW_FRAME_S[m]) for m in sorted(NARROW_FRAME_S)],
+        # the lossy pipe's control frames, indexed by family (ordinary, floor)
+        "control_thresholds": [float(CONTROL_THRESHOLD_DB[f]) for f in (False, True)],
+        "narrow_control_thresholds": [float(NARROW_CONTROL_THRESHOLD_DB[f]) for f in (False, True)],
         "narrow_usable_modes": [
             int(m)
             for m in usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)
