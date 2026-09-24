@@ -7,7 +7,8 @@
 //! wide 2 300 Hz one and the narrow 500 Hz one, which have different carrier maps, different
 //! chip sets, different acquisition thresholds and different OFDM modes on their ladders but
 //! the same shape; and one `TONE` block for the tone floor (ADR-0013), the same on both, with
-//! the fast kinds of ADR-0014 that only the wide ladder carries.
+//! the fast kinds of ADR-0014 that only the wide ladder carries and the four-tone middle kinds
+//! of ADR-0015 that only the narrow one does.
 
 use std::{env, fmt::Write as _, fs, path::PathBuf};
 
@@ -139,7 +140,7 @@ fn waveform(out: &mut String, prefix: &str, doc: &serde_json::Value, n_rv: usize
 fn tone_kind(doc: &serde_json::Value) -> String {
     format!(
         "ToneKind {{ name: {:?}, payload_bytes: {}, data_symbols: {}, patterns: &[{}], \
-         control: {}, data_symbol_samples: {}, data_ramp_samples: {} }}",
+         control: {}, data_symbol_samples: {}, data_ramp_samples: {}, data_tones: {} }}",
         doc["name"].as_str().expect("name"),
         doc["payload_bytes"].as_u64().expect("payload_bytes"),
         doc["data_symbols"].as_u64().expect("data_symbols"),
@@ -151,6 +152,7 @@ fn tone_kind(doc: &serde_json::Value) -> String {
         doc["data_ramp_samples"]
             .as_u64()
             .expect("data_ramp_samples"),
+        doc["data_tones"].as_u64().expect("data_tones"),
     )
 }
 
@@ -198,15 +200,18 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
     out.push_str("];\n");
     tone_kinds(out, "TONE_DATA_KINDS", &doc["data"]);
     tone_kinds(out, "TONE_FAST_KINDS", &doc["fast"]);
+    tone_kinds(out, "TONE_NARROW_KINDS", &doc["narrow"]);
     let _ = writeln!(
         out,
         "pub(crate) static TONE: ToneTables = ToneTables {{\n    fs: {:?},\n    \
          symbol_samples: {},\n    tones: {},\n    ramp_samples: {},\n    edge_samples: {},\n    \
          gain_db: {:?},\n    sync_symbols: {sync},\n    sync_patterns: &TONE_SYNC_PATTERNS,\n    \
          control: {},\n    data: &TONE_DATA_KINDS,\n    fast: &TONE_FAST_KINDS,\n    \
+         narrow: &TONE_NARROW_KINDS,\n    \
          hop_div: {},\n    bin_div: {},\n    \
          clip: {:?},\n    max_cfo_hz: {:?},\n    threshold: {:?},\n    min_hits: {},\n    \
-         min_block_hits: {},\n    min_first_hits: {},\n    announce_threshold: {:?},\n    \
+         min_block_hits: {},\n    min_first_hits: {},\n    contradiction: {:?},\n    \
+         max_contradictions: {},\n    announce_threshold: {:?},\n    \
          lookahead: {},\n    \
          announce_lookahead: {},\n}};",
         f("fs"),
@@ -224,6 +229,8 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
         du("min_hits"),
         du("min_block_hits"),
         du("min_first_hits"),
+        df("contradiction"),
+        du("max_contradictions"),
         df("announce_threshold"),
         du("lookahead"),
         du("announce_lookahead"),
@@ -284,10 +291,14 @@ fn main() {
              /// Whether it is the control frame.\n    \
              pub control: bool,\n    \
              /// Samples in a data symbol: a sync symbol's for the floor's own kinds, a half or\n    \
-             /// a quarter of one for the fast kinds (ADR-0014).\n    \
+             /// a quarter of one for the fast kinds (ADR-0014) and the narrow middle ones\n    \
+             /// (ADR-0015).\n    \
              pub data_symbol_samples: usize,\n    \
              /// The data's glide between tones, in samples.\n    \
-             pub data_ramp_samples: usize,\n\
+             pub data_ramp_samples: usize,\n    \
+             /// Tones the data symbols are drawn from: the floor's sixteen, or the narrow middle\n    \
+             /// kinds' four (ADR-0015).\n    \
+             pub data_tones: usize,\n\
          }\n\n\
          /// The tone floor's constants (ADR-0013).\n\
          #[derive(Debug)]\n\
@@ -303,6 +314,7 @@ fn main() {
              pub control: ToneKind,\n    \
              pub data: &'static [ToneKind],\n    \
              pub fast: &'static [ToneKind],\n    \
+             pub narrow: &'static [ToneKind],\n    \
              pub hop_div: usize,\n    \
              pub bin_div: usize,\n    \
              pub clip: f64,\n    \
@@ -311,6 +323,8 @@ fn main() {
              pub min_hits: usize,\n    \
              pub min_block_hits: usize,\n    \
              pub min_first_hits: usize,\n    \
+             pub contradiction: f64,\n    \
+             pub max_contradictions: usize,\n    \
              pub announce_threshold: f64,\n    \
              pub lookahead: usize,\n    \
              pub announce_lookahead: usize,\n\

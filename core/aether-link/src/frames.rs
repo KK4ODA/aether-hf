@@ -380,8 +380,10 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// mean different frames at either end; a station ignores a call or an acceptance of another
 /// version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
 /// air, between the floor's two and the OFDM modes, and a control frame whose recommended
-/// mode has five bits and its counter three.
-pub const PROTOCOL_VERSION: u8 = 3;
+/// mode has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two
+/// more rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz
+/// ladder is as it was, but one number says what both ladders are).
+pub const PROTOCOL_VERSION: u8 = 4;
 
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;

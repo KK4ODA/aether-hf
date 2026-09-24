@@ -98,9 +98,10 @@ human-facing and may be localised.
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
 what keeps this document PHY-agnostic. A mode number is a rung of the waveform's **ladder**
-(ADR-0013, ADR-0014): the tone floor's kinds, then the OFDM modes — twenty rungs at 2 300 Hz
-(the floor's two and its four fast kinds at rungs 0–5, the fourteen OFDM modes from BPSK ⅕
-at rungs 6–19), thirteen at 500 Hz (the floor's two, then QPSK ⅓ up at rungs 2–12) — and a
+(ADR-0013, ADR-0014, ADR-0015): the tone floor's kinds, then the OFDM modes — twenty rungs
+at 2 300 Hz (the floor's two and its four fast kinds at rungs 0–5, the fourteen OFDM modes
+from BPSK ⅕ at rungs 6–19), fifteen at 500 Hz (the floor's two and its two four-tone middle
+kinds at rungs 0–3, then QPSK ⅓ up at rungs 4–14) — and a
 mode number means nothing without the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
 restart; `[radio] answer_only` (live) makes the station take calls and make none — what
 §97.221(c) allows an unattended station at 500 Hz outside the automatic sub-bands, and
@@ -179,7 +180,7 @@ at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (`rigctld`; a
 keying line cannot, and the field is null rather than a guess). Times are seconds from the
 start of the file by the station's audio clock.
-The sidecar's `format` is `aether-hf-session/3`. `status` carries `recording` — the path and
+The sidecar's `format` is `aether-hf-session/4`. `status` carries `recording` — the path and
 length so far — while one runs. With `[record] auto = true` every session records itself
 from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remote>`.
 

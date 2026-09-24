@@ -24,9 +24,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The sidecar's `format` field: bumped when its shape or the meaning of its numbers changes
-/// — `/3` since the fast kinds (ADR-0014) put four more rungs on the 2 300 Hz ladder, so a
-/// mode number means another frame there than in a `/2` sidecar.
-pub const FORMAT: &str = "aether-hf-session/3";
+/// — `/3` since the fast kinds (ADR-0014) put four more rungs on the 2 300 Hz ladder, `/4`
+/// since the narrow middle kinds (ADR-0015) put two more on the 500 Hz one, so a mode number
+/// means another frame there than in an earlier sidecar.
+pub const FORMAT: &str = "aether-hf-session/4";
 
 /// One frame the receiver found, as the sidecar records it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

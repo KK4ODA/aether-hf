@@ -19,7 +19,7 @@ use aether_phy::{
     blanker::{NoiseBlanker, StreamingBlanker},
     codec::{FrameCodec, coprime_stride},
     constellation::{Constellation, NoiseVar},
-    modes::{CONTROL_MODE, LONG, MODES, SHORT},
+    modes::{CONTROL_MODE, LONG, MODES, NARROW, SHORT, WIDE},
     ofdm::OfdmDemodulator,
     passband::{AudioToBaseband, BasebandToAudio, band_limit_taps, resample_taps},
     preamble::{FrameHeader, FrameType},
@@ -367,9 +367,9 @@ fn mode_and_layout(
     }
 }
 
-/// The tone-floor kind with this name (ADR-0013).
+/// The tone-floor kind with this name (ADR-0013), of either air.
 fn tone_kind(name: &str) -> &'static tone::ToneKind {
-    tone::kinds()
+    tone::all_kinds()
         .into_iter()
         .find(|k| k.name == name)
         .unwrap_or_else(|| panic!("no tone kind {name}"))
@@ -449,14 +449,20 @@ fn tone_interference(n: usize) -> Vec<(f64, f64)> {
 fn tone_frames_are_received_as_the_model_receives_them() {
     // a frame delayed, turned and buried under interference: the detector's start, kind and
     // redundancy version exact, its offset, statistic and SNR and the soft bits to the vector
-    // file's tolerance, the payload exact
+    // file's tolerance, the payload exact — each by its own air's detector
     let doc = vectors();
     let tolerance = float(&doc, "tone_llr_tolerance");
     let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
     let cases = doc["tone_receive"].as_array().expect("tone receive");
     assert!(!cases.is_empty());
-    let detector = tone::ToneDetector::new();
+    let wide = tone::ToneDetector::for_kinds(&WIDE.tone_kinds());
+    let narrow = tone::ToneDetector::for_kinds(&NARROW.tone_kinds());
     for case in cases {
+        let detector = match int(case, "bandwidth_hz") {
+            2300 => &wide,
+            500 => &narrow,
+            other => panic!("no air of {other} Hz"),
+        };
         let kind = tone_kind(case["kind"].as_str().expect("kind"));
         let label = kind.name;
         let rv = int(case, "rv") as u8;

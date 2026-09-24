@@ -248,8 +248,8 @@ pub struct RadioSection {
     pub answer_only: bool,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
     /// constellations, or a band where they never work. Indexes the ladder of the bandwidth
-    /// in use — the tone floor's two rungs, then the OFDM modes (ADR-0013): sixteen rungs at
-    /// 2300 Hz, thirteen at 500 Hz.
+    /// in use — the tone floor's kinds, then the OFDM modes (ADR-0013, ADR-0014, ADR-0015):
+    /// twenty rungs at 2300 Hz, fifteen at 500 Hz.
     #[serde(default = "default_max_mode")]
     pub max_mode: usize,
     /// Offer payload compression in the connect handshake. Used only if the peer offers it
@@ -656,7 +656,7 @@ pub struct Config {
 /// backed up before it is rewritten, and a file from a *newer* version is refused rather
 /// than read with its unknown keys dropped — a downgrade that silently loses settings is
 /// worse than one that says so.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -668,7 +668,7 @@ pub type Migration = fn(&mut toml::Table);
 
 /// The steps from the first schema to the current one. `MIGRATIONS[i]` takes a file at
 /// version `i + 1` to version `i + 2`.
-pub const MIGRATIONS: &[Migration] = &[ladder_rungs, fast_rungs];
+pub const MIGRATIONS: &[Migration] = &[ladder_rungs, fast_rungs, narrow_middle_rungs];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
 /// ladder where it numbered the OFDM modes. On the 2 300 Hz air every OFDM mode sits two
@@ -704,6 +704,23 @@ fn fast_rungs(table: &mut toml::Table) {
         && *mode >= 2
     {
         *mode += 4;
+    }
+}
+
+/// Schema 3 → 4, the narrow middle kinds (ADR-0015): the 500 Hz ladder has two more rungs
+/// between the tone floor's two and the OFDM modes, so a number from rung 2 up moves two up
+/// with its mode; the floor's two keep theirs, and so does every rung at 2 300 Hz.
+fn narrow_middle_rungs(table: &mut toml::Table) {
+    let Some(toml::Value::Table(radio)) = table.get_mut("radio") else {
+        return;
+    };
+    if !matches!(radio.get("bandwidth"), Some(toml::Value::Integer(500))) {
+        return;
+    }
+    if let Some(toml::Value::Integer(mode)) = radio.get_mut("max_mode")
+        && *mode >= 2
+    {
+        *mode += 2;
     }
 }
 
@@ -1185,8 +1202,8 @@ bandwidth = 2300
 # a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).
 answer_only = false
 # The fastest mode this station will use: a rung of the ladder — the tone floor's kinds (six
-# at 2300 Hz, two at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has
-# thirteen rungs and anything past 12 means 12.
+# at 2300 Hz, four at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has
+# fifteen rungs and anything past 14 means 14.
 max_mode = 19
 # Offer payload compression. Used only if the other station offers it too. Off by default:
 # it is deflate over the whole session, so on a weak path one corrupted frame can desync the
@@ -1557,7 +1574,7 @@ mod tests {
         // the waveform is the modem: a change to it is a restart
         assert!(!Config::is_live("radio.bandwidth"));
         // a station switched to 500 Hz with nothing else touched runs every narrow rung:
-        // the wide default of 19 clamps to the narrow ladder's last, 12
+        // the wide default of 19 clamps to the narrow ladder's last, 14 (ADR-0015)
         let narrow = Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\n")
             .expect("a narrow station");
         assert_eq!(
@@ -1565,7 +1582,7 @@ mod tests {
             Some(aether_phy::waveform::NARROW_500)
         );
         assert_eq!(narrow.radio.max_mode, 19);
-        assert_eq!(narrow.radio.fastest_mode(), 12);
+        assert_eq!(narrow.radio.fastest_mode(), 14);
         let wide =
             Config::parse("schema_version = 3\ncallsign = \"W4ODA\"\n[radio]\nmax_mode = 8\n")
                 .expect("a wide station");
@@ -1642,7 +1659,8 @@ mod tests {
         // schema 1 -> 2 (ADR-0013): max_mode numbers the rungs of the ladder, where it
         // numbered the OFDM modes — two rungs up at 2300 Hz, above the tone floor's two;
         // at 500 Hz the OFDM modes on the ladder keep their numbers. Schema 2 -> 3 (ADR-0014):
-        // at 2300 Hz a rung from 2 up moves four more, above the fast kinds
+        // at 2300 Hz a rung from 2 up moves four more, above the fast kinds. Schema 3 -> 4
+        // (ADR-0015): at 500 Hz a rung from 2 up moves two, above the narrow middle kinds
         let migrated = |text: &str, from: u32| {
             let mut table: toml::Table = toml::from_str(text).expect("toml");
             assert_eq!(migrate_with(&mut table, from, MIGRATIONS), SCHEMA_VERSION);
@@ -1658,7 +1676,7 @@ mod tests {
         );
         assert_eq!(
             migrated("[radio]\nbandwidth = 500\nmax_mode = 9\n", 1),
-            Some(toml::Value::Integer(9))
+            Some(toml::Value::Integer(11))
         );
         assert_eq!(
             migrated("[radio]\nmax_key_s = 20.0\n", 1),
@@ -1674,8 +1692,22 @@ mod tests {
         }
         assert_eq!(
             migrated("[radio]\nbandwidth = 500\nmax_mode = 12\n", 2),
-            Some(toml::Value::Integer(12))
+            Some(toml::Value::Integer(14))
         );
+        // from schema 3: at 500 Hz the floor's two rungs keep their numbers, the rest move
+        // two; at 2300 Hz nothing moves
+        for (from, to) in [(0, 0), (1, 1), (2, 4), (12, 14)] {
+            assert_eq!(
+                migrated(&format!("[radio]\nbandwidth = 500\nmax_mode = {from}\n"), 3),
+                Some(toml::Value::Integer(to))
+            );
+        }
+        for rung in [0, 2, 19] {
+            assert_eq!(
+                migrated(&format!("[radio]\nmax_mode = {rung}\n"), 3),
+                Some(toml::Value::Integer(rung))
+            );
+        }
         // a file with no [radio] at all is left alone
         let mut table: toml::Table = toml::from_str("callsign = \"W4ODA\"\n").expect("toml");
         migrate_with(&mut table, 1, MIGRATIONS);
