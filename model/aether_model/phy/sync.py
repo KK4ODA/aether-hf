@@ -339,16 +339,35 @@ class FrameDetector:
         energy = float(np.sum(np.abs(y) ** 2)) * (symbols - 1) / symbols
         return float(abs(lags)) / max(energy, 1e-30)
 
-    def _detect_floor(self, x: ComplexArray, max_frames: int) -> list[FrameSync]:
-        """Floor-family candidates, best first; each accepted one masks its whole span and
+    def _detect_floor(
+        self, x: ComplexArray, max_frames: int, streaming: bool = False
+    ) -> tuple[list[FrameSync], list[FrameSync]]:
+        """Floor-family candidates, best first; each accepted one claims its whole span and
         the seven symbols before it (where the averaged statistic still sees part of its
-        preamble). The contest with the ordinary pass is settled in :meth:`detect`."""
+        preamble). The contest with the ordinary pass is settled in :meth:`detect`.
+
+        A candidate that repeats like a floor preamble but cannot be used yet claims the same,
+        so nothing it would have claimed is taken in its place. That matters above all to a
+        streaming receiver: eight identical symbols score well above the threshold at a
+        symbol's alignment and at part-symbol offsets a few symbols *before* the true start,
+        and while the true start's statistic is still arriving those are the best candidates
+        there are (ADR-0009 §8).
+
+        Offline, a candidate is usable when its whole frame is in ``x``. A streaming receiver
+        cannot wait for that inside its search window — a floor frame is 4.2 s, the window a
+        fraction of it — so with ``streaming`` a candidate is usable once every candidate that
+        could still claim it has been evaluated in full (:attr:`floor_settle_samples`): the
+        decision is then the one offline makes, taken while the frame is still arriving.
+
+        Returns the accepted candidates and, streaming, the ones whose preamble is in but
+        which are not final yet — the receiver's evidence that a floor frame is arriving."""
         found: list[FrameSync] = []
+        early: list[FrameSync] = []
         fstat, fother = self._floor_stat, self._floor_other
         fcfo, ftype = self._floor_cfo, self._floor_type
         fmask = fstat >= self.min_floor_peak
         half = 3 * self.period // 2
-        skirt = self.floor_windows * self.period
+        skirt = max(self.min_gap, self.floor_windows * self.period)
         for _ in range(self.max_candidates):
             if len(found) >= max_frames:
                 break
@@ -360,31 +379,74 @@ class FrameDetector:
             frame_type = self._types[int(ftype[c])]
             d = self._refine_floor(x, lo, hi, frame_type, float(fcfo[c]))
             span = self.air.layout_for(frame_type is FrameType.DATA, floor=True).samples
-            if d + span + self.dem.fft_offset > len(x):
-                fmask[lo:hi] = False  # too close to the end to be usable yet
-                continue
-            cfo = self.fine_cfo(x, d, frame_type, self.floor_symbols, True)
             if self._repetition(x, d, self.floor_symbols) < FLOOR_REPETITION_MIN:
                 fmask[lo:hi] = False  # the bank liked it; the symbols do not repeat
                 continue
+            claim = slice(max(0, d - skirt), min(len(fmask), d + span))
+            if streaming:
+                usable = c + self.floor_settle_samples <= len(x)
+            else:
+                usable = d + span + self.dem.fft_offset <= len(x)
+            fmask[claim] = False  # used or not, nothing it would claim goes in its place
+            if not (usable or streaming):
+                continue  # offline, the frame runs off the end of the buffer
+            cfo = self.fine_cfo(x, d, frame_type, self.floor_symbols, True)
             confidence = float(fstat[c] / max(fother[c], 1e-12))
             header = FrameHeader(frame_type)
-            found.append(
-                FrameSync(d, cfo, header, float(fcfo[c]), confidence, float(fstat[c]), True)
-            )
-            a, b = max(0, d - max(self.min_gap, skirt)), min(len(fmask), d + span)
-            fmask[a:b] = False
-        return found
+            sync = FrameSync(d, cfo, header, float(fcfo[c]), confidence, float(fstat[c]), True)
+            if usable:
+                found.append(sync)
+            elif streaming:
+                early.append(sync)
+        return found, early
+
+    @property
+    def floor_settle_samples(self) -> int:
+        """How far past a floor candidate's statistic position the input must reach before a
+        streaming receiver takes the candidate as final. A candidate is claimed by an
+        accepted one whose refined start lies up to the claim's skirt after it; that one's
+        statistic sits up to half the refinement window further on, and evaluating it in full
+        — refinement, repetition — reads eight symbols past its own refinement window."""
+        half = 3 * self.period // 2
+        skirt = max(self.min_gap, self.floor_windows * self.period)
+        return skirt + 2 * half + self.floor_symbols * self.period
+
+    @property
+    def stream_lookback(self) -> int:
+        """How far a streaming receiver searches back behind what it has already searched,
+        so that every candidate is decided in a region that holds all it depends on. The
+        region runs two lookbacks behind the newest sample: an ordinary candidate needs a
+        symbol past its preamble; a floor candidate :attr:`floor_settle_samples` past its
+        statistic position and half a refinement window before it."""
+        longest = max(layout.preamble_symbols for layout in self.air.layouts)
+        ordinary = (longest + 1) * self.period
+        if not self.has_floor:
+            return ordinary
+        need = self.floor_settle_samples + 3 * self.period // 2
+        return max(ordinary, -(-need // (2 * self.period)) * self.period)
 
     # ── full acquisition ──────────────────────────────────────────────
 
     def detect(self, x: ComplexArray, max_frames: int = 1) -> list[FrameSync]:
         """Find up to ``max_frames`` preambles in ``x`` (offline, whole-buffer)."""
+        return self._acquire(x, max_frames, streaming=False)[0]
+
+    def detect_streaming(
+        self, x: ComplexArray, max_frames: int = 1
+    ) -> tuple[list[FrameSync], list[FrameSync]]:
+        """:meth:`detect` for a streaming receiver's search region: a floor candidate is
+        taken once it is final rather than once its whole frame is in (:meth:`_detect_floor`).
+        Also returns the floor candidates whose preamble is in but which are not final yet."""
+        return self._acquire(x, max_frames, streaming=True)
+
+    def _acquire(
+        self, x: ComplexArray, max_frames: int, streaming: bool
+    ) -> tuple[list[FrameSync], list[FrameSync]]:
         x = np.asarray(x, dtype=np.complex128)
         peak, bin_cfo, other = self.bank(x)
         ordinary: list[FrameSync] = []
         if len(peak) == 0:
-            return ordinary
+            return ordinary, []
         mask = peak >= self.min_timing_peak
         # The two SC symbols are identical, so a preamble preceded by silence also produces a
         # ≈ 0.7 sidelobe one symbol early. Never accept a peak until the statistic one symbol
@@ -418,10 +480,10 @@ class FrameDetector:
             # the reference at ≈ 0.3–0.4, which the threshold does not exclude).
             span = self.air.layout_for(header.frame_type is FrameType.DATA).samples
             mask[max(0, start - self.min_gap) : min(len(mask), start + span)] = False
-        found = self._detect_floor(x, max_frames) if self.has_floor else []
+        found, early = self._detect_floor(x, max_frames, streaming) if self.has_floor else ([], [])
         if found:
             found, ordinary = self._settle_families(found, ordinary)
-        return sorted(found + ordinary, key=lambda f: f.start)[:max_frames]
+        return sorted(found + ordinary, key=lambda f: f.start)[:max_frames], early
 
     def _span(self, sync: FrameSync) -> tuple[int, int]:
         layout = self.air.layout_for(sync.header.frame_type is FrameType.DATA, sync.floor)
