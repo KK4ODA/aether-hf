@@ -166,7 +166,7 @@
           <button id="btn-disconnect" title="Send what is queued, then close the session">Disconnect</button>
           <button id="btn-abort" title="Drop the session at once, sending nothing more" class="danger">Abort</button>
           <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
-          <label class="session-chime" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
+          <label class="check" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
           <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
           <button id="btn-test" title="Run the field test with the station in Call: probe, message, file, a burst at every mode, recorded; the same button stops it">Test session</button>
         </div>
@@ -188,18 +188,23 @@
         <div class="split">
           <div>
             <h2>Send</h2>
-            <textarea id="outgoing" title="Text to send over the session" rows="6" aria-label="Text to send" placeholder="Text to send once a session is up…"></textarea>
+            <textarea id="outgoing" title="Text to send over the session. With Enter sends ticked, Enter sends it and Shift+Enter starts a new line" rows="6" aria-label="Text to send" placeholder="Text to send once a session is up…"></textarea>
             <div class="row">
               <button id="btn-send" title="Queue the text for the session" class="primary">Send</button>
+              <label class="check" for="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line"><input type="checkbox" id="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line" /> Enter sends</label>
               <span class="sub" id="send-note" title="What happened to the last text sent"></span>
             </div>
           </div>
           <div>
             <div class="section-head">
               <h2>Received</h2>
-              <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard">Copy</button>
+              <div class="head-actions">
+                <label class="check" for="rx-sound" title="Play a short note when text arrives"><input type="checkbox" id="rx-sound" title="Play a short note when text arrives" /> Sound</label>
+                <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard, without the times">Copy</button>
+                <button id="btn-clear-received" class="small ghost" title="Empty this window; nothing is sent or lost from the session">Clear</button>
+              </div>
             </div>
-            <pre id="incoming" title="Text received over the session; select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
+            <pre id="incoming" title="Text received over the session: each message on a line of its own, with the time it arrived. Select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
           </div>
         </div>
 
@@ -707,7 +712,7 @@
             <li><strong>Setup</strong>: callsign, the radio interface and its three devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
             <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in. A device the other computer does not have is shown as <em>not on this computer</em> until you choose one.</li>
             <li><strong>Session → Keying and drive</strong>: <em>Key for 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider. The <em>How to set your drive</em> note on the Session tab walks through it.</li>
-            <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept.</li>
+            <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter (Shift+Enter for a new line; untick <em>Enter sends</em> to make Enter a new line). Each message arrives on a line of its own with its time, <em>Sound</em> plays a note when one does, and <em>Clear</em> empties the window.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
           </ol>
         </div>
