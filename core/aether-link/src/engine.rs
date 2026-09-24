@@ -704,8 +704,9 @@ impl LinkEngine {
 
     /// Ask a station whether it hears this one, and how well, without a session.
     ///
-    /// One PROBE frame, at the most robust mode, as whichever of this station's callsigns
-    /// the caller names (or the first of them); the answer, if it comes, arrives as a
+    /// One PROBE frame, on the tone floor — the most robust frame there is, which a probe
+    /// exists to measure a weak path with (ADR-0016) — as whichever of this station's
+    /// callsigns the caller names (or the first of them); the answer, if it comes, arrives as a
     /// `probe` event naming both directions of the path — the SNR the other station
     /// measured on our probe, and the SNR we measured on its answer. A probe that goes
     /// unanswered within one frame's turnaround is reported as such; the operator asks again
@@ -735,9 +736,9 @@ impl LinkEngine {
         let remote = remote_call.to_ascii_uppercase();
         self.stats.probes_sent += 1;
         self.last_probe = None;
-        self.send_probe(DataKind::Probe, &remote, None);
+        self.send_probe(DataKind::Probe, &remote, None, true);
         self.probing = Some(remote);
-        let wait = self.response_wait(self.timing.data_frame_s_for(self.robust_mode(false)), 0.0);
+        let wait = self.response_wait(self.timing.data_frame_s_for(self.robust_mode(true)), 0.0);
         let delay = self.tx_busy_until - self.now + wait;
         self.arm(Timer::Probe, delay);
         Ok(())
@@ -863,8 +864,26 @@ impl LinkEngine {
     /// went wrong when a session's first burst dropped into the floor after ordinary connect
     /// frames: the acknowledgement fired inside every floor frame and trampled it
     /// (ADR-0012).
+    ///
+    /// A caller does not call over a frame it hears arriving, and a prober does not give up
+    /// on one: it may be the answer, and if it is another station's the channel is busy. The
+    /// next try (or the probe's deadline) waits for its end. A called station that has
+    /// accepted a call whose acceptance was lost is connected, and acknowledges the
+    /// undecodable preamble of the caller's next try on the floor — which the try after that
+    /// ran into, again and again, until the caller gave up (ADR-0016).
     pub fn on_preamble(&mut self, t_start: f64, now: f64, frame_s: Option<f64>) {
         self.now = self.now.max(now);
+        if self.state == State::Connecting || self.probing.is_some() {
+            // the longest frame there is when the physical layer cannot say
+            let length = frame_s.unwrap_or_else(|| self.timing.data_frame_s_for(0));
+            let clear = t_start + length + self.timing.turnaround_s;
+            for timer in [Timer::Connect, Timer::Probe] {
+                if let Some(due) = self.deadline_of(timer) {
+                    self.set_deadline(timer, due.max(clear));
+                }
+            }
+            return;
+        }
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
             return;
@@ -1071,12 +1090,14 @@ impl LinkEngine {
     }
 
     /// The slowest mode of a family whose frame carries a connect body (with a DATA header
-    /// and length): what connect requests, answers, probes and beacons go out at. Falls
-    /// back to the ordinary family when the floor has no such mode.
+    /// and length): what connect requests, answers, probes and beacons go out at — on the
+    /// tone floor first (ADR-0016). Falls back to the ordinary family when the floor has no
+    /// such mode.
     ///
     /// # Panics
     /// If no mode carries a connect frame, which would make the protocol unusable.
-    fn robust_mode(&self, floor: bool) -> usize {
+    #[must_use]
+    pub fn robust_mode(&self, floor: bool) -> usize {
         let need = CONNECT_BODY_BYTES + 5;
         let found = (0..self.timing.data_capacity.len())
             .find(|&m| self.timing.is_floor(m) == floor && self.timing.capacity(m) >= need);
@@ -1087,11 +1108,16 @@ impl LinkEngine {
         }
     }
 
-    /// Whether the next connect request goes out on the floor layout: the first two tries
-    /// are ordinary frames, then the two families alternate, so a station that can only
-    /// be heard at the floor is still reached (ADR-0009).
+    /// Whether the next connect request goes out on the tone floor: the first try does, and
+    /// every other one after it (ADR-0016). A call is made before anything is known of the
+    /// path, so it goes where the path most likely carries it — the floor reaches 14 dB lower
+    /// than the ordinary family's control rung — and the ordinary tries between keep a path
+    /// the floor does not carry (a narrowband interferer on the floor's tones) from failing
+    /// every one. ADR-0009 had the first two tries ordinary, from when the floor was an OFDM
+    /// frame of its own that reached a few decibels lower; with the tone floor a weak path's
+    /// first two tries were wasted.
     fn connect_floor(&self) -> bool {
-        self.timing.floor_modes > 0 && self.connect_tries >= 2 && (self.connect_tries - 2) % 2 == 0
+        self.timing.floor_modes > 0 && self.connect_tries % 2 == 0
     }
 
     /// Learn the family and mode the peer sends data in — from a frame that decoded, so a
@@ -1136,8 +1162,8 @@ impl LinkEngine {
             snr_db,
         };
         let Ok(encoded) = body.encode() else { return };
-        // a request alternates families once the ordinary frame has gone unanswered; an
-        // answer goes back on the layout the request arrived on (ADR-0009)
+        // a request starts on the tone floor and alternates families (ADR-0016); an answer
+        // goes back on the layout the request arrived on (ADR-0009)
         let floor = if kind == DataKind::ConnectReq {
             self.connect_floor()
         } else {
@@ -1184,8 +1210,10 @@ impl LinkEngine {
     }
 
     /// A probe (`snr_db` absent) or its answer (the SNR the probe arrived at), outside
-    /// any session: session 0, sequence 0, the most robust mode.
-    fn send_probe(&mut self, kind: DataKind, remote: &str, snr_db: Option<f64>) {
+    /// any session: session 0, sequence 0, at the robust mode of `floor`'s family — a probe
+    /// on the tone floor, an answer in the family the probe arrived in, as a connect answer
+    /// goes (ADR-0016).
+    fn send_probe(&mut self, kind: DataKind, remote: &str, snr_db: Option<f64>, floor: bool) {
         let body = ProbeBody {
             src: self.my_call.clone(),
             dst: remote.to_owned(),
@@ -1193,7 +1221,7 @@ impl LinkEngine {
             caps: self.config.capabilities,
         };
         let Ok(encoded) = body.encode() else { return };
-        let mode = self.robust_mode(false);
+        let mode = self.robust_mode(floor);
         let capacity = self.timing.capacity(mode);
         let header = DataHeader {
             kind,
@@ -1440,12 +1468,22 @@ impl LinkEngine {
             .first()
             .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)))
             .max(self.timing.data_frame_s_for(recommendation));
-        let responder = self.irs_reply_delay(Some(family), Some(expected));
-        self.wait_for(
-            Waiting::Ack,
-            self.timing.control_frame_s_for(family),
-            responder,
-        );
+        // The receiving station answers in the family it last heard from us: this burst's,
+        // if it decodes any of it, and the one its last answer came in (`peer_floor`) if it
+        // decodes none — the acceptance of a call on the floor before a first OFDM burst, or
+        // the floor bursts before a climb. Wait for whichever of the two is longer: waiting
+        // for this burst's alone gave up on a floor acknowledgement a second into it, and the
+        // recommendation it carried was lost with it (ADR-0016).
+        let families = [family, self.peer_floor];
+        let control = families
+            .iter()
+            .map(|&f| self.timing.control_frame_s_for(f))
+            .fold(0.0, f64::max);
+        let responder = families
+            .iter()
+            .map(|&f| self.irs_reply_delay(Some(f), Some(expected)))
+            .fold(0.0, f64::max);
+        self.wait_for(Waiting::Ack, control, responder);
     }
 
     /// A frame sent `max_combines` times at its mode without an acknowledgement is stranded
@@ -1959,7 +1997,10 @@ impl LinkEngine {
             name: "probed",
             detail: format!("{} at {snr_db:.1} dB", request.src),
         });
-        self.send_probe(DataKind::ProbeAck, &request.src, Some(snr_db));
+        // back in the family the probe came in (noted from it), as an acceptance goes back on
+        // the layout its request arrived on
+        let floor = self.peer_floor;
+        self.send_probe(DataKind::ProbeAck, &request.src, Some(snr_db), floor);
     }
 
     fn handle_probe_ack(&mut self, body: &[u8], snr_db: f64) {
@@ -2032,8 +2073,8 @@ impl LinkEngine {
         self.arm(Timer::Link, self.link_timeout());
         // the request is the first measurement of how the caller is heard: the
         // controller starts from it, and the acceptance carries it back so the caller's
-        // first burst can too (P9-2)
-        self.rate.seed(snr_db);
+        // first burst can too (P9-2) — a lower bound if it came on the tone floor (ADR-0016)
+        self.rate.seed(snr_db, self.peer_floor);
         self.send_connect_with(DataKind::ConnectAck, Some(snr_db));
         let detail = format!("{} (irs)", self.remote_call);
         self.actions.push(Action::Event {
@@ -2083,7 +2124,7 @@ impl LinkEngine {
         // that supports, less a step, instead of at the slowest mode; the acceptance's
         // own SNR is how the other station is heard here, which this station's
         // controller starts from for the day it receives (P9-2)
-        self.rate.seed(snr_db);
+        self.rate.seed(snr_db, self.peer_floor);
         self.recommended = match accept.snr_db {
             Some(heard) => self.config.initial_mode.max(self.rate.first_mode(heard)),
             None => self.config.initial_mode,
@@ -2217,7 +2258,7 @@ mod tests {
             );
             // the ordinary layouts on both sides: what the peer recommends and what it may send
             e.recommended = 6;
-            e.rate.seed(15.0);
+            e.rate.seed(15.0, false);
             assert!(
                 (e.link_timeout() - 45.0).abs() < 1e-9,
                 "{}",
@@ -2241,6 +2282,65 @@ mod tests {
     }
 
     #[test]
+    fn the_iss_waits_for_an_answer_in_the_family_the_irs_last_heard() {
+        // ADR-0016: the IRS answers in the family it last heard from the ISS, so a first
+        // OFDM burst after a call on the floor that it decodes none of is answered on the
+        // floor; the ISS waits for that acknowledgement, not only for the OFDM one its burst
+        // would bring
+        let wait_after_burst = |peer_floor: bool| {
+            let mut e = engine(wide());
+            e.state = State::Connected;
+            e.role = Role::Iss;
+            e.session = 7;
+            e.peer_floor = peer_floor;
+            e.recommended = 7; // BPSK 1/3, an OFDM rung
+            e.send(&[0u8; 100]);
+            assert!(matches!(e.waiting_for, Some(Waiting::Ack)));
+            e.deadline_of(Timer::Wait).expect("armed") - e.tx_busy_until
+        };
+        let (ordinary, after_floor) = (wait_after_burst(false), wait_after_burst(true));
+        let t = wide();
+        let longer = t.control_frame_s_for(true) - t.control_frame_s_for(false);
+        assert!(
+            after_floor >= ordinary + longer - 1e-9,
+            "{ordinary} {after_floor}"
+        );
+    }
+
+    #[test]
+    fn a_caller_does_not_call_over_a_frame_it_hears_arriving() {
+        // ADR-0016: a called station whose acceptance was lost is connected, and answers the
+        // undecodable preamble of the caller's next try with an acknowledgement on the floor;
+        // the caller's try after that ran into it until the caller gave up. A caller waits
+        // out a frame it hears arriving, and a prober its answer
+        let t = wide();
+        let floor_control = t.control_frame_s_for(true);
+        let mut e = engine(t.clone());
+        e.connect("KK4XYZ").expect("idle");
+        let due = e.deadline_of(Timer::Connect).expect("armed");
+        e.on_preamble(due - 1.0, due - 0.5, Some(floor_control));
+        let moved = e.deadline_of(Timer::Connect).expect("armed");
+        assert!(
+            moved >= due - 1.0 + floor_control + t.turnaround_s,
+            "{moved}"
+        );
+        // a frame that ends before the next try was due changes nothing
+        let mut e = engine(t.clone());
+        e.connect("KK4XYZ").expect("idle");
+        let due = e.deadline_of(Timer::Connect).expect("armed");
+        e.on_preamble(due - 10.0, due - 9.5, Some(1.0));
+        let kept = e.deadline_of(Timer::Connect).expect("armed");
+        assert!((kept - due).abs() < 1e-12, "{kept} {due}");
+        // a probe's answer heard arriving is waited for
+        let mut e = engine(t.clone());
+        e.probe("KK4XYZ", None).expect("idle");
+        let due = e.deadline_of(Timer::Probe).expect("armed");
+        e.on_preamble(due - 1.0, due - 0.5, Some(floor_control));
+        let waited = e.deadline_of(Timer::Probe).expect("armed");
+        assert!(waited >= due - 1.0 + floor_control, "{waited}");
+    }
+
+    #[test]
     fn the_ack_waits_for_the_frame_the_preamble_announced() {
         // an IRS expecting ordinary frames (the connect frames were) must not answer inside a
         // floor frame five times as long: the frame names itself and the ACK waits for its end
@@ -2248,7 +2348,7 @@ mod tests {
         e.role = Role::Irs;
         e.state = State::Connected;
         e.peer_mode = Some(5); // the narrow air's control rung, where the connect frames went
-        e.rate.seed(10.0);
+        e.rate.seed(10.0, false);
         assert!(e.peer_data_frame_s() < 2.0);
         let floor_frame = NARROW_FRAME_S[0];
         e.on_preamble(100.0, 100.3, Some(floor_frame));

@@ -163,6 +163,13 @@ pub struct RateConfig {
     /// Steps kept in hand by [`RateController::first_mode`]: how far below the fastest mode
     /// one measurement supports a session's first burst goes out.
     pub first_mode_back: usize,
+    /// How far above a lower-bound seed ([`RateController::seed`]) the first ordinary
+    /// measurement must read to replace it. The tone floor's estimate is exact to about
+    /// +10 dB on AWGN; a few decibels between two frames' readings is their estimates' own
+    /// spread and the fade between them, and replacing a seed on that would only take the
+    /// larger of two noisy numbers. Beyond it the seed was the floor's ceiling, not the
+    /// path's (ADR-0016).
+    pub reseed_margin_db: f64,
 }
 
 impl Default for RateConfig {
@@ -181,6 +188,7 @@ impl Default for RateConfig {
             up_dwell: 1,
             max_up_step: 2,
             first_mode_back: 2,
+            reseed_margin_db: 3.0,
         }
     }
 }
@@ -211,6 +219,9 @@ pub struct RateController {
     floor_margin_db: Option<f64>,
     /// Failed bursts in a row on the first OFDM rung ([`step_down`](Self::step_down)).
     boundary_failures: usize,
+    /// The seed was a lower bound ([`seed`](Self::seed)): the first clean burst measured on an
+    /// ordinary frame seeds again.
+    reseed_pending: bool,
 }
 
 impl Default for RateController {
@@ -297,6 +308,7 @@ impl RateController {
             floor_modes: 6,
             floor_margin_db: None,
             boundary_failures: 0,
+            reseed_pending: false,
         }
     }
 
@@ -353,13 +365,21 @@ impl RateController {
     /// from the slowest mode: the smoothed SNR becomes the measurement and the
     /// recommendation [`first_mode`](Self::first_mode). Only before anything has been
     /// observed; a controller that has seen bursts knows more than one frame can tell it.
-    pub fn seed(&mut self, snr_db: f64) {
+    ///
+    /// `lower_bound`: the measurement was a tone-floor frame's, which a strong path does not
+    /// show — the floor's estimate is exact to about +10 dB on AWGN and saturates near +17,
+    /// and on a dispersive path it reads a few decibels whatever the SNR, the echo's spill
+    /// into the next symbol counting as noise (ADR-0016). Calls start on the floor, so a
+    /// strong path's session would start many rungs low and climb two a burst; instead the
+    /// first clean burst measured on an ordinary frame seeds again, upward only.
+    pub fn seed(&mut self, snr_db: f64, lower_bound: bool) {
         if self.smoothed_snr_db.is_some() {
             return;
         }
         self.smoothed_snr_db = Some(snr_db);
         let first = self.first_mode(snr_db);
         self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
+        self.reseed_pending = lower_bound;
     }
 
     /// The smoothed SNR, once anything has been measured.
@@ -377,6 +397,26 @@ impl RateController {
     /// Feed one burst: the mean SNR of its frames, how many decoded and failed, and the mode
     /// they were sent in — which is what turns a failure into a measurement.
     pub fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {
+        if self.reseed_pending
+            && ok > 0
+            && failed == 0
+            && let (Some(value), Some(mode)) = (snr_db, mode)
+            && mode >= self.floor_modes
+        {
+            // the first measurement a strong path can show: start again from it — upward, and
+            // only past the estimates' own spread — as an ordinary connect frame would have
+            self.reseed_pending = false;
+            if self
+                .smoothed_snr_db
+                .is_none_or(|seed| value > seed + self.config.reseed_margin_db)
+            {
+                self.smoothed_snr_db = Some(value);
+                let first = self.first_mode(value);
+                let at = self.modes.iter().position(|&m| m == first).unwrap_or(0);
+                self.index = self.index.max(at);
+                return;
+            }
+        }
         if let Some(value) = snr_db {
             self.smoothed_snr_db = Some(
                 self.smoothed_snr_db
@@ -531,6 +571,41 @@ mod tests {
     }
 
     #[test]
+    fn a_seed_from_the_tone_floor_is_a_lower_bound() {
+        // ADR-0016: calls start on the tone floor, whose SNR estimate reads low on a strong
+        // path; a controller seeded from it seeds again from the first clean burst measured
+        // on an ordinary frame — upward, past the estimates' own spread, and once
+        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+        let mut rc = RateController::default();
+        let ordinary = rc.modes()[rc.first_ordinary()];
+        rc.seed(4.0, true);
+        assert_eq!(rc.recommend(), rc.first_mode(4.0));
+        rc.observe(Some(20.0), 6, 0, Some(0)); // a floor burst: a lower bound again
+        assert!(close(rc.snr_db(), 0.7 * 4.0 + 0.3 * 20.0));
+        rc.observe(Some(20.0), 3, 3, Some(ordinary)); // a failure says nothing of the path
+        assert!(rc.recommend() < rc.first_mode(20.0));
+        rc.observe(Some(20.0), 6, 0, Some(ordinary));
+        assert!(close(rc.snr_db(), 20.0));
+        assert_eq!(rc.recommend(), rc.first_mode(20.0));
+        rc.observe(Some(10.0), 6, 0, Some(ordinary)); // once: then smoothed as ever
+        assert!(close(rc.snr_db(), 0.7 * 20.0 + 0.3 * 10.0));
+
+        let mut high = RateController::default(); // upward only
+        high.seed(15.0, true);
+        high.observe(Some(10.0), 6, 0, Some(ordinary));
+        assert!(close(high.snr_db(), 0.7 * 15.0 + 0.3 * 10.0));
+        let mut near = RateController::default(); // within the spread: smoothed, not replaced
+        let margin = RateConfig::default().reseed_margin_db;
+        near.seed(10.0, true);
+        near.observe(Some(10.0 + margin), 6, 0, Some(ordinary));
+        assert!(close(near.snr_db(), 0.7 * 10.0 + 0.3 * (10.0 + margin)));
+        let mut plain = RateController::default(); // an ordinary frame's is not a lower bound
+        plain.seed(4.0, false);
+        plain.observe(Some(20.0), 6, 0, Some(ordinary));
+        assert!(close(plain.snr_db(), 0.7 * 4.0 + 0.3 * 20.0));
+    }
+
+    #[test]
     fn a_clean_link_converges_in_a_few_bursts() {
         // from the bottom of the ladder two things pace the climb and nothing else: the step,
         // `max_up_step` usable modes a burst, and the margin, which gives up `down_step_db` a
@@ -647,9 +722,9 @@ mod tests {
             );
         }
         // seeding places the controller there and takes the measurement, once
-        rc.seed(15.0);
+        rc.seed(15.0, false);
         assert_eq!(rc.recommend(), rc.first_mode(15.0));
-        rc.seed(2.0);
+        rc.seed(2.0, false);
         assert_eq!(rc.snr_db(), Some(15.0));
     }
 
@@ -677,7 +752,7 @@ mod tests {
 
         let wound = |cap: Option<f64>| {
             let mut rc = RateController::default().with_floor(6, cap);
-            rc.seed(AWGN_THRESHOLD_DB[first] + 1.5);
+            rc.seed(AWGN_THRESHOLD_DB[first] + 1.5, false);
             rc.index = rc
                 .modes
                 .iter()

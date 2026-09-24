@@ -871,10 +871,12 @@ mod tests {
         let status = air.a.test_status();
         let results = &status["results"];
         assert_eq!(results["outcome"], "complete", "{results}");
+        // a probe and its answer are tone frames (ADR-0016), whose SNR reading tops out near
+        // +17 dB however clean the path; the ladder's OFDM rungs read past it
         assert!(
             results["probe"]["heard_here_db"]
                 .as_f64()
-                .is_some_and(|s| s > 20.0),
+                .is_some_and(|s| s > 15.0),
             "{results}"
         );
         assert!(

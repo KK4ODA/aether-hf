@@ -53,7 +53,8 @@ pub struct SimFrame {
     container: Container,
     mode: usize,
     rv: u8,
-    snr_db: f64,
+    /// The channel's SNR, which the frame is judged at.
+    channel_db: f64,
     t_start: f64,
     t_end: f64,
     payload: Vec<u8>,
@@ -62,6 +63,9 @@ pub struct SimFrame {
     /// a DATA frame's mode's, a CONTROL frame's family's.
     threshold: f64,
     floor: bool,
+    /// The SNR the receiver reports, which the frame is not judged at when they differ: a
+    /// tone-floor frame's reading capped ([`TwoStationSim::with_floor_reading_cap`]).
+    reported_db: f64,
 }
 
 impl SimFrame {
@@ -80,13 +84,14 @@ impl SimFrame {
             container,
             mode,
             rv: 0,
-            snr_db,
+            channel_db: snr_db,
             t_start,
             t_end,
             payload,
             draw: 0.0,
             threshold: AWGN_THRESHOLD_DB.get(mode).copied().unwrap_or(0.0),
             floor: false,
+            reported_db: snr_db,
         }
     }
 }
@@ -109,7 +114,7 @@ impl SoftFrame for SimFrame {
     }
 
     fn snr_db(&self) -> f64 {
-        self.snr_db
+        self.reported_db
     }
 
     fn t_start(&self) -> f64 {
@@ -123,7 +128,7 @@ impl SoftFrame for SimFrame {
     fn decode(&self, buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
         let prior = buffer.and_then(|b| b.first().copied()).unwrap_or(0.0);
         let gained = prior + if buffer.is_some() { HARQ_GAIN_DB } else { 0.0 };
-        if self.draw <= success_prob(self.threshold, self.snr_db, gained) {
+        if self.draw <= success_prob(self.threshold, self.channel_db, gained) {
             (Some(self.payload.clone()), vec![gained])
         } else {
             (None, vec![gained])
@@ -234,6 +239,8 @@ pub struct TwoStationSim {
     snr_schedule: Option<Box<dyn Fn(f64) -> f64>>,
     /// The mode of every DATA frame put on the pipe, in order: what the rate control did.
     modes_sent: Vec<usize>,
+    /// The most a tone-floor frame's SNR reads ([`with_floor_reading_cap`](Self::with_floor_reading_cap)).
+    floor_reading_cap_db: Option<f64>,
 }
 
 impl TwoStationSim {
@@ -252,6 +259,7 @@ impl TwoStationSim {
             control_thresholds: None,
             modes_sent: Vec::new(),
             snr_schedule: None,
+            floor_reading_cap_db: None,
         }
     }
 
@@ -274,6 +282,15 @@ impl TwoStationSim {
     #[must_use]
     pub fn with_snr_schedule(mut self, schedule: Box<dyn Fn(f64) -> f64>) -> Self {
         self.snr_schedule = Some(schedule);
+        self
+    }
+
+    /// The most a tone-floor frame's SNR reads: the floor's estimate saturates on a strong
+    /// path, near +17 dB on AWGN and a few decibels on a dispersive one (ADR-0016). The frame
+    /// is still judged at the channel's SNR.
+    #[must_use]
+    pub fn with_floor_reading_cap(mut self, cap_db: f64) -> Self {
+        self.floor_reading_cap_db = Some(cap_db);
         self
     }
 
@@ -351,18 +368,20 @@ impl TwoStationSim {
     fn launch(&mut self, who: usize, at: f64, frames: Vec<TxFrame>, duration_s: f64) {
         let mut t = at.max(self.stations[who].tx_end);
         self.stations[who].busy.push((t, t + duration_s));
-        let timing = self.stations[who].engine.timing();
-        let sof = timing.preamble_detect_s;
-        let timing = timing.clone();
+        let timing = self.stations[who].engine.timing().clone();
         let peer = 1 - who;
         for frame in frames {
             let duration = timing.frame_s(&frame);
-            if let Some(sof) = sof
-                && frame.container == Container::Data
-            {
+            let floor = match frame.container {
+                Container::Data => timing.is_floor(frame.mode),
+                Container::Control => frame.floor,
+            };
+            if let Some(sof) = timing.preamble_detect_s_for(floor) {
                 // acquisition succeeds far below every mode's decode threshold (P2-3 measured
                 // 100 % at −5 dB), so a listening receiver is assumed to see every preamble —
-                // and the layout it names, so the frame's own length
+                // a control frame's too, as the daemon hands the engine every trusted one
+                // (ADR-0016), each once its family announces it — and the layout it names, so
+                // the frame's own length
                 self.push(
                     t + sof,
                     peer,
@@ -421,11 +440,17 @@ impl TwoStationSim {
                 table.get(frame.mode).copied().unwrap_or(0.0)
             }
         };
+        let snr_db = self.snr_at(f64::midpoint(t0, t1));
+        let reported_db = match self.floor_reading_cap_db {
+            Some(cap) if floor => snr_db.min(cap),
+            _ => snr_db,
+        };
         let sim = SimFrame {
             container: frame.container,
             mode: frame.mode,
             rv: frame.rv,
-            snr_db: self.snr_at(f64::midpoint(t0, t1)),
+            channel_db: snr_db,
+            reported_db,
             t_start: t0 + self.prop_s,
             t_end: arrival,
             payload: frame.payload.clone(),

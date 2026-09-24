@@ -248,8 +248,9 @@ pub const NARROW_SHORT: FrameLayout = FrameLayout {
 /// because an OFDM frame's chip sequence is indexed by its position in it, and are on no rung
 /// of the ladder. Mode 2, QPSK ⅓, is the ladder's first OFDM rung. Mode 3 is QPSK ½: the
 /// slowest mode whose SHORT frame carries a control frame and whose LONG frame carries a
-/// connect request; ordinary control frames, connect requests, beacons and probes go out at
-/// it. Thirteen modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25.
+/// connect request; ordinary control frames go out at it, and a connect request's ordinary
+/// tries (beacons, probes and a request's first try go out on the tone floor, ADR-0016).
+/// Thirteen modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25.
 pub const NARROW_MODES: [Mode; 13] = [
     mode(0, Modulation::Qpsk, 1, 10),
     mode(1, Modulation::Qpsk, 1, 5),
@@ -382,7 +383,7 @@ pub struct AirInterface {
     pub acquisition_threshold: f64,
     /// The OFDM modes on the ladder, ascending, above the tone floor's rungs.
     pub ofdm_ladder: &'static [usize],
-    /// The OFDM mode ordinary control frames, connect requests, beacons and probes go out
+    /// The OFDM mode ordinary control frames and a connect request's ordinary tries go out
     /// at: the slowest whose SHORT frame carries a control frame.
     pub control_mode_index: usize,
     /// The middle kinds the ladder carries above the tone floor's own two: the fast ones
@@ -392,7 +393,7 @@ pub struct AirInterface {
 }
 
 impl AirInterface {
-    /// The control mode: ordinary control frames, connect requests, beacons and probes go
+    /// The control mode: ordinary control frames and a connect request's ordinary tries go
     /// out at it.
     #[must_use]
     pub const fn control_mode(&self) -> Mode {
