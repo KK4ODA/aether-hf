@@ -534,7 +534,9 @@ re-seed takes Poor +24 dB 36 → 23 s. The daemon tests that took a call's, beac
 frame for OFDM measure the tone frame (RMS `tone::gain_db()` above, SNR > 15 on the wire, no
 constellation) and check OFDM on the call's second try and the session's ACKs. Not taken:
 answering a strong floor call in OFDM (asymmetric paths). No protocol change: beta.54 and
-beta.55 interoperate.
+beta.55 interoperate. **Option on the roadmap (P9-12):** a spread-tone floor on the
+2 300 Hz air — the floor's tones across the passband for frequency diversity, the constant
+envelope kept — built only if the air shows the 400 Hz floor losing to selective fading.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
