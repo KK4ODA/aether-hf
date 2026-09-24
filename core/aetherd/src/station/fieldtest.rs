@@ -885,16 +885,17 @@ mod tests {
             results["file"]["bps"].as_f64().is_some_and(|b| b > 0.0),
             "{results}"
         );
-        // every mode of the table, and every rung whole — except the two 64-QAM modes,
-        // which decode short of their frames on this wire at a reported 24–26 dB: the
-        // open question of ADR-0008 (a 64-QAM burst on the clean loopback), which the
-        // ladder is built to show and P9-1 is to settle. Not hidden here: it is the
-        // reason the top two rungs are excused, and the excuse goes when the modem does.
+        // every rung of the ladder — the tone floor's two (ADR-0013), then the OFDM modes —
+        // and every rung whole, except the two top 64-QAM modes (OFDM modes 12 and 13, rungs
+        // 14 and 15), which decode short of their frames on this wire at a reported
+        // 24–26 dB: the open question of ADR-0008 (a 64-QAM burst on the clean loopback),
+        // which the ladder is built to show and P9-1 is to settle. Not hidden here: it is
+        // the reason the top two rungs are excused, and the excuse goes when the modem does.
         let ladder = results["ladder"].as_array().expect("rungs");
-        assert_eq!(ladder.len(), 14, "{results}");
+        assert_eq!(ladder.len(), 16, "{results}");
         let short: Vec<&Value> = ladder
             .iter()
-            .filter(|r| r["decoded"] != r["frames"] && r["mode"].as_u64().is_some_and(|m| m < 12))
+            .filter(|r| r["decoded"] != r["frames"] && r["mode"].as_u64().is_some_and(|m| m < 14))
             .collect();
         assert!(
             short.is_empty(),

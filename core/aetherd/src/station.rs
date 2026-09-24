@@ -31,12 +31,9 @@ use aether_link::{
         ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
         unpack_callsign, with_bandwidth,
     },
-    rate::PAYLOAD_BYTES,
 };
 use aether_phy::{
-    AudioToBaseband, BasebandToAudio, Complex, Modem, StreamingReceiver,
-    preamble::FrameType,
-    rx::ReceivedFrame,
+    AudioToBaseband, BasebandToAudio, Complex, Modem, Received, StreamingReceiver,
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -147,7 +144,10 @@ impl Default for StationConfig {
 /// decode, which is why this is a `RefCell` and not a lock: everything in a station runs on
 /// one thread, and the audio callback talks to it through a queue.
 pub struct PhyFrame {
-    frame: ReceivedFrame,
+    /// The soft frame of either family: an OFDM frame, or the tone floor's (ADR-0013).
+    frame: Received,
+    /// The rung of the ladder it was sent at; 0 for a control frame.
+    rung: usize,
     modem: Rc<RefCell<Modem>>,
     t_start: f64,
     t_end: f64,
@@ -158,9 +158,10 @@ impl std::fmt::Debug for PhyFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhyFrame")
             .field("container", &self.container)
-            .field("mode", &self.frame.mode)
-            .field("rv", &self.frame.rv)
-            .field("snr_3k_db", &self.frame.snr_3k_db)
+            .field("rung", &self.rung)
+            .field("tone", &self.frame.is_tone())
+            .field("rv", &self.frame.rv())
+            .field("snr_3k_db", &self.frame.snr_3k_db())
             .finish_non_exhaustive()
     }
 }
@@ -171,19 +172,19 @@ impl SoftFrame for PhyFrame {
     }
 
     fn mode(&self) -> usize {
-        self.frame.mode
+        self.rung
     }
 
     fn floor(&self) -> bool {
-        self.frame.sync.floor
+        self.frame.is_tone()
     }
 
     fn rv(&self) -> u8 {
-        self.frame.rv
+        self.frame.rv()
     }
 
     fn snr_db(&self) -> f64 {
-        self.frame.snr_3k_db
+        self.frame.snr_3k_db()
     }
 
     fn t_start(&self) -> f64 {
@@ -196,7 +197,7 @@ impl SoftFrame for PhyFrame {
 
     fn decode(&self, buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
         let mut modem = self.modem.borrow_mut();
-        match modem.decode_frame(&self.frame, buffer.map(Vec::as_slice)) {
+        match modem.decode_received(&self.frame, buffer.map(Vec::as_slice)) {
             Ok((payload, llrs)) => (payload, llrs),
             // A frame the codec will not even look at is not a frame; there is nothing to
             // keep for a later combine either.
@@ -1179,8 +1180,8 @@ impl<P: Ptt> Station<P> {
             session: 0,
         };
         // beacons go out at the control mode: the slowest ordinary mode whose frame carries
-        // a callsign (mode 0 is a floor mode on the narrow air, ADR-0009)
-        let mode = self.transmitter.air().control_mode().index;
+        // a callsign — its rung of the ladder, above the tone floor's two (ADR-0013)
+        let mode = self.transmitter.air().control_rung();
         let capacity = self.engine.timing().capacity(mode);
         let payload =
             encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
@@ -1327,9 +1328,9 @@ impl<P: Ptt> Station<P> {
             return Err("the channel is busy");
         }
         let air = self.air();
-        let index = self.config.link.max_mode.min(air.n_modes() - 1);
-        let mode = air.modes[index];
-        let bytes = mode.payload_bytes(&air.data_layout(index));
+        let index = self.config.link.max_mode.min(air.n_rungs() - 1);
+        let rung = air.rung(index);
+        let bytes = rung.payload_bytes();
         if bytes == 0 {
             return Err("this mode carries no payload to send");
         }
@@ -1338,7 +1339,7 @@ impl<P: Ptt> Station<P> {
         // A burst is several frames back to back, long enough to read the ALC and turn the
         // knob against, and the bursts are spaced by as much silence: a one-frame burst is
         // a second long, which is no time at all for a hand on a drive control.
-        let frame_s = air.data_layout(index).duration_s().max(0.1);
+        let frame_s = rung.duration_s().max(0.1);
         let per_burst = (DRIVE_BURST_S / frame_s).ceil().max(1.0) as usize;
         let frame = aether_link::TxFrame {
             container: aether_link::Container::Data,
@@ -1773,30 +1774,41 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
-            self.report(&decoded, now);
-            let detected = decoded.frame.sync.detect_confidence(&self.air());
+            let air = self.air();
+            let control = decoded.frame.is_control();
+            // the rung a DATA frame was sent at; chips naming an OFDM mode on no rung of the
+            // ladder are noise, and go no further (the model's harness drops them too)
+            let Some(rung) = (if control {
+                Some(0)
+            } else {
+                decoded.frame.rung(&air)
+            }) else {
+                continue;
+            };
+            self.report(&decoded, rung, now);
+            let detected = decoded.frame.detect_confidence(&air);
             if let Some(recording) = &mut self.recording {
                 recording.frame(crate::record::FrameRecord {
                     t_s: now,
-                    kind: if decoded.frame.sync.frame_type == FrameType::Control {
+                    kind: if control {
                         "control".into()
                     } else {
                         "data".into()
                     },
-                    mode: decoded.frame.mode,
-                    rv: decoded.frame.rv,
-                    snr_3k_db: decoded.frame.snr_3k_db,
+                    mode: rung,
+                    rv: decoded.frame.rv(),
+                    snr_3k_db: decoded.frame.snr_3k_db(),
                     cfo_hz: reported_cfo(
                         decoded.ok(),
-                        decoded.frame.mode_confidence,
+                        decoded.frame.mode_confidence(),
                         detected,
-                        decoded.frame.cfo_hz,
+                        decoded.frame.cfo_hz(),
                     ),
-                    confidence: decoded.frame.mode_confidence,
+                    confidence: decoded.frame.mode_confidence(),
                     detect_confidence: detected,
                     decoded: decoded.ok(),
                     bytes: decoded.payload.as_ref().map_or(0, Vec::len),
-                    control: if decoded.frame.sync.frame_type == FrameType::Control {
+                    control: if control {
                         decoded
                             .payload
                             .as_deref()
@@ -1811,29 +1823,26 @@ impl<P: Ptt> Station<P> {
             // beacon drew a reply would be unusable.
             if let Some(caller) = beacon_callsign(&decoded) {
                 self.stats.beacons_heard += 1;
-                self.busy
-                    .mark_frame(now, decoded.frame.sync.detect_confidence(&self.air()));
+                self.busy.mark_frame(now, detected);
                 self.note(
                     "beacon",
-                    &format!("{caller} at {:.1} dB", decoded.frame.snr_3k_db),
+                    &format!("{caller} at {:.1} dB", decoded.frame.snr_3k_db()),
                 );
                 continue;
             }
-            let container = if decoded.frame.sync.frame_type == FrameType::Control {
+            let container = if control {
                 Container::Control
             } else {
                 Container::Data
             };
-            let layout = self
-                .transmitter
-                .air()
-                .layout_for_family(container == Container::Data, decoded.frame.sync.floor);
-            let start = decoded.frame.sync.start as f64 / fs;
+            let start = decoded.frame.start() as f64 / fs;
+            let frame_s = decoded.frame.samples(&air) as f64 / fs;
             let decoded_ok = decoded.ok();
             let frame = PhyFrame {
                 container,
                 t_start: start,
-                t_end: start + layout.duration_s(),
+                t_end: start + frame_s,
+                rung,
                 frame: decoded.frame,
                 modem: Rc::clone(&self.decoder),
             };
@@ -1857,20 +1866,21 @@ impl<P: Ptt> Station<P> {
         aether_phy::modes::air_interface(self.config.params)
     }
 
-    /// Describe a frame for the displays, and keep its constellation.
-    fn report(&mut self, decoded: &aether_phy::DecodedFrame, now: f64) {
+    /// Describe a frame for the displays, and keep its constellation. `rung` is the rung of
+    /// the ladder a DATA frame was sent at.
+    fn report(&mut self, decoded: &aether_phy::DecodedFrame, rung: usize, now: f64) {
         let frame = &decoded.frame;
-        let control = frame.sync.frame_type == FrameType::Control;
+        let control = frame.is_control();
         let payload = decoded.payload.as_deref();
         let mut report = FrameReport {
             t_s: now,
             kind: if control { "control" } else { "data" },
-            mode: frame.mode,
-            rv: frame.rv,
-            snr_db: frame.snr_3k_db,
-            cfo_hz: frame.cfo_hz,
-            confidence: frame.mode_confidence,
-            detect_confidence: frame.sync.detect_confidence(&self.air()),
+            mode: rung,
+            rv: frame.rv(),
+            snr_db: frame.snr_3k_db(),
+            cfo_hz: frame.cfo_hz(),
+            confidence: frame.mode_confidence(),
+            detect_confidence: frame.detect_confidence(&self.air()),
             decoded: decoded.ok(),
             bytes: payload.map_or(0, <[u8]>::len),
             from: None,
@@ -1922,9 +1932,11 @@ impl<P: Ptt> Station<P> {
             }
         }
         // the constellation, thinned evenly so a long frame costs a display no more
-        // than a short one
-        let step = frame.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
-        self.last_symbols = frame.symbols.iter().step_by(step).copied().collect();
+        // than a short one; a tone frame has none — one tone at a time, detected by energy
+        self.last_symbols = frame.ofdm().map_or_else(Vec::new, |ofdm| {
+            let step = ofdm.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
+            ofdm.symbols.iter().step_by(step).copied().collect()
+        });
         self.last_frame = Some(report.clone());
         // bounded, for a station nobody drains: a test harness, or a client that never asks
         if self.reports.len() >= MAX_UNTAKEN_REPORTS {
@@ -2122,11 +2134,11 @@ impl<P: Ptt> Station<P> {
         let mut baseband: Vec<Complex> = Vec::new();
         for frame in &frames {
             let burst = match frame.container {
-                Container::Data => self.transmitter.data_burst(
-                    &frame.payload,
-                    self.transmitter.modes()[frame.mode],
-                    frame.rv,
-                ),
+                // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
+                Container::Data => {
+                    self.transmitter
+                        .rung_burst(&frame.payload, frame.mode, frame.rv)
+                }
                 Container::Control => {
                     self.transmitter
                         .control_burst_of(&frame.payload, frame.rv, frame.floor)
@@ -2178,21 +2190,26 @@ impl<P: Ptt> Station<P> {
     /// preamble alone asserts nothing (`field/OTA-2-FINDINGS.md`).
     ///
     /// The engine's timing signal and the receive indicator still take the gate: a phantom
-    /// telling the engine a burst is arriving held this station's own turn.
+    /// telling the engine a burst is arriving held this station's own turn. An OFDM
+    /// preamble's threshold sits at the statistic's noise maximum, so its acquisitions take
+    /// [`DETECT_CONFIDENCE_TRUSTED`]; a tone frame (ADR-0013) is announced only once its
+    /// first sync block has cleared a threshold set over the noise maximum of that block and
+    /// beaten its neighbours for three symbols, which is the gate already.
     fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], now: f64) {
         let air = self.air();
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
-            if pending.sync.detect_confidence(&air) < DETECT_CONFIDENCE_TRUSTED {
+            if !pending.tone && pending.detect_confidence < DETECT_CONFIDENCE_TRUSTED {
                 continue;
             }
-            self.rx_until = self.rx_until.max(now + air.long.duration_s());
-            // the preamble named the frame's layout: its own air time, not a guess from the
-            // peer's last mode — a floor frame after ordinary connect frames is four times
-            // as long, and an answer timed for an ordinary one tramples it (ADR-0012)
-            let frame_s = pending.end.saturating_sub(pending.sync.start) as f64 / fs;
+            // the frame named itself — an OFDM preamble its layout, a tone frame its kind:
+            // its own air time, not a guess from the peer's last mode — a floor frame after
+            // ordinary connect frames is five times as long, and an answer timed for an
+            // ordinary one tramples it (ADR-0012)
+            let frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
+            self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
             self.engine
-                .on_preamble(pending.sync.start as f64 / fs, now, Some(frame_s));
+                .on_preamble(pending.start as f64 / fs, now, Some(frame_s));
         }
     }
 
@@ -2340,7 +2357,7 @@ fn is_probe_answer(frames: &[aether_link::TxFrame]) -> bool {
 
 /// The callsign in a beacon frame, if that is what this is.
 fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
-    if decoded.frame.sync.frame_type != FrameType::Data {
+    if decoded.frame.is_control() {
         return None;
     }
     let payload = decoded.payload.as_ref()?;
@@ -2351,25 +2368,37 @@ fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
     unpack_callsign(&body).ok()
 }
 
-/// Link-layer timing derived from the waveform tables.
+/// Link-layer timing derived from the waveform tables — what the model's harness
+/// (`phy_timing`) hands its engines.
 ///
 /// Every number here comes from [`WaveformParams`] or a measurement, never a guess: the frame
-/// durations are what the layouts actually occupy, and the capacities are what the modes
-/// actually carry.
+/// durations are what the frames actually occupy, and the capacities are what the rungs of
+/// the air's ladder — the tone floor's two, then its OFDM modes (ADR-0013) — actually carry.
+///
+/// # Panics
+/// If the air's tone floor has data kinds of different lengths, which the link layer cannot
+/// time: the fixed tables never have.
 #[must_use]
 pub fn phy_timing(params: WaveformParams) -> PhyTiming {
     let air = aether_phy::modes::air_interface(params);
-    // the mode table of the waveform in use: its capacities, and the thresholds its
-    // benchmark measured, so the rate controller steps whichever table the air has
-    let (capacity, thresholds): (Vec<usize>, Vec<f64>) =
-        if params.bandwidth == aether_phy::waveform::Bandwidth::Narrow500 {
-            (
-                aether_link::rate::NARROW_PAYLOAD_BYTES.to_vec(),
-                aether_link::rate::NARROW_AWGN_THRESHOLD_DB.to_vec(),
-            )
-        } else {
-            (PAYLOAD_BYTES.to_vec(), Vec::new())
-        };
+    let narrow = params.bandwidth == aether_phy::waveform::Bandwidth::Narrow500;
+    // the thresholds the air's benchmarks measured, so the rate controller steps whichever
+    // ladder the air has (empty: the wide one), and its control frames' for the family
+    let (thresholds, controls) = if narrow {
+        (
+            aether_link::rate::NARROW_AWGN_THRESHOLD_DB.to_vec(),
+            aether_link::rate::NARROW_CONTROL_THRESHOLD_DB,
+        )
+    } else {
+        (Vec::new(), aether_link::rate::CONTROL_THRESHOLD_DB)
+    };
+    let floor_s = air.tone_data()[0].duration_s();
+    assert!(
+        air.tone_data()
+            .iter()
+            .all(|k| (k.duration_s() - floor_s).abs() < 1e-12),
+        "the link layer takes one floor data-frame length"
+    );
     PhyTiming {
         data_frame_s: air.long.duration_s(),
         control_frame_s: air.short.duration_s(),
@@ -2378,16 +2407,28 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         detect_latency_s: 0.15,
         // the station fills this in from its keying lead and the daemon's playback backlog
         tx_latency_s: 0.0,
-        // acquisition reports a frame once its whole preamble is in, plus the search block:
-        // four symbols on the wide air, ten where the floor family's eight-symbol preamble
-        // is only complete that late (ADR-0009)
-        preamble_detect_s: Some((air.longest_preamble() + 2) as f64 * params.symbol_period_s()),
-        data_capacity: capacity,
+        // acquisition reports an OFDM frame once its preamble is in, plus the sidelobe guard
+        // and the search block: four symbols
+        preamble_detect_s: Some(
+            (aether_phy::PREAMBLE_SYMBOLS + 2) as f64 * params.symbol_period_s(),
+        ),
+        data_capacity: air
+            .ladder()
+            .iter()
+            .map(aether_phy::Rung::payload_bytes)
+            .collect(),
         mode_threshold_db: thresholds,
-        // the floor family (ADR-0009): its layouts' air times and how many modes use them
-        floor_data_frame_s: air.floor_long.map(|l| l.duration_s()),
-        floor_control_frame_s: air.floor_short.map(|l| l.duration_s()),
-        floor_modes: air.floor_modes,
+        // the tone floor (ADR-0013): its frames' air times and how many rungs are its
+        floor_data_frame_s: Some(floor_s),
+        floor_control_frame_s: Some(air.tone_control().duration_s()),
+        floor_modes: air.floor_modes(),
+        control_threshold_db: Some(controls),
+        // the wide air's first OFDM rung stays productive on a fading path a decibel above
+        // its 10 % point; the narrow air's does not (ADR-0013 §4)
+        floor_margin_db: (!narrow).then_some(aether_link::rate::WIDE_FLOOR_MARGIN_DB),
+        // a tone frame is announced once its first sync block is in and has beaten its
+        // neighbours, plus this receiver's own lateness (blanker, filter and a block)
+        floor_preamble_detect_s: Some(aether_phy::tone::announce_delay_s(0.1)),
     }
 }
 
@@ -2682,24 +2723,28 @@ mod tests {
         use aether_phy::preamble::FrameType;
         use aether_phy::rx::FrameSync;
 
+        // the two families are detected by different statistics against different
+        // thresholds, so a raw number means something only next to its own: an OFDM frame's
+        // matched-filter peak against the air's acquisition threshold, a tone frame's sync
+        // statistic against the tone detector's (ADR-0013)
         let air = aether_phy::modes::air_interface(aether_phy::waveform::NARROW_500);
-        let sync = |floor, peak| FrameSync {
+        let sync = FrameSync {
             start: 0,
             cfo_hz: 0.0,
             frame_type: FrameType::Control,
-            floor,
-            timing_peak: peak,
+            timing_peak: air.acquisition_threshold,
             type_confidence: 1.0,
         };
-        // the two families are detected by different statistics against different
-        // thresholds, so the same raw peak means different things
-        let ordinary = air.acceptance_threshold(false);
-        let floor = air.acceptance_threshold(true);
-        assert!(floor < ordinary, "the floor threshold is the lower one");
-        assert!((sync(false, ordinary).detect_confidence(&air) - 1.0).abs() < 1e-9);
-        assert!((sync(true, floor).detect_confidence(&air) - 1.0).abs() < 1e-9);
-        // a peak that is ample for a floor candidate is a bare pass as an ordinary one
-        assert!(sync(true, ordinary).detect_confidence(&air) > 1.5);
+        assert!((sync.detect_confidence(&air) - 1.0).abs() < 1e-9);
+        let detector = aether_phy::tone::ToneDetector::new();
+        let tone = aether_phy::ToneSync {
+            start: 0,
+            cfo_hz: 0.0,
+            kind: aether_phy::tone::control_kind(),
+            rv: 0,
+            statistic: detector.threshold() * 2.0,
+        };
+        assert!((tone.detect_confidence() - 2.0).abs() < 1e-9);
     }
 
     /// Step two stations against each other through a channel, in blocks of audio.
@@ -3702,9 +3747,11 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_station_does_not_hear_a_narrow_call() {
-        // the two waveforms do not decode each other's preambles: a 500 Hz call at a
-        // 2 300 Hz station is silence, which is the point of stating the bandwidth
+    fn a_wide_station_does_not_answer_a_narrow_call() {
+        // the two OFDM waveforms do not decode each other's preambles: a 500 Hz call's
+        // ordinary tries are silence at a 2 300 Hz station. The tone floor (ADR-0013) is the
+        // same frames on both airs, so its tries on the floor reach the wide station — which
+        // leaves them alone, because the call states its bandwidth
         let mut air = Air::new(1.0, 0.0005);
         air.a = Station::new(
             StationConfig {
@@ -3717,9 +3764,27 @@ mod tests {
             1,
         );
         air.a.connect("KK4XYZ").expect("idle");
-        air.run(20.0, |_, b| b.stats.frames_detected > 0);
-        assert_eq!(air.b.stats.frames_detected, 0);
-        assert!(!air.b.connected());
+        air.run(90.0, |_, b| {
+            b.events
+                .iter()
+                .any(|e| e.contains("calls in another bandwidth"))
+        });
+        assert!(!air.b.connected() && !air.a.connected());
+        let events = air.b.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("ignored:W4ODA calls in another bandwidth")),
+            "{events:?}"
+        );
+        // and whatever the wide station heard was the floor's, never the narrow OFDM
+        let floor = air.b.engine().timing().floor_modes;
+        let reports = air.b.take_frame_reports();
+        assert!(!reports.is_empty());
+        assert!(
+            reports.iter().all(|r| r.mode < floor && r.decoded),
+            "{reports:?}"
+        );
     }
 
     #[test]
@@ -4100,31 +4165,23 @@ mod tests {
         // detector finds a phantom every few seconds. Gating on acquisition confidence
         // was tried and measured: phantoms reach 1.54 and a real frame acquired at 1.38,
         // so there is no cut. Only a decode is evidence, so a preamble marks nothing.
-        use aether_phy::preamble::FrameType;
-        use aether_phy::rx::FrameSync;
-
         let mut station = idle_station();
         let quiet = vec![0.0001f32; 4096];
         for _ in 0..80 {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        let air = station.air();
-        let preamble = |peak: f64| aether_phy::PendingFrame {
-            sync: FrameSync {
-                start: 0,
-                cfo_hz: 0.0,
-                frame_type: FrameType::Control,
-                floor: true,
-                timing_peak: peak,
-                type_confidence: 1.0,
-            },
+        let preamble = |confidence: f64| aether_phy::PendingFrame {
+            start: 0,
             end: 1000,
+            detect_confidence: confidence,
+            tone: false,
+            control: true,
         };
         assert!(!station.channel_busy(), "quiet to begin with");
 
-        // just over the floor threshold: what noise produces
-        let phantom = preamble(air.acceptance_threshold(true) * 1.05);
+        // just over the threshold: what noise produces
+        let phantom = preamble(1.05);
         station.heed_preambles(&[phantom], now);
         assert!(
             !station.channel_busy(),
@@ -4132,7 +4189,7 @@ mod tests {
         );
 
         // well clear of it, as a frame would be — still nothing: acquisition is not evidence
-        let confident = preamble(air.acceptance_threshold(true) * 2.5);
+        let confident = preamble(2.5);
         station.heed_preambles(&[confident], now);
         assert!(
             !station.channel_busy(),
@@ -4174,12 +4231,11 @@ mod tests {
         let air = station.air();
         let frame = |peak: f64, payload: Option<Vec<u8>>| aether_phy::DecodedFrame {
             payload,
-            frame: ReceivedFrame {
+            frame: aether_phy::Received::Ofdm(aether_phy::rx::ReceivedFrame {
                 sync: FrameSync {
                     start: 0,
                     cfo_hz: 0.0,
                     frame_type: FrameType::Control,
-                    floor: false,
                     timing_peak: peak,
                     type_confidence: 1.0,
                 },
@@ -4192,20 +4248,19 @@ mod tests {
                 rv: 0,
                 chip_runner_up: 1,
                 mode_confidence: 1.0,
-            },
-            mode: aether_phy::CONTROL_MODE,
+            }),
         };
         assert!(!station.receiving(), "dark to begin with");
 
         // what noise produces: just over the threshold, and no payload
-        station.report(&frame(air.acceptance_threshold(false) * 1.05, None), now);
+        station.report(&frame(air.acquisition_threshold * 1.05, None), 0, now);
         assert!(
             !station.receiving(),
             "a candidate that neither decoded nor acquired confidently lit the lamp"
         );
 
         // a frame that acquired well clear of the threshold is a burst even undecoded
-        station.report(&frame(air.acceptance_threshold(false) * 1.5, None), now);
+        station.report(&frame(air.acquisition_threshold * 1.5, None), 0, now);
         assert!(
             station.receiving(),
             "a confident acquisition keeps the lamp lit"
@@ -4221,7 +4276,8 @@ mod tests {
         );
         let later = station.now();
         station.report(
-            &frame(air.acceptance_threshold(false) * 1.05, Some(vec![0u8; 7])),
+            &frame(air.acquisition_threshold * 1.05, Some(vec![0u8; 7])),
+            0,
             later,
         );
         assert!(station.receiving(), "a decoded frame lights the lamp");

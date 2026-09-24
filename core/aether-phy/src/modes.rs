@@ -1,6 +1,7 @@
-//! Frame layouts and the mode table — everything derives from [`WaveformParams`].
+//! Frame layouts, the mode tables and the ladder — everything derives from
+//! [`WaveformParams`].
 //!
-//! A *frame* is a preamble (two Schmidl–Cox symbols whose PN sequence encodes the frame
+//! An OFDM *frame* is a preamble (two Schmidl–Cox symbols whose PN sequence encodes the frame
 //! type) followed by `data_symbols` OFDM symbols, every `pilot_symbol_period`-th of which is
 //! a full pilot symbol. A *mode* is a (modulation, code rate) pair; with a layout it fixes
 //! the coded bits, information bits and payload bytes of a frame.
@@ -10,41 +11,47 @@
 //! Two air interfaces share this module (P7-0): the **wide** 2 300 Hz waveform with its
 //! fourteen modes, and the **narrow** 500 Hz waveform — twelve carriers, the same symbol
 //! timing and the same frame layouts, so the link layer's clocks do not change — with its own
-//! ten-mode table. A 500 Hz signal puts its power into a fifth of the band, ≈ 6.8 dB more per
-//! carrier at the same 3 kHz-referenced SNR, so its most robust mode can be QPSK ½ where the
-//! wide table starts at BPSK ⅕ and still reach the same floor; it has to be, because with eight
-//! data carriers a control frame's seven bytes fit a SHORT frame at nothing slower.
-//! [`AirInterface`] bundles a waveform with its layouts and modes; [`air_interface`] finds the
-//! one for a [`WaveformParams`].
+//! table. A 500 Hz signal puts its power into a fifth of the band, ≈ 6.8 dB more per carrier
+//! at the same 3 kHz-referenced SNR, so its control mode can be QPSK ½ where the wide table
+//! starts at BPSK ⅕ and still reach the same floor; it has to be, because with eight data
+//! carriers a control frame's seven bytes fit a SHORT frame at nothing slower.
+//!
+//! Below both tables is the **tone floor** (ADR-0013, [`crate::tone`]): a steady-envelope
+//! sixteen-tone FSK family, sent at the OFDM frames' peak amplitude and detected by energy.
+//! What the link layer calls "mode N" is a rung of the air's **ladder**: the tone floor's data
+//! kinds, then the air's OFDM modes, most robust first ([`Rung`], [`AirInterface::ladder`]).
+//! An OFDM frame's chips carry its OFDM mode index, which is not its rung: the wide ladder
+//! puts OFDM mode 0 at rung 2, the narrow one skips the OFDM modes the floor replaced.
+//! [`AirInterface`] bundles a waveform with its layouts, modes and ladder; [`air_interface`]
+//! finds the one for a [`WaveformParams`].
 
 use aether_fec::{
     CRC24A,
     ldpc::{select_base_graph, select_lifting_size},
 };
 
-use crate::waveform::{Bandwidth, Modulation, NARROW_500, WIDE_2300, WaveformParams};
+use crate::{
+    tone::{self, ToneKind},
+    waveform::{Bandwidth, Modulation, NARROW_500, WIDE_2300, WaveformParams},
+};
 
-/// Symbols of preamble ahead of an ordinary frame.
+/// Symbols of preamble ahead of a frame.
 pub const PREAMBLE_SYMBOLS: usize = 2;
-/// Symbols of preamble ahead of a floor frame (ADR-0009): four times the ordinary
-/// preamble, which the detector integrates for 6 dB.
-pub const FLOOR_PREAMBLE_SYMBOLS: usize = 8;
 
 /// How many OFDM symbols a frame carries, and which of them are full pilot symbols.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameLayout {
-    /// `"long"`, `"short"`, `"floor-long"` or `"floor-short"`.
+    /// `"long"` or `"short"`.
     pub name: &'static str,
     /// Symbols after the preamble.
     pub data_symbols: usize,
     /// The numerology the layout is measured against.
     pub waveform: WaveformParams,
-    /// Identical preamble symbols ahead of the data symbols: two on the ordinary layouts,
-    /// eight on the floor layouts (ADR-0009).
+    /// Identical preamble symbols ahead of the data symbols: two on every layout since the
+    /// OFDM floor family (ADR-0009, eight) gave way to the tone floor (ADR-0013).
     pub preamble_symbols: usize,
     /// Symbols either side over which the receiver averages its comb-pilot channel
-    /// estimate: ±1 on the ordinary layouts, ±3 on the floor layouts, where every pilot
-    /// arrives at a fifth of the power and the channel is slow enough to allow it.
+    /// estimate: ±1.
     pub pilot_smoothing: usize,
 }
 
@@ -98,12 +105,6 @@ impl FrameLayout {
     #[must_use]
     pub fn total_symbols(&self) -> usize {
         self.preamble_symbols + self.data_symbols
-    }
-
-    /// Whether this is a floor layout (ADR-0009): a longer preamble of the floor sequences.
-    #[must_use]
-    pub const fn is_floor(&self) -> bool {
-        self.preamble_symbols != PREAMBLE_SYMBOLS
     }
 
     /// Frame duration in seconds.
@@ -240,32 +241,14 @@ pub const NARROW_SHORT: FrameLayout = FrameLayout {
     preamble_symbols: PREAMBLE_SYMBOLS,
     pilot_smoothing: 1,
 };
-/// 500 Hz floor data frames (ADR-0009): 136 symbols, about 4.2 s; 112 payload symbols × 8
-/// carriers = 896 slots, so a tenth-rate QPSK mode carries 19 bytes and a fifth-rate one
-/// 41 — a connect request. Sixteen full pilot symbols carry the chips.
-pub const NARROW_FLOOR_LONG: FrameLayout = FrameLayout {
-    name: "floor-long",
-    data_symbols: 128,
-    waveform: NARROW_500,
-    preamble_symbols: FLOOR_PREAMBLE_SYMBOLS,
-    pilot_smoothing: 3,
-};
-/// 500 Hz floor control frames: 72 symbols, about 2.2 s; 56 × 8 = 448 slots → 8 payload
-/// bytes at the floor control mode (QPSK 1/10), one more than a control frame needs.
-pub const NARROW_FLOOR_SHORT: FrameLayout = FrameLayout {
-    name: "floor-short",
-    data_symbols: 64,
-    waveform: NARROW_500,
-    preamble_symbols: FLOOR_PREAMBLE_SYMBOLS,
-    pilot_smoothing: 3,
-};
 
-/// The 500 Hz mode table, most robust first. Modes 0 and 1 are the floor family's
-/// (ADR-0009): QPSK 1/10 and QPSK ⅕ on [`NARROW_FLOOR_LONG`], about −12 and −10 dB. Mode 2,
-/// QPSK ⅓ on the ordinary frame, is the rung between them and mode 3. Mode 3 is QPSK ½: the
+/// The 500 Hz OFDM mode table, most robust first. Modes 0 and 1 were the OFDM floor family's
+/// (ADR-0009) until the tone floor (ADR-0013) replaced them; they stay in the table only
+/// because an OFDM frame's chip sequence is indexed by its position in it, and are on no rung
+/// of the ladder. Mode 2, QPSK ⅓, is the ladder's first OFDM rung. Mode 3 is QPSK ½: the
 /// slowest mode whose SHORT frame carries a control frame and whose LONG frame carries a
-/// connect request; control frames, connect requests, beacons and probes go out at it.
-/// Thirteen modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25.
+/// connect request; ordinary control frames, connect requests, beacons and probes go out at
+/// it. Thirteen modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25.
 pub const NARROW_MODES: [Mode; 13] = [
     mode(0, Modulation::Qpsk, 1, 10),
     mode(1, Modulation::Qpsk, 1, 5),
@@ -282,19 +265,78 @@ pub const NARROW_MODES: [Mode; 13] = [
     mode(12, Modulation::Qam64, 5, 6),
 ];
 
-/// Leading modes of the narrow table that go out on the floor layouts.
-pub const NARROW_FLOOR_MODES: usize = 2;
 /// The narrow control mode's index: QPSK ½.
 pub const NARROW_CONTROL_MODE_INDEX: usize = 3;
 /// The narrow control mode.
 pub const NARROW_CONTROL_MODE: Mode = NARROW_MODES[NARROW_CONTROL_MODE_INDEX];
-/// The detector's threshold on its floor statistic at 500 Hz — the floor references'
-/// normalised peak averaged over the seven windows an eight-symbol preamble fills — set
-/// like the ordinary one, just above the statistic's maximum over 60 s of noise (0.314).
-pub const NARROW_FLOOR_ACQUISITION_THRESHOLD: f64 = 0.32;
 
-/// One waveform with the layouts and modes that go with it — what a transmitter, receiver,
-/// detector or link needs to know about the air it is on.
+/// The wide ladder's OFDM rungs: every mode of the table.
+const WIDE_OFDM_LADDER: [usize; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+/// The narrow ladder's OFDM rungs: the table from QPSK ⅓ up.
+const NARROW_OFDM_LADDER: [usize; 11] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+/// One step of an air's ladder — what the link layer, the rate controller and the operator
+/// call "mode N": a tone-floor kind, or an OFDM mode on the layout it goes out on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Rung {
+    /// A tone-floor data kind (ADR-0013).
+    Tone(&'static ToneKind),
+    /// An OFDM mode on its data layout.
+    Ofdm(Mode, FrameLayout),
+}
+
+impl Rung {
+    /// Whether the rung is the tone floor's.
+    #[must_use]
+    pub const fn is_floor(&self) -> bool {
+        matches!(self, Self::Tone(_))
+    }
+
+    /// Its name: the tone kind's (`tone-24`) or the OFDM mode's (`QPSK-1/2`).
+    #[must_use]
+    pub fn name(&self) -> String {
+        match self {
+            Self::Tone(kind) => kind.name.to_string(),
+            Self::Ofdm(mode, _) => mode.name(),
+        }
+    }
+
+    /// Payload bytes a DATA frame at this rung carries.
+    #[must_use]
+    pub fn payload_bytes(&self) -> usize {
+        match self {
+            Self::Tone(kind) => kind.payload_bytes,
+            Self::Ofdm(mode, layout) => mode.payload_bytes(layout),
+        }
+    }
+
+    /// A DATA frame's length in seconds.
+    #[must_use]
+    pub fn duration_s(&self) -> f64 {
+        match self {
+            Self::Tone(kind) => kind.duration_s(),
+            Self::Ofdm(_, layout) => layout.duration_s(),
+        }
+    }
+
+    /// Payload bits per second of frame air time.
+    #[must_use]
+    pub fn net_bps(&self) -> f64 {
+        8.0 * self.payload_bytes() as f64 / self.duration_s()
+    }
+
+    /// The OFDM mode, if the rung is one.
+    #[must_use]
+    pub const fn ofdm_mode(&self) -> Option<Mode> {
+        match self {
+            Self::Tone(_) => None,
+            Self::Ofdm(mode, _) => Some(*mode),
+        }
+    }
+}
+
+/// One waveform with the layouts, modes and ladder that go with it — what a transmitter,
+/// receiver, detector or link needs to know about the air it is on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AirInterface {
     /// The numerology.
@@ -303,129 +345,130 @@ pub struct AirInterface {
     pub long: FrameLayout,
     /// The control-frame layout.
     pub short: FrameLayout,
-    /// The mode table, most robust first.
+    /// The OFDM mode table, most robust first: what an OFDM frame's chips index. The link
+    /// runs the ladder.
     pub modes: &'static [Mode],
     /// Largest pairwise correlation allowed between the (mode, RV) chip sequences: 0.2 for
-    /// the wide waveform's 56 sequences of 168 chips, 0.25 for the narrow one's 40 of 32.
+    /// the wide waveform's 56 sequences of 168 chips, 0.25 for the narrow one's 52 of 32.
     pub chip_correlation_bound: f64,
     /// The detector's normalised matched-filter peak above which a preamble is declared,
     /// set just above the statistic's maximum over 60 s of band-limited noise: 0.36 at
     /// 2 300 Hz, 0.56 at 500 Hz (a fifth of the degrees of freedom in a preamble's span,
     /// and the signal peaks rise by about as much, so the two floors coincide).
     pub acquisition_threshold: f64,
-    /// The floor family's data layout (ADR-0009), when this air has one: the frame the modes
-    /// below the control mode go out on, and a connect request once the ordinary frame has
-    /// gone unanswered.
-    pub floor_long: Option<FrameLayout>,
-    /// The floor family's control layout: control frames while the link runs a floor mode.
-    pub floor_short: Option<FrameLayout>,
-    /// How many of the leading modes are floor modes — the slowest of the table and the only
-    /// ones on the floor layouts.
-    pub floor_modes: usize,
-    /// The mode control frames, connect requests, beacons and probes go out at: the slowest
-    /// whose SHORT frame carries a control frame.
+    /// The OFDM modes on the ladder, ascending, above the tone floor's rungs.
+    pub ofdm_ladder: &'static [usize],
+    /// The OFDM mode ordinary control frames, connect requests, beacons and probes go out
+    /// at: the slowest whose SHORT frame carries a control frame.
     pub control_mode_index: usize,
-    /// The detector's threshold on its floor statistic; 1.0 — never — without a floor family.
-    pub floor_acquisition_threshold: f64,
 }
 
 impl AirInterface {
-    /// The threshold a candidate of this family had to clear to be declared a preamble.
-    ///
-    /// The two families are detected by different statistics against different thresholds,
-    /// so a raw peak only means something next to the one that applied to it.
-    #[must_use]
-    pub const fn acceptance_threshold(&self, floor: bool) -> f64 {
-        if floor {
-            self.floor_acquisition_threshold
-        } else {
-            self.acquisition_threshold
-        }
-    }
-    /// The control mode: control frames, connect requests, beacons and probes go out at it.
+    /// The control mode: ordinary control frames, connect requests, beacons and probes go
+    /// out at it.
     #[must_use]
     pub const fn control_mode(&self) -> Mode {
         self.modes[self.control_mode_index]
     }
 
-    /// The mode floor control frames use on the floor control layout — the slowest of all.
+    /// The tone floor's data kinds: the ladder's first rungs.
+    #[must_use]
+    pub fn tone_data(&self) -> &'static [ToneKind] {
+        tone::data_kinds()
+    }
+
+    /// The tone floor's control frame: control frames while the link runs the floor.
+    #[must_use]
+    pub fn tone_control(&self) -> &'static ToneKind {
+        tone::control_kind()
+    }
+
+    /// How many of the ladder's leading rungs are the floor's: rung `floor_modes()` is the
+    /// first OFDM one.
+    #[must_use]
+    pub fn floor_modes(&self) -> usize {
+        self.tone_data().len()
+    }
+
+    /// Every rung, most robust first: the tone floor's data kinds, then the OFDM modes of
+    /// [`ofdm_ladder`](Self::ofdm_ladder) on the LONG layout.
+    #[must_use]
+    pub fn ladder(&self) -> Vec<Rung> {
+        self.tone_data()
+            .iter()
+            .map(Rung::Tone)
+            .chain(
+                self.ofdm_ladder
+                    .iter()
+                    .map(|&m| Rung::Ofdm(self.modes[m], self.long)),
+            )
+            .collect()
+    }
+
+    /// The rung at `index`.
     ///
     /// # Panics
-    /// If this air has no floor family.
+    /// If the ladder has no such rung.
     #[must_use]
-    pub fn floor_control_mode(&self) -> Mode {
-        assert!(self.floor_modes > 0, "this air has no floor family");
-        self.modes[0]
-    }
-
-    /// The control mode of a family.
-    #[must_use]
-    pub fn control_mode_for(&self, floor: bool) -> Mode {
-        if floor {
-            self.floor_control_mode()
-        } else {
-            self.control_mode()
+    pub fn rung(&self, index: usize) -> Rung {
+        let floor = self.floor_modes();
+        if index < floor {
+            return Rung::Tone(&self.tone_data()[index]);
         }
+        let mode = *self
+            .ofdm_ladder
+            .get(index - floor)
+            .unwrap_or_else(|| panic!("the ladder has no rung {index}"));
+        Rung::Ofdm(self.modes[mode], self.long)
     }
 
-    /// Whether a mode goes out on the floor layouts.
+    /// Rungs on the ladder — the link layer's mode count.
     #[must_use]
-    pub const fn is_floor(&self, mode_index: usize) -> bool {
-        mode_index < self.floor_modes
+    pub fn n_rungs(&self) -> usize {
+        self.floor_modes() + self.ofdm_ladder.len()
     }
 
-    /// How many modes the table has, and so how many the pilot chips can signal.
+    /// OFDM modes in the table — what the chip sequences are indexed by.
     #[must_use]
     pub const fn n_modes(&self) -> usize {
         self.modes.len()
     }
 
-    /// The layout an ordinary frame of this kind has.
+    /// Whether a rung is the tone floor's.
+    #[must_use]
+    pub fn is_floor(&self, rung: usize) -> bool {
+        rung < self.floor_modes()
+    }
+
+    /// The rung an OFDM mode sits on, if it sits on one.
+    #[must_use]
+    pub fn rung_of(&self, ofdm_mode: usize) -> Option<usize> {
+        self.ofdm_ladder
+            .iter()
+            .position(|&m| m == ofdm_mode)
+            .map(|j| self.floor_modes() + j)
+    }
+
+    /// The rung of the control mode.
+    ///
+    /// # Panics
+    /// If the control mode is on no rung, which the fixed tables never produce.
+    #[must_use]
+    pub fn control_rung(&self) -> usize {
+        self.rung_of(self.control_mode_index)
+            .expect("the control mode is on the ladder")
+    }
+
+    /// The layout an OFDM frame of this kind has.
     #[must_use]
     pub const fn layout_for(&self, data: bool) -> FrameLayout {
         if data { self.long } else { self.short }
     }
 
-    /// The layout a frame of this kind and family has.
-    ///
-    /// # Panics
-    /// If the floor family is asked of an air that has none.
+    /// Every OFDM layout of this air.
     #[must_use]
-    pub fn layout_for_family(&self, data: bool, floor: bool) -> FrameLayout {
-        if !floor {
-            return self.layout_for(data);
-        }
-        let layout = if data {
-            self.floor_long
-        } else {
-            self.floor_short
-        };
-        layout.expect("this air has no floor family")
-    }
-
-    /// The layout a DATA frame at this mode goes out on.
-    #[must_use]
-    pub fn data_layout(&self, mode_index: usize) -> FrameLayout {
-        self.layout_for_family(true, self.is_floor(mode_index))
-    }
-
-    /// Every layout of this air, the ordinary two first.
-    #[must_use]
-    pub fn layouts(&self) -> Vec<FrameLayout> {
-        let mut out = vec![self.long, self.short];
-        out.extend(self.floor_long);
-        out.extend(self.floor_short);
-        out
-    }
-
-    /// The longest preamble any of this air's layouts carries.
-    #[must_use]
-    pub fn longest_preamble(&self) -> usize {
-        self.layouts()
-            .iter()
-            .map(|l| l.preamble_symbols)
-            .max()
-            .unwrap_or(PREAMBLE_SYMBOLS)
+    pub const fn layouts(&self) -> [FrameLayout; 2] {
+        [self.long, self.short]
     }
 
     /// The nominal bandwidth in hertz.
@@ -443,11 +486,8 @@ pub const WIDE: AirInterface = AirInterface {
     modes: &MODES,
     chip_correlation_bound: 0.2,
     acquisition_threshold: 0.36,
-    floor_long: None,
-    floor_short: None,
-    floor_modes: 0,
+    ofdm_ladder: &WIDE_OFDM_LADDER,
     control_mode_index: 0,
-    floor_acquisition_threshold: 1.0,
 };
 
 /// The 500 Hz air interface.
@@ -458,11 +498,8 @@ pub const NARROW: AirInterface = AirInterface {
     modes: &NARROW_MODES,
     chip_correlation_bound: 0.25,
     acquisition_threshold: 0.56,
-    floor_long: Some(NARROW_FLOOR_LONG),
-    floor_short: Some(NARROW_FLOOR_SHORT),
-    floor_modes: NARROW_FLOOR_MODES,
+    ofdm_ladder: &NARROW_OFDM_LADDER,
     control_mode_index: NARROW_CONTROL_MODE_INDEX,
-    floor_acquisition_threshold: NARROW_FLOOR_ACQUISITION_THRESHOLD,
 };
 
 /// The air interface a waveform belongs to, by bandwidth.
@@ -532,6 +569,7 @@ mod tests {
     fn the_control_mode_carries_seven_bytes() {
         assert_eq!(CONTROL_MODE.payload_bytes(&SHORT), 7);
         assert_eq!(NARROW_CONTROL_MODE.payload_bytes(&NARROW_SHORT), 7);
+        assert_eq!(WIDE.tone_control().payload_bytes, 7);
     }
 
     #[test]
@@ -541,41 +579,68 @@ mod tests {
         assert!((NARROW_SHORT.duration_s() - SHORT.duration_s()).abs() < 1e-12);
         assert_eq!(NARROW_LONG.qam_symbols(), 28 * 8);
         assert_eq!(NARROW_SHORT.qam_symbols(), 10 * 8);
-        // every mode on the layout it goes out on: the floor modes (ADR-0009) on the
-        // floor frame, four times as long, the rest on the ordinary one
         let payloads: Vec<usize> = NARROW_MODES
             .iter()
-            .map(|m| m.payload_bytes(&NARROW.data_layout(m.index)))
+            .map(|m| m.payload_bytes(&NARROW_LONG))
             .collect();
         assert_eq!(
             payloads,
-            vec![19, 41, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137],
+            vec![2, 8, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137],
             "the narrow table's payloads are the model's"
         );
         assert!((NARROW_MODES[12].net_bit_rate(&NARROW_LONG) - 1040.0).abs() < 1.0);
         assert_eq!(NARROW.control_mode(), NARROW_MODES[3]);
-        assert_eq!(
-            NARROW
-                .floor_control_mode()
-                .payload_bytes(&NARROW_FLOOR_SHORT),
-            8
-        );
-        assert_eq!(NARROW_FLOOR_LONG.total_symbols(), 136);
-        assert_eq!(NARROW_FLOOR_SHORT.total_symbols(), 72);
-        assert!(NARROW_FLOOR_LONG.is_floor() && !NARROW_LONG.is_floor());
-        assert_eq!(NARROW.longest_preamble(), FLOOR_PREAMBLE_SYMBOLS);
         for (i, m) in NARROW_MODES.iter().enumerate() {
             assert_eq!(m.index, i);
-            let layout = NARROW.data_layout(i);
-            let z = m.lifting_size(&layout);
-            let kb = if m.base_graph(&layout) == 1 { 22 } else { 10 };
-            assert!(kb * z >= m.info_bits(&layout), "{}", m.name());
+            let z = m.lifting_size(&NARROW_LONG);
+            let kb = if m.base_graph(&NARROW_LONG) == 1 {
+                22
+            } else {
+                10
+            };
+            assert!(kb * z >= m.info_bits(&NARROW_LONG), "{}", m.name());
         }
         assert_eq!(air_interface(NARROW_500), NARROW);
         assert_eq!(air_interface(WIDE_2300), WIDE);
         assert_eq!(NARROW.n_modes(), 13);
         assert_eq!(WIDE.control_mode(), CONTROL_MODE);
         assert_eq!(NARROW.layout_for(false), NARROW_SHORT);
+    }
+
+    #[test]
+    fn the_ladders_are_the_models() {
+        // ADR-0013: the tone floor's two data kinds under each air's OFDM rungs
+        let wide: Vec<(String, usize)> = WIDE
+            .ladder()
+            .iter()
+            .map(|r| (r.name(), r.payload_bytes()))
+            .collect();
+        assert_eq!(wide.len(), 16);
+        assert_eq!(WIDE.n_rungs(), 16);
+        assert_eq!(wide[0], ("tone-24".to_string(), 24));
+        assert_eq!(wide[1], ("tone-36".to_string(), 36));
+        assert_eq!(wide[2], ("BPSK-1/5".to_string(), 26));
+        assert_eq!(wide[15], ("QAM64-5/6".to_string(), 732));
+        assert_eq!(
+            NARROW
+                .ladder()
+                .iter()
+                .map(Rung::payload_bytes)
+                .collect::<Vec<_>>(),
+            vec![24, 36, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137]
+        );
+        assert_eq!((WIDE.floor_modes(), NARROW.floor_modes()), (2, 2));
+        assert_eq!((WIDE.control_rung(), NARROW.control_rung()), (2, 3));
+        assert_eq!(NARROW.rung_of(0), None);
+        assert_eq!(NARROW.rung_of(2), Some(2));
+        assert!(WIDE.is_floor(1) && !WIDE.is_floor(2));
+        assert_eq!(WIDE.rung(2).ofdm_mode(), Some(MODES[0]));
+        assert!(NARROW.rung(0).is_floor());
+        // bytes per second climb the ladder, which is what the rate controller steps along
+        for air in [WIDE, NARROW] {
+            let rates: Vec<f64> = air.ladder().iter().map(Rung::net_bps).collect();
+            assert!(rates.windows(2).all(|w| w[0] <= w[1] + 1e-9), "{rates:?}");
+        }
     }
 
     #[test]

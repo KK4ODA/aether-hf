@@ -32,8 +32,8 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, ProbeBody, WINDOW, bandwidth_code, control_flags, data_capacity, decode_data,
-        encode_data, in_window, pack_callsign, seq_after, seq_distance,
+        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, control_flags,
+        data_capacity, decode_data, encode_data, in_window, pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{RateConfig, RateController},
@@ -75,7 +75,9 @@ pub struct LinkConfig {
     pub burst_gap_s: f64,
     /// Mode a session starts on.
     pub initial_mode: usize,
-    /// Fastest mode this station will use.
+    /// Fastest mode — rung of the ladder — this station will use: the top of the widest
+    /// ladder (2 300 Hz, ADR-0013) by default; a recommendation never leaves the air's own
+    /// table.
     pub max_mode: usize,
     /// With a peer that wants to send, hand over after this many bursts of our own.
     pub bursts_before_turn: usize,
@@ -101,7 +103,7 @@ impl Default for LinkConfig {
             ack_margin_s: 0.4,
             burst_gap_s: 0.2,
             initial_mode: 0,
-            max_mode: 13,
+            max_mode: 15,
             bursts_before_turn: 3,
             max_combines: 4,
             capabilities: 0,
@@ -396,9 +398,10 @@ impl std::fmt::Debug for LinkEngine {
 }
 
 /// A fresh rate controller for the PHY's mode table: its thresholds when the timing carries
-/// them, the wide waveform's otherwise.
+/// them, the wide waveform's otherwise — with the air's floor: how many rungs are the floor's
+/// and how far the first OFDM rung's margin is capped against it (ADR-0013).
 fn rate_controller_for(timing: &PhyTiming) -> RateController {
-    if timing.mode_threshold_db.is_empty() {
+    let controller = if timing.mode_threshold_db.is_empty() {
         RateController::default()
     } else {
         let frame_s: Vec<f64> = (0..timing.mode_threshold_db.len())
@@ -410,7 +413,8 @@ fn rate_controller_for(timing: &PhyTiming) -> RateController {
             &timing.data_capacity,
             &frame_s,
         )
-    }
+    };
+    controller.with_floor(timing.floor_modes, timing.floor_margin_db)
 }
 
 impl LinkEngine {
@@ -866,7 +870,7 @@ impl LinkEngine {
             return;
         }
         let length = frame_s.unwrap_or_else(|| self.peer_data_frame_s());
-        let deadline = t_start + length + self.irs_reply_delay();
+        let deadline = t_start + length + self.irs_reply_delay(None, None);
         let current = self.deadline_of(Timer::Ack).unwrap_or(0.0);
         self.set_deadline(Timer::Ack, deadline.max(current));
     }
@@ -901,12 +905,21 @@ impl LinkEngine {
     /// silence. How much silence depends on what the physical layer reports: given a
     /// start-of-frame signal a contiguous next frame announces itself that quickly, so the
     /// receiver waits only that long; without one it must wait a whole data frame, which is
-    /// roughly a quarter of the air time.
-    fn irs_reply_delay(&self) -> f64 {
+    /// roughly a quarter of the air time. The floor's frames announce themselves later than
+    /// the ordinary ones (the tone floor's first sync block is eight symbols of 40 ms), so a
+    /// burst on the floor gets the floor's wait (ADR-0013).
+    ///
+    /// The receiver asks with its own view — the family and the frames it has been hearing:
+    /// `None`, `None`. The sender asks too, to size its wait for the acknowledgement, and has
+    /// to ask about the burst it has just *sent*: `floor` its family and `frame_s` the
+    /// longest data frame the receiver will expect. Asked with its own view instead, it
+    /// answered with the family it last *heard* — an ordinary acceptance before a session's
+    /// first floor burst — and waited too little by the difference, the whole margin.
+    fn irs_reply_delay(&self, floor: Option<bool>, frame_s: Option<f64>) -> f64 {
         let quiet = self
             .timing
-            .preamble_detect_s
-            .unwrap_or_else(|| self.peer_data_frame_s());
+            .preamble_detect_s_for(floor.unwrap_or(self.peer_floor))
+            .unwrap_or_else(|| frame_s.unwrap_or_else(|| self.peer_data_frame_s()));
         quiet + self.config.burst_gap_s + self.timing.turnaround_s
     }
 
@@ -1119,7 +1132,7 @@ impl LinkEngine {
             src: self.my_call.clone(),
             dst: self.remote_call.clone(),
             caps: self.config.capabilities,
-            version: 1,
+            version: PROTOCOL_VERSION,
             snr_db,
         };
         let Ok(encoded) = body.encode() else { return };
@@ -1338,30 +1351,7 @@ impl LinkEngine {
         let mode = self.burst_mode();
         let recommendation = self.recommended.min(self.config.max_mode);
         let unacked = self.unacked();
-        // A frame sent max_combines times at its mode without an acknowledgement is
-        // stranded there: the peer has reset its buffer for it, and another round at the
-        // same mode has the odds the last one had. When the recommendation has moved
-        // below that mode, the frame is re-encoded at the slowest mode down to it that
-        // carries the body — another codeword, which the peer starts fresh on. A full
-        // frame has nowhere slower to go and keeps trying; the ladder (P6-7) sends small
-        // bodies for that reason, and so should anything that expects to fall far.
-        for &seq in &unacked {
-            let Some(index) = self.records.iter().position(|r| r.seq == seq) else {
-                continue;
-            };
-            let record = &self.records[index];
-            if record.tx_count >= self.config.max_combines && recommendation < record.mode {
-                if let Some(target) =
-                    self.reencode_target(record.body.len(), record.mode, recommendation)
-                {
-                    let record = &mut self.records[index];
-                    record.mode = target;
-                    record.reencoded += record.tx_count;
-                    record.tx_count = 0;
-                    self.stats.frames_reencoded += 1;
-                }
-            }
-        }
+        self.reencode_stranded(&unacked, recommendation);
         let mut family = self.timing.is_floor(mode);
         // One family per burst (ADR-0009): the receiver infers a frame's slot from its air
         // time, which needs every frame of the burst to be the same length. A frame keeps
@@ -1443,12 +1433,46 @@ impl LinkEngine {
         self.bursts_since_turn += 1;
         self.disarm(Timer::Keepalive);
         self.transmit(frames);
-        let responder = self.irs_reply_delay();
+        // the receiver's quiet after this burst: its family, and the longest frame it will
+        // expect — this burst's, or the mode it recommended, as its own peer_data_frame_s
+        // has it
+        let expected = seqs
+            .first()
+            .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)))
+            .max(self.timing.data_frame_s_for(recommendation));
+        let responder = self.irs_reply_delay(Some(family), Some(expected));
         self.wait_for(
             Waiting::Ack,
             self.timing.control_frame_s_for(family),
             responder,
         );
+    }
+
+    /// A frame sent `max_combines` times at its mode without an acknowledgement is stranded
+    /// there: the peer has reset its buffer for it, and another round at the same mode has
+    /// the odds the last one had. When the recommendation has moved below that mode, the
+    /// frame is re-encoded at the slowest mode down to it that carries the body — another
+    /// codeword, which the peer starts fresh on. A full frame has nowhere slower to go and
+    /// keeps trying; the ladder (P6-7) sends small bodies for that reason, and so should
+    /// anything that expects to fall far.
+    fn reencode_stranded(&mut self, unacked: &[u8], recommendation: usize) {
+        for &seq in unacked {
+            let Some(index) = self.records.iter().position(|r| r.seq == seq) else {
+                continue;
+            };
+            let record = &self.records[index];
+            if record.tx_count >= self.config.max_combines && recommendation < record.mode {
+                if let Some(target) =
+                    self.reencode_target(record.body.len(), record.mode, recommendation)
+                {
+                    let record = &mut self.records[index];
+                    record.mode = target;
+                    record.reencoded += record.tx_count;
+                    record.tx_count = 0;
+                    self.stats.frames_reencoded += 1;
+                }
+            }
+        }
     }
 
     /// The mode a transmit record was encoded at.
@@ -1577,7 +1601,7 @@ impl LinkEngine {
         };
         self.decode_record(frame, &mut record);
         self.burst.push(record);
-        let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay();
+        let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
         self.arm(Timer::Ack, delay);
     }
 
@@ -1863,6 +1887,17 @@ impl LinkEngine {
 
     fn take_iss(&mut self) {
         self.role = Role::Iss;
+        // the first burst of a turn goes out where this station's own measurements of the
+        // peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
+        // it (P9-2), not at the slowest rung of the ladder: that is the tone floor
+        // (ADR-0013), five times slower than the first OFDM mode
+        if let Some(snr) = self.rate.snr_db() {
+            let first = self.rate.first_mode(snr);
+            self.recommended = self
+                .config
+                .initial_mode
+                .max(first.min(self.config.max_mode));
+        }
         self.waiting_for = None;
         self.disarm(Timer::Wait);
         self.disarm(Timer::Ack);
@@ -1971,6 +2006,18 @@ impl LinkEngine {
             });
             return;
         }
+        if request.version != PROTOCOL_VERSION {
+            // a mode number is a rung of the ladder since ADR-0013, which an earlier version
+            // numbers differently: a session would run on numbers meaning other frames
+            self.actions.push(Action::Event {
+                name: "ignored",
+                detail: format!(
+                    "{} calls with link protocol {}",
+                    request.src, request.version
+                ),
+            });
+            return;
+        }
         if self.state == State::Connecting && self.my_call > self.remote_call {
             return; // simultaneous call: the higher callsign keeps calling
         }
@@ -2009,6 +2056,16 @@ impl LinkEngine {
             self.actions.push(Action::Event {
                 name: "ignored",
                 detail: format!("{} answers in another bandwidth", accept.src),
+            });
+            return;
+        }
+        if accept.version != PROTOCOL_VERSION {
+            self.actions.push(Action::Event {
+                name: "ignored",
+                detail: format!(
+                    "{} answers with link protocol {}",
+                    accept.src, accept.version
+                ),
             });
             return;
         }
@@ -2088,10 +2145,16 @@ impl LinkEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES};
+    use crate::rate::{
+        AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB,
+        NARROW_CONTROL_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES, PAYLOAD_BYTES,
+    };
 
-    /// The 500 Hz air's timing, with its floor family (ADR-0009): the durations the model's
-    /// harness hands the engine.
+    /// The tone floor's control frame, in seconds: 80 symbols of 40 ms (ADR-0013).
+    const TONE_CONTROL_S: f64 = 3.2;
+
+    /// The 500 Hz air's timing, with the tone floor under it (ADR-0013): the durations the
+    /// model's harness hands the engine.
     fn narrow() -> PhyTiming {
         PhyTiming {
             data_frame_s: NARROW_FRAME_S[2],
@@ -2103,8 +2166,25 @@ mod tests {
             data_capacity: NARROW_PAYLOAD_BYTES.to_vec(),
             mode_threshold_db: NARROW_AWGN_THRESHOLD_DB.to_vec(),
             floor_data_frame_s: Some(NARROW_FRAME_S[0]),
-            floor_control_frame_s: Some(2.232),
+            floor_control_frame_s: Some(TONE_CONTROL_S),
             floor_modes: 2,
+            control_threshold_db: Some(NARROW_CONTROL_THRESHOLD_DB),
+            floor_margin_db: None,
+            floor_preamble_detect_s: Some(0.54),
+        }
+    }
+
+    /// The 2 300 Hz air's, the same way.
+    fn wide() -> PhyTiming {
+        PhyTiming {
+            data_frame_s: FRAME_S[2],
+            control_frame_s: 0.434,
+            data_capacity: PAYLOAD_BYTES.to_vec(),
+            mode_threshold_db: AWGN_THRESHOLD_DB.to_vec(),
+            floor_data_frame_s: Some(FRAME_S[0]),
+            control_threshold_db: Some(CONTROL_THRESHOLD_DB),
+            floor_margin_db: Some(1.0),
+            ..narrow()
         }
     }
 
@@ -2123,22 +2203,26 @@ mod tests {
     #[test]
     fn the_link_timeout_spans_whole_exchanges_at_the_floor() {
         // ADR-0012: 45 s on the ordinary layouts, four whole exchanges on the floor, where one
-        // exchange is nearly half a minute
-        let mut e = engine(narrow());
-        e.recommended = 0;
-        let exchange = 6.0 * NARROW_FRAME_S[0] + 2.232 + 2.0 * 0.25 + 0.2;
-        assert!(
-            (e.link_timeout() - 4.0 * exchange).abs() < 0.01,
-            "{}",
-            e.link_timeout()
-        );
-        e.recommended = 6;
-        e.rate.seed(15.0);
-        assert!(
-            (e.link_timeout() - 45.0).abs() < 1e-9,
-            "{}",
-            e.link_timeout()
-        );
+        // exchange is over half a minute — the tone floor now (ADR-0013), the same frames on
+        // both airs
+        let exchange = 6.0 * NARROW_FRAME_S[0] + TONE_CONTROL_S + 2.0 * 0.25 + 0.2;
+        for timing in [wide(), narrow()] {
+            let mut e = LinkEngine::new("W4ODA", timing, LinkConfig::default(), 1);
+            e.recommended = 0; // a floor mode
+            assert!(
+                (e.link_timeout() - 4.0 * exchange).abs() < 0.01,
+                "{}",
+                e.link_timeout()
+            );
+            // the ordinary layouts on both sides: what the peer recommends and what it may send
+            e.recommended = 6;
+            e.rate.seed(15.0);
+            assert!(
+                (e.link_timeout() - 45.0).abs() < 1e-9,
+                "{}",
+                e.link_timeout()
+            );
+        }
     }
 
     #[test]
@@ -2158,8 +2242,7 @@ mod tests {
     #[test]
     fn the_ack_waits_for_the_frame_the_preamble_announced() {
         // an IRS expecting ordinary frames (the connect frames were) must not answer inside a
-        // floor frame four times as long: the preamble names the frame and the ACK waits for
-        // its end
+        // floor frame five times as long: the frame names itself and the ACK waits for its end
         let mut e = engine(narrow());
         e.role = Role::Irs;
         e.state = State::Connected;

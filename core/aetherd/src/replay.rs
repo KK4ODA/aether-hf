@@ -13,9 +13,7 @@
 
 use std::path::Path;
 
-use aether_phy::{
-    AudioToBaseband, Complex, StreamingReceiver, WIDE_2300, WaveformParams, preamble::FrameType,
-};
+use aether_phy::{AudioToBaseband, Complex, StreamingReceiver, WIDE_2300, WaveformParams};
 use serde_json::Value;
 
 use crate::record::{FrameRecord, read_wav};
@@ -188,27 +186,38 @@ pub fn run_timed(
     let mut seen = 0usize;
     let mut absorb = |baseband: &[Complex], receiver: &mut StreamingReceiver| {
         for decoded in receiver.feed(baseband) {
+            let control = decoded.frame.is_control();
+            // the rung a DATA frame was sent at, as the station reports it; chips naming an
+            // OFDM mode on no rung of the ladder are noise, which the station drops too
+            let Some(rung) = (if control {
+                Some(0)
+            } else {
+                decoded.frame.rung(&air)
+            }) else {
+                continue;
+            };
+            let detected = decoded.frame.detect_confidence(&air);
             found.push(FrameRecord {
-                t_s: decoded.frame.sync.start as f64 / fs,
-                kind: if decoded.frame.sync.frame_type == FrameType::Control {
+                t_s: decoded.frame.start() as f64 / fs,
+                kind: if control {
                     "control".to_owned()
                 } else {
                     "data".to_owned()
                 },
-                mode: decoded.frame.mode,
-                rv: decoded.frame.rv,
-                snr_3k_db: decoded.frame.snr_3k_db,
+                mode: rung,
+                rv: decoded.frame.rv(),
+                snr_3k_db: decoded.frame.snr_3k_db(),
                 cfo_hz: crate::station::reported_cfo(
                     decoded.ok(),
-                    decoded.frame.mode_confidence,
-                    decoded.frame.sync.detect_confidence(&air),
-                    decoded.frame.cfo_hz,
+                    decoded.frame.mode_confidence(),
+                    detected,
+                    decoded.frame.cfo_hz(),
                 ),
-                confidence: decoded.frame.mode_confidence,
-                detect_confidence: decoded.frame.sync.detect_confidence(&air),
+                confidence: decoded.frame.mode_confidence(),
+                detect_confidence: detected,
                 decoded: decoded.ok(),
                 bytes: decoded.payload.as_ref().map_or(0, Vec::len),
-                control: if decoded.frame.sync.frame_type == FrameType::Control {
+                control: if control {
                     decoded
                         .payload
                         .as_deref()

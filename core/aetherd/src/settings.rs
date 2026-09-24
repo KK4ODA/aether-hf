@@ -177,11 +177,11 @@ pub const RULES: &[Rule] = &[
         ..rule("radio.bandwidth")
     },
     Rule {
-        // the wide table's last mode; a narrower table clamps rather than refuses, and a
-        // test holds this number to the table
+        // the wide ladder's last rung; a narrower ladder clamps rather than refuses, and a
+        // test holds this number to the ladder
         min: Some(0.0),
-        max: Some(13.0),
-        why: "the mode table has fourteen entries",
+        max: Some(15.0),
+        why: "the ladder has sixteen rungs: the tone floor's two and the fourteen OFDM modes",
         ..rule("radio.max_mode")
     },
     // ── this installation ──────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ wait_for_clear = true
 busy_threshold_db = 6.0
 bandwidth = 2300
 answer_only = false
-max_mode = 13
+max_mode = 15
 compress = false
 cw_id = false
 cw_id_wpm = 20.0
@@ -763,7 +763,7 @@ mod tests {
         assert_eq!(
             rule_for("radio.max_mode").max,
             Some((aether_link::AWGN_THRESHOLD_DB.len() - 1) as f64),
-            "the mode bound is not the table's last mode"
+            "the mode bound is not the ladder's last rung"
         );
     }
 

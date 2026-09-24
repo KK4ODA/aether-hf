@@ -23,6 +23,7 @@ use aether_phy::{
     ofdm::OfdmDemodulator,
     passband::{AudioToBaseband, BasebandToAudio, band_limit_taps, resample_taps},
     preamble::{FrameHeader, FrameType},
+    tone,
     tx::FrameTransmitter,
     waveform::{Modulation, WIDE_2300},
 };
@@ -354,8 +355,7 @@ fn a_frame_survives_the_full_round_trip_for_every_mode() {
     }
 }
 
-/// The mode and layout a waveform case was generated with: the ordinary layouts by name,
-/// and the floor family's (ADR-0009) where the air has one.
+/// The mode and layout a waveform case was generated with, by the layout's name.
 fn mode_and_layout(
     air: &aether_phy::modes::AirInterface,
     case: &serde_json::Value,
@@ -363,15 +363,157 @@ fn mode_and_layout(
     match case["layout"].as_str().expect("layout") {
         "long" => (air.modes[int(case, "mode")], air.long),
         "short" => (air.control_mode(), air.short),
-        "floor-long" => (
-            air.modes[int(case, "mode")],
-            air.floor_long.expect("floor layout"),
-        ),
-        "floor-short" => (
-            air.control_mode_for(true),
-            air.floor_short.expect("floor layout"),
-        ),
         other => panic!("unknown layout {other}"),
+    }
+}
+
+/// The tone-floor kind with this name (ADR-0013).
+fn tone_kind(name: &str) -> &'static tone::ToneKind {
+    tone::kinds()
+        .into_iter()
+        .find(|k| k.name == name)
+        .unwrap_or_else(|| panic!("no tone kind {name}"))
+}
+
+fn usizes(value: &Value) -> Vec<usize> {
+    value
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|v| v.as_u64().expect("an unsigned") as usize)
+        .collect()
+}
+
+#[test]
+fn tone_frames_match_the_model() {
+    // ADR-0013: the data tones a payload maps to and the whole frame's tones are exact — the
+    // codec chain, the Gray labels and the sync blocks' placement; the waveform, a phase
+    // accumulated over raised-cosine glides, to the vector file's tolerance
+    let doc = vectors();
+    let tolerance = float(&doc, "tone_sample_tolerance");
+    let cases = doc["tone_frames"].as_array().expect("tone frames");
+    assert!(cases.len() >= 4);
+    for case in cases {
+        let kind = tone_kind(case["kind"].as_str().expect("kind"));
+        let rv = int(case, "rv");
+        let label = format!("{} rv{rv}", kind.name);
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let codec = tone::ToneCodec::new(kind).expect("codec");
+        let data = codec.encode(&payload, rv as u8).expect("encode");
+        assert_eq!(data, usizes(&case["data_tones"]), "{label}: data tones");
+        let frame = tone::frame_tones(kind, &data, rv);
+        assert_eq!(frame, usizes(&case["frame_tones"]), "{label}: frame tones");
+        let x = tone::burst(&codec, &payload, rv as u8).expect("burst");
+        assert_eq!(x.len(), int(case, "n_samples"), "{label}: sample count");
+        let power: f64 = x.iter().map(|&(re, im)| re * re + im * im).sum::<f64>() / x.len() as f64;
+        assert!(
+            (power - float(case, "mean_power")).abs() < tolerance,
+            "{label}: mean power {power}"
+        );
+        let stride = int(case, "stride");
+        let want = case["strided_samples"].as_array().expect("samples");
+        for (index, w) in want.iter().enumerate() {
+            let got = x[index * stride];
+            let (wr, wi) = (w[0].as_f64().expect("re"), w[1].as_f64().expect("im"));
+            assert!(
+                (got.0 - wr).abs() < tolerance && (got.1 - wi).abs() < tolerance,
+                "{label}: sample {} is {got:?}, the model has ({wr}, {wi})",
+                index * stride
+            );
+        }
+    }
+}
+
+/// The generator's stand-in for noise under a tone frame: off-grid tones and a slow chirp.
+fn tone_interference(n: usize) -> Vec<(f64, f64)> {
+    let tau = 2.0 * std::f64::consts::PI;
+    let freqs = [-243.1, -151.7, -63.3, 12.9, 97.7, 171.3, 238.9];
+    (0..n)
+        .map(|index| {
+            let k = index as f64;
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &f) in freqs.iter().enumerate() {
+                let phase = tau * f / 8000.0 * k + 0.37 * i as f64;
+                re += phase.cos();
+                im += phase.sin();
+            }
+            let chirp = tau * (-180.0 * k / 8000.0 + 0.5 * 40.0 * (k / 8000.0).powi(2));
+            re += chirp.cos();
+            im += chirp.sin();
+            (0.1 * re, 0.1 * im)
+        })
+        .collect()
+}
+
+#[test]
+fn tone_frames_are_received_as_the_model_receives_them() {
+    // a frame delayed, turned and buried under interference: the detector's start, kind and
+    // redundancy version exact, its offset, statistic and SNR and the soft bits to the vector
+    // file's tolerance, the payload exact
+    let doc = vectors();
+    let tolerance = float(&doc, "tone_llr_tolerance");
+    let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
+    let cases = doc["tone_receive"].as_array().expect("tone receive");
+    assert!(!cases.is_empty());
+    let detector = tone::ToneDetector::new();
+    for case in cases {
+        let kind = tone_kind(case["kind"].as_str().expect("kind"));
+        let label = kind.name;
+        let rv = int(case, "rv") as u8;
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let codec = tone::ToneCodec::new(kind).expect("codec");
+        let x = tone::burst(&codec, &payload, rv).expect("burst");
+        let (lead, n, cfo) = (
+            int(case, "lead"),
+            int(case, "n_samples"),
+            float(case, "cfo_hz"),
+        );
+        let mut y = vec![(0.0f64, 0.0f64); n];
+        y[lead..lead + x.len()].copy_from_slice(&x);
+        let tau = 2.0 * std::f64::consts::PI;
+        for (k, (sample, noise)) in y.iter_mut().zip(tone_interference(n)).enumerate() {
+            let phase = tau * cfo * k as f64 / 8000.0;
+            let (cos, sin) = (phase.cos(), phase.sin());
+            *sample = (
+                sample.0 * cos - sample.1 * sin + noise.0,
+                sample.0 * sin + sample.1 * cos + noise.1,
+            );
+        }
+        let found = detector.detect(&y, 8);
+        assert_eq!(found.len(), 1, "{label}: {found:?}");
+        let sync = found[0];
+        assert_eq!(sync.start, int(case, "start"), "{label}: start");
+        assert_eq!((sync.kind.name, sync.rv), (label, rv), "{label}: kind");
+        assert!(
+            close(sync.cfo_hz, float(case, "detected_cfo_hz")),
+            "{label}: offset {}",
+            sync.cfo_hz
+        );
+        assert!(
+            close(sync.statistic, float(case, "statistic")),
+            "{label}: statistic"
+        );
+        let frame = tone::demodulate(&y, kind, rv, sync.start, sync.cfo_hz).expect("in range");
+        assert!(
+            close(frame.snr_db, float(case, "snr_db")),
+            "{label}: SNR {}",
+            frame.snr_db
+        );
+        let want = case["llr"].as_array().expect("llr");
+        assert_eq!(frame.llr.len(), want.len(), "{label}: soft bits");
+        for (index, (got, w)) in frame.llr.iter().zip(want).enumerate() {
+            let w = w.as_f64().expect("llr");
+            assert!(
+                close(*got, w),
+                "{label}: soft bit {index} is {got}, the model has {w}"
+            );
+        }
+        let (decoded, _) = codec.decode(&frame.llr, rv, None).expect("decode");
+        assert_eq!(
+            decoded.as_deref(),
+            Some(payload.as_slice()),
+            "{label}: payload"
+        );
     }
 }
 
@@ -693,5 +835,56 @@ fn the_impulse_blanker_matches_the_model() {
             blanked, want,
             "block {block}: the streaming blanker removed a different set"
         );
+    }
+}
+
+#[test]
+fn a_frame_after_the_receivers_own_silence_is_found_where_the_model_finds_it() {
+    // a frame straight after exact silence — a station's own transmission, muted — and the
+    // hypothesis a block-spacing early, first block in the silence and middle block on the
+    // frame's first: its block hits and verdict exact, and then the frame the detector takes
+    let doc = vectors();
+    let cases = doc["tone_after_silence"].as_array().expect("cases");
+    assert!(!cases.is_empty());
+    let kind = &tone::data_kinds()[1];
+    let codec = tone::ToneCodec::new(kind).expect("codec");
+    let detector = tone::ToneDetector::new();
+    for case in cases {
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let (lead, n) = (int(case, "lead"), int(case, "n_samples"));
+        let x = tone::burst(&codec, &payload, 0).expect("burst");
+        let mut y = vec![(0.0f64, 0.0f64); n];
+        y[lead..lead + x.len()].copy_from_slice(&x);
+        for (sample, noise) in y.iter_mut().zip(tone_interference(n)).skip(lead) {
+            sample.0 += noise.0;
+            sample.1 += noise.1;
+        }
+        let early = int(case, "early_start");
+        let want: Vec<usize> = case["early_block_hits"]
+            .as_array()
+            .expect("hits")
+            .iter()
+            .map(|v| v.as_u64().expect("hits") as usize)
+            .collect();
+        assert_eq!(
+            detector.block_hits(&y, kind, 0, early, 0.0).to_vec(),
+            want,
+            "block hits"
+        );
+        let phantom = tone::ToneSync {
+            start: early,
+            cfo_hz: 0.0,
+            kind,
+            rv: 0,
+            statistic: 0.0,
+        };
+        assert_eq!(
+            detector.confirmed(&y, &phantom),
+            case["early_confirmed"].as_bool().expect("verdict")
+        );
+        let found = detector.detect(&y, 8);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].start, int(case, "start"));
+        assert_eq!((found[0].kind.name, found[0].rv), (kind.name, 0));
     }
 }

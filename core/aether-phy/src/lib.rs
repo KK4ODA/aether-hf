@@ -13,9 +13,9 @@
 //! # What is here
 //!
 //! Everything from a payload to audio and back: the frame codec, OFDM, the preamble,
-//! acquisition, the receiver, the audio front end at 48 kHz, the impulse blanker, and a
-//! streaming receiver that takes blocks of any size and reports a frame's preamble as soon as
-//! acquisition finds it.
+//! acquisition, the receiver, the tone floor under both mode tables (ADR-0013), the audio
+//! front end at 48 kHz, the impulse blanker, and a streaming receiver that takes blocks of any
+//! size and reports a frame as soon as acquisition finds it.
 //!
 //! The transmitter applies ADR-0004 peak reduction by default, at the target its frame's
 //! constellation can absorb; `without_papr_reduction` turns it off for a benchmark or a
@@ -34,6 +34,7 @@ pub mod preamble;
 pub mod rx;
 pub mod stream;
 pub mod sync;
+pub mod tone;
 pub mod tx;
 pub mod waveform;
 
@@ -47,9 +48,10 @@ pub use blanker::{BlankMode, NoiseBlanker, StreamingBlanker};
 pub use codec::{FrameCodec, coprime_stride};
 pub use constellation::{Complex, Constellation, NoiseVar};
 pub use fir::{Fir, Sample};
-pub use modem::{DecodedFrame, Modem, ModemError};
-pub use modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, PREAMBLE_SYMBOLS, SHORT};
+pub use modem::{DecodedFrame, Modem, ModemError, Received};
+pub use modes::{CONTROL_MODE, FrameLayout, LONG, MODES, Mode, PREAMBLE_SYMBOLS, Rung, SHORT};
 pub use papr::{CLIP_TARGET_DB, CLIP_TARGET_DENSE_DB, ClipAndFilter, clip_target_db, papr_db};
 pub use passband::{AudioToBaseband, BasebandToAudio};
 pub use stream::{PendingFrame, StreamingReceiver};
+pub use tone::{ToneFrame, ToneKind, ToneSync};
 pub use waveform::{Bandwidth, Modulation, WIDE_2300, WaveformParams};

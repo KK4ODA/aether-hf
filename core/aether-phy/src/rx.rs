@@ -84,16 +84,12 @@ pub struct FrameSync {
     pub cfo_hz: f64,
     /// Which container it is.
     pub frame_type: FrameType,
-    /// The frame is of the floor family (ADR-0009): an eight-symbol preamble of the floor
-    /// sequences and the floor layouts; `start` is then the first of the eight.
-    pub floor: bool,
     /// The normalised matched-filter peak that declared this preamble (1.0 is a perfect
-    /// match), or the floor statistic for a floor candidate. The model's `FrameSync` has
-    /// carried this since the detector was written; the port left it on `Acquisition`,
-    /// where the streaming receiver dropped it.
+    /// match). The model's `FrameSync` has carried this since the detector was written; the
+    /// port left it on `Acquisition`, where the streaming receiver dropped it.
     ///
     /// Compare it against the threshold that accepted it —
-    /// [`AirInterface::acceptance_threshold`](crate::modes::AirInterface::acceptance_threshold)
+    /// [`AirInterface::acquisition_threshold`](crate::modes::AirInterface::acquisition_threshold)
     /// — for [`detect_confidence`](Self::detect_confidence), which is the only number that
     /// separates a real acquisition from noise on a **control** frame:
     /// [`mode_confidence`](ReceivedFrame::mode_confidence) is read from the pilot chips,
@@ -113,7 +109,7 @@ impl FrameSync {
     /// Unlike that one it is defined for every frame type, which is the point of it.
     #[must_use]
     pub fn detect_confidence(&self, air: &crate::modes::AirInterface) -> f64 {
-        self.timing_peak / air.acceptance_threshold(self.floor).max(1e-12)
+        self.timing_peak / air.acquisition_threshold.max(1e-12)
     }
 }
 
@@ -189,9 +185,7 @@ impl FrameReceiver {
     /// Where a frame starts and ends in the sample stream.
     #[must_use]
     pub fn frame_span(&self, sync: &FrameSync) -> (usize, usize) {
-        let layout = self
-            .air
-            .layout_for_family(sync.frame_type == FrameType::Data, sync.floor);
+        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
         (sync.start, sync.start + layout.samples())
     }
 
@@ -212,14 +206,11 @@ impl FrameReceiver {
         sync: &FrameSync,
         hypothesis: Option<usize>,
     ) -> Result<ReceivedFrame, DemodError> {
-        let layout = self
-            .air
-            .layout_for_family(sync.frame_type == FrameType::Data, sync.floor);
+        let layout = self.air.layout_for(sync.frame_type == FrameType::Data);
         let period = self.params.symbol_samples();
         let n_sym = layout.total_symbols();
         let pre = layout.preamble_symbols;
-        // the comb-pilot estimate is averaged over ±radius symbols: ±1 on the ordinary
-        // layouts, ±3 on the floor layouts (ADR-0009)
+        // the comb-pilot estimate is averaged over ±radius symbols
         let radius = layout.pilot_smoothing;
         let map = self.demodulator.map();
         let pilot_carriers = map.pilot_carriers().to_vec();
@@ -350,7 +341,7 @@ impl FrameReceiver {
             let used = observed.len();
             let mut metrics = vec![0.0f64; self.preamble.n_sequences()];
             for (index, metric) in metrics.iter_mut().enumerate() {
-                let sequence = self.preamble.chip_sequence_for(index, &layout);
+                let sequence = self.preamble.chip_sequence(index);
                 let mut accumulator = (0.0, 0.0);
                 for (slot, &chip) in sequence.iter().take(used).enumerate() {
                     accumulator = c::add(accumulator, c::scale(observed[slot], chip));
@@ -373,9 +364,7 @@ impl FrameReceiver {
         for (pilot_number, &symbol) in pilot_symbols.iter().enumerate() {
             known[symbol].copy_from_slice(map.pilot_sequence());
             if sync.frame_type == FrameType::Data {
-                let chips = self
-                    .preamble
-                    .mode_chips_for(mode, pilot_number, rv, &layout);
+                let chips = self.preamble.mode_chips(mode, pilot_number, rv);
                 for (&carrier, &chip) in data_carriers.iter().zip(&chips) {
                     known[symbol][carrier] = (chip, 0.0);
                 }
@@ -521,7 +510,6 @@ mod tests {
                 start: lead,
                 cfo_hz: 0.0,
                 frame_type: FrameType::Data,
-                floor: false,
                 timing_peak: 1.0,
                 type_confidence: 1.0,
             },
@@ -702,7 +690,6 @@ mod tests {
             start: 400,
             cfo_hz: 0.0,
             frame_type: FrameType::Control,
-            floor: false,
             timing_peak: 1.0,
             type_confidence: 1.0,
         };
@@ -767,7 +754,6 @@ mod tests {
             start: 0,
             cfo_hz: 0.0,
             frame_type: FrameType::Data,
-            floor: false,
             timing_peak: 1.0,
             type_confidence: 1.0,
         };

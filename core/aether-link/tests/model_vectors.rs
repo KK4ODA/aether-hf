@@ -19,8 +19,8 @@ use aether_link::{
         encode_data, pack_callsign, unpack_callsign,
     },
     rate::{
-        AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
-        RateController, usable_modes, usable_modes_by_rate,
+        AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
+        PAYLOAD_BYTES, RateController, usable_modes, usable_modes_by_rate,
     },
 };
 use serde_json::Value;
@@ -91,6 +91,24 @@ fn the_threshold_table_matches_the_model() {
         .map(|v| v.as_u64().expect("mode") as usize)
         .collect();
     assert_eq!(usable_modes(), expected_modes);
+    // the wide ladder's rungs (ADR-0013): the tone floor's two, then the OFDM modes
+    let payload: Vec<usize> = doc["payload_bytes"]
+        .as_array()
+        .expect("payloads")
+        .iter()
+        .map(|v| v.as_u64().expect("bytes") as usize)
+        .collect();
+    assert_eq!(PAYLOAD_BYTES.to_vec(), payload);
+    let frame_s: Vec<f64> = doc["frame_s"]
+        .as_array()
+        .expect("frame air times")
+        .iter()
+        .map(|v| v.as_f64().expect("seconds"))
+        .collect();
+    assert_eq!(FRAME_S.len(), frame_s.len());
+    for (got, want) in FRAME_S.iter().zip(&frame_s) {
+        assert!((got - want).abs() < 1e-9, "frame air time {got} vs {want}");
+    }
 }
 
 #[test]

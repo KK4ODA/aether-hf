@@ -1284,7 +1284,7 @@ mod tests {
             .expect("settings")
             .remove("update");
         let applied = profile.apply(&running, None).expect("apply");
-        assert_eq!(applied.config.radio.max_mode, 13);
+        assert_eq!(applied.config.radio.max_mode, 15);
         assert!(!applied.config.radio.cw_id);
         assert_eq!(
             applied.config.update,
@@ -1367,7 +1367,7 @@ mod tests {
         assert_eq!(applied.config.radio.bandwidth, 2300);
         assert!(applied.config.radio.wait_for_clear);
         assert!((applied.config.audio.tx_level - 0.25).abs() < 1e-9);
-        assert_eq!(applied.config.radio.max_mode, 13);
+        assert_eq!(applied.config.radio.max_mode, 15);
         // and what was fine arrived
         assert_eq!(applied.config.callsign, "KK4ODA");
         assert!((applied.config.radio.busy_threshold_db - 7.5).abs() < 1e-9);
@@ -1551,12 +1551,14 @@ mod tests {
           "settings": { "callsign": "W4ODA", "radio": { "max_mode": 6 } }
         }"#;
         let profile = Profile::parse(old).expect("parse");
-        assert_eq!(profile.settings_schema, 1);
+        // its settings were the first schema's, and come forward through the file's chain
+        assert_eq!(profile.settings_schema, crate::config::SCHEMA_VERSION);
         assert_eq!(profile.aether_version, "");
         assert_eq!(profile.memories, None);
         let applied = profile.apply(&station(), None).expect("apply");
         assert_eq!(applied.config.callsign, "W4ODA");
-        assert_eq!(applied.config.radio.max_mode, 6);
+        // the OFDM mode 6 it named is rung 8 of the wide ladder (ADR-0013)
+        assert_eq!(applied.config.radio.max_mode, 8);
         assert_eq!(applied.config.ptt, PttConfig::None);
         assert_eq!(
             applied.memories, None,
@@ -1566,14 +1568,15 @@ mod tests {
 
     #[test]
     fn the_settings_go_through_the_configuration_files_own_migrations() {
-        // the chain is empty while there is one schema; the machinery is exercised with
-        // the profile at the current schema and a null leaf, which TOML cannot hold and
-        // the conversion must strip
+        // a profile of the first schema, with a null leaf, which TOML cannot hold and the
+        // conversion must strip: its max_mode comes forward as the file's would
         let mut profile = Profile::capture("Now", &station(), &[], None, &now());
         profile.settings["audio"]["input"] = Value::Null;
+        profile.settings["radio"]["max_mode"] = serde_json::json!(13);
         profile.settings_schema = crate::config::first_schema();
         profile.migrate_settings().expect("migrates");
         assert_eq!(profile.settings_schema, crate::config::SCHEMA_VERSION);
+        assert_eq!(profile.settings["radio"]["max_mode"], 15);
         assert!(
             profile.settings["audio"].get("input").is_none(),
             "a null is an absent setting"
@@ -1670,7 +1673,7 @@ mod tests {
             truck.settings["ptt"]["kind"], "none",
             "everything else is the default"
         );
-        assert_eq!(truck.settings["radio"]["max_mode"], 13);
+        assert_eq!(truck.settings["radio"]["max_mode"], 15);
         let entry = store.write(&truck, None).expect("write");
         assert_eq!(
             entry.id, "Truck - IC-705",

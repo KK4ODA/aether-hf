@@ -18,59 +18,86 @@
 //!
 //! Modes that another mode beats on *both* throughput and threshold are never recommended.
 
-/// Minimum usable SNR (3 kHz, 10 % frame error rate) per mode on AWGN.
+/// Minimum usable SNR (3 kHz, 10 % frame error rate) per rung of the 2 300 Hz ladder on
+/// AWGN.
 ///
-/// Every entry is measured (`bench/baselines/phy_fer_awgn14.csv`). Interpolated guesses used
-/// to sit here and were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate
-/// controller had no way to discover except by losing frames.
-pub const AWGN_THRESHOLD_DB: [f64; 14] = [
-    -5.1, -3.2, -1.8, -0.4, 1.4, 2.9, 4.7, 6.9, 6.0, 8.9, 9.9, 13.9, 15.6, 16.9,
+/// Every entry is measured: the tone floor's two (rungs 0–1, ADR-0013) by
+/// `tools/bench_tone.py` (`bench/baselines/tone_floor.csv`), at equal peak power and so in
+/// the OFDM frames' reference; the OFDM modes (rungs 2–15, OFDM modes 0–13) by
+/// `bench_phy.py` (`bench/baselines/phy_fer_awgn14.csv`). Interpolated guesses used to sit
+/// here and were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate controller
+/// had no way to discover except by losing frames. Mirrors the model; the vector test pins
+/// it.
+pub const AWGN_THRESHOLD_DB: [f64; 16] = [
+    -19.0, -17.3, -5.1, -3.2, -1.8, -0.4, 1.4, 2.9, 4.7, 6.9, 6.0, 8.9, 9.9, 13.9, 15.6, 16.9,
 ];
 
-/// The 2 300 Hz control frame's 10 % FER point on AWGN, indexed by family (ordinary, floor):
-/// the control mode on the SHORT layout, which the lossy pipe ([`crate::sim`]) judges a
-/// control frame by; the rate controller never reads it. The wide air has no floor family,
-/// so both entries are the one frame. Mirrors the model; the vector test pins it.
-pub const CONTROL_THRESHOLD_DB: [f64; 2] = [-5.1, -5.1];
+/// The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
+/// `bench/baselines/tone_floor.csv`) — the same frame on both airs.
+pub const TONE_CONTROL_THRESHOLD_DB: f64 = -19.5;
+
+/// The 2 300 Hz control frames' 10 % FER points on AWGN, indexed by family (ordinary,
+/// floor): the control mode on the SHORT layout, and the tone floor's control frame — what
+/// the lossy pipe ([`crate::sim`]) judges a control frame by; the rate controller never
+/// reads it. Mirrors the model; the vector test pins it.
+pub const CONTROL_THRESHOLD_DB: [f64; 2] = [-5.1, TONE_CONTROL_THRESHOLD_DB];
 
 /// The two 500 Hz control frames' 10 % FER points on AWGN, indexed by family: the ordinary
-/// SHORT frame at the control mode and the floor one (ADR-0009), measured by
-/// `tools/bench_floor.py` into `bench/baselines/floor_500.csv`. Mirrors the model.
-pub const NARROW_CONTROL_THRESHOLD_DB: [f64; 2] = [-4.5, -11.3];
+/// SHORT frame at the control mode (`bench/baselines/floor_500.csv`) and the tone floor's.
+/// Mirrors the model.
+pub const NARROW_CONTROL_THRESHOLD_DB: [f64; 2] = [-4.5, TONE_CONTROL_THRESHOLD_DB];
 
-/// Payload bytes per frame for each mode, on the LONG layout.
-pub const PAYLOAD_BYTES: [usize; 14] = [
-    26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
+/// `PhyTiming::floor_margin_db` of the 2 300 Hz air (ADR-0013 §4, the link bench): its first
+/// OFDM rung spreads a frame over 2.3 kHz and, with HARQ, stays productive on a fading path
+/// a decibel above its 10 % point — held to that against the floor, a quarter of its rate,
+/// however wide the learned margin. The 500 Hz air's first rung has a fifth of that
+/// diversity, and has no cap.
+pub const WIDE_FLOOR_MARGIN_DB: f64 = 1.0;
+
+/// Payload bytes per frame of each rung of the 2 300 Hz ladder.
+pub const PAYLOAD_BYTES: [usize; 16] = [
+    24, 36, 26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
 ];
 
-/// The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
-/// as an operator would compare them: measured by `tools/bench_phy.py --bandwidth 500`
-/// into `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py
-/// --bandwidth 500 --apply` into the model, and mirrored here (the vector test pins it).
+/// Air time of each wide rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
+/// 31 ms on the ordinary layout (the link layer's copy of the frames; the vector test pins
+/// it) — what [`usable_modes_by_rate`] needs to compare the floor's long frames with the
+/// ordinary ones.
+pub const FRAME_S: [f64; 16] = [
+    5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+    1.054, 1.054,
+];
+
+/// The 500 Hz waveform's ladder (P7-0, ADR-0013), 3 kHz-referenced like the wide one, so the
+/// two read as an operator would compare them: the tone floor's two rungs (the same frames
+/// and thresholds as on the wide ladder), then the OFDM modes from QPSK ⅓, measured by
+/// `tools/bench_phy.py --bandwidth 500` into `bench/baselines/phy_fer_500.csv`, written by
+/// `tools/update_rate_table.py --bandwidth 500 --apply` into the model, and mirrored here
+/// (the vector test pins it).
 pub const NARROW_AWGN_THRESHOLD_DB: [f64; 13] = [
-    -12.4, -10.2, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
+    -19.0, -17.3, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
 ];
 
-/// Payload bytes per frame for each narrow mode, on the layout it goes out on: the floor
-/// modes' frames (ADR-0009) are four times as long, which is why [`usable_modes_by_rate`]
-/// needs [`NARROW_FRAME_S`] to compare them.
+/// Payload bytes per frame of each rung of the 500 Hz ladder: the tone floor's frames are
+/// five times as long as the ordinary ones, which is why [`usable_modes_by_rate`] needs
+/// [`NARROW_FRAME_S`] to compare them.
 pub const NARROW_PAYLOAD_BYTES: [usize; 13] =
-    [19, 41, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
+    [24, 36, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
 
-/// Air time of each narrow mode's DATA frame: 136 symbols on the floor layout, 34 on the
-/// ordinary one, at 31 ms a symbol (the link layer's copy of the layouts; the vector test
-/// pins it).
+/// Air time of each narrow rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
+/// 31 ms on the ordinary layout (the link layer's copy of the frames; the vector test pins
+/// it).
 pub const NARROW_FRAME_S: [f64; 13] = [
-    4.216, 4.216, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+    5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
 ];
 
-/// Modes on the throughput/threshold Pareto front, ascending, for the wide table.
+/// Rungs on the throughput/threshold Pareto front, ascending, for the wide ladder.
 ///
-/// A mode another mode beats on both counts is never worth choosing; mode 7 (8-PSK 2/3) is in
-/// that position, beaten by mode 8 (16-QAM 1/2) on the same payload at a lower threshold.
+/// A rung another rung beats on both counts is never worth choosing; rung 9 (8-PSK 2/3) is in
+/// that position, beaten by rung 10 (16-QAM 1/2) on the same payload at a lower threshold.
 #[must_use]
 pub fn usable_modes() -> Vec<usize> {
-    usable_modes_of(&AWGN_THRESHOLD_DB, &PAYLOAD_BYTES)
+    usable_modes_by_rate(&AWGN_THRESHOLD_DB, &PAYLOAD_BYTES, &FRAME_S)
 }
 
 /// Modes on the throughput/threshold Pareto front of any table, ascending, comparing
@@ -82,7 +109,7 @@ pub fn usable_modes_of(thresholds: &[f64], payload: &[usize]) -> Vec<usize> {
 }
 
 /// Modes on the throughput/threshold Pareto front of any table, ascending, comparing bytes
-/// per second — what tells a floor mode's long frame from an ordinary one (ADR-0009).
+/// per second — what tells the floor's long frames from the ordinary ones.
 #[must_use]
 pub fn usable_modes_by_rate(thresholds: &[f64], payload: &[usize], frame_s: &[f64]) -> Vec<usize> {
     let worth = |m: usize| payload[m] as f64 / frame_s[m];
@@ -167,6 +194,18 @@ pub struct RateController {
     ever_failed: bool,
     /// The last decay step taken since the failure before, which the next one grows on.
     decay_step_db: f64,
+    /// How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013 —
+    /// whose frames carry a quarter of the first OFDM rung's rate or less. The step across
+    /// that boundary is not a step between neighbours a third apart in rate, which is what
+    /// the learned margin was built for: see [`floor_margin_db`](Self::floor_margin_db).
+    floor_modes: usize,
+    /// The most margin the first OFDM rung is held to against the floor, however wide the
+    /// learned margin has grown, on an air whose first rung stays productive on a fading
+    /// path below it (`PhyTiming::floor_margin_db`); `None` leaves the learned margin in
+    /// charge.
+    floor_margin_db: Option<f64>,
+    /// Failed bursts in a row on the first OFDM rung ([`step_down`](Self::step_down)).
+    boundary_failures: usize,
 }
 
 impl Default for RateController {
@@ -183,10 +222,31 @@ impl RateController {
         &self.modes
     }
 
-    /// Build one for the wide waveform's table.
+    /// Build one for the wide waveform's ladder.
     #[must_use]
     pub fn new(config: RateConfig) -> Self {
-        Self::for_table(config, &AWGN_THRESHOLD_DB, &PAYLOAD_BYTES)
+        Self::for_table_timed(config, &AWGN_THRESHOLD_DB, &PAYLOAD_BYTES, &FRAME_S)
+    }
+
+    /// The same controller for an air whose first `floor_modes` rungs are the floor's, the
+    /// first OFDM rung's margin capped at `floor_margin_db` against it (ADR-0013 §4).
+    #[must_use]
+    pub fn with_floor(mut self, floor_modes: usize, floor_margin_db: Option<f64>) -> Self {
+        self.floor_modes = floor_modes;
+        self.floor_margin_db = floor_margin_db;
+        self
+    }
+
+    /// How many of the ladder's leading rungs are the floor's.
+    #[must_use]
+    pub fn floor_modes(&self) -> usize {
+        self.floor_modes
+    }
+
+    /// The cap on the first OFDM rung's margin, if the air has one.
+    #[must_use]
+    pub fn floor_margin_db(&self) -> Option<f64> {
+        self.floor_margin_db
     }
 
     /// Build one for any mode table: its thresholds decide when to step, its payloads
@@ -200,8 +260,8 @@ impl RateController {
         Self::for_table_timed(config, thresholds, payload, &frame_s)
     }
 
-    /// The same for a table whose frames differ in length (ADR-0009): modes are compared
-    /// by bytes per second.
+    /// The same for a table whose frames differ in length — the floor's are five times the
+    /// ordinary ones (ADR-0013): modes are compared by bytes per second.
     ///
     /// # Panics
     /// If the table's columns differ in length or are empty.
@@ -229,6 +289,9 @@ impl RateController {
             clean_since_decay: 0,
             ever_failed: false,
             decay_step_db: 0.0,
+            floor_modes: 2,
+            floor_margin_db: None,
+            boundary_failures: 0,
         }
     }
 
@@ -243,13 +306,16 @@ impl RateController {
     /// up would demand, less one step. The measurement is of a mode-0 frame — the most
     /// robust there is — and a burst at a fast mode is more exposed to what the channel
     /// does within a frame, so the first burst keeps `first_mode_back` steps in hand and
-    /// the climb makes them up in a burst if the channel allows (P9-2, ADR-0008).
+    /// the climb makes them up in a burst if the channel allows (P9-2, ADR-0008). The steps
+    /// in hand stay in the family the measurement fits: a session the SNR puts on an OFDM
+    /// rung does not start on the floor, five times slower, for its caution (ADR-0013).
     #[must_use]
     pub fn first_mode(&self, snr_db: f64) -> usize {
+        let ordinary = self.first_ordinary();
         let mut fit = 0;
         for index in 1..self.modes.len() {
             if self.thresholds[self.modes[index]]
-                + self.config.margin_db
+                + self.margin(index)
                 + self.config.up_hysteresis_db
                 > snr_db
             {
@@ -257,7 +323,25 @@ impl RateController {
             }
             fit = index;
         }
-        self.modes[fit.saturating_sub(self.config.first_mode_back)]
+        let lowest = if fit >= ordinary { ordinary } else { 0 };
+        self.modes[fit.saturating_sub(self.config.first_mode_back).max(lowest)]
+    }
+
+    /// Index in [`modes`](Self::modes) of the first rung above the floor.
+    fn first_ordinary(&self) -> usize {
+        self.modes
+            .iter()
+            .position(|&m| m >= self.floor_modes)
+            .unwrap_or(0)
+    }
+
+    /// The margin a rung is held to: the learned one, capped at `floor_margin_db` for the
+    /// first OFDM rung, whose alternative is the floor.
+    fn margin(&self, index: usize) -> f64 {
+        match self.floor_margin_db {
+            Some(cap) if index == self.first_ordinary() => self.margin_db.min(cap),
+            _ => self.margin_db,
+        }
     }
 
     /// Start from a measurement — the connect frame this station decoded — instead of
@@ -302,6 +386,7 @@ impl RateController {
             self.decay_step_db = 0.0;
             self.step_down();
         } else if ok > 0 {
+            self.boundary_failures = 0;
             self.clean_run += 1;
             self.clean_since_decay += 1;
             if !self.ever_failed {
@@ -339,13 +424,28 @@ impl RateController {
     fn fits(&self, index: usize, extra_db: f64) -> bool {
         match self.smoothed_snr_db {
             None => index == 0,
-            Some(snr) => self.thresholds[self.modes[index]] + self.margin_db + extra_db <= snr,
+            Some(snr) => self.thresholds[self.modes[index]] + self.margin(index) + extra_db <= snr,
         }
     }
 
     /// A failure: fall to the fastest mode the SNR and margin still support, but always at
-    /// least one step — a failure at the bottom of the table is still evidence.
+    /// least one step — a failure at the bottom of the table is still evidence. The one
+    /// exception is a single failed burst on the first OFDM rung of an air that caps its
+    /// margin (`floor_margin_db`) while the SNR still carries the rung: the floor below is a
+    /// quarter of the rate, so one lost burst is not worth leaving for it; a second one in a
+    /// row is.
     fn step_down(&mut self) {
+        let ordinary = self.first_ordinary();
+        let at_boundary = self.floor_margin_db.is_some() && self.index == ordinary;
+        self.boundary_failures = if at_boundary {
+            self.boundary_failures + 1
+        } else {
+            0
+        };
+        if at_boundary && self.boundary_failures < 2 && self.fits(ordinary, 0.0) {
+            return;
+        }
+        self.boundary_failures = 0;
         let mut target = self.index.saturating_sub(1);
         for candidate in (0..self.index).rev() {
             if self.fits(candidate, 0.0) {
@@ -400,10 +500,11 @@ mod tests {
     }
 
     #[test]
-    fn mode_seven_is_dominated_and_never_recommended() {
+    fn rung_nine_is_dominated_and_never_recommended() {
+        // 8-PSK 2/3, OFDM mode 7, two rungs up the ladder since the tone floor (ADR-0013)
         let modes = usable_modes();
-        assert!(!modes.contains(&7), "{modes:?}");
-        assert_eq!(modes.len(), 13);
+        assert!(!modes.contains(&9), "{modes:?}");
+        assert_eq!(modes.len(), 15);
         assert!(modes.windows(2).all(|w| w[0] < w[1]));
     }
 
@@ -473,8 +574,8 @@ mod tests {
     fn a_failure_widens_the_margin_by_more_than_a_fixed_step() {
         let mut rc = RateController::default();
         let start = rc.margin_db();
-        // mode 4 needs +1.4 dB and failed at +12: this channel costs about 11 dB more
-        rc.observe(Some(12.0), 0, 4, Some(4));
+        // rung 6 (QPSK ½) needs +1.4 dB and failed at +12: this channel costs about 11 dB more
+        rc.observe(Some(12.0), 0, 4, Some(6));
         assert!(rc.margin_db() - start > rc.config.up_step_db);
         assert!(rc.margin_db() - start <= rc.config.max_jump_db);
     }
@@ -482,16 +583,16 @@ mod tests {
     #[test]
     fn a_learned_margin_is_sticky_then_decays() {
         let mut rc = RateController::default();
-        rc.observe(Some(12.0), 0, 4, Some(4));
+        rc.observe(Some(12.0), 0, 4, Some(6));
         let learned = rc.margin_db();
         for _ in 0..rc.config.decay_every - 1 {
-            rc.observe(Some(12.0), 6, 0, Some(4));
+            rc.observe(Some(12.0), 6, 0, Some(6));
         }
         assert!(
             (rc.margin_db() - learned).abs() < 1e-12,
             "gave up too early"
         );
-        rc.observe(Some(12.0), 6, 0, Some(4));
+        rc.observe(Some(12.0), 6, 0, Some(6));
         assert!(rc.margin_db() < learned, "never decays");
     }
 
@@ -502,6 +603,92 @@ mod tests {
             rc.observe(Some(10.0), 6, 0, Some(0));
         }
         assert!(rc.margin_db() < RateConfig::default().margin_db - 2.0 * rc.config.down_step_db);
+    }
+
+    #[test]
+    fn the_first_mode_keeps_a_step_in_hand() {
+        let mut rc = RateController::default();
+        // far below every mode but the slowest: the slowest
+        assert_eq!(rc.first_mode(-25.0), usable_modes()[0]);
+        let config = RateConfig::default();
+        for snr in [4.0, 9.0, 15.0, 20.0] {
+            let modes = rc.modes().to_vec();
+            let top = modes
+                .iter()
+                .rposition(|&m| {
+                    AWGN_THRESHOLD_DB[m] + rc.margin_db() + config.up_hysteresis_db <= snr
+                })
+                .expect("something fits");
+            assert_eq!(
+                rc.first_mode(snr),
+                modes[top.saturating_sub(config.first_mode_back)],
+                "{snr}"
+            );
+        }
+        // seeding places the controller there and takes the measurement, once
+        rc.seed(15.0);
+        assert_eq!(rc.recommend(), rc.first_mode(15.0));
+        rc.seed(2.0);
+        assert_eq!(rc.snr_db(), Some(15.0));
+    }
+
+    #[test]
+    fn the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() {
+        // ADR-0013 §4: the step between the tone floor and the first OFDM rung is a factor
+        // of four in rate, not the third the margin and the hysteresis were tuned on
+        let config = RateConfig::default();
+        let rc = RateController::default(); // the wide ladder: rungs 0 and 1 are the floor
+        assert_eq!(rc.floor_modes(), 2);
+        assert_eq!(&rc.modes()[..3], &[0, 1, 2]);
+        let fits_rung_3 = AWGN_THRESHOLD_DB[3] + rc.margin_db() + config.up_hysteresis_db;
+        assert_eq!(
+            rc.first_mode(fits_rung_3),
+            2,
+            "not two steps down, on the floor"
+        );
+        assert!(
+            rc.first_mode(-12.0) < 2,
+            "nothing above the floor fits: the floor"
+        );
+
+        let wound = |cap: Option<f64>| {
+            let mut rc = RateController::default().with_floor(2, cap);
+            rc.seed(AWGN_THRESHOLD_DB[2] + 1.5);
+            rc.index = rc.modes.iter().position(|&m| m == 2).expect("rung 2");
+            rc.margin_db = 8.0; // a fading channel's learned margin
+            rc
+        };
+        let mut capped = wound(Some(1.0));
+        let snr = capped.snr_db();
+        capped.observe(snr, 0, 6, Some(2));
+        assert_eq!(
+            capped.recommend(),
+            2,
+            "one lost burst: still four times the floor"
+        );
+        capped.observe(snr, 0, 6, Some(2));
+        assert!(capped.recommend() < 2, "two in a row: the floor");
+        for _ in 0..3 {
+            capped.observe(snr, 6, 0, None);
+        }
+        assert!(
+            capped.recommend() < 2,
+            "the cap and the hysteresis are not met there"
+        );
+        let enough = AWGN_THRESHOLD_DB[2] + 1.0 + config.up_hysteresis_db + 0.5;
+        for _ in 0..6 {
+            capped.observe(Some(enough), 6, 0, None);
+        }
+        assert!(
+            capped.recommend() >= 2,
+            "they are here, whatever the learned margin"
+        );
+
+        // uncapped (the narrow air) the learned margin decides, as between any two rungs
+        let mut plain = wound(None);
+        let snr = plain.snr_db();
+        plain.observe(snr, 0, 6, Some(2));
+        assert!(plain.recommend() < 2);
     }
 
     #[test]

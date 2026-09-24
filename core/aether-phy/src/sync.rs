@@ -19,6 +19,11 @@
 //!    whole preamble's gain it is essentially error-free wherever a frame is detectable at
 //!    all. A DATA frame's mode is read later, from the pilot chips.
 //!
+//! The OFDM floor family of ADR-0009 — eight-symbol preambles of its own sequences, an
+//! averaged floor statistic, the contest between the two families — was retired with
+//! ADR-0013: below the OFDM tables is the tone floor, found by
+//! [`ToneDetector`](crate::tone::ToneDetector).
+//!
 //! The threshold is set for sensitivity rather than purity: the statistic's noise maximum is
 //! around 0.32, the default is [`DEFAULT_MIN_PEAK`], and an occasional false alarm costs only
 //! a failed CRC.
@@ -58,22 +63,6 @@ pub struct Acquisition {
     pub coarse_cfo_hz: f64,
 }
 
-/// The least a floor candidate's eight symbols may repeat one another: the magnitude of the
-/// summed one-symbol-lag correlation over the energy the lags span. A floor preamble shows
-/// the signal's share of the power (0.2 at −13 dB); noise shows a few hundredths.
-pub const FLOOR_REPETITION_MIN: f64 = 0.1;
-/// When a candidate of one family lies inside the other family's frame, the floor one is
-/// kept if its statistic is at least this fraction of the ordinary one's peak. A genuine
-/// floor frame scores about the signal's share of the power on its own statistic and at
-/// most three quarters of that on the ordinary references; a genuine ordinary frame scores
-/// its share on its own peak and at most half of it on the floor statistic — so the ratio
-/// sits at 1.3 or above for the one and 0.5 or below for the other.
-pub const FLOOR_OVER_ORDINARY: f64 = 0.85;
-/// Frequency sub-steps inside one 3.9 Hz bank bin for the coherent timing refinement of a
-/// floor candidate: four windows two symbols apart drift 180° over a bin's half-width, so
-/// the combination is tried on this grid and the best kept.
-const FLOOR_SUB_GRID_HZ: [f64; 5] = [-1.5625, -0.78125, 0.0, 0.78125, 1.5625];
-
 /// Finds preambles in a buffer.
 pub struct FrameDetector {
     params: WaveformParams,
@@ -88,8 +77,6 @@ pub struct FrameDetector {
     min_gap: usize,
     /// Segmented, unit-energy reference waveform per frame type.
     references: Vec<Vec<Complex>>,
-    /// The same for the floor family's sequences (ADR-0009); empty without a floor family.
-    floor_references: Vec<Vec<Complex>>,
     n_segments: usize,
     reference_len: usize,
     bin_hz: Vec<f64>,
@@ -97,13 +84,6 @@ pub struct FrameDetector {
     coarse_fft: Arc<dyn Fft<f64>>,
     fine_fft: Arc<dyn Fft<f64>>,
     fft_offset: usize,
-    /// Whether the air has a floor family, and its preamble's length in symbols and in
-    /// two-symbol windows a symbol apart.
-    has_floor: bool,
-    floor_symbols: usize,
-    floor_windows: usize,
-    /// Accept a floor candidate only above this floor statistic.
-    pub min_floor_peak: f64,
 }
 
 impl std::fmt::Debug for FrameDetector {
@@ -111,7 +91,6 @@ impl std::fmt::Debug for FrameDetector {
         f.debug_struct("FrameDetector")
             .field("min_timing_peak", &self.min_timing_peak)
             .field("max_cfo_hz", &self.max_cfo_hz)
-            .field("has_floor", &self.has_floor)
             .finish_non_exhaustive()
     }
 }
@@ -158,20 +137,11 @@ impl FrameDetector {
         let preamble = Preamble::new(params);
         let period = params.symbol_samples();
         let air = air_interface(params);
-        let has_floor = air.floor_long.is_some();
 
         let references: Vec<Vec<Complex>> = FRAME_TYPES
             .iter()
             .map(|&ft| reference_waveform(&modulator, preamble.sc_values(ft), period))
             .collect();
-        let floor_references: Vec<Vec<Complex>> = if has_floor {
-            FRAME_TYPES
-                .iter()
-                .map(|&ft| reference_waveform(&modulator, preamble.sc_values_of(ft, true), period))
-                .collect()
-        } else {
-            Vec::new()
-        };
         let reference_len = references[0].len();
         let n_segments = reference_len / SEGMENT_LEN;
 
@@ -191,7 +161,6 @@ impl FrameDetector {
             .filter(|&k| bin_hz[k].abs() <= DEFAULT_MAX_CFO_HZ)
             .collect();
 
-        let floor_symbols = air.longest_preamble();
         let mut planner = FftPlanner::new();
         Self {
             params,
@@ -202,7 +171,6 @@ impl FrameDetector {
             period,
             min_gap: 4 * period,
             references,
-            floor_references,
             n_segments,
             reference_len,
             bin_hz,
@@ -210,10 +178,6 @@ impl FrameDetector {
             coarse_fft: planner.plan_fft_forward(FFT_LEN),
             fine_fft: planner.plan_fft_forward(FINE_FACTOR * FFT_LEN),
             fft_offset: OfdmDemodulator::new(params).fft_offset(),
-            has_floor,
-            floor_symbols,
-            floor_windows: floor_symbols - 1,
-            min_floor_peak: air.floor_acquisition_threshold,
         }
     }
 
@@ -221,12 +185,6 @@ impl FrameDetector {
     #[must_use]
     pub fn reference_len(&self) -> usize {
         self.reference_len
-    }
-
-    /// Symbols in a floor preamble (two without a floor family).
-    #[must_use]
-    pub fn floor_symbols(&self) -> usize {
-        self.floor_symbols
     }
 
     /// The segmented partial correlations of one reference at one position, written into
@@ -252,34 +210,10 @@ impl FrameDetector {
         }
     }
 
-    /// The segmented partial correlations of one reference at one position.
-    fn partials(
-        &self,
-        samples: &[Complex],
-        position: usize,
-        reference: &[Complex],
-    ) -> Vec<Complex64> {
-        let mut out = vec![Complex64::new(0.0, 0.0); self.n_segments];
-        Self::partials_into(samples, position, reference, &mut out);
-        out
-    }
-
     /// The running state for a bank fed one stream of positions in order.
     #[must_use]
     pub fn bank_state(&self) -> BankState {
-        let n_bins = self.usable_bins.len();
-        // The floor statistic at q averages the floor references' normalised magnitude rows
-        // at q, q + P, …, q + 6P, so rows are kept in a ring that far back.
-        let span = (self.floor_windows - 1) * self.period;
-        let ring_len = span + 1;
         BankState {
-            rings: if self.has_floor {
-                vec![vec![0.0f64; ring_len * n_bins]; self.floor_references.len()]
-            } else {
-                Vec::new()
-            },
-            ring_len,
-            span,
             spectrum: vec![Complex64::new(0.0, 0.0); FFT_LEN],
             parts: vec![Complex64::new(0.0, 0.0); self.n_segments],
         }
@@ -304,19 +238,14 @@ impl FrameDetector {
     }
 
     /// One position's bank result. `position` indexes `samples` (its reference window must
-    /// be in them), `ring_pos` is the same position in whatever numbering the caller keeps
-    /// its stream in — the floor ring is indexed by it, so it must advance by one per call
-    /// with no gaps — and `energy` is the reference window's normalisation, already floored.
-    /// Returns the ordinary row for `position` and, once the floor family's averaging span
-    /// has passed, the floor row for the position that span back (with its index).
+    /// be in them) and `energy` is the reference window's normalisation, already floored.
     pub fn bank_row(
         &self,
         state: &mut BankState,
         samples: &[Complex],
         position: usize,
-        ring_pos: usize,
         energy: f64,
-    ) -> (BankRow, Option<(usize, FloorRow)>) {
+    ) -> BankRow {
         let mut best = [0.0f64; FRAME_TYPES.len()];
         let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
         for (type_index, reference) in self.references.iter().enumerate() {
@@ -337,75 +266,19 @@ impl FrameDetector {
             best_cfo[type_index] = self.bin_hz[top_bin];
         }
         let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
-        let row = BankRow {
+        BankRow {
             peak: best[win],
             cfo: best_cfo[win],
             other: best[lose],
             winner: win,
-            ..BankRow::default()
-        };
-        if !self.has_floor {
-            return (row, None);
         }
-
-        let n_bins = self.usable_bins.len();
-        let slot = ring_pos % state.ring_len;
-        for type_index in 0..self.floor_references.len() {
-            Self::partials_into(
-                samples,
-                position,
-                &self.floor_references[type_index],
-                &mut state.parts,
-            );
-            state.spectrum[..self.n_segments].copy_from_slice(&state.parts);
-            state.spectrum[self.n_segments..].fill(Complex64::new(0.0, 0.0));
-            self.coarse_fft.process(&mut state.spectrum);
-            let ring_row = &mut state.rings[type_index][slot * n_bins..(slot + 1) * n_bins];
-            for (value, &bin) in ring_row.iter_mut().zip(&self.usable_bins) {
-                *value = state.spectrum[bin].norm() / energy;
-            }
-        }
-        if position < state.span {
-            return (row, None);
-        }
-        let q = position - state.span;
-        let q_ring = ring_pos - state.span;
-        let mut best = [0.0f64; FRAME_TYPES.len()];
-        let mut best_cfo = [0.0f64; FRAME_TYPES.len()];
-        for (type_index, ring) in state.rings.iter().enumerate() {
-            let mut top = 0.0f64;
-            let mut top_bin = 0usize;
-            for (b, &bin) in self.usable_bins.iter().enumerate() {
-                let mut sum = 0.0f64;
-                for k in 0..self.floor_windows {
-                    let at = (q_ring + k * self.period) % state.ring_len;
-                    sum += ring[at * n_bins + b];
-                }
-                let mean = sum / self.floor_windows as f64;
-                if mean > top {
-                    top = mean;
-                    top_bin = bin;
-                }
-            }
-            best[type_index] = top;
-            best_cfo[type_index] = self.bin_hz[top_bin];
-        }
-        let (win, lose) = if best[0] >= best[1] { (0, 1) } else { (1, 0) };
-        let floor = FloorRow {
-            stat: best[win],
-            cfo: best_cfo[win],
-            other: best[lose],
-            winner: win,
-        };
-        (row, Some((q, floor)))
     }
 
     /// The matched-filter bank: for every start position, the best normalised peak over both
     /// frame types, the offset of the winning bin, the other type's peak, and which type won.
-    /// On an air with a floor family the floor statistic — the floor references' normalised
-    /// peak averaged over the seven windows a floor preamble fills — comes alongside. Each
-    /// position is one [`bank_row`](Self::bank_row); the streaming receiver computes the same
-    /// rows once each and keeps them, rather than calling this over its whole lookback.
+    /// Each position is one [`bank_row`](Self::bank_row); the streaming receiver computes
+    /// the same rows once each and keeps them, rather than calling this over its whole
+    /// lookback.
     #[must_use]
     pub fn bank(&self, samples: &[Complex]) -> BankOutput {
         if samples.len() < self.reference_len {
@@ -427,49 +300,25 @@ impl FrameDetector {
                 .max(1e-30)
                 .sqrt()
                 .max(floor);
-            let (row, floor_row) = self.bank_row(&mut state, samples, position, position, energy);
+            let row = self.bank_row(&mut state, samples, position, energy);
             output.set(position, &row);
-            if let Some((q, floor_row)) = floor_row {
-                output.set_floor(q, &floor_row);
-            }
         }
         output
     }
 
-    /// Carrier offset at a known ordinary preamble position: the segmented filter on a fine
-    /// grid, then the full-symbol-lag phase to refine it.
+    /// Carrier offset at a known preamble position: the segmented filter on a fine grid,
+    /// then the full-symbol-lag phase to refine it.
     ///
     /// # Panics
     /// If the buffer does not hold two whole symbols from `start`.
     #[must_use]
     pub fn fine_cfo(&self, samples: &[Complex], start: usize, frame_type: FrameType) -> f64 {
-        self.fine_cfo_of(samples, start, frame_type, PREAMBLE_SYMBOLS, false)
-    }
-
-    /// Carrier offset at a known preamble position of either family. A floor preamble
-    /// (`preamble_symbols` = 8, `floor`) is matched whole — its two-symbol reference tiled —
-    /// and the lag phase is averaged over all seven symbol pairs.
-    ///
-    /// # Panics
-    /// If the buffer does not hold the whole preamble from `start`.
-    #[must_use]
-    pub fn fine_cfo_of(
-        &self,
-        samples: &[Complex],
-        start: usize,
-        frame_type: FrameType,
-        preamble_symbols: usize,
-        floor: bool,
-    ) -> f64 {
         let type_index = FRAME_TYPES
             .iter()
             .position(|&t| t == frame_type)
             .expect("known type");
-        let reference = if floor {
-            &self.floor_references[type_index]
-        } else {
-            &self.references[type_index]
-        };
+        let reference = &self.references[type_index];
+        let preamble_symbols = PREAMBLE_SYMBOLS;
         assert!(
             start + preamble_symbols * self.period <= samples.len(),
             "fine_cfo needs the whole preamble from the start position"
@@ -535,268 +384,12 @@ impl FrameDetector {
         coarse + residual
     }
 
-    /// How much `symbols` symbol periods from `start` repeat one another: the magnitude of
-    /// the summed one-symbol-lag correlation over the energy the lags span, 1.0 for identical
-    /// noiseless symbols (Schmidl & Cox's timing metric, summed over a run).
-    fn repetition(&self, samples: &[Complex], start: usize, symbols: usize) -> f64 {
-        let n = symbols * self.period;
-        if start + n > samples.len() {
-            return 0.0;
-        }
-        let y = &samples[start..start + n];
-        let mut lags = Complex64::new(0.0, 0.0);
-        for i in 0..n - self.period {
-            let a = y[i];
-            let b = y[i + self.period];
-            lags += Complex64::new(a.0 * b.0 + a.1 * b.1, a.0 * b.1 - a.1 * b.0);
-        }
-        let energy: f64 = y.iter().map(|&(re, im)| re * re + im * im).sum::<f64>()
-            * (symbols - 1) as f64
-            / symbols as f64;
-        lags.norm() / energy.max(1e-30)
-    }
-
-    /// The start of a floor preamble within `lo … hi`: four two-symbol windows two symbols
-    /// apart combined coherently at the bank's bin nearest `f0` and the sub-grid around it,
-    /// each window normalised by its own energy. The averaged statistic that found the
-    /// candidate is a symbol wide at its top; this is not.
-    fn refine_floor(
-        &self,
-        samples: &[Complex],
-        lo: usize,
-        hi: usize,
-        frame_type: FrameType,
-        f0: f64,
-    ) -> usize {
-        let type_index = FRAME_TYPES
-            .iter()
-            .position(|&t| t == frame_type)
-            .expect("known type");
-        let reference = &self.floor_references[type_index];
-        let n_win = self.floor_symbols / 2;
-        let step = 2 * self.period;
-        let last_window = (n_win - 1) * step;
-        let positions = samples.len().saturating_sub(self.reference_len) + 1;
-        let hi = hi.min(positions.saturating_sub(last_window));
-        if hi <= lo {
-            return lo;
-        }
-        // the transform bin nearest f0, and the reference's single-bin transform there
-        let bin = *self
-            .usable_bins
-            .iter()
-            .min_by(|&&a, &&b| {
-                (self.bin_hz[a] - f0)
-                    .abs()
-                    .partial_cmp(&(self.bin_hz[b] - f0).abs())
-                    .expect("finite")
-            })
-            .expect("bins");
-        let twiddle: Vec<Complex64> = (0..self.n_segments)
-            .map(|k| Complex64::from_polar(1.0, -2.0 * PI * (bin * k) as f64 / FFT_LEN as f64))
-            .collect();
-        // the bin value and window energy at every position the windows can land on
-        let count = hi - lo + last_window;
-        let mut value = Vec::with_capacity(count);
-        let mut energy = Vec::with_capacity(count);
-        for p in lo..lo + count {
-            let parts = self.partials(samples, p, reference);
-            let v: Complex64 = parts.iter().zip(&twiddle).map(|(a, w)| a * w).sum();
-            value.push(v);
-            let e: f64 = samples[p..p + self.reference_len]
-                .iter()
-                .map(|&(re, im)| re * re + im * im)
-                .sum::<f64>()
-                .sqrt()
-                .max(1e-15);
-            energy.push(e);
-        }
-        let fs = self.params.fs_baseband;
-        let mut best = 0.0f64;
-        let mut best_at = lo;
-        for d in lo..hi {
-            for delta in FLOOR_SUB_GRID_HZ {
-                let mut acc = Complex64::new(0.0, 0.0);
-                for k in 0..n_win {
-                    let at = d - lo + k * step;
-                    let rot = Complex64::from_polar(
-                        1.0,
-                        -2.0 * PI * (f0 + delta) * (k * step) as f64 / fs,
-                    );
-                    acc += value[at] * rot / energy[at];
-                }
-                let score = acc.norm() / n_win as f64;
-                if score > best {
-                    best = score;
-                    best_at = d;
-                }
-            }
-        }
-        best_at
-    }
-
-    /// Floor-family candidates, best first; each accepted one claims its whole span and the
-    /// seven symbols before it (where the averaged statistic still sees part of its
-    /// preamble). The contest with the ordinary pass is settled in [`Self::detect`].
-    ///
-    /// A candidate that repeats like a floor preamble but cannot be used yet claims the same,
-    /// so nothing it would have claimed is taken in its place. That matters above all to a
-    /// streaming receiver: eight identical symbols score well above the threshold at a
-    /// symbol's alignment and at part-symbol offsets a few symbols *before* the true start,
-    /// and while the true start's statistic is still arriving those are the best candidates
-    /// there are (ADR-0009 §8).
-    ///
-    /// Offline, a candidate is usable when its whole frame is in `samples`. A streaming
-    /// receiver cannot wait for that inside its search window — a floor frame is 4.2 s, the
-    /// window a fraction of it — so with `streaming` a candidate is usable once every
-    /// candidate that could still claim it has been evaluated in full
-    /// ([`Self::floor_settle_samples`]): the decision is then the one offline makes, taken
-    /// while the frame is still arriving.
-    ///
-    /// Returns the accepted candidates and, streaming, the ones whose preamble is in but
-    /// which are not final yet — the receiver's evidence that a floor frame is arriving.
-    fn detect_floor(
-        &self,
-        samples: &[Complex],
-        output: &BankOutput,
-        max_frames: usize,
-        streaming: bool,
-    ) -> (Vec<Acquisition>, Vec<Acquisition>) {
-        let mut found = Vec::new();
-        let mut arriving = Vec::new();
-        let mut eligible: Vec<bool> = output
-            .floor_stat
-            .iter()
-            .map(|&s| s >= self.min_floor_peak)
-            .collect();
-        let half = 3 * self.period / 2;
-        let skirt = self.min_gap.max(self.floor_windows * self.period);
-        for _ in 0..self.max_candidates {
-            if found.len() >= max_frames {
-                break;
-            }
-            let Some(c) = eligible
-                .iter()
-                .enumerate()
-                .filter(|&(_, &ok)| ok)
-                .max_by(|a, b| {
-                    output.floor_stat[a.0]
-                        .partial_cmp(&output.floor_stat[b.0])
-                        .expect("finite statistics")
-                })
-                .map(|(index, _)| index)
-            else {
-                break;
-            };
-            let lo = c.saturating_sub(half);
-            let hi = (c + half + 1).min(eligible.len());
-            let frame_type = FRAME_TYPES[output.floor_winner[c]];
-            let d = self.refine_floor(samples, lo, hi, frame_type, output.floor_cfo[c]);
-            let span = self
-                .air
-                .layout_for_family(frame_type == FrameType::Data, true)
-                .samples();
-            if self.repetition(samples, d, self.floor_symbols) < FLOOR_REPETITION_MIN {
-                eligible[lo..hi].fill(false); // the bank liked it; the symbols do not repeat
-                continue;
-            }
-            let usable = if streaming {
-                c + self.floor_settle_samples() <= samples.len()
-            } else {
-                d + span + self.fft_offset <= samples.len()
-            };
-            // used or not, nothing it would claim goes in its place
-            let claim_to = (d + span).min(eligible.len());
-            eligible[d.saturating_sub(skirt).min(claim_to)..claim_to].fill(false);
-            if !(usable || streaming) {
-                continue; // offline, the frame runs off the end of the buffer
-            }
-            let cfo_hz = self.fine_cfo_of(samples, d, frame_type, self.floor_symbols, true);
-            let acquisition = Acquisition {
-                sync: FrameSync {
-                    start: d,
-                    cfo_hz,
-                    frame_type,
-                    floor: true,
-                    timing_peak: output.floor_stat[c],
-                    type_confidence: output.floor_stat[c] / output.floor_other[c].max(1e-12),
-                },
-                timing_peak: output.floor_stat[c],
-                type_confidence: output.floor_stat[c] / output.floor_other[c].max(1e-12),
-                coarse_cfo_hz: output.floor_cfo[c],
-            };
-            if usable {
-                found.push(acquisition);
-            } else if streaming {
-                arriving.push(acquisition);
-            }
-        }
-        (found, arriving)
-    }
-
-    /// How far past a floor candidate's statistic position the input must reach before a
-    /// streaming receiver takes the candidate as final. A candidate is claimed by an accepted
-    /// one whose refined start lies up to the claim's skirt after it; that one's statistic
-    /// sits up to half the refinement window further on, and evaluating it in full —
-    /// refinement, repetition — reads eight symbols past its own refinement window.
-    #[must_use]
-    pub fn floor_settle_samples(&self) -> usize {
-        let half = 3 * self.period / 2;
-        let skirt = self.min_gap.max(self.floor_windows * self.period);
-        skirt + 2 * half + self.floor_symbols * self.period
-    }
-
     /// How far a streaming receiver searches back behind what it has already searched, so
-    /// that every candidate is decided in a region that holds all it depends on. The region
-    /// runs two lookbacks behind the newest sample: an ordinary candidate needs a symbol past
-    /// its preamble; a floor candidate [`Self::floor_settle_samples`] past its statistic
-    /// position and half a refinement window before it.
+    /// that every candidate is decided in a region that holds all it depends on: a symbol
+    /// past the preamble.
     #[must_use]
     pub fn stream_lookback(&self) -> usize {
-        let ordinary = (self.air.longest_preamble() + 1) * self.period;
-        if !self.has_floor {
-            return ordinary;
-        }
-        let need = self.floor_settle_samples() + 3 * self.period / 2;
-        ordinary.max(need.div_ceil(2 * self.period) * self.period)
-    }
-
-    /// Where a frame of this acquisition starts and ends.
-    fn span(&self, acquisition: &Acquisition) -> (usize, usize) {
-        let layout = self.air.layout_for_family(
-            acquisition.sync.frame_type == FrameType::Data,
-            acquisition.sync.floor,
-        );
-        (
-            acquisition.sync.start,
-            acquisition.sync.start + layout.samples(),
-        )
-    }
-
-    /// Where a candidate of one family lies inside the other's frame, one of them is the
-    /// other's body or preamble scoring on the wrong references: the floor one stays if its
-    /// statistic is at least [`FLOOR_OVER_ORDINARY`] of the ordinary peak, else the ordinary
-    /// one does. Strongest ordinary candidates are settled first.
-    fn settle_families(
-        &self,
-        mut floor: Vec<Acquisition>,
-        mut ordinary: Vec<Acquisition>,
-    ) -> (Vec<Acquisition>, Vec<Acquisition>) {
-        ordinary.sort_by(|a, b| b.timing_peak.total_cmp(&a.timing_peak));
-        let mut kept = Vec::with_capacity(ordinary.len());
-        for o in ordinary {
-            let (o_start, o_end) = self.span(&o);
-            let clashes = |f: &Acquisition| o_start < self.span(f).1 && f.sync.start < o_end;
-            if floor
-                .iter()
-                .any(|f| clashes(f) && f.timing_peak >= FLOOR_OVER_ORDINARY * o.timing_peak)
-            {
-                continue; // a floor frame explains it
-            }
-            floor.retain(|f| !clashes(f));
-            kept.push(o);
-        }
-        (floor, kept)
+        (PREAMBLE_SYMBOLS + 1) * self.period
     }
 
     // ── full acquisition ──────────────────────────────────────────────
@@ -811,7 +404,9 @@ impl FrameDetector {
         self.detect_with(samples, &output, max_frames)
     }
 
-    /// [`detect`](Self::detect) over a bank already computed for `samples`.
+    /// [`detect`](Self::detect) over a bank already computed for `samples` — for a streaming
+    /// receiver, the rows it keeps, a row per position each computed once rather than the
+    /// bank re-run over the whole lookback on every block.
     ///
     /// # Panics
     /// As [`detect`](Self::detect).
@@ -822,37 +417,9 @@ impl FrameDetector {
         output: &BankOutput,
         max_frames: usize,
     ) -> Vec<Acquisition> {
-        self.acquire(samples, output, max_frames, false).frames
-    }
-
-    /// [`detect_with`](Self::detect_with) for a streaming receiver's search region, whose
-    /// bank is the rows it keeps — a row per position, each computed once rather than the
-    /// bank re-run over the whole lookback on every block. A floor candidate is taken once it
-    /// is final rather than once its whole frame is in ([`Self::floor_settle_samples`]); the
-    /// floor candidates whose preamble is in but which are not final yet come back as well.
-    ///
-    /// # Panics
-    /// As [`detect`](Self::detect).
-    #[must_use]
-    pub fn detect_streaming(
-        &self,
-        samples: &[Complex],
-        output: &BankOutput,
-        max_frames: usize,
-    ) -> Detection {
-        self.acquire(samples, output, max_frames, true)
-    }
-
-    fn acquire(
-        &self,
-        samples: &[Complex],
-        output: &BankOutput,
-        max_frames: usize,
-        streaming: bool,
-    ) -> Detection {
         let mut ordinary: Vec<Acquisition> = Vec::new();
         if output.peak.is_empty() {
-            return Detection::default();
+            return ordinary;
         }
         let mut eligible: Vec<bool> = output
             .peak
@@ -868,9 +435,6 @@ impl FrameDetector {
             *slot = false;
         }
 
-        // Both passes look for up to max_frames of their own on the full statistics — a
-        // strong frame's body scores on either family's references, so each pass sees the
-        // other's frames — and the contest is settled by evidence below.
         for _ in 0..self.max_candidates {
             if ordinary.len() >= max_frames {
                 break;
@@ -909,7 +473,6 @@ impl FrameDetector {
                     start,
                     cfo_hz,
                     frame_type,
-                    floor: false,
                     timing_peak: output.peak[start],
                     type_confidence: output.peak[start] / output.other[start].max(1e-12),
                 },
@@ -929,36 +492,9 @@ impl FrameDetector {
             eligible[low..high].fill(false);
         }
 
-        let (mut found, arriving) = if self.has_floor {
-            let (floor, arriving) = self.detect_floor(samples, output, max_frames, streaming);
-            if floor.is_empty() {
-                (floor, arriving)
-            } else {
-                let (floor, kept) = self.settle_families(floor, ordinary);
-                ordinary = kept;
-                (floor, arriving)
-            }
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        found.append(&mut ordinary);
-        found.sort_by_key(|acquisition| acquisition.sync.start);
-        found.truncate(max_frames);
-        Detection {
-            frames: found,
-            arriving,
-        }
+        ordinary.sort_by_key(|acquisition| acquisition.sync.start);
+        ordinary
     }
-}
-
-/// What a streaming search found.
-#[derive(Debug, Clone, Default)]
-pub struct Detection {
-    /// Frames to take: as [`FrameDetector::detect`] finds them.
-    pub frames: Vec<Acquisition>,
-    /// Floor frames whose preamble is in but which are not final yet: evidence that one is
-    /// arriving, a timing signal and nothing more.
-    pub arriving: Vec<Acquisition>,
 }
 
 /// What [`FrameDetector::bank`] produced, one entry per start position.
@@ -972,16 +508,6 @@ pub struct BankOutput {
     pub other: Vec<f64>,
     /// Which frame type won: an index into the detector's type list.
     pub winner: Vec<usize>,
-    /// The floor statistic (ADR-0009): the winning floor reference's normalised peak
-    /// averaged over the seven windows a floor preamble fills; zero without a floor family
-    /// and at positions whose windows run past the buffer.
-    pub floor_stat: Vec<f64>,
-    /// Carrier offset of the floor statistic's winning bin, in hertz.
-    pub floor_cfo: Vec<f64>,
-    /// The losing floor reference's statistic at the same position.
-    pub floor_other: Vec<f64>,
-    /// Which frame type's floor reference won.
-    pub floor_winner: Vec<usize>,
 }
 
 impl BankOutput {
@@ -993,10 +519,6 @@ impl BankOutput {
             cfo: vec![0.0; positions],
             other: vec![0.0; positions],
             winner: vec![0; positions],
-            floor_stat: vec![0.0; positions],
-            floor_cfo: vec![0.0; positions],
-            floor_other: vec![0.0; positions],
-            floor_winner: vec![0; positions],
         }
     }
 
@@ -1008,10 +530,6 @@ impl BankOutput {
             out.cfo.push(row.cfo);
             out.other.push(row.other);
             out.winner.push(row.winner);
-            out.floor_stat.push(row.floor_stat);
-            out.floor_cfo.push(row.floor_cfo);
-            out.floor_other.push(row.floor_other);
-            out.floor_winner.push(row.floor_winner);
         }
         out
     }
@@ -1022,17 +540,9 @@ impl BankOutput {
         self.other[position] = row.other;
         self.winner[position] = row.winner;
     }
-
-    fn set_floor(&mut self, position: usize, floor: &FloorRow) {
-        self.floor_stat[position] = floor.stat;
-        self.floor_cfo[position] = floor.cfo;
-        self.floor_other[position] = floor.other;
-        self.floor_winner[position] = floor.winner;
-    }
 }
 
-/// One position's bank result: the ordinary statistic for that position and — once the
-/// floor family's averaging span has run past it — the floor statistic for it too.
+/// One position's bank result.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BankRow {
     /// Best normalised peak over both frame types.
@@ -1043,39 +553,12 @@ pub struct BankRow {
     pub other: f64,
     /// Which frame type won.
     pub winner: usize,
-    /// The floor statistic (ADR-0009); zero until finalised, and without a floor family.
-    pub floor_stat: f64,
-    /// Carrier offset of the floor statistic's winning bin, in hertz.
-    pub floor_cfo: f64,
-    /// The losing floor reference's statistic.
-    pub floor_other: f64,
-    /// Which frame type's floor reference won.
-    pub floor_winner: usize,
 }
 
-/// The floor statistic for one position, finalised a preamble's averaging span after it.
-#[derive(Debug, Clone, Copy)]
-pub struct FloorRow {
-    /// The winning floor reference's averaged, normalised peak.
-    pub stat: f64,
-    /// Its carrier offset, in hertz.
-    pub cfo: f64,
-    /// The losing reference's statistic.
-    pub other: f64,
-    /// Which frame type's floor reference won.
-    pub winner: usize,
-}
-
-/// The bank's running state over one stream of positions: the floor family's ring of
-/// per-position rows — the floor statistic at `q` averages the rows at `q, q+P, …, q+6P`,
-/// so rows are kept that far back — and scratch space, so a position allocates nothing.
-/// Positions are fed in order with no gaps; one per stream, from
+/// The bank's scratch space, so a position allocates nothing; one per stream, from
 /// [`FrameDetector::bank_state`].
 #[derive(Debug, Clone)]
 pub struct BankState {
-    rings: Vec<Vec<f64>>,
-    ring_len: usize,
-    span: usize,
     spectrum: Vec<Complex64>,
     parts: Vec<Complex64>,
 }
