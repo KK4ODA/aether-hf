@@ -185,6 +185,20 @@ class RayleighFadingProcess:
             return np.ones(n, dtype=np.complex128)
         return self._lowrate(n)
 
+    def skip(self, n: int) -> None:
+        """Advance the process by ``n`` samples at ``fs`` without producing them — a gap
+        in which nothing was sent still fades. Costs only the low-rate samples it spans."""
+        if self._static or n <= 0:
+            return
+        d = self._decim
+        t_next = self._pos + n
+        k_next = t_next // d
+        new = self._lowrate(int(k_next))
+        grid = np.concatenate(([self._g0, self._g1], new))
+        self._g0 = complex(grid[k_next])
+        self._g1 = complex(grid[k_next + 1])
+        self._pos = int(t_next % d)
+
     def next(self, n: int) -> ComplexArray:
         """Return the next ``n`` fading gains at ``fs``."""
         if self._static:
@@ -225,6 +239,13 @@ class WattersonChannel:
             RayleighFadingProcess(self.fs, spread, np.random.default_rng(s))
             for spread, s in zip(self.profile.doppler_spread_hz, seeds, strict=True)
         ]
+        self._history = np.zeros(self._max_delay, dtype=np.complex128)
+
+    def skip(self, n: int) -> None:
+        """Let ``n`` samples of silence pass: every tap fades on, and nothing sent before
+        the gap is still in the delay line after it."""
+        for fading in self._fading:
+            fading.skip(n)
         self._history = np.zeros(self._max_delay, dtype=np.complex128)
 
     def process(self, x: ComplexArray) -> ComplexArray:
