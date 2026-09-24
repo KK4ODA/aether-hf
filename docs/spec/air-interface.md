@@ -141,7 +141,11 @@ envelope: a transmitter driven to a fixed peak puts an OFDM frame's average powe
 dB below that peak (§2.2) and a steady tone's at it, so a tone-floor frame goes out **5.5 dB
 above an OFDM frame's average** at the same transmit level — at or under every OFDM frame's
 peak. Every SNR a receiver reports from a tone-floor frame is taken back to the OFDM
-frames' reference by the same 5.5 dB, and every threshold in §4 is in that reference.
+frames' reference by the same 5.5 dB, and every threshold in §4 is in that reference. The
+estimate is by energy, exact where the floor is used and a lower bound on a strong path: the
+glide between tones caps it near +17 dB on a clean channel, and on a dispersive one the echo's
+spill into the next symbol caps it at a few decibels (ADR-0016 §4). A rate controller seeded
+from a floor frame starts again from the first ordinary burst it measures.
 
 The tones are spaced at the symbol rate about the passband centre and span 400 Hz, inside
 a 500 Hz channel on either air. Between symbols the frequency glides on a raised cosine and
@@ -293,8 +297,8 @@ receiver. (The tone floor's frames are §2.4's.)
 
 LONG carries user data and the connection handshake. SHORT carries acknowledgements and
 other control frames, always at the control mode. While a link runs the tone floor its data
-and control frames are the tone floor's, and a connection request goes out on it once the
-ordinary one has gone unanswered (§7.2).
+and control frames are the tone floor's; a connection request starts on the floor, and probes
+and beacons go out on it (§7).
 
 ### 3.1 Preamble, and what it signals
 
@@ -370,7 +374,8 @@ Rungs are ordered from most robust to fastest. A rung that another rung beats on
 payload per second and threshold is never selected by the rate controller; rung 13 (OFDM
 mode 7) is in that position, and so is rung 6 (BPSK ⅕, OFDM mode 0), which the fastest tone
 kind beats by six decibels at a higher rate — it stays on the ladder as the ordinary family's
-most robust mode, which connection requests, probes and beacons go out at. The tone floor's
+most robust mode, which a connection request's ordinary tries and the answers to requests and
+probes that arrived in the ordinary family go out at (§7.2). The tone floor's
 thresholds come from `bench/baselines/tone_floor.csv`, at equal peak power.
 
 ---
@@ -384,8 +389,9 @@ wide air, and rungs 2 and 3 its four-tone middle kinds (ADR-0015). Above them th
 mode *m* is rung *m* + 2: OFDM modes 0 and 1 were the OFDM floor of ADR-0009, which the tone
 floor replaced, and are on no rung. Rung 5, QPSK ½, is the **control mode** — the slowest
 whose SHORT frame carries a seven-byte control frame and whose LONG frame carries a
-connection request; ordinary control frames, connect requests, beacons and probes go out at
-it. Rung 4, QPSK ⅓ on the ordinary frame, is the step between the tone floor and the control
+connection request; ordinary control frames go out at it, and so do a connection request's
+ordinary tries and the answers to requests and probes that arrived in the ordinary family
+(§7.2). Rung 4, QPSK ⅓ on the ordinary frame, is the step between the tone floor and the control
 mode.
 
 <!-- BEGIN:modes500 -->
@@ -504,11 +510,12 @@ id of zero and a body that is one packed callsign. It is how an operator answers
 hear me?" without arranging a contact first, which on HF is most of what a new station needs
 to know. A receiver reports the callsign and the SNR it measured and does nothing else — a
 beacon is never answered on the air, because a channel where every beacon drew a reply would
-be unusable. It is sent at the most robust mode, because the whole point is to be heard by
-somebody who cannot yet hear anything else.
+be unusable. It is sent on the tone floor (tone-24), the most robust frame there is, because the
+whole point is to be heard by somebody who cannot yet hear anything else; the floor's frames are
+the same in both bandwidths, so a station of either hears it.
 
 A `PROBE` frame is a beacon with a destination: "can *you* hear me, and how well?" It is
-sent outside any session (session id zero, sequence zero, the most robust mode) with this
+sent outside any session (session id zero, sequence zero, on the tone floor) with this
 body:
 
 | Offset | Field |
@@ -519,10 +526,11 @@ body:
 | 15 | capability byte (§7.3): the bandwidth the frame was sent in |
 
 A station that is addressed by a probe, is idle, and finds the probe's stated bandwidth to
-be its own answers with one `PROBE_ACK` — the same body with the callsigns swapped and the
-SNR it measured on the probe in the SNR byte. The prober then has the two numbers that
-describe a path, one from each end, and reports them; a probe that draws no answer within
-one data frame's turnaround is reported as unanswered, and there are no retries — the
+be its own answers with one `PROBE_ACK`, in the family the probe arrived in — the same body
+with the callsigns swapped and the SNR it measured on the probe in the SNR byte. The prober
+then has the two numbers that describe a path, one from each end, and reports them (a reading
+from a floor frame is a lower bound on a strong path, §2.4); a probe that draws no answer
+within a floor frame's turnaround is reported as unanswered, and there are no retries — the
 operator asks again, so a probe can never fill a channel by itself. A station in a
 session ignores probes (the session's frames matter more), and a station never answers a
 probe addressed to somebody else. Answering is a *response* in the sense of
@@ -569,7 +577,12 @@ and fills the remainder of the burst with new frames at the recommended mode.
 `BREAK` in an ACK. `POLL` keeps an idle link alive. `DISC`/`DISC_ACK` close it. Connection is
 a two-way handshake in DATA-container frames carrying both callsigns, with randomised
 backoff so two stations calling each other simultaneously desynchronise instead of colliding
-on every retry.
+on every retry. The first request goes out on the tone floor and the tries alternate between
+the floor and the ordinary family's robust mode (ADR-0016); the acceptance goes back in the
+family the request arrived in, and a caller does not send a try over a frame it hears
+arriving. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
+the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
+burst.
 
 ### 7.3 Capability negotiation
 

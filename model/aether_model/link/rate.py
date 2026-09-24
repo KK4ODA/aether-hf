@@ -222,6 +222,12 @@ class RateController:
     first_mode_back: int = 2
     """Steps kept in hand by :meth:`first_mode`: how far below the fastest mode one
     measurement supports a session's first burst goes out."""
+    reseed_margin_db: float = 3.0
+    """How far above a lower-bound seed (:meth:`seed`) the first ordinary measurement must read
+    to replace it. The tone floor's estimate is exact to about +10 dB on AWGN; a few decibels
+    between two frames' readings is their estimates' own spread and the fade between them, and
+    replacing a seed on that would only take the larger of two noisy numbers. Beyond it the
+    seed was the floor's ceiling, not the path's."""
     floor_modes: int = 6
     """How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013, and
     on the 2 300 Hz air its fast kinds, ADR-0014 — whose frames are five times as long as an
@@ -249,6 +255,9 @@ class RateController:
     """The last decay step taken since the failure before, which the next one grows on."""
     _boundary_failures: int = 0
     """Failed bursts in a row on the first OFDM rung (:meth:`_step_down`)."""
+    _reseed_pending: bool = False
+    """The seed was a lower bound (:meth:`seed`): the first clean burst measured on an ordinary
+    frame seeds again."""
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
@@ -258,6 +267,21 @@ class RateController:
     def observe(self, snr_db: float | None, ok: int, failed: int, mode: int | None = None) -> None:
         """Feed one burst: mean SNR of its frames, how many decoded / failed, and the mode
         they were sent in (which turns a failure into a measurement — see :meth:`_widen`)."""
+        if (
+            self._reseed_pending
+            and snr_db is not None
+            and ok
+            and not failed
+            and mode is not None
+            and mode >= self.floor_modes
+        ):
+            # the first measurement a strong path can show: start again from it — upward, and
+            # only past the estimates' own spread — as an ordinary connect frame would have
+            self._reseed_pending = False
+            if self._smoothed is None or snr_db > self._smoothed + self.reseed_margin_db:
+                self._smoothed = self.snr_db = snr_db
+                self._index = max(self._index, self.modes.index(self.first_mode(snr_db)))
+                return
         if snr_db is not None:
             self._smoothed = (
                 snr_db if self._smoothed is None else 0.7 * self._smoothed + 0.3 * snr_db
@@ -332,15 +356,23 @@ class RateController:
         """Index in :attr:`modes` of the first rung above the floor."""
         return next((i for i, m in enumerate(self.modes) if m >= self.floor_modes), 0)
 
-    def seed(self, snr_db: float) -> None:
+    def seed(self, snr_db: float, *, lower_bound: bool = False) -> None:
         """Start from a measurement — the connect frame this station decoded — instead of
         from the slowest mode: the smoothed SNR becomes the measurement and the
         recommendation :meth:`first_mode`. Only before anything has been observed; a
-        controller that has seen bursts knows more than one frame can tell it."""
+        controller that has seen bursts knows more than one frame can tell it.
+
+        ``lower_bound``: the measurement was a tone-floor frame's, which a strong path does
+        not show — the floor's estimate is exact to about +10 dB on AWGN and saturates near
+        +17, and on a dispersive path it reads a few decibels whatever the SNR, the echo's
+        spill into the next symbol counting as noise (ADR-0016). Calls start on the floor, so
+        a strong path's session would start many rungs low and climb two a burst; instead the
+        first clean burst measured on an ordinary frame seeds again, upward only."""
         if self._smoothed is not None:
             return
         self._smoothed = self.snr_db = snr_db
         self._index = self.modes.index(self.first_mode(snr_db))
+        self._reseed_pending = lower_bound
 
     # ── the state machine ─────────────────────────────────────────────
 

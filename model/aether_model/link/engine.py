@@ -367,7 +367,8 @@ class LinkEngine:
     def probe(self, remote_call: str, as_call: str | None = None) -> None:
         """Ask a station whether it hears this one, and how well, without a session.
 
-        One PROBE frame, at the most robust mode; the answer, if it comes, arrives as a
+        One PROBE frame, on the tone floor — the most robust frame there is, which a probe
+        exists to measure a weak path with (ADR-0016); the answer, if it comes, arrives as a
         ``probe`` event naming both directions of the path — the SNR the other station
         measured on our probe, and the SNR we measured on its answer. A probe that goes
         unanswered within one frame's turnaround is reported as such; the operator asks
@@ -385,8 +386,8 @@ class LinkEngine:
         self._probing = remote_call.upper()
         self.last_probe = None
         self.stats.probes_sent += 1
-        self._send_probe(DataKind.PROBE, self._probing, None)
-        wait = self._response_wait(self.timing.data_frame_s_for(self._robust_mode(False)))
+        self._send_probe(DataKind.PROBE, self._probing, None, floor=True)
+        wait = self._response_wait(self.timing.data_frame_s_for(self._robust_mode(True)))
         self._arm("probe", self._tx_busy_until - self.now + wait)
 
     def disconnect(self) -> None:
@@ -523,6 +524,20 @@ class LinkEngine:
         when a session's first burst dropped into the floor after the connect frames were
         ordinary: the ACK fired in the middle of every floor frame and trampled it (P9-7)."""
         self.now = max(self.now, now)
+        if self.state is State.CONNECTING or self._probing is not None:
+            # A caller does not call over a frame it hears arriving, and a prober does not
+            # give up on one: it may be the answer, and if it is another station's the
+            # channel is busy. The next try (or the probe's deadline) waits for its end. A
+            # called station that has accepted a call whose acceptance was lost is
+            # connected, and acknowledges the undecodable preamble of the caller's next try
+            # on the floor — which the try after that ran into, again and again, until the
+            # caller gave up (ADR-0016). The longest frame there is when the PHY cannot say.
+            length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
+            clear = t_start + length + self.timing.turnaround_s
+            for timer in ("connect", "probe"):
+                if timer in self._deadlines:
+                    self._deadlines[timer] = max(self._deadlines[timer], clear)
+            return
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
@@ -681,8 +696,9 @@ class LinkEngine:
 
     def _robust_mode(self, floor: bool) -> int:
         """The slowest mode of the given family whose frame carries a connect body (with a
-        DATA header and length): what connect requests, answers, probes and beacons go out
-        at. Falls back to the ordinary family when the floor has no such mode."""
+        DATA header and length): what connect requests and their answers, probes and theirs,
+        and beacons go out at — on the tone floor first (ADR-0016). Falls back to the
+        ordinary family when the floor has no such mode."""
         need = CONNECT_BODY_BYTES + 5
         caps = self.timing.data_capacity or {}
         for m in sorted(caps):
@@ -693,14 +709,15 @@ class LinkEngine:
         raise ValueError("no mode carries a connect frame")
 
     def _connect_floor(self) -> bool:
-        """Whether the next connect request goes out on the floor layout: the first two tries
-        are ordinary frames, then the two families alternate, so a station that can only
-        be heard at the floor is still reached (ADR-0009)."""
-        return (
-            self.timing.floor_modes > 0
-            and self._connect_tries >= 2
-            and (self._connect_tries - 2) % 2 == 0
-        )
+        """Whether the next connect request goes out on the tone floor: the first try does,
+        and every other one after it (ADR-0016). A call is made before anything is known of
+        the path, so it goes where the path most likely carries it — the floor reaches 14 dB
+        lower than the ordinary family's control rung — and the ordinary tries between keep a
+        path the floor does not carry (a narrowband interferer on the floor's tones) from
+        failing every one. ADR-0009 had the first two tries ordinary, from when the floor was
+        an OFDM frame of its own that reached a few decibels lower; with the tone floor a
+        weak path's first two tries were wasted, and a probe or a beacon never reached it."""
+        return self.timing.floor_modes > 0 and self._connect_tries % 2 == 0
 
     def _data_frame(self, rec: _TxRecord) -> TxFrame:
         rec.tx_count += 1
@@ -711,8 +728,8 @@ class LinkEngine:
     def _send_connect(self, kind: DataKind, snr_db: float | None = None) -> None:
         src, dst = self.my_call, self.remote_call
         body = ConnectBody(src, dst, caps=self.cfg.capabilities, snr_db=snr_db).encode()
-        # a request alternates families once the ordinary frame has gone unanswered; an
-        # answer goes back on the layout the request arrived on
+        # a request starts on the tone floor and alternates families (ADR-0016); an answer
+        # goes back on the layout the request arrived on
         floor = self._connect_floor() if kind is DataKind.CONNECT_REQ else self._peer_floor
         mode = self._robust_mode(floor)
         cap = self.timing.capacity(mode)
@@ -727,11 +744,15 @@ class LinkEngine:
             wait = self._response_wait(frame_s) + self.rng.uniform(0.0, span)
             self._arm("connect", self._tx_busy_until - self.now + wait)
 
-    def _send_probe(self, kind: DataKind, remote: str, snr_db: float | None) -> None:
+    def _send_probe(
+        self, kind: DataKind, remote: str, snr_db: float | None, *, floor: bool
+    ) -> None:
         """A PROBE (``snr_db`` absent) or a PROBE_ACK (the SNR the probe arrived at),
-        outside any session: session 0, sequence 0, the most robust mode."""
+        outside any session: session 0, sequence 0, at the robust mode of ``floor``'s family
+        — a probe on the tone floor, an answer in the family the probe arrived in, as a
+        connect answer goes (ADR-0016)."""
         body = ProbeBody(self.my_call, remote, snr_db, caps=self.cfg.capabilities).encode()
-        mode = self._robust_mode(False)
+        mode = self._robust_mode(floor)
         cap = self.timing.capacity(mode)
         payload = encode_data(DataHeader(kind, 0, 0), body, cap)
         self._transmit([TxFrame(Container.DATA, payload, mode=mode, rv=0)])
@@ -916,10 +937,17 @@ class LinkEngine:
             self.timing.data_frame_s_for(self._records[seqs[0]].mode) if seqs else 0.0,
             self.timing.data_frame_s_for(min(self._recommended, self.cfg.max_mode)),
         )
+        # The IRS answers in the family it last heard from us: this burst's, if it decodes
+        # any of it, and the one its last answer came in (our _peer_floor) if it decodes
+        # none — the acceptance of a call on the floor before a first OFDM burst, or the
+        # floor bursts before a climb. Wait for whichever of the two is longer: waiting for
+        # this burst's alone gave up on a floor acknowledgement a second into it, and the
+        # recommendation it carried was lost with it (ADR-0016).
+        families = {family, self._peer_floor}
         self._wait_for(
             "ack",
-            self.timing.control_frame_s_for(family),
-            self._irs_reply_delay(family, expected),
+            max(self.timing.control_frame_s_for(f) for f in families),
+            max(self._irs_reply_delay(f, expected) for f in families),
         )
 
     def _on_ack(self, ack: ControlFrame) -> None:
@@ -1260,7 +1288,9 @@ class LinkEngine:
         self.my_call = req.dst
         self.stats.probes_answered += 1
         self.actions.append(Event("probed", f"{req.src} at {frame.snr_db:.1f} dB"))
-        self._send_probe(DataKind.PROBE_ACK, req.src, frame.snr_db)
+        # back in the family the probe came in (noted from it), as an acceptance goes back on
+        # the layout its request arrived on
+        self._send_probe(DataKind.PROBE_ACK, req.src, frame.snr_db, floor=self._peer_floor)
 
     def _handle_probe_ack(self, body: bytes, frame: SoftFrame) -> None:
         try:
@@ -1311,8 +1341,8 @@ class LinkEngine:
         self._arm("link", self._link_timeout())
         # the request is the first measurement of how the caller is heard: the
         # controller starts from it, and the acceptance carries it back so the caller's
-        # first burst can too (P9-2)
-        self.rate.seed(snr_db)
+        # first burst can too (P9-2) — a lower bound if it came on the tone floor (ADR-0016)
+        self.rate.seed(snr_db, lower_bound=self._peer_floor)
         self._send_connect(DataKind.CONNECT_ACK, snr_db)
         self.actions.append(Event("connected", f"{self.remote_call} (irs)"))
 
@@ -1345,7 +1375,7 @@ class LinkEngine:
         # that supports, less a step, instead of at the slowest mode; the acceptance's
         # own SNR is how the other station is heard here, which this station's
         # controller starts from for the day it receives (P9-2)
-        self.rate.seed(snr_db)
+        self.rate.seed(snr_db, lower_bound=self._peer_floor)
         self._recommended = self.cfg.initial_mode
         if ack.snr_db is not None:
             self._recommended = max(self.cfg.initial_mode, self.rate.first_mode(ack.snr_db))

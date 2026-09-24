@@ -74,8 +74,8 @@ def test_the_bridge_leaves_room_for_a_control_burst_read_as_data() -> None:
 @pytest.mark.parametrize("params", [WIDE_2300, NARROW_500], ids=["2300", "500"])
 def test_real_phy_session_on_the_tone_floor(params: object) -> None:
     """At −14 dB (3 kHz, the OFDM frames' reference) nothing but the tone floor (ADR-0013)
-    carries a frame on either air: the connect goes out on it from the third try, and the
-    session runs connect, data and acknowledgements on tone frames through the real
+    carries a frame on either air: the call goes out on it from the first try (ADR-0016), and
+    the session runs connect, data and acknowledgements on tone frames through the real
     modem."""
     timing = phy_timing(params)  # type: ignore[arg-type]
     a = LinkEngine("W4ODA", timing, seed=1)
@@ -88,11 +88,11 @@ def test_real_phy_session_on_the_tone_floor(params: object) -> None:
     sim.run(until=900)
     assert sim.delivered(1) == msg
     assert a.state is State.IDLE and b.state is State.IDLE
-    # two connect requests at the ordinary control rung, unanswered; the rest on the floor
+    # the call on the floor's most robust kind, answered at once; everything on the floor
     air = sim.bridge.modem.air
     sent = sim.bridge.modes_sent
-    assert sent[:2] == [air.control_rung] * 2, sent
-    assert sent[2:] and set(sent[2:]) <= set(range(air.floor_modes)), sent
+    assert sent[0] == 0 and a.stats.frames_sent > 0, sent
+    assert set(sent) <= set(range(air.floor_modes)), sent
 
 
 def test_real_phy_probe_reports_both_directions(timing: object) -> None:

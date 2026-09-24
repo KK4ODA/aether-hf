@@ -85,6 +85,10 @@ class SimFrame:
     """The SNR at which this frame decodes nine times in ten on the channel being modelled:
     a DATA frame's mode's, a CONTROL frame's family's. The AWGN table's for its mode when
     unset."""
+    _judge_snr_db: float | None = None
+    """The SNR the pipe's logistic judges this frame at when the receiver reports another — a
+    tone-floor frame whose reading is capped (:attr:`TwoStationSim.floor_reading_cap_db`).
+    Unset, its reported SNR."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
@@ -95,7 +99,8 @@ class SimFrame:
         if self._decode_snr_db is not None:
             p = success_probability(self._decode_snr_db + gained, threshold)
         else:
-            p = _success_prob(threshold, self.snr_db, gained)
+            judged = self.snr_db if self._judge_snr_db is None else self._judge_snr_db
+            p = _success_prob(threshold, judged, gained)
         if self._draw <= p:
             return self.payload, gained
         return None, gained
@@ -136,6 +141,7 @@ class TwoStationSim:
         control_thresholds: dict[bool, float] | None = None,
         frame_snr_offset: Callable[[TxFrame], float] | None = None,
         fading: FadingPipe | None = None,
+        floor_reading_cap_db: float | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -158,6 +164,10 @@ class TwoStationSim:
         fixed *peak*, so a frame's average power — the SNR the far end measures — is that
         peak less its own peak-to-average ratio: with the offset each frame's negative
         ratio, :attr:`snr_db` is the SNR at equal peak power (P9-6)."""
+        self.floor_reading_cap_db = floor_reading_cap_db
+        """The most a tone-floor frame's SNR reads: the floor's estimate saturates on a strong
+        path, near +17 dB on AWGN and a few decibels on a dispersive one (ADR-0016). The
+        frame is still judged at the channel's SNR. Unset, it reads what the channel gives."""
         self.fading = fading
         """A fading channel both stations share (P9-6): each frame's reported SNR and the
         SNR it decodes at come from its own stretch of the fade, and the per-mode
@@ -179,6 +189,10 @@ class TwoStationSim:
         decode_snr_db = None
         if self.fading is not None:
             snr_db, decode_snr_db = self.fading.judge(frame, snr_db, t_start, t_end)
+        judge_snr_db = None
+        cap = self.floor_reading_cap_db
+        if floor and cap is not None and snr_db > cap:
+            judge_snr_db, snr_db = snr_db, cap
         return SimFrame(
             container=frame.container,
             mode=frame.mode,
@@ -191,6 +205,7 @@ class TwoStationSim:
             floor=floor,
             _decode_snr_db=decode_snr_db,
             _threshold=threshold,
+            _judge_snr_db=judge_snr_db,
         )
 
     # ── scheduling ────────────────────────────────────────────────────
@@ -219,13 +234,18 @@ class TwoStationSim:
         st = self.st[who]
         t = max(at, st.tx_end)
         st.busy.append((t, t + tx.duration_s))
-        sof = st.engine.timing.preamble_detect_s
+        timing = st.engine.timing
         for frame in tx.frames:
-            dur = st.engine.timing.frame_s(frame)
-            if sof is not None and frame.container is Container.DATA:
+            dur = timing.frame_s(frame)
+            control = frame.container is Container.CONTROL
+            floor = frame.floor if control else timing.is_floor(frame.mode)
+            sof = timing.preamble_detect_s_for(floor)
+            if sof is not None:
                 # acquisition succeeds far below every mode's decode threshold (P2-3: 100 %
-                # at −5 dB), so a listening receiver is assumed to see every preamble — and
-                # the layout it names, so the frame's own length
+                # at −5 dB), so a listening receiver is assumed to see every preamble — a
+                # control frame's too, as the daemon hands the engine every trusted one
+                # (ADR-0016), each once its family announces it — and the layout it names,
+                # so the frame's own length
                 self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur))
             self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur))
             t += dur

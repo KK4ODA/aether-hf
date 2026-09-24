@@ -187,6 +187,12 @@ def fading_pipe(csv_path: Path, air: AirInterface, channel: str, seed: int) -> F
 PEAK_CSV = "bench/baselines/peak_to_average.csv"
 """``tools/bench_peak.py``: each frame's peak-to-average ratio as the modem transmits it."""
 
+FLOOR_READING_CAP_DB = {"awgn": 17.5, "good": 15.5, "moderate": 12.0, "poor": 5.0}
+"""The most the tone floor's SNR estimate reads on each class however strong the path — the
+median reading at +30 to +40 dB in ``bench/baselines/tone_snr_reading.csv``
+(``tools/bench_tone_snr.py``): the glide between tones caps it on AWGN, a dispersive path's
+echo lower still. ``--floor-cap`` holds every tone frame's reading to it (ADR-0016)."""
+
 
 def peak_offsets(csv_path: Path, air: AirInterface) -> Callable[[TxFrame], float]:
     """Each frame's SNR at equal *peak* power relative to the SNR the axis states: minus its
@@ -315,6 +321,7 @@ def run_point(
     fading: bool = False,
     continuous: bool = False,
     link: dict[str, float | int] | None = None,
+    floor_cap: float | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
     cfg = LinkConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
@@ -352,6 +359,7 @@ def run_point(
             control_thresholds=control_thresholds_for(timing),
             frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
             fading=fading_pipe(Path(FADING_CSV), air, channel, seed),
+            floor_reading_cap_db=floor_cap,
         )
     else:
         sim = TwoStationSim(
@@ -363,6 +371,7 @@ def run_point(
             snr_schedule=schedule,
             control_thresholds=controls,
             frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
+            floor_reading_cap_db=floor_cap,
         )
 
     modes: list[int] = []
@@ -613,6 +622,13 @@ def main() -> int:
         "fade, judged at its calibrated effective SNR (bench/baselines/fading_pipe.csv)",
     )
     ap.add_argument(
+        "--floor-cap",
+        action="store_true",
+        help="a tone-floor frame's SNR reads at most its class's ceiling "
+        "(FLOOR_READING_CAP_DB, bench/baselines/tone_snr_reading.csv), as the floor's "
+        "estimate does (ADR-0016); without it every frame reads the channel's SNR",
+    )
+    ap.add_argument(
         "--continuous",
         action="store_true",
         help="with --backend phy: one fade for the whole session, shared by both "
@@ -664,6 +680,7 @@ def main() -> int:
                     fading=args.fading,
                     continuous=args.continuous,
                     link=link,
+                    floor_cap=FLOOR_READING_CAP_DB.get(channel) if args.floor_cap else None,
                 )
                 rows.append(row)
                 print(

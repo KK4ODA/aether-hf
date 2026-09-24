@@ -390,6 +390,29 @@ is as fast or faster (1.3–1.7 times on the fading classes from −8 to 0 dB), 
 fewer sessions; the cap helps AWGN at −2 dB only and costs the fading classes, so the 500 Hz
 air has none. The calibration added the two kinds' rows and left every other row as it was.
 
+## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
+
+`calls.csv` is `tools/bench_calls.py`: per air, class and SNR, 30 calls and 30 probes on the
+fading pipe, beta.54's code from a worktree (`--tree`) against this calibration and this code.
+With calls starting on the tone floor a call connects in 11 s at every SNR from −12 dB up on
+every class (beta.54: 20 s below −4 dB, 3 s above), more of them at −16 dB (Good 19 → 29 of
+30, Moderate 15 → 26), and a probe is answered down to −12 dB (beta.54: none below −4 dB).
+
+`tone_snr_reading.csv` is `tools/bench_tone_snr.py`: what the tone floor's SNR estimate reads
+against the channel's SNR, genie timing, tone-24 and the tone control frame. Exact to about
++10 dB on AWGN; the ceiling is 17.5 dB on AWGN, 15.5 on Good, 12 on Moderate and 5 on Poor —
+the glide between tones on a clean path, the echo on a dispersive one. `bench_link.py
+--floor-cap` holds every tone frame's reading to its class's ceiling.
+
+`link_floor_calls.csv` is `bench_link.py --fading`, 30 sessions a point, 2 kB at 2 300 Hz and
+1 kB at 500 Hz: beta.54 (worktree), and this code with readings capped (`--floor-cap`), with
+and without the re-seed (`--rate reseed_margin_db=1000` turns it off), from −12 to +24 dB; and
+an earlier run from −18 to +6 dB without the re-seed or the cap. From −18 to −6 dB sessions are
+shorter at most points and more complete at the edge; from 0 dB up every one is longer, by the
+floor handshake (11 s against 3) and a first burst started from the floor's ceiling, which the
+re-seed takes back where the ceiling is lowest (2 300 Hz Poor +24 dB: 36 → 23 s; beta.54 8 s).
+ADR-0016 §5 has the table.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
