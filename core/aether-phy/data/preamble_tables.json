@@ -460,7 +460,9 @@
    "control_mode_index": 3,
    "tone_data": [
     "tone-24",
-    "tone-36"
+    "tone-36",
+    "tone4x100-51",
+    "tone4x100-75"
    ],
    "ofdm_ladder": [
     2,
@@ -799,6 +801,86 @@
     14,
     5,
     10
+   ],
+   [
+    3,
+    9,
+    1,
+    14,
+    15,
+    13,
+    10,
+    0
+   ],
+   [
+    3,
+    14,
+    15,
+    10,
+    2,
+    1,
+    13,
+    6
+   ],
+   [
+    10,
+    2,
+    13,
+    15,
+    0,
+    7,
+    5,
+    14
+   ],
+   [
+    7,
+    6,
+    0,
+    15,
+    8,
+    14,
+    2,
+    5
+   ],
+   [
+    2,
+    9,
+    5,
+    0,
+    14,
+    13,
+    1,
+    10
+   ],
+   [
+    6,
+    13,
+    5,
+    14,
+    10,
+    4,
+    2,
+    15
+   ],
+   [
+    0,
+    3,
+    1,
+    5,
+    11,
+    12,
+    14,
+    4
+   ],
+   [
+    4,
+    13,
+    11,
+    0,
+    8,
+    15,
+    2,
+    14
    ]
   ],
   "control": {
@@ -810,7 +892,8 @@
    ],
    "control": true,
    "data_symbol_samples": 320,
-   "data_ramp_samples": 32
+   "data_ramp_samples": 32,
+   "data_tones": 16
   },
   "data": [
    {
@@ -825,7 +908,8 @@
     ],
     "control": false,
     "data_symbol_samples": 320,
-    "data_ramp_samples": 32
+    "data_ramp_samples": 32,
+    "data_tones": 16
    },
    {
     "name": "tone-36",
@@ -839,7 +923,8 @@
     ],
     "control": false,
     "data_symbol_samples": 320,
-    "data_ramp_samples": 32
+    "data_ramp_samples": 32,
+    "data_tones": 16
    }
   ],
   "fast": [
@@ -855,7 +940,8 @@
     ],
     "control": false,
     "data_symbol_samples": 160,
-    "data_ramp_samples": 16
+    "data_ramp_samples": 16,
+    "data_tones": 16
    },
    {
     "name": "tone50-75",
@@ -869,7 +955,8 @@
     ],
     "control": false,
     "data_symbol_samples": 160,
-    "data_ramp_samples": 16
+    "data_ramp_samples": 16,
+    "data_tones": 16
    },
    {
     "name": "tone100-105",
@@ -883,7 +970,8 @@
     ],
     "control": false,
     "data_symbol_samples": 80,
-    "data_ramp_samples": 8
+    "data_ramp_samples": 8,
+    "data_tones": 16
    },
    {
     "name": "tone100-153",
@@ -897,7 +985,40 @@
     ],
     "control": false,
     "data_symbol_samples": 80,
-    "data_ramp_samples": 8
+    "data_ramp_samples": 8,
+    "data_tones": 16
+   }
+  ],
+  "narrow": [
+   {
+    "name": "tone4x100-51",
+    "payload_bytes": 51,
+    "data_symbols": 440,
+    "patterns": [
+     25,
+     26,
+     27,
+     28
+    ],
+    "control": false,
+    "data_symbol_samples": 80,
+    "data_ramp_samples": 32,
+    "data_tones": 4
+   },
+   {
+    "name": "tone4x100-75",
+    "payload_bytes": 75,
+    "data_symbols": 440,
+    "patterns": [
+     29,
+     30,
+     31,
+     32
+    ],
+    "control": false,
+    "data_symbol_samples": 80,
+    "data_ramp_samples": 32,
+    "data_tones": 4
    }
   ],
   "detector": {
@@ -909,6 +1030,8 @@
    "min_hits": 12,
    "min_block_hits": 4,
    "min_first_hits": 5,
+   "contradiction": 12.0,
+   "max_contradictions": 2,
    "announce_threshold": 4.8,
    "lookahead": 4,
    "announce_lookahead": 12

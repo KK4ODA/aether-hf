@@ -3669,9 +3669,11 @@ mod tests {
             ..config
         };
         let mut air = Air::with(1.0, 0.0005, narrow);
-        assert_eq!(air.a.engine().timing().data_capacity.len(), 13);
-        assert_eq!(air.a.engine().timing().mode_threshold_db.len(), 13);
-        assert_eq!(air.a.engine().timing().floor_modes, 2);
+        // fifteen rungs: the tone floor's two, its four-tone middle kinds (ADR-0015), and the
+        // OFDM modes from QPSK 1/3
+        assert_eq!(air.a.engine().timing().data_capacity.len(), 15);
+        assert_eq!(air.a.engine().timing().mode_threshold_db.len(), 15);
+        assert_eq!(air.a.engine().timing().floor_modes, 4);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(40.0, |a, b| a.connected() && b.connected());
         assert!(

@@ -477,7 +477,7 @@ fn the_rate_controller_steps_the_table_the_phy_hands_it() {
     let mut t = timing(false);
     t.data_capacity = NARROW_PAYLOAD_BYTES.to_vec();
     t.mode_threshold_db = NARROW_AWGN_THRESHOLD_DB.to_vec();
-    t.floor_modes = 2;
+    t.floor_modes = 4;
     t.floor_data_frame_s = Some(NARROW_FRAME_S[0]);
     t.floor_control_frame_s = Some(2.232);
     let usable = usable_modes_by_rate(
@@ -485,9 +485,10 @@ fn the_rate_controller_steps_the_table_the_phy_hands_it() {
         &NARROW_PAYLOAD_BYTES,
         &NARROW_FRAME_S,
     );
-    assert!(usable.contains(&0) && usable.contains(&12) && !usable.contains(&6));
+    // 8-PSK 2/3 (rung 8) carries what 16-QAM 1/2 (rung 9) does and needs more
+    assert!(usable.contains(&0) && usable.contains(&14) && !usable.contains(&8));
     let config = LinkConfig {
-        max_mode: 12,
+        max_mode: 14,
         ..LinkConfig::default()
     };
     let (mut a, b) = pair(&t, &config);
@@ -500,11 +501,11 @@ fn the_rate_controller_steps_the_table_the_phy_hands_it() {
     assert_eq!(sim.delivered(1), message.as_slice());
     let highest = sim.modes_sent().iter().copied().max().unwrap_or(0);
     assert!(
-        highest <= 12,
+        highest < NARROW_AWGN_THRESHOLD_DB.len(),
         "a mode outside the narrow table was sent: {highest}"
     );
     assert!(
-        highest >= 8,
+        highest >= 10,
         "at 25 dB the controller climbs the narrow table: {highest}"
     );
 }
@@ -1076,12 +1077,13 @@ impl aether_link::SoftFrame for Handed {
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
-    // version 3 of the link protocol numbers modes as rungs of the ladder with the fast kinds
-    // (ADR-0014), version 2 as rungs of the ladder before them (ADR-0013), version 1 as OFDM
-    // modes: a station of another version means other frames by the same numbers, so a call
-    // from one is not a session to start — it is ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 3);
-    for version in [1u8, 2] {
+    // version 4 of the link protocol numbers the 500 Hz ladder's rungs with its middle kinds
+    // (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
+    // ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
+    // other frames by the same numbers, so a call from one is not a session to start — it is
+    // ignored, with an event saying why
+    assert_eq!(PROTOCOL_VERSION, 4);
+    for version in [1u8, 2, 3] {
         let t = timing(false);
         let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
         let body = ConnectBody {

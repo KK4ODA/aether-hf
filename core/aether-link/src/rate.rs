@@ -70,27 +70,30 @@ pub const FRAME_S: [f64; 20] = [
     1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
 ];
 
-/// The 500 Hz waveform's ladder (P7-0, ADR-0013), 3 kHz-referenced like the wide one, so the
-/// two read as an operator would compare them: the tone floor's two rungs (the same frames
-/// and thresholds as on the wide ladder), then the OFDM modes from QPSK ⅓, measured by
-/// `tools/bench_phy.py --bandwidth 500` into `bench/baselines/phy_fer_500.csv`, written by
-/// `tools/update_rate_table.py --bandwidth 500 --apply` into the model, and mirrored here
-/// (the vector test pins it).
-pub const NARROW_AWGN_THRESHOLD_DB: [f64; 13] = [
-    -19.0, -17.3, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
+/// The 500 Hz waveform's ladder (P7-0, ADR-0013, ADR-0015), 3 kHz-referenced like the wide
+/// one, so the two read as an operator would compare them: the tone floor's two rungs (the
+/// same frames and thresholds as on the wide ladder) and its two four-tone middle kinds,
+/// measured by `tools/bench_tone.py` (`bench/baselines/tone_floor.csv`), then the OFDM modes
+/// from QPSK ⅓, measured by `tools/bench_phy.py --bandwidth 500` into
+/// `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py --bandwidth 500
+/// --apply` into the model, and mirrored here (the vector test pins it).
+pub const NARROW_AWGN_THRESHOLD_DB: [f64; 15] = [
+    -19.0, -17.3, -14.3, -13.0, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
 ];
 
 /// Payload bytes per frame of each rung of the 500 Hz ladder: the tone floor's frames are
 /// five times as long as the ordinary ones, which is why [`usable_modes_by_rate`] needs
 /// [`NARROW_FRAME_S`] to compare them.
-pub const NARROW_PAYLOAD_BYTES: [usize; 13] =
-    [24, 36, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137];
+pub const NARROW_PAYLOAD_BYTES: [usize; 15] = [
+    24, 36, 51, 75, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137,
+];
 
-/// Air time of each narrow rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
-/// 31 ms on the ordinary layout (the link layer's copy of the frames; the vector test pins
-/// it).
-pub const NARROW_FRAME_S: [f64; 13] = [
-    5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+/// Air time of each narrow rung's DATA frame: 134 slots of 40 ms on the tone floor, its
+/// middle kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy
+/// of the frames; the vector test pins it).
+pub const NARROW_FRAME_S: [f64; 15] = [
+    5.36, 5.36, 5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+    1.054,
 ];
 
 /// Rungs on the throughput/threshold Pareto front, ascending, for the wide ladder.

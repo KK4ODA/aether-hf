@@ -2153,11 +2153,11 @@ mod tests {
     /// The tone floor's control frame, in seconds: 80 symbols of 40 ms (ADR-0013).
     const TONE_CONTROL_S: f64 = 3.2;
 
-    /// The 500 Hz air's timing, with the tone floor under it (ADR-0013): the durations the
-    /// model's harness hands the engine.
+    /// The 500 Hz air's timing, with the tone floor under it (ADR-0013) and its middle kinds
+    /// (ADR-0015): the durations the model's harness hands the engine.
     fn narrow() -> PhyTiming {
         PhyTiming {
-            data_frame_s: NARROW_FRAME_S[2],
+            data_frame_s: NARROW_FRAME_S[4],
             control_frame_s: 0.434,
             turnaround_s: 0.25,
             detect_latency_s: 0.15,
@@ -2167,7 +2167,7 @@ mod tests {
             mode_threshold_db: NARROW_AWGN_THRESHOLD_DB.to_vec(),
             floor_data_frame_s: Some(NARROW_FRAME_S[0]),
             floor_control_frame_s: Some(TONE_CONTROL_S),
-            floor_modes: 2,
+            floor_modes: 4,
             control_threshold_db: Some(NARROW_CONTROL_THRESHOLD_DB),
             floor_margin_db: None,
             floor_preamble_detect_s: Some(0.54),
@@ -2247,7 +2247,7 @@ mod tests {
         let mut e = engine(narrow());
         e.role = Role::Irs;
         e.state = State::Connected;
-        e.peer_mode = Some(3);
+        e.peer_mode = Some(5); // the narrow air's control rung, where the connect frames went
         e.rate.seed(10.0);
         assert!(e.peer_data_frame_s() < 2.0);
         let floor_frame = NARROW_FRAME_S[0];

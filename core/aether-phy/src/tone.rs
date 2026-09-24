@@ -12,7 +12,9 @@
 //!
 //! The **fast kinds** (ADR-0014) are the same frame — its sync blocks, its length, its code —
 //! with two or four data symbols a slot, at 50 or 100 Bd on tones 50 or 100 Hz apart: the
-//! 2 300 Hz ladder's middle rungs, found by the same detector.
+//! 2 300 Hz ladder's middle rungs, found by the same detector. The **narrow middle kinds**
+//! (ADR-0015) are the same frame again with four data symbols a slot on *four* tones 100 Hz
+//! apart — the floor's own 400 Hz, two bits a symbol: the 500 Hz ladder's middle rungs.
 //!
 //! The numerology, sync patterns and frame kinds are the model's, compiled in from
 //! `data/preamble_tables.json`; `tests/model_vectors.rs` checks the tones exactly and the
@@ -61,13 +63,27 @@ pub fn fast_kinds() -> &'static [ToneKind] {
     TONE.fast
 }
 
-/// Every kind: the control frame, the floor's data kinds, the fast kinds.
+/// The narrow middle kinds (ADR-0015), slowest first: the 500 Hz ladder's rungs above the
+/// floor's own two.
+#[must_use]
+pub fn narrow_kinds() -> &'static [ToneKind] {
+    TONE.narrow
+}
+
+/// The kinds the 2 300 Hz air's detector looks for: the control frame, the floor's data
+/// kinds, the fast kinds — what [`ToneDetector::new`] is built for.
 #[must_use]
 pub fn kinds() -> Vec<&'static ToneKind> {
     std::iter::once(control_kind())
         .chain(data_kinds().iter())
         .chain(fast_kinds().iter())
         .collect()
+}
+
+/// Every kind of both airs, the narrow middle ones last.
+#[must_use]
+pub fn all_kinds() -> Vec<&'static ToneKind> {
+    kinds().into_iter().chain(narrow_kinds().iter()).collect()
 }
 
 /// Sample rate of the complex baseband the tone floor is defined on.
@@ -88,7 +104,7 @@ pub fn tones() -> usize {
     TONE.tones
 }
 
-/// Coded bits a symbol carries.
+/// Coded bits a sync-numerology symbol carries: a floor kind's data symbol.
 #[must_use]
 pub fn bits_per_symbol() -> usize {
     TONE.tones.trailing_zeros() as usize
@@ -141,10 +157,18 @@ impl ToneKind {
     }
 
     /// Offset of data tone `k` from the passband centre: the data's tones are spaced at its
-    /// own symbol rate.
+    /// own symbol rate, centred like the floor's.
     #[must_use]
     pub fn data_tone_hz(&self, k: usize) -> f64 {
-        (k as f64 - (TONE.tones as f64 - 1.0) / 2.0) * TONE.fs / self.data_symbol_samples as f64
+        (k as f64 - (self.data_tones as f64 - 1.0) / 2.0) * TONE.fs
+            / self.data_symbol_samples as f64
+    }
+
+    /// Coded bits a data symbol carries: four on sixteen tones, two on the narrow middle
+    /// kinds' four (ADR-0015).
+    #[must_use]
+    pub fn data_bits(&self) -> usize {
+        self.data_tones.trailing_zeros() as usize
     }
 
     /// The data's runs of slots between the sync blocks, as `(first slot, slots)`.
@@ -166,7 +190,7 @@ impl ToneKind {
     /// Coded bits the data symbols carry.
     #[must_use]
     pub fn coded_bits(&self) -> usize {
-        self.data_symbols * bits_per_symbol()
+        self.data_symbols * self.data_bits()
     }
 
     /// The code rate.
@@ -274,8 +298,8 @@ impl ToneCodec {
         let n = kind.coded_bits();
         let stride = coprime_stride(n);
         let permutation = (0..n).map(|k| (k * stride) % n).collect();
-        let mut tone_of_label = vec![0usize; tones()];
-        for t in 0..tones() {
+        let mut tone_of_label = vec![0usize; kind.data_tones];
+        for t in 0..kind.data_tones {
             tone_of_label[gray(t)] = t;
         }
         Ok(Self {
@@ -319,7 +343,7 @@ impl ToneCodec {
         for (k, &bit) in selected.iter().enumerate() {
             interleaved[self.permutation[k]] = bit;
         }
-        let m = bits_per_symbol();
+        let m = kind.data_bits();
         Ok(interleaved
             .chunks_exact(m)
             .map(|group| {
@@ -523,11 +547,19 @@ pub fn tone_energies(
     cfo_hz: f64,
     symbols: usize,
 ) -> Option<Vec<f64>> {
-    tone_energies_at(samples, start, cfo_hz, symbols, TONE.symbol_samples)
+    tone_energies_at(
+        samples,
+        start,
+        cfo_hz,
+        symbols,
+        TONE.symbol_samples,
+        TONE.tones,
+    )
 }
 
-/// [`tone_energies`] at a symbol length of `n` samples, on tones spaced at that symbol
-/// rate: a fast kind's data (ADR-0014).
+/// [`tone_energies`] at a symbol length of `n` samples, on `tones` tones spaced at that
+/// symbol rate (`symbols × tones`): a fast kind's data (ADR-0014) or a narrow middle one's
+/// (ADR-0015).
 #[must_use]
 pub fn tone_energies_at(
     samples: &[Complex],
@@ -535,11 +567,11 @@ pub fn tone_energies_at(
     cfo_hz: f64,
     symbols: usize,
     n: usize,
+    tones: usize,
 ) -> Option<Vec<f64>> {
     if start + symbols * n > samples.len() {
         return None;
     }
-    let tones = TONE.tones;
     let spacing = TONE.fs / n as f64;
     // the references: exp(−2πj·(f_k + cfo)·t)
     let mut reference = vec![(0.0f64, 0.0f64); tones * n];
@@ -599,7 +631,11 @@ fn median(values: &mut [f64]) -> f64 {
 /// own transmission read its noise as zero and its SNR as 290 dB.
 #[must_use]
 pub fn noise_level(energies: &[f64], layout: &[Option<usize>]) -> f64 {
-    let tones = TONE.tones;
+    noise_level_of(energies, layout, TONE.tones)
+}
+
+/// [`noise_level`] of rows `tones` wide.
+fn noise_level_of(energies: &[f64], layout: &[Option<usize>], tones: usize) -> f64 {
     let mut bins = Vec::with_capacity(energies.len());
     for (s, role) in layout.iter().enumerate() {
         let row = &energies[s * tones..(s + 1) * tones];
@@ -760,6 +796,7 @@ pub fn data_energies(
             cfo_hz,
             slots * kind.speed(),
             kind.data_symbol_samples,
+            kind.data_tones,
         )?);
     }
     Some(out)
@@ -778,12 +815,12 @@ pub fn fast_metrics(
     noise: f64,
     data: &[f64],
 ) -> Vec<f64> {
-    let tones = TONE.tones;
+    let tones = kind.data_tones;
     let e: Vec<f64> = energies.iter().map(|v| v / noise).collect();
     let (centres, levels) = block_levels(&e, layout);
     let speed = kind.speed();
     let data_layout = vec![None; data.len() / tones];
-    let data_noise = noise_level(data, &data_layout);
+    let data_noise = noise_level_of(data, &data_layout, tones);
     let mut out = Vec::with_capacity(data.len());
     let mut row = 0usize;
     for (slot, role) in layout.iter().enumerate() {
@@ -809,12 +846,12 @@ fn log_sum_exp(values: impl Iterator<Item = f64> + Clone) -> f64 {
     top + values.map(|v| (v - top).exp()).sum::<f64>().ln()
 }
 
-/// Soft bits (positive = 0) from the per-tone metrics: log-sum over the tones labelled 0 less
-/// the log-sum over those labelled 1, bit by bit, most significant first.
+/// Soft bits (positive = 0) from the per-tone metrics of symbols on `tones` tones: log-sum
+/// over the tones labelled 0 less the log-sum over those labelled 1, bit by bit, most
+/// significant first.
 #[must_use]
-pub fn bit_llrs(metrics: &[f64]) -> Vec<f64> {
-    let tones = TONE.tones;
-    let bits = bits_per_symbol();
+pub fn bit_llrs(metrics: &[f64], tones: usize) -> Vec<f64> {
+    let bits = tones.trailing_zeros() as usize;
     let mut out = Vec::with_capacity(metrics.len() / tones * bits);
     for row in metrics.chunks_exact(tones) {
         for b in 0..bits {
@@ -865,7 +902,7 @@ pub fn demodulate(
         let data = data_energies(samples, kind, start, cfo_hz)?;
         fast_metrics(kind, &energies, &layout, noise, &data)
     };
-    let llr = bit_llrs(&metrics);
+    let llr = bit_llrs(&metrics, kind.data_tones);
     let tones = TONE.tones;
     let held: Vec<f64> = layout
         .iter()
@@ -940,14 +977,15 @@ impl Default for ToneDetector {
 }
 
 impl ToneDetector {
-    /// The detector for every kind: the floor's and the fast ones (ADR-0014).
+    /// The 2 300 Hz air's detector: the floor's kinds and the fast ones (ADR-0014).
     #[must_use]
     pub fn new() -> Self {
         Self::for_kinds(&kinds())
     }
 
-    /// The detector for these kinds — an air's: the 500 Hz air carries no fast kinds, and a
-    /// detector that looks for them only adds chances of a false alarm there.
+    /// The detector for these kinds — an air's: the 500 Hz air carries no fast kinds and the
+    /// 2 300 Hz air no narrow middle ones, and a detector that looks for another air's kinds
+    /// only adds chances of a false alarm.
     ///
     /// # Panics
     /// If the compiled-in sync patterns are not the length the model exported.
@@ -1306,17 +1344,8 @@ impl ToneDetector {
         start: usize,
         cfo: f64,
     ) -> [usize; 3] {
-        let Some(e) = tone_energies(samples, start, cfo, kind.symbols()) else {
-            return [0; 3];
-        };
-        let tones = TONE.tones;
-        let sync = kind.sync(usize::from(rv));
-        kind.block_offsets().map(|o| {
-            sync.iter()
-                .enumerate()
-                .filter(|&(j, &t)| strongest(&e[(o + j) * tones..(o + j + 1) * tones], t))
-                .count()
-        })
+        tone_energies(samples, start, cfo, kind.symbols())
+            .map_or([0; 3], |e| block_hits_in(&e, kind, rv))
     }
 
     /// Sync symbols of a frame placed at `start`/`cfo` whose own tone is the strongest
@@ -1338,12 +1367,36 @@ impl ToneDetector {
     /// at least `min_block_hits` of them in a second block. A hypothesis a block-spacing off
     /// a strong frame has eight hits in one block and chance in the others: taken as frames
     /// end, it came first and blocked the real frame (found by two daemons over `[sim]`,
-    /// the first block in the silence a station keeps while it transmits).
+    /// the first block in the silence a station keeps while it transmits). And no more than
+    /// `max_contradictions` of its sync symbols may hold another tone, strong
+    /// ([`contradictions`](Self::contradictions)): a pattern read at a part-symbol offset
+    /// inside a strong frame it does not name — another air's (ADR-0015) — matches half its
+    /// symbols and is contradicted in the rest.
     #[must_use]
     pub fn confirmed(&self, samples: &[Complex], sync: &ToneSync) -> bool {
-        let mut hits = self.block_hits(samples, sync.kind, sync.rv, sync.start, sync.cfo_hz);
+        let Some(e) = tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()) else {
+            return false;
+        };
+        let mut hits = block_hits_in(&e, sync.kind, sync.rv);
         hits.sort_unstable();
-        hits.iter().sum::<usize>() >= TONE.min_hits && hits[1] >= TONE.min_block_hits
+        hits.iter().sum::<usize>() >= TONE.min_hits
+            && hits[1] >= TONE.min_block_hits
+            && contradictions_in(&e, sync.kind, sync.rv) <= TONE.max_contradictions
+    }
+
+    /// Sync symbols of `sync` whose strongest tone is not their own, holds at least
+    /// `contradiction` times the noise per bin — which noise alone reaches once in ten
+    /// thousand symbols — and at least four times its own median over the frame's sync
+    /// symbols, so a steady carrier or spur, strong in every symbol, contradicts nothing.
+    /// Measured: 8–12 for a strong frame of another air read by a pattern of this one at a
+    /// part-symbol offset, at most one for a real frame from its threshold to 30 dB on AWGN
+    /// and ITU Poor. Every symbol if the frame runs past the buffer.
+    #[must_use]
+    pub fn contradictions(&self, samples: &[Complex], sync: &ToneSync) -> usize {
+        tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols())
+            .map_or(3 * SYNC_SYMBOLS, |e| {
+                contradictions_in(&e, sync.kind, sync.rv)
+            })
     }
 
     /// Timing and offset on the sync tones' own energy: a grid of two hops and two bins
@@ -1411,6 +1464,40 @@ impl ToneDetector {
             statistic: self.sync_statistic(samples, kind, rv, start, cfo),
         }
     }
+}
+
+/// Per sync block, the symbols whose own tone is the strongest of a frame's slot energies
+/// `e` (at the sync numerology); a silent symbol is no hit.
+fn block_hits_in(e: &[f64], kind: &ToneKind, rv: u8) -> [usize; 3] {
+    let tones = TONE.tones;
+    let sync = kind.sync(usize::from(rv));
+    kind.block_offsets().map(|o| {
+        sync.iter()
+            .enumerate()
+            .filter(|&(j, &t)| strongest(&e[(o + j) * tones..(o + j + 1) * tones], t))
+            .count()
+    })
+}
+
+/// [`ToneDetector::contradictions`] from a frame's slot energies `e`.
+fn contradictions_in(e: &[f64], kind: &ToneKind, rv: u8) -> usize {
+    let tones = TONE.tones;
+    let layout = kind.layout(usize::from(rv));
+    let rows: Vec<(usize, &[f64])> = layout
+        .iter()
+        .enumerate()
+        .filter_map(|(s, role)| role.map(|t| (t, &e[s * tones..(s + 1) * tones])))
+        .collect();
+    let steady: Vec<f64> = (0..tones)
+        .map(|k| median(&mut rows.iter().map(|(_, row)| row[k]).collect::<Vec<_>>()))
+        .collect();
+    let noise = sync_noise(e, &layout, kind);
+    rows.iter()
+        .filter(|&&(own, row)| {
+            let top = argmax(row);
+            top != own && row[top] >= TONE.contradiction * noise && row[top] >= 4.0 * steady[top]
+        })
+        .count()
 }
 
 // ── streaming ──────────────────────────────────────────────────────────
@@ -1812,11 +1899,28 @@ mod tests {
             assert_eq!(kind.data_segments(), [(8, 49), (65, 61)]);
         }
         assert!((fast_kinds()[3].data_tone_hz(15) - 750.0).abs() < 1e-12);
+        // ADR-0015: the narrow middle kinds are the floor's frame with four data symbols a
+        // slot on four tones 100 Hz apart, inside the floor's 400 Hz — 880 coded bits
+        assert_eq!(
+            narrow_kinds()
+                .iter()
+                .map(|k| (k.payload_bytes, k.speed(), k.data_tones, k.coded_bits()))
+                .collect::<Vec<_>>(),
+            vec![(51, 4, 4, 880), (75, 4, 4, 880)]
+        );
+        for kind in narrow_kinds() {
+            assert_eq!(kind.symbols(), 134);
+            assert_eq!(kind.block_offsets(), [0, 57, 126]);
+            assert_eq!(kind.data_bits(), 2);
+            let span = kind.data_tone_hz(3) - kind.data_tone_hz(0);
+            assert!((kind.data_tone_hz(0) + 150.0).abs() < 1e-12 && (span - 300.0).abs() < 1e-12);
+        }
+        assert_eq!(all_kinds().len(), 9);
     }
 
     #[test]
     fn every_kind_round_trips_clean() {
-        for kind in kinds() {
+        for kind in all_kinds() {
             let codec = codec(kind);
             let data = payload(kind, 3);
             let x = burst(&codec, &data, 0).expect("burst");
@@ -1829,7 +1933,12 @@ mod tests {
 
     #[test]
     fn the_envelope_is_constant_at_the_gain() {
-        for kind in [&data_kinds()[1], &fast_kinds()[1], &fast_kinds()[3]] {
+        for kind in [
+            &data_kinds()[1],
+            &fast_kinds()[1],
+            &fast_kinds()[3],
+            &narrow_kinds()[1],
+        ] {
             let x = burst(&codec(kind), &payload(kind, 9), 0).expect("burst");
             let gain = 10f64.powf(gain_db() / 20.0);
             let edge = TONE.edge_samples;
@@ -1841,8 +1950,14 @@ mod tests {
 
     #[test]
     fn the_detector_names_kind_rv_start_and_offset() {
-        let det = ToneDetector::new();
-        for kind in kinds() {
+        let wide = ToneDetector::new();
+        let narrow = ToneDetector::for_kinds(&crate::modes::NARROW.tone_kinds());
+        for kind in all_kinds() {
+            let det = if narrow_kinds().contains(kind) {
+                &narrow
+            } else {
+                &wide
+            };
             for rv in 0..kind.n_rv() {
                 let x = burst(&codec(kind), &payload(kind, 5), rv as u8).expect("burst");
                 let lead = 1234 + 97 * rv;
@@ -1901,6 +2016,78 @@ mod tests {
             part.snr_db,
             whole.snr_db
         );
+    }
+
+    #[test]
+    fn a_strong_other_tone_contradicts_and_a_steady_one_does_not() {
+        // ADR-0015: slot energies of a frame at unit noise, its sync tones at 100
+        let kind = &data_kinds()[0];
+        let tones = TONE.tones;
+        let layout = kind.layout(0);
+        let mut e = vec![1.0f64; kind.symbols() * tones];
+        let sync: Vec<(usize, usize)> = layout
+            .iter()
+            .enumerate()
+            .filter_map(|(s, role)| role.map(|t| (s, t)))
+            .collect();
+        for &(s, t) in &sync {
+            e[s * tones + t] = 100.0;
+        }
+        assert_eq!(contradictions_in(&e, kind, 0), 0);
+        // three symbols hold another tone, stronger than their own: three contradictions
+        for &(s, t) in &sync[..3] {
+            e[s * tones + (t + 5) % tones] = 200.0;
+        }
+        assert_eq!(contradictions_in(&e, kind, 0), 3);
+        // a symbol whose own tone faded, its strongest one no more than noise makes, is a
+        // miss and no contradiction
+        let (s, t) = sync[0];
+        e[s * tones + t] = 0.5;
+        e[s * tones + (t + 5) % tones] = 5.0;
+        assert_eq!(contradictions_in(&e, kind, 0), 2);
+        // a steady carrier stronger than every sync tone contradicts nothing
+        let mut steady = vec![1.0f64; kind.symbols() * tones];
+        for &(s, t) in &sync {
+            steady[s * tones + t] = 100.0;
+        }
+        let carrier = (0..tones)
+            .find(|k| sync.iter().all(|&(_, t)| t != *k))
+            .unwrap_or(0);
+        for s in 0..kind.symbols() {
+            steady[s * tones + carrier] = 150.0;
+        }
+        assert_eq!(contradictions_in(&steady, kind, 0), 0);
+    }
+
+    #[test]
+    fn a_strong_frame_of_the_other_air_is_no_frame() {
+        // ADR-0015: each air's detector looks only for its own middle kinds; read by the other
+        // air's patterns at a part-symbol offset, a strong frame matched half their sync
+        // symbols and was contradicted in the rest — the contradictions now refuse it
+        let wide = ToneDetector::new();
+        let narrow = ToneDetector::for_kinds(&crate::modes::NARROW.tone_kinds());
+        let cases = narrow_kinds()
+            .iter()
+            .map(|k| (k, &wide))
+            .chain(fast_kinds().iter().map(|k| (k, &narrow)));
+        for (i, (kind, det)) in cases.enumerate() {
+            for rv in 0..kind.n_rv() {
+                let x = burst(&codec(kind), &payload(kind, 11 + i as u8), rv as u8).expect("burst");
+                let lead = 2345 + 131 * rv;
+                let cfo = -37.0 + 23.5 * rv as f64;
+                let mut y: Vec<Complex> = vec![(0.0, 0.0); lead];
+                y.extend_from_slice(&x);
+                y.extend(std::iter::repeat_n((0.0, 0.0), 3000));
+                let noise = hiss(y.len(), 0.1, 0x9e37_79b9_7f4a_7c15 ^ (i * 4 + rv) as u64);
+                for (k, (s, h)) in y.iter_mut().zip(noise).enumerate() {
+                    let phase = 2.0 * PI * cfo * k as f64 / TONE.fs;
+                    let (c, d) = (phase.cos(), phase.sin());
+                    *s = (s.0 * c - s.1 * d + h.0, s.0 * d + s.1 * c + h.1);
+                }
+                let found = det.detect(&y, 4);
+                assert!(found.is_empty(), "{} rv {rv}: {found:?}", kind.name);
+            }
+        }
     }
 
     /// Deterministic pseudo-noise, `scale` per component.
