@@ -486,8 +486,7 @@ confirmation), and a stronger first block inside an arrival, not at its block po
 replaces it. The fading pipe fills an unmeasured rung from its own family's penalty.
 Gate: 5.2/5.5 dB over BPSK ⅕ on Good/Moderate at a higher rate; sessions 2–3× faster from −6
 to −2 dB on the fading classes, nothing slower; the 1 dB floor-boundary cap still pays. Owed:
-tone floor and fast tones on the air (beta.52 and beta.53 do not connect: protocol 2 vs 3);
-next P9-5.
+tone floor and fast tones on the air (beta.52 and beta.53 do not connect: protocol 2 vs 3).
 **P9-10 the 500 Hz middle kinds** (ADR-0015, beta.54; the author's "phase 4 at 500 Hz",
 done before P9-5 on request): `tone4x100-51` and `tone4x100-75` (76 and 112 bit/s) are the
 floor's frame with 440 data symbols on **four** tones 100 Hz apart (±50, ±150 Hz, the floor's
@@ -508,6 +507,11 @@ also refuses ADR-0014's early reading by itself. Cross-air *arrivals* remain (th
 announces on clipped ratios). Gate: 4.2/6.9 dB over QPSK ⅓ on Good/Moderate; 500 Hz sessions
 1.3–1.7× faster from −8 to 0 dB, nothing slower; no floor-boundary cap at 500 Hz (tried: it
 costs the fading classes). Owed: the air at 500 Hz (beta.53 and beta.54 do not connect).
+**P9-5 time diversity is paused** (2026-09-24, the author's decision): a nice-to-have, to be
+built — if at all — as an experimental opt-in mode, off by default; the first look (a burst
+interleaver: 10–40 % faster sessions in most fading regimes on the pipe, at the cost of the
+burst becoming the unit a receiver decodes) is in the roadmap's P9-5 row. **Now: field testing
+of the daemon as it is.**
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
