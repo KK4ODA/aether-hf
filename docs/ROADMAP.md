@@ -660,10 +660,13 @@ Poor; the 500 Hz floor's mode 0 −2.0 on Good). VARA HF's published v4.3 speed-
 puts narrowband noncoherent FSK at the bottom (18–175 bit/s; the two lowest levels the same
 in every bandwidth), a few carriers in the middle and the full band only at the top; the
 author's videos of VARA calling at 2300 Hz show a call a few tones and about 150 Hz wide,
-whose envelope measured 6–7 dB peak-to-average through the speaker, against 7.6 dB for
-Aether's frames after ADR-0004 (10.6 without). The benches compare modes at equal *average*
-power while a transmitter's ALC limits *peak* power — the author's 50 W setting gave 8–10 W
-average — so neither concentrating the power nor a steadier envelope has ever been counted.
+whose envelope measured 6–7 dB peak-to-average through the speaker. Aether's frames, as
+transmitted with ADR-0004's peak reduction, measure 5.9 dB (PSK) and 7.5 dB (QAM) at their
+highest sample (`bench/baselines/peak_to_average.csv`, `tools/bench_peak.py`; 10.6 without
+the reduction): a steady tone would put about 6 dB more average power on the air from the
+same peak. The benches compare modes at equal *average* power while a transmitter's ALC
+limits *peak* power — the author's 50 W setting gave 8–10 W average — so neither
+concentrating the power nor a steadier envelope has ever been counted.
 On the link bench, starting lower changed no 2300 Hz outcome and cost time; at 500 Hz a
 margin sized for fading carried the marginal cases (Moderate 0 dB 2/20 → 19/20, Good 3 dB
 13/20 → 20/20) at 2–3× the time on a clean channel, and starting at mode 0 alone made Good

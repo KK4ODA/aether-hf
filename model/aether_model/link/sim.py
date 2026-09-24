@@ -125,6 +125,7 @@ class TwoStationSim:
         thresholds: dict[int, float] | None = None,
         snr_schedule: Callable[[float], float] | None = None,
         control_thresholds: dict[bool, float] | None = None,
+        frame_snr_offset: Callable[[TxFrame], float] | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -142,6 +143,11 @@ class TwoStationSim:
         family; the air's AWGN values (:func:`control_thresholds_for`) when unset."""
         self.snr_schedule = snr_schedule
         """SNR as a function of time, for ramps. Overrides :attr:`snr_db` when set."""
+        self.frame_snr_offset = frame_snr_offset
+        """Decibels added to the channel SNR for one frame. A transmitter is driven to a
+        fixed *peak*, so a frame's average power — the SNR the far end measures — is that
+        peak less its own peak-to-average ratio: with the offset each frame's negative
+        ratio, :attr:`snr_db` is the SNR at equal peak power (P9-6)."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
@@ -213,7 +219,10 @@ class TwoStationSim:
         if self._busy(rx, t0, t1):
             return  # half-duplex or collision: the receiver was transmitting
         arrival = t1 + self.prop_s
-        sf = self._factory(frame, self.snr_at(0.5 * (t0 + t1)), t0 + self.prop_s, arrival)
+        snr = self.snr_at(0.5 * (t0 + t1))
+        if self.frame_snr_offset is not None:
+            snr += self.frame_snr_offset(frame)
+        sf = self._factory(frame, snr, t0 + self.prop_s, arrival)
         if sf is None:
             return
         eng = self.st[rx].engine

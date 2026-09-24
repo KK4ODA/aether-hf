@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.harness import phy_timing, two_modem_sim
+from aether_model.link.phy import Container, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     NARROW_AWGN_THRESHOLD_DB,
@@ -111,6 +112,30 @@ def channel_thresholds(
         shift = statistics.fmean(penalties) if penalties else 0.0
         out[channel] = {m: table.get(m, awgn[m] + shift) for m in awgn}
     return out
+
+
+PEAK_CSV = "bench/baselines/peak_to_average.csv"
+"""``tools/bench_peak.py``: each frame's peak-to-average ratio as the modem transmits it."""
+
+
+def peak_offsets(csv_path: Path, air: AirInterface) -> Callable[[TxFrame], float]:
+    """Each frame's SNR at equal *peak* power relative to the SNR the axis states: minus its
+    own measured peak-to-average ratio (the highest sample), so a waveform with a steadier
+    envelope gets the average power it really puts on the air (P9-6)."""
+    ratio: dict[str, float] = {}
+    with csv_path.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if int(r["bandwidth_hz"]) == air.params.bandwidth.value:
+                ratio[r["frame"]] = float(r["papr_max_db"])
+
+    def offset(frame: TxFrame) -> float:
+        if frame.container is Container.CONTROL:
+            key = "control floor" if frame.floor and "control floor" in ratio else "control short"
+        else:
+            key = f"mode {frame.mode}"
+        return -ratio[key]
+
+    return offset
 
 
 CONTROL_CSV = {
@@ -200,6 +225,7 @@ def run_point(
     rate: dict[str, float | int] | None = None,
     schedule: Callable[[float], float] | None = None,
     controls: dict[bool, float] | None = None,
+    peak: bool = False,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
     cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}))
@@ -225,6 +251,7 @@ def run_point(
             thresholds=thresholds or table_for(air)[0],
             snr_schedule=schedule,
             control_thresholds=controls,
+            frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
         )
 
     modes: list[int] = []
@@ -244,13 +271,19 @@ def run_point(
     ok = sim.delivered(1) == payload
     changes = sum(1 for x, y in pairwise(modes) if x != y)
     goodput = 8 * len(sim.delivered(1)) / seconds if seconds > 0 else 0.0
-    ceiling = ideal_bps(thresholds or table_for(air)[0], snr_db, air)
+    table = thresholds or table_for(air)[0]
+    if peak:
+        # at equal peak power a mode needs its own peak-to-average ratio on top
+        offset = peak_offsets(Path(PEAK_CSV), air)
+        table = {m: t - offset(TxFrame(Container.DATA, b"", mode=m)) for m, t in table.items()}
+    ceiling = ideal_bps(table, snr_db, air)
     return {
         "backend": backend,
         "bandwidth_hz": air.params.bandwidth.value,
         "rate": ",".join(f"{k}={v}" for k, v in sorted((rate or {}).items())),
         "channel": channel,
         "snr_db": round(snr_db, 1),
+        "snr_reference": "peak" if peak else "average",
         "ramp": "" if ramp is None else f"+/-{ramp[0] / 2:.0f}dB/{ramp[1]:.0f}s",
         "bytes": len(payload),
         "seconds": round(seconds, 1),
@@ -419,6 +452,12 @@ def main() -> int:
         default=[],
         help="session sidecars to run the engines against instead of a grid",
     )
+    ap.add_argument(
+        "--peak",
+        action="store_true",
+        help="read the SNR axis at equal transmitter peak power: each frame's SNR is the "
+        "axis less its own peak-to-average ratio (bench/baselines/peak_to_average.csv)",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -464,6 +503,7 @@ def main() -> int:
                     air,
                     rate,
                     controls=controls.get(channel, awgn_controls),
+                    peak=args.peak,
                 )
                 rows.append(row)
                 print(
