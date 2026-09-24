@@ -1,15 +1,17 @@
-"""Where the floor breaks: acquisition, decode and genie-timing decode per frame (ADR-0009).
+"""Where the OFDM frames break: acquisition, decode and genie-timing decode per frame.
 
     python tools/bench_floor.py [--bandwidth 500] [--frames 20] [--channels awgn,good,poor]
                                 [--out bench/baselines/floor_500.csv]
 
-For every mode of the air (on the layout it goes out on) and for the two control frames
-(ordinary and floor), twenty frames a point, three things are counted: frames the detector
-placed within half a symbol of the truth, frames that decoded through the detector, and
-frames that decoded with *genie* timing — the true start, the detector's own CFO from
-there. Genie against detected separates the code-and-modulation floor from the receiver's.
+For the slowest OFDM modes of the air's ladder (``--modes`` names OFDM modes) and for its
+control frame, twenty frames a point, three things are counted: frames the detector placed
+within half a symbol of the truth, frames that decoded through the detector, and frames
+that decoded with *genie* timing — the true start, the detector's own CFO from there.
+Genie against detected separates the code-and-modulation floor from the receiver's.
 ``bench_phy.py`` gives the FER curves the rate table is built from; this tool says *why* a
-curve stops where it does.
+curve stops where it does. The tone floor below the OFDM rungs (ADR-0013) is
+``bench_tone.py``'s; the OFDM floor family this tool was written for (ADR-0009) is retired,
+and its rows in ``floor_500.csv`` are the record of what the tone floor replaced.
 """
 
 from __future__ import annotations
@@ -54,33 +56,22 @@ def main() -> int:
     modem = Modem(params)
     fs = params.fs_baseband
     lead, tail = 2000, 2000
-    indices = (
-        [int(m) for m in args.modes.split(",")] if args.modes else [m.index for m in air.modes[:3]]
-    )
+    ofdm = [r.mode.index for r in air.ladder if r.mode is not None]
+    indices = [int(m) for m in args.modes.split(",")] if args.modes else ofdm[:3]
     cases: list[tuple[str, object, FrameHeader, object]] = []
     for i in indices:
         mode = air.modes[i]
-        layout = air.data_layout(i)
+        layout = air.long
         cases.append(
             (f"mode {i} {mode.name} {layout.name}", mode, FrameHeader(FrameType.DATA, i), layout)
         )
     cases.append(("control short", air.control_mode, FrameHeader(FrameType.CONTROL), air.short))
-    if air.floor_short is not None:
-        cases.append(
-            (
-                "control floor",
-                air.floor_control_mode,
-                FrameHeader(FrameType.CONTROL),
-                air.floor_short,
-            )
-        )
     rng = np.random.default_rng(args.seed)
     rows = []
     t0 = time.time()
     for label, mode, header, layout in cases:
         codec = modem.codec(mode, layout)  # type: ignore[arg-type]
         n = codec.payload_bytes
-        floor = layout.preamble_symbols != air.long.preamble_symbols  # type: ignore[union-attr]
         for channel in args.channels.split(","):
             for snr in RANGES[channel]:
                 acquired = decoded = genie = 0
@@ -100,7 +91,6 @@ def main() -> int:
                     syncs = modem.detector.detect(y, max_frames=1)
                     if (
                         syncs
-                        and syncs[0].floor == floor
                         and syncs[0].header.frame_type is header.frame_type
                         and abs(syncs[0].start - lead) <= params.symbol_samples // 2
                     ):
@@ -112,16 +102,8 @@ def main() -> int:
                         except ValueError:
                             pass
                     try:
-                        cfo = modem.detector.fine_cfo(
-                            y,
-                            lead,
-                            header.frame_type,
-                            layout.preamble_symbols,
-                            floor,  # type: ignore[union-attr]
-                        )
-                        sync = FrameSync(
-                            lead, cfo, FrameHeader(header.frame_type), 0.0, 9.0, 1.0, floor
-                        )
+                        cfo = modem.detector.fine_cfo(y, lead, header.frame_type)
+                        sync = FrameSync(lead, cfo, FrameHeader(header.frame_type), 0.0, 9.0, 1.0)
                         frame = modem.demodulate(y, sync)
                         out, _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
                         genie += out == payload

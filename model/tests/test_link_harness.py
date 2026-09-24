@@ -34,10 +34,10 @@ def test_real_phy_connect_transfer_disconnect(timing: object) -> None:
 
 
 def test_real_phy_harq_ir_rescue_below_threshold(timing: object) -> None:
-    """QPSK ½ pinned and driven at 0 dB (≈ 1 dB below its single-shot threshold): the
-    transfer completes only because the receiver soft-combines real LLRs across redundancy
-    versions."""
-    cfg = LinkConfig(initial_mode=4, max_mode=4, max_retries=40)
+    """QPSK ½ (rung 6) pinned and driven at 0 dB (≈ 1 dB below its single-shot threshold):
+    the transfer completes only because the receiver soft-combines real LLRs across
+    redundancy versions."""
+    cfg = LinkConfig(initial_mode=6, max_mode=6, max_retries=40)
     a = LinkEngine("W4ODA", timing, cfg, seed=1)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
     sim = two_modem_sim(a, b, channel="awgn", snr_db=0.0, seed=3)
@@ -59,13 +59,38 @@ def test_the_bridge_leaves_room_for_a_control_burst_read_as_data() -> None:
         bridge = PhyBridge(channel="poor", snr_db=10.0, params=params)
         control = bridge.modem.control_burst(bytes(7), 0)
         buf = bridge.padded(control)
-        # the longest layout of the air: a floor DATA frame at 500 Hz (ADR-0009)
+        # the longest OFDM layout of the air
         span = max(x.samples for x in bridge.modem.air.layouts) + bridge.modem.rx.dem.fft_offset
         # a start anywhere up to a symbol late still fits a DATA span
         assert len(buf) >= bridge.lead + params.symbol_samples + span, params.bandwidth
-        capacity = int(phy_timing(params).data_capacity[0])
-        data = bridge.modem.data_burst(bytes(capacity), bridge.modem.modes[0], 0)
-        assert len(bridge.padded(data)) >= bridge.lead + len(data) + bridge.tail
+        for rung in (0, bridge.modem.air.floor_modes):  # the tone floor's, and an OFDM one
+            capacity = int(phy_timing(params).data_capacity[rung])
+            data = bridge.modem.rung_burst(bytes(capacity), rung, 0)
+            assert len(bridge.padded(data)) >= bridge.lead + len(data) + bridge.tail
+
+
+@pytest.mark.parametrize("params", [WIDE_2300, NARROW_500], ids=["2300", "500"])
+def test_real_phy_session_on_the_tone_floor(params: object) -> None:
+    """At −14 dB (3 kHz, the OFDM frames' reference) nothing but the tone floor (ADR-0013)
+    carries a frame on either air: the connect goes out on it from the third try, and the
+    session runs connect, data and acknowledgements on tone frames through the real
+    modem."""
+    timing = phy_timing(params)  # type: ignore[arg-type]
+    a = LinkEngine("W4ODA", timing, seed=1)
+    b = LinkEngine("KK4XYZ", timing, seed=2)
+    sim = two_modem_sim(a, b, channel="awgn", snr_db=-14.0, seed=4, params=params)  # type: ignore[arg-type]
+    msg = b"Aether HF on the tone floor. 73"
+    a.connect("KK4XYZ")
+    a.send(msg)
+    a.disconnect()
+    sim.run(until=900)
+    assert sim.delivered(1) == msg
+    assert a.state is State.IDLE and b.state is State.IDLE
+    # two connect requests at the ordinary control rung, unanswered; the rest on the floor
+    air = sim.bridge.modem.air
+    sent = sim.bridge.modes_sent
+    assert sent[:2] == [air.control_rung] * 2, sent
+    assert sent[2:] and set(sent[2:]) <= set(range(air.floor_modes)), sent
 
 
 def test_real_phy_probe_reports_both_directions(timing: object) -> None:

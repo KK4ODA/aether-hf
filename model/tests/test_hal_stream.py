@@ -51,12 +51,10 @@ def _three_frames(modem: Modem, rng: np.random.Generator) -> tuple[list[bytes], 
 def test_a_floor_frame_streams_the_same_as_offline(
     block: int, control: bool, rng: np.random.Generator
 ) -> None:
-    """ADR-0009's floor family carries connect, poll and acknowledgement when a 500 Hz link
-    runs its slowest modes. A floor frame spans 4.2 s (data) or 2.2 s (control), but the
-    streaming search region is a fraction of that, so until the receiver learned to acquire a
-    floor frame on its preamble and confirm it with the whole frame at harvest, the family
-    decoded offline and never live — the one set of modes that carries a link at -10 dB."""
-    from aether_model.frame.modes import air_interface
+    """The tone floor (ADR-0013) carries connect, poll and acknowledgement when a link runs
+    its slowest rungs. A tone frame spans 5.4 s (data) or 3.2 s (control) — far more than
+    the OFDM search region — so the stream keeps its own spectrogram rows by hop and takes a
+    frame a symbol after it ends; what it hands over must be what offline finds."""
     from aether_model.waveform import NARROW_500
 
     modem = Modem(NARROW_500)
@@ -64,16 +62,12 @@ def test_a_floor_frame_streams_the_same_as_offline(
         payload = rng.integers(1, 256, modem.payload_bytes(None), dtype=np.uint8).tobytes()
         burst = modem.control_burst(payload, floor=True)
     else:
-        mode = air_interface(NARROW_500).modes[0]  # a floor mode on the narrow air
-        payload = rng.integers(1, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
-        burst = modem.data_burst(payload, mode)
+        payload = rng.integers(1, 256, modem.rung_payload_bytes(0), dtype=np.uint8).tobytes()
+        burst = modem.rung_burst(payload, 0)
     noise = 0.01 * (rng.standard_normal(20_000) + 1j * rng.standard_normal(20_000))
     x = np.concatenate([noise[:600], burst, noise[600:4600]])
     offline = [f.payload for f in Modem(NARROW_500).decode_buffer(x, max_frames=4)]
-    # the floor control container holds a byte more than the ordinary one `payload_bytes`
-    # sizes, so a control payload comes back zero-padded; the frame itself must be found alone
-    assert len(offline) == 1 and offline[0] is not None, "offline must find the floor frame alone"
-    assert offline[0][: len(payload)] == payload
+    assert offline == [payload], "offline must find the floor frame alone"
     rx = StreamingReceiver(NARROW_500)
     streamed = []
     for i in range(0, len(x), block):
@@ -86,33 +80,57 @@ def test_a_floor_frame_streams_the_same_as_offline(
 def test_a_floor_frame_near_its_threshold_streams_the_same_as_offline(
     block: int, control: bool
 ) -> None:
-    """The same at −9 dB with a carrier offset — where the floor family is the only one that
-    carries a link, and where the statistic's ordering is closest to the noise: the stream
-    must reach offline's decision, not a neighbouring candidate's."""
-    from aether_model.frame.modes import air_interface
-    from aether_model.waveform import NARROW_500
-
-    modem = Modem(NARROW_500)
+    """The same at −18 dB (3 kHz, the OFDM frames' reference) with a carrier offset, on the
+    wide air — where the tone floor is the only family that carries a link, and where the
+    statistic's ordering is closest to the noise: the stream must reach offline's decision,
+    not a neighbouring candidate's."""
+    modem = Modem(WIDE_2300)
     rng = np.random.default_rng(90)
     if control:
         payload = rng.integers(1, 256, modem.payload_bytes(None), dtype=np.uint8).tobytes()
         burst = modem.control_burst(payload, floor=True)
     else:
-        mode = air_interface(NARROW_500).modes[0]
-        payload = rng.integers(1, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
-        burst = modem.data_burst(payload, mode)
+        payload = rng.integers(1, 256, modem.rung_payload_bytes(0), dtype=np.uint8).tobytes()
+        burst = modem.rung_burst(payload, 0)
     x = np.concatenate([np.zeros(3000, dtype=complex), burst, np.zeros(6000, dtype=complex)])
     y = make_channel(
-        "awgn", snr_db=-9.0, fs=NARROW_500.fs_baseband, seed=4, signal_power=1.0, cfo_hz=23.0
+        "awgn", snr_db=-18.0, fs=WIDE_2300.fs_baseband, seed=4, signal_power=1.0, cfo_hz=23.0
     ).process(x)
-    offline = [f.payload for f in Modem(NARROW_500).decode_buffer(y, max_frames=4)]
-    assert len(offline) == 1 and offline[0] is not None, "offline must find the floor frame alone"
-    assert offline[0][: len(payload)] == payload
-    rx = StreamingReceiver(NARROW_500)
+    offline = [f.payload for f in Modem(WIDE_2300).decode_buffer(y, max_frames=4)]
+    assert offline == [payload], "offline must find the floor frame alone"
+    rx = StreamingReceiver(WIDE_2300)
     streamed = []
     for i in range(0, len(y), block):
         streamed += [f.payload for f in rx.feed(y[i : i + block])]
     assert streamed == offline
+
+
+def test_the_stream_announces_a_floor_frame_while_it_arrives() -> None:
+    """A receiving station holds its acknowledgement while a burst is still coming; for the
+    tone floor the stream says a frame is arriving once its first sync block is in —
+    within half a second — and stops saying so once the frame is handed over."""
+    from aether_model.phy.tone import announce_delay_s
+
+    modem = Modem(WIDE_2300)
+    rng = np.random.default_rng(91)
+    payload = rng.integers(1, 256, modem.rung_payload_bytes(1), dtype=np.uint8).tobytes()
+    burst = modem.rung_burst(payload, 1)
+    x = np.concatenate([np.zeros(2000, dtype=complex), burst, np.zeros(4000, dtype=complex)])
+    y = make_channel("awgn", snr_db=-10.0, fs=FS, seed=5, signal_power=1.0).process(x)
+    rx = StreamingReceiver(WIDE_2300)
+    announced_at = None
+    frames = []
+    for i in range(0, len(y), 160):
+        frames += rx.feed(y[i : i + 160])
+        if announced_at is None and rx.arriving:
+            announced_at = i + 160
+            (arrival,) = rx.arriving
+            assert arrival.kind is modem.air.tone_data[1]
+            assert abs(arrival.start - (2000 + rx.delay_samples)) <= 80
+    assert announced_at is not None
+    assert announced_at - 2000 <= announce_delay_s() * FS
+    assert [f.payload for f in frames] == [payload]
+    assert rx.arriving == []
 
 
 @pytest.mark.parametrize("block", [1024, 2048, 7777])

@@ -193,6 +193,14 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
     return (caps & ~CAP_BANDWIDTH_MASK & 0xFF) | (code << CAP_BANDWIDTH_SHIFT)
 
 
+PROTOCOL_VERSION = 2
+"""The link protocol a station speaks, in the connect body's version byte. 2 since the tone
+floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
+above the OFDM mode of version 1 — so a session between the two would run on numbers that
+mean different frames at either end; a station ignores a call or an acceptance of another
+version, and says so."""
+
+
 @dataclass(frozen=True)
 class ConnectBody:
     """Body of CONNECT_REQ / CONNECT_ACK: who is calling whom, and what they can do."""
@@ -202,7 +210,7 @@ class ConnectBody:
     caps: int = 0
     """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
     (bits 1–2, :func:`bandwidth_code`)."""
-    version: int = 1
+    version: int = PROTOCOL_VERSION
     snr_db: float | None = None
     """In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels, in the
     CONTROL frame's byte — what the caller starts its first burst from (P9-2). Absent

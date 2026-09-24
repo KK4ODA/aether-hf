@@ -32,16 +32,17 @@ import random
 import statistics
 import sys
 from collections import defaultdict
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from aether_model.frame.modes import LONG, MODES, SHORT
 from aether_model.link.engine import LinkEngine
-from aether_model.link.phy import PhyTiming
+from aether_model.link.harness import phy_timing
 from aether_model.link.sim import TwoStationSim
+from aether_model.waveform import WIDE_2300
 from bench_link import channel_thresholds
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,14 +61,8 @@ def predict_session(
 ) -> float:
     """Goodput the reference model's simulator gives a session of this size, with a real
     station's latency: connect, one transfer, disconnect, averaged over a few seeds."""
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
-    timing = PhyTiming(
-        data_frame_s=LONG.duration_s,
-        control_frame_s=SHORT.duration_s,
-        data_capacity=caps,
-        tx_latency_s=REAL_TX_LATENCY_S,
-        preamble_detect_s=4 * LONG.waveform.symbol_period_s,
-    )
+    # the wide air's ladder as the model's PHY reports it, with a real station's latency
+    timing = replace(phy_timing(WIDE_2300), tx_latency_s=REAL_TX_LATENCY_S)
     thresholds = None if channel == "awgn" else channel_thresholds(fer_csv).get(channel)
     payload = bytes(random.Random(7).getrandbits(8) for _ in range(link_bytes))
     rates = []

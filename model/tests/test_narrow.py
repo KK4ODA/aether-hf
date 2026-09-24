@@ -17,8 +17,6 @@ from aether_model.frame.modes import (
     LONG,
     MODES,
     NARROW,
-    NARROW_FLOOR_LONG,
-    NARROW_FLOOR_SHORT,
     NARROW_LONG,
     NARROW_MODES,
     NARROW_SHORT,
@@ -107,35 +105,34 @@ def test_narrow_chip_set_is_its_own_and_the_wide_set_is_untouched() -> None:
 
 def test_narrow_mode_table() -> None:
     assert len(NARROW_MODES) == 13
-    assert NARROW.floor_modes == 2 and NARROW.control_mode is NARROW_MODES[3]
+    assert NARROW.control_mode is NARROW_MODES[3] and NARROW.control_rung == 3
     assert NARROW.control_mode.modulation is Modulation.QPSK
     assert NARROW.control_mode.code_rate == 1 / 2
     # a control frame fits the SHORT layout at the control mode, exactly as at 2 300 Hz
     assert NARROW.control_mode.payload_bytes(NARROW_SHORT) == CONTROL_BYTES == 7
     assert MODES[0].payload_bytes(SHORT) == 7
     # and a connect request fits the LONG layout at the control mode (header, length and
-    # body), and the floor layout at mode 1 — but not mode 0, whose frame is for data
+    # body), and the tone floor's slowest kind
     assert NARROW.control_mode.payload_bytes(NARROW_LONG) >= CONNECT_BODY_BYTES + 5
-    assert NARROW_MODES[1].payload_bytes(NARROW_FLOOR_LONG) >= CONNECT_BODY_BYTES + 5
-    assert NARROW_MODES[0].payload_bytes(NARROW_FLOOR_LONG) < CONNECT_BODY_BYTES + 5
-    # the ordinary modes each carry more than the one before; the floor modes carry
-    # 19 and 41 bytes in a frame four times as long; the fastest reaches a kilobit
-    payloads = [m.payload_bytes(NARROW.data_layout(m.index)) for m in NARROW_MODES]
+    assert NARROW.ladder[0].payload_bytes >= CONNECT_BODY_BYTES + 5
+    # the ladder: the tone floor's two kinds (ADR-0013), then OFDM modes 2–12 on the LONG
+    # layout — modes 0 and 1, the OFDM floor they replaced, are on no rung
+    assert NARROW.n_rungs == 13 and NARROW.floor_modes == 2
+    assert [r.tone for r in NARROW.ladder[:2]] == list(NARROW.tone_data)
+    assert [r.mode.index for r in NARROW.ladder[2:] if r.mode] == list(range(2, 13))
+    # the ordinary modes each carry more than the one before; the floor's kinds carry 24 and
+    # 36 bytes in a frame five times as long; the fastest reaches a kilobit
+    payloads = [r.payload_bytes for r in NARROW.ladder]
     assert payloads[2:] == sorted(payloads[2:])
-    assert payloads[:4] == [19, 41, 15, 25] and payloads[-1] == 137
-    assert NARROW_FLOOR_LONG.duration_s == pytest.approx(4 * NARROW_LONG.duration_s, abs=0.2)
-    # a floor control frame carries a control frame with a byte over
-    assert NARROW.floor_control_mode.payload_bytes(NARROW_FLOOR_SHORT) == CONTROL_BYTES + 1
-    assert {
-        m.index: pytest.approx(NARROW.data_layout(m.index).duration_s, abs=1e-3)
-        for m in NARROW_MODES
-    } == NARROW_FRAME_S
+    assert payloads[:4] == [24, 36, 15, 25] and payloads[-1] == 137
+    assert NARROW.ladder[0].duration_s == pytest.approx(5.36)
+    assert {r.index: pytest.approx(r.duration_s, abs=1e-3) for r in NARROW.ladder} == (
+        NARROW_FRAME_S
+    )
     assert NARROW_MODES[-1].net_bit_rate(NARROW_LONG) == pytest.approx(1040, abs=1)
-    # the rate controller's copies agree with the table
-    assert {
-        m.index: m.payload_bytes(NARROW.data_layout(m.index)) for m in NARROW_MODES
-    } == NARROW_PAYLOAD_BYTES
-    assert set(NARROW_AWGN_THRESHOLD_DB) == {m.index for m in NARROW_MODES}
+    # the rate controller's copies agree with the ladder
+    assert {r.index: r.payload_bytes for r in NARROW.ladder} == NARROW_PAYLOAD_BYTES
+    assert set(NARROW_AWGN_THRESHOLD_DB) == {r.index for r in NARROW.ladder}
     assert usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)[:4] == [
         0,
         1,
@@ -149,7 +146,7 @@ def test_narrow_mode_table() -> None:
 
 def test_every_narrow_mode_decodes_at_20_db(modem: Modem) -> None:
     rng = np.random.default_rng(1)
-    for mode in modem.modes:
+    for mode in (r.mode for r in modem.air.ladder if r.mode is not None):
         payload = rng.integers(0, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
         ch = make_channel(
             "awgn",
@@ -233,8 +230,8 @@ def test_narrow_session_over_the_real_phy() -> None:
     rate controller stepping the narrow table and never a wide index."""
     timing = phy_timing(P)
     assert timing.mode_threshold_db == NARROW_AWGN_THRESHOLD_DB
-    assert timing.capacity(3) == 25 and timing.capacity(0) == 19
-    assert timing.floor_modes == 2 and timing.floor_data_frame_s == pytest.approx(4.216, abs=1e-3)
+    assert timing.capacity(3) == 25 and timing.capacity(0) == 24
+    assert timing.floor_modes == 2 and timing.floor_data_frame_s == pytest.approx(5.36, abs=1e-3)
     cfg = LinkConfig(capabilities=bandwidth_capabilities(P))
     assert bandwidth_code(cfg.capabilities) == 1
     a = LinkEngine("W4ODA", timing, cfg, seed=1)
@@ -253,4 +250,4 @@ def test_narrow_session_over_the_real_phy() -> None:
     sim.run(until=600)
     assert sim.delivered(1) == msg
     assert a.state is State.IDLE and b.state is State.IDLE
-    assert sim.bridge.modes_sent and max(sim.bridge.modes_sent) < len(NARROW_MODES)
+    assert sim.bridge.modes_sent and max(sim.bridge.modes_sent) < NARROW.n_rungs

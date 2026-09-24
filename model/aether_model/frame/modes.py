@@ -1,6 +1,7 @@
-"""Frame layouts and the mode table — everything derives from :mod:`aether_model.waveform`.
+"""Frame layouts, the mode tables and the ladder — everything derives from
+:mod:`aether_model.waveform`.
 
-A *frame* is a preamble (two Schmidl–Cox symbols whose PN sequence encodes the frame
+An OFDM *frame* is a preamble (two Schmidl–Cox symbols whose PN sequence encodes the frame
 type) followed by ``data_symbols`` OFDM symbols, every ``pilot_symbol_period``-th of which
 (starting with the first) is a full pilot symbol; in DATA frames the data carriers of the
 full pilot symbols carry the mode index as PN chips. A *mode* is a (modulation, code rate)
@@ -11,25 +12,36 @@ Base-graph choice follows the public 5G rule (TS 38.212 §7.2.2): BG2 for small 
 low rates, BG1 otherwise. One code block per frame.
 
 Two air interfaces share this module (P7-0). The **wide** one is the 2 300 Hz waveform with
-its fourteen modes; the **narrow** one is the 500 Hz waveform of ADR-0002 — twelve carriers,
-the same symbol timing and the same frame layouts, so the link layer's clocks do not
-change — with its own thirteen-mode table. A 500 Hz signal puts its power into a fifth of
-the band, ≈ 6.8 dB more per carrier at the same 3 kHz-referenced SNR, so its control mode
-can be QPSK ½ where the wide table starts at BPSK ⅕ and still reach the same SNR floor;
-it has to be, because with eight data carriers a control frame's seven bytes do not fit a
-SHORT frame at anything slower. Below it the narrow air has a **floor family**
-(ADR-0009): two more layouts with an eight-symbol preamble and two or four times the data
-symbols, on which a tenth-rate and a fifth-rate QPSK mode carry a few bytes at −12 and
-−10 dB, and a control frame at the same SNR as the data. A frame's family is told from
-the length of its preamble, so the ordinary frames are untouched. :class:`AirInterface`
-bundles a waveform with its layouts and modes; :func:`air_interface` finds the one for a
+its fourteen OFDM modes; the **narrow** one is the 500 Hz waveform of ADR-0002 — twelve
+carriers, the same symbol timing and the same frame layouts, so the link layer's clocks do
+not change — with its own table. A 500 Hz signal puts its power into a fifth of the band,
+≈ 6.8 dB more per carrier at the same 3 kHz-referenced SNR, so its control mode can be QPSK
+½ where the wide table starts at BPSK ⅕ and still reach the same SNR floor; it has to be,
+because with eight data carriers a control frame's seven bytes do not fit a SHORT frame at
+anything slower.
+
+Below both tables is the **tone floor** (ADR-0013): a steady-envelope sixteen-tone FSK
+family, sent at the OFDM frames' peak amplitude and detected by energy, whose frames are
+named by Costas-sequence sync blocks rather than a preamble and chips. Its frame
+definitions — numerology, sync patterns, kinds — are here beside the OFDM layouts; the
+signal processing is :mod:`aether_model.phy.tone`. What the link layer calls "mode N" is
+a rung of the air's **ladder**: the tone floor's data kinds, then the air's OFDM modes, most
+robust first (:class:`Rung`, :attr:`AirInterface.ladder`). An OFDM frame's chips carry its
+OFDM mode index, which is not its rung: the wide ladder puts OFDM mode 0 at rung 2, the
+narrow one skips the OFDM modes the floor replaced. :class:`AirInterface` bundles a
+waveform with its layouts, modes and ladder; :func:`air_interface` finds the one for a
 :class:`WaveformParams`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from fractions import Fraction
+from functools import cached_property
+
+import numpy as np
+from numpy.typing import NDArray
 
 from aether_model.fec.crc import CRC24A, Crc
 from aether_model.fec.nr_ldpc import select_lifting_size
@@ -45,13 +57,11 @@ class FrameLayout:
     data_symbols: int
     waveform: WaveformParams = WIDE_2300
     preamble_symbols: int = PREAMBLE_SYMBOLS
-    """Identical Schmidl–Cox symbols ahead of the data symbols: two on the ordinary
-    layouts; eight on the floor layouts (ADR-0009), which is what lets the detector find
-    them 6 dB deeper and is also how a receiver tells the two families apart."""
+    """Identical Schmidl–Cox symbols ahead of the data symbols: two on every layout since
+    the OFDM floor family (ADR-0009, eight) gave way to the tone floor (ADR-0013)."""
     pilot_smoothing: int = 1
     """Symbols either side over which the receiver averages its comb-pilot channel
-    estimate: ±1 on the ordinary layouts; ±3 on the floor layouts, where every pilot
-    arrives at a fifth of the power and the channel is slow enough to allow it."""
+    estimate: ±1."""
 
     @property
     def pilot_symbol_indices(self) -> tuple[int, ...]:
@@ -167,30 +177,6 @@ NARROW_LONG = FrameLayout("long", data_symbols=32, waveform=NARROW_500)
 NARROW_SHORT = FrameLayout("short", data_symbols=12, waveform=NARROW_500)
 """500 Hz control frames: the same 14 symbols; 10 × 8 = 80 QAM symbols → 7 payload bytes
 at the narrow control mode (QPSK ½), exactly the wide control frame's capacity."""
-FLOOR_PREAMBLE_SYMBOLS = 8
-"""Schmidl–Cox symbols of a floor frame (ADR-0009): four times the ordinary preamble, which
-the detector integrates for 6 dB, and a run of seven full two-symbol peaks that no ordinary
-frame produces."""
-NARROW_FLOOR_LONG = FrameLayout(
-    "floor-long",
-    data_symbols=128,
-    waveform=NARROW_500,
-    preamble_symbols=FLOOR_PREAMBLE_SYMBOLS,
-    pilot_smoothing=3,
-)
-"""500 Hz floor data frames: 136 symbols ≈ 4.2 s; 112 payload symbols × 8 carriers = 896
-QAM symbols, so a tenth-rate QPSK mode still carries 19 bytes and a fifth-rate one 41 — a
-connect request. Sixteen full pilot symbols carry the mode chips."""
-NARROW_FLOOR_SHORT = FrameLayout(
-    "floor-short",
-    data_symbols=64,
-    waveform=NARROW_500,
-    preamble_symbols=FLOOR_PREAMBLE_SYMBOLS,
-    pilot_smoothing=3,
-)
-"""500 Hz floor control frames: 72 symbols ≈ 2.2 s; 56 × 8 = 448 QAM symbols → 8 payload
-bytes at the floor control mode (QPSK 1/10), one more than a control frame needs."""
-
 NARROW_MODES: tuple[Mode, ...] = (
     Mode(0, Modulation.QPSK, _f(1, 10)),
     Mode(1, Modulation.QPSK, _f(1, 5)),
@@ -206,39 +192,281 @@ NARROW_MODES: tuple[Mode, ...] = (
     Mode(11, Modulation.QAM64, _f(3, 4)),
     Mode(12, Modulation.QAM64, _f(5, 6)),
 )
-"""The 500 Hz mode table, most robust first. Modes 0 and 1 are the floor family's
-(ADR-0009): QPSK 1/10 and QPSK ⅕ on :data:`NARROW_FLOOR_LONG`, 19 and 41 bytes a frame at
-about −12 and −10 dB. Mode 2, QPSK ⅓ on the ordinary frame, is the rung between them and
-mode 3. Mode 3 is QPSK ½: the slowest mode whose SHORT frame carries a control frame and
-whose LONG frame carries a connect request, and — with the narrow waveform's per-carrier
-advantage — one that reaches about the same 3 kHz SNR as the wide table's BPSK ⅕; control
-frames, connect requests, beacons and probes go out at it. Thirteen modes is what the
-32-chip sequence set holds at |ρ| ≤ 0.25."""
+"""The 500 Hz OFDM mode table, most robust first. Modes 0 and 1 were the OFDM floor family's
+(ADR-0009): QPSK 1/10 and ⅕ on a frame four times as long, until the tone floor (ADR-0013)
+replaced them — they stay in the table only because an OFDM frame's chip sequence is indexed
+by its position in it, and are on no rung of the ladder. Mode 2, QPSK ⅓, is the ladder's
+first OFDM rung. Mode 3 is QPSK ½: the slowest mode whose SHORT frame carries a control
+frame and whose LONG frame carries a connect request, and — with the narrow waveform's
+per-carrier advantage — one that reaches about the same 3 kHz SNR as the wide table's BPSK
+⅕; ordinary control frames, connect requests, beacons and probes go out at it. Thirteen
+modes is what the 32-chip sequence set holds at |ρ| ≤ 0.25."""
 
-NARROW_FLOOR_MODES = 2
-"""Leading modes of the narrow table that go out on the floor layouts."""
 NARROW_CONTROL_MODE_INDEX = 3
 NARROW_CONTROL_MODE = NARROW_MODES[NARROW_CONTROL_MODE_INDEX]
-NARROW_FLOOR_ACQUISITION_THRESHOLD = 0.32
-"""The detector's threshold on its floor statistic at 500 Hz — four two-symbol windows of
-an eight-symbol preamble combined coherently — set like the ordinary one, just above the
-statistic's maximum over 60 s of band-limited noise (0.314)."""
+
+
+# ── the tone floor (ADR-0013) ─────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ToneNumerology:
+    """M tones spaced at the symbol rate, centred on the passband's centre."""
+
+    fs: float = 8000.0
+    symbol_samples: int = 320
+    """40 ms: twenty times ITU Poor's 2 ms delay spread, and a tone spacing of 25 Hz that is
+    twenty-five times its 1 Hz Doppler spread."""
+    tones: int = 16
+    ramp_samples: int = 32
+    """Each change of tone glides over this many samples on a raised-cosine frequency
+    trajectory, which keeps the spectrum inside 500 Hz without touching the envelope."""
+    edge_samples: int = 16
+    """The frame fades in and out over this many samples, so keying it does not click."""
+
+    @property
+    def bits_per_symbol(self) -> int:
+        return int(math.log2(self.tones))
+
+    @property
+    def spacing_hz(self) -> float:
+        return self.fs / self.symbol_samples
+
+    @property
+    def symbol_s(self) -> float:
+        return self.symbol_samples / self.fs
+
+    @property
+    def span_hz(self) -> float:
+        """Lowest tone to highest, plus one spacing: 400 Hz."""
+        return self.tones * self.spacing_hz
+
+    def tone_hz(self, tone: int | NDArray[np.int64]) -> NDArray[np.float64]:
+        return np.asarray(
+            (np.asarray(tone, dtype=np.float64) - (self.tones - 1) / 2.0) * self.spacing_hz,
+            dtype=np.float64,
+        )
+
+    def snr_scale(self) -> float:
+        """Symbol energy over noise density per unit 3 kHz SNR: a tone of power ``P`` in
+        noise whose power in 3 kHz is ``N`` puts ``P/N · 3000 · T`` into its bin."""
+        return 3000.0 * self.symbol_s
+
+
+TONE_NUMEROLOGY = ToneNumerology()
+
+SYNC_SYMBOLS = 8
+SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
+    (11, 5, 8, 1, 15, 2, 4, 10),
+    (0, 15, 1, 13, 14, 4, 7, 12),
+    (6, 15, 8, 3, 13, 4, 11, 1),
+    (2, 11, 10, 15, 3, 1, 12, 7),
+    (12, 3, 4, 11, 14, 13, 5, 1),
+    (14, 2, 7, 13, 4, 1, 5, 0),
+    (2, 0, 12, 15, 1, 9, 13, 6),
+    (11, 14, 1, 15, 10, 6, 8, 0),
+    (8, 1, 14, 4, 6, 15, 10, 13),
+)
+"""The tone floor's sync blocks: eight symbols over sixteen tones, each a *Costas sequence* —
+every displacement (Δsymbol, Δtone) between two of its symbols occurs once, so a shifted
+copy matches it in at most one symbol — and no two sharing more than two symbols under any
+time offset within a block and any tone shift up to ±8 (±200 Hz, twice the carrier-offset
+search). A bound at zero offset alone is not enough: every block of a frame repeats its
+pattern at the same places, so two patterns that overlap in three symbols three symbols
+apart put nine of a frame's 24 sync symbols on a hypothesis of the other kind read three
+symbols early — which, with the data's coincidences on top, passed for a frame. The first
+is the control frame's; then four for each data kind, one per redundancy version. Drawn by
+:func:`search_sync_patterns` and pinned: they are part of the air interface."""
+PATTERN_SHIFT = 8
+"""Tone shifts over which :data:`SYNC_PATTERNS` are mutually distinct."""
+PATTERN_CROSS = 2
+"""The most symbols two of :data:`SYNC_PATTERNS` share under any offset and shift."""
+
+
+def is_costas(seq: tuple[int, ...]) -> bool:
+    """Every displacement between two symbols of ``seq`` is distinct (and no tone repeats)."""
+    seen: set[tuple[int, int]] = set()
+    for j in range(len(seq)):
+        for i in range(j):
+            d = (j - i, seq[j] - seq[i])
+            if d in seen:
+                return False
+            seen.add(d)
+    return len(set(seq)) == len(seq)
+
+
+def cross_hits(
+    a: tuple[int, ...], b: tuple[int, ...], max_offset: int, max_shift: int = PATTERN_SHIFT
+) -> int:
+    """The most symbols block ``a`` shares with block ``b`` read up to ``max_offset``
+    symbols earlier or later and up to ``max_shift`` tones higher or lower — how easily a
+    frame of one kind passes for another."""
+    n = len(a)
+    return max(
+        sum(1 for j in range(n) if 0 <= j - d < n and a[j] == b[j - d] + shift)
+        for d in range(-max_offset, max_offset + 1)
+        for shift in range(-max_shift, max_shift + 1)
+    )
+
+
+def search_sync_patterns(
+    count: int, symbols: int = SYNC_SYMBOLS, tones: int = 16
+) -> tuple[tuple[int, ...], ...]:
+    """How :data:`SYNC_PATTERNS` were drawn: random selections of ``symbols`` distinct tones
+    from a seeded generator, kept if Costas and within :data:`PATTERN_CROSS` of every
+    earlier one."""
+    rng = np.random.default_rng(20260924)
+    chosen: list[tuple[int, ...]] = []
+    for _ in range(200_000):
+        cand = tuple(int(v) for v in rng.permutation(tones)[:symbols])
+        if is_costas(cand) and all(
+            cross_hits(cand, c, symbols - 1) <= PATTERN_CROSS for c in chosen
+        ):
+            chosen.append(cand)
+            if len(chosen) == count:
+                return tuple(chosen)
+    raise ValueError(f"only {len(chosen)} patterns found")
+
+
+@dataclass(frozen=True)
+class ToneKind:
+    """One kind of tone-floor frame: what it carries, how long it is, and the sync patterns
+    that name it — one per redundancy version (a control frame has one)."""
+
+    name: str
+    payload_bytes: int
+    data_symbols: int
+    patterns: tuple[int, ...]
+    """Indices into :data:`SYNC_PATTERNS`, by redundancy version."""
+    control: bool = False
+    num: ToneNumerology = field(default=TONE_NUMEROLOGY)
+
+    @property
+    def info_bits(self) -> int:
+        return self.payload_bytes * 8 + PAYLOAD_CRC.width
+
+    @property
+    def coded_bits(self) -> int:
+        return self.data_symbols * self.num.bits_per_symbol
+
+    @property
+    def rate(self) -> float:
+        return self.info_bits / self.coded_bits
+
+    @property
+    def base_graph(self) -> int:
+        return select_base_graph(self.payload_bytes * 8, Fraction(self.rate).limit_denominator(64))
+
+    @property
+    def lifting_size(self) -> int:
+        return select_lifting_size(self.base_graph, self.info_bits)
+
+    @property
+    def symbols(self) -> int:
+        return self.data_symbols + 3 * SYNC_SYMBOLS
+
+    @property
+    def samples(self) -> int:
+        return self.symbols * self.num.symbol_samples
+
+    @property
+    def duration_s(self) -> float:
+        return self.symbols * self.num.symbol_s
+
+    @property
+    def net_bps(self) -> float:
+        return 8 * self.payload_bytes / self.duration_s
+
+    @property
+    def block_offsets(self) -> tuple[int, int, int]:
+        """First symbol of each sync block: start, middle, end. The data is split unevenly
+        between them — 45 % before the middle block — so the three distances between blocks
+        all differ and no shift of a frame lines up more than one of its blocks with
+        another's: with an even split a frame read one block-spacing early has its middle
+        and end blocks on the true frame's first and middle, sixteen of 24 sync symbols."""
+        first = self.data_symbols * 9 // 20
+        return (0, SYNC_SYMBOLS + first, self.symbols - SYNC_SYMBOLS)
+
+    def sync(self, rv: int = 0) -> tuple[int, ...]:
+        return SYNC_PATTERNS[self.patterns[rv]]
+
+    def layout(self, rv: int = 0) -> NDArray[np.int64]:
+        """Each symbol's role: ``-1`` a data symbol, otherwise the sync tone."""
+        out = np.full(self.symbols, -1, dtype=np.int64)
+        for o in self.block_offsets:
+            out[o : o + SYNC_SYMBOLS] = self.sync(rv)
+        return out
+
+
+TONE_CONTROL = ToneKind("tone-control", 7, 56, (0,), control=True)
+"""Acknowledgements and the other control frames on the floor: 80 symbols, 3.2 s; seven
+bytes at rate 0.36, more robust than the data it answers."""
+TONE_DATA: tuple[ToneKind, ...] = (
+    ToneKind("tone-24", 24, 110, (1, 2, 3, 4)),
+    ToneKind("tone-36", 36, 110, (5, 6, 7, 8)),
+)
+"""The data kinds, slowest first, on one 134-symbol frame (5.36 s): 24 bytes at rate 0.49
+(36 bit/s) — enough for a connect request — and 36 at rate 0.71 (54 bit/s)."""
+
+
+# ── the ladder ────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Rung:
+    """One step of an air's ladder — what the link layer, the rate controller and the
+    operator call "mode N": a tone-floor kind, or an OFDM mode on the layout it goes out on."""
+
+    index: int
+    tone: ToneKind | None = None
+    mode: Mode | None = None
+    layout: FrameLayout | None = None
+
+    @property
+    def floor(self) -> bool:
+        return self.tone is not None
+
+    @property
+    def name(self) -> str:
+        if self.tone is not None:
+            return self.tone.name
+        assert self.mode is not None
+        return self.mode.name
+
+    @property
+    def payload_bytes(self) -> int:
+        if self.tone is not None:
+            return self.tone.payload_bytes
+        assert self.mode is not None and self.layout is not None
+        return self.mode.payload_bytes(self.layout)
+
+    @property
+    def duration_s(self) -> float:
+        if self.tone is not None:
+            return self.tone.duration_s
+        assert self.layout is not None
+        return self.layout.duration_s
+
+    @property
+    def net_bps(self) -> float:
+        return 8 * self.payload_bytes / self.duration_s
 
 
 @dataclass(frozen=True)
 class AirInterface:
-    """One waveform with the layouts and modes that go with it — what a transmitter,
+    """One waveform with the layouts, modes and ladder that go with it — what a transmitter,
     receiver, detector or link harness needs to know about the air it is on."""
 
     params: WaveformParams
     long: FrameLayout
     short: FrameLayout
     modes: tuple[Mode, ...]
+    """The OFDM mode table: what an OFDM frame's chips index. The link runs the ladder."""
     chip_correlation_bound: float
     """Largest pairwise correlation allowed between the (mode, RV) chip sequences. The
     wide waveform has 168 chips and holds 56 sequences at 0.2; the narrow one has 32 and
     holds its 52 at 0.25 — the metric loses a little separation and keeps a 15 dB
-    processing gain, which at the narrow floor is still a reliable decision."""
+    processing gain."""
     acquisition_threshold: float
     """The detector's normalised matched-filter peak above which a preamble is declared.
     Set just above the statistic's maximum over 60 s of band-limited noise: 0.348 at
@@ -246,73 +474,85 @@ class AirInterface:
     higher because its band-limited noise has a fifth of the degrees of freedom in a
     preamble's span, and its signal peaks are higher by about as much (0.57–0.68 at
     −5 dB against 0.42–0.50), so the two floors land in the same place."""
-    floor_long: FrameLayout | None = None
-    """The floor family's data layout (ADR-0009), when this air has one: the frame the
-    modes below :attr:`control_mode` go out on, and a connect request once the ordinary
-    frame has gone unanswered."""
-    floor_short: FrameLayout | None = None
-    """The floor family's control layout: acknowledgements and the other control frames
-    while the link runs a floor mode."""
-    floor_modes: int = 0
-    """How many of the leading modes are floor modes — the slowest of the table and the
-    only ones on the floor layouts. Mode ``floor_modes`` is the first ordinary one."""
+    ofdm_ladder: tuple[int, ...] = ()
+    """The OFDM modes on the ladder, ascending, above the tone floor's rungs."""
     control_mode_index: int = 0
-    """The mode control frames, connect requests, beacons and probes go out at: the
-    slowest whose SHORT frame carries a control frame — mode 0 on the wide air, mode 3
-    (QPSK ½) on the narrow one, where mode 2 (QPSK ⅓) is an ordinary data mode whose
-    SHORT frame would carry three bytes."""
-    floor_acquisition_threshold: float = 1.0
-    """The detector's threshold on its floor statistic (the two-symbol bank's outputs at
-    four positions two symbols apart, combined coherently), set like
-    :attr:`acquisition_threshold`; 1.0 — never — on an air without a floor family."""
+    """The OFDM mode ordinary control frames, connect requests, beacons and probes go out
+    at: the slowest whose SHORT frame carries a control frame — mode 0 on the wide air,
+    mode 3 (QPSK ½) on the narrow one, where mode 2 (QPSK ⅓) is a data mode whose SHORT
+    frame would carry three bytes."""
+    tone_data: tuple[ToneKind, ...] = TONE_DATA
+    """The tone floor's data kinds (ADR-0013): the ladder's first rungs."""
+    tone_control: ToneKind = TONE_CONTROL
+    """The control frame while the link runs the floor."""
 
     @property
     def control_mode(self) -> Mode:
-        """The mode control frames, connect requests, beacons and probes go out at."""
+        """The OFDM mode ordinary control frames, connect requests, beacons and probes go
+        out at."""
         return self.modes[self.control_mode_index]
 
-    @property
-    def floor_control_mode(self) -> Mode:
-        """The mode floor control frames use on :attr:`floor_short` — the slowest of all."""
-        if not self.floor_modes:
-            raise ValueError(f"{self.name} has no floor family")
-        return self.modes[0]
+    @cached_property
+    def ladder(self) -> tuple[Rung, ...]:
+        """Every rung, most robust first: the tone floor's data kinds, then the OFDM modes
+        of :attr:`ofdm_ladder` on the LONG layout."""
+        tones = [Rung(i, tone=k) for i, k in enumerate(self.tone_data)]
+        base = len(tones)
+        ofdm = [
+            Rung(base + j, mode=self.modes[m], layout=self.long)
+            for j, m in enumerate(self.ofdm_ladder)
+        ]
+        return (*tones, *ofdm)
 
-    def control_mode_for(self, floor: bool) -> Mode:
-        return self.floor_control_mode if floor else self.control_mode
+    @property
+    def floor_modes(self) -> int:
+        """How many of the ladder's leading rungs are the floor's: rung ``floor_modes`` is
+        the first OFDM one."""
+        return len(self.tone_data)
 
     @property
     def n_modes(self) -> int:
+        """OFDM modes in the table — what the chip sequences are indexed by."""
         return len(self.modes)
+
+    @property
+    def n_rungs(self) -> int:
+        """Rungs on the ladder — the link layer's mode count."""
+        return len(self.ladder)
+
+    @property
+    def control_rung(self) -> int:
+        """The rung of :attr:`control_mode`."""
+        return self.rung_of(self.control_mode_index)
 
     @property
     def name(self) -> str:
         return self.params.bandwidth.name
 
-    def is_floor(self, mode_index: int) -> bool:
-        return mode_index < self.floor_modes
+    def is_floor(self, rung: int) -> bool:
+        return rung < self.floor_modes
 
-    def layout_for(self, data: bool, floor: bool = False) -> FrameLayout:
-        if floor:
-            layout = self.floor_long if data else self.floor_short
-            if layout is None:
-                raise ValueError(f"{self.name} has no floor family")
-            return layout
+    def rung_of(self, ofdm_mode: int) -> int:
+        """The rung an OFDM mode sits on (``ValueError`` if it is on none)."""
+        return self.floor_modes + self.ofdm_ladder.index(ofdm_mode)
+
+    def data_layout(self, rung: int) -> FrameLayout:
+        """The OFDM layout a DATA frame at an OFDM rung goes out on."""
+        layout = self.ladder[rung].layout
+        if layout is None:
+            raise ValueError(f"rung {rung} is the tone floor's; it has no OFDM layout")
+        return layout
+
+    def layout_for(self, data: bool) -> FrameLayout:
         return self.long if data else self.short
-
-    def data_layout(self, mode_index: int) -> FrameLayout:
-        """The layout a DATA frame at this mode goes out on."""
-        return self.layout_for(True, self.is_floor(mode_index))
 
     @property
     def layouts(self) -> tuple[FrameLayout, ...]:
-        """Every layout of this air, the ordinary two first."""
-        return tuple(
-            x for x in (self.long, self.short, self.floor_long, self.floor_short) if x is not None
-        )
+        """Every OFDM layout of this air."""
+        return (self.long, self.short)
 
 
-WIDE = AirInterface(WIDE_2300, LONG, SHORT, MODES, 0.2, 0.36)
+WIDE = AirInterface(WIDE_2300, LONG, SHORT, MODES, 0.2, 0.36, ofdm_ladder=tuple(range(len(MODES))))
 NARROW = AirInterface(
     NARROW_500,
     NARROW_LONG,
@@ -320,11 +560,8 @@ NARROW = AirInterface(
     NARROW_MODES,
     0.25,
     0.56,
-    floor_long=NARROW_FLOOR_LONG,
-    floor_short=NARROW_FLOOR_SHORT,
-    floor_modes=NARROW_FLOOR_MODES,
+    ofdm_ladder=tuple(range(2, len(NARROW_MODES))),
     control_mode_index=NARROW_CONTROL_MODE_INDEX,
-    floor_acquisition_threshold=NARROW_FLOOR_ACQUISITION_THRESHOLD,
 )
 
 AIR_INTERFACES: dict[Bandwidth, AirInterface] = {
@@ -353,29 +590,46 @@ def mode_table(
     modes: tuple[Mode, ...] | None = None,
     air: AirInterface | None = None,
 ) -> list[dict[str, float | int | str]]:
-    """Human-readable summary, e.g. for docs/spec and the GUI. With ``air`` every mode is
-    tabulated on the layout it actually goes out on (the floor modes on the floor
-    layout); otherwise on ``layout``."""
-    rows: list[dict[str, float | int | str]] = []
-    if air is None:
-        air = air_interface(layout.waveform)
-        per_mode = False
-    else:
-        per_mode = True
-    for m in modes if modes is not None else air.modes:
-        lay = air.data_layout(m.index) if per_mode else layout
-        rows.append(
-            {
-                "mode": m.index,
-                "name": m.name,
-                "layout": lay.name,
-                "bits_per_symbol": m.modulation.bits_per_symbol,
-                "code_rate": str(m.code_rate),
-                "coded_bits": m.coded_bits(lay),
-                "payload_bytes": m.payload_bytes(lay),
-                "base_graph": m.base_graph(lay),
-                "z": m.lifting_size(lay),
-                "net_bps": round(m.net_bit_rate(lay)),
-            }
-        )
-    return rows
+    """Human-readable summary, e.g. for docs/spec and the GUI. With ``air`` every rung of
+    its ladder is tabulated — the tone floor's kinds and the OFDM modes on their layout;
+    otherwise the OFDM ``modes`` (default: the layout's air's) on ``layout``."""
+    if air is not None:
+        rows: list[dict[str, float | int | str]] = []
+        for r in air.ladder:
+            if r.tone is not None:
+                k = r.tone
+                rows.append(
+                    {
+                        "mode": r.index,
+                        "name": k.name,
+                        "layout": f"tone, {k.symbols} symbols",
+                        "bits_per_symbol": k.num.bits_per_symbol,
+                        "code_rate": f"{k.rate:.2f}",
+                        "coded_bits": k.coded_bits,
+                        "payload_bytes": k.payload_bytes,
+                        "base_graph": k.base_graph,
+                        "z": k.lifting_size,
+                        "net_bps": round(k.net_bps),
+                    }
+                )
+                continue
+            assert r.mode is not None and r.layout is not None
+            rows.append(_ofdm_row(r.index, r.mode, r.layout))
+        return rows
+    table = modes if modes is not None else air_interface(layout.waveform).modes
+    return [_ofdm_row(m.index, m, layout) for m in table]
+
+
+def _ofdm_row(index: int, m: Mode, lay: FrameLayout) -> dict[str, float | int | str]:
+    return {
+        "mode": index,
+        "name": m.name,
+        "layout": lay.name,
+        "bits_per_symbol": m.modulation.bits_per_symbol,
+        "code_rate": str(m.code_rate),
+        "coded_bits": m.coded_bits(lay),
+        "payload_bytes": m.payload_bytes(lay),
+        "base_graph": m.base_graph(lay),
+        "z": m.lifting_size(lay),
+        "net_bps": round(m.net_bit_rate(lay)),
+    }

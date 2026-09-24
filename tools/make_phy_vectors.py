@@ -27,20 +27,20 @@ from numpy.typing import NDArray
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.codec import FrameCodec, coprime_stride
+from aether_model.frame.codec import FrameCodec, coprime_stride, tone_codec
 from aether_model.frame.modes import (
     CONTROL_MODE,
     LONG,
     MODES,
-    NARROW,
     NARROW_CONTROL_MODE,
-    NARROW_FLOOR_LONG,
-    NARROW_FLOOR_SHORT,
     NARROW_LONG,
     NARROW_MODES,
     NARROW_SHORT,
     SHORT,
+    TONE_CONTROL,
+    TONE_DATA,
 )
+from aether_model.phy import tone
 from aether_model.phy.constellation import constellation
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import FrameHeader, FrameType
@@ -232,11 +232,6 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
         (NARROW_MODES[7], NARROW_LONG, FrameType.DATA, 2),
         (NARROW_MODES[12], NARROW_LONG, FrameType.DATA, 1),
         (NARROW_CONTROL_MODE, NARROW_SHORT, FrameType.CONTROL, 0),
-        # the floor family (ADR-0009): eight-symbol preambles of their own sequences, the
-        # floor layouts, and chips over all sixteen pilot symbols
-        (NARROW_MODES[0], NARROW_FLOOR_LONG, FrameType.DATA, 0),
-        (NARROW_MODES[1], NARROW_FLOOR_LONG, FrameType.DATA, 3),
-        (NARROW.floor_control_mode, NARROW_FLOOR_SHORT, FrameType.CONTROL, 0),
     ]
     transmitters_by_params: dict = {}
     for mode, layout, frame_type, rv in cases:
@@ -286,6 +281,90 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
                     "carriers": carriers,
                 }
             )
+    return out
+
+
+TONE_CASES = ((TONE_CONTROL, 0), (TONE_DATA[0], 0), (TONE_DATA[0], 2), (TONE_DATA[1], 1))
+
+
+def tone_frame_cases() -> list[dict[str, object]]:
+    """The tone floor's frames (ADR-0013): the data tones a payload maps to and the whole
+    frame's tones are exact; the waveform — a phase accumulated over a raised-cosine
+    frequency glide — is compared at a stride, to a tolerance."""
+    out = []
+    rng = np.random.default_rng(4242)
+    for kind, rv in TONE_CASES:
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        data = tone_codec(kind).encode(payload, rv)
+        frame = tone.frame_tones(kind, data, rv)
+        x = tone.burst(kind, payload, rv)
+        out.append(
+            {
+                "kind": kind.name,
+                "rv": rv,
+                "payload": payload.hex(),
+                "data_tones": [int(t) for t in data],
+                "frame_tones": [int(t) for t in frame],
+                "n_samples": len(x),
+                "mean_power": float(np.mean(np.abs(x) ** 2)),
+                "stride": 53,
+                "strided_samples": complex_list(x[::53]),
+            }
+        )
+    return out
+
+
+def tone_interference(n: int) -> NDArray[np.complex128]:
+    """A deterministic stand-in for noise under a tone frame: a spread of off-grid tones
+    and a slow chirp, closed form so both languages build it identically."""
+    k = np.arange(n)
+    x = np.zeros(n, dtype=np.complex128)
+    for i, f in enumerate((-243.1, -151.7, -63.3, 12.9, 97.7, 171.3, 238.9)):
+        x += np.exp(1j * (2 * np.pi * f / 8000.0 * k + 0.37 * i))
+    x += np.exp(1j * 2 * np.pi * (-180.0 * k / 8000.0 + 0.5 * 40.0 * (k / 8000.0) ** 2))
+    return 0.1 * x
+
+
+def tone_receive_cases() -> list[dict[str, object]]:
+    """A tone frame received: delayed by ``lead`` samples, turned by ``cfo_hz``, with
+    :func:`tone_interference` added — detected, demodulated and decoded. The detector's
+    start, kind and redundancy version are exact; its offset, statistic and the SNR to a
+    tolerance; the soft bits to a tolerance; the payload exact."""
+    out = []
+    rng = np.random.default_rng(777)
+    det = tone.ToneDetector()
+    for i, (kind, rv) in enumerate(TONE_CASES):
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        if rv:
+            rv = 0  # a lone RV other than 0 is not decodable; the pattern search is exercised
+        lead, cfo = 1500 + 211 * i, -37.5 + 23.25 * i
+        x = tone.burst(kind, payload, rv)
+        n = lead + len(x) + 2000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y *= np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += tone_interference(n)
+        syncs = det.detect(y)
+        assert len(syncs) == 1, (kind.name, syncs)
+        sync = syncs[0]
+        frame = tone.demodulate(y, sync.kind, sync.rv, sync.start, sync.cfo_hz)
+        decoded, _ = frame.decode()
+        assert decoded == payload, kind.name
+        out.append(
+            {
+                "kind": kind.name,
+                "rv": rv,
+                "payload": payload.hex(),
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "start": sync.start,
+                "detected_cfo_hz": sync.cfo_hz,
+                "statistic": sync.statistic,
+                "snr_db": frame.snr_db,
+                "llr": [float(v) for v in frame.llr],
+            }
+        )
     return out
 
 
@@ -401,6 +480,10 @@ def main() -> int:
         "waveform_frames": waveform_cases(),
         "passband": passband_case(),
         "blanker": blanker_case(),
+        "tone_frames": tone_frame_cases(),
+        "tone_receive": tone_receive_cases(),
+        "tone_sample_tolerance": 1e-9,
+        "tone_llr_tolerance": 1e-6,
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -33,10 +33,12 @@ from aether_model.link.sim import TwoStationSim
 
 @pytest.fixture(scope="module")
 def timing() -> PhyTiming:
-    caps = {m.index: m.payload_bytes(LONG) for m in MODES}
-    return PhyTiming(
-        data_frame_s=LONG.duration_s, control_frame_s=SHORT.duration_s, data_capacity=caps
-    )
+    """The wide air's ladder — the tone floor's two rungs, then the OFDM modes — as the
+    model's PHY reports it, but without preamble reports (the engine's safe fallback)."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import WIDE_2300
+
+    return phy_timing(WIDE_2300, start_of_frame=False)
 
 
 def _pair(timing: PhyTiming, config: LinkConfig | None = None) -> tuple[LinkEngine, LinkEngine]:
@@ -152,6 +154,45 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
     assert rc.snr_db == 15.0  # a second seed changes nothing
 
 
+def test_the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() -> None:
+    """ADR-0013 §4: the step between the tone floor and the first OFDM rung is a factor of
+    four in rate, not the third the margin and the hysteresis were tuned on. A session the
+    SNR puts on the first OFDM rungs does not start on the floor; on an air that caps the
+    first rung's margin (the wide one) the rung is held against the floor to its threshold
+    plus the cap, however wide the learned margin, and one failed burst there does not leave
+    for the floor — a second in a row does; the climb back asks for the cap and the
+    hysteresis."""
+    rc = RateController()  # the wide ladder: rungs 0 and 1 are the tone floor
+    assert rc.floor_modes == 2 and rc.modes[:3] == [0, 1, 2]
+    fits_rung_3 = AWGN_THRESHOLD_DB[3] + rc.margin_db + rc.up_hysteresis_db
+    assert rc.first_mode(fits_rung_3) == 2  # not two steps down, on the floor
+    assert rc.first_mode(-12.0) in (0, 1)  # nothing above the floor fits: the floor
+
+    capped = RateController(floor_margin_db=1.0)
+    capped.seed(AWGN_THRESHOLD_DB[2] + 1.5)
+    capped._index = capped.modes.index(2)
+    capped.margin_db = 8.0  # a fading channel's learned margin
+    snr = capped.snr_db
+    capped.observe(snr, ok=0, failed=6, mode=2)
+    assert capped.recommend() == 2  # one lost burst: still worth four times the floor
+    capped.observe(snr, ok=0, failed=6, mode=2)
+    assert capped.recommend() < 2  # two in a row: the floor
+    for _ in range(3):
+        capped.observe(snr, ok=6, failed=0)
+    assert capped.recommend() < 2  # the cap and the hysteresis are not met at that SNR
+    for _ in range(6):
+        capped.observe(AWGN_THRESHOLD_DB[2] + 1.0 + capped.up_hysteresis_db + 0.5, ok=6, failed=0)
+    assert capped.recommend() >= 2  # they are here, whatever the learned margin
+
+    # uncapped (the narrow air) the learned margin decides, as between any two rungs
+    plain = RateController(floor_margin_db=None)
+    plain.seed(AWGN_THRESHOLD_DB[2] + 1.5)
+    plain._index = plain.modes.index(2)
+    plain.margin_db = 8.0
+    plain.observe(plain.snr_db, ok=0, failed=6, mode=2)
+    assert plain.recommend() < 2
+
+
 def test_probe_body_round_trips_and_clamps_its_snr() -> None:
     probe = ProbeBody("W4ODA", "KK4XYZ", None, caps=0b10)
     assert ProbeBody.decode(probe.encode()) == probe
@@ -198,8 +239,8 @@ def test_ack_received_semantics() -> None:
 def test_usable_modes_are_pareto_and_sorted() -> None:
     modes = usable_modes()
     assert modes == sorted(modes)
-    # mode 7 (8-PSK 2/3) is dominated by mode 8 (16-QAM 1/2): more payload, lower threshold
-    assert 7 not in modes
+    # rung 9 (8-PSK 2/3) is dominated by rung 10 (16-QAM 1/2): more payload, lower threshold
+    assert 9 not in modes
     for m in modes:
         assert not any(
             AWGN_THRESHOLD_DB[o] <= AWGN_THRESHOLD_DB[m] and o != m and o in modes
@@ -988,24 +1029,67 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
 # ── holding the link on a fading path (P9-7) ──────────────────────────
 
 
+def test_a_call_in_another_link_protocol_is_ignored_and_said_so(timing: PhyTiming) -> None:
+    """Version 2 of the link protocol numbers modes as rungs of the ladder (ADR-0013): a
+    station of version 1 means other frames by the same numbers, so a call from one is not
+    a session to start — it is ignored, with an event saying why."""
+    from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
+    from aether_model.link.phy import Container, TxFrame
+
+    assert PROTOCOL_VERSION == 2 and ConnectBody("A", "B").version == 2
+    b = LinkEngine("KK4XYZ", timing, None, seed=2)
+    body = ConnectBody("W4ODA", "KK4XYZ", version=1).encode()
+    payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))
+    sim = TwoStationSim(LinkEngine("W4ODA", timing, None, seed=1), b, snr_db=10.0, seed=3)
+    frame = sim._synthetic_frame(TxFrame(Container.DATA, payload, mode=2), 10.0, 0.0, 1.0)
+    assert frame is not None
+    b.on_frame(frame, 1.0)
+    assert b.state is State.IDLE
+    assert any("link protocol 1" in str(e) for e in b.actions)
+
+
+@pytest.mark.parametrize("reports", [False, True], ids=["no-preamble-reports", "reports"])
+def test_the_iss_waits_out_the_irs_quiet_after_a_floor_burst(reports: bool) -> None:
+    """The ISS sizes its wait for an ACK by the quiet the IRS keeps after a burst. It has to
+    ask about the burst it sent — a floor burst straight after an ordinary acceptance — not
+    the family it last heard: asked the other way it under-waited by the difference, a whole
+    tone frame without preamble reports, and a floor session pinned at 16 dB died of ACK
+    timeouts (ADR-0013)."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import WIDE_2300
+
+    timing = phy_timing(WIDE_2300, start_of_frame=reports)
+    cfg = LinkConfig(max_mode=0)
+    a = LinkEngine("W4ODA", timing, cfg, seed=1)
+    b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+    sim = TwoStationSim(a, b, snr_db=16.0, seed=21)
+    msg = bytes(600)
+    a.connect("KK4XYZ")
+    a.send(msg)
+    a.disconnect()
+    sim.run(until=1200)
+    assert sim.delivered(1) == msg
+    assert a.stats.ack_timeouts == 0 and b.stats.ack_timeouts == 0
+
+
 def test_the_link_timeout_spans_whole_exchanges_at_the_floor() -> None:
     """Silence ends a session after 45 s on the ordinary layouts, and only after four whole
-    exchanges where the link runs the 500 Hz floor (ADR-0009): one exchange there is nearly
-    half a minute, and a slow fade outlasts one missed exchange far more often than a link
-    really fails."""
+    exchanges where the link runs the floor: one exchange there is over half a minute,
+    and a slow fade outlasts one missed exchange far more often than a link really fails.
+    """
     from aether_model.link.harness import phy_timing
     from aether_model.waveform import NARROW_500, WIDE_2300
 
-    wide = LinkEngine("W4ODA", phy_timing(WIDE_2300), LinkConfig())
-    assert wide._link_timeout() == 45.0
-    narrow = LinkEngine("W4ODA", phy_timing(NARROW_500), LinkConfig(max_mode=12))
-    narrow._recommended = 0  # a floor mode
-    exchange = 6 * 4.216 + 2.232 + 2 * 0.25 + 0.2
-    assert narrow._link_timeout() == pytest.approx(4 * exchange, rel=0.01)
-    # the ordinary layouts on both sides: what the peer recommends and what it may send
-    narrow._recommended = 6
-    narrow.rate.seed(15.0)
-    assert narrow._link_timeout() == 45.0
+    # on the tone floor (ADR-0013) — the same frames on both airs
+    exchange = 6 * 5.36 + 3.2 + 2 * 0.25 + 0.2
+    for params in (WIDE_2300, NARROW_500):
+        engine = LinkEngine("W4ODA", phy_timing(params), LinkConfig())
+        engine._recommended = 0  # a floor mode
+        assert engine._link_timeout() == pytest.approx(4 * exchange, rel=0.01)
+        # the ordinary layouts on both sides: what the peer recommends and what it may send
+        engine._recommended = 6
+        engine.rate.seed(15.0)
+        assert engine._link_timeout() == 45.0
 
 
 def test_an_unanswered_burst_steps_the_recommendation_down(timing: PhyTiming) -> None:
@@ -1050,7 +1134,7 @@ def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
 def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     """The three P9-7 changes together, on the fading pipe (P9-6): at −4 dB on ITU Good the
     500 Hz floor carries a 1 kB session that the fixed 45 s timeout dropped two times in
-    three."""
+    three — the tone floor now (ADR-0013), which carries it with room to spare."""
     import numpy as np
 
     from aether_model.frame.modes import NARROW
@@ -1060,7 +1144,7 @@ def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     from aether_model.link.sim import control_thresholds_for
 
     # the calibrated constants of the frames this session uses (bench/baselines/fading_pipe.csv)
-    beta = {"mode 0": 0.026, "mode 1": 0.056, "control floor": 0.05, "control short": 0.3}
+    beta = {"tone-24": 0.0122, "tone-36": 0.0111, "tone-control": 0.0087, "control short": 1000.0}
     timing = phy_timing(NARROW.params)
     done = 0
     for seed in range(6):
@@ -1069,7 +1153,7 @@ def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
         pipe = FadingPipe(
             SharedFading("good", seed),
             shapes_for(NARROW),
-            lambda f: beta.get(frame_key(f), 1.0),
+            lambda f: beta.get(frame_key(f, NARROW), 1.0),
             np.random.default_rng(seed),
         )
         sim = TwoStationSim(

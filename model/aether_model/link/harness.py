@@ -14,45 +14,55 @@ renders one :class:`~aether_model.link.phy.TxFrame` and returns a :class:`RealSo
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 
 from aether_model.channel import WattersonChannel, make_channel
-from aether_model.frame.modes import air_interface
+from aether_model.frame.modes import PREAMBLE_SYMBOLS, air_interface
 from aether_model.link.engine import LinkEngine
 from aether_model.link.frames import with_bandwidth
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
-from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
+from aether_model.link.rate import (
+    AWGN_THRESHOLD_DB,
+    CONTROL_THRESHOLD_DB,
+    NARROW_AWGN_THRESHOLD_DB,
+    NARROW_CONTROL_THRESHOLD_DB,
+)
 from aether_model.link.sim import TwoStationSim
+from aether_model.phy import tone
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameType
-from aether_model.phy.rx import ReceivedFrame
 from aether_model.waveform import WIDE_2300, Bandwidth, WaveformParams
 
 ComplexArray = NDArray[np.complex128]
+FloatArray = NDArray[np.float64]
+
+WIDE_FLOOR_MARGIN_DB = 1.0
+"""``PhyTiming.floor_margin_db`` of the 2 300 Hz air (ADR-0013 §4, the link bench)."""
 
 
 @dataclass
 class RealSoftFrame:
-    """A frame recovered by the real receiver; ``decode`` runs the LDPC decoder and combines
-    LLRs with the opaque HARQ buffer of an earlier transmission of the same block."""
+    """A frame recovered by the real receiver — OFDM or the tone floor's; ``decode`` runs
+    the LDPC decoder and combines LLRs with the opaque HARQ buffer of an earlier
+    transmission of the same block."""
 
     container: Container
     mode: int
+    """The rung of the ladder the frame was sent at (0 for a control frame)."""
     rv: int
     snr_db: float
     t_start: float
     t_end: float
     floor: bool
-    _modem: Modem
-    _received: ReceivedFrame
+    _decode: Callable[[FloatArray | None], tuple[bytes | None, FloatArray]]
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         buf = buffer if isinstance(buffer, np.ndarray) else None
-        payload, llr = self._modem.decode_frame(self._received, buf)
-        return payload, llr
+        return self._decode(buf)
 
 
 def bandwidth_capabilities(params: WaveformParams = WIDE_2300, caps: int = 0) -> int:
@@ -64,35 +74,39 @@ def bandwidth_capabilities(params: WaveformParams = WIDE_2300, caps: int = 0) ->
 def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) -> PhyTiming:
     """Timing and per-mode capacities for the real waveform.
 
-    ``preamble_detect_s`` is the air's longest preamble plus two symbol periods: the
-    Schmidl–Cox symbols the detector correlates against (two, or eight for the floor family
-    of ADR-0009), plus the one-symbol sidelobe guard it needs before accepting a peak
-    (P2-3), plus a symbol of slack for block-boundary latency in the streaming receiver.
-    Pass ``start_of_frame=False`` to model a PHY that cannot report preambles.
+    ``preamble_detect_s`` is the preamble plus two symbol periods: the two Schmidl–Cox
+    symbols the detector correlates against, plus the one-symbol sidelobe guard it needs
+    before accepting a peak (P2-3), plus a symbol of slack for block-boundary latency in
+    the streaming receiver; the tone floor's frames are announced later
+    (:func:`~aether_model.phy.tone.announce_delay_s`). Pass ``start_of_frame=False`` to
+    model a PHY that cannot report preambles.
     """
     air = air_interface(params)
-    caps = {m.index: m.payload_bytes(air.data_layout(m.index)) for m in air.modes}
-    thresholds = (
-        AWGN_THRESHOLD_DB if params.bandwidth is Bandwidth.WIDE_2300 else NARROW_AWGN_THRESHOLD_DB
-    )
+    caps = {r.index: r.payload_bytes for r in air.ladder}
+    wide = params.bandwidth is Bandwidth.WIDE_2300
+    thresholds = AWGN_THRESHOLD_DB if wide else NARROW_AWGN_THRESHOLD_DB
+    controls = CONTROL_THRESHOLD_DB if wide else NARROW_CONTROL_THRESHOLD_DB
+    floor_s = {k.duration_s for k in air.tone_data}
+    if len(floor_s) != 1:
+        raise ValueError("the link layer takes one floor data-frame length")
     return PhyTiming(
         data_frame_s=air.long.duration_s,
         control_frame_s=air.short.duration_s,
         turnaround_s=0.25,
         detect_latency_s=0.15,
-        # the longest preamble of the air plus the sidelobe guard and a symbol of slack: four
-        # symbols on the wide air, ten where the floor family's eight-symbol preamble is
-        # only complete that late (ADR-0009)
         preamble_detect_s=(
-            (max(x.preamble_symbols for x in air.layouts) + 2) * params.symbol_period_s
-            if start_of_frame
-            else None
+            (PREAMBLE_SYMBOLS + 2) * params.symbol_period_s if start_of_frame else None
         ),
         data_capacity=caps,
         mode_threshold_db=dict(thresholds),
-        floor_data_frame_s=air.floor_long.duration_s if air.floor_long else None,
-        floor_control_frame_s=air.floor_short.duration_s if air.floor_short else None,
+        control_threshold_db=dict(controls),
+        floor_data_frame_s=floor_s.pop(),
+        floor_control_frame_s=air.tone_control.duration_s,
         floor_modes=air.floor_modes,
+        floor_preamble_detect_s=tone.announce_delay_s() if start_of_frame else None,
+        # the wide air's first OFDM rung stays productive on a fading path a decibel above its
+        # 10 % point; the narrow air's does not (ADR-0013 §4)
+        floor_margin_db=WIDE_FLOOR_MARGIN_DB if wide else None,
     )
 
 
@@ -135,7 +149,7 @@ class PhyBridge:
     def _burst(self, frame: TxFrame) -> ComplexArray:
         if frame.container is Container.DATA:
             self.modes_sent.append(frame.mode)
-            return self.modem.data_burst(frame.payload, self.modem.modes[frame.mode], frame.rv)
+            return self.modem.rung_burst(frame.payload, frame.mode, frame.rv)
         return self.modem.control_burst(frame.payload, frame.rv, floor=frame.floor)
 
     def padded(self, burst: ComplexArray) -> ComplexArray:
@@ -148,7 +162,7 @@ class PhyBridge:
         end of the buffer instead, and did, seven minutes into a Poor-channel run."""
         p = self.modem.p
         span = max(x.samples for x in self.modem.air.layouts) + self.modem.rx.dem.fft_offset
-        tail = max(self.tail, span + p.symbol_samples - len(burst))
+        tail = max(self.tail, span + p.symbol_samples - len(burst), 2 * p.symbol_samples)
         return np.concatenate((np.zeros(self.lead, complex), burst, np.zeros(tail, complex)))
 
     def factory(
@@ -173,6 +187,27 @@ class PhyBridge:
             )
         buf = self.padded(burst)
         y = self.modem.detector.condition(ch.process(buf))
+        # the tone floor first: its detector confirms what it finds, and an OFDM frame is
+        # never taken for one (``test_tone.py``)
+        tones = self.modem.tone_detector.detect(y, max_frames=1)
+        if tones:
+            ts = tones[0]
+            if ts.start + ts.kind.samples > len(y):
+                self.overrun += 1
+                return None
+            self.detected += 1
+            soft = tone.demodulate(y, ts.kind, ts.rv, ts.start, ts.cfo_hz)
+            air = self.modem.air
+            return RealSoftFrame(
+                container=Container.CONTROL if ts.kind.control else Container.DATA,
+                mode=0 if ts.kind.control else air.tone_data.index(ts.kind),
+                rv=ts.rv,
+                snr_db=soft.snr_db,
+                t_start=t_start,
+                t_end=t_end,
+                floor=True,
+                _decode=soft.decode,
+            )
         syncs = self.modem.detector.detect(y, max_frames=1)
         if not syncs:
             return None
@@ -182,22 +217,25 @@ class PhyBridge:
             # placed later than a symbol past the burst: gone, and counted
             self.overrun += 1
             return None
+        data = received.sync.header.frame_type is FrameType.DATA
+        try:
+            rung = self.modem.air.rung_of(received.mode) if data else 0
+        except ValueError:
+            return None  # chips naming an OFDM mode on no rung: noise
         self.detected += 1
-        container = (
-            Container.DATA
-            if received.sync.header.frame_type is FrameType.DATA
-            else Container.CONTROL
-        )
+
+        def decode(buffer: FloatArray | None) -> tuple[bytes | None, FloatArray]:
+            return self.modem.decode_frame(received, buffer)
+
         return RealSoftFrame(
-            container=container,
-            mode=received.mode,
+            container=Container.DATA if data else Container.CONTROL,
+            mode=rung,
             rv=received.rv,
             snr_db=received.snr_3k_db,
             t_start=t_start,
             t_end=t_end,
-            floor=received.sync.floor,
-            _modem=self.modem,
-            _received=received,
+            floor=False,
+            _decode=decode,
         )
 
 

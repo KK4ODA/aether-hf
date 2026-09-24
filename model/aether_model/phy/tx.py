@@ -1,7 +1,6 @@
 """Frame transmitter: header + coded symbols → complex baseband → audio (roadmap P1-4).
 
-A frame is ``[SC, SC] + data symbols`` (the SC sequence encodes the frame type; a floor
-layout sends eight SC symbols instead of two, ADR-0009); data
+A frame is ``[SC, SC] + data symbols`` (the SC sequence encodes the frame type); data
 symbol ``i`` is a full pilot symbol when ``i`` is in ``layout.pilot_symbol_indices`` — in
 DATA frames its data carriers carry the mode's PN chips — and otherwise carries the next
 ``n_data_carriers`` constellation symbols (time-major) on its data carriers with comb

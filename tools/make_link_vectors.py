@@ -35,10 +35,12 @@ from aether_model.link.frames import (
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
+    FRAME_S,
     NARROW_AWGN_THRESHOLD_DB,
     NARROW_CONTROL_THRESHOLD_DB,
     NARROW_FRAME_S,
     NARROW_PAYLOAD_BYTES,
+    PAYLOAD_BYTES,
     RateController,
     usable_modes,
 )
@@ -210,6 +212,10 @@ def main() -> int:
         "Frame encodings are exact; the rate-controller traces are compared value by value.",
         "awgn_thresholds": [float(AWGN_THRESHOLD_DB[m]) for m in sorted(AWGN_THRESHOLD_DB)],
         "usable_modes": [int(m) for m in usable_modes()],
+        # the wide ladder's payloads and frame lengths (ADR-0013: the tone floor's two rungs
+        # first), which usable_modes compares in bytes a second
+        "payload_bytes": [int(PAYLOAD_BYTES[m]) for m in sorted(PAYLOAD_BYTES)],
+        "frame_s": [float(FRAME_S[m]) for m in sorted(FRAME_S)],
         "narrow_awgn_thresholds": [
             float(NARROW_AWGN_THRESHOLD_DB[m]) for m in sorted(NARROW_AWGN_THRESHOLD_DB)
         ],

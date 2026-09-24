@@ -29,8 +29,8 @@ class TxFrame:
     mode: int = 0
     rv: int = 0
     floor: bool = False
-    """A CONTROL frame to go out on the floor layout (ADR-0009). A DATA frame's family
-    follows its mode; this flag is only read for control frames."""
+    """A CONTROL frame to go out on the floor — the tone floor's control frame (ADR-0013).
+    A DATA frame's family follows its mode; this flag is only read for control frames."""
 
 
 class SoftFrame(Protocol):
@@ -42,8 +42,8 @@ class SoftFrame(Protocol):
     t_start: float
     t_end: float
     floor: bool
-    """The frame arrived on a floor layout (ADR-0009). A DATA frame's family is also its
-    mode's; for a control frame this is the only way the engine learns it."""
+    """The frame is the floor's (the tone floor, ADR-0013). A DATA frame's family is also
+    its mode's; for a control frame this is the only way the engine learns it."""
     """Air time of the frame in the receiver's clock (seconds)."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
@@ -82,12 +82,25 @@ class PhyTiming:
     it is on."""
 
     floor_data_frame_s: float | None = None
-    """Air time of a DATA frame at a floor mode (ADR-0009): the floor layout is longer
-    than the ordinary one. ``None`` on an air without a floor family."""
+    """Air time of a DATA frame at a floor mode — the tone floor's frame (ADR-0013), five
+    times an ordinary one. ``None`` on an air without a floor family."""
     floor_control_frame_s: float | None = None
-    """Air time of a control frame sent on the floor layout."""
+    """Air time of the floor's control frame."""
     floor_modes: int = 0
-    """How many of the leading modes go out on the floor layouts (the slowest ones)."""
+    """How many of the leading modes are the floor's (the slowest ones)."""
+    control_threshold_db: dict[bool, float] | None = None
+    """The AWGN 10 % points of the air's two control frames, keyed by family (ordinary,
+    floor) — what a simulated channel judges a control frame by. ``None``: the wide air's
+    (:data:`~aether_model.link.rate.CONTROL_THRESHOLD_DB`)."""
+    floor_margin_db: float | None = None
+    """The most margin the rate controller holds the first OFDM rung to against the floor
+    (:attr:`~aether_model.link.rate.RateController.floor_margin_db`): an air whose first rung
+    stays productive on a fading path below the learned margin says how far; ``None`` leaves
+    the learned margin in charge."""
+    floor_preamble_detect_s: float | None = None
+    """:attr:`preamble_detect_s` for the floor's frames: the tone floor announces a frame
+    once its first sync block is in and has beaten its neighbours, 0.54 s after it starts,
+    where an ordinary preamble takes 0.12 s. ``None``: as :attr:`preamble_detect_s`."""
 
     def capacity(self, mode: int) -> int:
         if self.data_capacity is None:
@@ -102,6 +115,12 @@ class PhyTiming:
         if self.is_floor(mode) and self.floor_data_frame_s is not None:
             return self.floor_data_frame_s
         return self.data_frame_s
+
+    def preamble_detect_s_for(self, floor: bool) -> float | None:
+        """How soon a frame of the given family is announced (``None``: it is not)."""
+        if floor and self.floor_preamble_detect_s is not None:
+            return self.floor_preamble_detect_s
+        return self.preamble_detect_s
 
     def control_frame_s_for(self, floor: bool) -> float:
         """Air time of a control frame of the given family."""

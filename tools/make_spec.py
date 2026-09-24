@@ -26,16 +26,24 @@ from aether_model.frame.modes import (
     NARROW,
     PAYLOAD_CRC,
     PREAMBLE_SYMBOLS,
+    SYNC_PATTERNS,
+    SYNC_SYMBOLS,
+    TONE_CONTROL,
+    TONE_DATA,
+    TONE_NUMEROLOGY,
     WIDE,
     AirInterface,
     FrameLayout,
 )
 from aether_model.link.frames import CALL_BYTES, CONTROL_BYTES, DATA_HEADER, WINDOW
-from aether_model.link.rate import AWGN_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB
+from aether_model.link.rate import (
+    AWGN_THRESHOLD_DB,
+    NARROW_AWGN_THRESHOLD_DB,
+    TONE_CONTROL_THRESHOLD_DB,
+)
+from aether_model.phy import tone
 from aether_model.phy.papr import CLIP_TARGET_DB, CLIP_TARGET_DENSE_DB
 from aether_model.phy.preamble import (
-    FLOOR_CHIP_CORRELATION_BOUND,
-    FLOOR_SC_SEEDS,
     MODE_CHIP_SEED,
     N_RV,
     SC_SEEDS,
@@ -95,25 +103,6 @@ def waveform_block(air: AirInterface = WIDE) -> str:
             "normalised matched-filter peak",
         ],
     ]
-    if air.floor_long is not None:
-        rows += [
-            [
-                "Floor preamble",
-                f"{air.floor_long.preamble_symbols} symbols",
-                "identical Schmidl-Cox symbols of the floor sequences (ADR-0009)",
-            ],
-            [
-                "Floor mode/RV chips",
-                f"{pre.n_chips_for(air.floor_long)}",
-                f"{N_RV} x {air.n_modes} sequences, pairwise |correlation| <= "
-                f"{FLOOR_CHIP_CORRELATION_BOUND}",
-            ],
-            [
-                "Floor acquisition threshold",
-                f"{air.floor_acquisition_threshold}",
-                "seven-window average of the floor references' normalised peak",
-            ],
-        ]
     return _table(["Parameter", "Value", "Notes"], rows)
 
 
@@ -137,33 +126,53 @@ def layout_block(air: AirInterface = WIDE) -> str:
 
 
 def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
+    """The air's ladder: every rung, the tone floor's kinds first (ADR-0013)."""
     thresholds = AWGN_THRESHOLD_DB if air is WIDE else NARROW_AWGN_THRESHOLD_DB
-    floor = air.floor_long is not None
     rows = []
-    for m in air.modes:
-        # a floor mode is tabulated on the layout it actually goes out on (ADR-0009)
-        layout = air.data_layout(m.index) if floor else layout
+    for r in air.ladder:
+        if r.tone is not None:
+            k = r.tone
+            rows.append(
+                [
+                    str(r.index),
+                    k.name,
+                    "TONE",
+                    str(k.num.bits_per_symbol),
+                    f"{k.rate:.2f}",
+                    f"BG{k.base_graph}",
+                    str(k.lifting_size),
+                    str(k.info_bits),
+                    str(k.coded_bits),
+                    str(k.payload_bytes),
+                    f"{k.net_bps:.0f}",
+                    f"{thresholds[r.index]:+.1f}",
+                ]
+            )
+            continue
+        m = r.mode
+        assert m is not None
+        lay = air.data_layout(r.index)
         rows.append(
             [
-                str(m.index),
-                m.name,
-                *([layout.name.upper()] if floor else []),
+                str(r.index),
+                f"{m.name} (OFDM mode {m.index})",
+                lay.name.upper(),
                 str(m.modulation.bits_per_symbol),
                 str(m.code_rate),
-                f"BG{m.base_graph(layout)}",
-                str(m.lifting_size(layout)),
-                str(m.info_bits(layout)),
-                str(m.coded_bits(layout)),
-                str(m.payload_bytes(layout)),
-                f"{m.net_bit_rate(layout):.0f}",
-                f"{thresholds[m.index]:+.1f}",
+                f"BG{m.base_graph(lay)}",
+                str(m.lifting_size(lay)),
+                str(m.info_bits(lay)),
+                str(m.coded_bits(lay)),
+                str(m.payload_bytes(lay)),
+                f"{m.net_bit_rate(lay):.0f}",
+                f"{thresholds[r.index]:+.1f}",
             ]
         )
     return _table(
         [
-            "Mode",
+            "Rung",
             "Name",
-            *(["Layout"] if floor else []),
+            "Frame",
             "bits/sym",
             "Rate",
             "Base graph",
@@ -178,6 +187,96 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
     )
 
 
+def tone_block() -> str:
+    """The tone floor's numerology, frame kinds and detector constants (ADR-0013)."""
+    num = TONE_NUMEROLOGY
+    det = tone.ToneDetector()
+    rows = [
+        ["Tones", f"{num.tones}", f"{num.bits_per_symbol} Gray-labelled coded bits a symbol"],
+        [
+            "Symbol",
+            f"{num.symbol_samples} samples ({num.symbol_s * 1e3:.0f} ms)",
+            f"{1 / num.symbol_s:.0f} Bd",
+        ],
+        [
+            "Tone spacing",
+            f"{num.spacing_hz:.0f} Hz",
+            f"tones at (k - {(num.tones - 1) / 2}) x spacing about the passband centre",
+        ],
+        ["Span", f"{num.span_hz:.0f} Hz", "lowest tone to highest, plus a spacing"],
+        [
+            "Tone change",
+            f"{num.ramp_samples} samples",
+            "raised-cosine frequency glide centred on the boundary; continuous phase",
+        ],
+        ["Frame edges", f"{num.edge_samples} samples", "raised-cosine amplitude fade in and out"],
+        [
+            "Level",
+            f"+{tone.TONE_GAIN_DB:.1f} dB",
+            "over an OFDM frame's average power at the same transmit level",
+        ],
+        [
+            "Sync blocks",
+            f"3 x {SYNC_SYMBOLS} symbols",
+            "start, middle, end; 45 % of the data before the middle one",
+        ],
+        [
+            "Detector",
+            f"hop {num.symbol_samples // det.HOP_DIV} samples, bin {det.bin_hz:.2f} Hz",
+            f"offset search +/-{det.cfo_bins * det.bin_hz:.0f} Hz",
+        ],
+        [
+            "Acquisition threshold",
+            f"{det.threshold}",
+            f"mean sync-tone ratio, each clipped at {det.CLIP:.0f}; "
+            f"{det.MIN_HITS} of 24 sync tones strongest",
+        ],
+        [
+            "Arrival threshold",
+            f"{tone.ANNOUNCE_THRESHOLD}",
+            f"first block's mean ratio; {det.MIN_FIRST_HITS} of 8 strongest",
+        ],
+    ]
+    kinds = []
+    for k in (TONE_CONTROL, *TONE_DATA):
+        kinds.append(
+            [
+                k.name,
+                str(k.payload_bytes),
+                f"{k.data_symbols} + 3 x {SYNC_SYMBOLS} = {k.symbols}",
+                f"{k.duration_s:.2f} s",
+                ", ".join(str(o) for o in k.block_offsets),
+                f"{k.rate:.2f}",
+                f"{k.net_bps:.1f}",
+                ", ".join(str(p) for p in k.patterns),
+                f"{TONE_CONTROL_THRESHOLD_DB:+.1f}"
+                if k.control
+                else f"{AWGN_THRESHOLD_DB[TONE_DATA.index(k)]:+.1f}",
+            ]
+        )
+    patterns = [[str(i), " ".join(str(t) for t in p)] for i, p in enumerate(SYNC_PATTERNS)]
+    return "\n\n".join(
+        (
+            _table(["Parameter", "Value", "Notes"], rows),
+            _table(
+                [
+                    "Kind",
+                    "Payload B",
+                    "Symbols",
+                    "Duration",
+                    "Sync blocks at",
+                    "Rate",
+                    "Net bps",
+                    "Patterns (by RV)",
+                    "AWGN dB",
+                ],
+                kinds,
+            ),
+            _table(["Pattern", "Tones"], patterns),
+        )
+    )
+
+
 def constants_block() -> str:
     rows = [
         [
@@ -186,8 +285,6 @@ def constants_block() -> str:
         ],
         ["Schmidl-Cox PN seed, DATA", str(SC_SEEDS[0])],
         ["Schmidl-Cox PN seed, CONTROL", str(SC_SEEDS[1])],
-        ["Schmidl-Cox PN seed, floor DATA", str(FLOOR_SC_SEEDS[0])],
-        ["Schmidl-Cox PN seed, floor CONTROL", str(FLOOR_SC_SEEDS[1])],
         ["Mode/RV chip seed", str(MODE_CHIP_SEED)],
         ["Redundancy versions", str(N_RV)],
         ["Peak reduction target, PSK modes", f"{CLIP_TARGET_DB:.1f} dB"],
@@ -208,6 +305,7 @@ BLOCKS = {
     "waveform500": lambda: waveform_block(NARROW),
     "layouts500": lambda: layout_block(NARROW),
     "modes500": lambda: mode_block(NARROW.long, NARROW),
+    "tone": tone_block,
 }
 
 

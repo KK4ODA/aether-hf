@@ -8,7 +8,9 @@ generator; the core compiles them in as literals (``core/aether-phy/build.rs``),
 modem that re-derived them would depend on reproducing another language's random-number
 generator bit for bit — and the whole point of the tables is that the two implementations
 agree. One block per waveform: the wide one and, since P7-0, the narrow one, each with its
-carrier map, its sequences, its chip-correlation bound and its acquisition threshold.
+carrier map, its sequences, its chip-correlation bound, its acquisition threshold and the
+OFDM modes on its ladder; and one block for the tone floor (ADR-0013), which both airs share:
+its numerology, sync patterns, frame kinds and detector constants.
 """
 
 from __future__ import annotations
@@ -22,10 +24,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import NARROW, WIDE, AirInterface
+from aether_model.frame.modes import (
+    NARROW,
+    SYNC_PATTERNS,
+    SYNC_SYMBOLS,
+    TONE_CONTROL,
+    TONE_DATA,
+    TONE_NUMEROLOGY,
+    WIDE,
+    AirInterface,
+    ToneKind,
+)
+from aether_model.phy import tone
 from aether_model.phy.ofdm import PILOT_ROOT, carrier_map, zadoff_chu
 from aether_model.phy.preamble import (
-    FLOOR_CHIP_CORRELATION_BOUND,
     MODE_CHIP_SEED,
     N_RV,
     SC_SEEDS,
@@ -52,23 +64,11 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
     for frame_type in FrameType:
         values = pre.sc_values(frame_type)[even]
         sc[frame_type.name] = pack_signs(values / np.abs(values).mean())
-    floor_sc = {}
-    if air.floor_long is not None:
-        # the floor sequences occupy every carrier
-        for frame_type in FrameType:
-            values = pre.sc_values(frame_type, floor=True)
-            floor_sc[frame_type.name] = pack_signs(values / np.abs(values).mean())
 
     chip_table = {}
     for rv in range(N_RV):
         for mode in range(air.n_modes):
             chip_table[f"{rv}_{mode}"] = pack_signs(pre.sequences[pre.chip_index(mode, rv)])
-    floor_chips = {}
-    if air.floor_long is not None:
-        seqs = pre.sequences_for(air.floor_long)
-        for rv in range(N_RV):
-            for mode in range(air.n_modes):
-                floor_chips[f"{rv}_{mode}"] = pack_signs(seqs[pre.chip_index(mode, rv)])
 
     return {
         "bandwidth_hz": params.bandwidth.hz,
@@ -82,18 +82,9 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
         "chip_correlation_bound": air.chip_correlation_bound,
         "acquisition_threshold": air.acquisition_threshold,
         "mode_chips": chip_table,
-        # the floor family (ADR-0009): empty on an air without one
-        "floor_modes": air.floor_modes,
         "control_mode_index": air.control_mode_index,
-        "floor_schmidl_cox": floor_sc,
-        "floor_sc_length": int(cmap.n_carriers) if air.floor_long is not None else 0,
-        "floor_preamble_symbols": (
-            air.floor_long.preamble_symbols if air.floor_long is not None else 0
-        ),
-        "floor_chip_length": int(pre.n_chips_for(air.floor_long)) if air.floor_long else 0,
-        "floor_chip_correlation_bound": FLOOR_CHIP_CORRELATION_BOUND,
-        "floor_acquisition_threshold": air.floor_acquisition_threshold,
-        "floor_mode_chips": floor_chips,
+        # the ladder (ADR-0013): the tone floor's data kinds, then these OFDM modes
+        "ofdm_ladder": list(air.ofdm_ladder),
         "layouts": [
             {
                 "name": layout.name,
@@ -106,6 +97,46 @@ def waveform_block(air: AirInterface) -> dict[str, object]:
         "pilot_sequence": [
             [float(v.real), float(v.imag)] for v in zadoff_chu(cmap.n_carriers, PILOT_ROOT)
         ],
+    }
+
+
+def tone_kind(kind: ToneKind) -> dict[str, object]:
+    return {
+        "name": kind.name,
+        "payload_bytes": kind.payload_bytes,
+        "data_symbols": kind.data_symbols,
+        "patterns": list(kind.patterns),
+        "control": kind.control,
+    }
+
+
+def tone_block() -> dict[str, object]:
+    """The tone floor (ADR-0013): the same frames on both airs."""
+    num = TONE_NUMEROLOGY
+    det = tone.ToneDetector()
+    return {
+        "fs": num.fs,
+        "symbol_samples": num.symbol_samples,
+        "tones": num.tones,
+        "ramp_samples": num.ramp_samples,
+        "edge_samples": num.edge_samples,
+        "gain_db": tone.TONE_GAIN_DB,
+        "sync_symbols": SYNC_SYMBOLS,
+        "sync_patterns": [list(p) for p in SYNC_PATTERNS],
+        "control": tone_kind(TONE_CONTROL),
+        "data": [tone_kind(k) for k in TONE_DATA],
+        "detector": {
+            "hop_div": det.HOP_DIV,
+            "bin_div": det.BIN_DIV,
+            "clip": det.CLIP,
+            "max_cfo_hz": det.cfo_bins * det.bin_hz,
+            "threshold": det.threshold,
+            "min_hits": det.MIN_HITS,
+            "min_first_hits": det.MIN_FIRST_HITS,
+            "announce_threshold": tone.ANNOUNCE_THRESHOLD,
+            "lookahead": tone.ToneStream.LOOKAHEAD,
+            "announce_lookahead": tone.ToneStream.ANNOUNCE_LOOKAHEAD,
+        },
     }
 
 
@@ -130,6 +161,7 @@ def main() -> int:
             "WIDE_2300": waveform_block(WIDE),
             "NARROW_500": waveform_block(NARROW),
         },
+        "tone": tone_block(),
     }
 
     out = Path(args.out)

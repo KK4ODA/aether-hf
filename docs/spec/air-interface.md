@@ -108,24 +108,16 @@ carrier and both edges: carriers 0, 4, 8 and 11), leaving eight data carriers.
 | Preamble | 2 symbols | two identical Schmidl-Cox symbols |
 | Mode/RV chips | 32 | 4 x 13 sequences, pairwise |correlation| <= 0.25 |
 | Acquisition threshold | 0.56 | normalised matched-filter peak |
-| Floor preamble | 8 symbols | identical Schmidl-Cox symbols of the floor sequences (ADR-0009) |
-| Floor mode/RV chips | 128 | 4 x 13 sequences, pairwise |correlation| <= 0.2 |
-| Floor acquisition threshold | 0.32 | seven-window average of the floor references' normalised peak |
 <!-- END:waveform500 -->
 
-The ordinary frame layouts keep their symbol counts, so a narrow frame lasts exactly as
-long as a wide one and a link layer's timers do not know which waveform is under them. The
-**floor layouts** (ADR-0009) are the narrow air's own: an eight-symbol preamble and two or
-four times the data symbols, for the modes below the control mode and for control frames
-while the link runs one of them:
+The frame layouts keep their symbol counts, so a narrow frame lasts exactly as long as a
+wide one and a link layer's timers do not know which waveform is under them:
 
 <!-- BEGIN:layouts500 -->
 | Layout | Symbols | Duration | Samples (8 kHz) | Full pilot symbols | QAM slots |
 |---|---|---|---|---|---|
 | LONG | 2 + 32 = 34 | 1054 ms | 8432 | 0, 8, 16, 24 | 224 |
 | SHORT | 2 + 12 = 14 | 434 ms | 3472 | 0, 8 | 80 |
-| FLOOR-LONG | 8 + 128 = 136 | 4216 ms | 33728 | 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120 | 896 |
-| FLOOR-SHORT | 8 + 64 = 72 | 2232 ms | 17856 | 0, 8, 16, 24, 32, 40, 48, 56 | 448 |
 <!-- END:layouts500 -->
 
 The ordinary preamble uses the same PN seeds drawn to the six even carriers (the two frame
@@ -136,17 +128,82 @@ is what that set holds. The acquisition threshold is higher (§ constants) becau
 band-limited noise has a fifth of the degrees of freedom in a preamble's span, and so are
 the signal peaks by about as much.
 
-**The floor family.** A floor frame's preamble is eight identical symbols of a second pair
-of PN sequences, one per frame type, drawn on all twelve carriers (§3.1), followed by the
-FLOOR-LONG or FLOOR-SHORT data symbols. Eight symbols give a receiver four times the preamble energy —
-its *floor statistic* averages the two-symbol matched-filter output over the seven
-symbol-spaced windows the preamble fills, and has its own, lower threshold (§8) — and the
-separate sequences keep the two families from firing each other's detectors. A floor DATA
-frame's chips run over all sixteen of its full pilot symbols (128 chips, pairwise
-correlation ≤ 0.2). A receiver averages its comb-pilot channel estimate over ±3 symbols
-on a floor layout (±1 on the others). Which frames use the family is the link layer's
-rule (§7.2): the two floor modes' data frames, control frames while the link runs a floor
-mode, and every other connect request once the ordinary ones go unanswered.
+Below both OFDM tables is the tone floor (§2.4), the same frames on either air.
+
+### 2.4 The tone floor
+
+The slowest rungs of both ladders (§4) are not OFDM at all. A **tone-floor** frame sends
+one of sixteen tones at a time, with a continuous phase and a constant envelope, and is
+detected non-coherently, from the energy in each tone (ADR-0013). Its value is its
+envelope: a transmitter driven to a fixed peak puts an OFDM frame's average power 5.6–7.5
+dB below that peak (§2.2) and a steady tone's at it, so a tone-floor frame goes out **5.5 dB
+above an OFDM frame's average** at the same transmit level — at or under every OFDM frame's
+peak. Every SNR a receiver reports from a tone-floor frame is taken back to the OFDM
+frames' reference by the same 5.5 dB, and every threshold in §4 is in that reference.
+
+The tones are spaced at the symbol rate about the passband centre and span 400 Hz, inside
+a 500 Hz channel on either air. Between symbols the frequency glides on a raised cosine and
+the phase runs on, which keeps the spectrum inside the channel (99.9 % of the power within
+±250 Hz, −56 dB beyond ±500 Hz) without touching the envelope. Each symbol carries four
+coded bits under a Gray label, so neighbouring tones — the ones a carrier offset or a
+Doppler smear confuses — differ in one bit.
+
+A frame is three **sync blocks** of eight symbols — at its start, after 45 % of its data,
+and at its end — with the data between them. Each block's tones are a *Costas sequence*:
+every displacement (Δsymbol, Δtone) between two of its symbols occurs once (J. P. Costas,
+*Proc. IEEE*, 1984), so a block shifted in time or frequency matches itself in at most one
+symbol and a receiver finds timing and carrier offset together. The pattern names the
+frame: one for the control frame and one per redundancy version of each data kind, no two
+sharing more than two symbols under any offset within a block and any shift of up to eight
+tones. The uneven split of the data makes the three distances between a frame's blocks
+differ, so no shift of a frame lines up more than one of its blocks with another's.
+
+<!-- BEGIN:tone -->
+| Parameter | Value | Notes |
+|---|---|---|
+| Tones | 16 | 4 Gray-labelled coded bits a symbol |
+| Symbol | 320 samples (40 ms) | 25 Bd |
+| Tone spacing | 25 Hz | tones at (k - 7.5) x spacing about the passband centre |
+| Span | 400 Hz | lowest tone to highest, plus a spacing |
+| Tone change | 32 samples | raised-cosine frequency glide centred on the boundary; continuous phase |
+| Frame edges | 16 samples | raised-cosine amplitude fade in and out |
+| Level | +5.5 dB | over an OFDM frame's average power at the same transmit level |
+| Sync blocks | 3 x 8 symbols | start, middle, end; 45 % of the data before the middle one |
+| Detector | hop 80 samples, bin 6.25 Hz | offset search +/-100 Hz |
+| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest |
+| Arrival threshold | 4.8 | first block's mean ratio; 5 of 8 strongest |
+
+| Kind | Payload B | Symbols | Duration | Sync blocks at | Rate | Net bps | Patterns (by RV) | AWGN dB |
+|---|---|---|---|---|---|---|---|---|
+| tone-control | 7 | 56 + 3 x 8 = 80 | 3.20 s | 0, 33, 72 | 0.36 | 17.5 | 0 | -19.5 |
+| tone-24 | 24 | 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.49 | 35.8 | 1, 2, 3, 4 | -19.0 |
+| tone-36 | 36 | 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.71 | 53.7 | 5, 6, 7, 8 | -17.3 |
+
+| Pattern | Tones |
+|---|---|
+| 0 | 11 5 8 1 15 2 4 10 |
+| 1 | 0 15 1 13 14 4 7 12 |
+| 2 | 6 15 8 3 13 4 11 1 |
+| 3 | 2 11 10 15 3 1 12 7 |
+| 4 | 12 3 4 11 14 13 5 1 |
+| 5 | 14 2 7 13 4 1 5 0 |
+| 6 | 2 0 12 15 1 9 13 6 |
+| 7 | 11 14 1 15 10 6 8 0 |
+| 8 | 8 1 14 4 6 15 10 13 |
+<!-- END:tone -->
+
+A receiver searches a spectrogram at a quarter-symbol hop and a quarter-tone bin for every
+kind, redundancy version, start and carrier offset: the statistic is the mean, over the 24
+sync symbols, of the sync tone's energy over the mean of the other fifteen in the same
+symbol (a wideband burst lifts every tone together and leaves it at one; a strong carrier
+on one tone scores only where a pattern happens to use that tone), each ratio clipped. A
+candidate above the threshold is refined to the sample and a fraction of a hertz and kept
+only if at least half its sync tones are the strongest in their symbols — inside a strong
+frame, data symbols line up with some pattern at some offset in a handful of positions,
+never in half. A receiver may announce a frame as arriving once its first block is in
+(§7.2). The codeword is the OFDM frames' — CRC, LDPC, rate matching and the golden-ratio
+interleaver of §5 — ending in four bits a tone; a redundancy version other than 0 is not
+decodable alone and combines with the ones before it (HARQ-IR) as an OFDM frame's does.
 
 ### 2.2 Peak reduction
 
@@ -161,9 +218,9 @@ See `../adr/0004-papr-reduction.md`.
 
 ## 3. Frame structure
 
-A frame is a two-symbol preamble followed by data symbols — eight symbols on the narrow
-air's floor layouts (§2.3). Every 8th data symbol, starting with the first, is a **full
-pilot symbol** in which all carriers are known to the receiver.
+An OFDM frame is a two-symbol preamble followed by data symbols. Every 8th data symbol,
+starting with the first, is a **full pilot symbol** in which all carriers are known to the
+receiver. (The tone floor's frames are §2.4's.)
 
 <!-- BEGIN:layouts -->
 | Layout | Symbols | Duration | Samples (8 kHz) | Full pilot symbols | QAM slots |
@@ -173,9 +230,9 @@ pilot symbol** in which all carriers are known to the receiver.
 <!-- END:layouts -->
 
 LONG carries user data and the connection handshake. SHORT carries acknowledgements and
-other control frames, always at the control mode. On the narrow air FLOOR-LONG carries the
-floor modes' data and a connection request once the ordinary one has gone unanswered, and
-FLOOR-SHORT the control frames of a link running a floor mode (ADR-0009).
+other control frames, always at the control mode. While a link runs the tone floor its data
+and control frames are the tone floor's, and a connection request goes out on it once the
+ordinary one has gone unanswered (§7.2).
 
 ### 3.1 Preamble, and what it signals
 
@@ -189,21 +246,6 @@ Commun.*, 1997).
 different seeds — so the type decision carries the full processing gain of the preamble
 rather than depending on a separate header symbol that would be unreadable at the SNRs where
 the robust modes operate.
-
-The floor family (§2.3) has a second pair of seeds, and its preamble symbols carry their
-PN on **every** active carrier, not the even ones only. With twelve carriers a data symbol
-correlates with a six-carrier PN reference at up to 0.75 once the receiver has searched
-over carrier offset — half of the even carriers are comb pilots, which repeat every symbol
-— and at about half that with a twelve-carrier one; the seeds were searched so that at
-500 Hz every pair of the four sequences has a cosine of 0.25 or below and the floor pair
-overlaps the pilot sequence by no more than 0.4, and at 2 300 Hz every pair is at 0.25 or
-below. A receiver tells the families apart by evidence: a floor candidate must show its
-eight symbols repeating one another over all seven lags, and where a candidate of one
-family lies inside the other's frame — a strong frame's body scores on either family's
-references — the floor one is kept only if its statistic is at least 0.85 of the
-ordinary peak, since a genuine floor frame scores about the signal's share of the power
-on its own statistic and at most three quarters of it on the ordinary references, and a
-genuine ordinary frame the reverse.
 
 Zadoff–Chu is deliberately *not* used anywhere in the preamble: a ZC chirp shifted in
 frequency is, up to phase, the same chirp shifted in time, so a matched filter could not
@@ -226,65 +268,73 @@ pilot sequence.
 
 ---
 
-## 4. Modes
+## 4. Modes — the ladder
+
+What the link layer calls "mode N" is a **rung** of the air's ladder: the tone floor's two
+data kinds (§2.4), then the air's OFDM modes, most robust first. An OFDM frame's chips carry
+its OFDM mode index (§3.2), which is not its rung: on the 2 300 Hz ladder OFDM mode *m* is
+rung *m* + 2.
 
 <!-- BEGIN:modes -->
-| Mode | Name | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | BPSK-1/5 | 1 | 1/5 | BG2 | 30 | 232 | 1176 | 26 | 197 | -5.1 |
-| 1 | BPSK-1/3 | 1 | 1/3 | BG2 | 52 | 392 | 1176 | 46 | 349 | -3.2 |
-| 2 | BPSK-1/2 | 1 | 1/2 | BG2 | 72 | 584 | 1176 | 70 | 531 | -1.8 |
-| 3 | QPSK-1/3 | 2 | 1/3 | BG2 | 80 | 784 | 2352 | 95 | 721 | -0.4 |
-| 4 | QPSK-1/2 | 2 | 1/2 | BG2 | 120 | 1176 | 2352 | 144 | 1093 | +1.4 |
-| 5 | QPSK-2/3 | 2 | 2/3 | BG2 | 160 | 1568 | 2352 | 193 | 1465 | +2.9 |
-| 6 | PSK8-1/2 | 3 | 1/2 | BG2 | 176 | 1760 | 3528 | 217 | 1647 | +4.7 |
-| 7 | PSK8-2/3 | 3 | 2/3 | BG2 | 240 | 2352 | 3528 | 291 | 2209 | +6.9 |
-| 8 | QAM16-1/2 | 4 | 1/2 | BG2 | 240 | 2352 | 4704 | 291 | 2209 | +6.0 |
-| 9 | QAM16-2/3 | 4 | 2/3 | BG2 | 320 | 3136 | 4704 | 389 | 2953 | +8.9 |
-| 10 | QAM16-3/4 | 4 | 3/4 | BG1 | 176 | 3528 | 4704 | 438 | 3324 | +9.9 |
-| 11 | QAM64-2/3 | 6 | 2/3 | BG1 | 224 | 4704 | 7056 | 585 | 4440 | +13.9 |
-| 12 | QAM64-3/4 | 6 | 3/4 | BG1 | 256 | 5288 | 7056 | 658 | 4994 | +15.6 |
-| 13 | QAM64-5/6 | 6 | 5/6 | BG1 | 288 | 5880 | 7056 | 732 | 5556 | +16.9 |
+| Rung | Name | Frame | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | tone-24 | TONE | 4 | 0.49 | BG2 | 28 | 216 | 440 | 24 | 36 | -19.0 |
+| 1 | tone-36 | TONE | 4 | 0.71 | BG2 | 40 | 312 | 440 | 36 | 54 | -17.3 |
+| 2 | BPSK-1/5 (OFDM mode 0) | LONG | 1 | 1/5 | BG2 | 30 | 232 | 1176 | 26 | 197 | -5.1 |
+| 3 | BPSK-1/3 (OFDM mode 1) | LONG | 1 | 1/3 | BG2 | 52 | 392 | 1176 | 46 | 349 | -3.2 |
+| 4 | BPSK-1/2 (OFDM mode 2) | LONG | 1 | 1/2 | BG2 | 72 | 584 | 1176 | 70 | 531 | -1.8 |
+| 5 | QPSK-1/3 (OFDM mode 3) | LONG | 2 | 1/3 | BG2 | 80 | 784 | 2352 | 95 | 721 | -0.4 |
+| 6 | QPSK-1/2 (OFDM mode 4) | LONG | 2 | 1/2 | BG2 | 120 | 1176 | 2352 | 144 | 1093 | +1.4 |
+| 7 | QPSK-2/3 (OFDM mode 5) | LONG | 2 | 2/3 | BG2 | 160 | 1568 | 2352 | 193 | 1465 | +2.9 |
+| 8 | PSK8-1/2 (OFDM mode 6) | LONG | 3 | 1/2 | BG2 | 176 | 1760 | 3528 | 217 | 1647 | +4.7 |
+| 9 | PSK8-2/3 (OFDM mode 7) | LONG | 3 | 2/3 | BG2 | 240 | 2352 | 3528 | 291 | 2209 | +6.9 |
+| 10 | QAM16-1/2 (OFDM mode 8) | LONG | 4 | 1/2 | BG2 | 240 | 2352 | 4704 | 291 | 2209 | +6.0 |
+| 11 | QAM16-2/3 (OFDM mode 9) | LONG | 4 | 2/3 | BG2 | 320 | 3136 | 4704 | 389 | 2953 | +8.9 |
+| 12 | QAM16-3/4 (OFDM mode 10) | LONG | 4 | 3/4 | BG1 | 176 | 3528 | 4704 | 438 | 3324 | +9.9 |
+| 13 | QAM64-2/3 (OFDM mode 11) | LONG | 6 | 2/3 | BG1 | 224 | 4704 | 7056 | 585 | 4440 | +13.9 |
+| 14 | QAM64-3/4 (OFDM mode 12) | LONG | 6 | 3/4 | BG1 | 256 | 5288 | 7056 | 658 | 4994 | +15.6 |
+| 15 | QAM64-5/6 (OFDM mode 13) | LONG | 6 | 5/6 | BG1 | 288 | 5880 | 7056 | 732 | 5556 | +16.9 |
 <!-- END:modes -->
 
 `K'` is the information block including CRC, `E` the coded bits after rate matching, and the
 AWGN column the measured SNR (3 kHz) for 10 % frame error rate — every entry measured, not
 interpolated (`bench/baselines/phy_fer_awgn14.csv`).
 
-Modes are ordered from most robust to fastest. A mode that another mode beats on *both*
-payload and threshold is never selected by the rate controller; mode 7 is in that position.
+Rungs are ordered from most robust to fastest. A rung that another rung beats on *both*
+payload per second and threshold is never selected by the rate controller; rung 9 (OFDM
+mode 7) is in that position. The tone floor's thresholds come from
+`bench/baselines/tone_floor.csv`, at equal peak power.
 
 ---
 
 ### 4.1 Modes at 500 Hz
 
-The narrow table has thirteen modes and its indices are its own: mode 7 at 500 Hz is
-16-QAM ½, not the wide table's 8-PSK ⅔. A station knows which table applies from the
-waveform the frame arrived in. Mode 3, QPSK ½, is the **control mode** — the slowest whose
-SHORT frame carries a seven-byte control frame and whose LONG frame carries a connection
-request; control frames, connect requests, beacons and probes go out at it. Modes 0 and 1
-are the **floor modes** (ADR-0009): QPSK 1/10 and QPSK ⅕ on the FLOOR-LONG layout, 19 and
-41 bytes in a frame of 4.2 s, for the SNR region the ordinary frames cannot reach; while a
-link runs one of them its control frames go on FLOOR-SHORT at mode 0's modulation and rate
-(8 bytes, one over a control frame's need). Mode 2, QPSK ⅓ on the ordinary frame, is the
-rung between the floor and the control mode.
+The narrow ladder has thirteen rungs and its OFDM modes are its own: rung 7 at 500 Hz is
+16-QAM ½, not the wide ladder's QPSK ⅔. A station knows which ladder applies from the
+waveform the frame arrived in. Rungs 0 and 1 are the tone floor, the same frames as on the
+wide air. Above them the narrow OFDM modes keep their numbers as rungs: OFDM modes 0 and 1
+were the OFDM floor of ADR-0009, which the tone floor replaced, and are on no rung. Rung 3,
+QPSK ½, is the **control mode** — the slowest whose SHORT frame carries a seven-byte control
+frame and whose LONG frame carries a connection request; ordinary control frames, connect
+requests, beacons and probes go out at it. Rung 2, QPSK ⅓ on the ordinary frame, is the step
+between the floor and the control mode.
 
 <!-- BEGIN:modes500 -->
-| Mode | Name | Layout | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
+| Rung | Name | Frame | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | QPSK-1/10 | FLOOR-LONG | 2 | 1/10 | BG2 | 30 | 176 | 1792 | 19 | 36 | -12.4 |
-| 1 | QPSK-1/5 | FLOOR-LONG | 2 | 1/5 | BG2 | 44 | 352 | 1792 | 41 | 78 | -10.2 |
-| 2 | QPSK-1/3 | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
-| 3 | QPSK-1/2 | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
-| 4 | QPSK-2/3 | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.6 |
-| 5 | PSK8-1/2 | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
-| 6 | PSK8-2/3 | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.5 |
-| 7 | QAM16-1/2 | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
-| 8 | QAM16-2/3 | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
-| 9 | QAM16-3/4 | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.5 |
-| 10 | QAM64-2/3 | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
-| 11 | QAM64-3/4 | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
-| 12 | QAM64-5/6 | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
+| 0 | tone-24 | TONE | 4 | 0.49 | BG2 | 28 | 216 | 440 | 24 | 36 | -19.0 |
+| 1 | tone-36 | TONE | 4 | 0.71 | BG2 | 40 | 312 | 440 | 36 | 54 | -17.3 |
+| 2 | QPSK-1/3 (OFDM mode 2) | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
+| 3 | QPSK-1/2 (OFDM mode 3) | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
+| 4 | QPSK-2/3 (OFDM mode 4) | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.6 |
+| 5 | PSK8-1/2 (OFDM mode 5) | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
+| 6 | PSK8-2/3 (OFDM mode 6) | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.5 |
+| 7 | QAM16-1/2 (OFDM mode 7) | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
+| 8 | QAM16-2/3 (OFDM mode 8) | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
+| 9 | QAM16-3/4 (OFDM mode 9) | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.5 |
+| 10 | QAM64-2/3 (OFDM mode 10) | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
+| 11 | QAM64-3/4 (OFDM mode 11) | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
+| 12 | QAM64-5/6 (OFDM mode 12) | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
 <!-- END:modes500 -->
 
 ---
@@ -494,8 +544,6 @@ retransmission that follows.
 | Payload CRC | CRC24A, polynomial 0x864CFB, 24 bits |
 | Schmidl-Cox PN seed, DATA | 4649 |
 | Schmidl-Cox PN seed, CONTROL | 7919 |
-| Schmidl-Cox PN seed, floor DATA | 4 |
-| Schmidl-Cox PN seed, floor CONTROL | 9 |
 | Mode/RV chip seed | 20260913 |
 | Redundancy versions | 4 |
 | Peak reduction target, PSK modes | 5.0 dB |
@@ -531,7 +579,10 @@ rate), and end-to-end link goodput with adaptive rate control:
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| Most robust mode | −5.1 dB | +2.0 | +1.2 | −0.3 |
+| Tone floor, 36 bit/s (rung 0) | −19.0 dB | −12.0 | −13.2 | −14.5 |
+| Tone floor, 54 bit/s (rung 1) | −17.3 | −8.8 | −10.3 | −10.9 |
+| Tone floor, control frame | −19.5 | −11.2 | −14.7 | −15.8 |
+| Most robust OFDM mode (rung 2) | −5.1 dB | +2.0 | +1.2 | −0.3 |
 | QPSK 1/2 | +1.4 | +8.7 | +8.5 | +6.0 |
 | Goodput at +12 dB | 1696 bps | 859 | 819 | 1034 |
 | Goodput at +20 dB | 2106 bps | 1696 | 1565 | 1745 |
@@ -541,20 +592,26 @@ power into the same noise:
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| Floor mode 0 (QPSK 1/10 on the floor frame, 36 bit/s) | −12.2 dB | −2.0 | −1.0 | −2.0 |
-| Floor mode 1 (QPSK ⅕ on the floor frame, 78 bit/s) | −10.2 | −1.0 | −4.0 | −5.0 |
+| Tone floor, 36 bit/s (rung 0) | −19.0 dB | −12.0 | −13.2 | −14.5 |
+| Tone floor, 54 bit/s (rung 1) | −17.3 | −8.8 | −10.3 | −10.9 |
 | Control mode (QPSK ½) | −5.2 | +4.0 | +3.5 | +0.0 |
 | 16-QAM ½ | −0.1 | +9.0 | +9.5 | +8.0 |
 | Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +22 | > +23 |
-| Best single-mode throughput at −10 dB | 311 bps | 114 | 91 | 111 |
-| Best single-mode throughput at +12 dB | 1040 bps | 533 | 469 | 359 |
+| Best single-rung throughput at −10 dB | 54 bps | 45 | 49 | 52 |
+| Best single-rung throughput at +12 dB | 1040 bps | 533 | 469 | 389 |
 
-The control mode equals the wide floor on AWGN, because twelve carriers carry ≈ 6.8 dB
-more per carrier than fifty-seven; on the fading channels a fifth of the frequency
-diversity costs it about 2 dB on ITU Good. The floor family (ADR-0009) reaches 7 dB
-lower on AWGN and 5–9 dB lower on the fading channels, where a 4.2 s frame spans several
-fades on ITU Poor. The fading-channel crossings of the floor modes sit on shallow curves
-and move a decibel or two between runs of thirty frames.
+The tone floor's rows are the same on either air (`bench/baselines/tone_floor.csv`, 100
+frames a point, through the detector) and are at equal peak power: its frames go out 5.5 dB
+above an OFDM frame's average at the same transmit level (§2.4), and the SNR is the OFDM
+frames' reference, so every row of both tables reads against the same transmitter. The
+OFDM floor the tone floor replaced at 500 Hz (ADR-0009, `floor_500.csv`) needed −13.0,
+−4.0, −4.7 and −3.0 dB for its 36 bit/s mode: the tone floor is 6 dB better on AWGN and 8–12
+dB better on the fading channels, where its frames span several fades and it needs no
+channel estimate. The narrow control mode equals the wide table's most robust OFDM mode on
+AWGN, because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; on the
+fading channels a fifth of the frequency diversity costs it about 2 dB on ITU Good. The
+fading-channel crossings of the slowest rungs sit on shallow curves and move a decibel or
+two between runs of a hundred frames.
 
 These are simulator figures. No on-air measurements exist yet, and none should be inferred.
 
@@ -562,8 +619,10 @@ These are simulator figures. No on-air measurements exist yet, and none should b
 
 ## 11. Open items for v1.0
 
-* A floor family for the wide waveform, measured against the narrow one (ADR-0009 gives
-  the narrow air its floor; the roadmap's 2 300 Hz question is still open).
+* Rungs between the tone floor and the full-width OFDM modes (54 bit/s at −17 dB against
+  197 bit/s at −5 dB on the wide ladder), if the equal-peak-power curves call for them.
+* A call on the tone floor is heard by a station of either bandwidth; negotiating across
+  the two is not specified.
 * The wide (2.75 kHz) bandwidth variant.
 * Compression negotiation, CW identification, beacon and ping datagrams.
 * Formal test vectors published alongside this document; the reference vectors in `vectors/`
