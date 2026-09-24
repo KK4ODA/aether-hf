@@ -132,6 +132,7 @@ def tone_block() -> dict[str, object]:
             "max_cfo_hz": det.cfo_bins * det.bin_hz,
             "threshold": det.threshold,
             "min_hits": det.MIN_HITS,
+            "min_block_hits": det.MIN_BLOCK_HITS,
             "min_first_hits": det.MIN_FIRST_HITS,
             "announce_threshold": tone.ANNOUNCE_THRESHOLD,
             "lookahead": tone.ToneStream.LOOKAHEAD,

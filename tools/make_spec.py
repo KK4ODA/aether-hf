@@ -229,7 +229,8 @@ def tone_block() -> str:
             "Acquisition threshold",
             f"{det.threshold}",
             f"mean sync-tone ratio, each clipped at {det.CLIP:.0f}; "
-            f"{det.MIN_HITS} of 24 sync tones strongest",
+            f"{det.MIN_HITS} of 24 sync tones strongest, {det.MIN_BLOCK_HITS} of them in a "
+            "second block; a silent symbol is no evidence",
         ],
         [
             "Arrival threshold",

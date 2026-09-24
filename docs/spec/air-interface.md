@@ -170,7 +170,7 @@ differ, so no shift of a frame lines up more than one of its blocks with another
 | Level | +5.5 dB | over an OFDM frame's average power at the same transmit level |
 | Sync blocks | 3 x 8 symbols | start, middle, end; 45 % of the data before the middle one |
 | Detector | hop 80 samples, bin 6.25 Hz | offset search +/-100 Hz |
-| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest |
+| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence |
 | Arrival threshold | 4.8 | first block's mean ratio; 5 of 8 strongest |
 
 | Kind | Payload B | Symbols | Duration | Sync blocks at | Rate | Net bps | Patterns (by RV) | AWGN dB |
