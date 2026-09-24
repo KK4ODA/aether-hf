@@ -31,6 +31,7 @@ from aether_model.frame.modes import (
     TONE_CONTROL,
     TONE_DATA,
     TONE_FAST,
+    TONE_NARROW,
     TONE_NUMEROLOGY,
     WIDE,
     AirInterface,
@@ -127,7 +128,8 @@ def layout_block(air: AirInterface = WIDE) -> str:
 
 
 def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
-    """The air's ladder: every rung, the tone floor's kinds first (ADR-0013, ADR-0014)."""
+    """The air's ladder: every rung, the tone floor's kinds first (ADR-0013, ADR-0014,
+    ADR-0015)."""
     thresholds = AWGN_THRESHOLD_DB if air is WIDE else NARROW_AWGN_THRESHOLD_DB
     rows = []
     for r in air.ladder:
@@ -137,7 +139,8 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
                 [
                     str(r.index),
                     k.name,
-                    f"TONE, {round(1 / k.data.symbol_s)} Bd data",
+                    f"TONE, {round(1 / k.data.symbol_s)} Bd data"
+                    + ("" if k.data.tones == TONE_NUMEROLOGY.tones else f", {k.data.tones} tones"),
                     str(k.data.bits_per_symbol),
                     f"{k.rate:.2f}",
                     f"BG{k.base_graph}",
@@ -189,10 +192,12 @@ def mode_block(layout: FrameLayout = LONG, air: AirInterface = WIDE) -> str:
 
 
 def tone_block() -> str:
-    """The tone floor's numerology, frame kinds and detector constants (ADR-0013), and its
-    fast kinds' data numerologies (ADR-0014)."""
+    """The tone floor's numerology, frame kinds and detector constants (ADR-0013), and the
+    data numerologies of its fast kinds (ADR-0014) and its narrow middle ones (ADR-0015)."""
     num = TONE_NUMEROLOGY
-    fast = sorted({k.data for k in TONE_FAST}, key=lambda n: -n.symbol_samples)
+    fast = sorted(
+        {k.data for k in (*TONE_FAST, *TONE_NARROW)}, key=lambda n: (-n.tones, -n.symbol_samples)
+    )
     det = tone.ToneDetector()
     rows = [
         ["Tones", f"{num.tones}", f"{num.bits_per_symbol} Gray-labelled coded bits a symbol"],
@@ -215,7 +220,8 @@ def tone_block() -> str:
         ["Frame edges", f"{num.edge_samples} samples", "raised-cosine amplitude fade in and out"],
         *(
             [
-                f"Fast data, {1 / n.symbol_s:.0f} Bd",
+                f"{n.tones}-tone data, {1 / n.symbol_s:.0f} Bd"
+                + (", 500 Hz air" if n.span_hz <= num.span_hz else ", 2 300 Hz air"),
                 f"{n.symbol_samples} samples ({n.symbol_s * 1e3:.0f} ms), "
                 f"{n.spacing_hz:.0f} Hz apart, span {n.span_hz:.0f} Hz",
                 f"{num.symbol_samples // n.symbol_samples} data symbols a slot; tone change "
@@ -244,7 +250,9 @@ def tone_block() -> str:
             f"{det.threshold}",
             f"mean sync-tone ratio, each clipped at {det.CLIP:.0f}; "
             f"{det.MIN_HITS} of 24 sync tones strongest, {det.MIN_BLOCK_HITS} of them in a "
-            "second block; a silent symbol is no evidence",
+            "second block; a silent symbol is no evidence; at most "
+            f"{det.MAX_CONTRADICTIONS} contradicted (another tone strongest, "
+            f"{det.CONTRADICTION:.0f}x the noise, not steady)",
         ],
         [
             "Arrival threshold",
@@ -253,7 +261,7 @@ def tone_block() -> str:
         ],
     ]
     kinds = []
-    for k in (TONE_CONTROL, *TONE_DATA, *TONE_FAST):
+    for k in (TONE_CONTROL, *TONE_DATA, *TONE_FAST, *TONE_NARROW):
         data = (
             str(k.data_symbols)
             if k.speed == 1
@@ -271,7 +279,9 @@ def tone_block() -> str:
                 ", ".join(str(p) for p in k.patterns),
                 f"{TONE_CONTROL_THRESHOLD_DB:+.1f}"
                 if k.control
-                else f"{AWGN_THRESHOLD_DB[WIDE.tone_data.index(k)]:+.1f}",
+                else f"{AWGN_THRESHOLD_DB[WIDE.tone_data.index(k)]:+.1f}"
+                if k in WIDE.tone_data
+                else f"{NARROW_AWGN_THRESHOLD_DB[NARROW.tone_data.index(k)]:+.1f}",
             ]
         )
     patterns = [[str(i), " ".join(str(t) for t in p)] for i, p in enumerate(SYNC_PATTERNS)]

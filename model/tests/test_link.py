@@ -1016,7 +1016,7 @@ def test_a_narrow_session_at_the_floor_completes_through_the_pipe() -> None:
     from aether_model.waveform import NARROW_500
 
     timing = phy_timing(NARROW_500)
-    a, b = _pair(timing, LinkConfig(max_mode=12))
+    a, b = _pair(timing, LinkConfig(max_mode=14))
     sim = TwoStationSim(a, b, snr_db=-8.0, seed=3)
     message = bytes(range(60))
     a.connect("KK4XYZ")
@@ -1059,18 +1059,19 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
 # ── holding the link on a fading path (P9-7) ──────────────────────────
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     timing: PhyTiming, version: int
 ) -> None:
-    """Version 3 of the link protocol numbers modes as rungs of the ladder with the fast
-    kinds (ADR-0014), version 2 as rungs of the ladder before them (ADR-0013), version 1 as
-    OFDM modes: a station of another version means other frames by the same numbers, so a
-    call from one is not a session to start — it is ignored, with an event saying why."""
+    """Version 4 of the link protocol numbers the 500 Hz ladder's rungs with its middle kinds
+    (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
+    ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
+    other frames by the same numbers, so a call from one is not a session to start — it is
+    ignored, with an event saying why."""
     from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
     from aether_model.link.phy import Container, TxFrame
 
-    assert PROTOCOL_VERSION == 3 and ConnectBody("A", "B").version == 3
+    assert PROTOCOL_VERSION == 4 and ConnectBody("A", "B").version == 4
     b = LinkEngine("KK4XYZ", timing, None, seed=2)
     body = ConnectBody("W4ODA", "KK4XYZ", version=version).encode()
     payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))
@@ -1151,9 +1152,9 @@ def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
     from aether_model.waveform import NARROW_500
 
     timing = phy_timing(NARROW_500)
-    b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=12))
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=14))
     b.role, b.state = Role.IRS, State.CONNECTED
-    b._peer_mode = 3  # the ordinary connect mode
+    b._peer_mode = 5  # the narrow air's control rung, where the connect frames went
     b.rate.seed(10.0)  # and a recommendation on the ordinary layouts
     guessed = b._peer_data_frame_s()
     assert guessed < 2.0
@@ -1168,7 +1169,8 @@ def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
 def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     """The three P9-7 changes together, on the fading pipe (P9-6): at −4 dB on ITU Good the
     500 Hz floor carries a 1 kB session that the fixed 45 s timeout dropped two times in
-    three — the tone floor now (ADR-0013), which carries it with room to spare."""
+    three — the tone floor now (ADR-0013) and its middle kinds (ADR-0015), which carry it
+    with room to spare."""
     import numpy as np
 
     from aether_model.frame.modes import NARROW
@@ -1178,12 +1180,19 @@ def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     from aether_model.link.sim import control_thresholds_for
 
     # the calibrated constants of the frames this session uses (bench/baselines/fading_pipe.csv)
-    beta = {"tone-24": 0.0122, "tone-36": 0.0111, "tone-control": 0.0087, "control short": 1000.0}
+    beta = {
+        "tone-24": 0.0122,
+        "tone-36": 0.0111,
+        "tone4x100-51": 0.0401,
+        "tone4x100-75": 0.0226,
+        "tone-control": 0.0087,
+        "control short": 1000.0,
+    }
     timing = phy_timing(NARROW.params)
     done = 0
     for seed in range(6):
-        a = LinkEngine("W4ODA", timing, LinkConfig(max_mode=12), seed=seed)
-        b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=12), seed=seed + 1)
+        a = LinkEngine("W4ODA", timing, LinkConfig(max_mode=14), seed=seed)
+        b = LinkEngine("KK4XYZ", timing, LinkConfig(max_mode=14), seed=seed + 1)
         pipe = FadingPipe(
             SharedFading("good", seed),
             shapes_for(NARROW),

@@ -129,7 +129,8 @@ band-limited noise has a fifth of the degrees of freedom in a preamble's span, a
 the signal peaks by about as much.
 
 Below both OFDM tables is the tone floor (§2.4), the same frames on either air, with its
-fast kinds between it and the OFDM modes on the 2 300 Hz air.
+fast kinds between it and the OFDM modes on the 2 300 Hz air and its four-tone middle kinds
+there on the 500 Hz air.
 
 ### 2.4 The tone floor
 
@@ -172,6 +173,20 @@ symbol SNR from the sync blocks at the sync numerology and the data's tones at t
 each on its own bins; a data symbol's SNR is the level interpolated at its middle, a
 quarter or a half of a slot's. The 500 Hz air has no room for them.
 
+The 500 Hz ladder has two **middle kinds** of its own (ADR-0015): the same frame with four
+data symbols in each data slot on **four** tones 100 Hz apart, at ±50 and ±150 Hz — the
+floor's own 400 Hz — two Gray-labelled bits a symbol and 880 coded bits a frame. Their data
+glides over the floor's own 32 samples, which keeps them inside the channel as the floor's
+frames are (99.9 % of the power within ±250 Hz). The 2 300 Hz air does not look for them.
+
+A candidate is a frame only if at least 12 of its 24 sync symbols have their own tone
+strongest, at least 4 of them in a second block, and no more than two are **contradicted**:
+a sync symbol whose strongest tone is another one, at least 12 times the noise per bin and
+at least four times that tone's median over the frame's sync symbols (a steady carrier or
+spur is not a contradiction). A pattern read at a part-symbol offset inside a strong frame
+it does not name — another air's middle kind, or a frame read a block early — matches half its
+symbols there and is contradicted in the rest.
+
 <!-- BEGIN:tone -->
 | Parameter | Value | Notes |
 |---|---|---|
@@ -181,12 +196,13 @@ quarter or a half of a slot's. The 500 Hz air has no room for them.
 | Span | 400 Hz | lowest tone to highest, plus a spacing |
 | Tone change | 32 samples | raised-cosine frequency glide centred on the boundary; continuous phase |
 | Frame edges | 16 samples | raised-cosine amplitude fade in and out |
-| Fast data, 50 Bd | 160 samples (20 ms), 50 Hz apart, span 800 Hz | 2 data symbols a slot; tone change 16 samples, the shorter glide at a boundary with a sync symbol |
-| Fast data, 100 Bd | 80 samples (10 ms), 100 Hz apart, span 1600 Hz | 4 data symbols a slot; tone change 8 samples, the shorter glide at a boundary with a sync symbol |
+| 16-tone data, 50 Bd, 2 300 Hz air | 160 samples (20 ms), 50 Hz apart, span 800 Hz | 2 data symbols a slot; tone change 16 samples, the shorter glide at a boundary with a sync symbol |
+| 16-tone data, 100 Bd, 2 300 Hz air | 80 samples (10 ms), 100 Hz apart, span 1600 Hz | 4 data symbols a slot; tone change 8 samples, the shorter glide at a boundary with a sync symbol |
+| 4-tone data, 100 Bd, 500 Hz air | 80 samples (10 ms), 100 Hz apart, span 400 Hz | 4 data symbols a slot; tone change 32 samples, the shorter glide at a boundary with a sync symbol |
 | Level | +5.5 dB | over an OFDM frame's average power at the same transmit level |
 | Sync blocks | 3 x 8 symbols | start, middle, end; 45 % of the data slots before the middle one; the same for every kind |
 | Detector | hop 80 samples, bin 6.25 Hz | offset search +/-100 Hz |
-| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence |
+| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence; at most 2 contradicted (another tone strongest, 12x the noise, not steady) |
 | Arrival threshold | 4.8 | first block's mean ratio; 5 of 8 strongest |
 
 | Kind | Payload B | Data + sync = slots | Duration | Sync blocks at | Rate | Net bps | Patterns (by RV) | AWGN dB |
@@ -198,6 +214,8 @@ quarter or a half of a slot's. The 500 Hz air has no room for them.
 | tone50-75 | 75 | 220 at 50 Bd in 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.71 | 111.9 | 13, 14, 15, 16 | -14.2 |
 | tone100-105 | 105 | 440 at 100 Bd in 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.49 | 156.7 | 17, 18, 19, 20 | -13.1 |
 | tone100-153 | 153 | 440 at 100 Bd in 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.71 | 228.4 | 21, 22, 23, 24 | -11.2 |
+| tone4x100-51 | 51 | 440 at 100 Bd in 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.49 | 76.1 | 25, 26, 27, 28 | -14.3 |
+| tone4x100-75 | 75 | 440 at 100 Bd in 110 + 3 x 8 = 134 | 5.36 s | 0, 57, 126 | 0.71 | 111.9 | 29, 30, 31, 32 | -13.0 |
 
 | Pattern | Tones |
 |---|---|
@@ -226,6 +244,14 @@ quarter or a half of a slot's. The 500 Hz air has no room for them.
 | 22 | 3 9 6 13 14 10 0 15 |
 | 23 | 8 13 15 14 11 0 10 2 |
 | 24 | 15 0 4 6 1 14 5 10 |
+| 25 | 3 9 1 14 15 13 10 0 |
+| 26 | 3 14 15 10 2 1 13 6 |
+| 27 | 10 2 13 15 0 7 5 14 |
+| 28 | 7 6 0 15 8 14 2 5 |
+| 29 | 2 9 5 0 14 13 1 10 |
+| 30 | 6 13 5 14 10 4 2 15 |
+| 31 | 0 3 1 5 11 12 14 4 |
+| 32 | 4 13 11 0 8 15 2 14 |
 <!-- END:tone -->
 
 A receiver searches a spectrogram at a quarter-symbol hop and a quarter-tone bin for every
@@ -307,8 +333,8 @@ pilot sequence.
 ## 4. Modes — the ladder
 
 What the link layer calls "mode N" is a **rung** of the air's ladder: the tone floor's data
-kinds (§2.4) — its own two, then on the 2 300 Hz air its four fast kinds — then the air's
-OFDM modes, most robust first. An OFDM frame's chips carry its OFDM mode index (§3.2),
+kinds (§2.4) — its own two, then on the 2 300 Hz air its four fast kinds and on the 500 Hz
+air its two four-tone middle kinds — then the air's OFDM modes, most robust first. An OFDM frame's chips carry its OFDM mode index (§3.2),
 which is not its rung: on the 2 300 Hz ladder OFDM mode *m* is rung *m* + 6.
 
 <!-- BEGIN:modes -->
@@ -351,32 +377,35 @@ thresholds come from `bench/baselines/tone_floor.csv`, at equal peak power.
 
 ### 4.1 Modes at 500 Hz
 
-The narrow ladder has thirteen rungs and its OFDM modes are its own: rung 7 at 500 Hz is
-16-QAM ½, not the wide ladder's QPSK ⅔. A station knows which ladder applies from the
+The narrow ladder has fifteen rungs and its OFDM modes are its own: rung 9 at 500 Hz is
+16-QAM ½, not the wide ladder's QPSK ⅓. A station knows which ladder applies from the
 waveform the frame arrived in. Rungs 0 and 1 are the tone floor, the same frames as on the
-wide air. Above them the narrow OFDM modes keep their numbers as rungs: OFDM modes 0 and 1
-were the OFDM floor of ADR-0009, which the tone floor replaced, and are on no rung. Rung 3,
-QPSK ½, is the **control mode** — the slowest whose SHORT frame carries a seven-byte control
-frame and whose LONG frame carries a connection request; ordinary control frames, connect
-requests, beacons and probes go out at it. Rung 2, QPSK ⅓ on the ordinary frame, is the step
-between the floor and the control mode.
+wide air, and rungs 2 and 3 its four-tone middle kinds (ADR-0015). Above them the narrow OFDM
+mode *m* is rung *m* + 2: OFDM modes 0 and 1 were the OFDM floor of ADR-0009, which the tone
+floor replaced, and are on no rung. Rung 5, QPSK ½, is the **control mode** — the slowest
+whose SHORT frame carries a seven-byte control frame and whose LONG frame carries a
+connection request; ordinary control frames, connect requests, beacons and probes go out at
+it. Rung 4, QPSK ⅓ on the ordinary frame, is the step between the tone floor and the control
+mode.
 
 <!-- BEGIN:modes500 -->
 | Rung | Name | Frame | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | tone-24 | TONE, 25 Bd data | 4 | 0.49 | BG2 | 28 | 216 | 440 | 24 | 36 | -19.0 |
 | 1 | tone-36 | TONE, 25 Bd data | 4 | 0.71 | BG2 | 40 | 312 | 440 | 36 | 54 | -17.3 |
-| 2 | QPSK-1/3 (OFDM mode 2) | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
-| 3 | QPSK-1/2 (OFDM mode 3) | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
-| 4 | QPSK-2/3 (OFDM mode 4) | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.6 |
-| 5 | PSK8-1/2 (OFDM mode 5) | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
-| 6 | PSK8-2/3 (OFDM mode 6) | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.5 |
-| 7 | QAM16-1/2 (OFDM mode 7) | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
-| 8 | QAM16-2/3 (OFDM mode 8) | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
-| 9 | QAM16-3/4 (OFDM mode 9) | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.5 |
-| 10 | QAM64-2/3 (OFDM mode 10) | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
-| 11 | QAM64-3/4 (OFDM mode 11) | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
-| 12 | QAM64-5/6 (OFDM mode 12) | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
+| 2 | tone4x100-51 | TONE, 100 Bd data, 4 tones | 2 | 0.49 | BG2 | 56 | 432 | 880 | 51 | 76 | -14.3 |
+| 3 | tone4x100-75 | TONE, 100 Bd data, 4 tones | 2 | 0.71 | BG1 | 30 | 624 | 880 | 75 | 112 | -13.0 |
+| 4 | QPSK-1/3 (OFDM mode 2) | LONG | 2 | 1/3 | BG2 | 24 | 144 | 448 | 15 | 114 | -6.0 |
+| 5 | QPSK-1/2 (OFDM mode 3) | LONG | 2 | 1/2 | BG2 | 28 | 224 | 448 | 25 | 190 | -5.2 |
+| 6 | QPSK-2/3 (OFDM mode 4) | LONG | 2 | 2/3 | BG2 | 40 | 296 | 448 | 34 | 258 | -3.6 |
+| 7 | PSK8-1/2 (OFDM mode 5) | LONG | 3 | 1/2 | BG2 | 44 | 336 | 672 | 39 | 296 | -2.1 |
+| 8 | PSK8-2/3 (OFDM mode 6) | LONG | 3 | 2/3 | BG2 | 56 | 448 | 672 | 53 | 402 | +0.5 |
+| 9 | QAM16-1/2 (OFDM mode 7) | LONG | 4 | 1/2 | BG2 | 56 | 448 | 896 | 53 | 402 | -0.1 |
+| 10 | QAM16-2/3 (OFDM mode 8) | LONG | 4 | 2/3 | BG2 | 72 | 592 | 896 | 71 | 539 | +2.0 |
+| 11 | QAM16-3/4 (OFDM mode 9) | LONG | 4 | 3/4 | BG1 | 32 | 672 | 896 | 81 | 615 | +3.5 |
+| 12 | QAM64-2/3 (OFDM mode 10) | LONG | 6 | 2/3 | BG2 | 96 | 896 | 1344 | 109 | 827 | +6.9 |
+| 13 | QAM64-3/4 (OFDM mode 11) | LONG | 6 | 3/4 | BG1 | 48 | 1008 | 1344 | 123 | 934 | +8.8 |
+| 14 | QAM64-5/6 (OFDM mode 12) | LONG | 6 | 5/6 | BG1 | 52 | 1120 | 1344 | 137 | 1040 | +10.4 |
 <!-- END:modes500 -->
 
 ---
@@ -643,14 +672,17 @@ power into the same noise:
 |---|---|---|---|---|
 | Tone floor, 36 bit/s (rung 0) | −19.0 dB | −11.7 | −13.2 | −14.5 |
 | Tone floor, 54 bit/s (rung 1) | −17.3 | −8.8 | −10.3 | −10.9 |
+| Middle kind, 76 bit/s (rung 2) | −14.3 | −7.5 | −10.0 | −10.3 |
+| Middle kind, 112 bit/s (rung 3) | −13.0 | −3.2 | −4.9 | −5.7 |
 | Control mode (QPSK ½) | −5.2 | +4.0 | +3.5 | +0.0 |
 | 16-QAM ½ | −0.1 | +9.0 | +9.5 | +8.0 |
 | Fastest narrow mode (64-QAM ⅚) | +10.4 | +21.0 | > +22 | > +23 |
-| Best single-rung throughput at −10 dB | 54 bps | 45 | 49 | 52 |
+| Best single-rung throughput at −10 dB | 112 bps | 69 | 69 | 73 |
 | Best single-rung throughput at +12 dB | 1040 bps | 533 | 469 | 389 |
 
 The tone floor's rows are the same on either air (`bench/baselines/tone_floor.csv`, 100
-frames a point, through the detector; the fast kinds are the 2 300 Hz air's alone) and are at
+frames a point, through the detector; the fast kinds are the 2 300 Hz air's alone, the
+four-tone middle kinds the 500 Hz air's) and are at
 equal peak power: its frames go out 5.5 dB
 above an OFDM frame's average at the same transmit level (§2.4), and the SNR is the OFDM
 frames' reference, so every row of both tables reads against the same transmitter. The

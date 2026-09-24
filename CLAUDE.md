@@ -488,6 +488,26 @@ Gate: 5.2/5.5 dB over BPSK ⅕ on Good/Moderate at a higher rate; sessions 2–3
 to −2 dB on the fading classes, nothing slower; the 1 dB floor-boundary cap still pays. Owed:
 tone floor and fast tones on the air (beta.52 and beta.53 do not connect: protocol 2 vs 3);
 next P9-5.
+**P9-10 the 500 Hz middle kinds** (ADR-0015, beta.54; the author's "phase 4 at 500 Hz",
+done before P9-5 on request): `tone4x100-51` and `tone4x100-75` (76 and 112 bit/s) are the
+floor's frame with 440 data symbols on **four** tones 100 Hz apart (±50, ±150 Hz, the floor's
+32-sample glide) — rungs 2–3 of a fifteen-rung narrow ladder (OFDM mode *m* at rung *m* + 2);
+`ToneNumerology` `QUAD100`, `TONE_NARROW`, `ToneKind.data.tones` everywhere the data's tones
+are counted (the port: `ToneKind::data_tones`/`data_bits`, `MiddleTones::{Fast, Quad}` in
+place of `fast_tones`). Sync patterns 25–32 from the same seeded search, now batched
+(`permuted` rows = successive `permutation` calls) and vectorised (the cross bound as a
+triangle table): the first 25 in 0.45 s in CI, all 33 in the slow set. Link protocol 4,
+configuration schema 4 (`narrow_middle_rungs`: a 500 Hz `max_mode` from 2 up +2; fixture
+`0.2.0-beta.53-narrow.toml`), sidecars `aether-hf-session/4`. **Contradicted sync symbols**
+(both airs): each air's detector now misses the other's middle kinds, and a strong one was
+taken for a frame of another kind at a part-symbol offset (12–14 of 24 hits: the pattern
+bound holds at whole offsets only); a sync symbol whose strongest tone is another, ≥ 12× the
+noise and ≥ 4× that tone's median over the sync symbols (a steady carrier is not one),
+contradicts the frame, and `confirmed` allows two — ghosts had 8–12, real frames ≤ 1. It
+also refuses ADR-0014's early reading by itself. Cross-air *arrivals* remain (the stream
+announces on clipped ratios). Gate: 4.2/6.9 dB over QPSK ⅓ on Good/Moderate; 500 Hz sessions
+1.3–1.7× faster from −8 to 0 dB, nothing slower; no floor-boundary cap at 500 Hz (tried: it
+costs the fading classes). Owed: the air at 500 Hz (beta.53 and beta.54 do not connect).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

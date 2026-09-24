@@ -370,6 +370,26 @@ but −2 dB on AWGN, which ties; nothing is slower elsewhere, and 500 Hz is unch
 calibration fills an unmeasured rung's fading threshold from its own family's rungs now, and
 `calibrate_fading.py --jobs 4` fits on four processes.
 
+## The 500 Hz middle kinds (`tone_floor.csv`, `link_narrow_middle.csv`, P9-10 / ADR-0015)
+
+The 500 Hz air's two middle kinds are the tone floor's frame with 440 data symbols on four
+tones at 100 Bd, inside the floor's own 400 Hz; `bench_tone.py` measures each kind with its
+own air's detector (the 500 Hz air's for these). 10 % FER through the detector:
+
+| | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| tone4x100-51, 76 bit/s | −14.3 dB | −7.5 | −10.0 | −10.3 |
+| tone4x100-75, 112 bit/s | −13.0 | −3.2 | −4.9 | −5.7 |
+| (QPSK ⅓, 114 bit/s, the first OFDM rung at 500 Hz) | −6.0 | +1.0 | +2.0 | −1.3 |
+
+ADR-0015's gate — 3 dB over the OFDM rung at the same rate on Good and Moderate — passes by
+4.2 and 6.9 dB. `link_narrow_middle.csv` is the link bench on the fading pipe at 500 Hz, 30
+sessions of 1 kB a point: beta.53's code from a worktree against the same calibration, this
+one, and this one with a 1 dB cap at the narrow floor boundary. From −10 to +2 dB every point
+is as fast or faster (1.3–1.7 times on the fading classes from −8 to 0 dB), none completes
+fewer sessions; the cap helps AWGN at −2 dB only and costs the fading classes, so the 500 Hz
+air has none. The calibration added the two kinds' rows and left every other row as it was.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,

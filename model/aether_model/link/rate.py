@@ -89,27 +89,31 @@ frames with the ordinary ones."""
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
     0: -19.0,
     1: -17.3,
-    2: -6.0,
-    3: -5.2,
-    4: -3.6,
-    5: -2.1,
-    6: 0.5,
-    7: -0.1,
-    8: 2.0,
-    9: 3.5,
-    10: 6.9,
-    11: 8.8,
-    12: 10.4,
+    2: -14.3,
+    3: -13.0,
+    4: -6.0,
+    5: -5.2,
+    6: -3.6,
+    7: -2.1,
+    8: 0.5,
+    9: -0.1,
+    10: 2.0,
+    11: 3.5,
+    12: 6.9,
+    13: 8.8,
+    14: 10.4,
 }
 """The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
 as an operator would compare them: the same transmitter power into the same noise. Every
-entry is measured (``bench/baselines/phy_fer_500.csv``, ``tools/bench_phy.py --bandwidth
-500``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). Its control
-mode, QPSK ½ (rung 3), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1 because
-twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it are QPSK ⅓ on
-the ordinary frame (rung 2) and the tone floor's two kinds (rungs 0–1, ADR-0013, the same
-frames and thresholds as on the wide ladder), which reach −19 dB where the OFDM floor they
-replaced (ADR-0009) reached −12."""
+entry is measured: the tone floor's four (rungs 0–3: its own two, ADR-0013, the same frames
+and thresholds as on the wide ladder, and the four-tone middle kinds, ADR-0015) by
+``tools/bench_tone.py`` (``bench/baselines/tone_floor.csv``); the OFDM modes (rungs 4–14,
+OFDM modes 2–12) by ``tools/bench_phy.py --bandwidth 500`` (``bench/baselines/
+phy_fer_500.csv``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). Its
+control mode, QPSK ½ (rung 5), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1
+because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it is QPSK ⅓
+on the ordinary frame (rung 4), and below that the tone floor, which reaches −19 dB where the
+OFDM floor it replaced (ADR-0009) reached −12."""
 
 TONE_CONTROL_THRESHOLD_DB = -19.5
 """The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
@@ -132,25 +136,28 @@ it."""
 NARROW_PAYLOAD_BYTES: dict[int, float] = {
     0: 24,
     1: 36,
-    2: 15,
-    3: 25,
-    4: 34,
-    5: 39,
-    6: 53,
-    7: 53,
-    8: 71,
-    9: 81,
-    10: 109,
-    11: 123,
-    12: 137,
+    2: 51,
+    3: 75,
+    4: 15,
+    5: 25,
+    6: 34,
+    7: 39,
+    8: 53,
+    9: 53,
+    10: 71,
+    11: 81,
+    12: 109,
+    13: 123,
+    14: 137,
 }
 """Payload bytes per frame of each rung of the 500 Hz ladder: the tone floor's frames are
 five times as long as the ordinary ones, which is why :func:`usable_modes` needs
 :data:`NARROW_FRAME_S` to compare them."""
 
-NARROW_FRAME_S: dict[int, float] = {m: (5.36 if m < 2 else 1.054) for m in range(13)}
-"""Air time of each narrow rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
-31 ms on the ordinary layout (the link layer's copy of the frames; tested against them)."""
+NARROW_FRAME_S: dict[int, float] = {m: (5.36 if m < 4 else 1.054) for m in range(15)}
+"""Air time of each narrow rung's DATA frame: 134 slots of 40 ms on the tone floor, its
+middle kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy of
+the frames; tested against them)."""
 
 
 def usable_modes(

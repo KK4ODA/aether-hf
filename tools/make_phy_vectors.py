@@ -32,6 +32,7 @@ from aether_model.frame.modes import (
     CONTROL_MODE,
     LONG,
     MODES,
+    NARROW,
     NARROW_CONTROL_MODE,
     NARROW_LONG,
     NARROW_MODES,
@@ -40,6 +41,8 @@ from aether_model.frame.modes import (
     TONE_CONTROL,
     TONE_DATA,
     TONE_FAST,
+    TONE_NARROW,
+    WIDE,
 )
 from aether_model.phy import tone
 from aether_model.phy.constellation import constellation
@@ -295,6 +298,9 @@ TONE_CASES = (
     (TONE_FAST[1], 3),
     (TONE_FAST[2], 1),
     (TONE_FAST[3], 0),
+    # the 500 Hz air's middle kinds (ADR-0015), after the rest for the same reason
+    (TONE_NARROW[0], 2),
+    (TONE_NARROW[1], 0),
 )
 
 
@@ -338,13 +344,20 @@ def tone_interference(n: int) -> NDArray[np.complex128]:
 
 def tone_receive_cases() -> list[dict[str, object]]:
     """A tone frame received: delayed by ``lead`` samples, turned by ``cfo_hz``, with
-    :func:`tone_interference` added — detected, demodulated and decoded. The detector's
-    start, kind and redundancy version are exact; its offset, statistic and the SNR to a
-    tolerance; the soft bits to a tolerance; the payload exact."""
+    :func:`tone_interference` added — detected by its own air's detector (``bandwidth_hz``:
+    the 2 300 Hz air's, which looks for the floor's and the fast kinds, or the 500 Hz air's,
+    which looks for the floor's and the narrow middle ones), demodulated and decoded. The
+    detector's start, kind and redundancy version are exact; its offset, statistic and the
+    SNR to a tolerance; the soft bits to a tolerance; the payload exact."""
     out = []
     rng = np.random.default_rng(777)
-    det = tone.ToneDetector()
+    detectors = {
+        air.params.bandwidth.hz: tone.ToneDetector((air.tone_control, *air.tone_data))
+        for air in (WIDE, NARROW)
+    }
     for i, (kind, rv) in enumerate(TONE_CASES):
+        bandwidth = NARROW.params.bandwidth.hz if kind in TONE_NARROW else WIDE.params.bandwidth.hz
+        det = detectors[bandwidth]
         payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
         if rv:
             rv = 0  # a lone RV other than 0 is not decodable; the pattern search is exercised
@@ -365,6 +378,7 @@ def tone_receive_cases() -> list[dict[str, object]]:
             {
                 "kind": kind.name,
                 "rv": rv,
+                "bandwidth_hz": bandwidth,
                 "payload": payload.hex(),
                 "lead": lead,
                 "cfo_hz": cfo,

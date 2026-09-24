@@ -126,18 +126,24 @@ def test_a_sidecar_from_before_the_ladder_is_read_onto_it(tmp_path: Path) -> Non
     """A sidecar recorded before the tone floor (``aether-hf-session/1``) numbered the OFDM
     modes: on the wide air six rungs below where they sit now, two for the tone floor's own
     kinds (ADR-0013) and four for its fast ones (ADR-0014); on the narrow air modes 0 and 1
-    were the retired OFDM floor, which is on no rung. One recorded with the tone floor and
-    before the fast kinds (``/2``) numbered the wide ladder's rungs from 2 up four lower."""
+    were the retired OFDM floor, which is on no rung, and modes 2–12 sit two rungs up, above
+    the narrow middle kinds (ADR-0015). One recorded with the tone floor and before the fast
+    kinds (``/2``) numbered the wide ladder's rungs from 2 up four lower; one from before the
+    narrow middle kinds (``/2``, ``/3``) the narrow ladder's from 2 up two lower."""
     legacy = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 2300}}
     assert [field_ingest.sidecar_rung(legacy, m) for m in (0, 5, 13)] == [6, 11, 19]
     narrow = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 500}}
-    assert [field_ingest.sidecar_rung(narrow, m) for m in (0, 1, 2, 12)] == [None, None, 2, 12]
+    assert [field_ingest.sidecar_rung(narrow, m) for m in (0, 1, 2, 12)] == [None, None, 4, 14]
     floor = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 2300}}
     assert [field_ingest.sidecar_rung(floor, m) for m in (0, 1, 2, 15)] == [0, 1, 6, 19]
-    floor_narrow = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 500}}
-    assert [field_ingest.sidecar_rung(floor_narrow, m) for m in (0, 1, 2, 12)] == [0, 1, 2, 12]
-    current = {"format": "aether-hf-session/3", "session": {"bandwidth_hz": 2300}}
-    assert [field_ingest.sidecar_rung(current, m) for m in (0, 2, 19)] == [0, 2, 19]
+    for fmt in ("aether-hf-session/2", "aether-hf-session/3"):
+        before = {"format": fmt, "session": {"bandwidth_hz": 500}}
+        assert [field_ingest.sidecar_rung(before, m) for m in (0, 1, 2, 12)] == [0, 1, 4, 14]
+    fast = {"format": "aether-hf-session/3", "session": {"bandwidth_hz": 2300}}
+    assert [field_ingest.sidecar_rung(fast, m) for m in (0, 2, 19)] == [0, 2, 19]
+    for bandwidth, top in ((2300, 19), (500, 14)):
+        current = {"format": "aether-hf-session/4", "session": {"bandwidth_hz": bandwidth}}
+        assert [field_ingest.sidecar_rung(current, m) for m in (0, 2, top)] == [0, 2, top]
     document = json.loads(_sidecar(tmp_path).read_text(encoding="utf-8"))
     document["format"] = "aether-hf-session/1"
     document["session"]["test"]["ladder"] = [
