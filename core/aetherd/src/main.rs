@@ -53,6 +53,11 @@ const HEARD_SAVE_DELAY: Duration = Duration::from_secs(5);
 /// bring it up: the loop forces it up on the wall clock instead. Comfortably longer than the
 /// slowest loop pass, and well inside the key-time watchdog's own limit.
 const AUDIO_STALL_RELEASE: Duration = Duration::from_secs(2);
+/// The most a stopping daemon waits for the replies still on their way to its clients —
+/// above all the one to the `shutdown` that stopped it. Writing one takes a millisecond; this
+/// is for a machine too loaded to schedule the thread that writes it, and it bounds a client
+/// that has stopped reading.
+const REPLY_GRACE: Duration = Duration::from_secs(2);
 
 /// The exit status that asks a supervisor to start the daemon again.
 ///
@@ -825,7 +830,7 @@ fn serve(
 
     loop {
         if stopping.load(std::sync::atomic::Ordering::SeqCst) {
-            stop(station, daemon, restarting);
+            stop(station, control, daemon, restarting);
             return Ok(());
         }
 
@@ -942,9 +947,11 @@ fn serve(
     }
 }
 
-/// The way out: the log says why, the stations heard are written, the radio is released.
+/// The way out: the log says why, the stations heard are written, the radio is released,
+/// and every reply still on its way to a client is written.
 fn stop(
     station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
     daemon: &mut DaemonState,
     restarting: &std::sync::atomic::AtomicBool,
 ) {
@@ -972,6 +979,17 @@ fn stop(
             &state_name(station),
         );
         eprintln!("aetherd: the radio would not release: {error}");
+    }
+    // `shutdown` was answered on the pass before and its connection may not have written the
+    // answer yet: exiting now would close the socket with nothing on it, and a restart the
+    // panel or the desktop shell asked for would look to it like a crash
+    if !control.settle(REPLY_GRACE) {
+        daemon.log.record(
+            Level::Warn,
+            "control",
+            "stopping with a reply still unwritten: a client stopped reading",
+            &state_name(station),
+        );
     }
 }
 

@@ -337,16 +337,17 @@ fn serve_rest(
         params,
         token: None,
     };
-    let response = handle
-        .call(request)
-        .unwrap_or_else(|error| Response::failed(None, error));
-    let text = serde_json::to_string(&response).unwrap_or_default();
-    write_http(
-        stream,
-        if response.ok { 200 } else { 400 },
-        "application/json",
-        &text,
-    );
+    // written before the request stops counting as unwritten: a daemon this request stops —
+    // `shutdown` — waits for the write before it exits (`ControlChannel::settle`)
+    handle.call_and_deliver(request, |response| {
+        let text = serde_json::to_string(&response).unwrap_or_default();
+        write_http(
+            stream,
+            if response.ok { 200 } else { 400 },
+            "application/json",
+            &text,
+        )
+    });
 }
 
 /// Serve one file from the panel directory, if the path names one.
@@ -425,20 +426,23 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
     while running.load(Ordering::Relaxed) {
         match socket.read() {
             Ok(tungstenite::Message::Text(text)) => {
-                let response = match serde_json::from_str::<Request>(&text) {
+                let sent = match serde_json::from_str::<Request>(&text) {
+                    // sent before the request stops counting as unwritten, as over REST
                     Ok(request) => handle
-                        .call(request)
-                        .unwrap_or_else(|error| Response::failed(None, error)),
-                    Err(error) => Response::failed(
-                        None,
-                        ApiError::new(
-                            "bad_request",
-                            format!("That is not a request this version understands: {error}"),
-                            false,
+                        .call_and_deliver(request, |response| send_json(&mut socket, &response)),
+                    Err(error) => send_json(
+                        &mut socket,
+                        &Response::failed(
+                            None,
+                            ApiError::new(
+                                "bad_request",
+                                format!("That is not a request this version understands: {error}"),
+                                false,
+                            ),
                         ),
                     ),
                 };
-                if send_json(&mut socket, &response).is_err() {
+                if sent.is_err() {
                     return;
                 }
             }

@@ -11,8 +11,26 @@
 //! control connection therefore cannot reach in and touch it. Instead each connection sends
 //! [`Command`]s down a channel and gets a [`Reply`] back on one it supplied, which keeps the
 //! modem's single-threadedness a fact rather than a convention.
+//!
+//! # Replies on their way when the daemon stops
+//!
+//! A reply is written by the connection's thread, after the modem has handed it over. A
+//! daemon that stops — `shutdown`, with or without `restart`, is answered and then acted on
+//! — must not exit in between, or the client that asked sees its connection close with no
+//! answer: a restart that looks like a crash to the supervisor that asked for it. So a
+//! connection counts its request as *unwritten* from the moment it asks until it has
+//! written the reply ([`ControlHandle::call_and_deliver`]), and the modem's last act is to
+//! refuse whatever is still asking and wait for that count to reach zero
+//! ([`ControlChannel::settle`]).
 
-use std::sync::mpsc;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -135,6 +153,7 @@ pub struct Command {
 pub struct ControlChannel {
     commands: mpsc::Receiver<Command>,
     subscribers: Subscribers,
+    unwritten: Arc<AtomicUsize>,
 }
 
 /// The client end: a handle a connection uses to talk to the modem.
@@ -142,6 +161,24 @@ pub struct ControlChannel {
 pub struct ControlHandle {
     commands: mpsc::Sender<Command>,
     subscribers: Subscribers,
+    unwritten: Arc<AtomicUsize>,
+}
+
+/// A request counted as unwritten for as long as this lives: from the moment a connection
+/// asks until it has written the reply.
+struct Unwritten<'a>(&'a AtomicUsize);
+
+impl<'a> Unwritten<'a> {
+    fn count(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl Drop for Unwritten<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 type Subscribers = std::sync::Arc<std::sync::Mutex<Vec<mpsc::Sender<Event>>>>;
@@ -151,14 +188,17 @@ type Subscribers = std::sync::Arc<std::sync::Mutex<Vec<mpsc::Sender<Event>>>>;
 pub fn channel() -> (ControlHandle, ControlChannel) {
     let (sender, receiver) = mpsc::channel();
     let subscribers: Subscribers = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let unwritten = Arc::new(AtomicUsize::new(0));
     (
         ControlHandle {
             commands: sender,
             subscribers: std::sync::Arc::clone(&subscribers),
+            unwritten: Arc::clone(&unwritten),
         },
         ControlChannel {
             commands: receiver,
             subscribers,
+            unwritten,
         },
     )
 }
@@ -176,6 +216,18 @@ impl ControlHandle {
         replies
             .recv()
             .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))
+    }
+
+    /// [`call`](Self::call), and hand the reply — or the failure, as a reply — to `deliver`,
+    /// the connection writing it to its client. The request counts as unwritten until
+    /// `deliver` has returned, so a daemon stopping waits for it ([`ControlChannel::settle`]):
+    /// the reply to the `shutdown` that stops it reaches the client that asked.
+    pub fn call_and_deliver<T>(&self, request: Request, deliver: impl FnOnce(Response) -> T) -> T {
+        let _unwritten = Unwritten::count(&self.unwritten);
+        let response = self
+            .call(request)
+            .unwrap_or_else(|error| Response::failed(None, error));
+        deliver(response)
     }
 
     /// Subscribe to events. The receiver stops when this handle's connection drops it.
@@ -214,6 +266,29 @@ impl ControlChannel {
     #[must_use]
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.lock().map_or(0, |list| list.len())
+    }
+
+    /// The modem's last act before the process exits: refuse whatever is still asking and
+    /// wait, up to `limit`, until every reply on its way has been written by its connection
+    /// ([`ControlHandle::call_and_deliver`]). Whether they all were.
+    #[must_use]
+    pub fn settle(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            for command in self.drain() {
+                let _ = command.reply.send(Response::failed(
+                    command.request.id.clone(),
+                    ApiError::new("modem_stopped", "The modem is stopping.", false),
+                ));
+            }
+            if self.unwritten.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 }
 
@@ -310,6 +385,75 @@ mod tests {
         let error = handle.call(request("status")).expect_err("it should fail");
         assert_eq!(error.code, "modem_stopped");
         assert!(!error.retryable);
+    }
+
+    #[test]
+    fn a_reply_on_its_way_is_written_before_the_modem_stops() {
+        // `shutdown` is answered and then acted on: without the wait, the process could exit
+        // between the answer and the connection's write, and the client that asked — a
+        // supervisor asking for a restart — saw its connection close with nothing on it
+        let (handle, channel) = channel();
+        let written = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&written);
+        let connection = std::thread::spawn(move || {
+            handle.call_and_deliver(request("shutdown"), |response| {
+                // a connection slow to write: descheduled, or a loaded machine
+                std::thread::sleep(Duration::from_millis(150));
+                flag.store(true, Ordering::SeqCst);
+                response
+            })
+        });
+        let command = loop {
+            if let Some(command) = channel.drain().pop() {
+                break command;
+            }
+            std::thread::yield_now();
+        };
+        let _ = command.reply.send(Response::ok(
+            command.request.id.clone(),
+            json!({"stopping": true}),
+        ));
+        assert!(
+            channel.settle(Duration::from_secs(5)),
+            "a reply went unwritten"
+        );
+        assert!(
+            written.load(Ordering::SeqCst),
+            "the modem stopped before the reply was written"
+        );
+        assert!(connection.join().expect("connection").ok);
+    }
+
+    #[test]
+    fn a_request_arriving_as_the_modem_stops_is_refused_not_left_waiting() {
+        let (handle, channel) = channel();
+        let connection = std::thread::spawn(move || {
+            handle.call_and_deliver(request("status"), |response| response)
+        });
+        // once the connection has counted its request, the wait cannot end without it — the
+        // request reaches the channel before or during the wait, and is answered either way
+        while channel.unwritten.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        assert!(
+            channel.settle(Duration::from_secs(5)),
+            "a reply went unwritten"
+        );
+        let response = connection.join().expect("connection");
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.expect("error").code,
+            "modem_stopped",
+            "a request the modem will never answer is told so"
+        );
+    }
+
+    #[test]
+    fn with_nothing_on_its_way_the_modem_stops_at_once() {
+        let (_handle, channel) = channel();
+        let began = Instant::now();
+        assert!(channel.settle(Duration::from_secs(5)));
+        assert!(began.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
