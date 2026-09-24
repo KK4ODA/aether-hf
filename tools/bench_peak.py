@@ -10,11 +10,11 @@ compare modes at equal *average* power, which credits nothing to a waveform with
 envelope; this measures what each frame gives away, so the benches can also be read at equal
 peak power (``bench_link.py --peak``, and ``--table`` here for the mode tables).
 
-For every mode of both air interfaces, on the layout it goes out on, and for the control
-frames (the ordinary SHORT frame, and the floor one on the 500 Hz air), ``--frames`` frames
-with random payloads are rendered by the modem's own transmitter — ADR-0004's peak reduction
-included — and the envelope power of the complex baseband, which is the RF envelope of the
-SSB signal, is ranked against its mean. Three statistics: the highest sample of all (the
+For every OFDM mode on either air's ladder, the ordinary control frame, and the tone
+floor's frames (ADR-0013), ``--frames`` frames with random payloads are rendered by the
+modem's own transmitter — ADR-0004's peak reduction included — and the envelope power of
+the complex baseband, which is the RF envelope of the SSB signal, is ranked against its
+mean. Three statistics: the highest sample of all (the
 ALC's worst case), and the levels exceeded by one sample in ten thousand and one in a
 thousand (a limiter's and a slow ALC's view). References: a steady tone is 0 dB, two equal
 tones 3 dB.
@@ -31,7 +31,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import air_interface
+from aether_model.frame.modes import TONE_CONTROL, air_interface
+from aether_model.phy import tone
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameHeader, FrameType
 from aether_model.waveform import NARROW_500, WIDE_2300
@@ -47,8 +48,9 @@ def envelope_stats(bursts: list[np.ndarray]) -> tuple[float, float, float]:
 
 
 def table(csv_path: Path) -> int:
-    """Every mode's 10 % FER threshold per channel, at equal average power (as measured) and
-    at equal peak power (plus the frame's own peak-to-average ratio)."""
+    """Every rung's 10 % FER threshold per channel, at equal average power (as measured) and
+    at equal peak power (plus the frame's own peak-to-average ratio; for the tone floor,
+    which goes out at the OFDM peak, plus its gain over the OFDM average)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from aether_model.frame.modes import NARROW, WIDE
     from bench_link import channel_thresholds, table_for
@@ -59,12 +61,17 @@ def table(csv_path: Path) -> int:
             ratio[(int(r["bandwidth_hz"]), r["frame"])] = float(r["papr_max_db"])
     for air, fer in ((WIDE, "phy_fer.csv"), (NARROW, "phy_fer_500.csv")):
         bw = air.params.bandwidth.value
-        tables = channel_thresholds(Path("bench/baselines") / fer, awgn=table_for(air)[0])
+        tables = channel_thresholds(Path("bench/baselines") / fer, awgn=table_for(air)[0], air=air)
         channels = [c for c in ("awgn", "good", "moderate", "poor") if c in tables]
         print(f"\n{bw} Hz: threshold at equal average / equal peak power (dB, 3 kHz)")
         print("  mode  papr  " + "  ".join(f"{c:>13s}" for c in channels))
         for m in sorted(table_for(air)[0]):
-            papr = ratio[(bw, f"mode {m}")]
+            rung = air.ladder[m]
+            if rung.tone is not None:
+                papr = tone.TONE_GAIN_DB
+            else:
+                assert rung.mode is not None
+                papr = ratio[(bw, f"mode {rung.mode.index}")]
             cells = "  ".join(f"{tables[c][m]:6.1f}/{tables[c][m] + papr:6.1f}" for c in channels)
             print(f"  {m:4d}  {papr:4.1f}  {cells}")
     return 0
@@ -90,19 +97,11 @@ def main() -> int:
         air = air_interface(params)
         modem = Modem(params)
         cases = [
-            (f"mode {m.index}", m, FrameHeader(FrameType.DATA, m.index), air.data_layout(m.index))
-            for m in air.modes
+            (f"mode {r.mode.index}", r.mode, FrameHeader(FrameType.DATA, r.mode.index), air.long)
+            for r in air.ladder
+            if r.mode is not None
         ]
         cases.append(("control short", air.control_mode, FrameHeader(FrameType.CONTROL), air.short))
-        if air.floor_short is not None:
-            cases.append(
-                (
-                    "control floor",
-                    air.floor_control_mode,
-                    FrameHeader(FrameType.CONTROL),
-                    air.floor_short,
-                )
-            )
         for label, mode, header, layout in cases:
             codec = modem.codec(mode, layout)  # type: ignore[arg-type]
             bursts = []
@@ -126,11 +125,35 @@ def main() -> int:
                 f"{layout.name:11s} max {peak:5.2f}  1e-4 {p4:5.2f}  1e-3 {p3:5.2f} dB",
                 flush=True,
             )
+        # the tone floor from a generator of its own, so the OFDM frames' random payloads
+        # are the ones the table has always had
+        tone_rng = np.random.default_rng(args.seed + params.bandwidth.value)
+        for kind in (*air.tone_data, TONE_CONTROL):
+            bursts = [
+                tone.burst(
+                    kind, bytes(tone_rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8))
+                )
+                for _ in range(args.frames)
+            ]
+            edge = kind.num.edge_samples
+            peak, p4, p3 = envelope_stats([b[edge:-edge] for b in bursts])
+            rows.append(
+                {
+                    "bandwidth_hz": params.bandwidth.value,
+                    "frame": kind.name,
+                    "modulation": f"FSK{kind.num.tones}",
+                    "layout": "tone",
+                    "papr_max_db": round(peak, 2),
+                    "papr_9999_db": round(p4, 2),
+                    "papr_999_db": round(p3, 2),
+                    "frames": args.frames,
+                }
+            )
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         with out.open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w = csv.DictWriter(f, fieldnames=list(rows[0]), lineterminator="\n")
             w.writeheader()
             w.writerows(rows)
         print(f"\nwrote {out} ({len(rows)} rows)")

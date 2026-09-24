@@ -75,5 +75,10 @@ def test_frames_are_shaped_by_the_layout_they_go_out_on() -> None:
     floor_control = narrow(TxFrame(Container.CONTROL, b"", floor=True))
     assert floor_data.duration_s > 3 * ordinary.duration_s
     assert floor_control.duration_s > narrow(TxFrame(Container.CONTROL, b"")).duration_s
-    wide = shapes_for(WIDE)(TxFrame(Container.DATA, b"", mode=0))
-    assert max(wide.carriers_hz) - min(wide.carriers_hz) > 1500 > max(ordinary.carriers_hz)
+    wide = shapes_for(WIDE)
+    ofdm = wide(TxFrame(Container.DATA, b"", mode=WIDE.floor_modes))
+    assert max(ofdm.carriers_hz) - min(ofdm.carriers_hz) > 1500 > max(ordinary.carriers_hz)
+    # the tone floor is the same 400 Hz on either air
+    tone = wide(TxFrame(Container.DATA, b"", mode=0))
+    assert tone == floor_data
+    assert len(tone.carriers_hz) == 16 and max(tone.carriers_hz) - min(tone.carriers_hz) == 375.0

@@ -95,7 +95,9 @@ class SharedFading:
         """``|H(f, t)|²`` over a frame (time × carrier), unit mean power on average."""
         if self.static:
             return np.ones((1, len(carriers_hz)))
-        n = max(1, math.ceil((t1 - t0) / STEP_S))
+        # rounded first: a frame of a whole number of steps (the tone floor's control frame
+        # is 64) must not come out a step longer on one frame's clock than another's
+        n = max(1, math.ceil(round((t1 - t0) / STEP_S, 6)))
         times = t0 + STEP_S * (0.5 + np.arange(n))
         idx = np.maximum(0, np.round(times * RATE_HZ).astype(int))
         self._extend(int(idx.max()) + 2)
@@ -148,12 +150,18 @@ class FadingPipe:
         return reported, effective_snr_db(snr, self.beta(frame))
 
 
-def frame_key(frame: TxFrame) -> str:
-    """The name a frame goes by in the calibration table: ``mode N``, ``control short`` or
-    ``control floor`` — the labels of ``bench_floor.py`` and ``bench_peak.py``."""
+def frame_key(frame: TxFrame, air: AirInterface) -> str:
+    """The name a frame goes by in the calibration table — what it *is*, not its rung, so the
+    table outlives a renumbered ladder: ``mode N`` for OFDM mode N (the chips' index, the
+    label of ``bench_floor.py`` and ``bench_peak.py``), the tone floor's kind by name
+    (``tone-24``, ``tone-control``: ``bench_tone.py``'s labels), ``control short``."""
     if frame.container is Container.CONTROL:
-        return "control floor" if frame.floor else "control short"
-    return f"mode {frame.mode}"
+        return air.tone_control.name if frame.floor else "control short"
+    rung = air.ladder[frame.mode]
+    if rung.tone is not None:
+        return rung.tone.name
+    assert rung.mode is not None
+    return f"mode {rung.mode.index}"
 
 
 CARRIER_STEP_HZ = 150.0
@@ -170,13 +178,20 @@ def shapes_for(air: AirInterface) -> Callable[[TxFrame], FrameShape]:
     centre = params.n_carriers // 2
     carriers = tuple(float((k - centre) * params.subcarrier_spacing_hz) for k in data[::step])
 
+    # the tone floor sends one tone at a time over 400 Hz: its frame is sampled at every one
+    # of its sixteen tones — four missed the notch between them on ITU Poor and Moderate,
+    # and no β could make the pipe as hard on the frame as the modem measured
+    num = air.tone_control.num
+    tones = tuple(float(f) for f in num.tone_hz(np.arange(num.tones)))
+
     def shape(frame: TxFrame) -> FrameShape:
         if frame.container is Container.CONTROL:
-            floor = frame.floor and air.floor_short is not None
-            layout = air.floor_short if floor else air.short
-        else:
-            layout = air.data_layout(frame.mode)
-        assert layout is not None
-        return FrameShape(layout.duration_s, carriers)
+            if frame.floor:
+                return FrameShape(air.tone_control.duration_s, tones)
+            return FrameShape(air.short.duration_s, carriers)
+        rung = air.ladder[frame.mode]
+        if rung.tone is not None:
+            return FrameShape(rung.tone.duration_s, tones)
+        return FrameShape(air.data_layout(frame.mode).duration_s, carriers)
 
     return shape

@@ -319,6 +319,34 @@ average power on the air from the same peak. `bench_link.py --peak` reads the SN
 equal peak power (each frame gets the axis less its own ratio), and `bench_peak.py --table`
 prints each mode's threshold per channel both ways.
 
+## The tone floor (`tone_floor.csv`, `link_tone_floor.csv`, P9-8 / ADR-0013)
+
+`tools/bench_tone.py` sends each of the tone floor's kinds, 100 frames a point, at a random
+start and a carrier offset uniform in ±100 Hz, through AWGN and the three ITU classes, and
+counts frames acquired, decoded through the detector, and decoded with genie timing. The SNR
+is the OFDM frames' reference and the tone frames go out 5.5 dB above it — equal peak power —
+so the curves read directly against `floor_500.csv` and `phy_fer*.csv`. 10 % FER through the
+detector:
+
+| | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| tone-24, 36 bit/s | −19.0 dB | −12.0 | −13.2 | −14.5 |
+| tone-36, 54 bit/s | −17.3 | −8.8 | −10.3 | −10.9 |
+| tone-control | −19.5 | −11.2 | −14.7 | −15.8 |
+| (the OFDM floor it replaced, 36 bit/s) | −13.0 | −4.0 | −4.7 | −3.0 |
+
+ADR-0013's gate — 3 dB over the best existing frame at the same rate, on Good and Moderate —
+passes by five or more. The fading pipe is calibrated for the tone frames at all sixteen
+tones (four missed the notches between them; every tone fit is exact).
+
+`link_tone_floor.csv` is the link bench on the fading pipe (`bench_link.py --fading`, 30
+sessions a point) before (beta.50, run from a worktree) and after: at 2 300 Hz sessions now
+complete from −6 dB down to −14 (Moderate, Poor) and −10 (Good), where none did, and nothing
+moved from 0 dB up; −4 to −2 dB run on the floor or its boundary at up to half the old rate.
+At 500 Hz the gain is below −6 dB, and from −4 to +2 dB on Moderate and Poor the link runs a
+quarter slower, the OFDM floor's 78 bit/s mode gone. ADR-0013 §4.5 has the table and the
+rate controller's rules at the boundary.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,

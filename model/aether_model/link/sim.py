@@ -38,7 +38,6 @@ from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
-    NARROW_CONTROL_THRESHOLD_DB,
 )
 
 FrameFactory = Callable[[TxFrame, float, float, float], "SoftFrame | None"]
@@ -56,9 +55,9 @@ def _success_prob(threshold: float, snr_db: float, energy_db: float) -> float:
 
 
 def control_thresholds_for(timing: PhyTiming) -> dict[bool, float]:
-    """The AWGN thresholds of an air's two control frames, keyed by family: the narrow air's
-    when it has a floor family, the wide air's otherwise."""
-    return dict(NARROW_CONTROL_THRESHOLD_DB if timing.floor_modes else CONTROL_THRESHOLD_DB)
+    """The AWGN thresholds of an air's two control frames, keyed by family, as its timing
+    carries them — the wide air's when it does not."""
+    return dict(timing.control_threshold_db or CONTROL_THRESHOLD_DB)
 
 
 @dataclass

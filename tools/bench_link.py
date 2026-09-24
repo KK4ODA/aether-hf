@@ -53,7 +53,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import NARROW, WIDE, AirInterface
+from aether_model.frame.modes import NARROW, TONE_CONTROL, WIDE, AirInterface
 from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
 from aether_model.link.harness import phy_timing, two_modem_sim
@@ -66,6 +66,7 @@ from aether_model.link.rate import (
     usable_modes,
 )
 from aether_model.link.sim import TwoStationSim, control_thresholds_for
+from aether_model.phy.tone import TONE_GAIN_DB
 
 CHANNEL_ORDER = ("awgn", "good", "moderate", "poor")
 
@@ -73,15 +74,38 @@ CHANNEL_ORDER = ("awgn", "good", "moderate", "poor")
 # ── channel calibration for the fast backend ──────────────────────────
 
 
+TONE_CSV = "bench/baselines/tone_floor.csv"
+"""``tools/bench_tone.py``'s measurements of the tone floor's frames (ADR-0013), per channel —
+the same frames on both airs."""
+
+
+def tone_points(
+    csv_path: Path, target: str = "decoded"
+) -> dict[tuple[str, str], list[tuple[float, float]]]:
+    """(channel, kind name) → [(SNR, FER)] from ``bench_tone.py``'s rows."""
+    points: dict[tuple[str, str], list[tuple[float, float]]] = defaultdict(list)
+    if not csv_path.exists():
+        return points
+    with csv_path.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            fer = 1.0 - int(r[target]) / max(int(r["frames"]), 1)
+            points[(r["channel"], r["frame"])].append((float(r["snr_3k_db"]), fer))
+    return points
+
+
 def channel_thresholds(
     csv_path: Path,
     target_fer: float = 0.10,
     awgn: dict[int, float] = AWGN_THRESHOLD_DB,
+    air: AirInterface = WIDE,
+    tone_csv: Path = Path(TONE_CSV),
 ) -> dict[str, dict[int, float]]:
-    """Per-channel, per-mode minimum usable SNR interpolated from the PHY sweep.
+    """Per-channel, per-rung minimum usable SNR interpolated from the PHY sweeps: the OFDM
+    modes' rows of ``csv_path`` (``bench_phy.py``, which names OFDM modes) mapped onto the
+    air's ladder, and the tone floor's from ``tone_csv``.
 
-    Modes the sweep did not cover are filled by shifting the AWGN table by the mean measured
-    penalty of that channel — crude, but it keeps the whole mode ladder available to the rate
+    Rungs the sweeps did not cover are filled by shifting the AWGN table by the mean measured
+    penalty of that channel — crude, but it keeps the whole ladder available to the rate
     controller instead of leaving holes it would have to skip.
     """
     if not csv_path.exists():
@@ -90,7 +114,15 @@ def channel_thresholds(
         rows = list(csv.DictReader(f))
     points: dict[tuple[str, int], list[tuple[float, float]]] = defaultdict(list)
     for r in rows:
-        points[(r["channel"], int(r["mode"]))].append((float(r["snr_3k_db"]), float(r["fer"])))
+        try:
+            rung = air.rung_of(int(r["mode"]))
+        except ValueError:
+            continue  # an OFDM mode on no rung: the 500 Hz air's retired floor
+        points[(r["channel"], rung)].append((float(r["snr_3k_db"]), float(r["fer"])))
+    names = {k.name: i for i, k in enumerate(air.tone_data)}
+    for (channel, name), pts in tone_points(tone_csv).items():
+        if name in names:
+            points[(channel, names[name])] += pts
 
     def crossing(pts: list[tuple[float, float]]) -> float | None:
         prev: tuple[float, float] | None = None
@@ -137,7 +169,7 @@ def fading_pipe(csv_path: Path, air: AirInterface, channel: str, seed: int) -> F
     return FadingPipe(
         SharedFading(channel, seed),
         shapes_for(air),
-        lambda frame: betas.get(frame_key(frame), 1.0),
+        lambda frame: betas.get(frame_key(frame, air), 1.0),
         np.random.default_rng(seed + 99),
     )
 
@@ -157,11 +189,15 @@ def peak_offsets(csv_path: Path, air: AirInterface) -> Callable[[TxFrame], float
                 ratio[r["frame"]] = float(r["papr_max_db"])
 
     def offset(frame: TxFrame) -> float:
+        # the tone floor goes out at the OFDM frames' peak: its thresholds are stated at
+        # that level already, TONE_GAIN_DB over the OFDM average (ADR-0013)
         if frame.container is Container.CONTROL:
-            key = "control floor" if frame.floor and "control floor" in ratio else "control short"
-        else:
-            key = f"mode {frame.mode}"
-        return -ratio[key]
+            return -TONE_GAIN_DB if frame.floor else -ratio["control short"]
+        rung = air.ladder[frame.mode]
+        if rung.tone is not None:
+            return -TONE_GAIN_DB
+        assert rung.mode is not None
+        return -ratio[f"mode {rung.mode.index}"]
 
     return offset
 
@@ -178,24 +214,26 @@ def control_thresholds(
     awgn: dict[bool, float],
     tables: dict[str, dict[int, float]],
     awgn_data: dict[int, float],
-    has_floor: bool,
     target_fer: float = 0.10,
+    tone_csv: Path = Path(TONE_CSV),
 ) -> dict[str, dict[bool, float]]:
     """Per-channel thresholds of the two control frames (keyed by family), interpolated from
-    ``bench_floor.py``'s rows ``control short`` and ``control floor``. A channel or frame the
-    sweep did not cover gets its AWGN value shifted by that channel's mean data penalty, as
-    :func:`channel_thresholds` fills a mode it did not measure. An air without a floor family
-    has one control frame, which serves both keys."""
+    ``bench_floor.py``'s rows ``control short`` and ``bench_tone.py``'s ``tone-control``. A
+    channel or frame the sweeps did not cover gets its AWGN value shifted by that channel's
+    mean data penalty, as :func:`channel_thresholds` fills a rung it did not measure."""
     rows: list[dict[str, str]] = []
     if csv_path.exists():
         with csv_path.open(encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
     points: dict[tuple[str, bool], list[tuple[float, float]]] = defaultdict(list)
     for r in rows:
-        if r["frame"] not in ("control short", "control floor"):
+        if r["frame"] != "control short":
             continue
         fer = 1.0 - int(r["decoded"]) / max(int(r["frames"]), 1)
-        points[(r["channel"], r["frame"] == "control floor")].append((float(r["snr_3k_db"]), fer))
+        points[(r["channel"], False)].append((float(r["snr_3k_db"]), fer))
+    for (channel, name), pts in tone_points(tone_csv).items():
+        if name == TONE_CONTROL.name:
+            points[(channel, True)] += pts
 
     def crossing(pts: list[tuple[float, float]]) -> float | None:
         prev: tuple[float, float] | None = None
@@ -215,7 +253,7 @@ def control_thresholds(
         shift = statistics.fmean(penalties) if penalties else 0.0
         short = crossing(points.get((channel, False), []))
         short = short if short is not None else awgn[False] + shift
-        floor = crossing(points.get((channel, True), [])) if has_floor else short
+        floor = crossing(points.get((channel, True), []))
         out[channel] = {False: short, True: floor if floor is not None else awgn[True] + shift}
     return out
 
@@ -224,10 +262,11 @@ def ideal_bps(thresholds: dict[int, float], snr_db: float, air: AirInterface = W
     """Payload rate of the fastest mode the channel supports at this SNR, ignoring every
     protocol cost — the ceiling the link layer is measured against."""
     awgn, payload = table_for(air)
+    frame_s = {r.index: r.duration_s for r in air.ladder}
     best = 0.0
-    for m in usable_modes(awgn, payload):
+    for m in usable_modes(awgn, payload, frame_s):
         if thresholds.get(m, awgn[m]) <= snr_db:
-            best = max(best, air.modes[m].net_bit_rate(air.long))
+            best = max(best, air.ladder[m].net_bps)
     return best
 
 
@@ -259,7 +298,7 @@ def run_point(
     link: dict[str, float | int] | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
-    cfg = LinkConfig(max_mode=air.n_modes - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
+    cfg = LinkConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
     a = LinkEngine("W4ODA", timing, cfg, seed=seed)
     b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
     if ramp is not None:
@@ -320,7 +359,9 @@ def run_point(
     a.connect("KK4XYZ")
     a.send(payload)
     a.disconnect()
-    seconds = sim.run(until=80.0 * len(payload) / 1000.0 + 400.0)
+    # long enough for the tone floor's 25-36 bit/s (ADR-0013): a session that is still
+    # carrying data slowly is not a failed one
+    seconds = sim.run(until=0.4 * len(payload) + 600.0)
     ok = sim.delivered(1) == payload
     changes = sum(1 for x, y in pairwise(modes) if x != y)
     goodput = 8 * len(sim.delivered(1)) / seconds if seconds > 0 else 0.0
@@ -419,34 +460,40 @@ def fit_penalty(observations: list[tuple[int, int, int, float]], awgn: dict[int,
 
 
 def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, int, float]]:
-    """What the session says about each mode: the ladder's rungs when there was a Test
-    session, else the data frames the receiver found, one observation each."""
+    """What the session says about each rung: the ladder's rungs when there was a Test
+    session, else the data frames the receiver found, one observation each — a pre-ladder
+    sidecar's OFDM mode numbers mapped onto the ladder (:func:`field_ingest.sidecar_rung`)."""
+    from field_ingest import sidecar_rung
+
     session = document.get("session") or {}
     assert isinstance(session, dict)
     test = session.get("test") or {}
     assert isinstance(test, dict)
     rungs = [
-        (int(r["mode"]), int(r["frames"]), int(r["decoded"]), float(r["snr_db"]))
+        (rung, int(r["frames"]), int(r["decoded"]), float(r["snr_db"]))
         for r in test.get("ladder") or []
-        if isinstance(r, dict) and isinstance(r.get("snr_db"), (int, float))
+        if isinstance(r, dict)
+        and isinstance(r.get("snr_db"), (int, float))
+        and (rung := sidecar_rung(document, int(r["mode"]))) is not None
     ]
     if rungs:
         return rungs
     frames = document.get("frames") or []
     assert isinstance(frames, list)
     return [
-        (int(f["mode"]), 1, int(bool(f.get("decoded"))), float(f["snr_3k_db"]))
+        (rung, 1, int(bool(f.get("decoded"))), float(f["snr_3k_db"]))
         for f in frames
         if isinstance(f, dict)
         and f.get("kind") == "data"
         and isinstance(f.get("snr_3k_db"), (int, float))
+        and (rung := sidecar_rung(document, int(f["mode"]))) is not None
     ]
 
 
 def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     """One run of the engines against a recorded session."""
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("format") != "aether-hf-session/1":
+    if document.get("format") not in ("aether-hf-session/1", "aether-hf-session/2"):
         raise ValueError(f"{path}: not a session sidecar")
     session = document.get("session") or {}
     test = session.get("test") or {}
@@ -557,13 +604,11 @@ def main() -> int:
     )
     rate = overrides(args.rate)
     link = overrides(args.link)
-    tables = channel_thresholds(Path(fer_csv), awgn=table_for(air)[0])
+    tables = channel_thresholds(Path(fer_csv), awgn=table_for(air)[0], air=air)
     if args.backend == "sim" and not tables:
         print(f"warning: {fer_csv} not found; every channel modelled as AWGN", flush=True)
     awgn_controls = control_thresholds_for(phy_timing(air.params))
-    controls = control_thresholds(
-        Path(CONTROL_CSV[air]), awgn_controls, tables, table_for(air)[0], air.floor_long is not None
-    )
+    controls = control_thresholds(Path(CONTROL_CSV[air]), awgn_controls, tables, table_for(air)[0])
     channels = [c.strip() for c in args.channels.split(",") if c.strip()]
     snrs = [float(s) for s in args.snr.split(",") if s.strip()]
     payload = bytes((i * 37) % 256 for i in range(args.bytes))

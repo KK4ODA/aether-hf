@@ -38,6 +38,7 @@ from enum import Enum
 from aether_model.link.frames import (
     CONNECT_BODY_BYTES,
     MAX_BURST,
+    PROTOCOL_VERSION,
     WINDOW,
     ConnectBody,
     ControlFlags,
@@ -94,7 +95,9 @@ class LinkConfig:
     """The slowest mode a session's first burst goes out at. The acceptance's SNR report
     picks the first mode (P9-2); this is the floor under it, which a bench that pins a
     mode sets along with :attr:`max_mode`."""
-    max_mode: int = 13
+    max_mode: int = 15
+    """The fastest rung the station sends at: the top of the widest ladder (2 300 Hz,
+    ADR-0013) by default — a recommendation never leaves the air's own table."""
     bursts_before_turn: int = 3
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
     silence_step: int = 2
@@ -538,7 +541,7 @@ class LinkEngine:
     def _disarm(self, name: str) -> None:
         self._deadlines.pop(name, None)
 
-    def _irs_reply_delay(self) -> float:
+    def _irs_reply_delay(self, floor: bool | None = None, frame_s: float | None = None) -> float:
         """How long the IRS waits after a burst's last frame before sending its ACK.
 
         The ISS carries no burst length — the header must be identical across the
@@ -546,10 +549,19 @@ class LinkEngine:
         silence. How *much* silence depends on what the PHY reports: given a start-of-frame
         signal (:attr:`PhyTiming.preamble_detect_s`) a contiguous next frame announces itself
         that quickly, so the IRS only waits that long; without one it has to wait a whole
-        data frame, which is roughly a quarter of the air time."""
-        quiet = self.timing.preamble_detect_s
+        data frame, which is roughly a quarter of the air time. The floor's frames announce
+        themselves later than the ordinary ones (the tone floor's first sync block is eight
+        symbols of 40 ms), so a burst on the floor gets the floor's wait (ADR-0013).
+
+        The IRS asks with its own view — the family and the frames it has been hearing. The
+        ISS asks too, to size its wait for the ACK, and has to ask about the burst it has
+        just *sent*: ``floor`` its family and ``frame_s`` the longest data frame the IRS
+        will expect. Asked with its own view instead, it answered with the family it last
+        *heard* — an ordinary acceptance before a session's first floor burst — and waited
+        too little by the difference, the whole ACK margin (ADR-0013)."""
+        quiet = self.timing.preamble_detect_s_for(self._peer_floor if floor is None else floor)
         if quiet is None:
-            quiet = self._peer_data_frame_s()
+            quiet = self._peer_data_frame_s() if frame_s is None else frame_s
         return quiet + self.cfg.burst_gap_s + self.timing.turnaround_s
 
     def _response_wait(self, response_s: float, responder_delay: float = 0.0) -> float:
@@ -898,10 +910,16 @@ class LinkEngine:
         self._bursts_since_turn += 1
         self._disarm("keepalive")
         self._transmit(frames)
+        # the IRS's quiet after this burst: its family, and the longest frame it will expect
+        # — this burst's, or the mode it recommended, as its own _peer_data_frame_s has it
+        expected = max(
+            self.timing.data_frame_s_for(self._records[seqs[0]].mode) if seqs else 0.0,
+            self.timing.data_frame_s_for(min(self._recommended, self.cfg.max_mode)),
+        )
         self._wait_for(
             "ack",
             self.timing.control_frame_s_for(family),
-            self._irs_reply_delay(),
+            self._irs_reply_delay(family, expected),
         )
 
     def _on_ack(self, ack: ControlFrame) -> None:
@@ -1187,6 +1205,13 @@ class LinkEngine:
 
     def _take_iss(self) -> None:
         self.role = Role.ISS
+        # the first burst of a turn goes out where this station's own measurements of the
+        # peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
+        # it (P9-2), not at the slowest rung of the ladder: that is the tone floor
+        # (ADR-0013), five times slower than the first OFDM mode
+        if self.rate.snr_db is not None:
+            first = self.rate.first_mode(self.rate.snr_db)
+            self._recommended = max(self.cfg.initial_mode, min(self.cfg.max_mode, first))
         self._waiting_for = None
         self._disarm("wait")
         self._disarm("ack")
@@ -1266,6 +1291,11 @@ class LinkEngine:
             # bandwidth it was called in — either way not a session to start
             self.actions.append(Event("ignored", f"{req.src} calls in another bandwidth"))
             return
+        if req.version != PROTOCOL_VERSION:
+            self.actions.append(
+                Event("ignored", f"{req.src} calls with link protocol {req.version}")
+            )
+            return
         if self.state is State.CONNECTING and self.my_call > self.remote_call:
             return  # simultaneous call: the higher callsign keeps calling
         self.my_call = req.dst  # answer as the callsign that was called
@@ -1298,6 +1328,11 @@ class LinkEngine:
         if bandwidth_code(ack.caps) != bandwidth_code(self.cfg.capabilities):
             self.actions.append(Event("ignored", f"{ack.src} answers in another bandwidth"))
             return
+        if ack.version != PROTOCOL_VERSION:
+            self.actions.append(
+                Event("ignored", f"{ack.src} answers with link protocol {ack.version}")
+            )
+            return
         self._disarm("connect")
         self.peer_capabilities = ack.caps
         self.state = State.CONNECTED
@@ -1324,14 +1359,18 @@ class LinkEngine:
         carries them, the wide waveform's otherwise; its capacities decide which modes
         another mode beats on both counts and are never recommended."""
         thresholds = self.timing.mode_threshold_db
+        floor = {
+            "floor_modes": self.timing.floor_modes,
+            "floor_margin_db": self.timing.floor_margin_db,
+        }
         if thresholds is None:
-            return RateController(**self.cfg.rate)  # type: ignore[arg-type]
+            return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
         frame_s = {m: self.timing.data_frame_s_for(m) for m in thresholds}
         return RateController(
             thresholds=dict(thresholds),
             modes=usable_modes(thresholds, payload, frame_s),
-            **self.cfg.rate,  # type: ignore[arg-type]
+            **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
         )
 
     def _reset_transfer_state(self) -> None:

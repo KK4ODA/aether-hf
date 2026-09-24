@@ -31,14 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.fading import STEEP, SharedFading, shapes_for
+from aether_model.link.fading import STEEP, SharedFading, frame_key, shapes_for
 from aether_model.link.harness import phy_timing
 from aether_model.link.phy import Container, TxFrame
 from aether_model.link.sim import control_thresholds_for
 from bench_link import CONTROL_CSV, channel_thresholds, control_thresholds, table_for
 
 CLASSES = ("good", "moderate", "poor")
-BETA_RANGE = (-2.0, 3.0)
+BETA_RANGE = (-3.0, 3.0)
 """log10 of the β searched: from far below any modulation's (the worst element decides)
 to far above (the mean decides)."""
 
@@ -95,11 +95,11 @@ def calibrate(gains: np.ndarray, awgn_db: float, target_db: float) -> tuple[floa
 
 
 def frames_of(air: AirInterface) -> list[tuple[str, TxFrame]]:
-    out = [(f"mode {m.index}", TxFrame(Container.DATA, b"", mode=m.index)) for m in air.modes]
-    out.append(("control short", TxFrame(Container.CONTROL, b"")))
-    if air.floor_short is not None:
-        out.append(("control floor", TxFrame(Container.CONTROL, b"", floor=True)))
-    return out
+    """Every frame the air sends, by the name the pipe looks it up by (``frame_key``): each
+    rung's DATA frame, the ordinary control frame and the tone floor's."""
+    frames = [TxFrame(Container.DATA, b"", mode=r.index) for r in air.ladder]
+    frames += [TxFrame(Container.CONTROL, b""), TxFrame(Container.CONTROL, b"", floor=True)]
+    return [(frame_key(f, air), f) for f in frames]
 
 
 def main() -> int:
@@ -112,12 +112,10 @@ def main() -> int:
     rows: list[dict[str, object]] = []
     for air, fer_csv in ((WIDE, "phy_fer.csv"), (NARROW, "phy_fer_500.csv")):
         awgn, _ = table_for(air)
-        tables = channel_thresholds(Path("bench/baselines") / fer_csv, awgn=awgn)
+        tables = channel_thresholds(Path("bench/baselines") / fer_csv, awgn=awgn, air=air)
         timing = phy_timing(air.params)
         awgn_controls = control_thresholds_for(timing)
-        controls = control_thresholds(
-            Path(CONTROL_CSV[air]), awgn_controls, tables, awgn, air.floor_long is not None
-        )
+        controls = control_thresholds(Path(CONTROL_CSV[air]), awgn_controls, tables, awgn)
         shape = shapes_for(air)
         for label, frame in frames_of(air):
             s = shape(frame)

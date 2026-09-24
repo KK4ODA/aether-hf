@@ -28,7 +28,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FORMAT = "aether-hf-session/1"
+FORMAT = "aether-hf-session/2"
+"""The sidecar format this tool writes rows from: its mode numbers are rungs of the air's
+ladder (ADR-0013). ``aether-hf-session/1`` — every sidecar before the tone floor — numbered
+the OFDM modes; :func:`sidecar_rung` maps those onto the ladder."""
+LEGACY_FORMAT = "aether-hf-session/1"
+
+
+def sidecar_rung(document: dict[str, object], mode: int) -> int | None:
+    """The rung of the ladder a sidecar's mode number names. A ``/1`` sidecar numbered the
+    OFDM modes: on the 2 300 Hz air they sit two rungs up, above the tone floor's two; on
+    the 500 Hz air modes 2–12 keep their number and modes 0 and 1 were the OFDM floor
+    ADR-0013 retired, which is on no rung (``None``)."""
+    if document.get("format") != LEGACY_FORMAT:
+        return mode
+    session = document.get("session") or {}
+    bandwidth = session.get("bandwidth_hz") if isinstance(session, dict) else None
+    if bandwidth == 500:
+        return mode if mode >= 2 else None
+    return mode + 2
+
 
 BANDS: list[tuple[float, float, str]] = [
     (1.8e6, 2.0e6, "160 m"),
@@ -98,7 +117,7 @@ def _number(value: object) -> float | None:
 
 def summarise(document: dict[str, object], recording: str) -> Session:
     """The session a sidecar describes."""
-    if document.get("format") != FORMAT:
+    if document.get("format") not in (FORMAT, LEGACY_FORMAT):
         raise ValueError(f"{recording}: not a session sidecar ({document.get('format')})")
     session = document.get("session") or {}
     assert isinstance(session, dict)
@@ -127,9 +146,9 @@ def summarise(document: dict[str, object], recording: str) -> Session:
     file_ = test.get("file") or {}
     assert isinstance(message, dict) and isinstance(file_, dict)
     rungs = [
-        Rung(int(r["mode"]), int(r["frames"]), int(r["decoded"]), _number(r.get("snr_db")))
+        Rung(rung, int(r["frames"]), int(r["decoded"]), _number(r.get("snr_db")))
         for r in test.get("ladder") or []
-        if isinstance(r, dict)
+        if isinstance(r, dict) and (rung := sidecar_rung(document, int(r["mode"]))) is not None
     ]
     if test:
         # the transfers' goodput is the honest number: a Test session's audio also holds

@@ -24,48 +24,61 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -5.1,
-    1: -3.2,
-    2: -1.8,
-    3: -0.4,
-    4: 1.4,
-    5: 2.9,
-    6: 4.7,
-    7: 6.9,
-    8: 6.0,
-    9: 8.9,
-    10: 9.9,
-    11: 13.9,
-    12: 15.6,
-    13: 16.9,
+    0: -19.0,
+    1: -17.3,
+    2: -5.1,
+    3: -3.2,
+    4: -1.8,
+    5: -0.4,
+    6: 1.4,
+    7: 2.9,
+    8: 4.7,
+    9: 6.9,
+    10: 6.0,
+    11: 8.9,
+    12: 9.9,
+    13: 13.9,
+    14: 15.6,
+    15: 16.9,
 }
-"""Minimum usable SNR (3 kHz, FER ≤ 10 %) per mode on AWGN. **Every mode is measured** —
-``bench/baselines/phy_fer_awgn14.csv``, current air interface including ADR-0004 peak
-reduction — regenerate with ``tools/update_rate_table.py --apply``. The interpolated guesses
-this replaced were optimistic by up to 1.4 dB on the 64-QAM modes, which the rate controller
-had no way to discover except by losing frames."""
+"""Minimum usable SNR (3 kHz, FER ≤ 10 %) per rung of the 2 300 Hz ladder on AWGN. **Every
+rung is measured**: the tone floor's two (rungs 0–1, ADR-0013) by ``tools/bench_tone.py``
+(``bench/baselines/tone_floor.csv``), at equal peak power and so in the OFDM frames'
+reference; the OFDM modes (rungs 2–15, OFDM modes 0–13) by ``bench_phy.py``
+(``bench/baselines/phy_fer_awgn14.csv``, the current air interface including ADR-0004
+peak reduction) — regenerate with ``tools/update_rate_table.py --apply``. The interpolated
+guesses the OFDM entries replaced were optimistic by up to 1.4 dB on the 64-QAM modes,
+which the rate controller had no way to discover except by losing frames."""
 
 PAYLOAD_BYTES: dict[int, float] = {
-    0: 26,
-    1: 46,
-    2: 70,
-    3: 95,
-    4: 144,
-    5: 193,
-    6: 217,
-    7: 291,
-    8: 291,
-    9: 389,
-    10: 438,
-    11: 585,
-    12: 658,
-    13: 732,
+    0: 24,
+    1: 36,
+    2: 26,
+    3: 46,
+    4: 70,
+    5: 95,
+    6: 144,
+    7: 193,
+    8: 217,
+    9: 291,
+    10: 291,
+    11: 389,
+    12: 438,
+    13: 585,
+    14: 658,
+    15: 732,
 }
+"""Payload bytes per frame of each rung of the 2 300 Hz ladder."""
+
+FRAME_S: dict[int, float] = {m: (5.36 if m < 2 else 1.054) for m in range(16)}
+"""Air time of each wide rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
+31 ms on the ordinary layout (the link layer's copy of the frames; tested against them) —
+what :func:`usable_modes` needs to compare the floor's long frames with the ordinary ones."""
 
 
 NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
-    0: -12.4,
-    1: -10.2,
+    0: -19.0,
+    1: -17.3,
     2: -6.0,
     3: -5.2,
     4: -3.6,
@@ -82,28 +95,33 @@ NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
 as an operator would compare them: the same transmitter power into the same noise. Every
 entry is measured (``bench/baselines/phy_fer_500.csv``, ``tools/bench_phy.py --bandwidth
 500``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). Its control
-mode, QPSK ½ (mode 3), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1 because
-twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it the floor
-family (ADR-0009) — modes 0 and 1 on a frame four times as long, and mode 2 on the
-ordinary one — reaches −12 dB."""
+mode, QPSK ½ (rung 3), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1 because
+twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it are QPSK ⅓ on
+the ordinary frame (rung 2) and the tone floor's two kinds (rungs 0–1, ADR-0013, the same
+frames and thresholds as on the wide ladder), which reach −19 dB where the OFDM floor they
+replaced (ADR-0009) reached −12."""
 
-CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -5.1, True: -5.1}
-"""The 2 300 Hz control frame's 10 % FER point on AWGN, keyed by family: the control mode on
-the SHORT layout, which the lossy pipe (:mod:`aether_model.link.sim`) judges a control frame
-by; the rate controller never reads it. The wide air has no floor family, so both keys are
-the one frame. ``tools/bench_floor.py --bandwidth 2300`` measures it
+TONE_CONTROL_THRESHOLD_DB = -19.5
+"""The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
+``bench/baselines/tone_floor.csv``) — the same frame on both airs."""
+
+CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -5.1, True: TONE_CONTROL_THRESHOLD_DB}
+"""The 2 300 Hz control frames' 10 % FER points on AWGN, keyed by family: the control mode
+on the SHORT layout, and the tone floor's control frame — what the lossy pipe
+(:mod:`aether_model.link.sim`) judges a control frame by; the rate controller never reads
+it. ``tools/bench_floor.py --bandwidth 2300`` measures the ordinary one
 (``bench/baselines/floor_2300.csv``)."""
 
-NARROW_CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -4.5, True: -11.3}
+NARROW_CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -4.5, True: TONE_CONTROL_THRESHOLD_DB}
 """The two 500 Hz control frames' 10 % FER points on AWGN: the ordinary SHORT frame at the
-control mode, and the floor one (ADR-0009) — ``bench/baselines/floor_500.csv``. Until
-2026-09-23 the pipe judged every control frame at data mode 0's threshold, which on this air
-is a floor mode at −12 dB: an ordinary acknowledgement that needs −4.5 dB went through the
-pipe eight decibels below where the modem could decode it."""
+control mode (``bench/baselines/floor_500.csv``), and the tone floor's. Until 2026-09-23
+the pipe judged every control frame at data mode 0's threshold: an ordinary acknowledgement
+that needs −4.5 dB went through the pipe eight decibels below where the modem could decode
+it."""
 
 NARROW_PAYLOAD_BYTES: dict[int, float] = {
-    0: 19,
-    1: 41,
+    0: 24,
+    1: 36,
     2: 15,
     3: 25,
     4: 34,
@@ -116,24 +134,23 @@ NARROW_PAYLOAD_BYTES: dict[int, float] = {
     11: 123,
     12: 137,
 }
-"""Payload bytes per frame of each narrow mode *on the layout it goes out on*: the floor
-modes' frames are four times as long, which is why :func:`usable_modes` needs
+"""Payload bytes per frame of each rung of the 500 Hz ladder: the tone floor's frames are
+five times as long as the ordinary ones, which is why :func:`usable_modes` needs
 :data:`NARROW_FRAME_S` to compare them."""
 
-NARROW_FRAME_S: dict[int, float] = {m: (4.216 if m < 2 else 1.054) for m in range(13)}
-"""Air time of each narrow mode's DATA frame: 136 symbols on the floor layout, 34 on the
-ordinary one, at 31 ms a symbol (the link layer's copy of the layouts; tested against
-them)."""
+NARROW_FRAME_S: dict[int, float] = {m: (5.36 if m < 2 else 1.054) for m in range(13)}
+"""Air time of each narrow rung's DATA frame: 134 symbols of 40 ms on the tone floor, 34 of
+31 ms on the ordinary layout (the link layer's copy of the frames; tested against them)."""
 
 
 def usable_modes(
     thresholds: Mapping[int, float] = AWGN_THRESHOLD_DB,
     payload: Mapping[int, float] = PAYLOAD_BYTES,
-    frame_s: Mapping[int, float] | None = None,
+    frame_s: Mapping[int, float] | None = FRAME_S,
 ) -> list[int]:
     """Modes on the throughput/threshold Pareto front, ascending. ``payload`` is bytes per
     frame; given ``frame_s`` (air time per mode) the comparison is bytes per second, which
-    is what tells a floor mode's long frame from an ordinary one (ADR-0009)."""
+    is what tells the floor's long frames from the ordinary ones."""
 
     def worth(m: int) -> float:
         return payload[m] / (frame_s[m] if frame_s is not None else 1.0)
@@ -188,6 +205,21 @@ class RateController:
     first_mode_back: int = 2
     """Steps kept in hand by :meth:`first_mode`: how far below the fastest mode one
     measurement supports a session's first burst goes out."""
+    floor_modes: int = 2
+    """How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013 — whose
+    frames carry a quarter of the first OFDM rung's rate or less. The step across that
+    boundary is not a step between neighbours a third apart in rate, which is what the
+    learned margin was built for: see :attr:`floor_margin_db`."""
+    floor_margin_db: float | None = None
+    """The most margin the first OFDM rung is held to against the floor, however wide the
+    learned margin has grown — on an air whose first rung stays productive on a fading path
+    below the margin the learned one would demand (``PhyTiming.floor_margin_db``). The
+    learned margin prices a channel's fading among OFDM rungs a third apart in rate; the floor
+    is a quarter of the rate, and a rung that loses half its frames but gets the rest through
+    with HARQ is still worth twice the floor. The 2 300 Hz air's first rung spreads a frame
+    over 2.3 kHz: on the fading bench, before the floor existed, it carried every session
+    from a decibel above its 10 % point up on every class. The 500 Hz air's has a fifth of
+    that diversity and does not; ``None``, the learned margin, is the rule there."""
     thresholds: dict[int, float] = field(default_factory=lambda: dict(AWGN_THRESHOLD_DB))
     modes: list[int] = field(default_factory=usable_modes)
     snr_db: float | None = None
@@ -199,6 +231,8 @@ class RateController:
     _ever_failed: bool = False
     _decay_step_db: float = 0.0
     """The last decay step taken since the failure before, which the next one grows on."""
+    _boundary_failures: int = 0
+    """Failed bursts in a row on the first OFDM rung (:meth:`_step_down`)."""
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
@@ -221,6 +255,7 @@ class RateController:
             self._decay_step_db = 0.0
             self._step_down()
         elif ok:
+            self._boundary_failures = 0
             self._clean_run += 1
             self._clean_since_decay += 1
             if not self._ever_failed:
@@ -266,12 +301,20 @@ class RateController:
         most robust there is — and a burst at a fast mode is more exposed to what the
         channel does within a frame, so the first burst keeps :attr:`first_mode_back` steps in hand
         and the climb makes them up in a burst if the channel allows."""
+        ordinary = self._first_ordinary()
         fit = 0
         for i in range(1, len(self.modes)):
-            if self.thresholds[self.modes[i]] + self.margin_db + self.up_hysteresis_db > snr_db:
+            if self.thresholds[self.modes[i]] + self._margin(i) + self.up_hysteresis_db > snr_db:
                 break
             fit = i
-        return self.modes[max(0, fit - self.first_mode_back)]
+        # the steps in hand stay in the family the measurement fits: a session the SNR puts
+        # on an OFDM rung does not start on the floor, five times slower, for its caution
+        lowest = ordinary if fit >= ordinary else 0
+        return self.modes[max(lowest, fit - self.first_mode_back)]
+
+    def _first_ordinary(self) -> int:
+        """Index in :attr:`modes` of the first rung above the floor."""
+        return next((i for i, m in enumerate(self.modes) if m >= self.floor_modes), 0)
 
     def seed(self, snr_db: float) -> None:
         """Start from a measurement — the connect frame this station decoded — instead of
@@ -285,14 +328,31 @@ class RateController:
 
     # ── the state machine ─────────────────────────────────────────────
 
+    def _margin(self, index: int) -> float:
+        """The margin a rung is held to: the learned one, capped at :attr:`floor_margin_db`
+        for the first OFDM rung, whose alternative is the floor."""
+        if self.floor_margin_db is not None and index == self._first_ordinary():
+            return min(self.margin_db, self.floor_margin_db)
+        return self.margin_db
+
     def _fits(self, index: int, extra_db: float = 0.0) -> bool:
         if self.snr_db is None:
             return index == 0
-        return self.thresholds[self.modes[index]] + self.margin_db + extra_db <= self.snr_db
+        return self.thresholds[self.modes[index]] + self._margin(index) + extra_db <= self.snr_db
 
     def _step_down(self) -> None:
         """A failure: fall to the fastest mode the current SNR and margin still support, but
-        always at least one step — a failure at the bottom of the table is still evidence."""
+        always at least one step — a failure at the bottom of the table is still evidence.
+        The one exception is a single failed burst on the first OFDM rung of an air that caps
+        its margin (:attr:`floor_margin_db`) while the SNR still carries the rung: the floor
+        below is a quarter of the rate, so one lost burst is not worth leaving for it; a
+        second one in a row is."""
+        ordinary = self._first_ordinary()
+        at_boundary = self.floor_margin_db is not None and self._index == ordinary
+        self._boundary_failures = self._boundary_failures + 1 if at_boundary else 0
+        if at_boundary and self._boundary_failures < 2 and self._fits(ordinary):
+            return
+        self._boundary_failures = 0
         target = self._index - 1
         for i in range(self._index - 1, -1, -1):
             if self._fits(i):

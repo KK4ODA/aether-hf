@@ -82,13 +82,11 @@ class ReceivedFrame:
     ``chip_runner_up`` if the CRC fails."""
 
 
-def layout_for(
-    header_type: FrameType, params: WaveformParams = WIDE_2300, floor: bool = False
-) -> FrameLayout:
-    """The layout a frame of this type — and family (ADR-0009) — has on this waveform."""
-    if params is WIDE_2300 and not floor:
+def layout_for(header_type: FrameType, params: WaveformParams = WIDE_2300) -> FrameLayout:
+    """The layout an OFDM frame of this type has on this waveform."""
+    if params is WIDE_2300:
         return LONG if header_type is FrameType.DATA else SHORT
-    return air_interface(params).layout_for(header_type is FrameType.DATA, floor)
+    return air_interface(params).layout_for(header_type is FrameType.DATA)
 
 
 class FrameReceiver:
@@ -137,7 +135,7 @@ class FrameReceiver:
         self.data_c = self.cmap.data_carriers
 
     def frame_span(self, sync: FrameSync) -> tuple[int, int]:
-        layout = layout_for(sync.header.frame_type, self.p, sync.floor)
+        layout = layout_for(sync.header.frame_type, self.p)
         return sync.start, sync.start + layout.samples
 
     def receive(
@@ -145,7 +143,7 @@ class FrameReceiver:
     ) -> ReceivedFrame:
         """Demodulate and equalize one frame. ``hypothesis`` (a chip-sequence index)
         overrides chip-based (mode, rv) detection — used for the runner-up retry."""
-        layout = layout_for(sync.header.frame_type, self.p, sync.floor)
+        layout = layout_for(sync.header.frame_type, self.p)
         start, end = self.frame_span(sync)
         if end + self.dem.fft_offset > len(x):
             raise ValueError("frame runs past the end of the buffer")
@@ -172,7 +170,7 @@ class FrameReceiver:
         raw = demod(cfo_total)
 
         # 2. comb LS estimates on every symbol after the preamble (pilot carriers are known
-        #    on all of them), smoothed over ±1 symbol (±3 on a floor layout)
+        #    on all of them), smoothed over ±1 symbol
         radius = layout.pilot_smoothing
         comb = np.zeros((n_sym, len(pc)), dtype=np.complex128)
         comb[pre:] = raw[pre:, pc] / ref
