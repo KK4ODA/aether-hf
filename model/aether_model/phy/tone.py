@@ -125,13 +125,18 @@ def tone_energies(
 def noise_level(energies: FloatArray, layout: IntArray) -> float:
     """The noise energy per bin: the median of the bins that should hold only noise — every
     tone but the sync tone in a sync symbol, every tone but the strongest in a data symbol —
-    over ln 2, the median of an exponential."""
+    over ln 2, the median of an exponential. A silent symbol (the receiver muted while its
+    station transmitted) measures nothing and is left out: counted, a frame half under the
+    station's own transmission read its noise as zero and its SNR as 290 dB."""
     e = np.array(energies, dtype=np.float64)
     known = layout >= 0
     rows = np.arange(len(e))
     top = np.where(known, layout, e.argmax(axis=1))
     mask = np.ones_like(e, dtype=bool)
     mask[rows, top] = False
+    mask[e.max(axis=1) <= 0] = False
+    if not mask.any():
+        return 1e-30
     return max(float(np.median(e[mask])) / math.log(2.0), 1e-30)
 
 
@@ -242,6 +247,13 @@ class ToneDetector:
     BIN_DIV = 4
     CLIP = 10.0
     MIN_HITS = 12
+    MIN_BLOCK_HITS = 4
+    """Hits the second-best sync block of a confirmed frame must have: evidence in two of the
+    three blocks, which is what three blocks are for — a fade may swallow one. A hypothesis
+    read a block-spacing early against a strong frame has one block on the frame's own and the
+    others over its data or silence; with eight hits there and the data's coincidences it
+    reached twelve, and a receiver taking frames as they end took it first — found by two
+    daemons over ``[sim]``, where it was the silence a station keeps while it transmits."""
     MIN_FIRST_HITS = 5
 
     def __init__(
@@ -345,22 +357,38 @@ class ToneDetector:
             found.append(sync)
         return sorted(found, key=lambda s: s.start)
 
+    def block_hits(
+        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float
+    ) -> list[int]:
+        """Per sync block, the symbols of a frame placed at ``start``/``cfo`` whose own tone
+        is the strongest of the sixteen. A symbol with no energy at all is no evidence: a
+        receiver hears exact silence only while it is muted — its own transmission — and
+        there every tone ties."""
+        layout = kind.layout(rv)
+        e = tone_energies(x, start, cfo, kind.symbols, kind.num)
+        out = []
+        for o in kind.block_offsets:
+            rows = e[o : o + SYNC_SYMBOLS]
+            hit = (rows.argmax(axis=1) == layout[o : o + SYNC_SYMBOLS]) & (rows.max(axis=1) > 0)
+            out.append(int(np.sum(hit)))
+        return out
+
     def sync_hits(self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float) -> int:
         """Sync symbols of a frame placed at ``start``/``cfo`` whose own tone is the strongest
-        of the sixteen."""
-        layout = kind.layout(rv)
-        idx = np.flatnonzero(layout >= 0)
-        e = tone_energies(x, start, cfo, kind.symbols, kind.num)[idx]
-        return int(np.sum(e.argmax(axis=1) == layout[idx]))
+        of the sixteen (:meth:`block_hits`, summed)."""
+        return sum(self.block_hits(x, kind, rv, start, cfo))
 
     def confirmed(self, x: ComplexArray, sync: ToneSync) -> bool:
         """Whether a refined candidate is a frame: at least :attr:`MIN_HITS` of its 24 sync
-        symbols have their own tone strongest. Inside a strong frame the data symbols line
-        up with some pattern at some offset on a handful of positions — about seven of 24,
-        each clipped at the top — which can lift the statistic over the threshold; they do
-        not make the pattern's tones the strongest at half the positions, which a frame at
-        its decode threshold does 999 times in 1000."""
-        return self.sync_hits(x, sync.kind, sync.rv, sync.start, sync.cfo_hz) >= self.MIN_HITS
+        symbols have their own tone strongest, and at least :attr:`MIN_BLOCK_HITS` of them in
+        a second block. Inside a strong frame the data symbols line up with some pattern at
+        some offset on a handful of positions — about seven of 24, each clipped at the top —
+        which can lift the statistic over the threshold; they do not make the pattern's tones
+        the strongest at half the positions, which a frame at its decode threshold does 999
+        times in 1000. A hypothesis a block-spacing off a strong frame has eight hits in one
+        block and chance in the others, which the second condition refuses."""
+        hits = sorted(self.block_hits(x, sync.kind, sync.rv, sync.start, sync.cfo_hz))
+        return sum(hits) >= self.MIN_HITS and hits[-2] >= self.MIN_BLOCK_HITS
 
     def sync_statistic(
         self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float
@@ -556,8 +584,12 @@ class ToneStream:
             if acc[c] <= best[0]:
                 continue
             if first_only:
+                # a silent symbol (the receiver muted) ties every tone and is no evidence
                 hits = sum(
-                    int(np.argmax(self._rows[h + q * j][:, c]) == tone)
+                    int(
+                        np.argmax(self._rows[h + q * j][:, c]) == tone
+                        and self._rows[h + q * j][tone, c] > 0
+                    )
                     for j, tone in enumerate(kind.sync(rv))
                 )
                 if hits < self.det.MIN_FIRST_HITS:

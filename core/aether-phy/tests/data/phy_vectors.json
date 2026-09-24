@@ -88854,6 +88854,47 @@
    ]
   }
  ],
+ "tone_after_silence": [
+  {
+   "payload": "a48514d30416b7a899e0640b14c7109bf3ea497665d65d02c0a5c59790564218e0cc0d8c",
+   "lead": 30000,
+   "n_samples": 76880,
+   "early_start": 11760,
+   "early_block_hits": [
+    0,
+    8,
+    3
+   ],
+   "early_confirmed": false,
+   "start": 30001
+  },
+  {
+   "payload": "8b4ae5f1a94106a0956a26afbccdafe562f90a945f5693c642276ad5ab2da7394551370e",
+   "lead": 30000,
+   "n_samples": 76880,
+   "early_start": 11760,
+   "early_block_hits": [
+    0,
+    8,
+    1
+   ],
+   "early_confirmed": false,
+   "start": 30001
+  },
+  {
+   "payload": "9f5b658c8e4436e7085c4a7ed35c531188ae90922d1638ac556929149ab0f878a902ac5a",
+   "lead": 30000,
+   "n_samples": 76880,
+   "early_start": 11760,
+   "early_block_hits": [
+    0,
+    8,
+    0
+   ],
+   "early_confirmed": false,
+   "start": 30001
+  }
+ ],
  "tone_sample_tolerance": 1e-09,
  "tone_llr_tolerance": 1e-06
 }

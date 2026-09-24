@@ -50,7 +50,8 @@ golden-ratio interleaver. `docs/spec/air-interface.md` §2.4 has every number.
   ratio clipped at 10. Threshold 3.0 (noise maximum 2.73 a minute; narrow OFDM traffic at
   30 dB 2.75; a carrier 30 dB up 2.72). A candidate is refined — over two hops and two bins
   either side, then to the sample and a fraction of a hertz, on the sync tones' own energy —
-  and kept only if at least 12 of its 24 sync tones are the strongest in their symbols.
+  and kept only if at least 12 of its 24 sync tones are the strongest in their symbols, four
+  of them in a second block (§5); a silent symbol is no evidence either way.
 * **The demodulator** measures the noise from the bins that should hold none, the signal
   from each sync block, interpolates the symbol SNR between the blocks, and scores each tone
   `log I0(2·sqrt(E·s)/σ)`; a bit's LLR is the log-sum over the tones labelled 0 against 1.
@@ -69,17 +70,17 @@ what equal peak power means; the OFDM floor from `floor_500.csv` (20 frames a po
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| **tone-24**, 36 bit/s | **−19.0** | **−12.0** | **−13.2** | **−14.5** |
+| **tone-24**, 36 bit/s | **−19.0** | **−11.7** | **−13.2** | **−14.5** |
 | OFDM floor, QPSK 1/10, 36 bit/s | −13.0 | −4.0 | −4.7 | −3.0 |
 | **tone-36**, 54 bit/s | **−17.3** | **−8.8** | **−10.3** | **−10.9** |
 | OFDM floor, QPSK ⅕, 78 bit/s | −10.1 | −4.4 | −4.0 | −6.4 |
-| **tone-control** | **−19.5** | **−11.2** | **−14.7** | **−15.8** |
+| **tone-control** | **−19.5** | **−11.1** | **−14.5** | **−15.8** |
 | OFDM floor control frame | −11.2 | −4.0 | −4.7 | −6.8 |
 
 At the same 36 bit/s the tone floor is 6.0 dB better on AWGN — 5.5 of it the envelope — and
-8.0, 8.5 and 11.5 dB better on Good, Moderate and Poor, where its frames span several fades
-and it needs no channel estimate: the gate (3 dB on Good and Moderate) passes with five to
-spare. The 54 bit/s kind reaches 4–7 dB below the OFDM floor's 78 bit/s mode. The detector
+7.7, 8.5 and 11.5 dB better on Good, Moderate and Poor, where its frames span several fades
+and it needs no channel estimate: the gate (3 dB on Good and Moderate) passes with nearly five
+to spare. The 54 bit/s kind reaches 4–7 dB below the OFDM floor's 78 bit/s mode. The detector
 costs 0.1–0.3 dB against genie timing. The tone floor **replaces** the OFDM floor at 500 Hz
 — lower everywhere, and a far cheaper detector than ADR-0009's — and goes under the
 2 300 Hz ladder, which reaches 14 dB lower than it did.
@@ -179,6 +180,24 @@ tone frame) and every tool read the ladder. Consequences found on the way:
 * **The clipped statistic plateaus on a strong frame** over two hops and two bins, so the
   refinement starts from a grid, and it finishes to the sample: a strong frame read a few
   samples off smears the neighbouring symbol over every bin and the SNR estimate with it.
+
+* **A frame read a block-spacing early** — found by two daemons over `[sim]` after the port
+  (a Test session: tone-36 decoded 0 of 2, and the rest of the rung went to pieces), and
+  fixed model first. A station mutes its receiver while it transmits and the peer's burst
+  follows at once, so the receiver holds exact silence and then a frame. The hypothesis whose
+  first block lies in the silence and whose middle block sits on the frame's first had eight
+  hits there, one from the silence — at zero every tone ties, and the argmax is tone 0, which
+  that pattern holds — and three from the data's coincidences: twelve, the bar. A stream
+  takes a frame as it ends, so the phantom was taken first and its span blocked the real
+  frame; the real frame left the arrivals with it, a pseudo-arrival at its middle block took
+  its place, and the receiving station's acknowledgement fired inside the next frame. Now a
+  silent symbol is no evidence — neither a hit nor noise: a frame half under the station's
+  own transmission had read its noise as zero and its SNR as 290 dB — and a frame needs
+  `MIN_BLOCK_HITS` = 4 in a second block: evidence in two of three blocks, which is what
+  three blocks are for. Without it a phantom ahead of any burst passed about 1.8 % of the
+  time, with it about 0.16 %; it costs a few acquisitions a hundred at the lowest SNRs, nearly
+  all of frames that would not have decoded. The vectors carry the case
+  (`tone_after_silence`).
 
 ## 6. Costs and limits
 

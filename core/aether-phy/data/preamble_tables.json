@@ -671,6 +671,7 @@
    "max_cfo_hz": 100.0,
    "threshold": 3.0,
    "min_hits": 12,
+   "min_block_hits": 4,
    "min_first_hits": 5,
    "announce_threshold": 4.8,
    "lookahead": 4,

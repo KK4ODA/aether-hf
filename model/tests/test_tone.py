@@ -284,3 +284,63 @@ def test_a_strong_carrier_on_a_tone_is_not_a_frame() -> None:
     carrier = 30.0 * np.exp(2j * np.pi * 62.5 * t)
     y = make_channel("awgn", snr_db=0.0, fs=8000.0, seed=11, signal_power=1.0).process(carrier)
     assert T.ToneDetector().detect(y) == []
+
+
+def _after_silence(seed: int, lead_zero: int = 30000) -> tuple[np.ndarray, int, bytes]:
+    """A tone-36 frame straight after a span of exact silence — what a receiver holds while
+    its own station transmits — with a little noise after it, and where it starts."""
+    kind = M.TONE_DATA[1]
+    rng = np.random.default_rng(seed)
+    payload = _payload(rng, kind)
+    x = T.burst(kind, payload, 0)
+    y = np.concatenate((np.zeros(lead_zero, complex), x, np.zeros(4000, complex)))
+    noise = rng.normal(0, 0.03, len(y)) + 1j * rng.normal(0, 0.03, len(y))
+    noise[:lead_zero] = 0
+    return y + noise, lead_zero, payload
+
+
+def test_a_frame_after_the_receivers_own_silence_is_not_read_a_block_early() -> None:
+    """Found by two daemons over ``[sim]``: a station mutes its receiver while it transmits,
+    and the peer's burst follows at once. A hypothesis whose first block lies in that
+    silence and whose middle block sits on the frame's first had eight hits there, one
+    "hit" from the silence — every tone ties at zero, and the argmax is tone 0, which this
+    pattern holds — and three from the data: twelve. Taken as frames end, it came first and
+    blocked the real frame; the receiver's arrivals and its acknowledgement's timing went
+    with it. A silent symbol is no evidence, and a frame needs it in two blocks."""
+    kind = M.TONE_DATA[1]
+    det = T.ToneDetector()
+    n = kind.num.symbol_samples
+    y, start, payload = _after_silence(192)  # a payload whose data made the three
+    early = start - (kind.block_offsets[1]) * n
+    assert det.block_hits(y, kind, 0, early, 0.0) == [0, 8, 3]
+    assert not det.confirmed(y, T.ToneSync(early, 0.0, kind, 0, 0.0))
+    # offline and streaming alike, the frame itself — at its own start, decoded
+    for found in (det.detect(y), _streamed(y)):
+        assert [(s.kind, s.rv) for s in found] == [(kind, 0)], found
+        assert abs(found[0].start - start) <= 4
+        frame = T.demodulate(y, kind, 0, found[0].start, found[0].cfo_hz)
+        assert frame.decode()[0] == payload
+
+
+def _streamed(y: np.ndarray, block: int = 160) -> list[T.ToneSync]:
+    stream = T.ToneStream()
+    found: list[T.ToneSync] = []
+    for i in range(0, len(y), block):
+        found += stream.feed(y[: i + block], 0)
+    return found
+
+
+def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:
+    """A frame half under the receiver's own transmission — the station keyed over it —
+    read its noise as zero from the silent symbols and its SNR as 290 dB, which a rate
+    controller would take at its word."""
+    kind = M.TONE_DATA[0]
+    rng = np.random.default_rng(4)
+    payload = _payload(rng, kind)
+    lead = 3000
+    y = _received(kind, payload, snr_db=10.0, lead=lead, cfo_hz=0.0, seed=4)
+    whole = T.demodulate(y, kind, 0, lead, 0.0)
+    muted = y.copy()
+    muted[lead + kind.samples // 2 : lead + kind.samples] = 0
+    half = T.demodulate(muted, kind, 0, lead, 0.0)
+    assert abs(half.snr_db - whole.snr_db) < 4.0, (half.snr_db, whole.snr_db)

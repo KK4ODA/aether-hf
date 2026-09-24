@@ -368,6 +368,43 @@ def tone_receive_cases() -> list[dict[str, object]]:
     return out
 
 
+def tone_after_silence_cases() -> list[dict[str, object]]:
+    """A tone-36 frame straight after exact silence — a receiver's own transmission, muted —
+    with :func:`tone_interference` after it: the hypothesis a block-spacing early (first
+    block in the silence, middle block on the frame's first) and what the detector makes of
+    it, then what it finds. Block hits and the verdict are exact; so is the start found."""
+    out = []
+    kind = TONE_DATA[1]
+    det = tone.ToneDetector()
+    n_sym = kind.num.symbol_samples
+    for seed in (192, 7, 31):
+        rng = np.random.default_rng(seed)
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        lead = 30000
+        x = tone.burst(kind, payload, 0)
+        n = lead + len(x) + 4000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y[lead:] += tone_interference(n)[lead:]
+        early = lead - kind.block_offsets[1] * n_sym
+        hits = det.block_hits(y, kind, 0, early, 0.0)
+        confirmed = det.confirmed(y, tone.ToneSync(early, 0.0, kind, 0, 0.0))
+        found = det.detect(y)
+        assert [(s.kind, s.rv) for s in found] == [(kind, 0)], (seed, found)
+        out.append(
+            {
+                "payload": payload.hex(),
+                "lead": lead,
+                "n_samples": n,
+                "early_start": early,
+                "early_block_hits": hits,
+                "early_confirmed": confirmed,
+                "start": found[0].start,
+            }
+        )
+    return out
+
+
 def passband_input(n: int) -> NDArray[np.complex128]:
     """A deterministic multi-tone test signal, defined so both languages build it identically.
 
@@ -482,6 +519,7 @@ def main() -> int:
         "blanker": blanker_case(),
         "tone_frames": tone_frame_cases(),
         "tone_receive": tone_receive_cases(),
+        "tone_after_silence": tone_after_silence_cases(),
         "tone_sample_tolerance": 1e-9,
         "tone_llr_tolerance": 1e-6,
     }
