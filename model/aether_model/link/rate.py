@@ -87,6 +87,20 @@ twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it the
 family (ADR-0009) — modes 0 and 1 on a frame four times as long, and mode 2 on the
 ordinary one — reaches −12 dB."""
 
+CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -5.1, True: -5.1}
+"""The 2 300 Hz control frame's 10 % FER point on AWGN, keyed by family: the control mode on
+the SHORT layout, which the lossy pipe (:mod:`aether_model.link.sim`) judges a control frame
+by; the rate controller never reads it. The wide air has no floor family, so both keys are
+the one frame. ``tools/bench_floor.py --bandwidth 2300`` measures it
+(``bench/baselines/floor_2300.csv``)."""
+
+NARROW_CONTROL_THRESHOLD_DB: dict[bool, float] = {False: -4.5, True: -11.3}
+"""The two 500 Hz control frames' 10 % FER points on AWGN: the ordinary SHORT frame at the
+control mode, and the floor one (ADR-0009) — ``bench/baselines/floor_500.csv``. Until
+2026-09-23 the pipe judged every control frame at data mode 0's threshold, which on this air
+is a floor mode at −12 dB: an ordinary acknowledgement that needs −4.5 dB went through the
+pipe eight decibels below where the modem could decode it."""
+
 NARROW_PAYLOAD_BYTES: dict[int, float] = {
     0: 19,
     1: 41,

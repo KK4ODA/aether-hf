@@ -12,10 +12,15 @@ Channel model
 -------------
 * Half-duplex: a station hears a frame only if it was not transmitting for any part of it.
 * Simultaneous transmissions collide — both frames are lost (the ``connect`` race).
-* Loss: each frame draws a uniform once; it is lost if the draw exceeds the mode's success
+* Loss: each frame draws a uniform once; it is lost if the draw exceeds the frame's success
   probability at the channel SNR. A retransmission of the same block accumulates ≈ 3 dB of
-  "energy" per combine; the combined frame succeeds once the summed energy clears the mode
+  "energy" per combine; the combined frame succeeds once the summed energy clears the
   threshold — the same qualitative behaviour as LDPC HARQ-IR.
+* Each frame is judged at its own threshold: a DATA frame at its mode's, a CONTROL frame at
+  its family's control frame's (the ordinary SHORT frame or the floor one, ADR-0009). A
+  delivered frame carries its family, as the modem reports it: a DATA frame's is its
+  mode's, a CONTROL frame's the layout it went out on — the engine drops a floor-mode frame
+  whose flag disagrees with its mode, as it must for a real one.
 """
 
 from __future__ import annotations
@@ -28,8 +33,12 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from aether_model.link.engine import Deliver, Event, LinkEngine, Transmit
-from aether_model.link.phy import Container, SoftFrame, TxFrame
-from aether_model.link.rate import AWGN_THRESHOLD_DB
+from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
+from aether_model.link.rate import (
+    AWGN_THRESHOLD_DB,
+    CONTROL_THRESHOLD_DB,
+    NARROW_CONTROL_THRESHOLD_DB,
+)
 
 FrameFactory = Callable[[TxFrame, float, float, float], "SoftFrame | None"]
 """(frame, snr_db, t_start, t_end) -> a delivered SoftFrame, or None if it was not
@@ -41,11 +50,14 @@ _HARQ_GAIN_DB = 3.0
 """Soft-combining energy gained per retransmission of the same block."""
 
 
-def _success_prob(
-    mode: int, snr_db: float, energy_db: float, thresholds: dict[int, float] | None = None
-) -> float:
-    threshold = (thresholds or AWGN_THRESHOLD_DB).get(mode, 0.0)
+def _success_prob(threshold: float, snr_db: float, energy_db: float) -> float:
     return 1.0 / (1.0 + math.exp(-_STEEP * (snr_db + energy_db - threshold)))
+
+
+def control_thresholds_for(timing: PhyTiming) -> dict[bool, float]:
+    """The AWGN thresholds of an air's two control frames, keyed by family: the narrow air's
+    when it has a floor family, the wide air's otherwise."""
+    return dict(NARROW_CONTROL_THRESHOLD_DB if timing.floor_modes else CONTROL_THRESHOLD_DB)
 
 
 @dataclass
@@ -64,13 +76,18 @@ class SimFrame:
     payload: bytes
     _draw: float
     floor: bool = False
-    _thresholds: dict[int, float] | None = None
-    """Per-mode FER thresholds of the channel being modelled; AWGN when unset."""
+    _threshold: float | None = None
+    """The SNR at which this frame decodes nine times in ten on the channel being modelled:
+    a DATA frame's mode's, a CONTROL frame's family's. The AWGN table's for its mode when
+    unset."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
         gained = prior + (_HARQ_GAIN_DB if buffer is not None else 0.0)
-        if self._draw <= _success_prob(self.mode, self.snr_db, gained, self._thresholds):
+        threshold = self._threshold
+        if threshold is None:
+            threshold = AWGN_THRESHOLD_DB.get(self.mode, 0.0)
+        if self._draw <= _success_prob(threshold, self.snr_db, gained):
             return self.payload, gained
         return None, gained
 
@@ -107,6 +124,7 @@ class TwoStationSim:
         frame_factory: FrameFactory | None = None,
         thresholds: dict[int, float] | None = None,
         snr_schedule: Callable[[float], float] | None = None,
+        control_thresholds: dict[bool, float] | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -117,12 +135,26 @@ class TwoStationSim:
         self.t = 0.0
         self._factory: FrameFactory = frame_factory or self._synthetic_frame
         self.thresholds = thresholds
+        """Per-mode thresholds of the channel being modelled; the air's AWGN table when
+        unset (the one its timing hands the rate controller, the wide table without one)."""
+        self.control_thresholds = control_thresholds
+        """The two control frames' thresholds on the channel being modelled, keyed by
+        family; the air's AWGN values (:func:`control_thresholds_for`) when unset."""
         self.snr_schedule = snr_schedule
         """SNR as a function of time, for ramps. Overrides :attr:`snr_db` when set."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
     ) -> SoftFrame | None:
+        timing = self.st[0].engine.timing
+        control = frame.container is Container.CONTROL
+        # a data frame's family is its mode's; a control frame says which it went out on
+        floor = frame.floor if control else timing.is_floor(frame.mode)
+        if control:
+            threshold = (self.control_thresholds or control_thresholds_for(timing))[floor]
+        else:
+            table = self.thresholds or timing.mode_threshold_db or AWGN_THRESHOLD_DB
+            threshold = table.get(frame.mode, 0.0)
         return SimFrame(
             container=frame.container,
             mode=frame.mode,
@@ -132,7 +164,8 @@ class TwoStationSim:
             t_end=t_end,
             payload=frame.payload,
             _draw=self.rng.random(),
-            _thresholds=self.thresholds,
+            floor=floor,
+            _threshold=threshold,
         )
 
     # ── scheduling ────────────────────────────────────────────────────

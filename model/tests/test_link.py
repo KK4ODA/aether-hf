@@ -930,3 +930,56 @@ def test_a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it(timing: PhyTim
     assert a._reencode_target(16, top, 5) == 5
     full = data_capacity(timing.capacity(top))
     assert a._reencode_target(full, top, 0) is None
+
+
+# ── the lossy pipe's families (P9-6) ──────────────────────────────────
+
+
+def test_a_narrow_session_at_the_floor_completes_through_the_pipe() -> None:
+    """At −8 dB on AWGN only the 500 Hz floor family decodes (ADR-0009): its data modes and
+    its control frame. Until P9-6 the pipe delivered every frame as ordinary, the engine
+    rightly dropped a floor-mode frame whose flag disagreed with its mode, and every
+    simulated session that reached the floor failed — the link bench's 500 Hz numbers below
+    the ordinary table were a bench artefact."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    timing = phy_timing(NARROW_500)
+    a, b = _pair(timing, LinkConfig(max_mode=12))
+    sim = TwoStationSim(a, b, snr_db=-8.0, seed=3)
+    message = bytes(range(60))
+    a.connect("KK4XYZ")
+    a.send(message)
+    a.disconnect()
+    sim.run(until=900)
+    assert sim.delivered(1) == message, (sim.events(0), sim.events(1))
+    assert b.stats.frames_received > 0
+
+
+def test_a_control_frame_is_judged_at_its_own_family() -> None:
+    """The pipe judges a control frame at its family's control frame, not at data mode 0 —
+    on the 500 Hz air mode 0 is a floor mode at −12 dB, while the ordinary control frame
+    needs −4.5: at −8 dB the floor acknowledgement gets through and the ordinary one does
+    not."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.phy import Container, TxFrame
+    from aether_model.link.sim import control_thresholds_for
+    from aether_model.waveform import NARROW_500
+
+    timing = phy_timing(NARROW_500)
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=-8.0, seed=1)
+    thresholds = control_thresholds_for(timing)
+    assert thresholds[False] > -8.0 > thresholds[True]
+    decoded = {False: 0, True: 0}
+    for floor in (False, True):
+        for _ in range(200):
+            frame = sim._synthetic_frame(
+                TxFrame(Container.CONTROL, b"\x01" * 7, floor=floor), -8.0, 0.0, 1.0
+            )
+            assert frame is not None and frame.floor is floor
+            decoded[floor] += frame.decode(None)[0] is not None
+    assert decoded[True] > 180 and decoded[False] < 20, decoded
+    # a data frame's family is its mode's
+    data = sim._synthetic_frame(TxFrame(Container.DATA, b"x", mode=1), -8.0, 0.0, 1.0)
+    assert data is not None and data.floor is True
