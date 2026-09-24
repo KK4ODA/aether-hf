@@ -11,22 +11,13 @@
 
 use std::{
     io::{Read as _, Write as _},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
 use serde_json::{Value, json};
-
-/// A free port, briefly bound and released.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind")
-        .local_addr()
-        .expect("addr")
-        .port()
-}
 
 /// `POST /v1/<method>` over loopback, hand-rolled: the test carries no HTTP client.
 fn call(port: u16, method: &str, params: &Value) -> Value {
@@ -49,17 +40,10 @@ fn call(port: u16, method: &str, params: &Value) -> Value {
     serde_json::from_str(payload).unwrap_or_else(|e| panic!("{e}: {payload:?}"))
 }
 
-fn wait_for_port(port: u16, what: &str) {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(Instant::now() < deadline, "{what} never listened on {port}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 struct Daemon {
     child: Child,
     control: u16,
+    log: PathBuf,
 }
 
 impl Daemon {
@@ -68,15 +52,20 @@ impl Daemon {
     }
 
     /// Start with extra `[radio]` lines — the bandwidth, say.
+    ///
+    /// Every port is the system's choice (port 0), learned from the daemon's log. The tests
+    /// used to pick ports themselves — bind one, let it go, write it into the file — and on a
+    /// loaded CI runner another test's simulated channel was given the same port in between:
+    /// the daemon under test could not listen, and the test spoke HTTP to a socket that never
+    /// answers ("no body in \"\"").
     fn start_with(dir: &Path, name: &str, callsign: &str, sim: &str, radio: &str) -> Self {
-        let control = free_port();
         let config = dir.join(format!("{name}.toml"));
         std::fs::write(
             &config,
             format!(
                 "schema_version = {schema}\ncallsign = \"{callsign}\"\n\
                  [radio]\nwait_for_clear = false\n{radio}\n\
-                 [control]\nbind = \"127.0.0.1:{control}\"\n\
+                 [control]\nbind = \"127.0.0.1:0\"\n\
                  [record]\nauto = true\n\
                  [sim]\n{sim}\nsnr_db = 25.0\n",
                 // the current schema, so the settings a test names mean what they say today
@@ -92,7 +81,50 @@ impl Daemon {
             .stderr(Stdio::inherit())
             .spawn()
             .expect("start aetherd");
-        Self { child, control }
+        let mut daemon = Self {
+            child,
+            control: 0,
+            log,
+        };
+        let address = daemon.logged("its control interface", "listening on ws://", "/v1");
+        daemon.control = address
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+            .unwrap_or_else(|| panic!("not an address: {address:?}"));
+        daemon
+    }
+
+    /// What the daemon's log says between `before` and `after`, once it says it — an
+    /// address it has bound, which the log gives as the system assigned it.
+    fn logged(&mut self, what: &str, before: &str, after: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+            if let Some((found, _)) = text
+                .split_once(before)
+                .and_then(|(_, rest)| rest.split_once(after))
+            {
+                return found.to_owned();
+            }
+            if let Ok(Some(status)) = self.child.try_wait() {
+                panic!("the daemon exited ({status}) before logging {what}:\n{text}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the daemon never logged {what}:\n{text}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Where a daemon started with `listen = "127.0.0.1:0"` listens for its simulated
+    /// channel's other end.
+    fn sim_address(&mut self) -> String {
+        self.logged(
+            "its simulated channel",
+            "simulated channel (listening on ",
+            ")",
+        )
     }
 
     fn call(&self, method: &str, params: &Value) -> Value {
@@ -201,7 +233,6 @@ fn a_daemon_asked_to_restart_exits_asking_for_it() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("dir");
     let mut daemon = Daemon::start(&dir, "r", "W4ODA", "listen = \"127.0.0.1:0\"");
-    wait_for_port(daemon.control, "the daemon");
     assert_eq!(
         daemon.status()["supervised"],
         false,
@@ -219,22 +250,9 @@ fn two_daemons_complete_a_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let channel = free_port();
-
-    let a = Daemon::start(
-        &dir,
-        "a",
-        "W4ODA",
-        &format!("listen = \"127.0.0.1:{channel}\""),
-    );
-    let b = Daemon::start(
-        &dir,
-        "b",
-        "KK4XYZ",
-        &format!("connect = \"127.0.0.1:{channel}\""),
-    );
-    wait_for_port(a.control, "daemon a");
-    wait_for_port(b.control, "daemon b");
+    let mut a = Daemon::start(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"");
+    let channel = a.sim_address();
+    let b = Daemon::start(&dir, "b", "KK4XYZ", &format!("connect = \"{channel}\""));
     assert_eq!(a.status()["state"], "idle");
     assert_eq!(b.status()["callsign"], "KK4XYZ");
 
@@ -269,24 +287,16 @@ fn two_daemons_complete_a_session_at_500_hz() {
     let dir = std::env::temp_dir().join(format!("aether-narrow-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let channel = free_port();
     let radio = "bandwidth = 500\nmax_mode = 12\n";
-    let a = Daemon::start_with(
-        &dir,
-        "a",
-        "W4ODA",
-        &format!("listen = \"127.0.0.1:{channel}\""),
-        radio,
-    );
+    let mut a = Daemon::start_with(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"", radio);
+    let channel = a.sim_address();
     let b = Daemon::start_with(
         &dir,
         "b",
         "KK4XYZ",
-        &format!("connect = \"127.0.0.1:{channel}\""),
+        &format!("connect = \"{channel}\""),
         radio,
     );
-    wait_for_port(a.control, "daemon a");
-    wait_for_port(b.control, "daemon b");
     let caps = a.call("capabilities", &json!({}))["result"].clone();
     assert_eq!(caps["bandwidth_hz"], 500, "{caps}");
     assert_eq!(caps["modes"].as_array().map(Vec::len), Some(13));
@@ -333,23 +343,16 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let channel = free_port();
     // the ladder stops at the operator's fastest mode: six rungs keep the test short
-    let a = Daemon::start_with(
+    let mut a = Daemon::start_with(
         &dir,
         "a",
         "W4ODA",
-        &format!("listen = \"127.0.0.1:{channel}\""),
+        "listen = \"127.0.0.1:0\"",
         "max_mode = 5",
     );
-    let b = Daemon::start(
-        &dir,
-        "b",
-        "KK4XYZ",
-        &format!("connect = \"127.0.0.1:{channel}\""),
-    );
-    wait_for_port(a.control, "daemon a");
-    wait_for_port(b.control, "daemon b");
+    let channel = a.sim_address();
+    let b = Daemon::start(&dir, "b", "KK4XYZ", &format!("connect = \"{channel}\""));
     // the simulated link has just met: a moment for both ends' clocks to be running
     // before the probe, which is one frame with no retry
     std::thread::sleep(Duration::from_secs(3));

@@ -145,6 +145,25 @@ impl std::fmt::Debug for SimLink {
 /// Twenty milliseconds: capture hands over at least this much at a time, like a sound card.
 const MIN_BLOCK_S: f64 = 0.02;
 
+/// What the log calls the channel: where it listens — as bound, so a port of 0 reads as the
+/// port the system chose, which is how the other end, or a test, finds it — or where it
+/// connects.
+fn describe(config: &SimConfig, listener: Option<&TcpListener>) -> String {
+    let peer = match &config.peer {
+        Peer::Listen(address) => format!(
+            "listening on {}",
+            listener
+                .and_then(|l| l.local_addr().ok())
+                .map_or_else(|| address.clone(), |bound| bound.to_string())
+        ),
+        Peer::Connect(address) => format!("connecting to {address}"),
+    };
+    format!(
+        "simulated channel ({peer}), {:.0} dB SNR in 3 kHz",
+        config.snr_db
+    )
+}
+
 impl SimLink {
     /// Open the channel. Neither end blocks: a listener waits for its peer in the
     /// background, a connector retries for thirty seconds, and until the peer is there the
@@ -158,6 +177,7 @@ impl SimLink {
             Peer::Listen(address) => Some(TcpListener::bind(address)?),
             Peer::Connect(_) => None,
         };
+        let description = describe(config, listener.as_ref());
         let shared = Arc::new(Mutex::new(Shared::default()));
         let running = Arc::new(AtomicBool::new(true));
         let (to_peer, from_modem) = mpsc::channel::<Vec<f32>>();
@@ -252,14 +272,7 @@ impl SimLink {
             played: 0,
             consumed: std::cell::Cell::new((now, 0)),
             noise: Noise::new(0x9E37_79B9_7F4A_7C15),
-            description: format!(
-                "simulated channel ({}), {:.0} dB SNR in 3 kHz",
-                match &config.peer {
-                    Peer::Listen(a) => format!("listening on {a}"),
-                    Peer::Connect(a) => format!("connecting to {a}"),
-                },
-                config.snr_db
-            ),
+            description,
         })
     }
 
