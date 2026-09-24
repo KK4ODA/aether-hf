@@ -94,6 +94,30 @@ fn the_threshold_table_matches_the_model() {
 }
 
 #[test]
+fn the_pipes_control_thresholds_match_the_model() {
+    use aether_link::rate::{CONTROL_THRESHOLD_DB, NARROW_CONTROL_THRESHOLD_DB};
+    let doc = vectors();
+    for (key, table) in [
+        ("control_thresholds", CONTROL_THRESHOLD_DB),
+        ("narrow_control_thresholds", NARROW_CONTROL_THRESHOLD_DB),
+    ] {
+        let expected: Vec<f64> = doc[key]
+            .as_array()
+            .expect("control thresholds")
+            .iter()
+            .map(|v| v.as_f64().expect("threshold"))
+            .collect();
+        assert_eq!(expected.len(), 2, "{key}");
+        for (family, (got, want)) in table.iter().zip(&expected).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "{key}[{family}]: {got} vs {want}"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_narrow_threshold_table_matches_the_model() {
     let doc = vectors();
     let expected: Vec<f64> = doc["narrow_awgn_thresholds"]

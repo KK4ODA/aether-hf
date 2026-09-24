@@ -969,3 +969,48 @@ fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
     );
     assert!(sim.engine(0).stats.frames_reencoded >= 1);
 }
+
+#[test]
+fn a_narrow_session_at_the_floor_completes_through_the_pipe() {
+    use aether_link::rate::{NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES};
+    use aether_link::sim::control_thresholds_for;
+    // at −8 dB on AWGN only the 500 Hz floor family decodes (ADR-0009): its data modes and
+    // its control frame. The pipe delivers each frame's family and judges a control frame at
+    // its own family's threshold — at data mode 0's, as it did before P9-6, an ordinary
+    // acknowledgement went through eight decibels below where the modem decodes it
+    let params = aether_phy::waveform::NARROW_500;
+    let air = aether_phy::modes::air_interface(params);
+    let t = PhyTiming {
+        data_frame_s: air.long.duration_s(),
+        control_frame_s: air.short.duration_s(),
+        turnaround_s: 0.25,
+        detect_latency_s: 0.15,
+        tx_latency_s: 0.0,
+        preamble_detect_s: Some((air.longest_preamble() + 2) as f64 * params.symbol_period_s()),
+        data_capacity: NARROW_PAYLOAD_BYTES.to_vec(),
+        mode_threshold_db: NARROW_AWGN_THRESHOLD_DB.to_vec(),
+        floor_data_frame_s: air.floor_long.map(|l| l.duration_s()),
+        floor_control_frame_s: air.floor_short.map(|l| l.duration_s()),
+        floor_modes: air.floor_modes,
+    };
+    let [ordinary, floor] = control_thresholds_for(&t);
+    assert!(ordinary > -8.0 && -8.0 > floor, "{ordinary} {floor}");
+    let config = LinkConfig {
+        max_mode: 12,
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    a.connect("KK4XYZ").expect("idle");
+    let message: Vec<u8> = (0..60u8).collect();
+    a.send(&message);
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, -8.0, 3);
+    sim.run(900.0, 3.0);
+    assert_eq!(
+        sim.delivered(1),
+        message.as_slice(),
+        "{:?} {:?}",
+        sim.events(0),
+        sim.events(1)
+    );
+}
