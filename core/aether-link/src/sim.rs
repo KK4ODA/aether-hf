@@ -208,6 +208,17 @@ impl PartialEq for Ev {
 
 impl Eq for Ev {}
 
+/// A frame a station put on the pipe, as a test looks at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentFrame {
+    /// DATA or CONTROL.
+    pub container: Container,
+    /// The rung, for a DATA frame.
+    pub mode: usize,
+    /// Whether a CONTROL frame went on the tone floor.
+    pub floor: bool,
+}
+
 /// One side of the simulated link.
 struct Station {
     engine: LinkEngine,
@@ -215,6 +226,7 @@ struct Station {
     events: Vec<String>,
     tx_end: f64,
     busy: Vec<(f64, f64)>,
+    sent: Vec<SentFrame>,
 }
 
 impl Station {
@@ -225,6 +237,7 @@ impl Station {
             events: Vec::new(),
             tx_end: 0.0,
             busy: Vec::new(),
+            sent: Vec::new(),
         }
     }
 }
@@ -348,6 +361,12 @@ impl TwoStationSim {
         &self.modes_sent
     }
 
+    /// Every frame station `who` put on the pipe, in order.
+    #[must_use]
+    pub fn frames_sent(&self, who: usize) -> &[SentFrame] {
+        &self.stations[who].sent
+    }
+
     /// Events a station reported, as `name:detail`.
     #[must_use]
     pub fn events(&self, who: usize) -> &[String] {
@@ -398,6 +417,11 @@ impl TwoStationSim {
             if t >= key_up - 1e-9 {
                 break; // the key is up: nothing more goes out
             }
+            self.stations[who].sent.push(SentFrame {
+                container: frame.container,
+                mode: frame.mode,
+                floor: frame.floor,
+            });
             let cut = t + duration > key_up + 1e-9;
             let floor = match frame.container {
                 Container::Data => timing.is_floor(frame.mode),
