@@ -483,8 +483,10 @@ no burst length or position appears here — the receiver derives a frame's posi
 burst from its air time, and the end of a burst from the silence that follows.
 
 Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in a control
-frame), `BEACON` (3), `PROBE` (4) and `PROBE_ACK` (5). A receiver ignores a kind it does
-not know, which is what lets a kind be added.
+frame), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5) and `DATAGRAM` (6). A receiver ignores a
+kind it does not know, which is what lets a kind be added. `BEACON`, `PROBE`, `PROBE_ACK` and
+`DATAGRAM` are sent outside sessions, and a station in a session never takes one of them for
+session data, whatever its session id says.
 
 A `CONNECT_REQ` and a `CONNECT_ACK` carry this body, at the most robust mode:
 
@@ -536,6 +538,34 @@ session ignores probes (the session's frames matter more), and a station never a
 probe addressed to somebody else. Answering is a *response* in the sense of
 §97.221(c), so a station restricted to answering may answer a probe; sending one is a
 call, and it may not.
+
+A `DATAGRAM` frame carries a piece of **another program's frame** — an AX.25 frame a KISS
+client handed the modem (ADR-0019) — outside any session and with no acknowledgement: the
+client repeats whatever its own protocol needs repeated. The two header bytes a session uses
+number the pieces instead:
+
+| Header field | In a `DATAGRAM` |
+|---|---|
+| sequence number | the fragment's index (high nibble) \| the last fragment's index (low nibble): at most sixteen fragments |
+| session id | the datagram's number, 1–255, advanced by the sender for every datagram so that pieces of two datagrams are never joined |
+
+The pieces, joined in index order, are this body:
+
+| Offset | Field |
+|---|---|
+| 0–6 | sending station, packed — every datagram identifies its station in the emission itself, whatever the client's frame holds |
+| 7 | frame type, as a VARA-style KISS client names it: 0 an AX.25 frame, 1 an AX.25 frame with eight-byte address fields, 2 unformatted data |
+| 8… | the frame, byte for byte |
+
+Every fragment but the last is a full frame; the last is partial, with the explicit length —
+and a remainder exactly one byte too long for a partial frame goes as two fragments. All the
+fragments of a datagram go at the rung the sending station is configured to send datagrams
+at (tone-36 by default: the tone floor's frames are the same in both bandwidths, so a station
+of either hears them), in as few bursts as the transmitter's key limit allows, one after
+another, and only while the station is in no session. A receiver
+joins the pieces it decodes, hands the frame and its type to its own KISS clients once every
+piece has arrived, keeps at most eight incomplete datagrams, and drops one that has waited
+two minutes for a piece that is not coming.
 
 CONTROL container:
 

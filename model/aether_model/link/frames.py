@@ -68,6 +68,12 @@ class DataKind(Enum):
     """The answer to a PROBE: the probed station's callsign, the prober's, and the SNR the
     probe arrived at. Answering is a *response* in the sense of §97.221(c), so a station
     that may only answer may answer this too; sending a probe is a call, and may not."""
+    DATAGRAM = 6
+    """A fragment of another program's frame — an AX.25 frame a KISS client handed the modem —
+    sent outside any session, with no acknowledgement, to be handed to the KISS clients of
+    every station that decodes it (ADR-0019). ``seq`` is the fragment's index in its high
+    nibble and the last index in its low one; ``session`` is the datagram's number (1–255).
+    See ``datagram.py``."""
 
 
 class DataFlags(IntFlag):
