@@ -233,6 +233,8 @@ pub struct KissServer {
     shared: Arc<Shared>,
     /// Where it listens.
     pub address: SocketAddr,
+    /// The thread that holds the listening socket, waited for on the way out.
+    accept: Option<std::thread::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for KissServer {
@@ -249,6 +251,17 @@ impl Drop for KissServer {
         let _ = self.disconnect(None);
         // the accept loop is blocked in accept(): a connection of our own wakes it to stop
         let _ = TcpStream::connect_timeout(&self.address, Duration::from_millis(200));
+        // and the port is free only once that thread has let go of the socket: a port
+        // restarted in place on the same address (a changed setting) found it still held
+        if let Some(accept) = self.accept.take() {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !accept.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if accept.is_finished() {
+                let _ = accept.join();
+            }
+        }
     }
 }
 
@@ -309,8 +322,12 @@ impl KissServer {
             );
         }
         spawn_hub(Arc::clone(&shared), &handle)?;
-        spawn_accept(listener, Arc::clone(&shared), handle)?;
-        Ok(Self { shared, address })
+        let accept = spawn_accept(listener, Arc::clone(&shared), handle)?;
+        Ok(Self {
+            shared,
+            address,
+            accept: Some(accept),
+        })
     }
 
     /// The port's state now.
@@ -385,7 +402,7 @@ fn spawn_accept(
     listener: TcpListener,
     shared: Arc<Shared>,
     handle: ControlHandle,
-) -> Result<(), String> {
+) -> Result<std::thread::JoinHandle<()>, String> {
     std::thread::Builder::new()
         .name("aetherd-kiss-accept".to_owned())
         .spawn(move || {
@@ -397,7 +414,6 @@ fn spawn_accept(
                 admit(stream, &shared, &handle);
             }
         })
-        .map(|_| ())
         .map_err(|e| format!("cannot start the KISS accept thread: {e}"))
 }
 
