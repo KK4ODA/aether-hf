@@ -662,6 +662,25 @@ restore — to `station.toml.bak-v6`; adding a key is a new shape going back.
 `tools/kiss_test_client.py` (stdlib) drives any KISS port by hand; the bench pair's KISS ports are
 8110/8111. `two_daemons.rs` carries a frame from one daemon's KISS port to the other's client.
 
+**What a failure says (ADR-0020, from ND1J's Test on 7.082 MHz at 500 Hz, 2026-09-25).** The link
+ran at a quarter of the path (73/86 bit/s against ~350 from `bench_link --replay`); the
+receiver's rate controller had learned from junk. Now, in `_send_ack`/`send_ack` (model first):
+a burst's SNR is that of the frames that decoded or that the PHY trusts (`SoftFrame::trusted`,
+default true; the daemon's `trusted_measurement` is the rule `reported_cfo` used — a noise
+trigger read -11 dB and took the recommendation from rung 4 to 1); a failure counts when the
+frame is trusted and at RV 0 or 3 (`SELF_DECODABLE_RVS`) or was combined (`combined`) — a lone
+RV 1/2 retransmission decodes 6-10 % against 75 % at RV 0, and is how the copy of a frame the
+receiver already has arrives after a lost ACK; a failed burst whose every frame is faster than
+any rung the station has asked for in the session (`_asked`/`asked`) feeds only its SNR
+(`observe_snr`) — the Test's pinned ladder had held the margin at 12 dB for the file. Judging
+against the last recommendation, or the burst's most common rung, broke
+`test_transfer_survives_a_slow_snr_ramp` (retransmissions keep their first rung). Bench-neutral
+(the pipe's frames are real and decode at any RV — a fidelity gap); the day's bursts replayed
+open loop keep the margin at 2-6 dB and rungs 7-10. Not built: a trial climb off the tone rungs
+(no evidence yet). Tools: `aetherd --replay` decodes frame by frame, so RV 1/2 "failed" there is
+normal; the *other* side's recording decodes this station's ACKs, which carry the recommended
+rung — how a receiver's rate decisions are read after the fact.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

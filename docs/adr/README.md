@@ -24,3 +24,4 @@ context → decision → alternatives considered → consequences.
 | [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted |
 | [0018](0018-the-regulatory-gate.md) | The regulatory gate — nothing is keyed without the policy's leave; the rules as data; the occupancy measured | accepted |
 | [0019](0019-datagrams-and-the-kiss-port.md) | Datagrams, and a KISS port that answers as VARA's does — another program's frame outside sessions; the VARA frame types; Winlink priority | accepted |
+| [0020](0020-what-a-failure-says.md) | What a failure says — the receiver learns only from frames that could tell it something: trusted SNRs, self-decodable or combined failures, not the sender's own choices | accepted |

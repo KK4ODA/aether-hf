@@ -844,3 +844,9 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     **datagram** — a new DATA kind outside sessions, at the tone floor's tone-36 by default so
     stations of both bandwidths hear it, through the regulatory gate. Owed: VarAC, Winlink
     Express Packet, BPQ32 and the APRS programs on the bench, then the air.
+15. **Rate control on a real path** (done 2026-09-25, ADR-0020): from ND1J's 7.082 MHz Test,
+    where the link ran at a quarter of what the path carried — the receiving station now learns
+    only from frames that could tell it something: SNRs of frames that decoded or were acquired
+    with confidence, failures of frames that could have decoded (RV 0 or 3, or combined), and
+    not the Test ladder's pinned rungs. Owed: the air with the next beta; the link bench's pipe
+    decoding retransmissions as the PHY does (P9-6); whether 40 m wants a gentler margin step.
