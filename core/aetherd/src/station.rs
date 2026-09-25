@@ -2422,7 +2422,9 @@ impl<P: Ptt> Station<P> {
             end: end.to_owned(),
             snr_db: notes.snr_db,
             best_snr_db: notes.best_snr_db,
-            heard_there_db: notes.heard_there_db,
+            // the other station's disconnect is the last word on how it heard this one, and
+            // the only one a station that only received gets (ADR-0021)
+            heard_there_db: self.engine.ended_peer_snr_db().or(notes.heard_there_db),
             top_rung_sent: notes.top_rung_sent,
             top_rung_heard: notes.top_rung_heard,
             test: self.test_running(),
@@ -5205,6 +5207,9 @@ mod tests {
             "nothing but acknowledgements came back"
         );
         assert!(a.heard_there_db.is_some() && b.snr_db.is_some() && a.snr_db.is_some());
+        // the called station only received and was never acknowledged: the caller's
+        // disconnect said how it heard it (ADR-0021)
+        assert!(b.heard_there_db.is_some(), "{b:?}");
         assert!(!a.test && a.recording.is_none());
         assert!(air.a.take_finished_sessions().is_empty(), "taken once");
     }
