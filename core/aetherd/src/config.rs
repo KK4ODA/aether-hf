@@ -89,7 +89,7 @@ fn default_cat_baud() -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatProtocol {
-    /// Yaesu's ASCII CAT (FT-991A, FTDX10, FT-710, FTDX101 and the like): `TX2;` / `TX0;`.
+    /// Yaesu's ASCII CAT (FT-991A, FTDX10, FT-710, FTDX101 and the like): `TX1;` / `TX0;`.
     Yaesu,
     /// Kenwood's, which Elecraft also speaks: `TX;` / `RX;`.
     Kenwood,
