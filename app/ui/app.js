@@ -2140,13 +2140,7 @@ async function loadConfig() {
   const savedIndex = savedProfile
     ? PROFILES.findIndex((p) => p.id === savedProfile)
     : -1;
-  if (!profileChosen && $("wz-profile").options.length > 0) {
-    const index = savedIndex >= 0 ? savedIndex : guessProfile();
-    $("wz-profile").value = String(index);
-    $("wz-profile-note").textContent = PROFILES[index]?.note ?? "";
-    // a stored choice is authoritative: hold it through the next device rebuild
-    if (savedIndex >= 0) profileChosen = true;
-  }
+  if ($("wz-profile").options.length > 0) showInterface(savedIndex);
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
   $("record-auto").checked = liveConfig.record?.auto === true;
@@ -2774,21 +2768,19 @@ const PROFILES = [
   },
   {
     id: "manual",
-    name: "Manual — pick the modem devices below yourself",
+    name: "Manual — the devices and keying below, as you set them",
     match: null,
-    ptt: "serial",
-    line: "rts",
-    note: "Nothing is filled in for you: choose Capture, Playback and Keying under Modem devices below.",
+    ptt: null,
+    line: null,
+    note: "The fields below are what the modem uses. Pick a known interface above to have them filled in for it — you can change any of them afterwards.",
   },
 ];
 
-let devicesSeen = { devices: [], serial_ports: [], gpio_interfaces: [] };
+/// The Manual entry: shown whenever the fields below are not exactly what a known interface
+/// would fill in.
+const MANUAL = PROFILES.findIndex((p) => p.id === "manual");
 
-// Whether the operator has picked an interface themselves. The list is rebuilt whenever
-// the machine's devices are listed again — a device event, a reconnect — and a rebuild
-// that guessed afresh each time snapped a chosen Yaesu back to the Icom that was also
-// plugged in.
-let profileChosen = false;
+let devicesSeen = { devices: [], serial_ports: [], gpio_interfaces: [] };
 
 function fillProfiles() {
   const select = $("wz-profile");
@@ -2800,37 +2792,62 @@ function fillProfiles() {
     option.textContent = profile.name;
     select.append(option);
   }
-  if (profileChosen && before !== "") {
-    select.value = before;
-    $("wz-profile-note").textContent = PROFILES[Number(before)]?.note ?? "";
-    return;
-  }
-  select.value = String(guessProfile());
-  applyProfile();
+  // A rebuild shows what was shown; it never fills anything in. It used to guess an
+  // interface from the devices and apply it, which rewrote the keying under the operator:
+  // an Icom's and a Yaesu's codecs are both "USB Audio CODEC", and a Yaesu keyed by CAT was
+  // shown — and, on the next Save, set — as an Icom.
+  showInterface(before === "" ? -1 : Number(before));
 }
 
-/// The interface to pre-select: the one the configured capture device belongs to when the
-/// file names one, else the first whose devices are present, else "something else".
-function guessProfile() {
-  const configured = liveConfig?.audio?.input;
-  if (configured) {
-    const owner = PROFILES.findIndex((p) => p.match && p.match.test(configured));
-    if (owner >= 0) return owner;
+/// Whether the fields below are exactly what an interface would fill in: its devices, its
+/// keying port's kind and line, and its CAT settings. Anything else is the operator's own
+/// setup, which the list shows as Manual rather than as an interface it no longer is.
+function interfaceMatches(profile) {
+  if (!profile || profile.id === "manual") return false;
+  const input = $("dev-in").value;
+  if (profile.match && !(input && profile.match.test(input))) return false;
+  const keying = $("dev-ptt").value;
+  if (profile.ptt === "none") return keying === "";
+  if (profile.ptt === "gpio") return keying.startsWith("gpio:");
+  if (keying === "" || keying === "rigctld" || keying.startsWith("gpio:")) return false;
+  if (profile.line && $("ptt-line").value !== profile.line) return false;
+  if (profile.cat) {
+    if ($("ptt-protocol").value !== profile.cat.protocol) return false;
+    if (Number($("ptt-baud").value) !== profile.cat.baud) return false;
+    if (profile.cat.civ && $("ptt-civ").value.trim().toUpperCase() !== profile.cat.civ) return false;
   }
-  // a codec with a keying pin says what the interface is better than its audio name,
-  // which a Digirig and a DRA share
-  if (devicesSeen.gpio_interfaces.length > 0) {
-    const gpio = PROFILES.findIndex((p) => p.ptt === "gpio");
-    if (gpio >= 0) return gpio;
-  }
-  const present = PROFILES.findIndex(
+  return true;
+}
+
+/// Show `index` when the fields are still what it fills in, and Manual otherwise.
+function showInterface(index) {
+  const shown = index >= 0 && interfaceMatches(PROFILES[index]) ? index : MANUAL;
+  $("wz-profile").value = String(shown);
+  $("wz-profile-note").textContent = PROFILES[shown]?.note ?? "";
+  if (shown === MANUAL) noteDetectedInterface();
+}
+
+/// On Manual with no capture device chosen yet, say which known interfaces this machine
+/// seems to have — a hint, never a choice made for the operator.
+function noteDetectedInterface() {
+  if ($("dev-in").value) return;
+  const seen = PROFILES.filter(
     (p) => p.match && devicesSeen.devices.some((d) => p.match.test(d.name)),
-  );
-  return present >= 0 ? present : PROFILES.length - 1;
+  ).map((p) => p.name);
+  if (seen.length === 0) return;
+  $("wz-profile-note").textContent =
+    `This machine has a device that looks like ${seen.join(" or ")}: pick yours above to fill the fields below in for it.`;
+}
+
+/// A field below changed by hand: the list says Manual unless it is still what the chosen
+/// interface fills in.
+function interfaceEdited() {
+  const index = Number($("wz-profile").value);
+  if (!interfaceMatches(PROFILES[index])) showInterface(MANUAL);
 }
 
 function applyProfile() {
-  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES.at(-1);
+  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES[MANUAL];
   $("wz-profile-note").textContent = profile.note;
   if (!profile.match) return;
   const matching = devicesSeen.devices.filter((d) => profile.match.test(d.name));
@@ -3075,14 +3092,11 @@ async function wizardSave() {
     $("wz-save-note").textContent = "A callsign is required.";
     return;
   }
-  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES.at(-1);
+  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES[MANUAL];
+  // the fields are what is saved: an interface fills them in when it is picked, and never
+  // again — a VOX interface shown in the list used to save "no keying" over a CAT port set
+  // below it
   const changes = formChanges();
-  if (profile.ptt === "none") {
-    changes["ptt.kind"] = "none";
-    for (const key of Object.keys(changes)) {
-      if (key.startsWith("ptt.") && key !== "ptt.kind") delete changes[key];
-    }
-  }
   try {
     const answer = await call("config.set", changes);
     let note = `Saved. ${await applied(answer)}`;
@@ -4122,10 +4136,11 @@ function wire() {
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   $("btn-contribute").addEventListener("click", contributeTestSession);
   $("contribute-link").addEventListener("click", openContributeLink);
-  $("wz-profile").addEventListener("change", () => {
-    profileChosen = true;
-    applyProfile();
-  });
+  $("wz-profile").addEventListener("change", applyProfile);
+  // a field set by hand is the operator's own setup: the list follows it
+  for (const id of ["dev-in", "dev-out", "dev-ptt", "ptt-line", "ptt-protocol", "ptt-baud", "ptt-civ", "ptt-gpio", "ptt-address"]) {
+    $(id).addEventListener("change", interfaceEdited);
+  }
   for (const id of ["radio-busy-db", "radio-max-key", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
     $(id).addEventListener("input", checkModemSettings);
   }
