@@ -39,6 +39,12 @@ class SoftFrame(Protocol):
     rv: int
     snr_db: float
     """Estimated SNR (3 kHz reference) of this frame, for rate control."""
+    trusted: bool
+    """Whether the frame's measurements mean something when it does not decode: acquisition
+    was confident enough that a real frame was there (ADR-0020). A detection just over its
+    threshold that does not decode is as likely the correlator on noise, and its SNR is an
+    estimate of that noise — on the air one read -12 dB between frames decoding at +5 to +8.
+    A frame that decodes is real whatever this says."""
     t_start: float
     t_end: float
     floor: bool

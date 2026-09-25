@@ -59,6 +59,8 @@ class RealSoftFrame:
     t_end: float
     floor: bool
     _decode: Callable[[FloatArray | None], tuple[bytes | None, FloatArray]]
+    trusted: bool = True
+    """The harness detects in a buffer that holds the frame it sent: what it finds is real."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         buf = buffer if isinstance(buffer, np.ndarray) else None
