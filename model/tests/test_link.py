@@ -746,6 +746,52 @@ def test_what_has_reached_the_other_station_is_counted_in_order(timing: PhyTimin
     assert any(u > p for p, u, _ in readings), "a frame acknowledged past a hole waits for it"
 
 
+def test_a_regulatory_ceiling_holds_every_frame_the_station_sends(timing: PhyTiming) -> None:
+    """ADR-0018: the rules outrank link adaptation. A station whose ceiling admits only the
+    tone floor — an automatically controlled station answering outside the §97.221(b)
+    segments — sends every data frame at a floor rung and every control frame, answer and
+    probe answer on the floor, however good the path and whatever family the other station
+    uses; the other station, which has no ceiling, climbs as it always did."""
+    floor_top = timing.floor_modes - 1
+    ceiling = 1
+    assert timing.is_floor(ceiling) and ceiling < floor_top, "a ceiling inside the floor"
+    a, b = _pair(timing)
+    b.set_ceiling(ceiling)
+    sent: dict[str, list[TxFrame]] = {"a": [], "b": []}
+    for name, engine in (("a", a), ("b", b)):
+        original = engine._transmit
+
+        def record(frames: list[TxFrame], name: str = name, original=original) -> None:  # type: ignore[no-untyped-def]
+            sent[name].extend(frames)
+            original(frames)
+
+        engine._transmit = record  # type: ignore[method-assign]
+    sim = TwoStationSim(a, b, snr_db=24.0, seed=31)
+    a.connect("KK4XYZ")
+    sim.run(until=120)
+    assert a.connected and b.connected
+    a.send(bytes(3000))
+    b.send(bytes(3000))
+    sim.run(until=3000)
+    assert sim.delivered(1) == bytes(3000) and sim.delivered(0) == bytes(3000)
+    b_data = [f.mode for f in sent["b"] if f.container is Container.DATA]
+    b_control = [f.floor for f in sent["b"] if f.container is Container.CONTROL]
+    assert b_data and max(b_data) <= ceiling, b_data
+    assert b_control and all(b_control), "every control frame on the floor"
+    a_data = [f.mode for f in sent["a"] if f.container is Container.DATA]
+    assert max(a_data) > floor_top, "the path was good: the other station climbed"
+
+    # a ceiling set mid-session holds from the next frame on
+    a.set_ceiling(ceiling)
+    before = len(sent["a"])
+    a.send(bytes(1500))
+    sim.run(until=6000)
+    later = [f for f in sent["a"][before:]]
+    assert later
+    assert all(f.mode <= ceiling for f in later if f.container is Container.DATA)
+    assert all(f.floor for f in later if f.container is Container.CONTROL)
+
+
 def test_a_call_starts_on_the_tone_floor_and_alternates(timing: PhyTiming) -> None:
     """A call is made before anything is known of the path, so it goes where the path most
     likely carries it: the tone floor, 14 dB below the ordinary family's control rung, on its

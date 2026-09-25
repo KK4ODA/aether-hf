@@ -107,6 +107,14 @@ class LinkConfig:
     max_mode: int = 19
     """The fastest rung the station sends at: the top of the widest ladder (2 300 Hz,
     ADR-0014) by default — a recommendation never leaves the air's own table."""
+    ceiling: int | None = None
+    """The fastest rung the rules allow this station to send at, where it is now — the
+    regulatory policy's answer (ADR-0018), which link adaptation never overrides: an
+    automatically controlled station answering outside the §97.221(b) segments may not
+    climb past the rungs that occupy 500 Hz or less, however good the path. Unlike
+    :attr:`max_mode`, which is the operator's taste, it reaches every frame the station
+    sends: when it admits only tone-floor rungs, control frames, connect requests and
+    answers, and probe answers go on the floor too. Unset, only :attr:`max_mode` applies."""
     bursts_before_turn: int = 3
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
     silence_step: int = 2
@@ -656,6 +664,8 @@ class LinkEngine:
         of the bursts it sends, the IRS in the family of what it last heard — so an ACK
         comes back the way the burst went out, and either side can tell how long to wait
         for it."""
+        if self._floor_only():
+            return True
         if self.role is Role.ISS and self.state is State.CONNECTED:
             return self.timing.is_floor(self._burst_mode())
         return self._peer_floor
@@ -664,7 +674,7 @@ class LinkEngine:
         """The mode the next burst's new frames go out at: the pin while one is set, the
         peer's recommendation otherwise, never past the operator's ceiling."""
         chosen = self._recommended if self._pinned is None else self._pinned
-        return min(chosen, self.cfg.max_mode)
+        return min(chosen, self._cap())
 
     def _fits(self, body_len: int, mode: int) -> bool:
         """Whether a body can be encoded at ``mode``: within its capacity, and not the one
@@ -693,7 +703,7 @@ class LinkEngine:
         """An unanswered burst is evidence too: step the recommendation down
         :attr:`LinkConfig.silence_step` usable modes (never below the table's first)."""
         modes = self.rate.modes
-        current = min(self._recommended, self.cfg.max_mode)
+        current = min(self._recommended, self._cap())
         below = [m for m in modes if m <= current]
         index = modes.index(below[-1]) if below else 0
         self._recommended = modes[max(0, index - self.cfg.silence_step)]
@@ -736,6 +746,8 @@ class LinkEngine:
         failing every one. ADR-0009 had the first two tries ordinary, from when the floor was
         an OFDM frame of its own that reached a few decibels lower; with the tone floor a
         weak path's first two tries were wasted, and a probe or a beacon never reached it."""
+        if self.timing.floor_modes > 0 and self._floor_only():
+            return True
         return self.timing.floor_modes > 0 and self._connect_tries % 2 == 0
 
     def _data_frame(self, rec: _TxRecord) -> TxFrame:
@@ -749,7 +761,11 @@ class LinkEngine:
         body = ConnectBody(src, dst, caps=self.cfg.capabilities, snr_db=snr_db).encode()
         # a request starts on the tone floor and alternates families (ADR-0016); an answer
         # goes back on the layout the request arrived on
-        floor = self._connect_floor() if kind is DataKind.CONNECT_REQ else self._peer_floor
+        floor = (
+            self._connect_floor()
+            if kind is DataKind.CONNECT_REQ
+            else self._peer_floor or self._floor_only()
+        )
         mode = self._robust_mode(floor)
         cap = self.timing.capacity(mode)
         payload = encode_data(DataHeader(kind, 0, self.session), body, cap)
@@ -793,7 +809,7 @@ class LinkEngine:
 
     def _send_poll(self) -> None:
         self._transmit([self._control(ControlKind.POLL)])
-        self._wait_for("poll", self.timing.control_frame_s_for(self._control_floor()))
+        self._wait_for("poll", self._reply_control_s())
 
     def _send_turn(self) -> None:
         self._turn_tries += 1
@@ -811,7 +827,17 @@ class LinkEngine:
         self._disc_tries += 1
         self.state = State.DISCONNECTING
         self._transmit([self._control(ControlKind.DISC)])
-        self._wait_for("disc", self.timing.control_frame_s_for(self._control_floor()))
+        self._wait_for("disc", self._reply_control_s())
+
+    def _reply_control_s(self) -> float:
+        """How long the control frame that answers ours may take: ours goes out in our
+        family, and the answer comes back in it — or on the floor, from a station whose
+        regulatory ceiling admits only the floor (ADR-0018), which is the family it last
+        sent in. Waiting for ours alone, a poll was repeated every second and a half into
+        a floor acknowledgement three seconds long, and the link timed out with both ends
+        up. The longer of the two, as a burst's acknowledgement is waited for (ADR-0016)."""
+        families = {self._control_floor(), self._peer_floor}
+        return max(self.timing.control_frame_s_for(f) for f in families)
 
     def _on_response_timeout(self) -> None:
         what, self._waiting_for = self._waiting_for, None
@@ -891,9 +917,27 @@ class LinkEngine:
         is a live setting of the station's."""
         self.cfg.max_burst_s = seconds
 
+    def set_ceiling(self, rung: int | None) -> None:
+        """A new regulatory ceiling (:attr:`LinkConfig.ceiling`), from the next frame on:
+        the dial, the station's control or the session's direction changed what the rules
+        allow."""
+        self.cfg.ceiling = rung
+
+    def _cap(self) -> int:
+        """The fastest rung this station may send at: the operator's ceiling, and the
+        rules' when they set one."""
+        if self.cfg.ceiling is None:
+            return self.cfg.max_mode
+        return min(self.cfg.max_mode, self.cfg.ceiling)
+
+    def _floor_only(self) -> bool:
+        """Whether the rules admit only the tone floor: every frame this station sends —
+        control frames and connect and probe answers included — goes out in that family."""
+        return self.cfg.ceiling is not None and self.timing.is_floor(self.cfg.ceiling)
+
     def _send_burst(self) -> None:
         mode = self._burst_mode()
-        recommendation = min(self._recommended, self.cfg.max_mode)
+        recommendation = min(self._recommended, self._cap())
         unacked = self._unacked()
         # A frame sent max_combines times at its mode without an acknowledgement is
         # stranded there: the peer has reset its buffer for it, and another round at the
@@ -965,7 +1009,7 @@ class LinkEngine:
         # — this burst's, or the mode it recommended, as its own _peer_data_frame_s has it
         expected = max(
             self.timing.data_frame_s_for(self._records[seqs[0]].mode) if seqs else 0.0,
-            self.timing.data_frame_s_for(min(self._recommended, self.cfg.max_mode)),
+            self.timing.data_frame_s_for(min(self._recommended, self._cap())),
         )
         # The IRS answers in the family it last heard from us: this burst's, if it decodes
         # any of it, and the one its last answer came in (our _peer_floor) if it decodes
@@ -995,7 +1039,7 @@ class LinkEngine:
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
             del self._records[self._tx_base]
             self._tx_base = seq_after(self._tx_base)
-        self._recommended = max(0, min(self.cfg.max_mode, ack.recommended_mode))
+        self._recommended = max(0, min(self._cap(), ack.recommended_mode))
         if ack.snr_db is not None:
             self.peer_snr_db = ack.snr_db
         self._peer_wants_tx = bool(ack.flags & ControlFlags.WANT_TX)
@@ -1269,7 +1313,7 @@ class LinkEngine:
         # (ADR-0013), five times slower than the first OFDM mode
         if self.rate.snr_db is not None:
             first = self.rate.first_mode(self.rate.snr_db)
-            self._recommended = max(self.cfg.initial_mode, min(self.cfg.max_mode, first))
+            self._recommended = max(self.cfg.initial_mode, min(self._cap(), first))
         self._waiting_for = None
         self._disarm("wait")
         self._disarm("ack")
@@ -1320,7 +1364,9 @@ class LinkEngine:
         self.actions.append(Event("probed", f"{req.src} at {frame.snr_db:.1f} dB"))
         # back in the family the probe came in (noted from it), as an acceptance goes back on
         # the layout its request arrived on
-        self._send_probe(DataKind.PROBE_ACK, req.src, frame.snr_db, floor=self._peer_floor)
+        self._send_probe(
+            DataKind.PROBE_ACK, req.src, frame.snr_db, floor=self._peer_floor or self._floor_only()
+        )
 
     def _handle_probe_ack(self, body: bytes, frame: SoftFrame) -> None:
         try:
