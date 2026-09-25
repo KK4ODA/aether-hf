@@ -88,6 +88,14 @@ pub struct LinkConfig {
     /// ladder (2 300 Hz, ADR-0014) by default; a recommendation never leaves the air's own
     /// table.
     pub max_mode: usize,
+    /// The fastest rung the rules allow this station to send at, where it is now — the
+    /// regulatory policy's answer (ADR-0018), which link adaptation never overrides: an
+    /// automatically controlled station answering outside the §97.221(b) segments may not
+    /// climb past the rungs that occupy 500 Hz or less, however good the path. Unlike
+    /// `max_mode`, which is the operator's taste, it reaches every frame the station sends:
+    /// when it admits only tone-floor rungs, control frames, connect requests and answers,
+    /// and probe answers go on the floor too. `None`: only `max_mode` applies.
+    pub ceiling: Option<usize>,
     /// With a peer that wants to send, hand over after this many bursts of our own.
     pub bursts_before_turn: usize,
     /// HARQ buffers are reset after this many failed combines, which bounds a wrong guess.
@@ -114,6 +122,7 @@ impl Default for LinkConfig {
             burst_gap_s: 0.2,
             initial_mode: 0,
             max_mode: 19,
+            ceiling: None,
             bursts_before_turn: 3,
             max_combines: 4,
             capabilities: 0,
@@ -1041,7 +1050,9 @@ impl LinkEngine {
     /// decoded — so an acknowledgement comes back the way the burst went out, and either
     /// side can tell how long to wait for it.
     fn control_floor(&self) -> bool {
-        if self.role == Role::Iss && self.state == State::Connected {
+        if self.floor_only() {
+            true
+        } else if self.role == Role::Iss && self.state == State::Connected {
             self.timing.is_floor(self.burst_mode())
         } else {
             self.peer_floor
@@ -1049,11 +1060,37 @@ impl LinkEngine {
     }
 
     /// The mode the next burst's new frames go out at: the pin while one is set, the
-    /// peer's recommendation otherwise, never past the operator's ceiling.
+    /// peer's recommendation otherwise, never past the operator's ceiling or the rules'.
     fn burst_mode(&self) -> usize {
-        self.pinned
-            .unwrap_or(self.recommended)
-            .min(self.config.max_mode)
+        self.pinned.unwrap_or(self.recommended).min(self.cap())
+    }
+
+    /// The fastest rung this station may send at: the operator's ceiling, and the rules'
+    /// when they set one.
+    fn cap(&self) -> usize {
+        self.config.ceiling.map_or(self.config.max_mode, |ceiling| {
+            ceiling.min(self.config.max_mode)
+        })
+    }
+
+    /// Whether the rules admit only the tone floor: every frame this station sends —
+    /// control frames and connect and probe answers included — goes out in that family.
+    fn floor_only(&self) -> bool {
+        self.config
+            .ceiling
+            .is_some_and(|ceiling| self.timing.is_floor(ceiling))
+    }
+
+    /// How long the control frame that answers ours may take: ours goes out in our family,
+    /// and the answer comes back in it — or on the floor, from a station whose regulatory
+    /// ceiling admits only the floor (ADR-0018), which is the family it last sent in.
+    /// Waiting for ours alone, a poll was repeated every second and a half into a floor
+    /// acknowledgement three seconds long, and the link timed out with both ends up. The
+    /// longer of the two, as a burst's acknowledgement is waited for (ADR-0016).
+    fn reply_control_s(&self) -> f64 {
+        self.timing
+            .control_frame_s_for(self.control_floor())
+            .max(self.timing.control_frame_s_for(self.peer_floor))
     }
 
     /// Whether a body can be encoded at `mode`: within its capacity, and not the one
@@ -1077,7 +1114,7 @@ impl LinkEngine {
     /// next acknowledgement puts the peer's own recommendation back.
     fn back_off(&mut self) {
         let modes = self.rate.modes();
-        let current = self.recommended.min(self.config.max_mode);
+        let current = self.recommended.min(self.cap());
         let index = modes.iter().rposition(|&m| m <= current).unwrap_or(0);
         self.recommended = modes[index.saturating_sub(self.config.silence_step)];
     }
@@ -1122,6 +1159,18 @@ impl LinkEngine {
         self.config.max_burst_s = seconds;
     }
 
+    /// A new regulatory ceiling (`LinkConfig::ceiling`), from the next frame on: the dial,
+    /// the station's control or the session's direction changed what the rules allow.
+    pub fn set_ceiling(&mut self, rung: Option<usize>) {
+        self.config.ceiling = rung;
+    }
+
+    /// The regulatory ceiling in force, if any.
+    #[must_use]
+    pub fn ceiling(&self) -> Option<usize> {
+        self.config.ceiling
+    }
+
     /// The longest DATA frame the peer may send next: the family of what we recommended
     /// or of what it last sent, whichever is longer.
     fn peer_data_frame_s(&self) -> f64 {
@@ -1160,7 +1209,7 @@ impl LinkEngine {
     /// frame of its own that reached a few decibels lower; with the tone floor a weak path's
     /// first two tries were wasted.
     fn connect_floor(&self) -> bool {
-        self.timing.floor_modes > 0 && self.connect_tries % 2 == 0
+        self.timing.floor_modes > 0 && (self.floor_only() || self.connect_tries % 2 == 0)
     }
 
     /// Learn the family and mode the peer sends data in — from a frame that decoded, so a
@@ -1210,7 +1259,7 @@ impl LinkEngine {
         let floor = if kind == DataKind::ConnectReq {
             self.connect_floor()
         } else {
-            self.peer_floor
+            self.peer_floor || self.floor_only()
         };
         let mode = self.robust_mode(floor);
         let capacity = self.timing.capacity(mode);
@@ -1290,8 +1339,7 @@ impl LinkEngine {
     fn send_poll(&mut self) {
         let frame = self.control(ControlKind::Poll, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        let family = self.control_floor();
-        self.wait_for(Waiting::Poll, self.timing.control_frame_s_for(family), 0.0);
+        self.wait_for(Waiting::Poll, self.reply_control_s(), 0.0);
     }
 
     fn send_turn(&mut self) {
@@ -1317,8 +1365,7 @@ impl LinkEngine {
         self.state = State::Disconnecting;
         let frame = self.control(ControlKind::Disc, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        let family = self.control_floor();
-        self.wait_for(Waiting::Disc, self.timing.control_frame_s_for(family), 0.0);
+        self.wait_for(Waiting::Disc, self.reply_control_s(), 0.0);
     }
 
     fn on_response_timeout(&mut self) {
@@ -1420,7 +1467,7 @@ impl LinkEngine {
 
     fn send_burst(&mut self) {
         let mode = self.burst_mode();
-        let recommendation = self.recommended.min(self.config.max_mode);
+        let recommendation = self.recommended.min(self.cap());
         let unacked = self.unacked();
         self.reencode_stranded(&unacked, recommendation);
         let mut family = self.timing.is_floor(mode);
@@ -1598,7 +1645,7 @@ impl LinkEngine {
             self.records.remove(index);
             self.tx_base = seq_after(self.tx_base, 1);
         }
-        self.recommended = usize::from(ack.recommended_mode).min(self.config.max_mode);
+        self.recommended = usize::from(ack.recommended_mode).min(self.cap());
         if ack.snr_db.is_some() {
             self.peer_snr_db = ack.snr_db;
         }
@@ -1979,10 +2026,7 @@ impl LinkEngine {
         // (ADR-0013), five times slower than the first OFDM mode
         if let Some(snr) = self.rate.snr_db() {
             let first = self.rate.first_mode(snr);
-            self.recommended = self
-                .config
-                .initial_mode
-                .max(first.min(self.config.max_mode));
+            self.recommended = self.config.initial_mode.max(first.min(self.cap()));
         }
         self.waiting_for = None;
         self.disarm(Timer::Wait);
@@ -2047,7 +2091,7 @@ impl LinkEngine {
         });
         // back in the family the probe came in (noted from it), as an acceptance goes back on
         // the layout its request arrived on
-        let floor = self.peer_floor;
+        let floor = self.peer_floor || self.floor_only();
         self.send_probe(DataKind::ProbeAck, &request.src, Some(snr_db), floor);
     }
 

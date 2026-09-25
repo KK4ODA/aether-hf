@@ -1254,6 +1254,68 @@ fn what_has_reached_the_other_station_is_counted_in_order() {
     assert!(holes > 0, "a frame acknowledged past a hole waits for it");
 }
 
+#[test]
+fn a_regulatory_ceiling_holds_every_frame_the_station_sends() {
+    use aether_link::Container;
+    // ADR-0018: the rules outrank link adaptation. A station whose ceiling admits only the
+    // tone floor sends every data frame at a floor rung and every control frame, answer and
+    // probe answer on the floor, however good the path; the other station climbs as before
+    let t = timing(false);
+    let floor_top = t.floor_modes - 1;
+    let ceiling = 1;
+    assert!(t.is_floor(ceiling) && ceiling < floor_top);
+    let (mut a, mut b) = pair(&t, &LinkConfig::default());
+    b.set_ceiling(Some(ceiling));
+    let message = vec![0u8; 3000];
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&message);
+    b.send(&message);
+    let mut sim = TwoStationSim::new(a, b, 24.0, 31);
+    sim.run(3000.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    assert_eq!(sim.delivered(0), message.as_slice());
+    let data = |who: usize| -> Vec<usize> {
+        sim.frames_sent(who)
+            .iter()
+            .filter(|f| f.container == Container::Data)
+            .map(|f| f.mode)
+            .collect()
+    };
+    let b_data = data(1);
+    assert!(
+        !b_data.is_empty() && b_data.iter().all(|&m| m <= ceiling),
+        "{b_data:?}"
+    );
+    let b_control: Vec<bool> = sim
+        .frames_sent(1)
+        .iter()
+        .filter(|f| f.container == Container::Control)
+        .map(|f| f.floor)
+        .collect();
+    assert!(
+        !b_control.is_empty() && b_control.iter().all(|&f| f),
+        "all on the floor"
+    );
+    assert!(
+        data(0).iter().any(|&m| m > floor_top),
+        "the path was good: the other station climbed"
+    );
+
+    // a ceiling set mid-session holds from the next frame on
+    let before = sim.frames_sent(0).len();
+    sim.engine_mut(0).set_ceiling(Some(ceiling));
+    sim.engine_mut(0).send(&[1u8; 1500]);
+    sim.run(6000.0, 3.0);
+    let later = &sim.frames_sent(0)[before..];
+    assert!(!later.is_empty());
+    assert!(
+        later
+            .iter()
+            .all(|f| (f.container == Container::Data && f.mode <= ceiling)
+                || (f.container == Container::Control && f.floor))
+    );
+}
+
 /// A frame handed straight to an engine: a payload that always decodes.
 struct Handed {
     payload: Vec<u8>,

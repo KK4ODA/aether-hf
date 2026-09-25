@@ -23,4 +23,4 @@ pub use frames::{
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};
-pub use sim::{SimFrame, TwoStationSim};
+pub use sim::{SentFrame, SimFrame, TwoStationSim};
