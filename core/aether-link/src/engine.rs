@@ -607,6 +607,17 @@ impl LinkEngine {
                 .sum::<usize>()
     }
 
+    /// Bytes handed to [`send`](Self::send) that have not yet reached the other station's
+    /// application: the queue not yet framed, and every frame from the lowest unacknowledged
+    /// one up. A frame acknowledged past a hole still counts — the receiving station hands
+    /// the stream on in order, so its bytes wait with the hole — which is where this differs
+    /// from [`tx_pending_bytes`](Self::tx_pending_bytes). What a session's `send` calls were
+    /// given, less this, has arrived: a panel marks a message delivered from it.
+    #[must_use]
+    pub fn tx_undelivered_bytes(&self) -> usize {
+        self.tx_queue.len() + self.records.iter().map(|r| r.body.len()).sum::<usize>()
+    }
+
     /// The timing this engine was built with.
     #[must_use]
     pub fn timing(&self) -> &PhyTiming {

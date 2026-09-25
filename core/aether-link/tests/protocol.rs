@@ -1213,6 +1213,47 @@ fn a_burst_fits_the_transmitters_key_time() {
     assert!(fit_took < 0.5 * cut_took, "{fit_took} {cut_took}");
 }
 
+#[test]
+fn what_has_reached_the_other_station_is_counted_in_order() {
+    // the panel's check mark on a sent message: every byte of it and every byte before it
+    // acknowledged. A frame acknowledged past a hole still waits for the hole, which is
+    // where this differs from the bytes still pending
+    let t = timing(false);
+    let message = vec![0u8; 3000];
+    let mut holes = 0;
+    for seed in 1..=6 {
+        let (mut a, b) = pair(&t, &LinkConfig::default());
+        a.connect("KK4XYZ").expect("idle");
+        a.send(&message);
+        assert_eq!(a.tx_undelivered_bytes(), 3000);
+        // 0 dB: lossy enough that frames are acknowledged past holes
+        let mut sim = TwoStationSim::new(a, b, 0.0, seed);
+        let mut arrived_before = 0;
+        let mut now = 0.0;
+        while now < 3000.0 {
+            now += 0.5;
+            sim.run(now, 1e9);
+            let a = sim.engine(0);
+            let (pending, undelivered) = (a.tx_pending_bytes(), a.tx_undelivered_bytes());
+            let arrived = message.len() - undelivered;
+            assert!(arrived >= arrived_before, "seed {seed}: it only grows");
+            assert!(
+                arrived <= sim.delivered(1).len(),
+                "seed {seed}: never ahead of what the other station has"
+            );
+            assert!(undelivered >= pending, "seed {seed}");
+            holes += usize::from(undelivered > pending);
+            arrived_before = arrived;
+            if undelivered == 0 {
+                break;
+            }
+        }
+        assert_eq!(sim.delivered(1), message.as_slice(), "seed {seed}");
+        assert_eq!(sim.engine(0).tx_undelivered_bytes(), 0, "seed {seed}");
+    }
+    assert!(holes > 0, "a frame acknowledged past a hole waits for it");
+}
+
 /// A frame handed straight to an engine: a payload that always decodes.
 struct Handed {
     payload: Vec<u8>,
