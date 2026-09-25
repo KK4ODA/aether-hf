@@ -5,6 +5,8 @@
 // build step — see ADR-0005 — so the daemon can serve this directory as it stands and a
 // gateway needs no Node toolchain to build.
 
+import { createScopes, mountSignalBody, surface, tokens } from "./scopes.js";
+
 const endpoint = () => {
   // Served by the daemon: talk to wherever we were loaded from. Opened as a file (the Tauri
   // shell, or a browser pointed at the checkout): fall back to the default loopback port.
@@ -77,12 +79,20 @@ function connect() {
     if (!waiting) return;
     pending.delete(frame.id);
     if (frame.ok) waiting.resolve(frame.result ?? {});
-    else waiting.reject(new Error(frame.error?.message ?? "the modem refused"));
+    else {
+      // the refusal's code travels with it: a transmission the rules refused is logged as
+      // the rules' ("regulatory"), with the decision the modem attached
+      const error = new Error(frame.error?.message ?? "the modem refused");
+      error.code = frame.error?.code ?? null;
+      error.decision = frame.result?.decision ?? null;
+      waiting.reject(error);
+    }
   });
 
   socket.addEventListener("close", () => {
     setLink(false);
-    stopScopes();
+    scopes.stop();
+    showSignalLive();
     for (const [id, waiting] of pending) {
       waiting.reject(new Error("the connection closed"));
       pending.delete(id);
@@ -134,7 +144,7 @@ function onEvent(frame) {
       setLamp("lamp-ptt", data.on === true, data.on === true ? "Transmitter keyed" : "Transmitter off");
       break;
     case "state":
-      log(`${data.name}: ${data.detail}`);
+      log(`${data.name}: ${data.detail}`, false, "state");
       if (data.name === "connected") {
         resetReceived();
         markSession(data.remote || data.detail);
@@ -167,13 +177,16 @@ function onEvent(frame) {
       onReceivedData(data.data ?? "");
       break;
     case "log":
-      log(`${data.name}: ${data.detail}`, data.name === "error");
+      log(data.detail ?? "", data.name === "error", data.name ?? "modem");
       // the probe's answer, or its absence, where the button is
       if (data.name === "probe") noteProbe(data.detail ?? "");
       if (data.name === "test") noteTest(data.detail ?? "");
       break;
+    case "regulatory":
+      onRegulatory(data);
+      break;
     default:
-      log(`${frame.event}: ${JSON.stringify(data)}`);
+      log(JSON.stringify(data), false, frame.event);
   }
 }
 
@@ -440,6 +453,10 @@ async function refreshStatus() {
   renderCounters(status.counters ?? {});
 
   applyDial(status);
+  applyRegulatory(status.regulatory ?? null);
+  applyDeclaredDial(status);
+  keyingSummary();
+  applyAboutFromStatus(status);
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
   $("btn-probe").disabled = status.state !== "idle";
@@ -487,6 +504,7 @@ function applyMetrics(metrics) {
     $("v-queued").textContent = String(metrics.queued_bytes);
   }
   applyTxPeak(metrics.tx_peak_dbfs);
+  keyingSummary();
   applyPassband(metrics.rx_passband_hz, metrics.occupied_hz);
   // the link: the receiver's last frame, what the other end reports, the account
   if (metrics.snr_db !== undefined) {
@@ -758,7 +776,7 @@ function onFrame(frame) {
   if (panelShown("status")) drawStatusChart();
   if (panelShown("diagnostics")) {
     renderFrames();
-    fetchConstellation();
+    if (signalDocked) scopes.frame();
   }
 }
 
@@ -773,39 +791,6 @@ function notePeer(snr) {
 
 function panelShown(name) {
   return !$(`panel-${name}`).hidden && document.visibilityState === "visible";
-}
-
-function tokens() {
-  const style = getComputedStyle(document.body);
-  const read = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
-  return {
-    ink: read("--text-3", "#888"),
-    ink2: read("--text-2", "#aaa"),
-    accent: read("--accent", "#2dd4bf"),
-    grid: read("--plot-grid", "#223"),
-    tx: read("--status-tx", "#f59e0b"),
-    rx: read("--status-rx", "#22d3ee"),
-    error: read("--status-error", "#f87171"),
-    warn: read("--status-warning", "#fbbf24"),
-    busy: read("--status-busy", "#fb923c"),
-    plot: read("--plot-bg", "#000"),
-    numerals: read("--numerals", "monospace"),
-  };
-}
-
-/// A canvas sized to its box at the device's pixel ratio; returns the drawing context and
-/// the size in CSS pixels.
-function surface(id, fallbackWidth, height) {
-  const canvas = $(id);
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth || fallbackWidth;
-  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
-  }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  return { ctx, width, height };
 }
 
 // ── the Status tab's two charts share one frame ─────────────────────
@@ -929,24 +914,41 @@ const LEGEND_ROW = 11;
 // drawn — a hidden one has no width to size against — so every redraw goes through
 // drawStatusChart.
 
-let statusChart = "snr";
+let statusChart = "speed";
+
+// Speed is the view the Status tab opens on. A choice is remembered only when the operator
+// makes one: the key before beta.60 (`aether.statuschart`) was written on every load, so its
+// "snr" said what the default had been rather than what anybody chose — it is dropped, not
+// carried over, and the new key is written only by a click.
+const STATUS_CHART_KEY = "aether.chart";
+
+function storedStatusChart() {
+  try {
+    localStorage.removeItem("aether.statuschart");
+    return localStorage.getItem(STATUS_CHART_KEY) === "snr" ? "snr" : "speed";
+  } catch {
+    return "speed";
+  }
+}
 
 function drawStatusChart() {
   if (statusChart === "speed") drawSpeedChart();
   else drawSnrChart();
 }
 
-function selectStatusChart(which) {
-  statusChart = which === "speed" ? "speed" : "snr";
+function selectStatusChart(which, chosen = false) {
+  statusChart = which === "snr" ? "snr" : "speed";
   const speed = statusChart === "speed";
   $("chart-snr").hidden = speed;
   $("chart-speed").hidden = !speed;
   $("chart-tab-snr").setAttribute("aria-selected", String(!speed));
   $("chart-tab-speed").setAttribute("aria-selected", String(speed));
-  try {
-    localStorage.setItem("aether.statuschart", statusChart);
-  } catch {
-    // a browser that keeps nothing keeps nothing
+  if (chosen) {
+    try {
+      localStorage.setItem(STATUS_CHART_KEY, statusChart);
+    } catch {
+      // a browser that keeps nothing keeps nothing
+    }
   }
   drawStatusChart();
 }
@@ -1218,6 +1220,11 @@ function applyDial(status) {
       const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
       if (match) $("memory").value = String(match.hz);
     }
+  } else if (!canTune && liveConfig?.regulatory?.dial_hz) {
+    const hz = liveConfig.regulatory.dial_hz;
+    reading.textContent = `declared: ${formatHz(hz)} Hz`;
+    hero.textContent = `${formatHz(hz)} Hz`;
+    heroSub.textContent = "declared — this radio cannot report its dial";
   } else if (canTune) {
     reading.textContent = "radio: no reading yet";
     hero.textContent = "—";
@@ -1516,304 +1523,162 @@ async function clearHeard() {
   }
 }
 
-// ── diagnostics: the constellation, the spectrum, the frames ────────
+// ── diagnostics: signal analysis, docked or in its own window ───────
+//
+// The constellation, spectrum and waterfall are one card (scopes.js), drawn here on the
+// Diagnostics tab or, undocked, in a window of their own (signal.html) that stays in view
+// whatever tab this panel shows. Only one of the two draws at a time. Under the desktop shell
+// the shell owns that window: it opens it, brings it forward rather than opening a second,
+// closes it when asked and says when it has gone. In a browser it is a named pop-up — a
+// second Undock finds the same window — and the page in it says on a BroadcastChannel that
+// it is there, so a panel reloaded meanwhile still knows the card is out.
 
-let spectrumTimer = null;
-let spectrumBusy = false;
-let palette = null;
-let spectrumPolls = 0;
+const scopes = createScopes({
+  call,
+  connected: () => socket !== null && socket.readyState === WebSocket.OPEN,
+  modeName: (index) => modeTable[index]?.name ?? null,
+  canPersist: () => Boolean(liveConfig?.panel),
+  onActivity: () => showSignalLive(),
+});
 
-// The waterfall's controls, as any waterfall has them: the floor (auto follows the
-// quietest fifth of the spectrum), the range above it, lines per second, the palette.
-const waterfall = { auto: true, floor: -90, gain: 45, speed: 8, palette: "aether" };
+let signalDocked = true;
+let signalPopup = null;
+let signalPoll = null;
+let signalSeenAt = 0;
+let signalAnswerTimer = null;
+let signalChannel = null;
 
-const PALETTES = {
-  // black, the accent, white: the panel's own
-  aether: null,
-  // the classic blue waterfall: black, blue, cyan, white
-  blue: [[0, 0, 0], [0, 0, 110], [0, 70, 255], [0, 220, 255], [255, 255, 255]],
-  turbo: [[48, 18, 59], [70, 107, 227], [26, 228, 182], [164, 252, 60], [251, 190, 26], [227, 72, 6], [122, 4, 3]],
-  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
-  grey: [[0, 0, 0], [255, 255, 255]],
-};
-
-function loadWaterfallSettings() {
-  try {
-    const kept = JSON.parse(localStorage.getItem("aether.waterfall") ?? "{}");
-    for (const key of Object.keys(waterfall)) if (key in kept) waterfall[key] = kept[key];
-  } catch {
-    // nothing kept, or nothing readable: the defaults
-  }
-}
-
-function saveWaterfallSettings() {
-  try {
-    localStorage.setItem("aether.waterfall", JSON.stringify(waterfall));
-  } catch {
-    // a browser that keeps nothing keeps nothing
-  }
-}
-
-function showWaterfallSettings() {
-  $("wf-auto").checked = waterfall.auto;
-  $("wf-floor").value = String(waterfall.floor);
-  $("wf-floor").disabled = waterfall.auto;
-  $("wf-floor-value").textContent = waterfall.auto
-    ? `auto ${Math.round(waterfallFloor)} dBFS`
-    : `${waterfall.floor} dBFS`;
-  $("wf-gain").value = String(waterfall.gain);
-  $("wf-gain-value").textContent = `${waterfall.gain} dB`;
-  $("wf-speed").value = String(waterfall.speed);
-  $("wf-palette").value = waterfall.palette;
-}
-
-function wireWaterfallControls() {
-  loadWaterfallSettings();
-  $("wf-auto").addEventListener("change", () => {
-    waterfall.auto = $("wf-auto").checked;
-    if (!waterfall.auto) waterfall.floor = Math.round(waterfallFloor);
-    saveWaterfallSettings();
-    pushWaterfallSettings();
-    showWaterfallSettings();
-  });
-  $("wf-floor").addEventListener("input", () => {
-    waterfall.floor = Number($("wf-floor").value);
-    saveWaterfallSettings();
-    pushWaterfallSettings();
-    showWaterfallSettings();
-  });
-  $("wf-gain").addEventListener("input", () => {
-    waterfall.gain = Number($("wf-gain").value);
-    saveWaterfallSettings();
-    pushWaterfallSettings();
-    showWaterfallSettings();
-  });
-  $("wf-speed").addEventListener("change", () => {
-    waterfall.speed = Number($("wf-speed").value);
-    saveWaterfallSettings();
-    pushWaterfallSettings();
-  });
-  $("wf-palette").addEventListener("change", () => {
-    waterfall.palette = $("wf-palette").value;
-    palette = null;
-    saveWaterfallSettings();
-    pushWaterfallSettings();
-  });
-  showWaterfallSettings();
-}
-
-function startScopes() {
-  if (spectrumTimer !== null) return;
-  spectrumTimer = setInterval(pollSpectrum, 125);
-  pollSpectrum();
-  fetchConstellation();
-  renderFrames();
-}
-
-function stopScopes() {
-  if (spectrumTimer === null) return;
-  clearInterval(spectrumTimer);
-  spectrumTimer = null;
-}
+const shellEvents = () => window.__TAURI__?.event ?? null;
 
 function scopesWanted() {
-  if (panelShown("diagnostics") && socket && socket.readyState === WebSocket.OPEN) startScopes();
-  else stopScopes();
+  const up = socket !== null && socket.readyState === WebSocket.OPEN;
+  if (up && signalDocked && panelShown("diagnostics")) scopes.start();
+  else scopes.stop();
 }
 
-async function pollSpectrum() {
-  if (spectrumBusy || !socket || socket.readyState !== WebSocket.OPEN) return;
-  spectrumBusy = true;
-  try {
-    const spectrum = await call("spectrum");
-    drawSpectrum(spectrum);
-    // the spectrum refreshes eight times a second; the waterfall advances at its own pace
-    spectrumPolls += 1;
-    if (spectrumPolls % Math.max(1, Math.round(8 / waterfall.speed)) === 0) drawWaterfall(spectrum);
-  } catch {
-    // the next tick tries again; a missed frame of a scope is nothing
-  } finally {
-    spectrumBusy = false;
-  }
+function showSignalLive() {
+  const mark = $("signal-live");
+  const live = scopes.running();
+  mark.dataset.live = String(live || !signalDocked);
+  mark.textContent = !signalDocked ? "in its own window" : live ? "live" : "paused";
 }
 
-const SPECTRUM_TOP_HZ = 4000;
-
-function drawSpectrum(spectrum) {
-  const { ctx, width, height } = surface("chart-spectrum", 600, 110);
-  const c = tokens();
-  ctx.clearRect(0, 0, width, height);
-  const bins = spectrum.bins_db ?? [];
-  const caption = $("spectrum-caption");
-  if (bins.length === 0) {
-    caption.textContent = "waiting for audio";
-    return;
-  }
-  const binHz = spectrum.bin_hz;
-  const low = -110;
-  const high = 0;
-  const x = (hz) => (hz / SPECTRUM_TOP_HZ) * width;
-  const y = (db) => (1 - (Math.max(low, Math.min(high, db)) - low) / (high - low)) * (height - 12) + 2;
-  // the modem's passband, marked
-  const [lo, hi] = spectrum.passband_hz ?? [0, 0];
-  ctx.fillStyle = c.accent;
-  ctx.globalAlpha = 0.08;
-  ctx.fillRect(x(lo), 0, x(hi) - x(lo), height);
-  ctx.globalAlpha = 1;
-  ctx.strokeStyle = c.grid;
-  ctx.lineWidth = 1;
-  ctx.font = `9px ${c.numerals}`;
-  ctx.textBaseline = "top";
-  ctx.textAlign = "center";
-  for (let hz = 500; hz < SPECTRUM_TOP_HZ; hz += 500) {
-    ctx.beginPath();
-    ctx.moveTo(x(hz), 0);
-    ctx.lineTo(x(hz), height - 12);
-    ctx.stroke();
-    ctx.fillStyle = c.ink;
-    ctx.fillText(hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz), x(hz), height - 10);
-  }
-  for (const db of [-20, -40, -60, -80, -100]) {
-    ctx.beginPath();
-    ctx.moveTo(0, y(db));
-    ctx.lineTo(width, y(db));
-    ctx.stroke();
-  }
-  ctx.strokeStyle = spectrum.transmitting ? c.tx : c.accent;
-  ctx.lineWidth = 1.25;
-  ctx.beginPath();
-  bins.forEach((db, index) => {
-    const at = x(index * binHz);
-    if (index === 0) ctx.moveTo(at, y(db));
-    else ctx.lineTo(at, y(db));
-  });
-  ctx.stroke();
-  let peak = 0;
-  let peakDb = -Infinity;
-  bins.forEach((db, index) => {
-    if (db > peakDb) {
-      peakDb = db;
-      peak = index;
-    }
-  });
-  caption.textContent = spectrum.transmitting
-    ? "transmitting — this is the sound card's own output"
-    : `peak ${Math.round(peak * binHz)} Hz at ${peakDb.toFixed(0)} dBFS`;
+function signalNote(text) {
+  $("signal-note").textContent = text;
+  $("signal-note").hidden = !text;
 }
 
-function heat(fraction) {
-  if (!palette) {
-    const c = tokens();
-    const hex = (h) => {
-      const m = /^#([0-9a-f]{6})$/i.exec(h);
-      if (!m) return [64, 64, 64];
-      const v = parseInt(m[1], 16);
-      return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-    };
-    const stops = PALETTES[waterfall.palette] ?? [hex(c.plot), hex(c.accent), [255, 255, 255]];
-    palette = [];
-    for (let i = 0; i < 256; i++) {
-      const p = (i / 255) * (stops.length - 1);
-      const a = stops[Math.floor(p)];
-      const b = stops[Math.min(stops.length - 1, Math.floor(p) + 1)];
-      const f = p - Math.floor(p);
-      palette.push([0, 1, 2].map((k) => Math.round(a[k] + (b[k] - a[k]) * f)));
+function setSignalDocked(docked) {
+  signalDocked = docked;
+  $("signal-body").hidden = !docked;
+  $("signal-away").hidden = docked;
+  $("btn-undock").hidden = !docked;
+  signalNote("");
+  // the window may have changed the waterfall's settings while it had the card
+  if (docked) scopes.reload();
+  scopesWanted();
+  showSignalLive();
+}
+
+async function undockSignal() {
+  signalNote("");
+  const events = shellEvents();
+  if (events?.emit) {
+    try {
+      await events.emit("panel-signal", { action: "undock" });
+      // the shell answers with `signal-window`; a shell older than the panel says nothing
+      clearTimeout(signalAnswerTimer);
+      signalAnswerTimer = setTimeout(() => {
+        if (signalDocked) {
+          signalNote("This version of the desktop application cannot undock the card: update it, or open the panel in a browser.");
+        }
+      }, 2500);
+      return;
+    } catch {
+      // not allowed here: a browser window will do
     }
   }
-  return palette[Math.max(0, Math.min(255, Math.round(fraction * 255)))];
-}
-
-let waterfallFloor = -90;
-
-function drawWaterfall(spectrum) {
-  const bins = spectrum.bins_db ?? [];
-  if (bins.length === 0) return;
-  const canvas = $("chart-waterfall");
-  const width = Math.max(1, canvas.clientWidth || 600);
-  const height = 110;
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const ctx = canvas.getContext("2d");
-  // the newest line at the top; everything else moves down one
-  ctx.drawImage(canvas, 0, 0, width, height - 1, 0, 1, width, height - 1);
-  // the floor follows the quietest fifth of the spectrum, slowly, so the noise stays dark
-  // and a signal stays bright whatever the receive level — unless the operator set it
-  const sorted = [...bins].sort((a, b) => a - b);
-  const quiet = sorted[Math.floor(sorted.length / 5)];
-  waterfallFloor += (quiet - waterfallFloor) * 0.1;
-  if (waterfall.auto && spectrumPolls % 8 === 0) {
-    $("wf-floor-value").textContent = `auto ${Math.round(waterfallFloor)} dBFS`;
-  }
-  const floor = waterfall.auto ? waterfallFloor : waterfall.floor;
-  const span = waterfall.gain;
-  const row = ctx.createImageData(width, 1);
-  const binHz = spectrum.bin_hz;
-  for (let px = 0; px < width; px++) {
-    const hz = (px / width) * SPECTRUM_TOP_HZ;
-    const index = Math.min(bins.length - 1, Math.round(hz / binHz));
-    const [r, g, b] = heat((bins[index] - floor) / span);
-    row.data[px * 4] = r;
-    row.data[px * 4 + 1] = g;
-    row.data[px * 4 + 2] = b;
-    row.data[px * 4 + 3] = 255;
-  }
-  ctx.putImageData(row, 0, 0);
-}
-
-let constellationBusy = false;
-
-async function fetchConstellation() {
-  if (constellationBusy || !socket || socket.readyState !== WebSocket.OPEN) return;
-  constellationBusy = true;
-  try {
-    drawConstellation(await call("constellation"));
-  } catch {
-    // nothing to draw is nothing to draw
-  } finally {
-    constellationBusy = false;
-  }
-}
-
-function drawConstellation(result) {
-  const canvas = $("chart-constellation");
-  const size = canvas.clientWidth || 240;
-  const { ctx, width, height } = surface("chart-constellation", size, size);
-  const c = tokens();
-  ctx.clearRect(0, 0, width, height);
-  const points = result.points ?? [];
-  const frame = result.frame;
-  const caption = $("const-caption");
-  const half = width / 2;
-  ctx.strokeStyle = c.grid;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(half, 0);
-  ctx.lineTo(half, height);
-  ctx.moveTo(0, half);
-  ctx.lineTo(width, half);
-  ctx.stroke();
-  if (points.length === 0 || !frame) {
-    caption.textContent = "no frame yet";
+  const popup = window.open("signal.html", "aether-signal", "popup,width=860,height=640");
+  if (!popup) {
+    signalNote("The browser blocked the window: allow pop-ups for this page, then press Undock again.");
     return;
   }
-  let reach = 1.5;
-  for (const [i, q] of points) reach = Math.max(reach, Math.abs(i) + 0.1, Math.abs(q) + 0.1);
-  const scale = half / reach;
-  ctx.beginPath();
-  ctx.arc(half, half, scale, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = frame.decoded ? c.accent : c.error;
-  ctx.globalAlpha = 0.75;
-  for (const [i, q] of points) {
-    ctx.fillRect(half + i * scale - 1.5, half - q * scale - 1.5, 3, 3);
+  signalPopup = popup;
+  signalSeenAt = Date.now();
+  setSignalDocked(false);
+  watchSignalWindow();
+}
+
+// A browser says nothing when a window closes: look twice a second — at the window itself
+// when this page opened it, at its announcements when an earlier page did.
+function watchSignalWindow() {
+  clearInterval(signalPoll);
+  signalPoll = setInterval(() => {
+    const gone = signalPopup ? signalPopup.closed : Date.now() - signalSeenAt > 5000;
+    if (!gone) return;
+    clearInterval(signalPoll);
+    signalPoll = null;
+    signalPopup = null;
+    setSignalDocked(true);
+  }, 500);
+}
+
+async function dockSignal() {
+  const events = shellEvents();
+  if (events?.emit && signalPopup === null) {
+    try {
+      await events.emit("panel-signal", { action: "dock" });
+      return; // the shell closes the window and says so
+    } catch {
+      // fall through: close it from here
+    }
   }
-  ctx.globalAlpha = 1;
-  const mode = modeTable[frame.mode];
-  caption.textContent =
-    `${frame.kind} · mode ${frame.mode}${mode ? ` ${mode.name}` : ""} · ` +
-    `${Number(frame.snr_db).toFixed(1)} dB · ${frame.decoded ? "decoded" : "not decoded"}`;
+  if (signalPopup && !signalPopup.closed) signalPopup.close();
+  else signalChannel?.postMessage({ dock: true });
+  signalPopup = null;
+  clearInterval(signalPoll);
+  signalPoll = null;
+  setSignalDocked(true);
+}
+
+function wireSignalCard() {
+  mountSignalBody($("signal-body"));
+  scopes.wire();
+  $("btn-undock").addEventListener("click", undockSignal);
+  $("btn-signal-back").addEventListener("click", dockSignal);
+  // the undocked window changed the waterfall: follow it
+  window.addEventListener("storage", (event) => {
+    if (event.key === "aether.waterfall") scopes.reload();
+  });
+  const events = shellEvents();
+  if (events?.listen) {
+    events
+      .listen("signal-window", (event) => {
+        clearTimeout(signalAnswerTimer);
+        setSignalDocked(event.payload?.open !== true);
+      })
+      .then(() => events.emit("panel-signal", { action: "state" }))
+      .catch(() => {});
+    return;
+  }
+  try {
+    signalChannel = new BroadcastChannel("aether-signal");
+  } catch {
+    return;
+  }
+  signalChannel.addEventListener("message", (event) => {
+    if (event.data?.alive === true) {
+      signalSeenAt = Date.now();
+      if (signalDocked) {
+        setSignalDocked(false);
+        watchSignalWindow();
+      }
+    } else if (event.data?.alive === false && signalPopup === null) {
+      clearInterval(signalPoll);
+      signalPoll = null;
+      setSignalDocked(true);
+    }
+  });
 }
 
 function renderFrames() {
@@ -2216,7 +2081,6 @@ async function loadConfig() {
   // show the operator what is there now, so the form is not a blank slate over live settings
   if (!$("wz-call").value && liveConfig.callsign && liveConfig.callsign !== "N0CALL") {
     $("wz-call").value = liveConfig.callsign;
-    markStep(1, true);
   }
   const operator = liveConfig.operator ?? {};
   $("op-grid").value = operator.grid ?? "";
@@ -2256,6 +2120,16 @@ async function loadConfig() {
   $("radio-cwid").checked = radio.cw_id === true;
   $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
   $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
+  // the rules this station operates under (ADR-0018): nothing is assumed, and a field the
+  // file leaves empty stays on "choose…"
+  const rules = liveConfig.regulatory ?? {};
+  select($("reg-profile"), rules.profile ?? "");
+  select($("reg-control"), rules.control ?? "");
+  select($("reg-license"), rules.license_class ?? "");
+  select($("reg-sideband"), rules.sideband ?? "usb");
+  $("reg-margin").value = String(rules.edge_margin_hz ?? 50);
+  $("reg-band-plan").checked = rules.band_plan !== false;
+  $("reg-log-permitted").checked = rules.log_permitted === true;
   // the operator's saved Interface choice wins over a guess; without one, the file's
   // capture device says which interface this station is, better than whatever else is
   // plugged in. Either way a choice already made by hand this session is left alone.
@@ -2276,10 +2150,11 @@ async function loadConfig() {
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
-  takeWaterfallSettings(liveConfig.panel?.waterfall);
+  scopes.take(liveConfig.panel?.waterfall);
   noteMissingDevices();
   // the file's devices, not the profile's guess, are what the warning should be about
   checkRates();
+  checkRulesStep();
   checkModemSettings();
   checkAppSettings();
   writeConfig();
@@ -2425,6 +2300,15 @@ function formChanges() {
   if (Number.isInteger(hostPort) && hostPort > 0 && hostPort < 65535) {
     changes["host.bind"] = `127.0.0.1:${hostPort}`;
   }
+  // the rules (live keys): an empty choice is sent as empty, and blocks transmitting
+  changes["regulatory.profile"] = $("reg-profile").value;
+  changes["regulatory.control"] = $("reg-control").value;
+  changes["regulatory.license_class"] = $("reg-license").value;
+  changes["regulatory.sideband"] = $("reg-sideband").value;
+  const margin = numberIn("reg-margin");
+  if (margin !== null && $("reg-margin").value.trim() !== "") changes["regulatory.edge_margin_hz"] = margin;
+  changes["regulatory.band_plan"] = $("reg-band-plan").checked;
+  changes["regulatory.log_permitted"] = $("reg-log-permitted").checked;
   return changes;
 }
 
@@ -2818,42 +2702,6 @@ function noteMissingDevices() {
     : "";
 }
 
-// ── the waterfall's settings in the profile ──
-//
-// The waterfall's controls are the station's, not the window's: they are written to the
-// modem's `[panel.waterfall]` (live keys) so they travel in a profile, and kept in the
-// browser as well so a panel that cannot reach the modem still draws as it was left.
-let waterfallPushTimer = null;
-
-function pushWaterfallSettings() {
-  if (!liveConfig?.panel) return;
-  clearTimeout(waterfallPushTimer);
-  waterfallPushTimer = setTimeout(() => {
-    waterfallPushTimer = null;
-    call("config.set", {
-      "panel.waterfall.auto": waterfall.auto,
-      "panel.waterfall.floor_db": waterfall.floor,
-      "panel.waterfall.gain_db": waterfall.gain,
-      "panel.waterfall.speed": waterfall.speed,
-      "panel.waterfall.palette": waterfall.palette,
-    }).catch(() => {});
-  }, 400);
-}
-
-function takeWaterfallSettings(section) {
-  if (!section) return;
-  const before = JSON.stringify(waterfall);
-  if (typeof section.auto === "boolean") waterfall.auto = section.auto;
-  if (Number.isFinite(section.floor_db)) waterfall.floor = section.floor_db;
-  if (Number.isFinite(section.gain_db)) waterfall.gain = section.gain_db;
-  if (Number.isFinite(section.speed)) waterfall.speed = section.speed;
-  if (typeof section.palette === "string" && section.palette in PALETTES) waterfall.palette = section.palette;
-  if (JSON.stringify(waterfall) === before) return;
-  palette = null;
-  saveWaterfallSettings();
-  showWaterfallSettings();
-}
-
 // ── the setup wizard ────────────────────────────────────────────────
 
 // Known radio interfaces, by the device names they present. A profile only pre-fills the
@@ -3117,6 +2965,7 @@ function showTxLevel(level) {
   txLevelShown = { level, db };
   $("tx-level").value = String(db);
   $("tx-level-reading").textContent = `${db === 0 ? "" : "−"}${Math.abs(db)} dB`;
+  keyingSummary();
 }
 
 async function saveTxLevel() {
@@ -3173,6 +3022,7 @@ async function toggleDrive() {
     $("wz-tx-note").textContent = `${DRIVE_BURSTS} bursts of ${DRIVE_BURST_S} s, ${DRIVE_GAP_S} s apart — watch the ALC, back the level off until it barely moves.`;
     log(`drive check, ${DRIVE_BURSTS} bursts at transmit level ${$("tx-level-reading").textContent}`);
     driveButton(true);
+    setKeyingOpen(true);
   } catch (error) {
     $("wz-tx-note").textContent = error.message;
     log(error.message, true);
@@ -3231,6 +3081,667 @@ async function toggleTune() {
   if (started) tuneButton(true);
 }
 
+// ── the rules ───────────────────────────────────────────────────────
+//
+// The modem judges every transmission against its regulatory profile before the radio is
+// keyed (ADR-0018). The panel shows the verdict on this station's widest transmission at the
+// dial it is on — LEGAL, WARNING or TX BLOCKED — in the header on every tab and beside the
+// dial on the Session tab, with the reasoning one click away; what Setup still needs, in a
+// banner; and on the Diagnostics tab everything the policy knows: the situation, the ceiling
+// it holds the link to, the last decision the gate made and the dials where each waveform
+// fits. The panel decides nothing itself: every word here is the modem's.
+
+let regulatory = null;
+let regRefreshTimer = null;
+
+const VERDICT_WORD = {
+  legal: "LEGAL",
+  warning: "WARNING",
+  blocked: "TX BLOCKED",
+  none: "NO RULES",
+  unknown: "—",
+};
+
+function verdictOf(reg) {
+  if (!reg) return "unknown";
+  if (reg.policy === "none") return "none";
+  return reg.indicator?.verdict ?? "unknown";
+}
+
+function regSummary(reg) {
+  if (!reg) return "";
+  if (reg.policy === "none") return "No regulatory profile: you check every transmission yourself.";
+  return reg.indicator?.summary ?? reg.error ?? "";
+}
+
+/// "7 101.500 kHz": kilohertz with a thin space between the thousands.
+function khz(hz) {
+  if (typeof hz !== "number") return "—";
+  const [whole, frac] = (hz / 1000).toFixed(3).split(".");
+  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, " ")}.${frac} kHz`;
+}
+
+/// The e-CFR page of a Part 97 rule, from its citation: "§97.305(c)" → section 97.305.
+function ecfrUrl(rule) {
+  const m = /97\.(\d+)/.exec(rule ?? "");
+  return m ? `https://www.ecfr.gov/current/title-47/section-97.${m[1]}` : null;
+}
+
+const CONTROL_WORD = { local: "local", remote: "remote", automatic: "automatic" };
+const LICENSE_WORD = {
+  novice: "Novice",
+  technician: "Technician",
+  general: "General",
+  advanced: "Advanced",
+  extra: "Amateur Extra",
+};
+
+/// What Setup (or the dial) still needs before this station may transmit, in a sentence, or
+/// nothing when it needs nothing.
+function regNeeds(reg) {
+  if (!reg) return "";
+  if (reg.policy === "unset") {
+    return "Transmitting is blocked until you say which rules this station operates under — Setup, step 1.";
+  }
+  if (reg.policy === "broken") {
+    return `The regulatory profile could not be read (${reg.error ?? "unknown error"}); nothing is transmitted until it can be.`;
+  }
+  switch (reg.indicator?.code) {
+    case "no_control":
+      return "Transmitting is blocked until you say how the station is controlled — local, remote or automatic — Setup, step 1.";
+    case "no_license":
+      return "Transmitting is blocked until you set your license class — Setup, step 1.";
+    case "no_sideband":
+      return "Transmitting is blocked until you set the sideband the radio transmits on — Setup, step 1.";
+    case "region":
+      return `${reg.indicator.summary}. ${reg.indicator.detail}`;
+    case "no_dial":
+      return canTune
+        ? "The dial frequency is not known yet: the radio has not reported it. Nothing is transmitted until it does."
+        : "The dial frequency is not known: this radio cannot report it, so say where it is on the Session tab (Dial is at) before transmitting.";
+    default:
+      return "";
+  }
+}
+
+function applyRegulatory(reg) {
+  regulatory = reg ?? null;
+  const verdict = verdictOf(regulatory);
+  const summary = regSummary(regulatory);
+  const tone = verdict === "unknown" || verdict === "none" ? "" : verdict;
+
+  const badge = $("reg-badge");
+  badge.hidden = regulatory === null;
+  badge.dataset.verdict = verdict;
+  $("reg-badge-text").textContent = VERDICT_WORD[verdict];
+  const hint = summary ? `${summary} — click for the reasoning` : "Whether this station may transmit here; click for the reasoning";
+  if (badge.title !== hint) badge.title = hint;
+  $("reg-badge").setAttribute("aria-label", `Rules: ${VERDICT_WORD[verdict]}. ${summary}`);
+
+  const chip = $("dial-hero-reg");
+  chip.hidden = regulatory === null;
+  chip.dataset.verdict = verdict;
+  $("dial-hero-reg-badge").dataset.verdict = verdict;
+  $("dial-hero-reg-badge").textContent = VERDICT_WORD[verdict];
+  $("dial-hero-reg-text").textContent = summary.replace(/^(FCC: |TX BLOCKED: |FCC warning: )/, "");
+
+  const needs = regNeeds(regulatory);
+  $("reg-banner").hidden = !needs;
+  $("reg-banner-text").textContent = needs;
+  $("btn-reg-banner-setup").hidden = regulatory?.indicator?.code === "no_dial";
+
+  $("reg-detail").style.setProperty("--tone", tone ? `var(--status-${tone === "legal" ? "link" : tone === "blocked" ? "error" : "warning"})` : "var(--border-strong)");
+  if (!$("reg-detail").hidden) renderRegDetail();
+  if (panelShown("diagnostics")) renderRegCard();
+  checkRulesStep();
+}
+
+// A decision the gate made, from the `regulatory` event: logged, and the badge refreshed a
+// moment later (the status carries the new ceiling and the last decision).
+function onRegulatory(d) {
+  const blocked = d.verdict === "blocked";
+  const rf =
+    typeof d.rf_low_hz === "number" && typeof d.rf_high_hz === "number"
+      ? ` · on the air ${khz(d.rf_low_hz)}–${khz(d.rf_high_hz)}`
+      : "";
+  log(
+    `${blocked ? "refused" : "permitted"} ${d.what}: ${d.summary}${rf}${d.detail ? `\n${d.detail}` : ""}`,
+    blocked ? "warn" : "info",
+    "rules",
+  );
+  clearTimeout(regRefreshTimer);
+  regRefreshTimer = setTimeout(refreshStatus, 300);
+}
+
+// ── the reasoning, dropped from the header ──
+
+function regFact(list, name, value, title, href = null) {
+  const dt = document.createElement("dt");
+  dt.textContent = name;
+  const dd = document.createElement("dd");
+  dd.title = title;
+  if (href) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = value;
+    a.title = `${title} — opens the e-CFR`;
+    dd.append(a);
+  } else {
+    dd.textContent = value;
+  }
+  list.append(dt, dd);
+}
+
+function describeDial(d) {
+  if (typeof d.dial_hz !== "number") return "not known";
+  const source = d.dial_source === "declared" ? "declared by you" : "read from the radio";
+  return `${khz(d.dial_hz)} (${source}), ${(d.sideband ?? "?").toUpperCase()}`;
+}
+
+function renderRegDetail() {
+  const reg = regulatory;
+  const d = reg?.indicator ?? null;
+  const verdict = verdictOf(reg);
+  $("reg-detail-verdict").dataset.verdict = verdict;
+  $("reg-detail-verdict").textContent = VERDICT_WORD[verdict];
+  $("reg-detail-summary").textContent = regSummary(reg) || "The modem has not said yet.";
+  $("reg-detail-text").textContent =
+    reg?.policy === "none"
+      ? "The operator chose no regulatory profile: Aether makes no regulatory checks, and the control operator is responsible for every transmission."
+      : (d?.detail ?? "");
+  const facts = $("reg-detail-facts");
+  facts.replaceChildren();
+  if (d && reg.policy === "rules") {
+    if (typeof d.rf_low_hz === "number") {
+      regFact(facts, "On the air", `${khz(d.rf_low_hz)} – ${khz(d.rf_high_hz)}`, "The RF range the transmission covers: the dial and the audio it occupies, on this sideband");
+    }
+    regFact(facts, "Occupies", `${Math.round(d.bandwidth_hz)} Hz of audio (${Math.round(d.audio_low_hz)}–${Math.round(d.audio_high_hz)} Hz)`, "Measured from the waveform, under the wider reading of §97.3(a)(8)");
+    regFact(facts, "Dial", describeDial(d), "The dial the decision used, and where it came from");
+    if (d.band) regFact(facts, "Band", d.band, "The amateur band the signal is in");
+    if (d.segment) {
+      regFact(facts, "Segment", `${khz(d.segment.low_hz)} – ${khz(d.segment.high_hz)}${d.segment_rule ? ` (${d.segment_rule})` : ""}`, "The segment the whole signal must stay inside, with the margin kept at its edges", ecfrUrl(d.segment_rule));
+    }
+    if (d.automatic_segment) {
+      regFact(facts, "Automatic sub-band", `${khz(d.automatic_segment.low_hz)} – ${khz(d.automatic_segment.high_hz)}`, "The §97.221(b) segment an automatically controlled station is inside");
+    }
+    regFact(facts, "Control", CONTROL_WORD[d.control] ?? "not set", "How the station is controlled (§97.109)");
+    regFact(facts, "License", LICENSE_WORD[d.license] ?? "not set", "The control operator's class (§97.301)");
+    regFact(facts, "Margin", `${Math.round(d.margin_hz)} Hz at each edge`, "Room kept between the signal's edges and the segment's (Setup step 4)");
+    if (d.rule) regFact(facts, "Rule", d.rule, "The rule that decided", ecfrUrl(d.rule));
+    const ceiling = reg.ceiling;
+    if (ceiling && typeof ceiling.rung === "number" && ceiling.rung < ceiling.of - 1) {
+      regFact(facts, "Link held to", `rungs 0–${ceiling.rung}${ceiling.name ? ` (${ceiling.name})` : ""} of ${ceiling.of}`, "The fastest rung the rules allow here: the link never climbs past it");
+    }
+  }
+  const extra = [d?.guidance, ...(d?.notes ?? [])].filter(Boolean).join(" ");
+  $("reg-detail-guidance").textContent = extra;
+  $("reg-detail-guidance").hidden = !extra;
+}
+
+function openRegDetail() {
+  const panel = $("reg-detail");
+  const header = document.querySelector("header.bar");
+  panel.style.top = `${Math.round(header.getBoundingClientRect().bottom + 6)}px`;
+  renderRegDetail();
+  panel.hidden = false;
+  for (const id of ["reg-badge", "dial-hero-reg"]) $(id).setAttribute("aria-expanded", "true");
+}
+
+function closeRegDetail() {
+  $("reg-detail").hidden = true;
+  for (const id of ["reg-badge", "dial-hero-reg"]) $(id).setAttribute("aria-expanded", "false");
+}
+
+function toggleRegDetail() {
+  if ($("reg-detail").hidden) openRegDetail();
+  else closeRegDetail();
+}
+
+function showRulesInSetup() {
+  closeRegDetail();
+  selectTab($("tab-setup"));
+  $("step-1").scrollIntoView({ behavior: "smooth", block: "start" });
+  const first = ["reg-profile", "reg-control", "reg-license"].find((id) => !$(id).value) ?? "reg-profile";
+  $(first).focus({ preventScroll: true });
+}
+
+function showRulesInDiagnostics() {
+  closeRegDetail();
+  selectTab($("tab-diagnostics"));
+  $("reg-card").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── the Diagnostics card ──
+
+function safeRange(entry) {
+  if (!entry) return "—";
+  if (entry.dial_low_hz === entry.dial_high_hz) return `${khz(entry.dial_low_hz)} (channel)`;
+  return `${khz(entry.dial_low_hz)} – ${khz(entry.dial_high_hz)}`;
+}
+
+function renderRegCard() {
+  const reg = regulatory;
+  const verdict = verdictOf(reg);
+  $("reg-card-verdict").dataset.verdict = verdict;
+  $("reg-card-verdict").textContent = VERDICT_WORD[verdict];
+  const profile = reg?.profile ?? null;
+  $("reg-card-source").textContent = profile
+    ? `${profile.name} · rules as of ${profile.rules_as_of}`
+    : reg?.policy === "none"
+      ? "no profile: the operator checks every transmission"
+      : reg?.policy === "unset"
+        ? "no profile chosen yet"
+        : "";
+  const d = reg?.indicator ?? null;
+  $("reg-card-summary").textContent = [regSummary(reg), d?.detail].filter(Boolean).join(" — ");
+
+  const s = reg?.situation ?? {};
+  const situation = $("reg-situation");
+  situation.replaceChildren();
+  if (reg) {
+    const settings = liveConfig?.regulatory ?? {};
+    regFact(situation, "Rules", profile ? profile.name : reg.policy === "none" ? "none" : "not chosen", "The regulatory profile in force (Setup step 1)");
+    regFact(situation, "Control", CONTROL_WORD[s.control] ?? "not set", "How the station is controlled (§97.109), from Setup step 1 — never guessed from the network");
+    regFact(situation, "License", LICENSE_WORD[s.license] ?? "not set", "The control operator's class (§97.301)");
+    regFact(situation, "Dial", typeof s.dial_hz === "number" ? `${khz(s.dial_hz)} (${s.dial_source === "declared" ? "declared" : "from the radio"})` : "not known", "The dial the decisions use: read from the radio over CAT or rigctld, or declared on the Session tab");
+    regFact(situation, "Sideband", (s.sideband ?? "not set").toUpperCase(), "The sideband the radio transmits on (Setup step 1)");
+    regFact(situation, "Direction", reg.direction ?? "—", "Who began the exchange a transmission would belong to now: originate (this station), respond (another station called), operator (a test)");
+    regFact(situation, "Margin", `${Math.round(s.margin_hz ?? settings.edge_margin_hz ?? 0)} Hz at each segment edge`, "Room kept between the signal's edges and a segment's (Setup step 4)");
+    regFact(situation, "ITU region", String(s.itu_region ?? "—"), "The region whose tables apply");
+  }
+
+  const limits = $("reg-limits");
+  limits.replaceChildren();
+  if (reg?.policy === "rules") {
+    const c = reg.ceiling;
+    const held = c && typeof c.rung === "number" && c.rung < c.of - 1;
+    regFact(
+      limits,
+      "Link ceiling",
+      !c ? "not computed yet" : c.rung === null ? "no rung allowed here" : held ? `rung ${c.rung}${c.name ? ` (${c.name})` : ""} of ${c.of - 1}` : "every rung allowed",
+      "The fastest rung the rules allow at this dial: the link's rate control and its negotiation never go past it",
+    );
+    if (c?.limit) regFact(limits, "Held by", c.limit.summary, c.limit.detail ?? "Why the link is held there", ecfrUrl(c.limit.rule));
+    const widest = reg.occupied?.widest;
+    if (widest) {
+      const [lo, hi] = widest.audio.spectral;
+      regFact(limits, "Widest waveform", `rung ${widest.rung}: ${Math.round(Math.max(hi, widest.audio.power[1]) - Math.min(lo, widest.audio.power[0]))} Hz`, "The widest thing this station sends at its fastest mode, measured");
+    }
+    const floor = reg.occupied?.floor;
+    if (floor) {
+      regFact(limits, "Tone floor", `${Math.round(floor.audio.spectral[1] - floor.audio.spectral[0])} Hz`, "The narrowest data this station sends: the tone floor, measured");
+    }
+    const last = reg.last;
+    if (last?.decision) {
+      const ago = formatDuration(last.age_s ?? 0);
+      regFact(limits, "Last decision", `${ago} ago: ${last.decision.verdict === "blocked" ? "refused" : "permitted"} — ${last.decision.what}`, last.decision.summary);
+    }
+  }
+
+  const body = $("reg-safe");
+  body.replaceChildren();
+  const rows = new Map();
+  for (const [key, list] of [["widest", reg?.safe_dials?.widest ?? []], ["floor", reg?.safe_dials?.floor ?? []]]) {
+    for (const entry of list) {
+      const id = `${entry.band}|${entry.segment.low_hz}|${entry.segment.high_hz}`;
+      if (!rows.has(id)) rows.set(id, { band: entry.band, segment: entry.segment, rule: entry.rule });
+      rows.get(id)[key] = entry;
+    }
+  }
+  for (const row of [...rows.values()].sort((a, b) => a.segment.low_hz - b.segment.low_hz)) {
+    const tr = document.createElement("tr");
+    const cell = (text, className = "", title = "", href = null) => {
+      const td = document.createElement("td");
+      if (className) td.className = className;
+      if (title) td.title = title;
+      if (href) {
+        const a = document.createElement("a");
+        a.href = href;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = text;
+        td.append(a);
+      } else {
+        td.textContent = text;
+      }
+      tr.append(td);
+    };
+    cell(row.band);
+    cell(`${khz(row.segment.low_hz)} – ${khz(row.segment.high_hz)}`, "num");
+    cell(safeRange(row.widest), "num", "Dial range for the widest waveform");
+    cell(safeRange(row.floor), "num", "Dial range for the tone floor");
+    cell(row.rule, "", "The rule the segment comes from", ecfrUrl(row.rule));
+    body.append(tr);
+  }
+  $("reg-safe-wrap").hidden = rows.size === 0;
+}
+
+// ── a dial the radio cannot report ──
+
+function applyDeclaredDial(status) {
+  const reg = status.regulatory ?? null;
+  const declared = liveConfig?.regulatory?.dial_hz ?? null;
+  // a radio that reports its dial is always taken at its word: a declared one is only for
+  // a radio that cannot (serial-line, CM108 or VOX keying)
+  const row = $("declared-row");
+  row.hidden = status.can_tune === true || !(reg?.policy === "rules" || declared);
+  if (row.hidden) return;
+  const input = $("declared-dial");
+  if (document.activeElement !== input && declared && !input.value) {
+    input.value = (declared / 1e6).toFixed(declared % 1000 === 0 ? 3 : 4);
+  }
+  $("btn-declared-clear").disabled = !declared;
+  $("declared-note").textContent = declared
+    ? `The rules place your signal from ${khz(declared)}; set it again whenever you move the dial.`
+    : "This radio cannot report its dial: say where it is before transmitting.";
+}
+
+async function setDeclaredDial(clear = false) {
+  const hz = clear ? null : parseMhz($("declared-dial").value);
+  if (!clear && !hz) {
+    $("declared-note").textContent = "A frequency in MHz is needed, such as 14.105.";
+    $("declared-dial").focus();
+    return;
+  }
+  try {
+    await call("config.set", { "regulatory.dial_hz": hz });
+    if (liveConfig) liveConfig.regulatory = { ...(liveConfig.regulatory ?? {}), dial_hz: hz };
+    if (clear) $("declared-dial").value = "";
+    log(clear ? "the declared dial is forgotten" : `the dial is declared at ${khz(hz)}`, false, "rules");
+    refreshStatus();
+  } catch (error) {
+    $("declared-note").textContent = error.message;
+    log(error.message, true, "rules");
+  }
+}
+
+// Step 1 is done when the callsign is plausible and the rules are said: a profile — or "none"
+// — and, under a profile, the control and the license class. Until then it is marked.
+function rulesChosen() {
+  const profile = $("reg-profile").value;
+  if (profile === "none") return true;
+  return Boolean(profile && $("reg-control").value && $("reg-license").value);
+}
+
+function checkRulesStep() {
+  const call_ = $("wz-call").value.trim().toUpperCase();
+  const plausible = /^[A-Z0-9/-]{1,9}$/.test(call_);
+  const chosen = rulesChosen();
+  markStep(1, plausible && chosen);
+  $("step-1").dataset.needs = String(!chosen);
+}
+
+function wireRules() {
+  $("reg-badge").addEventListener("click", toggleRegDetail);
+  $("dial-hero-reg").addEventListener("click", toggleRegDetail);
+  $("btn-reg-close").addEventListener("click", closeRegDetail);
+  $("btn-reg-setup").addEventListener("click", showRulesInSetup);
+  $("btn-reg-banner-setup").addEventListener("click", showRulesInSetup);
+  $("btn-reg-diagnostics").addEventListener("click", showRulesInDiagnostics);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("reg-detail").hidden) closeRegDetail();
+  });
+  document.addEventListener("click", (event) => {
+    const panel = $("reg-detail");
+    if (panel.hidden) return;
+    if (panel.contains(event.target) || $("reg-badge").contains(event.target) || $("dial-hero-reg").contains(event.target)) return;
+    closeRegDetail();
+  });
+  window.addEventListener("resize", () => {
+    if (!$("reg-detail").hidden) openRegDetail();
+  });
+  for (const id of ["reg-profile", "reg-control", "reg-license", "reg-sideband"]) {
+    $(id).addEventListener("change", checkRulesStep);
+  }
+  $("btn-declared-set").addEventListener("click", () => setDeclaredDial(false));
+  $("btn-declared-clear").addEventListener("click", () => setDeclaredDial(true));
+  $("declared-dial").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      setDeclaredDial(false);
+    }
+  });
+}
+
+// ── keying and drive: a card that folds, with its numbers in its head ──
+//
+// The card sat at the foot of the Session tab and was found by scrolling. It is now under
+// the call row, folded by default, and its head always shows the transmit level, the last
+// transmission's peak, how the radio is keyed and the three buttons — so a drive check is
+// one click from anywhere on the tab, and pressing Set drive opens the card on the slider.
+
+const KEYING_OPEN_KEY = "aether.keying.open";
+
+function setKeyingOpen(open, remember = true) {
+  $("btn-keying-toggle").setAttribute("aria-expanded", String(open));
+  $("keying-body").hidden = !open;
+  $("keying-card").dataset.open = String(open);
+  if (!remember) return;
+  try {
+    localStorage.setItem(KEYING_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // the choice holds for this page only
+  }
+}
+
+function keyingSummary() {
+  const level = $("tx-level-reading").textContent;
+  const peak = $("tx-peak").textContent;
+  const keyed = lastStatus?.ptt ? ` · keyed by ${lastStatus.ptt}` : "";
+  $("keying-summary").textContent = `level ${level} · last peak ${peak}${keyed}`;
+}
+
+function wireKeying() {
+  let open = false;
+  try {
+    open = localStorage.getItem(KEYING_OPEN_KEY) === "1";
+  } catch {
+    // nothing kept
+  }
+  setKeyingOpen(open, false);
+  $("btn-keying-toggle").addEventListener("click", () => {
+    setKeyingOpen($("btn-keying-toggle").getAttribute("aria-expanded") !== "true");
+  });
+  keyingSummary();
+}
+
+// ── the log ─────────────────────────────────────────────────────────
+//
+// One entry a row: the time, where it came from (a tag: the panel, the session's state, the
+// modem's own names — probe, test, audio — or the rules), and the words. Problems carry their
+// colour; filters narrow it to problems, the rules' decisions or the sessions; the view
+// follows new entries unless the reader has scrolled up to read.
+
+const LOG_KEEP = 500;
+const SESSION_TAGS = new Set(["state", "probe", "probed", "test", "sent", "session", "connect", "call", "disc", "role", "ladder"]);
+let logFilter = "all";
+let logFollow = true;
+
+function logShows(entry) {
+  switch (logFilter) {
+    case "problems":
+      return entry.dataset.level === "error" || entry.dataset.level === "warn";
+    case "rules":
+      return entry.dataset.tag === "rules";
+    case "session":
+      return SESSION_TAGS.has(entry.dataset.tag);
+    default:
+      return true;
+  }
+}
+
+function countLog() {
+  const pane = $("log");
+  const total = pane.childElementCount;
+  const shown = logFilter === "all" ? total : [...pane.children].filter((e) => !e.hidden).length;
+  $("log-count").textContent =
+    logFilter === "all" ? `${total} ${total === 1 ? "entry" : "entries"}` : `${shown} of ${total} entries`;
+}
+
+function showLogFollow() {
+  const mark = $("log-live");
+  mark.dataset.live = String(logFollow);
+  mark.textContent = logFollow ? "following" : "held — scroll down to follow";
+}
+
+/// Add an entry. `level` is true for an error (as it always was), or "warn", "error", "info";
+/// `tag` says where it came from.
+function log(message, level = false, tag = "panel") {
+  const pane = $("log");
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.dataset.level = level === true ? "error" : typeof level === "string" ? level : "info";
+  entry.dataset.tag = tag;
+  const when = document.createElement("span");
+  when.className = "when";
+  when.textContent = clock(Date.now());
+  const label = document.createElement("span");
+  label.className = "log-tag";
+  label.textContent = tag;
+  label.title = `From: ${tag}`;
+  const text = document.createElement("span");
+  text.className = "log-text";
+  text.textContent = message;
+  entry.append(when, label, text);
+  entry.hidden = !logShows(entry);
+  pane.append(entry);
+  while (pane.childElementCount > LOG_KEEP) pane.firstElementChild.remove();
+  if (logFollow) pane.scrollTop = pane.scrollHeight;
+  countLog();
+}
+
+function setLogFilter(filter) {
+  logFilter = filter;
+  for (const chip of document.querySelectorAll(".log-toolbar .chip")) {
+    chip.setAttribute("aria-pressed", String(chip.dataset.filter === filter));
+  }
+  for (const entry of $("log").children) entry.hidden = !logShows(entry);
+  logFollow = true;
+  $("log").scrollTop = $("log").scrollHeight;
+  showLogFollow();
+  countLog();
+}
+
+function wireLog() {
+  for (const chip of document.querySelectorAll(".log-toolbar .chip")) {
+    chip.addEventListener("click", () => setLogFilter(chip.dataset.filter));
+  }
+  const pane = $("log");
+  pane.addEventListener("scroll", () => {
+    const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 4;
+    if (atBottom !== logFollow) {
+      logFollow = atBottom;
+      showLogFollow();
+    }
+  });
+  $("btn-clear-log").addEventListener("click", () => {
+    pane.replaceChildren();
+    countLog();
+  });
+  showLogFollow();
+  countLog();
+}
+
+// ── Help / About: the version and its updates ───────────────────────
+//
+// Under the desktop shell the About card reads the updater's own view — the version running,
+// the channel, what the last check found and how far an install has got — and Check for
+// Updates asks the shell's updater, the one the Help menu uses, whose window then shows what
+// it found and installs it on a yes. The button is off while a check, a download or an
+// install is under way. A browser has no updater: the card says so and links the releases.
+
+const RELEASES_URL = "https://github.com/KK4ODA/aether-hf/releases";
+let updateView = null;
+let updateAnswerTimer = null;
+
+function describeUpdate(view) {
+  const percent = view.total ? ` — ${Math.round((100 * view.downloaded) / view.total)} %` : "…";
+  switch (view.phase) {
+    case "checking":
+      return ["busy", "Checking for updates…", null];
+    case "up-to-date":
+      return view.checked === false
+        ? ["idle", "Not checked yet since Aether HF started.", null]
+        : ["current", "Up to date: this is the newest version on the channel.", view.current];
+    case "no-stable-yet":
+      return ["current", "No stable release yet: this beta is the newest. Choose betas in Setup step 5 to be offered the next one.", view.current];
+    case "available":
+      return ["available", `Version ${view.version} is available — the updates window has its notes and installs it.`, view.version];
+    case "downloading":
+      return ["busy", `Downloading ${view.version}${percent}`, view.version];
+    case "installing":
+      return ["busy", `Installing ${view.version}: the modem stops, and Aether HF starts again on it.`, view.version];
+    case "restart-required":
+      return ["available", `Installed ${view.version}: restart Aether HF to run it.`, view.version];
+    case "complete":
+      return ["complete", `Updated to ${view.version} from ${view.from}.`, view.version];
+    case "incomplete":
+      return ["error", `The update to ${view.version} did not finish; this is still the version before it.`, null];
+    default:
+      return ["error", view.message ?? "The updater reported a problem.", null];
+  }
+}
+
+function applyUpdateView(view) {
+  if (!view) return;
+  updateView = view;
+  clearTimeout(updateAnswerTimer);
+  const [state, text, latest] = describeUpdate(view);
+  $("about-update").dataset.state = state;
+  $("about-update-status").textContent = text;
+  $("about-version").textContent = view.current ?? "—";
+  $("about-channel").textContent = view.channel ?? "—";
+  $("about-latest").textContent = latest ?? "—";
+  const busy = ["checking", "downloading", "installing"].includes(view.phase);
+  $("btn-check-updates").disabled = busy;
+}
+
+function wireAbout() {
+  const events = shellEvents();
+  const button = $("btn-check-updates");
+  if (events?.listen) {
+    events
+      .listen("update", (event) => applyUpdateView(event.payload))
+      .then(() => events.emit("panel-update", { action: "view" }))
+      .catch(() => {});
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      $("about-update-status").textContent = "Asking the updater…";
+      try {
+        await events.emit("panel-update", { action: "check" });
+      } catch (error) {
+        $("about-update-status").textContent = `The updater could not be asked: ${error.message ?? error}`;
+        button.disabled = false;
+        return;
+      }
+      // a shell older than this panel has no one listening: say where the updater is
+      clearTimeout(updateAnswerTimer);
+      updateAnswerTimer = setTimeout(() => {
+        $("about-update-status").textContent = "Use the Help menu above: Check for updates….";
+        button.disabled = false;
+      }, 4000);
+    });
+    return;
+  }
+  // a browser: no updater here
+  $("about-update").dataset.state = "idle";
+  $("about-update-status").textContent =
+    "Updates are installed by the desktop application. In a browser, the releases page has every version.";
+  $("about-update-note").textContent = "A gateway updates by its own package or tarball (docs/user/gateway-kit.md).";
+  button.replaceChildren(document.createTextNode("Open the releases page"));
+  button.title = "Open the project's releases page, with every version's installers and notes";
+  button.addEventListener("click", () => window.open(RELEASES_URL, "_blank", "noopener"));
+}
+
+// Without a shell the version shown is the modem's own; the channel is the file's.
+function applyAboutFromStatus(status) {
+  if (shellEvents()?.listen) return;
+  $("about-version").textContent = status.version ? `aetherd ${status.version}` : "—";
+  $("about-channel").textContent = liveConfig?.update?.channel ?? "—";
+}
+
 // ── actions ─────────────────────────────────────────────────────────
 
 function selectTab(tab, focus = false) {
@@ -3247,6 +3758,7 @@ function selectTab(tab, focus = false) {
     drawStatusChart();
   }
   if (tab.dataset.panel === "stations") renderHeard();
+  if (tab.dataset.panel === "diagnostics") renderRegCard();
   scopesWanted();
 }
 
@@ -3379,13 +3891,9 @@ function wire() {
   $("btn-reset-counters").addEventListener("click", async () => {
     await act(() => call("counters.reset"), "counters reset");
   });
-  $("chart-tab-snr").addEventListener("click", () => selectStatusChart("snr"));
-  $("chart-tab-speed").addEventListener("click", () => selectStatusChart("speed"));
-  try {
-    selectStatusChart(localStorage.getItem("aether.statuschart") || "snr");
-  } catch {
-    selectStatusChart("snr");
-  }
+  $("chart-tab-snr").addEventListener("click", () => selectStatusChart("snr", true));
+  $("chart-tab-speed").addEventListener("click", () => selectStatusChart("speed", true));
+  selectStatusChart(storedStatusChart());
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
     const notes = $("record-notes").value.trim();
@@ -3398,7 +3906,6 @@ function wire() {
     event.preventDefault(); // Enter sends; Shift+Enter still starts a new line
     sendOutgoing();
   });
-  $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-heard-clear").addEventListener("click", clearHeard);
   $("btn-sessions-clear").addEventListener("click", clearSessions);
   $("btn-sessions-all").addEventListener("click", () => {
@@ -3426,11 +3933,12 @@ function wire() {
     // nothing kept
   }
   if (compact) setCompact(true);
-  // the stations' "3 min ago" and the dial move on their own
+  // the stations' "3 min ago", the dial and the rules' verdict on it move on their own: a dial
+  // turned on the radio shows its LEGAL / WARNING / TX BLOCKED within five seconds
   setInterval(() => {
     if (panelShown("stations")) renderHeard();
     if (socket && socket.readyState === WebSocket.OPEN) refreshStatus();
-  }, 15000);
+  }, 5000);
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   $("btn-contribute").addEventListener("click", contributeTestSession);
   $("wz-profile").addEventListener("change", () => {
@@ -3443,14 +3951,18 @@ function wire() {
   for (const id of ["host-port", "update-channel", "host-enabled"]) {
     $(id).addEventListener("input", checkAppSettings);
   }
-  wireWaterfallControls();
+  wireSignalCard();
+  wireRules();
+  wireKeying();
+  wireLog();
+  wireAbout();
   loadHistory();
   renderFrames(); // what was kept shows before the first new frame does
   drawStatusChart(); // the axes are there from the start, frames or none
   $("wz-call").addEventListener("input", () => {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);
-    markStep(1, plausible);
+    checkRulesStep();
     $("wz-call-note").textContent = plausible
       ? `Will go on the air as ${value}.`
       : "Letters, digits, - and /; up to nine characters.";
@@ -3579,7 +4091,9 @@ async function act(operation, description) {
     refreshStatus();
     return true;
   } catch (error) {
-    log(error.message, true);
+    const refusedByRules = error.code === "regulatory";
+    log(error.message, refusedByRules ? "warn" : true, refusedByRules ? "rules" : "panel");
+    if (refusedByRules) refreshStatus();
     return false;
   }
 }
@@ -3597,8 +4111,8 @@ async function copyDiagnostics() {
       note.textContent = `Copied ${(text.length / 1024).toFixed(0)} kB to the clipboard.`;
     } catch {
       // no clipboard (a plain http page in some browsers): show it, so it can be selected
-      $("log").textContent = text;
-      note.textContent = "The clipboard is not available here; the bundle is shown below.";
+      log(text, "info", "bundle");
+      note.textContent = "The clipboard is not available here; the bundle is in the log below.";
     }
   } catch (error) {
     note.textContent = error.message;
@@ -3934,19 +4448,6 @@ function setLamp(id, on, label) {
   if (lamp.getAttribute("aria-label") !== label) lamp.setAttribute("aria-label", label);
   // the same words on hover: a lamp that lights for a reason should say the reason
   if (lamp.title !== label) lamp.title = label;
-}
-
-function log(message, bad = false) {
-  const line = document.createElement("div");
-  line.className = `log-line${bad ? " bad" : ""}`;
-  const when = document.createElement("span");
-  when.className = "when";
-  when.textContent = new Date().toLocaleTimeString() + "  ";
-  line.append(when, document.createTextNode(message));
-  const pane = $("log");
-  pane.append(line);
-  while (pane.childElementCount > 500) pane.firstElementChild.remove();
-  pane.scrollTop = pane.scrollHeight;
 }
 
 // The received pane shows reconstructed user text only. Payload bytes are decoded as

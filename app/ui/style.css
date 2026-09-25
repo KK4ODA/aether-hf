@@ -9,8 +9,18 @@
  * a lit LINK lamp is green because a link is up, not because green was available — and
  * the accent is spent on the one thing the operator acts on, never on decoration.
  *
- * Spacing: 4 / 8 / 12 / 16 / 24. Radii: 4 for controls, 6 for panels. Motion: 120–180 ms,
- * and none at all when the operator has asked for none. */
+ * The design system, in one place:
+ *
+ *   type      10.5 caps labels and badges · 11 section labels · 12 secondary · 13.5 body ·
+ *             15 compact state · 18 state · 26 readings · 28 the dial
+ *   spacing   4 / 8 / 12 / 16 / 24 / 32
+ *   radii     4 controls · 6 cards and plots · pill for badges, chips and lamps' dots
+ *   controls  30 px tall, 24 px for .small; the same height for a button, a field and a
+ *             select, so a row of them lines up
+ *   cards     12 px × 16 px padding, 8 px between their parts; a head row carries the title,
+ *             a meta reading and the card's actions
+ *   states    hover lifts the surface, focus draws the accent ring, disabled fades to 45 %
+ *   motion    120–180 ms, and none at all when the operator has asked for none */
 
 :root {
   color-scheme: dark;
@@ -48,19 +58,44 @@
   --plot-bg: #0b1117;
   --plot-grid: #1e2833;
 
+  /* type */
+  --fs-2xs: 10.5px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 26px;
+  --fs-3xl: 28px;
+
+  /* space */
   --s1: 4px;
   --s2: 8px;
   --s3: 12px;
   --s4: 16px;
   --s5: 24px;
+  --s6: 32px;
+
+  /* shape */
   --r-sm: 4px;
   --r-md: 6px;
+  --r-pill: 999px;
+
+  /* controls and cards */
+  --control-h: 30px;
+  --control-h-sm: 24px;
+  --card-pad-y: 12px;
+  --card-pad-x: 16px;
+  --card-gap: 8px;
+
+  /* motion */
   --t-fast: 120ms;
   --t-slow: 180ms;
 
   --face: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   --numerals: "Cascadia Mono", "JetBrains Mono", "Roboto Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
 
   /* names the script reads; kept as aliases of the tokens above */
   --ink: var(--text);
@@ -99,6 +134,7 @@
   --plot-bg: #fbfcfd;
   --plot-grid: #e3e8ee;
   --shadow: 0 1px 2px rgba(20, 30, 40, 0.08);
+  --shadow-pop: 0 12px 32px rgba(20, 30, 40, 0.18);
 }
 
 * {
@@ -114,7 +150,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 13.5px/1.5 var(--face);
+  font: var(--fs-md) / 1.5 var(--face);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -135,7 +171,29 @@ body {
   display: none !important;
 }
 
-/* ── the top bar: brand, lamps, callsign ────────────────────────── */
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ── the top bar: brand, lamps, the rules, the dial, callsign ───── */
 
 .bar {
   display: flex;
@@ -163,6 +221,7 @@ header.bar {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text);
+  white-space: nowrap;
 }
 
 .brand-mark {
@@ -186,15 +245,26 @@ header.bar {
   margin-left: 2px;
 }
 
+.bar-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
 .callsign {
-  margin-left: auto;
   font: 600 14px/1 var(--numerals);
   letter-spacing: 0.08em;
   color: var(--text);
-  padding: 5px 10px;
+  padding: 0 10px;
+  height: var(--control-h-sm);
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
+  white-space: nowrap;
 }
 
 .head-right {
@@ -202,10 +272,8 @@ header.bar {
   display: flex;
   align-items: center;
   gap: var(--s2);
-}
-
-.head-right .callsign {
-  margin-left: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* the dial frequency, when the radio can say: read like a rig's display */
@@ -214,32 +282,14 @@ header.bar {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   color: var(--text-2);
-  padding: 5px 8px;
+  padding: 0 8px;
+  height: var(--control-h-sm);
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
-}
-
-button.ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--text-3);
-  padding: 5px 8px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-button.ghost:hover:not(:disabled) {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text);
-}
-
-button.ghost[aria-pressed="true"] {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent);
+  white-space: nowrap;
 }
 
 /* ── lamps: operational state, filled when lit and named always ──── */
@@ -247,15 +297,17 @@ button.ghost[aria-pressed="true"] {
 .indicators {
   display: flex;
   gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .lamp {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 600 10.5px/1 var(--numerals);
+  height: var(--control-h-sm);
+  font: 600 var(--fs-2xs) / 1 var(--numerals);
   letter-spacing: 0.12em;
-  padding: 5px 9px 5px 7px;
+  padding: 0 9px 0 7px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   color: var(--text-3);
@@ -314,19 +366,232 @@ button.ghost[aria-pressed="true"] {
   border: 0;
 }
 
-/* ── tabs ───────────────────────────────────────────────────────── */
+/* ── badges, chips and the live mark ─────────────────────────────── */
+
+/* A badge names a state in words and in colour: the regulatory verdict, most of all. The
+ * colour is the verdict's; the word is there for anyone who cannot tell the colours apart. */
+.badge {
+  --tone: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  font: 700 var(--fs-2xs) / 1 var(--numerals);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+}
+
+[data-verdict="legal"] {
+  --tone: var(--status-link);
+}
+
+[data-verdict="warning"] {
+  --tone: var(--status-warning);
+}
+
+[data-verdict="blocked"] {
+  --tone: var(--status-error);
+}
+
+[data-verdict="none"],
+[data-verdict="unknown"] {
+  --tone: var(--text-3);
+}
+
+/* the verdict in the header: a lamp-sized button that opens the reasoning */
+.reg-badge {
+  height: var(--control-h-sm);
+  min-height: 0;
+  padding: 0 10px 0 8px;
+  gap: 6px;
+  border-radius: var(--r-sm);
+  font: 700 var(--fs-2xs) / 1 var(--numerals);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--tone) 50%, var(--border));
+  white-space: nowrap;
+}
+
+.reg-badge:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tone) 22%, var(--surface));
+  border-color: var(--tone);
+}
+
+.reg-badge[data-verdict="blocked"] {
+  color: var(--on-status);
+  background: var(--status-error);
+  border-color: transparent;
+}
+
+.reg-badge[data-verdict="blocked"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--status-error) 85%, white 15%);
+}
+
+/* the chip beside the dial on the Session tab: the verdict and its sentence */
+.reg-chip {
+  min-height: var(--control-h-sm);
+  padding: 2px 10px 2px 4px;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--border));
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  max-width: 100%;
+  text-align: left;
+}
+
+.reg-chip:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tone) 10%, transparent);
+  border-color: var(--tone);
+}
+
+.reg-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* chips: a small group of toggles, one of them pressed (the log's filters) */
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* "live": a dot that breathes while the thing beside it is drawing or following */
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 var(--fs-2xs) / 1 var(--numerals);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+
+.live[data-live="true"] {
+  color: var(--status-link);
+}
+
+.live[data-live="true"]::before {
+  background: var(--status-link);
+  animation: breathe-dot 1.8s ease-in-out infinite;
+}
+
+@keyframes breathe-dot {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-link) 20%, transparent);
+  }
+}
+
+/* ── the regulatory reasoning, dropped from the header ─────────────── */
+
+.reg-detail {
+  position: fixed;
+  z-index: 30;
+  top: 56px;
+  right: var(--s4);
+  width: min(640px, calc(100vw - 2 * var(--s4)));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-top: 3px solid var(--tone, var(--border-strong));
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.reg-detail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.reg-detail-summary {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.reg-detail-text {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.reg-detail-actions {
+  margin-top: var(--s1);
+}
+
+/* ── tabs: one row; a narrow window scrolls them rather than stacking ── */
 
 .tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 2px;
   padding: 0 var(--s4);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
   appearance: none;
+  flex: none;
+  white-space: nowrap;
   border: 0;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -335,12 +600,16 @@ button.ghost[aria-pressed="true"] {
   font: inherit;
   font-weight: 500;
   padding: 10px 14px 9px;
+  min-height: 0;
+  border-radius: 0;
   cursor: pointer;
   transition: color var(--t-fast), border-color var(--t-fast);
 }
 
-.tab:hover {
+.tab:hover:not(:disabled) {
   color: var(--text);
+  background: none;
+  border-color: transparent;
 }
 
 .tab-count {
@@ -371,7 +640,9 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-a:focus-visible {
+summary:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -380,7 +651,7 @@ a:focus-visible {
 
 main {
   padding: var(--s4) var(--s4) var(--s5);
-  max-width: 1040px;
+  max-width: 1120px;
   width: 100%;
   margin: 0 auto;
 }
@@ -397,8 +668,9 @@ main {
   display: none;
 }
 
+/* a section's label: small capitals, quiet — it names, the content speaks */
 h2 {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -406,9 +678,22 @@ h2 {
   margin: var(--s4) 0 var(--s1);
 }
 
+h2.inline {
+  margin: 0;
+}
+
+/* a card's title */
+h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
 .sub-heading {
   margin: var(--s3) 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -420,39 +705,18 @@ h2 {
   color: var(--text-2);
 }
 
-#probe-result:empty {
+.note:empty {
   display: none;
 }
-#probe-result[data-state="ok"] {
+
+#probe-result[data-state="ok"],
+#test-result[data-state="ok"] {
   color: var(--text);
-}
-#probe-result[data-state="warn"] {
-  color: var(--warn);
 }
 
-.test-progress {
-  margin: var(--s2) 0;
-  padding: var(--s2) var(--s3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-}
-.test-progress p {
-  margin: 2px 0;
-}
-.test-step {
-  color: var(--text);
-  font-weight: 600;
-}
-.test-bar-row {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-}
-.test-bar-row progress {
-  flex: 1;
-  height: 8px;
-  accent-color: var(--accent);
+#probe-result[data-state="warn"],
+#test-result[data-state="warn"] {
+  color: var(--warn);
 }
 
 .note.warn {
@@ -464,7 +728,11 @@ h2 {
 
 .sub {
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-sm);
+}
+
+.push-right {
+  margin-left: auto;
 }
 
 code {
@@ -475,6 +743,62 @@ code {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0 4px;
+}
+
+/* a long explanation, folded: the summary says what it explains */
+details.hint {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+details.hint > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-2);
+  list-style: none;
+  user-select: none;
+}
+
+details.hint > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.hint > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--t-fast);
+}
+
+details.hint[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+details.hint > summary:hover {
+  color: var(--text);
+}
+
+details.hint > p {
+  margin: var(--s1) 0 0;
+  max-width: 78ch;
+}
+
+/* ── banners: faults, the rules, the session ─────────────────────── */
+
+.reg-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.reg-banner > span {
+  flex: 1 1 320px;
 }
 
 /* ── the state panel: the one thing readable from across the room ── */
@@ -528,6 +852,32 @@ code {
   --state: var(--status-error);
 }
 
+/* a state in flight breathes, gently, so a glance tells it apart from one that is settled */
+.state-strip[data-state="connecting"]::before,
+.state-strip[data-state="disconnecting"]::before,
+.state-strip[data-state="retrying"]::before {
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--state) 12%, transparent);
+  }
+}
+
+.state-name {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.state-detail {
+  color: var(--text-2);
+  font-size: 12.5px;
+  grid-column: 2;
+}
+
 /* The session, unmissably: a banner across every tab when it comes up, is being called, or
    has ended. The state strip is small and lives on one tab; a glance at the wrong one
    missed the whole session on the air. */
@@ -578,30 +928,162 @@ code {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .session-banner.pulse {
-    animation: none;
-  }
+/* ── readings: the number first, the name second, the rest third ── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
 }
 
-/* a checkbox with its words, beside the buttons it goes with (Chime, Enter sends, Sound) */
-.check {
-  display: inline-flex;
+/* A reading's number scales with its card (a container query) rather than being cut off:
+ * eleven characters — "2.28 kbit/s" — always fit, from a compact window's quarter-width
+ * card to a wide screen's. */
+.reading {
+  container-type: inline-size;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s2) var(--s3);
+  min-width: 0;
+}
+
+.reading .label {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reading .value {
+  font: 500 var(--fs-2xl) / 1.2 var(--numerals);
+  font-size: clamp(15px, 15cqi, var(--fs-2xl));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reading .sub {
+  margin-top: 1px;
+  min-height: 1.2em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── cards ──────────────────────────────────────────────────────── */
+
+.card,
+.step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--card-pad-y) var(--card-pad-x);
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+  min-width: 0;
+}
+
+/* a card's head: the title, a reading beside it, and its actions at the far end */
+.card-head {
+  display: flex;
   align-items: center;
-  gap: 0.45em;
+  gap: var(--s2) var(--s3);
+  flex-wrap: wrap;
+  min-height: var(--control-h-sm);
+}
+
+.card-meta {
+  min-width: 0;
+}
+
+.card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* A card whose body folds away and whose head still says what matters: Keying and drive
+ * shows the level, the last peak and its three buttons whether it is open or not. */
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  flex-wrap: wrap;
+}
+
+.disclosure-toggle {
+  min-height: var(--control-h-sm);
+  padding: 0 6px 0 2px;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.disclosure-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.disclosure-toggle .chevron {
+  transform: rotate(-90deg);
+  transition: transform var(--t-fast);
   color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
+}
+
+.disclosure-toggle[aria-expanded="true"] .chevron {
+  transform: none;
+}
+
+.disclosure-summary {
+  min-width: 0;
+  color: var(--text-2);
+}
+
+.disclosure-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+}
+
+#wz-tx-note:empty {
+  display: none;
+}
+
+.drive-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--s2) var(--s5);
+  align-items: center;
 }
 
 /* The drive-setting procedure, where the buttons are: a new user gets it wrong more than
    anything else, and it is the one setup that most decides whether they are decoded. */
 .drive-guide {
-  margin-bottom: var(--s3);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--r-sm);
-  background: var(--surface);
+  background: var(--bg-2);
   padding: var(--s2) var(--s3);
 }
 
@@ -622,76 +1104,59 @@ code {
   color: var(--text);
 }
 
-/* a state in flight breathes, gently, so a glance tells it apart from one that is settled */
-.state-strip[data-state="connecting"]::before,
-.state-strip[data-state="disconnecting"]::before,
-.state-strip[data-state="retrying"]::before {
-  animation: breathe 1.6s ease-in-out infinite;
+/* The two numbers an operator sets drive by — the transmit level and the last transmission's
+   peak — large enough to read from across the shack or over a remote desktop. */
+.drive-reading {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
 }
 
-@keyframes breathe {
-  50% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--state) 12%, transparent);
-  }
+/* The transmit peak. Full scale is 0 dB, so the closer it gets the less headroom the
+   waveform's peaks have — and those peaks, not its average, are what drive the rig's ALC. */
+#tx-peak.warn {
+  color: var(--warn);
 }
 
-.state-name {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  line-height: 1.25;
+#tx-peak.bad {
+  color: var(--status-error);
 }
 
-.state-detail {
+.label-like {
+  min-width: 96px;
   color: var(--text-2);
   font-size: 12.5px;
-  grid-column: 2;
 }
 
-/* ── readings: the number first, the name second, the rest third ── */
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--s3);
-}
-
-.reading {
-  background: var(--surface);
+.test-progress {
+  padding: var(--s2) var(--s3);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: 10px var(--s3) var(--s2);
-  min-width: 0;
+  background: var(--surface-2);
 }
 
-.reading .label {
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
+.test-progress p {
+  margin: 2px 0;
 }
 
-.reading .value {
-  font: 500 26px/1.2 var(--numerals);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-  margin-top: 3px;
+.test-step {
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 600;
 }
 
-.reading .sub {
-  margin-top: 1px;
-  min-height: 1.2em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.test-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
 }
 
-/* ── the chart ──────────────────────────────────────────────────── */
+.test-bar-row progress {
+  flex: 1;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+/* ── charts and plots ───────────────────────────────────────────── */
 
 .chart {
   margin: 0;
@@ -700,18 +1165,35 @@ code {
   border-radius: var(--r-md);
   padding: 10px var(--s3) var(--s3);
   overflow-x: auto;
+  min-width: 0;
 }
 
-.chart figcaption {
-  font-size: 10.5px;
+.chart figcaption,
+.plot figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-3);
-  margin-bottom: var(--s2);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  min-width: 0;
 }
 
-/* the SNR/Speed switch above the first chart, styled like the figcaption it replaces */
+.plot-meta {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* the Speed/SNR switch above the first chart, styled like the figcaption it replaces */
 .chart-tabs {
   display: flex;
   gap: 4px;
@@ -719,8 +1201,9 @@ code {
 }
 
 .chart-tab {
-  padding: 2px 10px;
-  font-size: 10.5px;
+  min-height: 22px;
+  padding: 0 10px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -728,12 +1211,12 @@ code {
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
-  cursor: pointer;
-  min-width: 0;
 }
 
-.chart-tab:hover {
+.chart-tab:hover:not(:disabled) {
   color: var(--text-2);
+  background: transparent;
+  border-color: transparent;
 }
 
 .chart-tab[aria-selected="true"] {
@@ -754,18 +1237,24 @@ canvas {
 .charts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--s3);
+  gap: 10px;
 }
 
-/* the diagnostics scopes: the constellation is square, the two spectra stack beside it */
-.scopes {
+/* ── the signal-analysis card: constellation, spectrum, waterfall ── */
+
+.plot {
+  margin: 0;
+  min-width: 0;
+}
+
+.signal-body {
   display: grid;
-  grid-template-columns: minmax(200px, 264px) 1fr;
+  grid-template-columns: minmax(170px, 250px) minmax(0, 1fr);
   gap: var(--s3);
   align-items: start;
 }
 
-.scope-stack {
+.plot-stack {
   display: flex;
   flex-direction: column;
   gap: var(--s3);
@@ -778,57 +1267,200 @@ canvas {
   max-width: 100%;
 }
 
-#chart-spectrum,
-#chart-waterfall {
+.plot-spectrum {
   height: 110px;
 }
 
-/* the waterfall's controls, as a waterfall has them: floor, gain, speed, palette */
-.scope-controls {
+.plot-waterfall {
+  height: 150px;
+}
+
+/* The waterfall's controls, in one row under the plots: floor, gain, speed, palette. */
+.scope-toolbar {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s2) var(--s3);
   align-items: center;
-  margin-top: var(--s2);
-  font-size: 11.5px;
+  gap: 6px var(--s4);
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
   color: var(--text-3);
 }
 
-.scope-controls label {
+.scope-toolbar label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: var(--fs-sm);
 }
 
-.scope-controls input[type="range"] {
-  width: 88px;
-  accent-color: var(--accent);
+.scope-toolbar input[type="range"] {
+  flex: none;
+  width: 80px;
 }
 
-.scope-controls select {
-  font-size: 11.5px;
-  padding: 1px 4px;
+.scope-value {
+  min-width: 11ch;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
 }
 
-.scope-controls .numerals {
-  min-width: 5.5em;
+#wf-gain-value {
+  min-width: 5ch;
+}
+
+.signal-away {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
   color: var(--text-2);
 }
 
-.chart figcaption .numerals {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 500;
-  color: var(--text-2);
-  margin-left: var(--s2);
+/* The card undocked: signal.html fills its window with it, the waterfall taking the height. */
+body.signal-window {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
-h2.inline {
+body.signal-window .head-right {
+  gap: var(--s3);
+}
+
+.signal-main {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+}
+
+.signal-window .signal-body {
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(180px, 34%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.signal-window .plot-stack {
+  height: 100%;
+  min-height: 0;
+}
+
+.signal-window .plot-grow {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.signal-window .plot-waterfall {
+  flex: 1 1 0;
+  min-height: 60px;
+  height: 0;
+}
+
+.signal-window .plot-spectrum {
+  height: 130px;
+}
+
+.signal-window #chart-constellation {
+  width: min(100%, calc(100vh - 170px));
+}
+
+/* ── the rules card ─────────────────────────────────────────────── */
+
+.reg-card-summary {
   margin: 0;
+  color: var(--text);
 }
 
-.push-right {
-  margin-left: auto;
+.reg-card-summary:empty {
+  display: none;
+}
+
+.reg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s2) var(--s5);
+}
+
+.reg-safe td,
+.reg-safe th {
+  white-space: nowrap;
+}
+
+/* ── tables ─────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+caption,
+thead th {
+  text-align: left;
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+caption {
+  padding: 10px var(--s3) 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+table:has(caption) {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+th,
+td {
+  padding: 5px var(--s3);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+thead th {
+  border-top: 0;
+  padding-top: var(--s2);
+  padding-bottom: 6px;
+  background: var(--surface-2);
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-family: var(--numerals);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+tbody tr {
+  transition: background var(--t-fast);
+}
+
+tbody tr:hover {
+  background: var(--surface-2);
 }
 
 .table-scroll {
@@ -840,6 +1472,7 @@ h2.inline {
 
 .table-scroll table {
   margin: 0;
+  border: 0;
 }
 
 .empty {
@@ -913,8 +1546,9 @@ button.sort:focus-visible {
 
 .heard button.small,
 .frames button.small {
-  padding: 2px 8px;
-  font-size: 11px;
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
 }
 
 /* activity, colour-coded like the lamps and named in words as well */
@@ -922,7 +1556,7 @@ button.sort:focus-visible {
   display: inline-block;
   padding: 1px 7px;
   border-radius: 9px;
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -955,14 +1589,20 @@ button.sort:focus-visible {
   color: var(--status-error);
 }
 
+.modes tbody tr[data-usable="false"] {
+  color: var(--text-3);
+}
+
+/* ── the Session tab ────────────────────────────────────────────── */
+
 /* The radio's dial, large, at the head of the Session tab: the one number an operator
-   checks before every call, so it is not buried in a row of controls. */
+   checks before every call, so it is not buried in a row of controls — with the rules'
+   verdict on it right beside it. */
 .dial-hero {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: var(--s2) var(--s3);
   flex-wrap: wrap;
-  margin-bottom: 6px;
 }
 
 .dial-hero-label {
@@ -971,185 +1611,41 @@ button.sort:focus-visible {
 }
 
 .dial-hero-hz {
-  font-size: 28px;
+  font-size: var(--fs-3xl);
   font-weight: 600;
   line-height: 1.1;
   color: var(--text);
 }
 
-/* The transmit peak. Full scale is 0 dB, so the closer it gets the less headroom the
-   waveform's peaks have — and those peaks, not its average, are what drive the rig's ALC. */
-#tx-peak.warn {
-  color: var(--warn);
-}
-
-#tx-peak.bad {
-  color: var(--status-error);
-}
-
-/* ── compact: the state strip and four readings, nothing else ────── */
-
-/* the page is as tall as what it shows, so the shell can size its window to it */
-body.compact {
-  min-height: 0;
-}
-
-body.compact .tabs,
-body.compact footer.bar,
-body.compact #readings-channel,
-body.compact .charts,
-body.compact .counters,
-body.compact .panel:not(#panel-status) {
-  display: none;
-}
-
-body.compact main {
-  padding: var(--s3) var(--s3);
-}
-
-body.compact #panel-status {
-  gap: var(--s2);
-}
-
-body.compact .state-strip {
+.declared-row {
   padding: var(--s2) var(--s3);
-}
-
-body.compact .state-name {
-  font-size: 15px;
-}
-
-body.compact #readings-link {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s2);
-}
-
-body.compact .reading {
-  padding: 6px 10px 6px;
-}
-
-body.compact .reading .value {
-  font-size: 20px;
-}
-
-body.compact .reading .sub {
-  display: none;
-}
-
-@media (max-width: 560px) {
-  body.compact #readings-link {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-/* ── tables ─────────────────────────────────────────────────────── */
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 40%, var(--border));
   border-radius: var(--r-md);
-  overflow: hidden;
+  background: color-mix(in srgb, var(--status-warning) 6%, var(--surface));
 }
 
-caption,
-thead th {
-  text-align: left;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
-  font-weight: 600;
-}
-
-caption {
-  padding: 10px var(--s3) 6px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: var(--r-md) var(--r-md) 0 0;
-}
-
-table:has(caption) {
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
-th,
-td {
-  padding: 5px var(--s3);
-  border-top: 1px solid var(--border);
-  font-size: 13px;
-}
-
-thead th {
-  border-top: 0;
-  padding-top: var(--s2);
-  padding-bottom: 6px;
-  background: var(--surface-2);
-}
-
-td.num,
-th.num {
-  text-align: right;
-  font-family: var(--numerals);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-tbody tr {
-  transition: background var(--t-fast);
-}
-
-tbody tr:hover {
-  background: var(--surface-2);
-}
-
-.counters h2 {
-  margin: 0 0 var(--s2);
-}
-
-/* a section heading with a small action to its right (Counters reset, Received copy) */
-.section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s3);
-}
-
-.section-head h2 {
-  margin: 0;
-}
-
-.head-actions {
-  display: flex;
+/* a checkbox with its words, beside the buttons it goes with (Chime, Enter sends, Sound) */
+.check {
+  display: inline-flex;
   align-items: center;
-  gap: var(--s2);
-}
-
-.counters .section-head {
-  margin-bottom: var(--s2);
-}
-
-button.small {
-  padding: 2px 10px;
-  font-size: 11px;
-  min-width: 0;
+  gap: 0.45em;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
 }
 
 /* a filesystem path, shown to be read, copied and opened */
 .path-row {
   display: flex;
   align-items: center;
-  gap: var(--s2) 8px;
+  gap: var(--s2);
   flex-wrap: wrap;
   min-width: 0;
 }
 
 .path {
   font-family: var(--numerals);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   word-break: break-all;
   user-select: text;
@@ -1160,6 +1656,8 @@ button.small {
 .session-facts {
   margin-top: 2px;
 }
+
+/* ── counters ───────────────────────────────────────────────────── */
 
 .pills {
   display: grid;
@@ -1172,7 +1670,7 @@ button.small {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--s2);
-  padding: 5px 10px;
+  padding: 4px 10px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -1180,7 +1678,7 @@ button.small {
 }
 
 .pill .k {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1202,8 +1700,27 @@ button.small {
   color: var(--status-error);
 }
 
-.modes tbody tr[data-usable="false"] {
-  color: var(--text-3);
+/* a section heading with a small action to its right (Counters reset, Received copy) */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-height: var(--control-h-sm);
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.counters .section-head {
+  margin-bottom: var(--s2);
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
 }
 
 /* ── the setup wizard ───────────────────────────────────────────── */
@@ -1218,29 +1735,8 @@ button.small {
   counter-reset: step;
 }
 
-.step,
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--s3) var(--s4) var(--s3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-
-.card h3 {
-  margin: 0 0 2px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
 .step h3 {
   margin: 0 0 2px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
   display: flex;
   align-items: center;
   gap: var(--s2);
@@ -1263,6 +1759,11 @@ button.small {
   content: "✓";
   background: var(--status-link);
   border-color: transparent;
+}
+
+/* a step that still needs something before the station may transmit */
+.step[data-needs="true"] {
+  border-color: color-mix(in srgb, var(--status-warning) 55%, var(--border));
 }
 
 /* A level meter: the fill is the RMS, the tick the peak. Drawn in the semantic colours
@@ -1308,6 +1809,99 @@ button.small {
   transition: left var(--t-fast) linear;
 }
 
+/* ── the profile bar at the top of Setup ── */
+
+.profile-bar {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.profile-bar > .row > label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+#profile-select {
+  min-width: 180px;
+}
+
+/* unsaved changes: the name carries a star, and the field says so in colour */
+#profile-select[data-dirty="true"] {
+  border-color: var(--status-warning);
+}
+
+#profile-label[data-dirty="true"]::after {
+  content: " *";
+  color: var(--status-warning);
+}
+
+#profile-note[data-state="warn"] {
+  color: var(--status-warning);
+}
+
+#profile-note[data-state="error"] {
+  color: var(--status-error);
+}
+
+/* the less-used actions, behind one control that opens a small list */
+details.menu {
+  position: relative;
+}
+
+details.menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 0 13px;
+  font-weight: 500;
+  user-select: none;
+}
+
+details.menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.menu > summary:hover {
+  background: color-mix(in srgb, var(--surface-3) 85%, var(--text) 15%);
+  border-color: var(--text-3);
+}
+
+details.menu[open] > summary {
+  border-color: var(--accent);
+}
+
+details.menu > .menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+details.menu > .menu-list > button {
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+}
+
+details.menu > .menu-list > button:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: transparent;
+}
+
 /* ── controls ───────────────────────────────────────────────────── */
 
 .row {
@@ -1327,6 +1921,11 @@ button.small {
   font-size: 12.5px;
 }
 
+.row > label.label-inline,
+.row > label.check {
+  min-width: 0;
+}
+
 label.check {
   display: inline-flex;
   align-items: center;
@@ -1336,6 +1935,21 @@ label.check {
   cursor: pointer;
 }
 
+/* a bar of controls: filters and a reading at the start, actions at the end */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  flex-wrap: wrap;
+}
+
+.toolbar-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
 input[type="text"],
 select,
 textarea {
@@ -1343,10 +1957,15 @@ textarea {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  padding: 6px 9px;
+  padding: 4px 9px;
   font: inherit;
   min-width: 0;
   transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+input[type="text"],
+select {
+  min-height: var(--control-h);
 }
 
 input[type="text"]:hover,
@@ -1361,6 +1980,12 @@ textarea:focus {
   border-color: var(--accent);
   outline: none;
   box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 input::placeholder,
@@ -1383,6 +2008,19 @@ select {
   background-repeat: no-repeat;
   background-position: right 10px center;
   cursor: pointer;
+}
+
+/* a select that holds a short word — a sideband, a speed — and should not stretch */
+select.narrow,
+select.compact {
+  flex: 0 0 auto;
+}
+
+select.compact {
+  min-height: var(--control-h-sm);
+  padding: 0 24px 0 8px;
+  font-size: var(--fs-sm);
+  background-position: right 8px center;
 }
 
 select option {
@@ -1410,15 +2048,6 @@ input[type="range"] {
   font-family: var(--numerals);
   font-variant-numeric: tabular-nums;
   min-width: 6ch;
-}
-
-/* The two numbers an operator sets drive by — the transmit level and the last transmission's
-   peak — large enough to read from across the shack or over a remote desktop. They were
-   secondary text, and an operator setting drive on the air never saw them. */
-.drive-reading {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: var(--text);
 }
 
 input.port {
@@ -1464,35 +2093,22 @@ textarea {
   line-height: 1.5;
 }
 
-/* what goes out and what came in, side by side and the same size */
-.split textarea,
-.split .received {
-  height: 15em;
-  min-height: 15em;
-  max-height: 15em;
-  margin: 0;
-}
-
-.split > div {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-  min-width: 0;
-}
-
-.split h2 {
-  margin-top: 0;
-}
-
 button {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--control-h);
   border: 1px solid var(--border-strong);
   background: var(--surface-3);
   color: var(--text);
   border-radius: var(--r-sm);
-  padding: 6px 13px;
+  padding: 0 13px;
   font: inherit;
   font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background var(--t-fast),
@@ -1513,6 +2129,12 @@ button:active:not(:disabled) {
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+button.small {
+  min-height: var(--control-h-sm);
+  padding: 0 9px;
+  font-size: var(--fs-sm);
 }
 
 button.primary {
@@ -1536,101 +2158,34 @@ button.danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--status-error) 14%, var(--surface-3));
 }
 
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-3);
+  min-height: var(--control-h-sm);
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+button.ghost[aria-pressed="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* a toggle that is on — the tune tone playing, a recording running */
-button[aria-pressed="true"] {
+button[aria-pressed="true"]:not(.ghost):not(.chip) {
   background: color-mix(in srgb, var(--status-tx) 18%, var(--surface-3));
   border-color: var(--status-tx);
   color: var(--text);
-}
-
-/* ── the profile bar at the top of Setup ── */
-
-.profile-bar {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-
-.profile-bar > .row > label {
-  font-weight: 600;
-  color: var(--text);
-}
-
-#profile-select {
-  min-width: 180px;
-}
-
-/* unsaved changes: the name carries a star, and the field says so in colour */
-#profile-select[data-dirty="true"] {
-  border-color: var(--status-warning);
-}
-
-#profile-label[data-dirty="true"]::after {
-  content: " *";
-  color: var(--status-warning);
-}
-
-/* the less-used actions, behind one control that opens a small list */
-details.menu {
-  position: relative;
-}
-
-details.menu > summary {
-  list-style: none;
-  cursor: pointer;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-3);
-  color: var(--text);
-  border-radius: var(--r-sm);
-  padding: 6px 13px;
-  font-weight: 500;
-  user-select: none;
-}
-
-details.menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-details.menu > summary:hover {
-  background: color-mix(in srgb, var(--surface-3) 85%, var(--text) 15%);
-  border-color: var(--text-3);
-}
-
-details.menu[open] > summary {
-  border-color: var(--accent);
-}
-
-details.menu > .menu-list {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 5;
-  min-width: 170px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
-}
-
-details.menu > .menu-list > button {
-  text-align: left;
-  border-color: transparent;
-  background: transparent;
-}
-
-details.menu > .menu-list > button:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: transparent;
-}
-
-#profile-note[data-state="warn"] {
-  color: var(--status-warning);
-}
-
-#profile-note[data-state="error"] {
-  color: var(--status-error);
 }
 
 /* ── text panes: received text, the log, the running configuration ── */
@@ -1640,6 +2195,26 @@ details.menu > .menu-list > button:hover:not(:disabled) {
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: var(--s3);
   align-items: start;
+}
+
+.split > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.split h2 {
+  margin-top: 0;
+}
+
+/* what goes out and what came in, side by side and the same size */
+.split textarea,
+.split .received {
+  height: 15em;
+  min-height: 15em;
+  max-height: 15em;
+  margin: 0;
 }
 
 .received,
@@ -1798,12 +2373,6 @@ details.menu > .menu-list > button:hover:not(:disabled) {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .composer-input[data-empty="true"]:not(:focus-within)::before {
-    animation: none;
-  }
-}
-
 /* the honest placeholder for payload that was not valid text */
 .rx-drop {
   color: var(--text-3);
@@ -1833,41 +2402,188 @@ details.menu > .menu-list > button:hover:not(:disabled) {
   color: var(--text-2);
 }
 
-.log-line .when {
-  color: var(--text-3);
+/* The log: one entry a row — the time, what it came from, and the words, which wrap under
+ * themselves rather than under the time — with problems in their colour and a rule between
+ * entries, so a hundred lines can be scanned rather than read. */
+.log {
+  background: var(--plot-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  height: clamp(320px, calc(100vh - 300px), 1000px);
+  overflow-y: auto;
+  font: 12.5px/1.5 var(--numerals);
+  user-select: text;
+  -webkit-user-select: text;
 }
 
-.log-line.bad {
+.log-entry {
+  display: grid;
+  grid-template-columns: 8.5ch 9ch minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px var(--s3);
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.log-entry:first-child {
+  border-top: 0;
+}
+
+.log-entry:nth-child(even) {
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+
+.log-entry .when {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.log-tag {
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  background: var(--surface-3);
+}
+
+.log-text {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-entry[data-level="error"] {
+  box-shadow: inset 3px 0 0 var(--status-error);
+}
+
+.log-entry[data-level="error"] .log-text,
+.log-entry[data-level="error"] .log-tag {
   color: var(--status-error);
 }
 
-/* ── help ───────────────────────────────────────────────────────── */
+.log-entry[data-level="warn"] {
+  box-shadow: inset 3px 0 0 var(--status-warning);
+}
+
+.log-entry[data-level="warn"] .log-text {
+  color: var(--status-warning);
+}
+
+.log-entry[data-tag="rules"] .log-tag {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.log-entry[data-tag="state"] .log-tag {
+  color: var(--status-link);
+}
+
+/* ── definition lists: a name and its value ──────────────────────── */
 
 .kv {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 4px var(--s4);
   align-items: baseline;
   font-size: 12.5px;
+  margin: 0;
 }
 
-.kv > span:nth-child(odd) {
+.kv > span:nth-child(odd),
+.kv > dt {
   color: var(--text-2);
 }
 
-.kv > :nth-child(even) {
+.kv > dd {
+  margin: 0;
+}
+
+.kv > :nth-child(even),
+.kv > dd {
   min-width: 0;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
-.kv a {
-  color: var(--accent);
-  text-decoration: none;
-  word-break: break-all;
+/* ── help and about ──────────────────────────────────────────────── */
+
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
 }
 
-.kv a:hover {
-  text-decoration: underline;
+.about-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  flex: none;
+}
+
+.about-title {
+  font-size: var(--fs-xl);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.about-tagline {
+  margin: 2px 0 0;
+  max-width: 72ch;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3) var(--s5);
+  align-items: start;
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+}
+
+.about-update {
+  --tone: var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+
+.about-update[data-state="available"],
+.about-update[data-state="complete"] {
+  --tone: var(--accent);
+}
+
+.about-update[data-state="busy"] {
+  --tone: var(--status-rx);
+}
+
+.about-update[data-state="current"] {
+  --tone: var(--status-link);
+}
+
+.about-update[data-state="error"] {
+  --tone: var(--status-error);
+}
+
+.about-status {
+  margin: 0;
+  font-weight: 600;
+}
+
+.about-paths {
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
 }
 
 .help-steps {
@@ -1908,6 +2624,13 @@ footer.bar {
   justify-content: space-between;
   padding-top: 6px;
   padding-bottom: 6px;
+}
+
+footer.bar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── the splash: the mark, once, and then the instrument ────────── */
@@ -1954,27 +2677,160 @@ footer.bar {
   background: var(--text-3);
 }
 
-/* ── small screens ──────────────────────────────────────────────── */
+/* ── compact: the state and four readings, deliberately laid out ─── */
+/*
+ * The desktop shell sizes the window to the page (up to 520 px wide). The header keeps the
+ * mark, the lamps, the rules' verdict and the callsign — the dial and the brand's words go —
+ * and wraps as two deliberate rows when it must; the four readings sit in one row where they
+ * fit and two by two where they do not, their numbers scaling with the card. */
+
+body.compact {
+  min-height: 0;
+}
+
+body.compact .tabs,
+body.compact footer.bar,
+body.compact #readings-channel,
+body.compact .charts,
+body.compact .counters,
+body.compact .panel:not(#panel-status),
+body.compact .brand-name,
+body.compact .brand-wave,
+body.compact #dial,
+body.compact #rx-passband-note {
+  display: none;
+}
+
+body.compact header.bar {
+  gap: 6px var(--s2);
+  padding: 6px var(--s3);
+  min-height: 0;
+}
+
+body.compact .indicators {
+  gap: 4px;
+}
+
+body.compact .lamp {
+  padding: 0 7px 0 6px;
+  gap: 5px;
+}
+
+body.compact .head-right {
+  gap: 6px;
+}
+
+body.compact main {
+  padding: var(--s2) var(--s3) var(--s3);
+}
+
+body.compact #panel-status {
+  gap: var(--s2);
+}
+
+body.compact .session-banner {
+  font-size: var(--fs-md);
+  padding: 6px var(--s3);
+  margin-bottom: var(--s2);
+  border-width: 1px;
+}
+
+body.compact .note.warn,
+body.compact .reg-banner {
+  font-size: var(--fs-sm);
+  margin-top: 0;
+  margin-bottom: var(--s2);
+}
+
+body.compact .state-strip {
+  padding: var(--s2) var(--s3);
+}
+
+body.compact .state-name {
+  font-size: var(--fs-lg);
+}
+
+body.compact .state-detail {
+  font-size: var(--fs-sm);
+}
+
+body.compact #readings-link {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+body.compact .reading {
+  padding: 6px var(--s2);
+}
+
+body.compact .reading .value {
+  font-size: clamp(14px, 16cqi, 20px);
+}
+
+body.compact .reading .sub {
+  display: none;
+}
+
+@media (max-width: 470px) {
+  body.compact #readings-link {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── narrower windows ───────────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  .drive-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .about-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 
 @media (max-width: 640px) {
   main {
     padding: var(--s3) var(--s3) var(--s4);
   }
 
+  .bar {
+    padding-left: var(--s3);
+    padding-right: var(--s3);
+  }
+
   .brand-wave {
     display: none;
   }
 
-  .reading .value {
-    font-size: 22px;
-  }
-
-  .scopes {
-    grid-template-columns: 1fr;
+  .signal-body {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   #chart-constellation {
     max-width: 264px;
+  }
+
+  .disclosure-actions {
+    margin-left: 0;
+  }
+
+  .log-entry {
+    grid-template-columns: 8.5ch minmax(0, 1fr);
+  }
+
+  .log-entry .log-tag {
+    display: none;
+  }
+
+  .row > label {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .row > label.check,
+  .row > label.label-inline {
+    flex-basis: auto;
   }
 }
 
