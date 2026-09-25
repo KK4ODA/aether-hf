@@ -251,6 +251,7 @@ struct TxRecord {
     reencoded: usize,
 }
 
+#[derive(Debug, Clone)]
 struct RxRecord {
     slot: usize,
     mode: usize,
@@ -258,7 +259,21 @@ struct RxRecord {
     payload: Option<Vec<u8>>,
     /// Sequence number if decoded, else the inferred guess (which may be absent).
     seq: Option<u8>,
+    /// The redundancy version it was sent at.
+    rv: u8,
+    /// The PHY trusts its measurements (`SoftFrame::trusted`).
+    trusted: bool,
+    /// It was combined with an earlier transmission of its block: a failure after that is a
+    /// failure of both.
+    combined: bool,
 }
+
+/// The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
+/// them, RV 3 wraps round to them): a frame at RV 1 or 2 is mostly parity and, at the rates
+/// this modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path,
+/// 2026-09-25, against 75 % at RV 0 — which is why a retransmission is combined with what came
+/// before (ADR-0020).
+const SELF_DECODABLE_RVS: [u8; 2] = [0, 3];
 
 #[derive(Debug, Clone)]
 struct AckSnapshot {
@@ -400,6 +415,9 @@ pub struct LinkEngine {
     burst_t0: Option<f64>,
     ack_history: Vec<AckSnapshot>,
     ack_counter: u8,
+    /// The fastest rung this station has recommended to the sender in this session: a burst
+    /// faster than any of them is the sender's choice (ADR-0020).
+    asked: Option<usize>,
     break_requested: bool,
     peer_capabilities: u8,
 }
@@ -488,6 +506,7 @@ impl LinkEngine {
             burst_t0: None,
             ack_history: Vec::new(),
             ack_counter: 0,
+            asked: None,
             break_requested: false,
             peer_capabilities: 0,
         }
@@ -1731,6 +1750,9 @@ impl LinkEngine {
             snr_db: frame.snr_db(),
             payload: None,
             seq: None,
+            rv: frame.rv(),
+            trusted: frame.trusted(),
+            combined: false,
         };
         self.decode_record(frame, &mut record);
         self.burst.push(record);
@@ -1760,6 +1782,7 @@ impl LinkEngine {
         if let Some(index) = self.harq.iter().position(|(seq, _, _, _)| *seq == guess) {
             let previous = self.harq[index].1.clone();
             let combines = self.harq[index].2;
+            record.combined = true;
             let (combined, merged) = frame.decode(Some(&previous));
             if let Some(combined) = combined {
                 self.stats.harq_rescues += 1;
@@ -1907,23 +1930,59 @@ impl LinkEngine {
             return;
         }
         let ok = self.burst.iter().filter(|r| r.payload.is_some()).count();
-        let failed = self.burst.len() - ok;
-        let snr = if self.burst.is_empty() {
-            None
-        } else {
-            Some(self.burst.iter().map(|r| r.snr_db).sum::<f64>() / self.burst.len() as f64)
-        };
+        // A failure is news of the path when the frame could have decoded (ADR-0020): a real
+        // frame (the PHY trusts it), at a redundancy version that decodes on its own or
+        // combined with an earlier transmission of its block. A retransmission at RV 1 or 2
+        // with nothing to combine with does not decode at any SNR — and that is how the
+        // retransmission of a frame this station already has arrives, after an
+        // acknowledgement the sender missed: each lost one had taught the margin 3 dB.
+        let failed = self
+            .burst
+            .iter()
+            .filter(|r| {
+                r.payload.is_none()
+                    && r.trusted
+                    && (SELF_DECODABLE_RVS.contains(&r.rv) || r.combined)
+            })
+            .count();
+        // The SNR of the frames that were really there: what decoded, and what the PHY
+        // trusts — a real frame that failed says how the path was. A detection just over its
+        // threshold that did not decode is as likely noise: on ND1J's 40 m path one read
+        // -11 dB between frames decoding at +5 to +8, and it took the recommendation from
+        // rung 4 to rung 1 (2026-09-25). A burst with none reports no SNR.
+        let measured: Vec<f64> = self
+            .burst
+            .iter()
+            .filter(|r| r.payload.is_some() || r.trusted)
+            .map(|r| r.snr_db)
+            .collect();
+        let snr =
+            (!measured.is_empty()).then(|| measured.iter().sum::<f64>() / measured.len() as f64);
         // the mode the burst was mostly sent at, which is what the rate controller judges
         let burst_mode = self
             .burst
             .iter()
             .map(|r| r.mode)
             .max_by_key(|&mode| self.burst.iter().filter(|r| r.mode == mode).count());
+        let slowest = self.burst.iter().map(|r| r.mode).min();
         // HARQ buffers were stored per frame as the frames arrived, so only the accumulator
         // needs clearing here
         self.burst.clear();
         self.burst_t0 = None;
-        self.rate.observe(snr, ok, failed, burst_mode);
+        if failed > 0
+            && let (Some(slowest), Some(asked)) = (slowest, self.asked)
+            && slowest > asked
+        {
+            // every frame faster than any rung this station has asked for: the sender's
+            // choice, and its failure no news — the Test's ladder, pinned past what the path
+            // carries, held the margin at its ceiling for the file that followed it. Anything
+            // slower is judged as usual: a retransmission keeps the rung it was first sent
+            // at, so after a step down the sender still sends rungs this station asked for
+            // once, and their failures are the path's.
+            self.rate.observe_snr(snr);
+        } else {
+            self.rate.observe(snr, ok, failed, burst_mode);
+        }
 
         if self.disc_requested {
             self.send_disc();
@@ -1958,8 +2017,19 @@ impl LinkEngine {
         self.ack_counter = (self.ack_counter + 1) % 8;
         self.stats.acks_sent += 1;
         let base = self.rx_base;
-        let recommended = self.rate.recommend() as u8;
-        let frame = self.control(ControlKind::Ack, flags, base, bitmap, snr, recommended);
+        let recommended = self.rate.recommend();
+        self.asked = Some(
+            self.asked
+                .map_or(recommended, |asked| asked.max(recommended)),
+        );
+        let frame = self.control(
+            ControlKind::Ack,
+            flags,
+            base,
+            bitmap,
+            snr,
+            recommended as u8,
+        );
         self.transmit(vec![frame]);
     }
 
@@ -2261,6 +2331,7 @@ impl LinkEngine {
         self.burst_t0 = None;
         self.ack_history.clear();
         self.ack_counter = 0;
+        self.asked = None;
         self.break_requested = false;
         self.peer_capabilities = 0;
         self.rate = rate_controller_for(&self.timing);
@@ -2338,6 +2409,122 @@ mod tests {
             },
             1,
         )
+    }
+
+    /// An engine receiving in a session, its controller seeded at `seed_db`.
+    fn receiving(seed_db: f64) -> LinkEngine {
+        let mut e = engine(wide());
+        e.state = State::Connected;
+        e.role = Role::Irs;
+        e.session = 7;
+        e.rate.seed(seed_db, false);
+        e
+    }
+
+    fn heard(mode: usize, snr_db: f64, decoded: bool, trusted: bool, rv: u8) -> RxRecord {
+        RxRecord {
+            slot: 0,
+            mode,
+            snr_db,
+            payload: decoded.then(|| vec![0x55]),
+            seq: None,
+            rv,
+            trusted,
+            combined: false,
+        }
+    }
+
+    /// The SNR the last acknowledgement the engine sent carried.
+    fn acknowledged_snr(e: &mut LinkEngine) -> Option<f64> {
+        let frames = e
+            .actions
+            .iter()
+            .rev()
+            .find_map(|a| match a {
+                Action::Transmit { frames, .. } => Some(frames.clone()),
+                _ => None,
+            })
+            .expect("an acknowledgement");
+        ControlFrame::decode(&frames[0].payload)
+            .expect("a control frame")
+            .snr_db
+    }
+
+    #[test]
+    fn a_burst_reports_the_snr_of_the_frames_that_were_there() {
+        // ND1J's 40 m path, 2026-09-25 (ADR-0020): failed frames barely over their threshold
+        // read -11 dB between frames decoding at +5 to +8, and the burst's mean took the
+        // recommendation from rung 4 to rung 1
+        let mut e = receiving(6.0);
+        e.burst = vec![
+            heard(8, 6.0, true, true, 0),
+            heard(8, -12.0, false, false, 0),
+            heard(8, 2.0, false, true, 0),
+        ];
+        e.send_ack();
+        assert_eq!(acknowledged_snr(&mut e), Some(4.0));
+        // nothing that was really there: no SNR at all, and the reading stands
+        let reading = e.rate.snr_db();
+        e.burst = vec![heard(8, -12.0, false, false, 0); 3];
+        e.send_ack();
+        assert_eq!(acknowledged_snr(&mut e), None);
+        assert_eq!(e.rate.snr_db(), reading);
+    }
+
+    #[test]
+    fn a_burst_faster_than_this_station_ever_asked_for_is_the_senders_choice() {
+        // the Test's ladder pins rungs past what the path carries: their failures are no news
+        // to a controller that never asked for them
+        let mut e = receiving(0.0);
+        let asked = e.rate.recommend();
+        e.asked = Some(asked);
+        let before = (e.rate.margin_db(), e.rate.recommend());
+        e.burst = vec![heard(asked + 3, 1.0, false, true, 0); 4];
+        e.send_ack();
+        assert_eq!((e.rate.margin_db(), e.rate.recommend()), before);
+        let reading = e.rate.snr_db().expect("a reading");
+        assert!(
+            (reading - 0.3).abs() < 1e-9,
+            "what it measured still counts: {reading}"
+        );
+        // a rung it asked for, failing: the path's news
+        e.burst = vec![heard(asked, 1.0, false, true, 0); 4];
+        e.send_ack();
+        assert!(e.rate.margin_db() > before.0 || e.rate.recommend() < before.1);
+    }
+
+    #[test]
+    fn a_retransmission_that_could_not_decode_alone_is_no_news() {
+        // RV 1 and 2 are mostly parity (6 and 10 % alone on ND1J's path, 75 % at RV 0), and
+        // alone is how the retransmission of a frame this station already has arrives, after
+        // an acknowledgement the sender missed
+        let mut e = receiving(6.0);
+        let asked = e.rate.recommend();
+        e.asked = Some(asked);
+        let before = (e.rate.margin_db(), e.rate.recommend());
+        e.burst = [1u8, 2, 1, 2]
+            .iter()
+            .map(|&rv| heard(asked, 6.0, false, true, rv))
+            .collect();
+        e.send_ack();
+        assert_eq!((e.rate.margin_db(), e.rate.recommend()), before);
+        let mut combined = heard(asked, 6.0, false, true, 1);
+        combined.combined = true;
+        for telling in [
+            combined,
+            heard(asked, 6.0, false, true, 3),
+            heard(asked, 6.0, false, true, 0),
+        ] {
+            let mut e = receiving(6.0);
+            e.asked = Some(asked);
+            e.burst = vec![telling.clone()];
+            e.send_ack();
+            assert_ne!(
+                (e.rate.margin_db(), e.rate.recommend()),
+                before,
+                "{telling:?}"
+            );
+        }
     }
 
     #[test]

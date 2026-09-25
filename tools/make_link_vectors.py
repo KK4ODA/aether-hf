@@ -216,12 +216,20 @@ def rate_trace_cases() -> list[dict]:  # type: ignore[type-arg]
         "collapse": [(18.0, 6, 0, None)] * 12 + [(4.0, 2, 4, 10)] * 12,
         "boundary": [(9.0, 6, 0, None)] * 3 + [(9.0, 3, 3, 8)] * 3 + [(9.0, 6, 0, 6)] * 12,
         "targeted_widen": [(12.0, 0, 4, 4)] * 3 + [(12.0, 6, 0, 4)] * 9,
+        # ADR-0020: bursts the sender chose, faster than asked, feed only their SNR
+        "senders_choice": [(10.0, 6, 0, None)] * 4
+        + [(6.0, 0, 4, None, True)] * 3
+        + [(None, 0, 3, None, True)]
+        + [(10.0, 6, 0, None)] * 4,
     }
     for name, observations in scenarios.items():
         rc = RateController()
         track = []
-        for snr, ok, failed, mode in observations:
-            rc.observe(snr, ok, failed, mode)
+        for snr, ok, failed, mode, *snr_only in observations:
+            if snr_only:
+                rc.observe_snr(snr)
+            else:
+                rc.observe(snr, ok, failed, mode)
             track.append(
                 {
                     "recommend": int(rc.recommend()),
@@ -233,8 +241,14 @@ def rate_trace_cases() -> list[dict]:  # type: ignore[type-arg]
             {
                 "name": name,
                 "observations": [
-                    {"snr_db": snr, "ok": ok, "failed": failed, "mode": mode}
-                    for snr, ok, failed, mode in observations
+                    {
+                        "snr_db": snr,
+                        "ok": ok,
+                        "failed": failed,
+                        "mode": mode,
+                        "snr_only": bool(only),
+                    }
+                    for snr, ok, failed, mode, *only in observations
                 ],
                 "track": track,
             }

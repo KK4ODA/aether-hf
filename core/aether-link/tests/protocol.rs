@@ -1010,6 +1010,36 @@ fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
 }
 
 #[test]
+fn the_tests_ladder_does_not_teach_the_receiver_a_margin() {
+    // ADR-0020: a session settles, the sender pins the fastest rung for a while — far past
+    // the path, every frame failing until it is re-encoded — and unpins; the receiving
+    // station's learned margin is no wider for it (on ND1J's test it had been held at its
+    // ceiling for the whole file that followed)
+    let t = timing(false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let top = t.data_capacity.len() - 1;
+    let mut sim = TwoStationSim::new(a, b, 6.0, 11);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(&[0u8; 400]);
+    sim.run(120.0, 1e9);
+    assert_eq!(sim.engine(1).state(), State::Connected);
+    let (_, margin) = sim.engine(1).rate_readings();
+    sim.engine_mut(0)
+        .pin_mode(Some(top), Some(16))
+        .expect("the top mode");
+    sim.engine_mut(0).send(&[0u8; 64]);
+    sim.run(360.0, 1e9);
+    sim.engine_mut(0).pin_mode(None, None).expect("unpinned");
+    let rungs = sim.engine_mut(0).take_ladder();
+    assert!(
+        rungs.iter().any(|r| r.mode == top && r.decoded == 0),
+        "{rungs:?}"
+    );
+    let (_, after) = sim.engine(1).rate_readings();
+    assert!(after <= margin + 1e-9, "{margin} -> {after}");
+}
+
+#[test]
 fn a_narrow_session_at_the_floor_completes_through_the_pipe() {
     use aether_link::sim::control_thresholds_for;
     // at −8 dB on AWGN only the floor decodes — the tone floor since ADR-0013: its data
