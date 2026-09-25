@@ -633,6 +633,16 @@ its head. The log is one entry a row with tags and filters (`log(message, level,
 "panel parses" step checks every `app/ui/*.js` as a module. The rules UI: the header's verdict
 badge and its reasoning panel (`reg-detail`), the Session tab's chip and *Dial is at* row, the
 Setup-needed banner, Setup step 1's rules fields, and the Diagnostics tab's Rules card.
+**The Session tab (redesigned 2026-09-25):** five boxed areas, each titled inside its box in the
+`.card-title` style — the dial (`#op-card`: readout, LEGAL chip, the dial list's `.tool-row`, the
+add-dial and *Dial is at* inset rows), the call (`#call-card`: callsign, two `.btn-group`s,
+Chime, probe/test results and progress), keying and drive, the conversation (`.workspace`: two
+`.pane`s with head and foot strips — it takes the window's spare height through
+`main:has(> #panel-session:not([hidden]))`, and stacks under 900 px), and the recording. Help is a
+small `?` (`details.help-pop`, a popover closed by an outside click or Escape: `wireHelpNotes`);
+utility buttons are `button.quiet`. `#dial-reading` is kept for the script and not shown (the
+readout says it). Headless Chrome over the DevTools protocol (a Node script) is how the panel was
+screenshotted at chosen sizes when the browser pane was hidden.
 
 **The KISS port (ADR-0019, `docs/user/kiss.md`, `host-interfaces.md` §8).** Programs set up for
 VARA HF's KISS port work unchanged: `core/aetherd/src/kiss/` — `framing.rs` (FEND/FESC, partial

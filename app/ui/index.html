@@ -165,98 +165,114 @@
       </section>
 
       <!-- ── session ────────────────────────────────────────────── -->
-      <section id="panel-session" class="panel" role="tabpanel" aria-labelledby="tab-session" hidden>
-        <div class="dial-hero" title="The radio's dial right now, read over CAT or rigctld every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
-          <span class="sub dial-hero-label">Radio dial</span>
-          <span class="numerals dial-hero-hz" id="dial-hero" role="status" aria-live="polite">—</span>
-          <span class="sub" id="dial-hero-sub"></span>
-          <button class="reg-chip" id="dial-hero-reg" data-verdict="unknown" aria-controls="reg-detail" title="What the rules say about transmitting on this dial; click for the reasoning" hidden>
-            <span class="badge" id="dial-hero-reg-badge" data-verdict="unknown" title="The verdict">—</span>
-            <span class="reg-chip-text" id="dial-hero-reg-text" title="The verdict in a sentence"></span>
-          </button>
-        </div>
-        <div class="row">
-          <label for="memory">Dial</label>
-          <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
-          <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT or rigctld">Tune</button>
-          <button id="btn-memory-add" title="Add a frequency to the list, or rename one already there">Add</button>
-          <button id="btn-memory-remove" title="Take the chosen frequency off the list">Remove</button>
-          <span class="sub numerals" id="dial-reading" title="What the radio reads now, over CAT or rigctld" role="status" aria-live="polite"></span>
-        </div>
-        <div class="row" id="memory-form" hidden>
-          <label for="memory-mhz">New dial</label>
-          <input id="memory-mhz" title="Dial frequency in MHz, for example 14.107" type="text" inputmode="decimal" class="mhz" placeholder="14.107" autocomplete="off" aria-label="Dial frequency in MHz" />
-          <span class="sub">MHz</span>
-          <input id="memory-name" title="A name or comment: the band, the net, the friend" type="text" class="prose" placeholder="Name or comment: the band, the net, the friend" aria-label="Name or comment" maxlength="60" />
-          <button id="btn-memory-save" title="Keep it: the list is saved beside the modem's configuration" class="primary">Save</button>
-          <button id="btn-memory-cancel" title="Close without adding">Cancel</button>
-          <span class="sub" id="memory-note" title="What the last edit of the list did" role="status" aria-live="polite"></span>
-        </div>
-        <!-- a radio that cannot report its dial: the operator says where it is, for the rules -->
-        <div class="row declared-row" id="declared-row" title="This radio cannot report its dial, so the rules need you to say where it is: set it here whenever you move the dial" hidden>
-          <label for="declared-dial">Dial is at</label>
-          <input id="declared-dial" title="The radio's dial in MHz, for example 14.105: where the rules place your signal" type="text" inputmode="decimal" class="mhz" placeholder="14.105" autocomplete="off" aria-label="The radio's dial in MHz" />
-          <span class="sub">MHz</span>
-          <button id="btn-declared-set" class="primary" title="Tell the modem the dial is here; it judges every transmission against it until you change it">Set</button>
-          <button id="btn-declared-clear" title="Forget the declared dial: nothing is transmitted until the dial is known again">Clear</button>
-          <span class="sub" id="declared-note" title="What the modem knows about the dial" role="status" aria-live="polite"></span>
-        </div>
-        <details class="hint" id="dial-note" title="How the dial list works">
-          <summary>How the dial list works</summary>
-          <p>
-            The list starts as the frequency plan's proposals and is yours to edit: <strong>Add</strong>
-            keeps a dial with a name (the same dial again renames it), <strong>Remove</strong> drops the
-            chosen one, and it is saved beside the modem's configuration. <strong>Tune</strong> sets the
-            radio to the chosen dial when it is keyed over CAT or <code>rigctld</code>; a serial line or
-            a CM108 interface cannot tune, and the list is still a list. When the radio's own dial
-            matches an entry, the list follows it. A radio that cannot report its dial shows a
-            <strong>Dial is at</strong> field instead: the rules need to know where you are.
-          </p>
-        </details>
-        <div class="row">
-          <label for="remote">Call</label>
-          <input id="remote" title="The other station's callsign, with its SSID if it uses one" type="text" placeholder="KK4XYZ" autocomplete="off" spellcheck="false" />
-          <button id="btn-connect" title="Call the station in Call and start a session" class="primary">Connect</button>
-          <button id="btn-disconnect" title="Send what is queued, then close the session">Disconnect</button>
-          <button id="btn-abort" title="Drop the session at once, sending nothing more" class="danger">Abort</button>
-          <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
-          <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
-          <button id="btn-test" title="Run the field test with the station in Call: probe, message, a burst at every mode, file, recorded; the same button stops it">Test session</button>
-          <label class="check push-right" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
-        </div>
-        <details class="hint" id="session-note" title="What each of the buttons above does">
-          <summary>What the buttons do</summary>
-          <p>
-            <strong>Disconnect</strong> finishes sending what is queued and then closes.
-            <strong>Abort</strong> does not. <strong>Probe</strong> asks the station in
-            Call whether it hears you, and how well, without a session: one frame, one
-            answer, both directions of the path. <strong>Beacon</strong> puts this station's
-            callsign on the air once, addressed to nobody, so anyone listening can report
-            hearing you. <strong>Test session</strong> runs the field test with the station in
-            Call: a probe, a message, a short burst at every mode and a file, all recorded —
-            about five minutes of transmitting, sized to what the path can do, and a sidecar the
-            project can learn from. The same button stops it. The other station only has to be
-            listening; Help says how to contribute the result.
-          </p>
-        </details>
-        <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
-        <p class="note" id="test-result" title="What the test session did last, and how it ended" role="status" aria-live="polite"></p>
-        <div class="test-progress" id="test-progress" title="How far the running test session has got" hidden>
-          <p class="test-step" id="test-step" title="The step the test is at, out of the six it runs, and the time: elapsed, and the most the budget leaves"></p>
-          <div class="test-bar-row">
-            <progress id="test-bar" max="1" value="0" title="How much of this step is done: bytes acknowledged, or rungs tried"></progress>
-            <span class="sub" id="test-bar-label" title="What the bar counts"></span>
+      <section id="panel-session" class="panel session" role="tabpanel" aria-labelledby="tab-session" hidden>
+        <!-- 1. where the station is: the dial, what the rules say of it, the remembered dials -->
+        <section class="card console-card op-card" id="op-card" aria-labelledby="dial-title" title="The radio's dial, what the rules say of transmitting there, and the dials you keep">
+          <div class="op-head">
+            <div class="dial-readout" title="The radio's dial right now, read over CAT or rigctld every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
+              <h2 class="card-title" id="dial-title" title="The radio's dial">Radio dial</h2>
+              <span class="numerals dial-hero-hz" id="dial-hero" role="status" aria-live="polite" title="The radio's dial, as it reports it or as you declared it">—</span>
+            </div>
+            <div class="op-status">
+              <button class="reg-chip" id="dial-hero-reg" data-verdict="unknown" aria-controls="reg-detail" title="What the rules say about transmitting on this dial; click for the reasoning" hidden>
+                <span class="badge" id="dial-hero-reg-badge" data-verdict="unknown" title="The verdict">—</span>
+                <span class="reg-chip-text" id="dial-hero-reg-text" title="The verdict in a sentence"></span>
+              </button>
+              <span class="sub op-note" id="dial-hero-sub" title="Where the dial reading comes from, when it is not the radio"></span>
+            </div>
           </div>
-          <p class="sub" id="test-ladder" title="The mode ladder: the rung under test, the fastest that has passed, and the failures in a row that end the ladder (three)" hidden></p>
-          <p class="sub" id="test-link" title="The rung the link is using now, and how the other station hears this one"></p>
-        </div>
+          <div class="tool-row">
+            <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
+            <div class="btn-group" role="group" aria-label="Dial list" title="Tune to the chosen dial, or edit the list">
+              <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT or rigctld">Tune</button>
+              <button id="btn-memory-add" class="quiet" title="Add a frequency to the list, or rename one already there">Add</button>
+              <button id="btn-memory-remove" class="quiet" title="Take the chosen frequency off the list">Remove</button>
+            </div>
+            <span class="sub numerals" id="dial-reading" title="What the radio reads now, over CAT or rigctld" role="status" aria-live="polite"></span>
+            <details class="help-pop push-right" id="dial-note" title="How the dial list works">
+              <summary title="How the dial list works" aria-label="How the dial list works">?</summary>
+              <p>
+                The list starts as the frequency plan's proposals and is yours to edit: <strong>Add</strong>
+                keeps a dial with a name (the same dial again renames it), <strong>Remove</strong> drops the
+                chosen one, and it is saved beside the modem's configuration. <strong>Tune</strong> sets the
+                radio to the chosen dial when it is keyed over CAT or <code>rigctld</code>; a serial line or
+                a CM108 interface cannot tune, and the list is still a list. When the radio's own dial
+                matches an entry, the list follows it. A radio that cannot report its dial shows a
+                <strong>Dial is at</strong> field instead: the rules need to know where you are.
+              </p>
+            </details>
+          </div>
+          <div class="tool-row inset-row" id="memory-form" title="A dial to add to the list" hidden>
+            <label for="memory-mhz">New dial</label>
+            <input id="memory-mhz" title="Dial frequency in MHz, for example 14.107" type="text" inputmode="decimal" class="mhz" placeholder="14.107" autocomplete="off" aria-label="Dial frequency in MHz" />
+            <span class="sub">MHz</span>
+            <input id="memory-name" title="A name or comment: the band, the net, the friend" type="text" class="prose" placeholder="Name or comment: the band, the net, the friend" aria-label="Name or comment" maxlength="60" />
+            <button id="btn-memory-save" title="Keep it: the list is saved beside the modem's configuration" class="primary">Save</button>
+            <button id="btn-memory-cancel" class="quiet" title="Close without adding">Cancel</button>
+            <span class="sub" id="memory-note" title="What the last edit of the list did" role="status" aria-live="polite"></span>
+          </div>
+          <!-- a radio that cannot report its dial: the operator says where it is, for the rules -->
+          <div class="tool-row inset-row declared-row" id="declared-row" title="This radio cannot report its dial, so the rules need you to say where it is: set it here whenever you move the dial" hidden>
+            <label for="declared-dial">Dial is at</label>
+            <input id="declared-dial" title="The radio's dial in MHz, for example 14.105: where the rules place your signal" type="text" inputmode="decimal" class="mhz" placeholder="14.105" autocomplete="off" aria-label="The radio's dial in MHz" />
+            <span class="sub">MHz</span>
+            <button id="btn-declared-set" class="primary" title="Tell the modem the dial is here; it judges every transmission against it until you change it">Set</button>
+            <button id="btn-declared-clear" class="quiet" title="Forget the declared dial: nothing is transmitted until the dial is known again">Clear</button>
+            <span class="sub" id="declared-note" title="What the modem knows about the dial" role="status" aria-live="polite"></span>
+          </div>
+        </section>
 
-        <!-- keying and drive: always in reach, its numbers in the head, its guide one click away -->
-        <section class="card disclosure" id="keying-card" data-open="false" aria-labelledby="keying-title">
+        <!-- 2. the other station: call it, probe it, test the path -->
+        <section class="card console-card call-card" id="call-card" aria-labelledby="call-title" title="The other station: call it, probe the path, beacon, or run a test session">
+          <div class="tool-row call-row">
+            <label class="card-title" for="remote" id="call-title" title="The other station's callsign">Call</label>
+            <input id="remote" title="The other station's callsign, with its SSID if it uses one" type="text" placeholder="KK4XYZ" autocomplete="off" spellcheck="false" />
+            <div class="btn-group" role="group" aria-label="Session" title="Start and end a session">
+              <button id="btn-connect" title="Call the station in Call and start a session" class="primary">Connect</button>
+              <button id="btn-disconnect" title="Send what is queued, then close the session">Disconnect</button>
+              <button id="btn-abort" title="Drop the session at once, sending nothing more" class="danger">Abort</button>
+            </div>
+            <div class="btn-group" role="group" aria-label="Without a session" title="Test the path without a session, or run the field test">
+              <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
+              <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
+              <button id="btn-test" title="Run the field test with the station in Call: probe, message, a burst at every mode, file, recorded; the same button stops it">Test session</button>
+            </div>
+            <label class="check push-right" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
+            <details class="help-pop" id="session-note" title="What each of the buttons does">
+              <summary title="What the buttons do" aria-label="What the buttons do">?</summary>
+              <p>
+                <strong>Disconnect</strong> finishes sending what is queued and then closes.
+                <strong>Abort</strong> does not. <strong>Probe</strong> asks the station in
+                Call whether it hears you, and how well, without a session: one frame, one
+                answer, both directions of the path. <strong>Beacon</strong> puts this station's
+                callsign on the air once, addressed to nobody, so anyone listening can report
+                hearing you. <strong>Test session</strong> runs the field test with the station in
+                Call: a probe, a message, a short burst at every mode and a file, all recorded —
+                about five minutes of transmitting, sized to what the path can do, and a sidecar the
+                project can learn from. The same button stops it. The other station only has to be
+                listening; Help says how to contribute the result.
+              </p>
+            </details>
+          </div>
+          <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
+          <p class="note" id="test-result" title="What the test session did last, and how it ended" role="status" aria-live="polite"></p>
+          <div class="test-progress" id="test-progress" title="How far the running test session has got" hidden>
+            <p class="test-step" id="test-step" title="The step the test is at, out of the six it runs, and the time: elapsed, and the most the budget leaves"></p>
+            <div class="test-bar-row">
+              <progress id="test-bar" max="1" value="0" title="How much of this step is done: bytes acknowledged, or rungs tried"></progress>
+              <span class="sub" id="test-bar-label" title="What the bar counts"></span>
+            </div>
+            <p class="sub" id="test-ladder" title="The mode ladder: the rung under test, the fastest that has passed, and the failures in a row that end the ladder (three)" hidden></p>
+            <p class="sub" id="test-link" title="The rung the link is using now, and how the other station hears this one"></p>
+          </div>
+        </section>
+
+        <!-- 3. keying and drive: always in reach, its numbers in the head, its guide one click away -->
+        <section class="card disclosure console-card" id="keying-card" data-open="false" aria-labelledby="keying-title">
           <div class="disclosure-head">
             <button class="disclosure-toggle" id="btn-keying-toggle" aria-expanded="false" aria-controls="keying-body" title="Show or hide the transmit level, the last peak and the guide to setting drive">
               <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron" /></svg>
-              <h3 id="keying-title">Keying and drive</h3>
+              <h3 class="card-title" id="keying-title" title="Keying the radio and setting drive">Keying and drive</h3>
             </button>
             <span class="sub numerals disclosure-summary" id="keying-summary" title="The transmit level, the last transmission's peak and how the radio is keyed">level — · peak —</span>
             <div class="disclosure-actions">
@@ -302,10 +318,11 @@
           </div>
         </section>
 
-        <div class="split">
-          <div>
-            <div class="section-head">
-              <h2>Send</h2>
+        <!-- 4. the conversation: the largest thing on the tab, and the first to grow -->
+        <div class="workspace" id="workspace" title="What goes out and what comes in">
+          <section class="pane" id="send-pane" aria-labelledby="send-title" title="What you send over the session">
+            <div class="pane-head">
+              <h2 class="card-title" id="send-title" title="What you send over the session">Send</h2>
               <div class="head-actions">
                 <button id="btn-copy-sent" class="small ghost" title="Copy the text sent to the clipboard, without the times">Copy</button>
                 <button id="btn-clear-sent" class="small ghost" title="Clear the text sent from this box; nothing is taken back from the session, and its recording is not touched">Clear</button>
@@ -317,15 +334,15 @@
                 <textarea id="outgoing" rows="1" spellcheck="true" title="Type here. With Enter sends ticked, Enter sends the text and Shift+Enter starts a new line" aria-label="Text to send"></textarea>
               </div>
             </div>
-            <div class="row">
+            <div class="pane-foot">
               <button id="btn-send" title="Send the text you typed over the session" class="primary">Send</button>
               <label class="check" for="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line"><input type="checkbox" id="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line" /> Enter sends</label>
               <span class="sub" id="send-note" title="What happened to the last text sent"></span>
             </div>
-          </div>
-          <div>
-            <div class="section-head">
-              <h2>Received</h2>
+          </section>
+          <section class="pane" id="received-pane" aria-labelledby="received-title" title="What the other station sent">
+            <div class="pane-head">
+              <h2 class="card-title" id="received-title" title="What the other station sent">Received</h2>
               <div class="head-actions">
                 <label class="check" for="rx-sound" title="Play a short note when text arrives"><input type="checkbox" id="rx-sound" title="Play a short note when text arrives" /> Sound</label>
                 <button id="btn-copy-received" class="small ghost" title="Copy the received text to the clipboard, without the times">Copy</button>
@@ -333,36 +350,46 @@
               </div>
             </div>
             <pre id="incoming" title="Text received over the session: each message on a line of its own, with the time it arrived. Select it or use Copy" class="received" role="log" aria-label="Received text" tabindex="0"></pre>
-          </div>
+          </section>
         </div>
 
-        <section class="card" id="session-recording" aria-labelledby="recording-title">
+        <!-- 5. what is kept of it: the recording, the last session, the test's report -->
+        <section class="card console-card rec-card" id="session-recording" aria-labelledby="recording-title">
           <div class="card-head">
-            <h3 id="recording-title">Recording and last session</h3>
+            <h3 class="card-title" id="recording-title" title="Recordings, the last session and the test report">Recording and last session</h3>
+            <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
+            <details class="help-pop push-right" id="recording-help" title="What a recording is">
+              <summary title="What a recording is" aria-label="What a recording is">?</summary>
+              <p>
+                A recording is what the radio delivered, at 48 kHz, and a JSON file beside it saying
+                what the modem made of it — every frame, its SNR, whether it decoded. It is what a bug
+                report about the air should carry. A test session leaves two files whose names end in
+                <code>_test</code>: the <code>.json</code> report and the <code>.wav</code> audio.
+              </p>
+            </details>
           </div>
-          <div class="row">
+          <div class="tool-row">
             <button id="btn-record" title="Record the radio's audio and what the modem makes of it, until pressed again">Record</button>
             <input id="record-notes" title="Notes kept with the recording: band, frequency, the other station, distance" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
-            <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
           </div>
-          <div class="kv session-facts">
-            <span>Last session</span>
-            <span id="last-session" class="numerals" title="The station and outcome of the current or most recent session">no session yet</span>
-            <span>Recordings folder</span>
-            <span class="path-row">
-              <span id="recordings-dir" class="path" title="Where recordings and their reports are written on this machine">—</span>
-              <button id="btn-open-recordings" class="small" title="Open the recordings folder in the file manager">Open folder</button>
-              <button id="btn-copy-recordings" class="small ghost" title="Copy the recordings folder path">Copy path</button>
-            </span>
-          </div>
-          <p class="note">
-            A recording is what the radio delivered, at 48 kHz, and a JSON file beside it saying
-            what the modem made of it — every frame, its SNR, whether it decoded. It is what a bug
-            report about the air should carry. A test session leaves two files whose names end in
-            <code>_test</code>: the <code>.json</code> report and the <code>.wav</code> audio.
-          </p>
-          <div class="row">
-            <button id="btn-contribute" title="Copy a link to a pre-filled GitHub report for the last test session">Contribute the last test session</button>
+          <dl class="rec-facts" title="The last session and where recordings go">
+            <div class="rec-fact">
+              <dt>Last session</dt>
+              <dd id="last-session" class="numerals" title="The station and outcome of the current or most recent session">no session yet</dd>
+            </div>
+            <div class="rec-fact">
+              <dt>Folder</dt>
+              <dd class="path-row">
+                <span id="recordings-dir" class="path" title="Where recordings and their reports are written on this machine">—</span>
+                <span class="btn-group" title="Open or copy the recordings folder">
+                  <button id="btn-open-recordings" class="small quiet" title="Open the recordings folder in the file manager">Open folder</button>
+                  <button id="btn-copy-recordings" class="small ghost" title="Copy the recordings folder path">Copy path</button>
+                </span>
+              </dd>
+            </div>
+          </dl>
+          <div class="tool-row contrib-row">
+            <button id="btn-contribute" class="small quiet" title="Copy a link to a pre-filled GitHub report for the last test session">Contribute the last test session</button>
             <a id="contribute-link" title="Open the pre-filled report" class="numerals" href="#" target="_blank" rel="noopener" hidden>open the report</a>
             <span class="sub" id="contribute-note" title="What the last contribute did" role="status" aria-live="polite"></span>
           </div>

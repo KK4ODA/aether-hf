@@ -1621,33 +1621,300 @@ button.sort:focus-visible {
 
 /* ── the Session tab ────────────────────────────────────────────── */
 
-/* The radio's dial, large, at the head of the Session tab: the one number an operator
-   checks before every call, so it is not buried in a row of controls — with the rules'
-   verdict on it right beside it. */
-.dial-hero {
+/* A console in five boxes, each named in its own head: where the station is (the dial and
+   what the rules say of it), who it calls, how it keys, the conversation, and what is kept of
+   it. The conversation is the largest thing on the tab and the first to grow: the tab fills
+   the window, and the room left over goes to Send and Received. */
+
+body:not(.compact) main:has(> #panel-session:not([hidden])) {
   display: flex;
-  align-items: center;
-  gap: var(--s2) var(--s3);
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex: 1 0 auto;
 }
 
-.dial-hero-label {
+#panel-session {
+  flex: 1 0 auto;
+}
+
+/* the name every box on the tab carries, at its top left, inside the box */
+.card-title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.console-card {
+  padding: 10px var(--card-pad-x);
+  gap: var(--s2);
+}
+
+/* a row of controls that lines up: one height, one gap, wrapping between groups */
+.tool-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.tool-row[hidden] {
+  display: none;
+}
+
+.tool-row > label:not(.check):not(.card-title) {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+/* a form opened inside a box: a dial to add, the dial declared */
+.inset-row {
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+
+.declared-row {
+  border-color: color-mix(in srgb, var(--status-warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--status-warning) 6%, var(--bg-2));
+}
+
+/* 1 · the dial: the one number checked before every call, and the rules' word on it */
+.op-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s5);
+}
+
+.dial-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .dial-hero-hz {
   font-size: var(--fs-3xl);
   font-weight: 600;
-  line-height: 1.1;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
-.declared-row {
-  padding: var(--s2) var(--s3);
-  border: 1px solid color-mix(in srgb, var(--status-warning) 40%, var(--border));
+.op-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.op-note:empty {
+  display: none;
+}
+
+#memory {
+  flex: 1 1 260px;
+  max-width: 420px;
+  min-width: 180px;
+}
+
+/* the readout above says what this row once did */
+#dial-reading {
+  display: none;
+}
+
+/* 2 · the call: the callsign, the session's three buttons, then the path's three */
+/* the groups stand apart by space alone, so a group that wraps starts its line cleanly */
+.call-row {
+  gap: var(--s2) var(--s4);
+}
+
+#remote {
+  width: 12ch;
+}
+
+.btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  flex-wrap: nowrap;
+}
+
+.call-card .note {
+  font-size: var(--fs-sm);
+}
+
+/* help that stays out of the way: a small ? that opens its note over the page */
+.help-pop {
+  position: relative;
+  flex: none;
+}
+
+.help-pop > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text-3);
+  font: 600 var(--fs-xs) / 1 var(--face);
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+
+.help-pop > summary::-webkit-details-marker {
+  display: none;
+}
+
+.help-pop > summary:hover,
+.help-pop[open] > summary {
+  color: var(--text);
+  border-color: var(--text-3);
+  background: var(--surface-2);
+}
+
+.help-pop > p {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(460px, calc(100vw - 48px));
+  margin: 0;
+  padding: var(--s3);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--status-warning) 6%, var(--surface));
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* 4 · the conversation: two panes, each a window with its name and tools in a head strip */
+.workspace {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--s3);
+  min-height: 18rem;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--plot-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+#send-pane:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 36px;
+  padding: 0 var(--s2) 0 var(--s3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s3);
+  padding: var(--s2) var(--s3);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.pane .composer {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pane .composer:focus-within {
+  box-shadow: none;
+}
+
+.pane .received {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* 5 · what is kept: the recording, the last session, the folder, the test's report */
+.rec-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
+  gap: var(--s1) var(--s5);
+  margin: 0;
+}
+
+.rec-fact .path {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.rec-fact .btn-group {
+  flex: none;
+}
+
+.rec-fact {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: var(--control-h-sm);
+}
+
+.rec-fact dt {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rec-fact dd {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.contrib-row {
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
 }
 
 /* a checkbox with its words, beside the buttons it goes with (Chime, Enter sends, Sound) */
@@ -1676,11 +1943,6 @@ button.sort:focus-visible {
   word-break: break-all;
   user-select: text;
   -webkit-user-select: text;
-}
-
-/* the compact facts under the recording controls */
-.session-facts {
-  margin-top: 2px;
 }
 
 /* ── counters ───────────────────────────────────────────────────── */
@@ -2237,6 +2499,19 @@ button.ghost[aria-pressed="true"] {
   color: var(--accent);
 }
 
+/* a utility beside the actions that matter: Add, Remove, Cancel, Open folder */
+button.quiet {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-2);
+}
+
+button.quiet:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
 /* a toggle that is on — the tune tone playing, a recording running */
 button[aria-pressed="true"]:not(.ghost):not(.chip) {
   background: color-mix(in srgb, var(--status-tx) 18%, var(--surface-3));
@@ -2244,34 +2519,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   color: var(--text);
 }
 
-/* ── text panes: received text, the log, the running configuration ── */
-
-.split {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--s3);
-  align-items: start;
-}
-
-.split > div {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-  min-width: 0;
-}
-
-.split h2 {
-  margin-top: 0;
-}
-
-/* what goes out and what came in, side by side and the same size */
-.split textarea,
-.split .received {
-  height: 15em;
-  min-height: 15em;
-  max-height: 15em;
-  margin: 0;
-}
+/* ── text panes: received text, the running configuration ── */
 
 .received,
 .config {
@@ -2311,10 +2559,6 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   color: var(--text);
   cursor: text;
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
-}
-
-.split .composer {
-  height: 15em;
 }
 
 .composer:hover {
@@ -2384,7 +2628,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border-top: 1px dashed var(--border);
 }
 
-.split .composer textarea {
+.composer textarea {
   display: block;
   width: 100%;
   height: auto;
@@ -2834,6 +3078,19 @@ body.compact .reading .sub {
 }
 
 /* ── narrower windows ───────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .rec-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-rows: minmax(15rem, 1fr);
+    min-height: 0;
+  }
+}
 
 @media (max-width: 860px) {
   .drive-grid {
