@@ -312,6 +312,17 @@ class RateController:
                 self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
             self._step_up()
 
+    def observe_snr(self, snr_db: float | None) -> None:
+        """Take a burst's SNR and nothing else: for a burst sent faster than this station asked
+        for, whose failure is the sender's choice and no news to this controller (ADR-0020) —
+        the Test's ladder climbing past what the path carries, or a burst sent before the advice
+        to go slower reached the sender. What decoded in it is still a measurement of the
+        path."""
+        if snr_db is None:
+            return
+        self._smoothed = snr_db if self._smoothed is None else 0.7 * self._smoothed + 0.3 * snr_db
+        self.snr_db = self._smoothed
+
     def _widen(self, snr_db: float | None, mode: int | None) -> None:
         """A failed burst is a measurement, not just a nudge: mode ``m`` failing at SNR ``s``
         says this channel needs more than ``s − threshold[m]`` dB of margin. Jump most of the

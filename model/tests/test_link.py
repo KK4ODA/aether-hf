@@ -1328,6 +1328,132 @@ def test_a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it(timing: PhyTim
     assert a._reencode_target(full, top, 0) is None
 
 
+# ── rate control on a real path (ADR-0020) ────────────────────────────
+
+
+def _connected_irs(timing: PhyTiming) -> tuple[LinkEngine, LinkEngine, list[TxFrame]]:
+    """A session up, the called station receiving; what it transmits from then on is kept
+    instead of sent."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=5)
+    a.connect("KK4XYZ")
+    sim.run(until=40)
+    assert b.state is State.CONNECTED and b.role is Role.IRS
+    sent: list[TxFrame] = []
+    b._transmit = sent.extend  # type: ignore[method-assign]
+    return a, b, sent
+
+
+def _heard(
+    mode: int,
+    snr_db: float,
+    *,
+    decoded: bool,
+    trusted: bool = True,
+    rv: int = 0,
+    combined: bool = False,
+) -> object:
+    from aether_model.link.engine import _RxRecord
+    from aether_model.link.sim import SimFrame
+
+    frame = SimFrame(Container.DATA, mode, rv, snr_db, 0.0, 1.0, b"", 0.0, trusted=trusted)
+    return _RxRecord(frame, 0, payload=b"x" if decoded else None, combined=combined)
+
+
+def test_a_burst_reports_the_snr_of_the_frames_that_were_there(timing: PhyTiming) -> None:
+    """ND1J's 40 m path, 2026-09-25: a burst's failed frames read -11 dB between frames
+    decoding at +5 to +8 — detections barely over their threshold, the correlator on noise —
+    and the burst's mean took the recommendation from rung 4 to rung 1. The SNR a burst
+    reports is now that of the frames that decoded and of those the PHY trusts: a real frame
+    that failed still says how the path was."""
+    _, b, sent = _connected_irs(timing)
+    b._burst = [
+        _heard(8, 6.0, decoded=True),
+        _heard(8, -12.0, decoded=False, trusted=False),
+        _heard(8, 2.0, decoded=False),
+    ]
+    b._send_ack()
+    ack = ControlFrame.decode(sent[-1].payload)
+    assert ack.snr_db == 4, ack
+    # nothing that was really there: no SNR at all, and the controller's reading stands
+    reading = b.rate.snr_db
+    b._burst = [_heard(8, -12.0, decoded=False, trusted=False)] * 3
+    b._send_ack()
+    assert ControlFrame.decode(sent[-1].payload).snr_db is None
+    assert b.rate.snr_db == reading
+
+
+def test_a_burst_faster_than_this_station_ever_asked_for_is_the_senders_choice(
+    timing: PhyTiming,
+) -> None:
+    """The Test's ladder pins rungs past what the path carries; their failures are no news
+    to the receiving station's controller, which never asked for them — on ND1J's test they
+    held its margin at the ceiling for the whole file that followed. A burst of rungs this
+    station has asked for is the path's, retransmissions of them included."""
+    _, b, _ = _connected_irs(timing)
+    b.rate = b._rate_controller()
+    b.rate.seed(0.0)
+    b._asked = b.rate.recommend()
+    faster = b._asked + 3
+    before = (b.rate.margin_db, b.rate.recommend())
+    b._burst = [_heard(faster, 1.0, decoded=False) for _ in range(4)]
+    b._send_ack()
+    assert (b.rate.margin_db, b.rate.recommend()) == before
+    assert b.rate.snr_db == pytest.approx(0.7 * 0.0 + 0.3 * 1.0), "what it measured still counts"
+    # a rung it asked for, failing: the path's news
+    b._burst = [_heard(b._asked, 1.0, decoded=False) for _ in range(4)]
+    b._send_ack()
+    assert b.rate.margin_db > before[0] or b.rate.recommend() < before[1]
+
+
+def test_a_retransmission_that_could_not_decode_alone_is_no_news(timing: PhyTiming) -> None:
+    """RV 1 and 2 are mostly parity: alone they do not decode at any SNR (6 and 10 % on ND1J's
+    path against 75 % at RV 0), and alone is how the retransmission of a frame this station
+    already has arrives — after an acknowledgement the sender missed. Their failure taught the
+    margin 3 dB for every lost acknowledgement. Combined with an earlier transmission, or at
+    RV 3, a failure is the path's again, and so is a first transmission's."""
+    _, b, _ = _connected_irs(timing)
+    b.rate = b._rate_controller()
+    b.rate.seed(6.0)
+    b._asked = b.rate.recommend()
+    mode = b._asked
+    before = (b.rate.margin_db, b.rate.recommend())
+    b._burst = [_heard(mode, 6.0, decoded=False, rv=rv) for rv in (1, 2, 1, 2)]
+    b._send_ack()
+    assert (b.rate.margin_db, b.rate.recommend()) == before
+    for telling in (
+        _heard(mode, 6.0, decoded=False, rv=1, combined=True),
+        _heard(mode, 6.0, decoded=False, rv=3),
+        _heard(mode, 6.0, decoded=False, rv=0),
+    ):
+        b.rate = b._rate_controller()
+        b.rate.seed(6.0)
+        b._burst = [telling]
+        b._send_ack()
+        assert (b.rate.margin_db, b.rate.recommend()) != before, telling
+
+
+def test_the_tests_ladder_does_not_teach_the_receiver_a_margin(timing: PhyTiming) -> None:
+    """End to end: a session settles, the sender pins the fastest rung for a while — far
+    past the path, every frame failing until it is re-encoded — and unpins. The receiving
+    station's learned margin is no wider for it."""
+    a, b = _pair(timing)
+    top = usable_modes()[-1]
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=11)
+    a.connect("KK4XYZ")
+    a.send(bytes(400))
+    sim.run(until=120)
+    assert b.state is State.CONNECTED
+    margin = b.rate.margin_db
+    a.pin_mode(top, body_bytes=16)
+    a.send(bytes(64))
+    sim.run(until=sim.t + 240)
+    a.pin_mode(None)
+    rungs = a.take_ladder()
+    assert rungs and all(r.mode == top and r.decoded == 0 for r in rungs if r.mode == top)
+    assert b.rate.margin_db <= margin + 1e-9, (margin, b.rate.margin_db)
+
+
 # ── the lossy pipe's families (P9-6) ──────────────────────────────────
 
 

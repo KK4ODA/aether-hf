@@ -89,6 +89,8 @@ class SimFrame:
     """The SNR the pipe's logistic judges this frame at when the receiver reports another — a
     tone-floor frame whose reading is capped (:attr:`TwoStationSim.floor_reading_cap_db`).
     Unset, its reported SNR."""
+    trusted: bool = True
+    """A simulated frame is a real frame, and its SNR the channel's."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0

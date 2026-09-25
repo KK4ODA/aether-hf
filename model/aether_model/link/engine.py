@@ -197,6 +197,16 @@ class _RxRecord:
     """Sequence number if decoded, else the inferred guess (may be None)."""
     buffer: object = None
     """This transmission's soft-decode output, kept for HARQ combining."""
+    combined: bool = False
+    """It was combined with an earlier transmission of its block: a failure after that is a
+    failure of both."""
+
+
+SELF_DECODABLE_RVS = frozenset({0, 3})
+"""The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
+them, RV 3 wraps round to them): a frame at RV 1 or 2 is mostly parity and, at the rates this
+modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path, 2026-09-25,
+against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
 
 
 @dataclass
@@ -339,6 +349,9 @@ class LinkEngine:
         self._burst_t0: float | None = None
         self._ack_history: list[_AckSnapshot] = []
         self._ack_counter = 0
+        self._asked: int | None = None
+        """The fastest rung this station has recommended to the sender in this session: a
+        burst faster than any of them is the sender's choice (ADR-0020)."""
         self._break_requested = False
         self._confirmed = False
         self.peer_capabilities = 0
@@ -1123,6 +1136,7 @@ class LinkEngine:
             del self._harq[guess]  # re-encoded at another mode: start over
         if guess in self._harq:
             prev, combines, _ = self._harq[guess]
+            rec.combined = True
             combined, merged = rec.frame.decode(prev)
             if combined is not None:
                 self.stats.harq_rescues += 1
@@ -1226,14 +1240,42 @@ class LinkEngine:
     def _send_ack(self) -> None:
         if self.state is not State.CONNECTED and self.state is not State.DISCONNECTING:
             return
-        ok = sum(1 for r in self._burst if r.payload is not None)
-        failed = len(self._burst) - ok
-        snrs = [r.frame.snr_db for r in self._burst]
+        decoded = [r for r in self._burst if r.payload is not None]
+        ok = len(decoded)
+        # A failure is news of the path when the frame could have decoded (ADR-0020): a real
+        # frame (the PHY trusts it), at a redundancy version that decodes on its own or
+        # combined with an earlier transmission of its block. A retransmission at RV 1 or 2
+        # with nothing to combine with does not decode at any SNR — and that is how the
+        # retransmission of a frame this station already has arrives, after an
+        # acknowledgement the sender missed: each lost one had taught the margin 3 dB.
+        failed = sum(
+            1
+            for r in self._burst
+            if r.payload is None
+            and r.frame.trusted
+            and (r.frame.rv in SELF_DECODABLE_RVS or r.combined)
+        )
+        # The SNR of the frames that were really there (ADR-0020): what decoded, and what the
+        # PHY acquired confidently enough to trust — a real frame that failed says how the path
+        # was. A detection just over its threshold that did not decode is as likely noise, and
+        # its SNR an estimate of that noise: on ND1J's 40 m path one read -11 dB between frames
+        # decoding at +5 to +8, and that number took the recommendation from rung 4 to rung 1
+        # (2026-09-25). A burst with none reports no SNR; its failure is what is learned from.
+        snrs = [r.frame.snr_db for r in self._burst if r.payload is not None or r.frame.trusted]
         snr = sum(snrs) / len(snrs) if snrs else None
         modes = [r.frame.mode for r in self._burst]
         burst_mode = max(set(modes), key=modes.count) if modes else None
         self._finish_burst()
-        self.rate.observe(snr, ok, failed, burst_mode)
+        if failed and modes and self._asked is not None and min(modes) > self._asked:
+            # every frame faster than any rung this station has asked for: the sender's
+            # choice, and its failure no news — the Test's ladder, pinned past what the path
+            # carries, held the margin at its ceiling for the file that followed it (ADR-0020).
+            # Anything slower is judged as usual: a retransmission keeps the rung it was first
+            # sent at, so after a step down the sender still sends rungs this station asked
+            # for once, and their failures are the path's.
+            self.rate.observe_snr(snr)
+        else:
+            self.rate.observe(snr, ok, failed, burst_mode)
         if self._disc_requested:
             self._send_disc()
             return
@@ -1255,6 +1297,8 @@ class LinkEngine:
             flags |= ControlFlags.BREAK | ControlFlags.WANT_TX
         self._ack_counter = (self._ack_counter + 1) % 8
         self.stats.acks_sent += 1
+        recommended = self.rate.recommend()
+        self._asked = recommended if self._asked is None else max(self._asked, recommended)
         self._transmit(
             [
                 self._control(
@@ -1263,7 +1307,7 @@ class LinkEngine:
                     base=self._rx_base,
                     bitmap=bitmap,
                     snr_db=snr,
-                    recommended_mode=self.rate.recommend(),
+                    recommended_mode=recommended,
                     counter=self._ack_counter,
                 )
             ]
@@ -1508,6 +1552,7 @@ class LinkEngine:
         self._burst_t0 = None
         self._ack_history = []
         self._ack_counter = 0
+        self._asked = None
         self._break_requested = False
         self._confirmed = False
         self.peer_capabilities = 0
