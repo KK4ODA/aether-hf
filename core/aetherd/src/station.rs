@@ -491,6 +491,35 @@ struct SessionNotes {
 /// `take_finished_sessions`.
 const MAX_UNTAKEN_SESSIONS: usize = 64;
 
+/// A message sent with a reference, waiting for the other station to have all of it: `end`
+/// is where it ends in the session's stream of link bytes.
+#[derive(Debug, Clone)]
+struct SentMark {
+    reference: String,
+    bytes: usize,
+    end: usize,
+}
+
+/// What became of a message sent with a reference ([`Station::send_tracked`]): the other
+/// station has all of it, or the session ended first. The panel's check mark on a sent line
+/// comes from this.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Delivery {
+    /// The sender's reference for the message.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Its size, application bytes.
+    pub bytes: usize,
+    /// Whether the other station has all of it, in order.
+    pub delivered: bool,
+    /// Why not, when not: how the session ended, or that there was none.
+    pub reason: Option<String>,
+}
+
+/// The most deliveries kept for `status` — a panel that was closed or reloaded while one
+/// resolved looks its messages up there — and held between two calls of `take_deliveries`.
+const RECENT_DELIVERIES: usize = 32;
+
 /// Where the Morse identifier stands (§97.119).
 #[derive(Debug, Clone, Copy, Default)]
 struct IdentifierState {
@@ -663,6 +692,14 @@ pub struct Station<P: Ptt> {
     reports: Vec<FrameReport>,
     /// The session now up, as the history will record it.
     session_notes: Option<SessionNotes>,
+    /// Link bytes handed to the engine this session: where the stream has got to.
+    link_sent: usize,
+    /// Messages sent with a reference, not yet all acknowledged, oldest first.
+    sent_marks: VecDeque<SentMark>,
+    /// Deliveries resolved since the daemon last took them.
+    deliveries: Vec<Delivery>,
+    /// The last deliveries resolved, for `status`.
+    recent_deliveries: VecDeque<Delivery>,
     /// Sessions that ended since the daemon last took them.
     finished: Vec<crate::sessions::Session>,
     /// The last frame, and its equalised constellation, for the diagnostics display.
@@ -779,6 +816,10 @@ impl<P: Ptt> Station<P> {
             events: Vec::new(),
             reports: Vec::new(),
             session_notes: None,
+            link_sent: 0,
+            sent_marks: VecDeque::new(),
+            deliveries: Vec::new(),
+            recent_deliveries: VecDeque::new(),
             finished: Vec::new(),
             last_frame: None,
             last_symbols: Vec::new(),
@@ -1101,6 +1142,80 @@ impl<P: Ptt> Station<P> {
         self.pump();
     }
 
+    /// Queue a message for the session and follow it: a [`Delivery`] under `reference` says
+    /// when the other station has all of it, in order — from the link's acknowledgements,
+    /// so after every byte before it too — or that the session ended first. A message given
+    /// with no session up is not queued, and is reported undelivered at once.
+    pub fn send_tracked(&mut self, data: &[u8], reference: &str) {
+        if !self.connected() {
+            self.resolve(Delivery {
+                reference: reference.to_owned(),
+                bytes: data.len(),
+                delivered: false,
+                reason: Some("no session".to_owned()),
+            });
+            return;
+        }
+        self.outbound.extend_from_slice(data);
+        self.flush_outbound();
+        self.sent_marks.push_back(SentMark {
+            reference: reference.to_owned(),
+            bytes: data.len(),
+            end: self.link_sent,
+        });
+        self.pump();
+    }
+
+    /// Deliveries resolved since the last call.
+    pub fn take_deliveries(&mut self) -> Vec<Delivery> {
+        std::mem::take(&mut self.deliveries)
+    }
+
+    /// The references still waiting, oldest first, and the last deliveries resolved.
+    #[must_use]
+    pub fn delivery_status(&self) -> (Vec<String>, Vec<Delivery>) {
+        (
+            self.sent_marks
+                .iter()
+                .map(|m| m.reference.clone())
+                .collect(),
+            self.recent_deliveries.iter().cloned().collect(),
+        )
+    }
+
+    fn resolve(&mut self, delivery: Delivery) {
+        if self.recent_deliveries.len() >= RECENT_DELIVERIES {
+            self.recent_deliveries.pop_front();
+        }
+        self.recent_deliveries.push_back(delivery.clone());
+        if self.deliveries.len() >= RECENT_DELIVERIES {
+            self.deliveries.remove(0);
+        }
+        self.deliveries.push(delivery);
+    }
+
+    /// Resolve the messages the other station now has all of: the stream handed to the
+    /// engine this session, less what it has not yet delivered in order.
+    fn note_arrivals(&mut self) {
+        if self.link.is_none() || self.sent_marks.is_empty() {
+            return;
+        }
+        let arrived = self
+            .link_sent
+            .saturating_sub(self.engine.tx_undelivered_bytes());
+        while self.sent_marks.front().is_some_and(|m| m.end <= arrived) {
+            let Some(mark) = self.sent_marks.pop_front() else {
+                break;
+            };
+            self.resolve(Delivery {
+                reference: mark.reference,
+                bytes: mark.bytes,
+                delivered: true,
+                reason: None,
+            });
+        }
+    }
+
     /// Push whatever the application has queued through the compressor and into the engine.
     fn flush_outbound(&mut self) {
         if self.outbound.is_empty() {
@@ -1113,6 +1228,7 @@ impl<P: Ptt> Station<P> {
         let wire = self.compressor.push(&pending);
         self.stats.bytes_before_compression = self.compressor.bytes_in;
         self.stats.bytes_after_compression = self.compressor.bytes_out;
+        self.link_sent += wire.len();
         self.engine.send(&wire);
     }
 
@@ -2159,6 +2275,63 @@ impl<P: Ptt> Station<P> {
         self.finished.push(session);
     }
 
+    /// A session came up: its coders, its account, its notes for the history, and the
+    /// engine's stream counted from nothing again.
+    fn session_began(&mut self, detail: &str) {
+        let agreed = negotiated(
+            offered_capabilities(self.config.compress),
+            self.engine.peer_capabilities(),
+        );
+        self.compressor = Compressor::new(agreed);
+        self.decompressor = Decompressor::new(agreed);
+        self.link = Some(LinkAccount {
+            started_s: self.now(),
+            bytes_sent: 0,
+            bytes_received: 0,
+        });
+        self.link_sent = 0;
+        self.session_notes = Some(SessionNotes {
+            remote: detail
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            caller: detail.ends_with("(iss)"),
+            frequency_hz: self.frequency.value,
+            acked_at_start: self.engine.stats.bytes_acked,
+            ..SessionNotes::default()
+        });
+        self.moved.clear();
+    }
+
+    /// A session ended, however it ended: its identifier falls due, it joins the history,
+    /// what it did not deliver is said to be undelivered, and its coders go.
+    fn session_ended(&mut self, detail: &str) {
+        // the end of a communication is identified, whatever ended it
+        if self.config.cw_id.is_some() && self.identifier.transmitted_since {
+            self.identifier.final_due = true;
+        }
+        self.finish_session(detail);
+        // what the other station did not have all of when the session ended never will: the
+        // engine has already let the stream go
+        for mark in std::mem::take(&mut self.sent_marks) {
+            self.resolve(Delivery {
+                reference: mark.reference,
+                bytes: mark.bytes,
+                delivered: false,
+                reason: Some(detail.to_owned()),
+            });
+        }
+        self.link = None;
+        self.moved.clear();
+        self.compressor = Compressor::new(false);
+        self.decompressor = Decompressor::new(false);
+        if let Some(calls) = self.pending_callsigns.take() {
+            // validated when they were given; the engine is idle now
+            let _ = self.engine.set_callsigns(&calls);
+        }
+    }
+
     /// Take what the engine has decided and act on it.
     fn pump(&mut self) {
         let mut connected = false;
@@ -2186,44 +2359,10 @@ impl<P: Ptt> Station<P> {
                     // stream's history, and carrying it into the next session would make the
                     // first bytes undecodable.
                     if name == "connected" {
-                        let agreed = negotiated(
-                            offered_capabilities(self.config.compress),
-                            self.engine.peer_capabilities(),
-                        );
-                        self.compressor = Compressor::new(agreed);
-                        self.decompressor = Decompressor::new(agreed);
-                        self.link = Some(LinkAccount {
-                            started_s: self.now(),
-                            bytes_sent: 0,
-                            bytes_received: 0,
-                        });
-                        self.session_notes = Some(SessionNotes {
-                            remote: detail
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or_default()
-                                .to_owned(),
-                            caller: detail.ends_with("(iss)"),
-                            frequency_hz: self.frequency.value,
-                            acked_at_start: self.engine.stats.bytes_acked,
-                            ..SessionNotes::default()
-                        });
-                        self.moved.clear();
+                        self.session_began(&detail);
                         connected = true;
                     } else if name == "disconnected" {
-                        // the end of a communication is identified, whatever ended it
-                        if self.config.cw_id.is_some() && self.identifier.transmitted_since {
-                            self.identifier.final_due = true;
-                        }
-                        self.finish_session(&detail);
-                        self.link = None;
-                        self.moved.clear();
-                        self.compressor = Compressor::new(false);
-                        self.decompressor = Decompressor::new(false);
-                        if let Some(calls) = self.pending_callsigns.take() {
-                            // validated when they were given; the engine is idle now
-                            let _ = self.engine.set_callsigns(&calls);
-                        }
+                        self.session_ended(&detail);
                     }
                     self.note(name, &detail);
                     // a session is the unit of a field recording: one file per session,
@@ -2255,6 +2394,7 @@ impl<P: Ptt> Station<P> {
         {
             notes.heard_there_db = Some(heard);
         }
+        self.note_arrivals();
         // a DISC or DISC_ACK of ours still to go carries the identifier; a session that
         // ended in silence — a link timeout, a peer that closed without a word — gets one
         // on its own, after whatever is on the air now
@@ -3851,6 +3991,74 @@ mod tests {
             station.now() - aborted_at
         );
         assert_eq!(station.stats.watchdog_trips, 0);
+    }
+
+    #[test]
+    fn a_sent_message_is_reported_once_the_other_station_has_it() {
+        // the panel's check mark: a message sent with a reference is reported delivered when
+        // the other station has all of it in order, and undelivered when the session ends
+        // first — or at once, with no session to send on
+        let delivery =
+            |reference: &str, bytes: usize, delivered: bool, reason: Option<&str>| Delivery {
+                reference: reference.to_owned(),
+                bytes,
+                delivered,
+                reason: reason.map(str::to_owned),
+            };
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.send_tracked(b"too early\n", "m0");
+        assert_eq!(
+            air.a.take_deliveries(),
+            [delivery("m0", 10, false, Some("no session"))]
+        );
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert_eq!(
+            air.a.take_received(),
+            b"",
+            "nothing sent before the session is queued"
+        );
+
+        air.a.send_tracked(b"first\n", "m1");
+        air.a.send_tracked(&[0x42; 600], "m2");
+        assert_eq!(air.a.delivery_status().0, ["m1", "m2"]);
+        assert!(
+            air.a.take_deliveries().is_empty(),
+            "nothing has arrived yet"
+        );
+        air.run(120.0, |a, _| a.delivery_status().0.is_empty());
+        assert_eq!(
+            air.a.take_deliveries(),
+            [
+                delivery("m1", 6, true, None),
+                delivery("m2", 600, true, None)
+            ]
+        );
+        let got = air.b.take_received();
+        assert!(got.starts_with(b"first\n") && got.len() == 606);
+
+        // a long message the operator aborts: it never all arrives. Incompressible — the
+        // session compresses, and 20 kB of one byte would cross in a frame
+        let mut state = 0x2545_f491_u32;
+        let noise: Vec<u8> = (0..20_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state.to_le_bytes()[0]
+            })
+            .collect();
+        air.a.send_tracked(&noise, "m3");
+        air.run(5.0, |_, _| false);
+        air.a.abort();
+        assert_eq!(
+            air.a.take_deliveries(),
+            [delivery("m3", 20_000, false, Some("aborted"))]
+        );
+        let (pending, recent) = air.a.delivery_status();
+        assert!(pending.is_empty());
+        let names: Vec<&str> = recent.iter().map(|d| d.reference.as_str()).collect();
+        assert_eq!(names, ["m0", "m1", "m2", "m3"]);
     }
 
     #[test]
