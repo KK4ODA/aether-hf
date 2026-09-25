@@ -656,6 +656,9 @@ restarts it in place; a port that would not bind is retried every 10 s): `enable
 bandwidths hear it), `wait_for_clear`,
 `max_clients` (4), `trace` (never contents). Panel: Setup step 5 *KISS programs*, the header's
 `apps-chip`, the Diagnostics *KISS* reading, "KISS frame" among the stations heard.
+Configuration **schema 7** (`kiss_port`, a step that changes nothing): beta.60 cannot read a file
+with `[kiss]` (every table refuses unknown keys), and the bump is what sends it — and the shell's
+restore — to `station.toml.bak-v6`; adding a key is a new shape going back.
 `tools/kiss_test_client.py` (stdlib) drives any KISS port by hand; the bench pair's KISS ports are
 8110/8111. `two_daemons.rs` carries a frame from one daemon's KISS port to the other's client.
 

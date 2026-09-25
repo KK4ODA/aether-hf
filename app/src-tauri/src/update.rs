@@ -753,6 +753,7 @@ const SCHEMA_HISTORY: &[(&str, u32)] = &[
     ("0.2.0-beta.54", 4),
     ("0.2.0-beta.56", 5),
     ("0.2.0-beta.60", 6),
+    ("0.2.0-beta.61", 7),
 ];
 
 /// The settings schema a version reads, if it is one this build knows of.

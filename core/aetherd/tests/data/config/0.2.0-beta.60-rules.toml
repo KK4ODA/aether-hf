@@ -1,0 +1,35 @@
+# As beta.60 wrote a station that said its rules (ADR-0018): schema 6, with the regulatory
+# section. Schema 7 moves nothing in it; the KISS port it adds is a new section, off.
+schema_version = 6
+callsign = "W4ODA"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "cat"
+port = "COM5"
+protocol = "yaesu"
+baud = 38400
+source = "data"
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+wait_for_clear = true
+
+[update]
+channel = "beta"
+check = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "extra"
+sideband = "usb"
+itu_region = 2
+edge_margin_hz = 50.0
+band_plan = true
+log_permitted = false
