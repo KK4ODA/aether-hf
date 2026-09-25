@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aether HF — signal analysis</title>
+    <link rel="icon" href="favicon.png" type="image/png" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <!-- The signal-analysis card undocked: the same card as the panel's Diagnostics tab
+       (scopes.js), in a window of its own that stays in view whatever tab the panel shows. -->
+  <body class="signal-window">
+    <header class="bar">
+      <h1 class="brand">
+        <img class="brand-mark" src="mark.png" alt="" width="22" height="22" />
+        <span>Aether <span class="brand-hf">HF</span></span>
+      </h1>
+      <span class="bar-title" title="The constellation, spectrum and waterfall, undocked from the panel's Diagnostics tab">Signal analysis</span>
+      <span class="live" id="signal-live" data-live="false" title="Whether the scopes are drawing: they pause while this window is minimised or the modem is out of reach">paused</span>
+      <div class="head-right">
+        <span class="lamp" id="lamp-link" title="Link: this window's connection to the modem" role="status" aria-label="Not connected to the modem">LINK</span>
+        <label class="check" id="on-top-box" title="Keep this window above the others, the panel included" hidden><input type="checkbox" id="on-top" title="Keep this window above the others, the panel included" /> Keep on top</label>
+        <button class="small" id="btn-dock" title="Put the card back on the panel's Diagnostics tab and close this window">Dock</button>
+      </div>
+    </header>
+    <main class="signal-main">
+      <p class="note warn" id="signal-note" title="Why the scopes are not drawing" role="status" hidden></p>
+      <div class="signal-body" id="signal-body"></div>
+    </main>
+    <script type="module" src="signal.js"></script>
+  </body>
+</html>
