@@ -41,6 +41,18 @@ beside it and the run before it is `aetherd.prev.log`, and *Help > Open the conf
 folder* takes you there. If restarting the modem made a problem go away, the log worth
 reading is `aetherd.prev.log` — the one from the run that misbehaved.
 
+**Keying, and the dial.** Setup step 2 keys the radio through a serial line (RTS or DTR), the
+radio's own *CAT command*, a CM108-class interface's GPIO pin, or `rigctld`. Only CAT and
+`rigctld` also read the dial, which the rules are judged at; with any other keying you say
+where the dial is on the Session tab, and again after every change of frequency. An **Icom
+with USB audio** (IC-7300, IC-7610, IC-9700, IC-705) needs nothing but its USB cable: choose
+the rig's COM port, *CAT command* and *Icom CI-V*, and in the rig's menu (*MENU › SET ›
+Connectors › CI-V*) set *CI-V USB Port* to *Unlink from [REMOTE]* and *CI-V USB Baud Rate* to
+the rate in Aether (19200 unless you already use another, such as 38400); the CI-V address is the rig's (IC-7300 94, IC-7610 98, IC-9700
+A2, IC-705 A4). Only one program can hold the port: close a logger or rig-control program
+that has it, or share the radio through `rigctld`. When CAT works, the dial appears in the
+header; when it does not, a banner names the port and what the radio answered.
+
 **Closing the window stops the modem.** When that would interrupt something — a session,
 a Test session, a call, a probe, a transmission — the application asks first and names
 it; *Keep running* leaves everything as it was. If you close anyway, the modem ends a

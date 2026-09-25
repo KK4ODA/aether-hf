@@ -2738,8 +2738,13 @@ const PROFILES = [
     name: "Icom with USB audio (IC-7300, IC-7610, IC-9700, IC-705)",
     match: /USB Audio CODEC/i,
     ptt: "serial",
-    line: "rts",
-    note: "Icom's USB port carries audio and a serial port; RTS keying needs 'USB SEND' set to RTS in the rig's menu.",
+    // CAT rather than RTS: the one USB serial port carries CI-V, so keying by command costs
+    // nothing and reads the dial, which the rules need — RTS keying left an IC-7300 keying
+    // well with no dial at all (ND1J, 2026-09-25)
+    line: "cat",
+    // 19200, CI-V's own rate: what Icom operators already use, and what the REMOTE jack runs at
+    cat: { protocol: "icom", baud: 19200, civ: "94" },
+    note: "Icom's USB port carries audio and CI-V: Aether keys by CAT command and reads the dial. In the rig's menu (MENU › SET › Connectors › CI-V) set CI-V USB Port to Unlink from [REMOTE] and CI-V USB Baud Rate to the rate here, 19200 — or put the rig's own rate here, such as 38400. The address is the rig's: IC-7300 94, IC-7610 98, IC-9700 A2, IC-705 A4.",
   },
   {
     id: "yaesu-usb",
@@ -2847,6 +2852,14 @@ function applyProfile() {
     // one serial port on the machine: almost certainly the interface's
     $("dev-ptt").value = devicesSeen.serial_ports[0].name;
   }
+  // how the port keys, as the interface is known to key: the operator picked this profile
+  if (profile.ptt === "serial" && profile.line) select($("ptt-line"), profile.line);
+  if (profile.cat) {
+    select($("ptt-protocol"), profile.cat.protocol);
+    $("ptt-baud").value = String(profile.cat.baud);
+    if (profile.cat.civ) $("ptt-civ").value = profile.cat.civ;
+  }
+  showKeyingFields();
   writeConfig();
 }
 
