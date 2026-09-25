@@ -826,3 +826,13 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     evidence. **Now:
     the field testing of the daemon as it is.** **P9-5** is paused (2026-09-24: a nice-to-have,
     an experimental opt-in if built); the **P9-1** runs when the author can; **P9-3** after them.
+13. **Regulatory compliance** (done 2026-09-25, ADR-0018, beta.60): every transmission is judged
+    against a regulatory profile before the radio is keyed — FCC Part 97 first (data segments,
+    2.8 kHz, the whole occupied signal inside the segment with a margin, license classes,
+    automatic control under §97.221, 60 m) — from the spectrum each waveform measures; the
+    link is capped to the rungs the rules allow; the control mode is the operator's to say.
+    Owed: another administration's profile when somebody asks for one, and the air — an
+    operator's view of LEGAL / WARNING / TX BLOCKED on a real dial. The panel's redesign (the
+    same beta): a token design system, the signal-analysis card that undocks into a window of
+    its own, Speed as the Status tab's first chart, Keying and drive always in reach, the log
+    as one entry a row with filters, and Help / About with the updater's status.

@@ -115,6 +115,15 @@ Every one of these has cost the project a day at some point; none is decoration.
 12. **The panel was actually loaded.** A PR touching `app/ui/` says it was opened against a
     running daemon with a clean browser console, the LINK lamp lit and the readings
     populated. `node --check` catches syntax and nothing else.
+13. **Nothing reaches the transmitter around the regulatory gate** (ADR-0018). A new kind of
+    transmission is queued as an `Outgoing` and judged in `Station::gate`, or judged by the
+    policy itself where it rides inside another's keying (as the Morse identifier does);
+    `playback()` keys only with the policy's leave. A PR that adds a way to key the radio,
+    play audio or start an exchange says which it is, and a test holds it to the gate
+    (`every_way_to_the_transmitter_passes_the_gate`).
+14. **The panel's look comes from the tokens.** Sizes, spacing, radii, control heights and
+    colours are the tokens at the top of `app/ui/style.css`; a new component uses them (and
+    the `.card` / `.card-head` / `.badge` / `.chip` pieces) rather than numbers of its own.
 
 ### 3.4 Run it
 

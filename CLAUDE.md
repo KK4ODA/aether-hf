@@ -600,6 +600,40 @@ session that ends first marks the rest undelivered with its reason. The typed li
 the moment it is sent and put back only if the send is refused — cleared after the reply, a
 quick typist's next words were glued to the last message. beta.58's separate SENT box is gone.
 
+**The regulatory gate (beta.60, ADR-0018, `docs/user/fcc-regulatory-controls.md`).** Nothing
+is keyed without the policy's leave: `Station::gate` judges the head of the queue
+(`transmission_of` → `Policy::authorize`), `playback()` spends the `Authorization` before
+`ptt.key()`, and a Morse identifier appended inside a burst is judged as CW in `append_cw_id`.
+The rules are data (`core/aetherd/data/regulatory/us-fcc-part97.json`, e-CFR as of
+2026-09-23; `profile::KNOWN` lists profiles); what each rung occupies is measured
+(`tools/make_occupancy.py` → `core/aetherd/data/occupancy.json`, both readings of §97.3(a)(8),
+the wider decides — every Aether emission is over 500 Hz that way, so an automatic station is
+confined to the §97.221(b) segments). `[regulatory]` is configuration schema 6 (profile, control
+local/remote/automatic — never inferred —, license_class, sideband, edge_margin_hz, band_plan,
+dial_hz for a radio that cannot report its dial, log_permitted); unset, nothing transmits. The
+link is capped by `set_ceiling` (model first). A `[sim]` daemon is judged only if its file names
+a profile — the bench pair in `C:\Dev\AetherBench\sim` now has local/extra/USB and a declared
+dial. Control API: `status.regulatory`, `regulatory.check`, `regulatory.profile`, the
+`regulatory` event, error code `regulatory`. MAINTAINING rule 13: a new way to key the radio goes
+through the gate and gets a test.
+
+**The panel's redesign (beta.60).** `style.css` opens with the design system (type scale, spacing,
+radii, 30/24 px control heights, card padding; `.card`/`.card-head`, `.badge` with
+`data-verdict`, `.chip`, `.live`, `details.hint`, `.disclosure`). The constellation, spectrum and
+waterfall are one card built by `app/ui/scopes.js` (markup, drawing, waterfall controls) and used
+by the Diagnostics tab and by `signal.html`/`signal.js`, the undocked window: under the shell the
+panel asks through events (`panel-signal` undock/dock/state → `signal-window {open}`;
+`app/src-tauri/src/signal.rs`), in a browser it is a named pop-up that announces itself on the
+`aether-signal` BroadcastChannel. The panel's capability grants events and window sizing only,
+never commands. Help / About reads the updater's view (`panel-update` view/check → `update`,
+`View.checked`) and its Check for Updates runs the Help menu's own check. Speed is the Status
+tab's first chart (`aether.chart`, written only on a click; the old `aether.statuschart` is
+dropped). Keying and drive is a folding card under the call row with its numbers and buttons in
+its head. The log is one entry a row with tags and filters (`log(message, level, tag)`). CI's
+"panel parses" step checks every `app/ui/*.js` as a module. The rules UI: the header's verdict
+badge and its reasoning panel (`reg-detail`), the Session tab's chip and *Dial is at* row, the
+Setup-needed banner, Setup step 1's rules fields, and the Diagnostics tab's Rules card.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
