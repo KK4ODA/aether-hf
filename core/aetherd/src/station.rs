@@ -2844,6 +2844,22 @@ impl<P: Ptt> Station<P> {
                 .map_or(cw.wpm, |max| cw.wpm.min(max)),
             ..cw
         };
+        // The identifier rides inside the burst's keying, so the gate's leave for the burst
+        // covers its data, not this: it is judged here as the CW emission it is (ADR-0018),
+        // and a refused one waits for a transmission of its own, which is judged again.
+        let identifier = Transmission {
+            what: "the Morse identifier".to_owned(),
+            kind: EmissionKind::Cw,
+            audio: Edges::tone(cw.tone_hz, crate::regulatory::occupancy::CW_HALF_WIDTH_HZ),
+            direction: self.session_direction.unwrap_or(Direction::Originate),
+        };
+        let situation = self.situation(false);
+        let decision = self.policy.evaluate(&situation, &identifier);
+        if !decision.allowed() {
+            self.identifier.transmitted_since = true;
+            self.report_decision(&decision, now);
+            return;
+        }
         let audio = cw.audio(&self.engine.my_call, audio_rate);
         if audio.is_empty() {
             return;
@@ -4837,6 +4853,57 @@ mod tests {
                 "{what} not judged: {whats:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_identifier_inside_a_burst_is_judged_as_the_cw_it_is() {
+        // the Morse identifier rides inside a data burst's keying, after the data the gate
+        // judged: it is judged again as CW before it is appended, so a profile that allowed
+        // the data but not CW there keeps it out of the burst
+        use crate::regulatory::{ControlMode, Policy};
+        let identifying = |regulatory| StationConfig {
+            callsign: "W4ODA".to_owned(),
+            wait_for_clear: false,
+            cw_id: Some(CwId::default()),
+            regulatory,
+            ..StationConfig::default()
+        };
+        let mut lawful = Station::new(
+            identifying(under_us_rules(14_078_000, ControlMode::Local)),
+            NullPtt::default(),
+            1,
+        );
+        lawful.connect("KK4XYZ").expect("idle");
+        run_alone(&mut lawful, 3.0, |s| s.stats.cw_ids > 0);
+        assert_eq!(lawful.stats.cw_ids, 1, "the call carries the identifier");
+
+        let mut profile =
+            crate::regulatory::profile::load("us-fcc-part97").expect("the profile reads");
+        for privilege in &mut profile.privileges.general {
+            if privilege.range.holds(14_078_000.0, 14_078_000.0) {
+                privilege.emissions = Some(vec!["data".to_owned()]);
+            }
+        }
+        let mut station = Station::new(
+            identifying(under_us_rules(14_078_000, ControlMode::Local)),
+            NullPtt::default(),
+            1,
+        );
+        station.set_policy(Policy::Rules(std::sync::Arc::new(profile)));
+        station.connect("KK4XYZ").expect("idle");
+        run_alone(&mut station, 3.0, Station::transmitting);
+        assert!(
+            station.transmitting(),
+            "the call itself is lawful and keyed"
+        );
+        assert_eq!(station.stats.cw_ids, 0, "but it carries no identifier");
+        assert!(
+            station
+                .take_regulatory_reports()
+                .iter()
+                .any(|d| d.what == "the Morse identifier" && !d.allowed()),
+            "and the refusal is reported"
+        );
     }
 
     #[test]
