@@ -396,7 +396,11 @@ fn the_rate_controller_follows_the_same_trace_as_the_model() {
             let ok = observation["ok"].as_u64().expect("ok") as usize;
             let failed = observation["failed"].as_u64().expect("failed") as usize;
             let mode = observation["mode"].as_u64().map(|m| m as usize);
-            rc.observe(snr, ok, failed, mode);
+            if observation["snr_only"].as_bool() == Some(true) {
+                rc.observe_snr(snr);
+            } else {
+                rc.observe(snr, ok, failed, mode);
+            }
 
             let want_mode = expected["recommend"].as_u64().expect("recommend") as usize;
             assert_eq!(

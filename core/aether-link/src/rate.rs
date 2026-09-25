@@ -394,6 +394,19 @@ impl RateController {
         self.margin_db
     }
 
+    /// Take a burst's SNR and nothing else: for a burst sent faster than this station asked
+    /// for, whose failure is the sender's choice and no news to this controller (ADR-0020) —
+    /// the Test's ladder climbing past what the path carries, or a burst sent before the
+    /// advice to go slower reached the sender. What decoded in it is still a measurement.
+    pub fn observe_snr(&mut self, snr_db: Option<f64>) {
+        if let Some(value) = snr_db {
+            self.smoothed_snr_db = Some(
+                self.smoothed_snr_db
+                    .map_or(value, |prev| 0.7 * prev + 0.3 * value),
+            );
+        }
+    }
+
     /// Feed one burst: the mean SNR of its frames, how many decoded and failed, and the mode
     /// they were sent in — which is what turns a failure into a measurement.
     pub fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {

@@ -49,6 +49,14 @@ pub trait SoftFrame {
     fn rv(&self) -> u8;
     /// SNR measured on this frame, referenced to 3 kHz.
     fn snr_db(&self) -> f64;
+    /// Whether the frame's measurements mean something when it does not decode: acquisition
+    /// was confident enough that a real frame was there (ADR-0020). A detection just over its
+    /// threshold that does not decode is as likely the correlator on noise, and its SNR an
+    /// estimate of that noise — on the air one read -12 dB between frames decoding at +5 to +8.
+    /// A frame that decodes is real whatever this says; a simulated frame is always real.
+    fn trusted(&self) -> bool {
+        true
+    }
     /// When the frame started, in the receiver's clock.
     fn t_start(&self) -> f64;
     /// When it finished.
