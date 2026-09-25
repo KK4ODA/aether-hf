@@ -4175,6 +4175,7 @@ function wire() {
   wireRules();
   wireKeying();
   wireLog();
+  wireHelpNotes();
   wireAbout();
   loadHistory();
   renderFrames(); // what was kept shows before the first new frame does
@@ -4407,6 +4408,22 @@ function applyLastSession(status) {
     lastSessionText = `${status.remote} — calling`;
   }
   if (lastSessionText) line.textContent = lastSessionText;
+}
+
+// The Session tab's help is a small ? whose note opens over the page (details.help-pop): it
+// closes again on a click anywhere else, or on Escape, as a popover does.
+function wireHelpNotes() {
+  const closeAll = (except) => {
+    for (const pop of document.querySelectorAll("details.help-pop[open]")) {
+      if (pop !== except) pop.open = false;
+    }
+  };
+  document.addEventListener("click", (event) => {
+    closeAll(event.target instanceof Element ? event.target.closest("details.help-pop") : null);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAll(null);
+  });
 }
 
 // Under the desktop shell the opener shows the folder: it may open the folder the shell
