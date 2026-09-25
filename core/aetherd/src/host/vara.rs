@@ -150,9 +150,13 @@ pub struct HostState {
 /// modem is broken, and kept, so the control API can say what was asked.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Recorded {
-    /// `CHAT ON`: `VarAC` asks for it on every start, and the short frames it means are a
-    /// different air interface this modem does not have.
+    /// `CHAT ON`: `VarAC` asks for it on every start. On VARA it lets the KISS port transmit
+    /// while this host holds the command port ("Winlink priority" otherwise); here it does
+    /// the same for Aether's KISS port (ADR-0019).
     pub chat: bool,
+    /// `IGNOREKISSDCD ON`: KISS frames go without waiting for a clear channel — `VarAC` says it
+    /// for its broadcasts.
+    pub ignore_kiss_dcd: bool,
     /// `LISTEN CQ`: hear only CQ frames. This station hears everything and answers calls to
     /// its own callsigns either way.
     pub cq_only: bool,
@@ -331,8 +335,11 @@ impl HostState {
             ("BW2300" | "BW500", []) if Self::bandwidth_of(verb) == Some(self.bandwidth_hz) => {
                 HostOutcome::ok()
             }
-            // a KISS-port detail with no KISS port behind it: heard, nothing to do
-            ("IGNOREKISSDCD", ["ON" | "OFF"]) => HostOutcome::ok(),
+            // the KISS port's channel access, as VARA has it (ADR-0019)
+            ("IGNOREKISSDCD", [on @ ("ON" | "OFF")]) => {
+                self.recorded.ignore_kiss_dcd = *on == "ON";
+                HostOutcome::ok()
+            }
             _ => HostOutcome::wrong(),
         }
     }

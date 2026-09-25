@@ -18,6 +18,7 @@ pub mod cwid;
 pub mod grid;
 pub mod heard;
 pub mod host;
+pub mod kiss;
 pub mod log;
 pub mod memories;
 pub mod profile;

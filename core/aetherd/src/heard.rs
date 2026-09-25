@@ -32,6 +32,8 @@ pub enum Activity {
     Probing,
     /// The other end of a session with this station.
     Connected,
+    /// A datagram: a KISS client's frame — an APRS report, a `VarAC` broadcast (ADR-0019).
+    Datagram,
 }
 
 /// One station, as the list keeps it.

@@ -148,6 +148,20 @@ pub struct DaemonState {
     pub memories: crate::memories::Memories,
     /// The host interface, when one is listening.
     pub host: Option<HostStatus>,
+    /// What the host interface knows that the KISS port obeys: a host attached, `CHAT ON`,
+    /// `IGNOREKISSDCD ON` (ADR-0019). Shared by the two servers.
+    pub host_flags: crate::kiss::HostFlags,
+    /// The KISS port, when it is listening.
+    pub kiss: Option<crate::kiss::KissServer>,
+    /// Why the KISS port is not listening when it should be.
+    pub kiss_error: Option<String>,
+    /// The KISS settings last tried: a change starts the port again.
+    pub kiss_tried: Option<crate::kiss::KissConfig>,
+    /// When a port that would not open is tried again — whatever held it (VARA, a soundmodem
+    /// on 8100) may have gone, and saving the same settings again changes nothing.
+    pub kiss_retry_at: Option<std::time::Instant>,
+    /// A handle on the control API, for the servers the daemon starts while it runs.
+    pub control_handle: Option<crate::control::ControlHandle>,
     /// The profiles beside the configuration, and which one is active.
     pub profiles: crate::profile::Store,
     /// Whether the settings or the profiles changed since the run loop last told the
@@ -194,6 +208,12 @@ impl DaemonState {
                 path.with_file_name("frequencies.json"),
             )),
             host: None,
+            host_flags: crate::kiss::HostFlags::default(),
+            kiss: None,
+            kiss_error: None,
+            kiss_tried: None,
+            kiss_retry_at: None,
+            control_handle: None,
             profiles: crate::profile::Store::open(Some(&path)),
             profiles_changed: false,
             path,
@@ -218,9 +238,41 @@ impl DaemonState {
                 "command_address": host.command_address,
                 "data_address": host.data_address,
                 "connected": host.connected.load(std::sync::atomic::Ordering::Relaxed),
+                // `CHAT ON`: VARA's leave for the KISS port to transmit while a host is attached
+                "chat": self.host_flags.chat.load(std::sync::atomic::Ordering::Relaxed),
             }),
             None => json!({ "enabled": false, "connected": false }),
         }
+    }
+
+    /// The KISS port, as `status.kiss` reports it: listening or why not, the clients, what
+    /// has crossed, and why client frames are held when they are (ADR-0019).
+    #[must_use]
+    pub fn kiss_json(&self) -> Value {
+        let settings = &self.config.kiss;
+        let mut out = match &self.kiss {
+            Some(server) => {
+                let mut status = serde_json::to_value(server.status()).unwrap_or(Value::Null);
+                status["exposed"] = json!(crate::kiss::server::exposed(&server.address));
+                status
+            }
+            None => json!({
+                "listening": false,
+                "address": Value::Null,
+                "error": self.kiss_error,
+                "clients": [],
+            }),
+        };
+        out["enabled"] = json!(settings.enabled);
+        out["bind"] = json!(settings.bind);
+        out["rung"] = json!(settings.rung);
+        out["wait_for_clear"] = json!(settings.wait_for_clear);
+        out["ignore_dcd"] = json!(
+            self.host_flags
+                .ignore_dcd
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+        out
     }
 }
 
@@ -338,27 +390,46 @@ pub fn dispatch_with<P: Ptt>(
             );
         }
         "frequencies.set" => return frequencies_set(daemon, &request.params, request.id.clone()),
+        "kiss.status" => return Response::ok(request.id.clone(), kiss_status(daemon.as_deref())),
+        "kiss.disconnect" => return kiss_disconnect(daemon, &request.params, request.id.clone()),
         "status" => {
-            let mut result = status(station);
-            result["supervised"] = json!(daemon.as_ref().is_some_and(|d| d.supervised));
-            result["host"] = daemon.as_ref().map_or_else(
-                || json!({ "enabled": false, "connected": false }),
-                |d| d.host_json(),
+            return Response::ok(
+                request.id.clone(),
+                daemon_status(station, daemon.as_deref()),
             );
-            result["audio_fault"] = json!(daemon.as_ref().and_then(|d| d.audio_fault.clone()));
-            result["config_note"] = json!(daemon.as_ref().and_then(|d| d.config_note.clone()));
-            // which installation this daemon runs from: a shell that finds one already
-            // listening decides from this whether it is its own to stop
-            result["binary"] = json!(
-                std::env::current_exe()
-                    .ok()
-                    .map(|p| p.display().to_string())
-            );
-            return Response::ok(request.id.clone(), result);
         }
         _ => {}
     }
     dispatch_station(station, request)
+}
+
+/// The KISS server's state, or a disabled one's when there is no daemon.
+fn kiss_status(daemon: Option<&DaemonState>) -> Value {
+    daemon.map_or_else(
+        || json!({ "enabled": false, "listening": false, "clients": [] }),
+        DaemonState::kiss_json,
+    )
+}
+
+/// `status`: the station's, with what only the daemon knows.
+fn daemon_status<P: Ptt>(station: &mut Station<P>, daemon: Option<&DaemonState>) -> Value {
+    let mut result = status(station);
+    result["supervised"] = json!(daemon.is_some_and(|d| d.supervised));
+    result["host"] = daemon.map_or_else(
+        || json!({ "enabled": false, "connected": false }),
+        DaemonState::host_json,
+    );
+    result["kiss"] = kiss_status(daemon);
+    result["audio_fault"] = json!(daemon.and_then(|d| d.audio_fault.clone()));
+    result["config_note"] = json!(daemon.and_then(|d| d.config_note.clone()));
+    // which installation this daemon runs from: a shell that finds one already
+    // listening decides from this whether it is its own to stop
+    result["binary"] = json!(
+        std::env::current_exe()
+            .ok()
+            .map(|p| p.display().to_string())
+    );
+    result
 }
 
 /// The configuration as a client may see it: with the secrets taken out.
@@ -605,6 +676,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
             Response::ok(id, json!({ "accepted": true, "orderly": false }))
         }
         "send" => send(station, params, id),
+        "datagram.send" => datagram_send(station, params, id),
         "listen" => listen(params, id),
         "devices.list" => devices(id),
         other => Response::failed(
@@ -968,6 +1040,104 @@ fn regulatory_check<P: Ptt>(station: &mut Station<P>, params: &Value) -> Value {
     station.regulatory_check(&query)
 }
 
+/// `datagram.send`: a KISS client's frame, to go out as a datagram outside any session
+/// (ADR-0019). It waits in the station's queue while a session is up; a full queue is a
+/// retryable `queue_full`, which the KISS port turns into TCP backpressure.
+fn datagram_send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    use crate::station::{DATAGRAM_QUEUE, DatagramRefusal, DatagramRequest};
+    let Some(frame) = params
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(from_base64)
+    else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A frame is required, base64: {\"data\": \"...\"}.",
+                false,
+            ),
+        );
+    };
+    let number = |key: &str| params.get(key).and_then(Value::as_f64);
+    let request = DatagramRequest {
+        frame_type: params
+            .get("frame_type")
+            .and_then(Value::as_u64)
+            .and_then(|t| u8::try_from(t).ok())
+            .unwrap_or(0),
+        frame,
+        reference: params.get("ref").and_then(Value::as_str).map(str::to_owned),
+        rung: params
+            .get("rung")
+            .and_then(Value::as_u64)
+            .and_then(|r| usize::try_from(r).ok()),
+        wait_for_clear: params
+            .get("wait_for_clear")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        persistence: number("persistence").unwrap_or(crate::kiss::DEFAULT_PERSISTENCE),
+        slot_s: number("slot_s").unwrap_or(crate::kiss::DEFAULT_SLOT_S),
+    };
+    match station.send_datagram(request) {
+        Ok(queued) => Response::ok(
+            id,
+            json!({
+                "accepted": true,
+                "queued": queued.queued,
+                "limit": DATAGRAM_QUEUE,
+                "fragments": queued.fragments,
+                "bursts": queued.bursts,
+                "air_s": queued.air_s,
+                "rung": queued.rung,
+            }),
+        ),
+        Err(DatagramRefusal::QueueFull) => Response::failed(
+            id,
+            ApiError::new(
+                "queue_full",
+                format!(
+                    "{DATAGRAM_QUEUE} datagrams are waiting already; try again when one has gone."
+                ),
+                true,
+            ),
+        ),
+        Err(DatagramRefusal::Invalid(why)) => Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                format!("Cannot send the datagram: {why}."),
+                false,
+            ),
+        ),
+        Err(DatagramRefusal::NotAllowed(why)) => Response::failed(
+            id,
+            ApiError::new(
+                "refused",
+                format!("Cannot send the datagram: {why}."),
+                false,
+            ),
+        ),
+    }
+}
+
+/// `kiss.disconnect {client?}`: close one KISS client's connection, or every one's.
+fn kiss_disconnect(
+    daemon: Option<&mut DaemonState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let Some(server) = daemon.and_then(|d| d.kiss.as_ref()) else {
+        return Response::failed(
+            id,
+            ApiError::new("not_listening", "The KISS port is not listening.", false),
+        );
+    };
+    let client = params.get("client").and_then(Value::as_u64);
+    let closed = server.disconnect(client);
+    Response::ok(id, json!({ "disconnected": closed }))
+}
+
 fn send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
     let Some(text) = params.get("data").and_then(Value::as_str) else {
         return Response::failed(
@@ -1089,6 +1259,8 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         // where the station stands with the rules (ADR-0018): the indicator, the ceiling on
         // the link's rungs, the gate's last decision and the dials where its waveforms fit
         "regulatory": station.regulatory_status(),
+        // KISS clients' datagrams: waiting, sent and heard (ADR-0019)
+        "datagrams": station.datagram_status(),
         // the messages sent with a reference that the other station does not yet have all
         // of, and the last ones resolved: a panel that missed a `sent` event looks here
         "sent": { "pending": sent_pending, "recent": sent_recent },

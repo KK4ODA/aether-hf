@@ -281,6 +281,92 @@ fn two_daemons_complete_a_session_over_the_simulated_channel() {
 }
 
 #[test]
+fn a_kiss_frame_crosses_from_one_daemons_kiss_port_to_the_others() {
+    use aetherd::kiss::framing::{Decoded, Decoder, encode};
+    // ADR-0019 end to end: an APRS program on one station's KISS port, and VarAC's type-1
+    // frames beside it, heard by a program on the other station's — over the simulated
+    // channel, as datagrams on the tone floor, with the frame types and lengths kept
+    let dir = std::env::temp_dir().join(format!("aether-kiss-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let kiss = "\n[kiss]\nenabled = true\nbind = \"127.0.0.1:0\"";
+    let mut a = Daemon::start_with(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"", kiss);
+    let channel = a.sim_address();
+    let b = Daemon::start_with(
+        &dir,
+        "b",
+        "KK4XYZ",
+        &format!("connect = \"{channel}\""),
+        kiss,
+    );
+    let port_of = |daemon: &Daemon| -> u16 {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(port) = daemon.status()["kiss"]["address"]
+                .as_str()
+                .and_then(|a| a.rsplit_once(':'))
+                .and_then(|(_, p)| p.parse().ok())
+            {
+                return port;
+            }
+            assert!(Instant::now() < deadline, "the KISS port never opened");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let mut listener = TcpStream::connect(("127.0.0.1", port_of(&b))).expect("B's KISS port");
+    listener
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .expect("timeout");
+    let mut sender = TcpStream::connect(("127.0.0.1", port_of(&a))).expect("A's KISS port");
+
+    // an AX.25 UI frame, as an APRS program hands it over: no flags, no FCS
+    let mut aprs: Vec<u8> = b"APRS  ".iter().map(|c| c << 1).collect();
+    aprs.push(0xE0);
+    aprs.extend(b"W4ODA ".iter().map(|c| c << 1));
+    aprs.push(0x61);
+    aprs.extend([0x03, 0xF0]);
+    aprs.extend(b"!3346.00N/08418.00W-Aether KISS over the air ".iter());
+    aprs.extend([0xC0, 0xDB]); // FEND and FESC inside the frame
+    let varac = b"VarAC-style type-1 broadcast".to_vec();
+    let mut wire = encode(0, 0, &aprs);
+    wire.extend(encode(0, 1, &varac));
+    sender.write_all(&wire).expect("send");
+
+    let mut decoder = Decoder::new(4096);
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(150);
+    let mut buffer = [0u8; 4096];
+    while got.len() < 2 && Instant::now() < deadline {
+        if let Ok(n) = listener.read(&mut buffer) {
+            assert!(n > 0, "B's KISS port closed the connection");
+            for decoded in decoder.push(&buffer[..n]) {
+                if let Decoded::Frame(frame) = decoded {
+                    got.push((frame.command, frame.data));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        got,
+        [(0, aprs), (1, varac)],
+        "both frames, in order, as sent"
+    );
+    assert_eq!(a.status()["datagrams"]["sent"], 2);
+    assert_eq!(b.status()["datagrams"]["heard"], 2);
+    // and B heard W4ODA as a station sending datagrams
+    let heard = b.call("heard.list", &json!({}));
+    assert!(
+        heard["result"]["stations"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|st| st["callsign"] == "W4ODA")),
+        "{heard}"
+    );
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn two_daemons_complete_a_session_at_500_hz() {
     // the narrow waveform end to end through the daemon: its own mode table, the
     // capabilities a host reads `BW500` from, and a recording that says which waveform

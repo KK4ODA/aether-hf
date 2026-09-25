@@ -399,6 +399,59 @@ fn default_host_bind() -> String {
     "127.0.0.1:8300".to_owned()
 }
 
+/// The KISS TCP port (ADR-0019): what APRS programs, `VarAC`'s broadcasts and packet programs
+/// that use VARA's KISS port connect to. Off by default, on loopback when on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KissSection {
+    /// Whether to listen. Off by default: a station nobody asked to take frames from other
+    /// software should not be taking them.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Where to listen. 8100 is VARA's KISS port, so a program set up for VARA finds this one
+    /// unchanged; loopback, so only programs on this computer can make it transmit.
+    #[serde(default = "default_kiss_bind")]
+    pub bind: String,
+    /// The rung datagrams go at: 1, the tone floor's `tone-36`, which a station of either
+    /// bandwidth decodes, as VARA sends KISS frames on its 500 Hz waveform for the same reason.
+    #[serde(default = "default_kiss_rung")]
+    pub rung: usize,
+    /// Wait for a clear channel before a datagram, as VARA's KISS port does; a host program's
+    /// `IGNOREKISSDCD ON` turns it off while that program is attached.
+    #[serde(default = "default_true")]
+    pub wait_for_clear: bool,
+    /// The most programs connected at once.
+    #[serde(default = "default_kiss_clients")]
+    pub max_clients: usize,
+    /// Log every frame's command, type and length and its queueing — never its contents.
+    #[serde(default)]
+    pub trace: bool,
+}
+
+impl Default for KissSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_kiss_bind(),
+            rung: default_kiss_rung(),
+            wait_for_clear: true,
+            max_clients: default_kiss_clients(),
+            trace: false,
+        }
+    }
+}
+
+fn default_kiss_bind() -> String {
+    format!("127.0.0.1:{}", crate::kiss::DEFAULT_PORT)
+}
+
+const fn default_kiss_rung() -> usize {
+    1
+}
+
+const fn default_kiss_clients() -> usize {
+    4
+}
+
 /// Which releases the desktop application offers to install.
 ///
 /// Read by the shell, not the daemon: it lives here because this file is the one place a
@@ -748,6 +801,9 @@ pub struct Config {
     /// The VARA-compatible host interface.
     #[serde(default)]
     pub host: HostSection,
+    /// The KISS TCP port, for APRS and packet programs (ADR-0019).
+    #[serde(default)]
+    pub kiss: KissSection,
     /// The log.
     #[serde(default)]
     pub log: LogSection,
@@ -995,6 +1051,7 @@ impl Config {
             radio: RadioSection::default(),
             control: ControlSection::default(),
             host: HostSection::default(),
+            kiss: KissSection::default(),
             log: LogSection::default(),
             update: UpdateSection::default(),
             record: RecordSection::default(),
@@ -1242,6 +1299,19 @@ impl Config {
         }
     }
 
+    /// KISS-port settings in the form the server wants.
+    #[must_use]
+    pub fn kiss_config(&self) -> crate::kiss::KissConfig {
+        crate::kiss::KissConfig {
+            enabled: self.kiss.enabled,
+            bind: self.kiss.bind.clone(),
+            rung: self.kiss.rung,
+            wait_for_clear: self.kiss.wait_for_clear,
+            max_clients: self.kiss.max_clients,
+            trace: self.kiss.trace,
+        }
+    }
+
     /// The simulated channel, if the file asks for one.
     #[must_use]
     pub fn sim_config(&self) -> Option<crate::sim::SimConfig> {
@@ -1302,6 +1372,13 @@ pub const LIVE_KEYS: &[&str] = &[
     "regulatory.band_plan",
     "regulatory.dial_hz",
     "regulatory.log_permitted",
+    // the KISS port restarts in place: no program attached elsewhere is interrupted
+    "kiss.enabled",
+    "kiss.bind",
+    "kiss.rung",
+    "kiss.wait_for_clear",
+    "kiss.max_clients",
+    "kiss.trace",
 ];
 
 /// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
@@ -1566,6 +1643,17 @@ enabled = false
 bind = "127.0.0.1:8300"
 # Print every line exchanged with the host program, for the first run against a new one.
 trace = false
+
+[kiss]
+# The KISS TCP port, for APRS programs, VarAC's broadcasts and packet programs that use VARA's
+# KISS port (ADR-0019, docs/user/kiss.md). Off unless asked for; loopback, so only programs on
+# this computer can make the station transmit. Changes take effect without a restart.
+enabled = false
+bind = "127.0.0.1:8100"
+rung = 1                   # tone-36: heard by stations of either bandwidth
+wait_for_clear = true      # wait for a clear channel before each datagram
+max_clients = 4
+trace = false              # log every frame's type and length (never its contents)
 
 [log]
 # `text` for a terminal; `json` writes one object per line for a journal or a log shipper.

@@ -295,7 +295,9 @@ fn run() -> Result<Exit, String> {
     }
 
     let (handle, control) = channel();
+    daemon.control_handle = Some(handle.clone());
     let _servers = start_servers(&config, handle, &mut daemon)?;
+    sync_kiss(&mut station, &mut daemon);
 
     if let Some(call) = &args.call {
         station.connect(call).map_err(str::to_owned)?;
@@ -519,7 +521,8 @@ fn start_servers(
     };
 
     let host = if config.host.enabled {
-        let server = HostServer::start(&config.host_config(), handle).map_err(|e| e.to_string())?;
+        let server = HostServer::start(&config.host_config(), handle, daemon.host_flags.clone())
+            .map_err(|e| e.to_string())?;
         daemon.host = Some(HostStatus {
             command_address: server.command_address.to_string(),
             data_address: server.data_address.to_string(),
@@ -542,6 +545,68 @@ fn start_servers(
     };
     Ok((control, host))
 }
+
+/// Keep the KISS port as the configuration says (ADR-0019): started, stopped, or started
+/// again in place when its settings change — without restarting the daemon, so a host
+/// program or a panel attached meanwhile is not interrupted. A port that would not bind is
+/// tried again every `KISS_RETRY`, its error logged once. The port's own notes go to the log
+/// here.
+fn sync_kiss(station: &mut Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
+    let state = format!("{:?}", station.state());
+    if let Some(server) = &daemon.kiss {
+        for note in server.take_notes() {
+            let level = if note.warn { Level::Warn } else { Level::Info };
+            daemon.log.record(level, "kiss", &note.text, &state);
+        }
+    }
+    let wanted = daemon.config.kiss_config();
+    let desired = wanted.enabled.then_some(wanted);
+    let changed = desired != daemon.kiss_tried;
+    let retry = !changed
+        && daemon.kiss.is_none()
+        && desired.is_some()
+        && daemon
+            .kiss_retry_at
+            .is_some_and(|at| std::time::Instant::now() >= at);
+    if !changed && !retry {
+        return;
+    }
+    daemon.kiss_tried.clone_from(&desired);
+    if daemon.kiss.take().is_some() {
+        daemon
+            .log
+            .record(Level::Info, "kiss", "the KISS port is closed", &state);
+    }
+    // the same failure again is not news: said once, and shown on the panel meanwhile
+    let previous = daemon.kiss_error.take();
+    daemon.kiss_retry_at = None;
+    let Some(config) = desired else {
+        station.clear_datagrams("the KISS port was switched off");
+        return;
+    };
+    let Some(handle) = daemon.control_handle.clone() else {
+        return;
+    };
+    match aetherd::kiss::KissServer::start(&config, handle, daemon.host_flags.clone()) {
+        Ok(server) => {
+            for note in server.take_notes() {
+                let level = if note.warn { Level::Warn } else { Level::Info };
+                daemon.log.record(level, "kiss", &note.text, &state);
+            }
+            daemon.kiss = Some(server);
+        }
+        Err(error) => {
+            if previous.as_deref() != Some(error.as_str()) {
+                daemon.log.record(Level::Error, "kiss", &error, &state);
+            }
+            daemon.kiss_error = Some(error);
+            daemon.kiss_retry_at = Some(std::time::Instant::now() + KISS_RETRY);
+        }
+    }
+}
+
+/// How often a KISS port that would not open is tried again.
+const KISS_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What the log says on the way out: a stop, or a stop that asked for a start.
 fn stop_reason(restarting: &std::sync::atomic::AtomicBool) -> &'static str {
@@ -858,6 +923,7 @@ fn serve(
 
         let pass_began = std::time::Instant::now();
         answer_commands(station, control, daemon, stopping, restarting);
+        sync_kiss(station, daemon);
         let commands_ms = pass_began.elapsed().as_secs_f64() * 1000.0;
 
         // the card's clock goes in ahead of the block, so a block that outlasts this
@@ -1064,6 +1130,7 @@ fn publish_station(
     for decision in station.take_regulatory_reports() {
         report_regulatory(station, control, daemon, &decision);
     }
+    publish_datagrams(station, control, daemon);
     let received = station.take_received();
     if !received.is_empty() {
         // The payload reaches panels through this event and host programs through the
@@ -1073,6 +1140,59 @@ fn publish_station(
         control.publish(&Event::new(
             "data",
             json!({"data": aetherd::control::methods::to_base64(&received)}),
+        ));
+    }
+}
+
+/// KISS clients' datagrams (ADR-0019): each one heard goes to the clients as a `datagram`
+/// event — the frame, its type and who sent it — and what became of each one sent with a
+/// reference as a `datagram-sent`, which is how a KISS ACKMODE client learns its frame left.
+/// The log says a datagram came or went and how long it was; never what it said.
+fn publish_datagrams(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+) {
+    for heard in station.take_received_datagrams() {
+        daemon.log.record(
+            Level::Info,
+            "kiss",
+            &format!(
+                "datagram from {}: {} bytes, type {}, at {:.1} dB",
+                heard.source,
+                heard.frame.len(),
+                heard.frame_type,
+                heard.snr_db
+            ),
+            &state_name(station),
+        );
+        control.publish(&Event::new(
+            "datagram",
+            json!({
+                "source": heard.source,
+                "frame_type": heard.frame_type,
+                "data": aetherd::control::methods::to_base64(&heard.frame),
+                "bytes": heard.frame.len(),
+                "snr_db": heard.snr_db,
+                "rung": heard.rung,
+            }),
+        ));
+    }
+    for report in station.take_datagram_reports() {
+        if !report.sent {
+            daemon.log.record(
+                Level::Warn,
+                "kiss",
+                &format!(
+                    "a datagram did not go out: {}",
+                    report.reason.as_deref().unwrap_or("no reason given")
+                ),
+                &state_name(station),
+            );
+        }
+        control.publish(&Event::new(
+            "datagram-sent",
+            json!({ "ref": report.reference, "sent": report.sent, "reason": report.reason }),
         ));
     }
 }
@@ -1235,6 +1355,7 @@ fn sighting_of(
         "connect" => (Activity::Calling, frame.to.clone()),
         "answer" | "probe-answer" => (Activity::Answering, frame.to.clone()),
         "probe" => (Activity::Probing, frame.to.clone()),
+        "datagram" => (Activity::Datagram, None),
         _ => (Activity::Connected, None),
     };
     Some(Sighting {
