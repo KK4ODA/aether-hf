@@ -31,7 +31,11 @@ through an open-source signing service is on the roadmap (`docs/ROADMAP.md` §9)
 
 First run writes a configuration with a placeholder callsign and no keying, so nothing
 transmits until you have been through **Setup** — which is where the panel opens until the
-first save: callsign, radio interface and devices, receive level, save. The configuration lives at
+first save: callsign and the rules you operate under, radio interface and devices, receive
+level, save. Aether judges every transmission against those rules before it keys the radio, and
+transmits nothing until you have said which rules apply, how the station is controlled (local,
+remote or automatic) and your license class — an update from an earlier version asks for them
+too, in a banner on every tab (`docs/user/fcc-regulatory-controls.md`). The configuration lives at
 `%APPDATA%\aether-hf\station.toml`; the daemon's output for this run is `aetherd.log`
 beside it and the run before it is `aetherd.prev.log`, and *Help > Open the configuration
 folder* takes you there. If restarting the modem made a problem go away, the log worth

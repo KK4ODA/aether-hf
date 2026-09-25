@@ -75,6 +75,10 @@ Events are unsolicited and carry no `id`:
 { "event": "state", "data": { "state": "connected", "role": "iss", "remote": "KK4XYZ" } }
 ```
 
+A request the regulatory policy refuses — a `connect`, `probe`, `beacon`, `tune`, `drive.set` or
+`ptt.test` the rules do not allow here — fails with code `regulatory`, a message that says why in a
+sentence, and the whole decision in `result.decision` (§4.10).
+
 **Error messages are written for operators, not developers.** `"The sound device 'USB Audio
 CODEC' was unplugged. Reconnect it or choose another in Settings → Audio."` — not a stack
 trace, and not `ENODEV`. The `code` is the stable machine-readable field; `message` is
@@ -88,7 +92,7 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `transmitting`, `probing` (a probe is out and its answer awaited — the state stays `idle`), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `transmitting`, `probing` (a probe is out and its answer awaited — the state stays `idle`), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), `regulatory` (where the station stands with the rules, §4.10), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `config.schema` | — | the settings registry (§4.9): every setting with its `key`, `type`, `default`, `nullable`, `scope`, `live`, and its `min`/`max`/`options` and `why` where it has a bound; `live_keys`; the profile format's name and both schema numbers |
@@ -209,6 +213,7 @@ was on. Each change goes out as a `heard` event.
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `sent` | a message sent with a `ref` was settled | `ref`, `bytes`, `delivered` (the other station has all of it), `reason` (how the session ended, when it ended first). `status.sent` has the references still waiting (`pending`) and the last 32 settled (`recent`), for a client that missed the event |
 | `session` | a session ended | the entry as `sessions.list` reports it |
+| `regulatory` | the regulatory gate refused a transmission — or, with `log_permitted`, allowed one an automatically controlled station made (§4.10) | the decision as §4.10 describes it, with `callsign` and `session` (the state it was judged in) |
 | `profile` | the settings, the dials or the profiles changed | what `profile.list` answers: `active`, `name`, `dirty`, `profiles` — so a panel's mark by the profile's name is never stale, whichever client made the change |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |
@@ -323,6 +328,54 @@ The first start after the upgrade that brought profiles adopts the running confi
 as the profile *Default* — nothing in the file changes — so every existing station has a
 profile from the first day. `dirty` is computed, not tracked: it is whether loading the
 active profile again would change anything, so it is right after any client's change.
+
+### 4.10 The rules
+
+The daemon judges every transmission against a regulatory profile before the radio is keyed
+(ADR-0018, `docs/user/fcc-regulatory-controls.md`). What it decided, and what it would decide, is
+data a client can show.
+
+| Method | Params | Result |
+|---|---|---|
+| `regulatory.check` | any of `dial_hz`, `control` (`local`, `remote`, `automatic`), `license_class`, `sideband` (`usb`, `lsb`), `direction` (`originate`, `respond`, `operator`), `rung` — each in place of the station's own | `decision` (for the station's waveform up to `rung`, or its fastest mode), `safe_dials` (every dial range where that waveform fits), `ceiling` (the fastest rung allowed, and the decision that stops the next), `situation` (the facts it used). A "what if" — nothing is changed |
+| `regulatory.profile` | — | `profile` (the profile in force, whole: bands, segments, privileges, the automatic-control segments, 60 m, power limits, the band plan, each with its citation; null without one) and `known` (the profiles this build carries: `id`, `name`) |
+
+`status.regulatory` is where the station stands now:
+
+* `policy`: `rules` (a profile applies), `none` (the operator chose none, and checks every
+  transmission), `unset` (none chosen: nothing is transmitted) or `broken` (the profile would
+  not read: nothing is transmitted; `error` says why); `profile`: `id`, `name`, `authority`,
+  `rules_as_of`, `source`, `bandwidth_reading`;
+* `situation`: `dial_hz` and `dial_source` (`radio`, read over CAT or `rigctld`, or `declared` by
+  the operator), `sideband`, `control`, `license`, `itu_region`, `margin_hz`, `band_plan`,
+  `power_w`; `direction`: who would begin the exchange of a transmission now;
+* `indicator`: the decision for the station's widest transmission — every rung up to its
+  fastest mode with its control frames — at the dial it is on: what the panel shows as LEGAL,
+  WARNING or TX BLOCKED. When the link is held to its narrower rungs here it is a `warning` that
+  says which;
+* `ceiling`: `rung` (the fastest rung the rules allow; null when none is), `name`, `of` (the
+  ladder's length) and `limit` (the decision that stops the next rung);
+* `last`: the last decision the gate made — `t_s`, `age_s` and the `decision`;
+* `occupied`: the audio edges of the `widest` waveform and of the tone `floor`, both readings of
+  §97.3(a)(8); `safe_dials`: the dial ranges where each fits.
+
+A **decision** is `verdict` (`legal`, `warning`, `blocked`), `code` (the reason in a word:
+`permitted`, `automatic_segment`, `automatic_response`, `sixty_channel`, `sixty_segment`,
+`no_rules`; or a refusal: `no_profile`, `profile_broken`, `region`, `no_control`, `no_license`,
+`no_sideband`, `no_dial`, `unmeasured`, `out_of_band`, `too_wide`, `outside_data_segment`,
+`no_data_here`, `privilege`, `automatic_excluded`, `automatic_bandwidth`, `automatic_originate`,
+`automatic_outside`, `sixty_emission`, `sixty_channel`, `sixty_off_channel`), `rule` (its
+citation), `summary` and `detail` (the reasoning in words, with the RF range), `what` (the
+transmission, in words), `kind` (`data`, `cw`, `test`, `nothing`), `direction`, `dial_hz`,
+`dial_source`, `sideband`, `control`, `license`, `audio_low_hz`/`audio_high_hz` and
+`rf_low_hz`/`rf_high_hz` (the edges the reading decides by), `bandwidth_hz`, `margin_hz`, `band`,
+`segment` and `segment_rule`, `automatic_segment`, `guidance` (the voluntary band plan's word) and
+`notes` (power limits, 60 m's sharing).
+
+The settings are `[regulatory]` in the configuration, all live: `profile` (`""`, `none`,
+`us-fcc-part97`), `control`, `license_class`, `sideband`, `itu_region`, `edge_margin_hz`,
+`band_plan`, `dial_hz` (for a radio that cannot report its dial; this machine's, not a profile's)
+and `log_permitted`.
 
 ### 4.6 The diagnostic bundle
 

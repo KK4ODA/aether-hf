@@ -22,3 +22,4 @@ context → decision → alternatives considered → consequences.
 | [0015](0015-narrow-middle-kinds.md) | The narrow middle kinds — four tones at 100 baud inside the floor's 400 Hz, the 500 Hz ladder's middle rungs; contradicted sync symbols; link protocol 4 | accepted |
 | [0016](0016-calls-on-the-floor.md) | Calls, probes and beacons start on the tone floor; a reading from the floor is a lower bound | accepted (amends 0006 and 0009's connect rule) |
 | [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted |
+| [0018](0018-the-regulatory-gate.md) | The regulatory gate — nothing is keyed without the policy's leave; the rules as data; the occupancy measured | accepted |
