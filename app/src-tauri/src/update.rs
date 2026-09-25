@@ -40,6 +40,9 @@ pub const REPOSITORY: &str = "https://github.com/KK4ODA/aether-hf";
 /// The window's label, which its capability names.
 const WINDOW: &str = "updater";
 
+/// The panel's window, whose About card shows the same view (`capabilities/panel.json`).
+const PANEL: &str = "main";
+
 /// Which releases to offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
@@ -231,6 +234,10 @@ pub struct View {
     pub channel: &'static str,
     /// Whether an earlier version is kept on this machine to go back to.
     pub can_restore: bool,
+    /// Whether anything has happened since the shell started — a check, an install, the
+    /// word from the start before. Until then the phase is only the default, and the panel's
+    /// About card says "not checked yet" rather than "up to date".
+    pub checked: bool,
 }
 
 /// The shell's side of the window: the view it shows and the update it holds.
@@ -252,6 +259,7 @@ impl Updater {
                 current: current.to_owned(),
                 channel: channel_for_build(current).name(),
                 can_restore: previous_installer(current).is_some(),
+                checked: false,
             }),
             pending: Mutex::new(None),
         };
@@ -280,9 +288,20 @@ fn show(app: &AppHandle, phase: Phase) {
         };
         view.phase = phase;
         view.can_restore = previous_installer(&view.current).is_some();
+        view.checked = true;
         view.clone()
     };
     let _ = app.emit_to(WINDOW, "update", &view);
+    let _ = app.emit_to(PANEL, "update", &view);
+}
+
+/// Tell the panel's About card where the updater stands: it asks once when it loads.
+pub fn tell_panel(app: &AppHandle) {
+    let state = app.state::<Updater>();
+    let Ok(view) = state.view.lock().map(|view| view.clone()) else {
+        return;
+    };
+    let _ = app.emit_to(PANEL, "update", &view);
 }
 
 /// Open the window, or bring it to the front if it is open.
@@ -1214,6 +1233,7 @@ mod tests {
             current: "0.2.0".into(),
             channel: "beta",
             can_restore: false,
+            checked: true,
         };
         let json = serde_json::to_value(&view).expect("json");
         assert_eq!(json["phase"], "downloading");
@@ -1228,9 +1248,12 @@ mod tests {
             current: "0.2.0".into(),
             channel: "stable",
             can_restore: true,
+            checked: false,
         })
         .expect("json");
         assert_eq!(json["phase"], "restart-required");
         assert_eq!(json["can_restore"], true);
+        // the panel's About card tells "not checked yet" from "up to date" by this
+        assert_eq!(json["checked"], false);
     }
 }
