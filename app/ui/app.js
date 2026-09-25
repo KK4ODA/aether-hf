@@ -53,6 +53,7 @@ function connect() {
     refreshStatus();
     loadCapabilities();
     loadHeard();
+    loadSessions();
     loadMemories();
     // devices first: the configuration selects among them, and a profile's guess must not
     // overwrite what the file says
@@ -151,6 +152,9 @@ function onEvent(frame) {
     case "heard":
       noteHeard(data);
       break;
+    case "session":
+      noteSession(data);
+      break;
     case "profile":
       // the settings, the dials or the profiles changed: the star by the name follows
       applyProfiles(data);
@@ -175,6 +179,96 @@ function noteTest(detail) {
   const line = $("test-result");
   line.textContent = `Test session: ${detail}`;
   line.dataset.state = detail.startsWith("aborted") || detail.startsWith("stopped") ? "warn" : "ok";
+}
+
+// ── the test session's progress ─────────────────────────────────────
+// What the operator needs while a test runs: the step, out of the six; for a transfer, the
+// bytes acknowledged of the total; on the ladder, the rung under test out of all of them,
+// the fastest that has passed and the failures in a row that end it; the rung the link is
+// using and how the other station hears this one; and the time — elapsed, and the most
+// the budget leaves. No countdown: how long a step takes is the path's to say. The old
+// line said "0 rungs" through three whole tests with ND1J that never reached the ladder,
+// which read as a ladder that would not climb.
+
+const TEST_STEPS = ["probe", "connect", "message", "ladder", "file", "disconnect"];
+const TEST_STEP_NAMES = {
+  probe: "probing",
+  connect: "calling",
+  message: "sending the message",
+  ladder: "climbing the mode ladder",
+  file: "sending the file",
+  disconnect: "disconnecting",
+};
+
+function rungLabel(mode, name) {
+  return name ? `rung ${mode} (${name})` : `rung ${mode}`;
+}
+
+function renderTestProgress(t) {
+  const box = $("test-progress");
+  if (!t) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const index = TEST_STEPS.indexOf(t.step);
+  const where = index >= 0 ? `step ${index + 1} of ${TEST_STEPS.length}` : t.step;
+  const left = t.remaining_s != null ? ` · at most ${formatDuration(t.remaining_s)} left in the budget` : "";
+  $("test-step").textContent =
+    `Test with ${t.remote}: ${TEST_STEP_NAMES[t.step] ?? t.step} (${where}) · ${formatDuration(t.elapsed_s)} elapsed${left}`;
+
+  const bar = $("test-bar");
+  const label = $("test-bar-label");
+  const ladder = t.ladder ?? null;
+  if (t.transfer && t.transfer.bytes > 0) {
+    bar.max = t.transfer.bytes;
+    bar.value = t.transfer.acked;
+    label.textContent = `${t.transfer.acked} of ${t.transfer.bytes} bytes acknowledged`;
+  } else if (t.step === "ladder" && ladder && ladder.total > 0) {
+    bar.max = ladder.total;
+    bar.value = ladder.done;
+    label.textContent = `${ladder.done} of ${ladder.total} rungs tried`;
+  } else {
+    bar.max = 1;
+    bar.value = 0;
+    label.textContent = "";
+  }
+
+  const rungs = $("test-ladder");
+  if (ladder && (t.step === "ladder" || ladder.done > 0)) {
+    const parts = [];
+    if (ladder.testing != null) {
+      parts.push(
+        `Testing ${rungLabel(ladder.testing, ladder.testing_name)}, rung ${ladder.done + 1} of ${ladder.total}, ${ladder.frames} frame${ladder.frames === 1 ? "" : "s"}`,
+      );
+    }
+    parts.push(
+      ladder.highest_passed != null
+        ? `highest passed: ${rungLabel(ladder.highest_passed, ladder.highest_passed_name)}`
+        : "no rung passed yet",
+    );
+    parts.push(`failures in a row: ${ladder.failures_in_row} of ${ladder.failures_allowed}`);
+    if (ladder.last) {
+      const snr = ladder.last.snr_db != null ? ` at ${Math.round(ladder.last.snr_db)} dB` : "";
+      const verdict = ladder.last.decoded * 2 >= ladder.last.frames ? "passed" : "failed";
+      parts.push(
+        `last: rung ${ladder.last.mode} ${verdict}, ${ladder.last.decoded}/${ladder.last.frames}${snr}`,
+      );
+    }
+    rungs.textContent = parts.join(" · ");
+    rungs.hidden = false;
+  } else {
+    rungs.hidden = true;
+  }
+
+  const link = t.link ?? null;
+  if (link) {
+    const heard =
+      link.heard_there_db != null ? ` · ${t.remote} hears us at ${Math.round(link.heard_there_db)} dB` : "";
+    $("test-link").textContent = `In use: ${rungLabel(link.rung, link.rung_name)}${heard}`;
+  } else {
+    $("test-link").textContent = "";
+  }
 }
 
 function noteProbe(detail) {
@@ -350,11 +444,8 @@ async function refreshStatus() {
   $("btn-test").textContent = status.test ? "Stop test" : "Test session";
   $("btn-test").disabled = !status.test && status.state !== "idle";
   testRunning = Boolean(status.test);
-  if (status.test) {
-    const t = status.test;
-    $("test-result").textContent =
-      `Test session with ${t.remote}: ${t.step} — ${Math.round(t.elapsed_s)} s, ${t.rungs} rung${t.rungs === 1 ? "" : "s"}`;
-  }
+  renderTestProgress(status.test ?? null);
+  if (status.remote) lastRemote = status.remote;
   applyRecording(status.recording ?? null);
   applyFaults(status);
   applyRecordingsDir(status.recordings_dir ?? null);
@@ -1260,7 +1351,15 @@ function renderHeard() {
       selectTab($("tab-session"));
       $("remote").focus();
     });
-    cell(button);
+    const actions = cell(button);
+    if (station.connected || sessionList.some((s) => s.remote === station.callsign)) {
+      const history = document.createElement("button");
+      history.className = "small ghost";
+      history.textContent = "Sessions";
+      history.title = `Show only the sessions with ${station.callsign}, below`;
+      history.addEventListener("click", () => showSessionsWith(station.callsign));
+      actions.append(" ", history);
+    }
     body.append(row);
   }
 }
@@ -1276,6 +1375,128 @@ function sortHeard(key) {
     }
   }
   renderHeard();
+}
+
+// ── the sessions ────────────────────────────────────────────────────
+// One line per session (`sessions.list`), newest first, beside the stations heard, which
+// keep one line per callsign — the modem's history, so it is the same from every panel. A
+// `session` event brings the one that just ended.
+
+let sessionList = [];
+let sessionsFilter = null;
+
+async function loadSessions() {
+  try {
+    const result = await call("sessions.list");
+    sessionList = result.sessions ?? [];
+  } catch {
+    return;
+  }
+  renderSessions();
+  renderHeard();
+}
+
+function noteSession(entry) {
+  if (!entry || !entry.remote) return;
+  sessionList.unshift(entry);
+  renderSessions();
+  renderHeard();
+}
+
+function showSessionsWith(callsign) {
+  sessionsFilter = callsign;
+  renderSessions();
+  $("sessions-head").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderSessions() {
+  const rows = sessionsFilter ? sessionList.filter((s) => s.remote === sessionsFilter) : sessionList;
+  const note = $("sessions-note");
+  if (sessionsFilter) {
+    note.textContent = `with ${sessionsFilter}: ${rows.length} session${rows.length === 1 ? "" : "s"}`;
+  } else {
+    note.textContent = sessionList.length ? `${sessionList.length} in all` : "";
+  }
+  $("btn-sessions-all").hidden = !sessionsFilter;
+  $("btn-sessions-clear").disabled = sessionList.length === 0;
+  $("sessions-empty").hidden = rows.length > 0;
+  $("sessions-empty").textContent = sessionsFilter
+    ? `No session with ${sessionsFilter} in the history.`
+    : "No session yet. Each one is added here when it ends.";
+  $("sessions-table").parentElement.hidden = rows.length === 0;
+  const body = $("sessions");
+  body.replaceChildren();
+  const db = (value) => (value == null ? "—" : `${value.toFixed(1)}`);
+  for (const s of rows) {
+    const row = document.createElement("tr");
+    const cell = (text, className, title) => {
+      const td = document.createElement("td");
+      if (className) td.className = className;
+      if (title) td.title = title;
+      if (text instanceof Node) td.append(text);
+      else td.textContent = text;
+      row.append(td);
+      return td;
+    };
+    cell(stamp(s.started_ms), "numerals", relative(s.started_ms));
+    cell(s.remote, "call", `The other station: ${s.remote}`);
+    cell(formatDuration(s.duration_s), "num", `${Math.round(s.duration_s)} s`);
+    cell(
+      s.role === "caller" ? "out" : "in",
+      "",
+      s.role === "caller" ? `This station called ${s.remote}` : `${s.remote} called this station`,
+    );
+    cell(
+      `${s.frequency_hz ? formatHz(s.frequency_hz) : "—"} · ${s.bandwidth_hz} Hz`,
+      "num",
+      s.frequency_hz ? `Dial ${formatHz(s.frequency_hz)} Hz, ${s.bandwidth_hz} Hz wide` : `The radio gave no dial; ${s.bandwidth_hz} Hz wide`,
+    );
+    cell(
+      `${formatBytes(s.bytes_acked)} / ${formatBytes(s.bytes_received)}`,
+      "num",
+      `Handed to the link: ${s.bytes_sent} bytes; acknowledged by ${s.remote}: ${s.bytes_acked} bytes (after compression); received: ${s.bytes_received} bytes`,
+    );
+    const rung = (value) => (value == null ? "—" : String(value));
+    const named = (value) => {
+      if (value == null) return "none";
+      const mode = modeTable[value];
+      return mode && mode.name ? `rung ${value} (${mode.name} on the ${s.bandwidth_hz} Hz air)` : `rung ${value}`;
+    };
+    cell(
+      `${rung(s.top_rung_sent)} / ${rung(s.top_rung_heard)}`,
+      "num",
+      `Fastest rung sent: ${named(s.top_rung_sent)}; fastest decoded from ${s.remote}: ${named(s.top_rung_heard)}`,
+    );
+    cell(
+      `${db(s.heard_there_db)} / ${db(s.snr_db)} dB`,
+      "num",
+      `${s.remote} last said it heard this station at ${db(s.heard_there_db)} dB; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`,
+    );
+    const ended = cell(s.end, "", s.recording ? `Recorded as ${s.recording}` : "Not recorded");
+    if (s.test) {
+      const pill = document.createElement("span");
+      pill.className = "act";
+      pill.dataset.activity = "test";
+      pill.textContent = "test";
+      pill.title = "A Test session: its report is in the recording's sidecar";
+      ended.append(" ", pill);
+    }
+    body.append(row);
+  }
+}
+
+async function clearSessions() {
+  if (!window.confirm("Forget every session in the history? The recordings and the stations heard are not touched.")) return;
+  try {
+    const result = await call("sessions.clear");
+    sessionList = [];
+    sessionsFilter = null;
+    renderSessions();
+    renderHeard();
+    $("sessions-note").textContent = `Forgot ${result.cleared ?? 0}.`;
+  } catch (error) {
+    $("sessions-note").textContent = error.message;
+  }
 }
 
 async function clearHeard() {
@@ -3109,7 +3330,7 @@ function wire() {
       return;
     }
     const sure = window.confirm(
-      `Run a test session with ${remote}? It sends a probe, a message, a file and a short burst at every mode — about five minutes of transmitting, ten at most, all recorded. Stop test ends it at any time.`,
+      `Run a test session with ${remote}? It sends a probe, a message, a short burst at every mode and a file — about five minutes of transmitting, ten at most, all recorded. Stop test ends it at any time.`,
     );
     if (!sure) return;
     $("test-result").textContent = `Test session with ${remote}: starting…`;
@@ -3137,6 +3358,9 @@ function wire() {
   $("btn-copy-recordings").addEventListener("click", () => copyRecordingsPath(false));
   $("btn-copy-received").addEventListener("click", copyReceived);
   $("btn-clear-received").addEventListener("click", clearReceived);
+  $("btn-copy-sent").addEventListener("click", copySent);
+  $("btn-clear-sent").addEventListener("click", clearSent);
+  loadSent();
   $("btn-reset-counters").addEventListener("click", async () => {
     await act(() => call("counters.reset"), "counters reset");
   });
@@ -3161,6 +3385,11 @@ function wire() {
   });
   $("btn-clear-log").addEventListener("click", () => $("log").replaceChildren());
   $("btn-heard-clear").addEventListener("click", clearHeard);
+  $("btn-sessions-clear").addEventListener("click", clearSessions);
+  $("btn-sessions-all").addEventListener("click", () => {
+    sessionsFilter = null;
+    renderSessions();
+  });
   for (const button of document.querySelectorAll("#heard-table button.sort")) {
     button.addEventListener("click", () => sortHeard(button.dataset.sort));
   }
@@ -3448,7 +3677,87 @@ async function sendOutgoing() {
   const message = /[\r\n]$/.test(text) ? text : `${text}\n`;
   const bytes = new TextEncoder().encode(message).length;
   const ok = await act(() => call("send", { data: toBase64(message) }), `queued ${bytes} bytes`);
-  if (ok) box.value = "";
+  if (ok) {
+    box.value = "";
+    addSent({ at: Date.now(), to: lastRemote ?? "", text: message.replace(/\r?\n$/, ""), bytes });
+  }
+}
+
+// ── the sent text ────────────────────────────────────────────────────
+// What this station sent stays in view with the time and the station it went to, apart
+// from what it received; it used to vanish from the box the moment it was queued. Kept in
+// this browser only (the last two hundred), as the received pane is: the daemon's log
+// records that text was sent and how much, never the text itself, and a clear here takes
+// nothing back from the session or its recording.
+
+const SENT_KEY = "aether.sent";
+/** The station of the session the text went to: the one the status last named. */
+let lastRemote = null;
+const SENT_KEEP = 200;
+let sentEntries = [];
+
+function loadSent() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(SENT_KEY) ?? "[]");
+    sentEntries = Array.isArray(kept) ? kept.slice(-SENT_KEEP) : [];
+  } catch {
+    sentEntries = [];
+  }
+  renderSent();
+}
+
+function saveSent() {
+  try {
+    localStorage.setItem(SENT_KEY, JSON.stringify(sentEntries.slice(-SENT_KEEP)));
+  } catch {
+    // private window or blocked storage: the list lives until the page does
+  }
+}
+
+function addSent(entry) {
+  sentEntries.push(entry);
+  if (sentEntries.length > SENT_KEEP) sentEntries = sentEntries.slice(-SENT_KEEP);
+  saveSent();
+  renderSent();
+}
+
+function renderSent() {
+  const pane = $("sent-log");
+  pane.replaceChildren(
+    ...sentEntries.map((entry) => {
+      const line = document.createElement("div");
+      line.className = "rx-line";
+      const when = document.createElement("span");
+      when.className = "when";
+      when.textContent = `${new Date(entry.at).toLocaleTimeString()}  `;
+      const to = document.createElement("span");
+      to.className = "to";
+      to.textContent = entry.to ? `→ ${entry.to}  ` : "";
+      const body = document.createElement("span");
+      body.className = "rx-text";
+      body.textContent = entry.text;
+      line.title = `${new Date(entry.at).toLocaleString()} · ${entry.bytes} bytes`;
+      line.append(when, to, body);
+      return line;
+    }),
+  );
+  pane.scrollTop = pane.scrollHeight;
+}
+
+async function copySent() {
+  const text = sentEntries.map((entry) => entry.text).join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    $("send-note").textContent = "Sent text copied.";
+  } catch {
+    $("send-note").textContent = "Could not copy — select the text and press Ctrl+C.";
+  }
+}
+
+function clearSent() {
+  sentEntries = [];
+  saveSent();
+  renderSent();
 }
 
 // the messages, a line each, without the times in the gutter
