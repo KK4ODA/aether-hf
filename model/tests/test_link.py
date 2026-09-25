@@ -27,7 +27,7 @@ from aether_model.link.frames import (
     unpack_callsign,
     with_bandwidth,
 )
-from aether_model.link.phy import Container, PhyTiming, TxFrame
+from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
 from aether_model.link.sim import TwoStationSim
 
@@ -713,6 +713,37 @@ def test_a_burst_fits_the_transmitters_key_time(timing: PhyTiming) -> None:
     assert fit_resent == 0, "a channel that carries the rung resends nothing"
     assert cut_resent >= 10, "every full burst lost a frame, and the link fell with it"
     assert fit_took < 0.5 * cut_took, (fit_took, cut_took)
+
+
+def test_what_has_reached_the_other_station_is_counted_in_order(timing: PhyTiming) -> None:
+    """A message is delivered when the other station's application has it: every byte of it
+    and every byte before it acknowledged. :attr:`tx_undelivered_bytes` counts what is still
+    short of that — the queue, and each frame from the lowest unacknowledged one up, a frame
+    acknowledged past a hole included — where :attr:`tx_pending_bytes` counts only what is
+    unacknowledged. The panel's check mark on a sent message comes from it."""
+    a, b = _pair(timing)
+    readings: list[tuple[int, int, int]] = []
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=3)  # a lossy path: frames acked past holes
+    original = a.on_frame
+
+    def observe(frame: SoftFrame, now: float) -> None:
+        original(frame, now)
+        readings.append((a.tx_pending_bytes, a.tx_undelivered_bytes, len(sim.delivered(1))))
+
+    a.on_frame = observe  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    a.send(bytes(3000))
+    assert a.tx_undelivered_bytes == 3000
+    sim.run(until=3000)
+    assert sim.delivered(1) == bytes(3000)
+    assert a.tx_undelivered_bytes == a.tx_pending_bytes == 0
+    arrived = [3000 - undelivered for _, undelivered, _ in readings]
+    # what the sender counts as arrived only grows, never runs ahead of what the other
+    # station's application actually has, and never exceeds what is acknowledged
+    assert arrived == sorted(arrived)
+    assert all(3000 - u <= got for _, u, got in readings), readings
+    assert all(u >= p for p, u, _ in readings)
+    assert any(u > p for p, u, _ in readings), "a frame acknowledged past a hole waits for it"
 
 
 def test_a_call_starts_on_the_tone_floor_and_alternates(timing: PhyTiming) -> None:

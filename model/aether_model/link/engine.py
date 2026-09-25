@@ -455,6 +455,16 @@ class LinkEngine:
         return queued + sum(len(r.body) for r in self._records.values() if not r.acked)
 
     @property
+    def tx_undelivered_bytes(self) -> int:
+        """Bytes handed to :meth:`send` that have not yet reached the other station's
+        application: the queue not yet framed, and every frame from the lowest unacknowledged
+        one up. A frame acknowledged past a hole still counts — the receiving station hands
+        the stream on in order, so its bytes wait with the hole — which is where this differs
+        from :attr:`tx_pending_bytes`. What a session's :meth:`send` calls were given, less
+        this, has arrived: a panel marks a message delivered from it."""
+        return len(self._tx_queue) + sum(len(r.body) for r in self._records.values())
+
+    @property
     def probing(self) -> bool:
         """Whether a probe of ours is out, unanswered and not yet given up on."""
         return self._probing is not None
