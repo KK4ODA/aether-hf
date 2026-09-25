@@ -66,6 +66,15 @@ from aether_model.link.rate import RateController, usable_modes
 class LinkConfig:
     burst_frames: int = 6
     """Frames per burst (≤ 16). Longer bursts amortise the ACK turnaround."""
+    max_burst_s: float | None = None
+    """The longest a burst may be on the air, seconds — the transmitter's key-time limit
+    less the keying's lead and tail and anything appended to a burst (a Morse identifier).
+    A burst carries at most as many frames as fit, one at least. Unset, the frame count
+    alone decides. Six tone frames (ADR-0013) are 32 s, and the daemon's 30 s key watchdog
+    cut the last one of every full tone burst on the air (ND1J, 2026-09-25): a frame lost
+    to the station's own watchdog reads to the rate controller as a frame lost to the
+    channel, and each burst that failed so stepped the link further down the tone floor,
+    where every burst was full again (ADR-0017)."""
     max_retries: int = 8
     """Consecutive unanswered bursts / polls before the link is declared dead."""
     connect_retries: int = 8
@@ -687,7 +696,7 @@ class LinkEngine:
         frame = max(self._peer_data_frame_s(), self.timing.data_frame_s_for(self._burst_mode()))
         floor = self._peer_floor or self.timing.is_floor(self._burst_mode())
         exchange = (
-            self.cfg.burst_frames * frame
+            self._burst_capacity(frame) * frame
             + self.timing.control_frame_s_for(floor)
             + 2 * self.timing.turnaround_s
             + self.cfg.burst_gap_s
@@ -859,6 +868,19 @@ class LinkEngine:
     def _has_work(self) -> bool:
         return bool(self._unacked()) or bool(self._tx_queue)
 
+    def _burst_capacity(self, frame_s: float) -> int:
+        """Frames of ``frame_s`` seconds one burst may carry: the configured count, and no
+        more than fit in :attr:`LinkConfig.max_burst_s` — one at least."""
+        count = min(self.cfg.burst_frames, MAX_BURST)
+        if self.cfg.max_burst_s is not None and frame_s > 0:
+            count = min(count, max(1, int(self.cfg.max_burst_s / frame_s + 1e-9)))
+        return count
+
+    def set_max_burst_s(self, seconds: float | None) -> None:
+        """A new limit on a burst's air time, from the next burst on: the key-time limit
+        is a live setting of the station's."""
+        self.cfg.max_burst_s = seconds
+
     def _send_burst(self) -> None:
         mode = self._burst_mode()
         recommendation = min(self._recommended, self.cfg.max_mode)
@@ -888,15 +910,13 @@ class LinkEngine:
         if unacked:
             family = self.timing.is_floor(self._records[unacked[0]].mode)
         seqs = [s for s in unacked if self.timing.is_floor(self._records[s].mode) == family]
-        seqs = seqs[: self.cfg.burst_frames]
+        # every frame of a burst is one family, and so one length: as many as fit
+        frame_s = self.timing.data_frame_s_for(self._records[seqs[0]].mode if seqs else mode)
+        room = self._burst_capacity(frame_s)
+        seqs = seqs[:room]
         new_frames = family == self.timing.is_floor(mode)
         cap = data_capacity(self.timing.capacity(mode))
-        while (
-            new_frames
-            and len(seqs) < min(self.cfg.burst_frames, MAX_BURST)
-            and self._outstanding() < WINDOW
-            and self._tx_queue
-        ):
+        while new_frames and len(seqs) < room and self._outstanding() < WINDOW and self._tx_queue:
             take = min(cap, len(self._tx_queue))
             if self._pin_body is not None:
                 take = min(take, self._pin_body)

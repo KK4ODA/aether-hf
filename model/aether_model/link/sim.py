@@ -142,6 +142,7 @@ class TwoStationSim:
         frame_snr_offset: Callable[[TxFrame], float] | None = None,
         fading: FadingPipe | None = None,
         floor_reading_cap_db: float | None = None,
+        key_limit_s: float | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -168,6 +169,11 @@ class TwoStationSim:
         """The most a tone-floor frame's SNR reads: the floor's estimate saturates on a strong
         path, near +17 dB on AWGN and a few decibels on a dispersive one (ADR-0016). The
         frame is still judged at the channel's SNR. Unset, it reads what the channel gives."""
+        self.key_limit_s = key_limit_s
+        """The transmitter's key-time limit, seconds: the daemon's watchdog unkeys the radio
+        when a transmission reaches it. The frame on the air at that moment arrives cut —
+        its receiver acquires it and cannot decode it, which counts as a frame the channel
+        lost — and nothing after it is sent. Unset, a transmission is as long as it is."""
         self.fading = fading
         """A fading channel both stations share (P9-6): each frame's reported SNR and the
         SNR it decodes at come from its own stretch of the fade, and the per-mode
@@ -235,8 +241,12 @@ class TwoStationSim:
         t = max(at, st.tx_end)
         st.busy.append((t, t + tx.duration_s))
         timing = st.engine.timing
+        key_up = t + self.key_limit_s if self.key_limit_s is not None else float("inf")
         for frame in tx.frames:
             dur = timing.frame_s(frame)
+            if t >= key_up - 1e-9:
+                break  # the key is up: nothing more goes out
+            cut = t + dur > key_up + 1e-9
             control = frame.container is Container.CONTROL
             floor = frame.floor if control else timing.is_floor(frame.mode)
             sof = timing.preamble_detect_s_for(floor)
@@ -247,7 +257,7 @@ class TwoStationSim:
                 # (ADR-0016), each once its family announces it — and the layout it names,
                 # so the frame's own length
                 self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur))
-            self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur))
+            self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur, cut))
             t += dur
         st.tx_end = t
         self._push(t, "tx_done", who)
@@ -255,7 +265,7 @@ class TwoStationSim:
     def _busy(self, who: int, t0: float, t1: float) -> bool:
         return any(a < t1 - 1e-9 and t0 + 1e-9 < b for a, b in self.st[who].busy)
 
-    def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float) -> None:
+    def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float, *, cut: bool = False) -> None:
         if self._busy(rx, t0, t1):
             return  # half-duplex or collision: the receiver was transmitting
         arrival = t1 + self.prop_s
@@ -265,6 +275,10 @@ class TwoStationSim:
         sf = self._factory(frame, snr, t0 + self.prop_s, arrival)
         if sf is None:
             return
+        if cut:
+            if not isinstance(sf, SimFrame):
+                return  # a real modem's frame cannot be cut here: it is not delivered
+            sf._draw = 2.0  # acquired, and past every probability of decoding
         eng = self.st[rx].engine
         eng.tick(arrival)
         eng.on_frame(sf, arrival)
@@ -305,8 +319,8 @@ class TwoStationSim:
             while self._q and self._q[0].t <= nt + 1e-9:
                 ev = heapq.heappop(self._q)
                 if ev.kind == "arrive":
-                    fr, t0, t1 = cast("tuple[TxFrame, float, float]", ev.data)
-                    self._deliver(ev.who, fr, t0, t1)
+                    fr, t0, t1, cut = cast("tuple[TxFrame, float, float, bool]", ev.data)
+                    self._deliver(ev.who, fr, t0, t1, cut=cut)
                 elif ev.kind == "preamble":
                     t0, t1, frame_s = cast("tuple[float, float, float]", ev.data)
                     self._announce(ev.who, t0, t1, frame_s)
