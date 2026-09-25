@@ -104,16 +104,9 @@ fn main() {
         && failure.is_none()
         && daemon_binary_on_port()
             .is_some_and(|running| daemon_path().is_ok_and(|ours| same_file(&running, &ours)));
-    let preferences = config_path().map_or(
-        update::Preferences {
-            channel: update::Channel::Stable,
-            check: false,
-        },
-        |path| update::preferences(&path),
-    );
-
+    let check_on_start = config_path().is_ok_and(|path| update::preferences(&path).check);
     let updater = update::Updater::new(
-        preferences.channel,
+        config_path().ok(),
         &context.package_info().version.to_string(),
     );
 
@@ -156,7 +149,7 @@ fn main() {
             } else if update::after_start(app.handle()) {
                 // the previous start installed something, and the window is saying how
                 // that went; a second window offering the next one can wait for the menu
-            } else if preferences.check {
+            } else if check_on_start {
                 // quietly: a start with nothing newer should look like nothing happened
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(update::check(handle, true));

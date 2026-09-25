@@ -402,17 +402,44 @@ fn default_host_bind() -> String {
 /// Which releases the desktop application offers to install.
 ///
 /// Read by the shell, not the daemon: it lives here because this file is the one place a
-/// station's settings are, and the panel edits it like any other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// station's settings are, and the panel edits it like any other. Unset, it follows the
+/// installation: a beta build follows the betas and a stable build the stable releases
+/// ([`UpdateChannel::for_build`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
     /// Tagged releases only. Never offered a beta or a nightly.
-    #[default]
     Stable,
     /// Betas, and any stable release newer than the beta in hand.
     Beta,
     /// The rolling nightly, and anything newer on the other channels.
     Nightly,
+}
+
+impl UpdateChannel {
+    /// The channel an installation of `version` follows unless told otherwise: a
+    /// pre-release (`0.2.0-beta.56`) the betas, a release the stable channel. A tester's
+    /// beta set to stable was offered nothing at all while every release was a beta.
+    #[must_use]
+    pub fn for_build(version: &str) -> Self {
+        if is_prerelease(version) {
+            Self::Beta
+        } else {
+            Self::Stable
+        }
+    }
+}
+
+impl Default for UpdateChannel {
+    fn default() -> Self {
+        Self::for_build(env!("CARGO_PKG_VERSION"))
+    }
+}
+
+/// Whether `version` is a pre-release: a hyphen after the patch number (`0.2.0-beta.56`).
+#[must_use]
+pub fn is_prerelease(version: &str) -> bool {
+    version.contains('-')
 }
 
 /// Automatic updates of the desktop application.
@@ -431,7 +458,7 @@ pub struct UpdateSection {
 impl Default for UpdateSection {
     fn default() -> Self {
         Self {
-            channel: UpdateChannel::Stable,
+            channel: UpdateChannel::default(),
             check: true,
         }
     }
@@ -656,7 +683,7 @@ pub struct Config {
 /// backed up before it is rewritten, and a file from a *newer* version is refused rather
 /// than read with its unknown keys dropped — a downgrade that silently loses settings is
 /// worse than one that says so.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -668,7 +695,12 @@ pub type Migration = fn(&mut toml::Table);
 
 /// The steps from the first schema to the current one. `MIGRATIONS[i]` takes a file at
 /// version `i + 1` to version `i + 2`.
-pub const MIGRATIONS: &[Migration] = &[ladder_rungs, fast_rungs, narrow_middle_rungs];
+pub const MIGRATIONS: &[Migration] = &[
+    ladder_rungs,
+    fast_rungs,
+    narrow_middle_rungs,
+    betas_follow_betas,
+];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
 /// ladder where it numbered the OFDM modes. On the 2 300 Hz air every OFDM mode sits two
@@ -721,6 +753,29 @@ fn narrow_middle_rungs(table: &mut toml::Table) {
         && *mode >= 2
     {
         *mode += 2;
+    }
+}
+
+/// Schema 4 → 5, a beta follows the betas: on a beta build, `update.channel = "stable"`
+/// becomes `"beta"`. The panel writes every setting it shows and the daemon writes every
+/// setting when it brings a file forward, so nearly every station's file named the stable
+/// channel whether or not anybody chose it — and every release so far has been a beta, so a
+/// tester on it was offered nothing and told the version in hand was the newest. A stable
+/// build leaves the setting alone, and so does a beta after this: choosing stable again is
+/// kept.
+fn betas_follow_betas(table: &mut toml::Table) {
+    betas_follow_betas_on(table, env!("CARGO_PKG_VERSION"));
+}
+
+/// [`betas_follow_betas`] as a build of `version` does it.
+fn betas_follow_betas_on(table: &mut toml::Table, version: &str) {
+    if !is_prerelease(version) {
+        return;
+    }
+    if let Some(toml::Value::Table(update)) = table.get_mut("update")
+        && matches!(update.get("channel"), Some(toml::Value::String(c)) if c == "stable")
+    {
+        update.insert("channel".into(), toml::Value::String("beta".into()));
     }
 }
 
@@ -1147,7 +1202,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 3
+schema_version = 5
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1247,8 +1302,9 @@ keep = 500
 [update]
 # The desktop application looks for a newer version when it starts and asks before
 # installing one. `stable` is tagged releases only; `beta` adds the betas; `nightly` adds
-# the nightly build. A headless gateway ignores this section.
-channel = "stable"
+# the nightly build. Unset, a beta installation follows `beta` and a stable one `stable`.
+# A headless gateway ignores this section.
+# channel = "beta"
 check = true
 
 [record]
@@ -1859,6 +1915,45 @@ mod tests {
         );
         assert_eq!(rewritten.0, config);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_beta_installation_follows_the_beta_channel() {
+        // every release so far is a beta, and a tester's file set to stable — which nearly
+        // every file was, since the panel writes every setting — was offered nothing at all
+        assert_eq!(
+            UpdateChannel::for_build("0.2.0-beta.56"),
+            UpdateChannel::Beta
+        );
+        assert_eq!(UpdateChannel::for_build("0.2.0"), UpdateChannel::Stable);
+        assert_eq!(
+            UpdateChannel::default(),
+            UpdateChannel::for_build(env!("CARGO_PKG_VERSION"))
+        );
+        let file = "schema_version = 4\ncallsign = \"W4ODA\"\n[update]\nchannel = \"stable\"\n";
+        let mut on_a_beta: toml::Table = toml::from_str(file).expect("toml");
+        betas_follow_betas_on(&mut on_a_beta, "0.2.0-beta.56");
+        assert_eq!(on_a_beta["update"]["channel"].as_str(), Some("beta"));
+        let mut on_a_release: toml::Table = toml::from_str(file).expect("toml");
+        betas_follow_betas_on(&mut on_a_release, "0.2.0");
+        assert_eq!(on_a_release["update"]["channel"].as_str(), Some("stable"));
+        // a nightly stays a nightly, a file that names no channel takes the build's default
+        for kept in ["nightly", "beta"] {
+            let text = format!("callsign = \"W4ODA\"\n[update]\nchannel = \"{kept}\"\n");
+            let mut table: toml::Table = toml::from_str(&text).expect("toml");
+            betas_follow_betas_on(&mut table, "0.2.0-beta.56");
+            assert_eq!(table["update"]["channel"].as_str(), Some(kept));
+        }
+        let unset = Config::parse("callsign = \"W4ODA\"\n").expect("parse");
+        assert_eq!(unset.update.channel, UpdateChannel::default());
+        // and once the file is at schema 5, stable is a choice this build keeps
+        let chosen = format!(
+            "schema_version = {SCHEMA_VERSION}\ncallsign = \"W4ODA\"\n[update]\nchannel = \"stable\"\n"
+        );
+        assert_eq!(
+            Config::parse(&chosen).expect("parse").update.channel,
+            UpdateChannel::Stable
+        );
     }
 
     #[test]

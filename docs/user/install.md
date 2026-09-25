@@ -72,9 +72,14 @@ with a radio yet — a report, good or bad, is worth an issue.
 ### Updating
 
 The application looks for a newer version when it starts and asks before installing one.
-Which releases it offers is a setting — **Setup → Updates**: *stable releases only* (the
-default), *betas too*, or *nightlies too*. A stable installation is never offered a beta or
-a nightly. *Help > Check for updates…* asks now.
+Which releases it offers is a setting — **Setup → Updates**: *stable releases only*, *betas
+too*, or *nightlies too*. Unset, it follows the installation: a beta follows the betas and a
+stable release the stable releases. (Beta 56 moved a beta installation still set to stable
+to *betas too*: every release so far has been a beta, and the panel had written *stable*
+into nearly every configuration whether or not anybody chose it. Choosing stable again is
+kept; the updates window then says there is no stable release yet.) A stable installation
+is never offered a beta or a nightly. *Help > Check for updates…* asks now, on whatever the
+setting says at that moment.
 
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work

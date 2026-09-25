@@ -31,6 +31,15 @@ const PHASES = {
     text: (v) => `Aether HF ${v.current} is the newest on the ${v.channel} channel.`,
     buttons: ["restore", "check", "close"],
   },
+  "no-stable-yet": {
+    title: "No stable release yet",
+    text: (v) =>
+      `Aether HF ${v.current} is a beta, and this installation follows the stable ` +
+      "channel, which has nothing to offer until the first stable release. To be offered " +
+      "the next beta, choose “betas too” under Setup › Application settings › Updates and " +
+      "save; the next check uses it.",
+    buttons: ["restore", "check", "close"],
+  },
   available: {
     title: (v) => `Aether HF ${v.version} is available`,
     text: (v) =>
@@ -268,6 +277,7 @@ function demo(phase) {
     "restart-required": { version: "0.2.0-beta.14" },
     complete: { current: "0.2.0-beta.14", version: "0.2.0-beta.14", from: "0.2.0-beta.13", notes: DEMO_NOTES },
     incomplete: { version: "0.2.0-beta.14" },
+    "no-stable-yet": { channel: "stable" },
     error: { message: "Could not check for updates: the network is unreachable. Try again when it is back.", retry: true },
   };
   return { ...base, ...(extra[phase] ?? {}) };
