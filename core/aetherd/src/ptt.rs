@@ -554,6 +554,83 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_icom_answer_is_the_frame_addressed_to_this_controller() {
+        // an IC-7300 with CI-V USB Echo Back on sends each command back first, and with CI-V
+        // transceive on (its default) announces its dial to address 00: neither is the answer
+        let icom = CatProtocol::Icom { address: 0x94 };
+        let key = icom.keying(true);
+        let echo = key.clone();
+        let broadcast = [
+            0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x70, 0x10, 0x14, 0x00, 0xFD,
+        ];
+        let done = [0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD];
+        assert!(!icom.reply_complete(&key, &echo));
+        assert!(!icom.reply_complete(&key, &broadcast));
+        assert!(!icom.reply_complete(&key, &done[..5]), "not until its FD");
+        let all = [echo.as_slice(), &broadcast, &done].concat();
+        assert!(icom.reply_complete(&key, &all));
+        assert!(icom.keying_accepted(&all));
+        // a refusal is an answer too, and says no
+        let refused = [0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD];
+        assert!(icom.reply_complete(&key, &refused));
+        assert!(!icom.keying_accepted(&refused));
+    }
+
+    #[test]
+    fn a_yaesu_answer_is_the_one_to_the_query() {
+        // a radio another program left in auto-information mode reports on its own
+        let yaesu = CatProtocol::Yaesu;
+        let query = yaesu.frequency_query();
+        assert!(!yaesu.reply_complete(&query, b"MD0C;"));
+        assert!(!yaesu.reply_complete(&query, b"MD0C;FA0141"));
+        assert!(yaesu.reply_complete(&query, b"MD0C;FA014107000;"));
+        assert_eq!(
+            yaesu.parse_frequency(b"MD0C;FA014107000;"),
+            Some(14_107_000)
+        );
+        assert!(
+            yaesu.reply_complete(&query, b"?;"),
+            "a refusal ends the wait"
+        );
+    }
+
+    #[test]
+    fn the_reply_is_read_past_what_arrives_before_it() {
+        // before: reading stopped at the first FD, which was the echo's or a broadcast's, so
+        // an IC-7300 that keyed was reported as refusing and the burst was dropped
+        let icom = CatProtocol::Icom { address: 0x94 };
+        let key = icom.keying(true);
+        let broadcast = vec![
+            0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x70, 0x10, 0x14, 0x00, 0xFD,
+        ];
+        let done = vec![0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD];
+        let late = vec![0xFE, 0xFE, 0x00, 0x94, 0x01, 0x01, 0x01, 0xFD];
+        let mut chunks = vec![key.clone(), broadcast, done, late].into_iter();
+        let mut reads = 0;
+        let got = collect_reply(
+            |buffer| {
+                reads += 1;
+                let chunk = chunks.next().unwrap_or_default();
+                buffer[..chunk.len()].copy_from_slice(&chunk);
+                Ok(chunk.len())
+            },
+            |got| icom.reply_complete(&key, got),
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .expect("read");
+        assert!(icom.keying_accepted(&got));
+        assert_eq!(reads, 3, "it read on past the answer");
+        // a radio that says nothing: the first timeout ends the wait, with nothing
+        let got = collect_reply(
+            |_| Err(std::io::ErrorKind::TimedOut.into()),
+            |got| icom.reply_complete(&key, got),
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+        )
+        .expect("a timeout is not an error");
+        assert!(got.is_empty());
+    }
+
     /// A backend that counts what it was asked to do, and can be told to refuse.
     #[derive(Debug, Default)]
     struct FakePtt {
@@ -908,6 +985,35 @@ impl CatProtocol {
         matches!(self, Self::Icom { .. })
     }
 
+    /// Whether `got` holds the radio's answer to `query`, so reading can stop.
+    ///
+    /// Not the first terminator to arrive: an Icom set to echo its commands (CI-V USB Echo
+    /// Back) sends each one back before answering, and one with CI-V transceive on — an
+    /// IC-7300's default — announces every turn of its dial and change of mode to address
+    /// 00, between our exchanges or in the middle of one. Its answer is the frame addressed
+    /// to this controller from the radio. A Yaesu or Kenwood answers with the query's own
+    /// two letters, or `?;` for a command it refused; a radio left in auto-information mode
+    /// by another program reports on its own in between.
+    #[must_use]
+    pub fn reply_complete(self, query: &[u8], got: &[u8]) -> bool {
+        match self {
+            Self::Icom { address } => {
+                // BCD data never holds FE, so the header cannot turn up inside a frame
+                let header = [0xFE, 0xFE, CIV_CONTROLLER, address];
+                got.windows(header.len())
+                    .position(|w| w == header)
+                    .is_some_and(|start| got[start + header.len()..].contains(&0xFD))
+            }
+            Self::Yaesu | Self::Kenwood => {
+                let name = &query[..query.len().min(2)];
+                got.windows(2)
+                    .enumerate()
+                    .any(|(at, w)| w == name && got[at..].contains(&b';'))
+                    || got.windows(2).any(|w| w == b"?;")
+            }
+        }
+    }
+
     /// Whether a CI-V answer says the command was carried out.
     #[must_use]
     pub fn keying_accepted(self, reply: &[u8]) -> bool {
@@ -918,6 +1024,32 @@ impl CatProtocol {
             _ => true,
         }
     }
+}
+
+/// The longest a radio's answer is waited for, however much else it is saying meanwhile.
+const REPLY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Read from `read` until `complete` says the answer is in, a read comes back empty or
+/// times out, or `deadline` passes: what has arrived by then is the answer.
+///
+/// # Errors
+/// A read that fails for another reason than a timeout.
+fn collect_reply(
+    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+    complete: impl Fn(&[u8]) -> bool,
+    deadline: std::time::Instant,
+) -> std::io::Result<Vec<u8>> {
+    let mut buffer = [0u8; 64];
+    let mut got = Vec::new();
+    while !complete(&got) && std::time::Instant::now() < deadline {
+        match read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => got.extend_from_slice(&buffer[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(got)
 }
 
 /// Keying a radio with its own commands over its CAT port.
@@ -965,6 +1097,10 @@ impl CatPtt {
         use std::io::{Read as _, Write as _};
 
         let command = self.protocol.keying(keyed);
+        // what the radio said on its own since the last exchange is not this answer: read
+        // first, a transceive broadcast from a turn of the dial was taken for it, the key
+        // was reported refused and the burst dropped
+        let _ = self.port.clear(serialport::ClearBuffer::Input);
         self.port
             .write_all(&command)
             .and_then(|()| self.port.flush())
@@ -972,17 +1108,14 @@ impl CatPtt {
         if !self.protocol.acknowledges_keying() {
             return Ok(());
         }
-        let mut reply = [0u8; 32];
-        let mut got = Vec::new();
-        // the answer is a few bytes; read until the terminator or the timeout
-        while !got.contains(&0xFD) {
-            match self.port.read(&mut reply) {
-                Ok(0) => break,
-                Ok(n) => got.extend_from_slice(&reply[..n]),
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(e) => return Err(PttError::Backend(format!("{}: {e}", self.path))),
-            }
-        }
+        let protocol = self.protocol;
+        let port = &mut self.port;
+        let got = collect_reply(
+            |buffer| port.read(buffer),
+            |got| protocol.reply_complete(&command, got),
+            std::time::Instant::now() + REPLY_WAIT,
+        )
+        .map_err(|e| PttError::Backend(format!("{}: {e}", self.path)))?;
         if self.protocol.keying_accepted(&got) {
             Ok(())
         } else {
@@ -997,21 +1130,17 @@ impl CatPtt {
     fn ask(&mut self, query: &[u8]) -> Option<Vec<u8>> {
         use std::io::{Read as _, Write as _};
 
+        let _ = self.port.clear(serialport::ClearBuffer::Input);
         self.port.write_all(query).ok()?;
         self.port.flush().ok()?;
-        let mut reply = [0u8; 64];
-        let mut got = Vec::new();
-        let done = |got: &[u8]| match self.protocol {
-            CatProtocol::Icom { .. } => got.contains(&0xFD),
-            _ => got.contains(&b';'),
-        };
-        while !done(&got) {
-            match self.port.read(&mut reply) {
-                Ok(n) if n > 0 => got.extend_from_slice(&reply[..n]),
-                // nothing more, or the timeout: what has arrived is the answer
-                _ => break,
-            }
-        }
+        let protocol = self.protocol;
+        let port = &mut self.port;
+        let got = collect_reply(
+            |buffer| port.read(buffer),
+            |got| protocol.reply_complete(query, got),
+            std::time::Instant::now() + REPLY_WAIT,
+        )
+        .ok()?;
         (!got.is_empty()).then_some(got)
     }
 }
