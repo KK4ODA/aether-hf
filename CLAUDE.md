@@ -554,7 +554,7 @@ beta.55 interoperate. **Option on the roadmap (P9-12):** a spread-tone floor on 
 envelope kept — built only if the air shows the 400 Hz floor losing to selective fading.
 
 **The ND1J tests and ADR-0017 (2026-09-25, beta.58).** Three Test sessions with ND1J
-(Senoia ↔ Atlanta: 40 m and 80 m at 2 300 Hz, 80 m at 500 Hz) read as a ladder that would
+(ND1J in Senoia ↔ KK4ODA near Northlake Mall, Atlanta: 40 m and 80 m at 2 300 Hz, 80 m at 500 Hz) read as a ladder that would
 not climb ("0 rungs"). The ladder step had never run — the order was probe → call →
 message → file → ladder, and the transfers ate the budget — and the link *had* climbed
 (2 300 Hz: rung 7 → 3, which failed → 2, 9/9; 500 Hz: rung 5, 6/6 → 7) before its own
