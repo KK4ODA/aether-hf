@@ -51,7 +51,7 @@ uninstaller asks, one kind at a time, and pressing Enter keeps it:
 
 | Asked | What it is | Where |
 |---|---|---|
-| Settings and caches | `station.toml` and its backups, the dial memories; the installers kept for going back; the window's stored data (the Sent list, the waterfall's controls) | `%APPDATA%\aether-hf\`, `%LOCALAPPDATA%\aether-hf\`, `%LOCALAPPDATA%\org.aetherhf.desktop\` |
+| Settings and caches | `station.toml` and its backups, the dial memories; the installers kept for going back; the window's stored data (the text sent, the waterfall's controls) | `%APPDATA%\aether-hf\`, `%LOCALAPPDATA%\aether-hf\`, `%LOCALAPPDATA%\org.aetherhf.desktop\` |
 | Profiles, logs and history | the profiles, `aetherd.log` and the one before it, the stations heard, the session history | `%APPDATA%\aether-hf\` |
 | Recordings | the audio and sidecars of your recorded and Test sessions — asked with a warning of its own, and only after the other two | `%APPDATA%\aether-hf\recordings\` |
 

@@ -586,6 +586,20 @@ would have stopped the panel loading; `node --check` on a `.mjs` copy catches th
 one does not. Open: author → ND1J measured about 0 dB (+5 the other way), and rung 3
 (tone50-75) failed at about 0 dB on 80 m NVIS — the next runs with this build will say more.
 
+**The Send box (beta.59, the author's design).** What the operator sends stays in the Send
+box, above the line being typed — the time, the text in the accent colour, and … / ✓ / ✗ — and
+the empty line waits with a blinking block cursor (`.composer` in `style.css`; `renderSent`,
+`fitComposer`, `focusComposer` in `app.js`; `prefers-reduced-motion` stops the blink). The ✓
+means the other station has all of the message, in order: `send {data, ref}` →
+`Station::send_tracked` records where the message ends in the session's stream of link bytes
+(`link_sent`, after compression) and `note_arrivals` compares it with `link_sent −
+LinkEngine::tx_undelivered_bytes()` — the queue plus every frame from the lowest
+unacknowledged one up, since a frame acknowledged past a hole still waits for it (model
+first); the `sent` event and `status.sent` (`pending`, `recent`) carry the verdict, and a
+session that ends first marks the rest undelivered with its reason. The typed line is taken
+the moment it is sent and put back only if the send is refused — cleared after the reply, a
+quick typist's next words were glued to the last message. beta.58's separate SENT box is gone.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
