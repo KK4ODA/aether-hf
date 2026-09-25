@@ -826,14 +826,20 @@ pub struct Config {
 
 /// The shape of configuration file this version writes.
 ///
-/// A file names its shape so a later version can bring it forward. Adding a key with a
-/// default is not a new shape — `serde(default)` handles it. Renaming or moving one is, and
-/// gets a migration in [`MIGRATIONS`]: a function from the file as one version wrote it to
-/// the file as the next expects it, applied in order on the way in. The operator's file is
-/// backed up before it is rewritten, and a file from a *newer* version is refused rather
-/// than read with its unknown keys dropped — a downgrade that silently loses settings is
+/// A file names its shape so a later version can bring it forward. Renaming or moving a key
+/// is a new shape, and gets a migration in [`MIGRATIONS`]: a function from the file as one
+/// version wrote it to the file as the next expects it, applied in order on the way in. The
+/// operator's file is backed up before it is rewritten, and a file from a *newer* version is
+/// never read with its unknown keys dropped — a downgrade that silently loses settings is
 /// worse than one that says so.
-pub const SCHEMA_VERSION: u32 = 6;
+///
+/// Adding a key with a default needs no migration going forward — `serde(default)` handles
+/// it — but it is a new shape going *back*: every table refuses keys it does not know, so a
+/// version from before the key cannot read a file that has one. The number goes up (with a
+/// step that changes nothing) so that version starts from the copy kept before the file was
+/// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
+/// station refusing to start.
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -851,6 +857,7 @@ pub const MIGRATIONS: &[Migration] = &[
     narrow_middle_rungs,
     betas_follow_betas,
     regulatory_settings,
+    kiss_port,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -962,6 +969,13 @@ fn regulatory_settings(table: &mut toml::Table) {
         table.insert("regulatory".into(), toml::Value::Table(regulatory));
     }
 }
+
+/// Schema 6 → 7, the KISS port (ADR-0019): nothing moves — `[kiss]` is new, and off until
+/// the operator turns it on. The step exists for going back: a version from before the KISS
+/// port cannot read a file with a `[kiss]` table, and the new number is what sends it to the
+/// copy kept before this version brought the file forward (`<name>.bak-v6`) instead of
+/// leaving the station unable to start.
+fn kiss_port(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1555,7 +1569,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 6
+schema_version = 7
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.

@@ -3,8 +3,8 @@
 **Status:** accepted, 2026-09-25. Model first for the frame format and the engine's rule
 (`aether_model/link/datagram.py`, `frames.py`, `engine.py`), then the port (`aether-link`
 `datagram.rs`, `frames.rs`, `engine.rs`) and the daemon (`core/aetherd/src/kiss/`,
-`station/datagrams.rs`). The link protocol is unchanged: a station of an earlier version ignores
-the new DATA kind, and its sessions with this one are what they were.
+`station/datagrams.rs`). Configuration schema 7. The link protocol is unchanged: a station of an
+earlier version ignores the new DATA kind, and its sessions with this one are what they were.
 
 ## 1. Context
 
@@ -181,6 +181,10 @@ Diagnostics tab; "KISS frame" as an activity among the stations heard.
   air, and the longest datagram at tone-36 is a 520-byte frame. AX.25 connected sessions over it
   work in principle and need long timers; the host interface is the way to run sessions.
 * An older station ignores datagrams and interoperates otherwise.
+* Configuration schema 7, a step that changes nothing: a version from before the KISS port
+  cannot read a file with a `[kiss]` table (every table refuses keys it does not know), and the
+  new number is what sends it, and the shell's restore, to the copy kept before
+  (`station.toml.bak-v6`) rather than leaving the station unable to start.
 * Open: VarAC, Winlink Express Packet, BPQ32, QtTermTCP and the APRS programs on the bench and the
   air (`docs/spec/host-interfaces.md` §8.6, `docs/user/kiss.md`).
 

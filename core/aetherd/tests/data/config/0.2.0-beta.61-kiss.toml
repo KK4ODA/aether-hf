@@ -1,0 +1,26 @@
+# As beta.61 wrote a station with its KISS port on (ADR-0019): schema 7.
+schema_version = 7
+callsign = "W4ODA"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[radio]
+bandwidth = 500
+max_mode = 14
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "general"
+sideband = "usb"
+
+[kiss]
+enabled = true
+bind = "127.0.0.1:8100"
+rung = 1
+wait_for_clear = true
+max_clients = 4
+trace = false
