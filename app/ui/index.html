@@ -168,7 +168,7 @@
           <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
           <label class="check" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
           <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
-          <button id="btn-test" title="Run the field test with the station in Call: probe, message, file, a burst at every mode, recorded; the same button stops it">Test session</button>
+          <button id="btn-test" title="Run the field test with the station in Call: probe, message, a burst at every mode, file, recorded; the same button stops it">Test session</button>
         </div>
         <p class="note" id="session-note">
           <strong>Disconnect</strong> finishes sending what is queued and then closes.
@@ -177,13 +177,22 @@
           answer, both directions of the path. <strong>Beacon</strong> puts this station's
           callsign on the air once, addressed to nobody, so anyone listening can report
           hearing you. <strong>Test session</strong> runs the field test with the station in
-          Call: a probe, a message, a file and a short burst at every mode, all recorded —
+          Call: a probe, a message, a short burst at every mode and a file, all recorded —
           about five minutes of transmitting, sized to what the path can do, and a sidecar the
           project can learn from. The same button stops it. The other station only has to be
           listening; Help says how to contribute the result.
         </p>
         <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
-        <p class="note" id="test-result" title="The test session's progress" role="status" aria-live="polite"></p>
+        <p class="note" id="test-result" title="What the test session did last, and how it ended" role="status" aria-live="polite"></p>
+        <div class="test-progress" id="test-progress" title="How far the running test session has got" hidden>
+          <p class="test-step" id="test-step" title="The step the test is at, out of the six it runs, and the time: elapsed, and the most the budget leaves"></p>
+          <div class="test-bar-row">
+            <progress id="test-bar" max="1" value="0" title="How much of this step is done: bytes acknowledged, or rungs tried"></progress>
+            <span class="sub" id="test-bar-label" title="What the bar counts"></span>
+          </div>
+          <p class="sub" id="test-ladder" title="The mode ladder: the rung under test, the fastest that has passed, and the failures in a row that end the ladder (three)" hidden></p>
+          <p class="sub" id="test-link" title="The rung the link is using now, and how the other station hears this one"></p>
+        </div>
 
         <div class="split">
           <div>
@@ -194,6 +203,14 @@
               <label class="check" for="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line"><input type="checkbox" id="enter-sends" title="Send with the Enter key; Shift+Enter starts a new line. Untick to make Enter start a new line" /> Enter sends</label>
               <span class="sub" id="send-note" title="What happened to the last text sent"></span>
             </div>
+            <div class="section-head">
+              <h2>Sent</h2>
+              <div class="head-actions">
+                <button id="btn-copy-sent" class="small ghost" title="Copy the sent text to the clipboard, without the times">Copy</button>
+                <button id="btn-clear-sent" class="small ghost" title="Empty this list; nothing is taken back from the session, and its recording is not touched">Clear</button>
+              </div>
+            </div>
+            <pre id="sent-log" title="Text this station has queued for the session: each message with the time it was sent, the station it went to and its size. Kept in this browser across reloads; select it or use Copy" class="received sent-log" role="log" aria-label="Sent text" tabindex="0"></pre>
           </div>
           <div>
             <div class="section-head">
@@ -291,8 +308,9 @@
           Every station whose frame carried a callsign — a beacon, a call, a probe, an answer, or the
           other end of a session — with when it was heard, how strong, and what it was doing.
           Click a heading to sort; <strong>Call</strong> puts the callsign on the Session
-          tab. The list is the modem's, kept beside its configuration, so it survives a
-          restart; it holds the 200 most recent.
+          tab, and <strong>Sessions</strong> shows the sessions with that station below. One
+          line per station; the list is the modem's, kept beside its configuration, so it
+          survives a restart; it holds the 200 most recent.
         </p>
         <div class="table-scroll">
           <table class="heard" id="heard-table" title="Every station whose frame carried a callsign; click a heading to sort" aria-describedby="heard-note">
@@ -314,6 +332,38 @@
           </table>
         </div>
         <p class="empty" id="heard-empty">Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.</p>
+
+        <div class="row sessions-head" id="sessions-head">
+          <h2 class="inline">Sessions</h2>
+          <span class="sub" id="sessions-note" title="Which sessions the list shows" role="status" aria-live="polite"></span>
+          <button id="btn-sessions-all" class="small ghost" title="Show the sessions with every station, not only one" hidden>Show all</button>
+          <button id="btn-sessions-clear" title="Empty the session history the modem keeps; the recordings and the stations heard are not touched" class="push-right">Forget sessions</button>
+        </div>
+        <p class="sub">
+          One line per session, newest first, added when it ends: when it came up and how long
+          it lasted, who called, what crossed each way, the fastest rung each way, how the other
+          station heard this one and how it ended. Kept by the modem beside its configuration;
+          the 500 most recent.
+        </p>
+        <div class="table-scroll">
+          <table class="heard sessions" id="sessions-table" title="Every session this station has had, newest first" aria-describedby="sessions-note">
+            <thead>
+              <tr>
+                <th scope="col" title="When the session came up">Started</th>
+                <th scope="col" title="The other station">Station</th>
+                <th scope="col" class="num" title="How long the session was up">Length</th>
+                <th scope="col" title="Who placed the call: out, this station called; in, it was called">Call</th>
+                <th scope="col" class="num" title="The dial frequency, when the radio could say, and the bandwidth the session ran on">Dial</th>
+                <th scope="col" class="num" title="Bytes the other station acknowledged, and bytes received from it">Sent / received</th>
+                <th scope="col" class="num" title="The fastest rung this station sent data at, and the fastest it decoded from the other station">Top rung out / in</th>
+                <th scope="col" class="num" title="How the other station last said it heard this one, and the SNR of the last frame decoded from it">Heard there / here</th>
+                <th scope="col" title="How the session ended, in the link's words; TEST marks a Test session">Ended</th>
+              </tr>
+            </thead>
+            <tbody id="sessions"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="sessions-empty">No session yet. Each one is added here when it ends.</p>
       </section>
 
       <!-- ── diagnostics ────────────────────────────────────────── -->

@@ -430,6 +430,31 @@ h2 {
   color: var(--warn);
 }
 
+.test-progress {
+  margin: var(--s2) 0;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.test-progress p {
+  margin: 2px 0;
+}
+.test-step {
+  color: var(--text);
+  font-weight: 600;
+}
+.test-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.test-bar-row progress {
+  flex: 1;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
 .note.warn {
   color: var(--status-warning);
   border-left: 3px solid var(--status-warning);
@@ -916,6 +941,10 @@ button.sort:focus-visible {
 
 .act[data-activity="answering"] {
   color: var(--status-rx);
+}
+
+.sessions-head {
+  margin-top: var(--s5);
 }
 
 .frames tr[data-decoded="false"] td {
@@ -1635,6 +1664,19 @@ details.menu > .menu-list > button:hover:not(:disabled) {
   user-select: text;
   -webkit-user-select: text;
   cursor: text;
+}
+
+/* what this station sent, set apart from what it received by the accent at its edge */
+.sent-log {
+  border-left: 3px solid var(--accent);
+  min-height: 4em;
+  max-height: 14em;
+  margin-top: var(--s1);
+}
+.sent-log .to {
+  color: var(--accent);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* the honest placeholder for payload that was not valid text */
