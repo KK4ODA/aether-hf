@@ -277,6 +277,24 @@ header.bar {
 }
 
 /* the dial frequency, when the radio can say: read like a rig's display */
+/* the programs using this station now: a host program, KISS programs */
+.apps-chip {
+  font: 500 var(--fs-sm)/1 var(--numerals);
+  color: var(--accent);
+  padding: 0 8px;
+  height: var(--control-h-sm);
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--r-sm);
+  background: var(--accent-dim);
+  white-space: nowrap;
+}
+
+.apps-chip[hidden] {
+  display: none;
+}
+
 .dial {
   font: 500 13px/1 var(--numerals);
   font-variant-numeric: tabular-nums;
@@ -1577,6 +1595,10 @@ button.sort:focus-visible {
   color: var(--status-rx);
 }
 
+.act[data-activity="datagram"] {
+  color: var(--text);
+}
+
 .sessions-head {
   margin-top: var(--s5);
 }
@@ -2069,6 +2091,36 @@ input.address {
   width: 16ch;
   text-transform: none;
   letter-spacing: normal;
+}
+
+/* the KISS port (ADR-0019): its state line and the programs connected to it */
+.kiss-state {
+  color: var(--text-2);
+}
+
+.kiss-state[data-state="warn"] {
+  color: var(--status-warning);
+}
+
+.kiss-state[data-state="error"] {
+  color: var(--status-error);
+}
+
+.kiss-clients {
+  list-style: none;
+  margin: 0 0 var(--s2);
+  padding: 0;
+  display: grid;
+  gap: var(--s1);
+}
+
+.kiss-clients li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
 }
 
 #ptt-line {

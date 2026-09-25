@@ -448,6 +448,7 @@ async function refreshStatus() {
   $("d-host-sub").textContent = host.enabled
     ? `${host.command_address ?? ""} · data ${host.data_address ?? ""}`
     : "turn on Host programs in Setup";
+  applyKiss(status.kiss ?? null, host, status.datagrams ?? null);
 
   applyMetrics(status.metrics ?? {});
   renderCounters(status.counters ?? {});
@@ -1120,6 +1121,7 @@ const ACTIVITY_TEXT = {
   probing: "probing",
   answering: "answering",
   connected: "session",
+  datagram: "KISS frame",
 };
 
 async function loadHeard() {
@@ -1963,6 +1965,7 @@ async function loadCapabilities() {
   }
   modeTable = caps.modes ?? [];
   fillModes();
+  fillKissRungs();
   const usable = new Set(caps.usable_modes ?? []);
   const body = $("modes");
   body.replaceChildren();
@@ -2150,6 +2153,13 @@ async function loadConfig() {
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
+  const kiss = liveConfig.kiss ?? {};
+  $("kiss-enabled").checked = kiss.enabled === true;
+  $("kiss-host").value = hostOf(kiss.bind) || "127.0.0.1";
+  $("kiss-port").value = String(portOf(kiss.bind) ?? 8100);
+  kissRungWanted = String(kiss.rung ?? 1);
+  select($("kiss-rung"), kissRungWanted);
+  $("kiss-wait").checked = kiss.wait_for_clear !== false;
   scopes.take(liveConfig.panel?.waterfall);
   noteMissingDevices();
   // the file's devices, not the profile's guess, are what the warning should be about
@@ -2300,6 +2310,14 @@ function formChanges() {
   if (Number.isInteger(hostPort) && hostPort > 0 && hostPort < 65535) {
     changes["host.bind"] = `127.0.0.1:${hostPort}`;
   }
+  // the KISS port (live keys: it opens, moves or closes when saved)
+  changes["kiss.enabled"] = $("kiss-enabled").checked;
+  const kissPort = Number($("kiss-port").value);
+  if (Number.isInteger(kissPort) && kissPort > 0 && kissPort <= 65535) {
+    changes["kiss.bind"] = joinAddress($("kiss-host").value.trim() || "127.0.0.1", kissPort);
+  }
+  changes["kiss.rung"] = Number($("kiss-rung").value);
+  changes["kiss.wait_for_clear"] = $("kiss-wait").checked;
   // the rules (live keys): an empty choice is sent as empty, and blocks transmitting
   changes["regulatory.profile"] = $("reg-profile").value;
   changes["regulatory.control"] = $("reg-control").value;
@@ -2883,9 +2901,158 @@ function checkModemSettings() {
 }
 
 function checkAppSettings() {
-  const ok = numberWithin("host-port", 1024, 65535) && Boolean($("update-channel").value);
+  const ok = numberWithin("host-port", 1024, 65535) && Boolean($("update-channel").value) && kissFormOk();
+  showKissExposed();
   markStep(5, ok);
   return ok;
+}
+
+// ── the KISS port (ADR-0019) ────────────────────────────────────────
+//
+// APRS and packet programs connect to it as they would to VARA HF's; what it says here is
+// the daemon's `status.kiss` (listening, the programs connected, their frames) and the form
+// that sets `[kiss]`. A port that anyone on the network could reach is said out loud: it
+// makes the station transmit and asks no password.
+
+let kissExposedRunning = false;
+let kissClientsShown = "";
+// the configured rung, held until the mode table arrives with the option for it
+let kissRungWanted = "1";
+
+/// The host part of `host:port`, an IPv6 host's brackets taken off.
+function hostOf(address) {
+  const text = String(address ?? "");
+  const cut = text.lastIndexOf(":");
+  const host = cut >= 0 ? text.slice(0, cut) : text;
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+/// `host:port` as the daemon parses it: an IPv6 host goes in brackets.
+function joinAddress(host, port) {
+  return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+/// Whether an address lets only this computer in.
+function loopbackHost(host) {
+  const h = String(host ?? "").trim().toLowerCase();
+  return h === "localhost" || h === "::1" || h.startsWith("127.");
+}
+
+/// The KISS rung list: the running ladder, with the two rungs every station hears marked.
+function fillKissRungs() {
+  const choice = $("kiss-rung");
+  if (choice.options.length === modeTable.length && modeTable.length > 0) return;
+  const before = choice.options.length > 1 ? choice.value : kissRungWanted;
+  choice.replaceChildren();
+  for (const mode of modeTable) {
+    const option = document.createElement("option");
+    option.value = String(mode.index);
+    // the tone floor's first two rungs are the same frames in both bandwidths (ADR-0013)
+    option.textContent = mode.index < 2
+      ? `${mode.index} — ${mode.name} · heard at 500 and 2300 Hz`
+      : `${mode.index} — ${mode.name} · this bandwidth only`;
+    choice.append(option);
+  }
+  select(choice, before);
+}
+
+function kissFormOk() {
+  if (!$("kiss-enabled").checked) return true;
+  if ($("kiss-host").value.trim() === "" || !numberWithin("kiss-port", 1024, 65535)) return false;
+  // the host programs' interface holds its port and the next one up
+  const port = Number($("kiss-port").value);
+  const host = Number($("host-port").value);
+  return !($("host-enabled").checked && (port === host || port === host + 1));
+}
+
+function showKissExposed() {
+  const typed = $("kiss-enabled").checked && !loopbackHost($("kiss-host").value);
+  $("kiss-exposed").hidden = !(typed || kissExposedRunning);
+}
+
+function applyKiss(kiss, host, datagrams) {
+  const k = kiss ?? { enabled: false, listening: false, clients: [] };
+  const clients = k.clients ?? [];
+  const count = clients.length;
+  const programs = `${count} program${count === 1 ? "" : "s"}`;
+  let state;
+  if (!k.enabled) state = "off";
+  else if (!k.listening) state = `not listening: ${k.error ?? "starting"}`;
+  else state = count === 0 ? `listening on ${k.address}` : `${programs} connected on ${k.address}`;
+  if (k.listening && k.paused) state += ` · holding frames: ${k.paused}`;
+  const line = $("kiss-state");
+  line.textContent = state;
+  line.dataset.state = k.enabled && !k.listening ? "error" : k.listening && k.paused ? "warn" : "ok";
+  $("btn-kiss-disconnect").disabled = count === 0;
+  renderKissClients(clients);
+  kissExposedRunning = k.listening === true && k.exposed === true;
+  showKissExposed();
+
+  $("d-kiss").textContent = !k.enabled
+    ? "off"
+    : !k.listening
+      ? "not listening"
+      : count > 0
+        ? `${programs}`
+        : "listening";
+  const waiting = datagrams?.queued ?? 0;
+  $("d-kiss-sub").textContent = k.enabled
+    ? `${k.frames_in ?? 0} in · ${k.frames_out ?? 0} out · ${waiting} waiting`
+    : "turn on KISS programs in Setup";
+
+  // the header: which programs are using this station now
+  const using = [];
+  if (host?.connected) using.push("host program");
+  if (count > 0) using.push(`${count} KISS`);
+  const chip = $("apps-chip");
+  chip.hidden = using.length === 0;
+  chip.textContent = using.join(" · ");
+  const who = clients.map((c) => `${c.app} (${c.peer})`);
+  chip.title = [
+    host?.connected ? "A host program is attached on the VARA-compatible interface" : "",
+    who.length ? `KISS: ${who.join(", ")}` : "",
+  ].filter(Boolean).join(". ") || "Programs using this station now";
+}
+
+function renderKissClients(clients) {
+  // rebuilt only when something changed, so a Disconnect button is not replaced under the
+  // pointer between a press and its release
+  const key = JSON.stringify(clients);
+  if (key === kissClientsShown) return;
+  kissClientsShown = key;
+  const list = $("kiss-clients");
+  list.hidden = clients.length === 0;
+  list.replaceChildren(
+    ...clients.map((c) => {
+      const item = document.createElement("li");
+      const since = c.since_ms
+        ? new Date(c.since_ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "";
+      const text = document.createElement("span");
+      const dropped = c.dropped ? `, ${c.dropped} dropped` : "";
+      text.textContent = `${c.app} · ${c.peer} · since ${since} · ${c.frames_in} in, ${c.frames_out} out${dropped}`;
+      text.title =
+        "What the program seems to be (a guess from what it sends), where it connected from, when, and its frames: sent to the air, handed to it, dropped";
+      const button = document.createElement("button");
+      button.className = "small ghost";
+      button.textContent = "Disconnect";
+      button.title = `Close this program's connection (${c.peer}); it may connect again`;
+      button.addEventListener("click", () => kissDisconnect(c.id));
+      item.append(text, button);
+      return item;
+    }),
+  );
+}
+
+async function kissDisconnect(client) {
+  try {
+    const result = await call("kiss.disconnect", client == null ? {} : { client });
+    const closed = result.disconnected ?? 0;
+    log(`KISS: ${closed} connection${closed === 1 ? "" : "s"} closed`, false, "kiss");
+  } catch (error) {
+    log(`KISS: ${error.message}`, true, "kiss");
+  }
+  refreshStatus();
 }
 
 async function wizardSave() {
@@ -3948,9 +4115,10 @@ function wire() {
   for (const id of ["radio-busy-db", "radio-max-key", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
     $(id).addEventListener("input", checkModemSettings);
   }
-  for (const id of ["host-port", "update-channel", "host-enabled"]) {
+  for (const id of ["host-port", "update-channel", "host-enabled", "kiss-enabled", "kiss-host", "kiss-port"]) {
     $(id).addEventListener("input", checkAppSettings);
   }
+  $("btn-kiss-disconnect").addEventListener("click", () => kissDisconnect(null));
   wireSignalCard();
   wireRules();
   wireKeying();

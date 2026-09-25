@@ -40,6 +40,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
           <span id="reg-badge-text" title="The verdict on this station's widest transmission, here and now">—</span>
         </button>
+        <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
         <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT or rigctld" hidden></span>
         <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
@@ -489,6 +490,11 @@
             <div class="value" id="d-host">—</div>
             <div class="sub" id="d-host-sub"></div>
           </div>
+          <div class="reading" title="The KISS port: whether it listens, the programs connected, and the datagrams sent and heard">
+            <div class="label">KISS</div>
+            <div class="value" id="d-kiss" title="off, listening, or how many programs are connected">—</div>
+            <div class="sub" id="d-kiss-sub" title="Frames from programs and to them, and datagrams waiting"></div>
+          </div>
           <div class="reading" title="The sound card's input: RMS, peak and whether it clipped">
             <div class="label">Audio</div>
             <div class="value" id="d-audio">—</div>
@@ -843,6 +849,38 @@
                 <code>127.0.0.1</code> and this port (the data port is the next number up). Off
                 until you turn it on; the modem restarts when you change it.
               </p>
+              <div class="row">
+                <label for="kiss-enabled">KISS programs</label>
+                <label class="check"><input id="kiss-enabled" title="Open a KISS port: APRS and packet programs hand this station frames to send, and get every frame it hears" type="checkbox" /> let APRS and packet programs send and receive frames, on</label>
+                <input id="kiss-host" title="The address the KISS port listens on: 127.0.0.1 lets only programs on this computer in" type="text" class="address" value="127.0.0.1" spellcheck="false" aria-label="KISS listen address" />
+                <input id="kiss-port" title="The KISS port: 8100 is VARA HF's, so a program set up for VARA needs no change" type="text" inputmode="numeric" class="port" value="8100" aria-label="KISS port" />
+              </div>
+              <p class="note warn" id="kiss-exposed" title="Why an address other than 127.0.0.1 is a risk" hidden>
+                Any computer that can reach this address can make your station transmit, and the
+                KISS port asks no password. Keep it at <code>127.0.0.1</code> unless the program
+                runs on another computer of yours, on a network you trust.
+              </p>
+              <div class="row">
+                <label for="kiss-rung">KISS frames go at</label>
+                <select id="kiss-rung" title="The rung KISS frames go at: 0 and 1 are the tone floor's, heard by stations of either bandwidth; a faster rung reaches only stations of this bandwidth, on a better path">
+                  <option value="1">1 — tone-36</option>
+                </select>
+                <label class="check"><input id="kiss-wait" title="Hold a KISS frame until the channel is clear, as VARA's KISS port does; a host program's IGNOREKISSDCD turns this off while it is attached" type="checkbox" checked /> wait for a clear channel</label>
+              </div>
+              <div class="row">
+                <label for="btn-kiss-disconnect">KISS port</label>
+                <span class="kiss-state" id="kiss-state" title="Whether the KISS port is listening, and where" role="status">off</span>
+                <button class="small" id="btn-kiss-disconnect" title="Close every KISS program's connection; a program may connect again" disabled>Disconnect</button>
+              </div>
+              <ul class="kiss-clients" id="kiss-clients" title="The programs connected to the KISS port: what they seem to be, where from, and their frames" hidden></ul>
+              <p class="sub">
+                Point the program's KISS over TCP settings at <code>127.0.0.1</code> and
+                <code>8100</code>, VARA HF's KISS port, so a program set up for VARA needs no
+                change. Each frame goes out as its own transmission with no acknowledgement, and
+                only while no session is up; the program repeats what needs repeating. Winlink
+                Express and VarAC <em>sessions</em> use Host programs above, not this port. Takes
+                effect when saved, without a restart.
+              </p>
             </li>
             <li class="step" data-step="6">
               <h3>6. Save</h3>
@@ -952,6 +990,7 @@
             <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider. The <em>How to set your drive</em> guide in that card walks through it.</li>
             <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter (Shift+Enter for a new line; untick <em>Enter sends</em> to make Enter a new line): what you send stays in the box above the line you type on, with its time and a ✓ once the other station has all of it (… while it is on its way, ✗ if the session ended first). Each message arrives on a line of its own with its time, <em>Sound</em> plays a note when one does, and <em>Clear</em> empties the window.</li>
             <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
+            <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change. Each frame goes out as its own transmission, heard by stations of either bandwidth.</li>
           </ol>
         </section>
 
