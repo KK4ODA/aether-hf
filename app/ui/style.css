@@ -1599,6 +1599,11 @@ button.sort:focus-visible {
   color: var(--text);
 }
 
+/* a value a table has nothing for, said in words */
+.muted {
+  color: var(--text-3);
+}
+
 .sessions-head {
   margin-top: var(--s5);
 }

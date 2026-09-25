@@ -1476,15 +1476,37 @@ function renderSessions() {
       const mode = modeTable[value];
       return mode && mode.name ? `rung ${value} (${mode.name} on the ${s.bandwidth_hz} Hz air)` : `rung ${value}`;
     };
+    // A direction with no traffic has nothing to show, and says so: in a session the other
+    // station called and sent, this one only acknowledged — no rung out — and a station says
+    // how it hears the other only when it acknowledges what that one sent.
+    const pair = (out, back) => {
+      const span = document.createDocumentFragment();
+      const first = document.createElement("span");
+      first.textContent = out.text;
+      if (out.muted) first.className = "muted";
+      span.append(first, ` / ${back}`);
+      return span;
+    };
+    const sentNothing = !s.bytes_sent;
     cell(
-      `${rung(s.top_rung_sent)} / ${rung(s.top_rung_heard)}`,
+      pair(
+        s.top_rung_sent == null ? { text: sentNothing ? "none sent" : "—", muted: true } : { text: rung(s.top_rung_sent) },
+        rung(s.top_rung_heard),
+      ),
       "num",
-      `Fastest rung sent: ${named(s.top_rung_sent)}; fastest decoded from ${s.remote}: ${named(s.top_rung_heard)}`,
+      s.top_rung_sent == null && sentNothing
+        ? `This station sent no data in this session — it only acknowledged what ${s.remote} sent — so there is no rung out; fastest decoded from ${s.remote}: ${named(s.top_rung_heard)}`
+        : `Fastest rung sent: ${named(s.top_rung_sent)}; fastest decoded from ${s.remote}: ${named(s.top_rung_heard)}`,
     );
     cell(
-      `${db(s.heard_there_db)} / ${db(s.snr_db)} dB`,
+      pair(
+        s.heard_there_db == null ? { text: "not said", muted: true } : { text: db(s.heard_there_db) },
+        `${db(s.snr_db)} dB`,
+      ),
       "num",
-      `${s.remote} last said it heard this station at ${db(s.heard_there_db)} dB; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`,
+      s.heard_there_db == null
+        ? `${s.remote} did not say how it heard this station: a station says that in its acknowledgements of what the other sends${sentNothing ? ", and this station sent nothing" : ""}; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`
+        : `${s.remote} last said it heard this station at ${db(s.heard_there_db)} dB; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`,
     );
     const ended = cell(s.end, "", s.recording ? `Recorded as ${s.recording}` : "Not recorded");
     if (s.test) {
