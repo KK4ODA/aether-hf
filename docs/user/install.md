@@ -37,6 +37,29 @@ beside it and the run before it is `aetherd.prev.log`, and *Help > Open the conf
 folder* takes you there. If restarting the modem made a problem go away, the log worth
 reading is `aetherd.prev.log` — the one from the run that misbehaved.
 
+**Closing the window stops the modem.** When that would interrupt something — a session,
+a Test session, a call, a probe, a transmission — the application asks first and names
+it; *Keep running* leaves everything as it was. If you close anyway, the modem ends a
+session on the air before it stops (a disconnect, and your callsign in Morse when it is
+set to identify), which can take a quarter of a minute after the window has gone. A
+daemon the application did not start (a gateway service) runs on, and closing asks
+nothing.
+
+**Uninstalling** (*Settings › Apps*, or *Uninstall Aether HF* from the Start menu) removes
+the program. What you made is yours, and it stays unless you say otherwise; the
+uninstaller asks, one kind at a time, and pressing Enter keeps it:
+
+| Asked | What it is | Where |
+|---|---|---|
+| Settings and caches | `station.toml` and its backups, the dial memories; the installers kept for going back; the window's stored data (the Sent list, the waterfall's controls) | `%APPDATA%\aether-hf\`, `%LOCALAPPDATA%\aether-hf\`, `%LOCALAPPDATA%\org.aetherhf.desktop\` |
+| Profiles, logs and history | the profiles, `aetherd.log` and the one before it, the stations heard, the session history | `%APPDATA%\aether-hf\` |
+| Recordings | the audio and sidecars of your recorded and Test sessions — asked with a warning of its own, and only after the other two | `%APPDATA%\aether-hf\recordings\` |
+
+A recordings folder you moved elsewhere (`[record] dir`) is never touched, and neither is
+anything you put in these folders yourself. An update, and a silent or passive uninstall,
+keep everything without asking. The uninstaller's own *Delete the application data* box
+removes only the window's stored data.
+
 ### Linux
 
 A Debian package, `aether-hf_<version>_amd64.deb`, for Debian 12 / Ubuntu 22.04 and later:
