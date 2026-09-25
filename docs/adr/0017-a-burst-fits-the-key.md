@@ -6,8 +6,8 @@ or the link protocol: a beta.57 station and a beta.58 station connect and carry 
 
 ## 1. Context
 
-Three Test sessions between KK4ODA (Senoia, GA; 50 W) and ND1J (Atlanta; 100–120 W) on the
-night of 2026-09-24/25 — 40 m at 2 300 Hz, 80 m at 2 300 Hz, 80 m at 500 Hz — looked like a
+Three Test sessions between ND1J (Senoia, GA; 100–120 W through an amplifier) and KK4ODA
+(near Northlake Mall, Atlanta; 50 W) on the night of 2026-09-24/25 — 40 m at 2 300 Hz, 80 m at 2 300 Hz, 80 m at 500 Hz — looked like a
 modem that would not climb: on the 80 m sessions, which the operators judged excellent, the
 panel said *0 rungs* throughout and the tests ran long. Both stations' recordings, sidecars
 and logs were read frame by frame. What they show:
