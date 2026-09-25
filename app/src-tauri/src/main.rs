@@ -25,6 +25,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod close;
+mod signal;
 mod update;
 
 use std::{
@@ -39,7 +40,7 @@ use std::{
 };
 
 use tauri::{
-    Manager as _,
+    Listener as _, Manager as _,
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
@@ -148,6 +149,7 @@ fn main() {
         ])
         .setup(move |app| {
             install_menu(app)?;
+            listen_to_panel(app);
             watch_daemon(app.handle().clone());
             // A packaged build has no terminal, so a daemon that would not start has to be
             // explained on screen: the panel would otherwise sit at "not connected" for ever,
@@ -179,6 +181,13 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // the undocked card going, however it went, puts it back in the panel
+            if window.label() == signal::WINDOW {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    signal::tell_panel(window.app_handle(), false);
+                }
+                return;
+            }
             // the panel's window closing is the shell closing; the updater's is not
             if window.label() != "main" {
                 return;
@@ -194,12 +203,53 @@ fn main() {
                     let window = window.clone();
                     std::thread::spawn(move || confirm_close(&window));
                 }
-                tauri::WindowEvent::Destroyed => stop_daemon(&window.state::<Daemon>()),
+                tauri::WindowEvent::Destroyed => {
+                    // the card's window goes with the panel's, or the shell would outlive it
+                    signal::close(window.app_handle());
+                    stop_daemon(&window.state::<Daemon>());
+                }
                 _ => {}
             }
         })
         .run(context)
         .expect("the desktop shell could not start");
+}
+
+/// What the panel asks of the shell. It is served by the daemon and has no commands, so it
+/// asks through events (`capabilities/panel.json` grants it events and nothing else it could
+/// act with): its About card wants the updater's view and a check — the Help menu's own —
+/// and its signal-analysis card wants a window of its own, and back.
+fn listen_to_panel(app: &tauri::App) {
+    let handle = app.handle().clone();
+    app.listen_any("panel-update", move |event| {
+        match action_of(event.payload()).as_deref() {
+            Some("check") => {
+                tauri::async_runtime::spawn(update::check(handle.clone(), false));
+            }
+            Some("view") => update::tell_panel(&handle),
+            _ => {}
+        }
+    });
+    let handle = app.handle().clone();
+    app.listen_any("panel-signal", move |event| {
+        match action_of(event.payload()).as_deref() {
+            // built off the event's thread, as the updater's window is: a window made inside
+            // a handler the main thread is waiting on can hang on Windows
+            Some("undock") => {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move { signal::open(&handle) });
+            }
+            Some("dock") => signal::close(&handle),
+            Some("state") => signal::tell_panel(&handle, signal::is_open(&handle)),
+            _ => {}
+        }
+    });
+}
+
+/// The `action` a panel's event names, from its JSON payload.
+fn action_of(payload: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    value.get("action")?.as_str().map(str::to_owned)
 }
 
 /// The Help menu: updates, going back, and where things are.
