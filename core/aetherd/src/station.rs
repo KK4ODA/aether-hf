@@ -166,6 +166,10 @@ pub struct PhyFrame {
     t_start: f64,
     t_end: f64,
     container: Container,
+    /// Acquired confidently enough that its measurements mean something when it does not
+    /// decode: the rule `reported_cfo` keeps a noise trigger's offset off the panel by
+    /// (ADR-0020).
+    trusted: bool,
 }
 
 impl std::fmt::Debug for PhyFrame {
@@ -199,6 +203,10 @@ impl SoftFrame for PhyFrame {
 
     fn snr_db(&self) -> f64 {
         self.frame.snr_3k_db()
+    }
+
+    fn trusted(&self) -> bool {
+        self.trusted
     }
 
     fn t_start(&self) -> f64 {
@@ -436,9 +444,19 @@ pub fn reported_cfo(
     detect_confidence: f64,
     cfo_hz: f64,
 ) -> Option<f64> {
-    let sure = confidence >= aether_phy::modem::MODE_RETRY_CONFIDENCE
-        || detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
-    (decoded || sure).then_some(cfo_hz)
+    (decoded || trusted_measurement(confidence, detect_confidence)).then_some(cfo_hz)
+}
+
+/// Whether a frame was acquired confidently enough that what the receiver measured on it —
+/// its offset, its SNR — is a measurement of a real frame even when it does not decode: the
+/// mode chips read with confidence, or acquisition well above its threshold. Below both it
+/// is as likely the correlator on noise, and the link's rate controller takes no SNR from it
+/// and no failure (ADR-0020): one such frame read -11 dB on ND1J's path between frames
+/// decoding at +5 to +8, and took the recommendation from rung 4 to rung 1.
+#[must_use]
+pub fn trusted_measurement(confidence: f64, detect_confidence: f64) -> bool {
+    confidence >= aether_phy::modem::MODE_RETRY_CONFIDENCE
+        || detect_confidence >= DETECT_CONFIDENCE_TRUSTED
 }
 
 /// What the physical layer made of one frame: for a display, for the list of stations
@@ -2214,6 +2232,7 @@ impl<P: Ptt> Station<P> {
             let start = decoded.frame.start() as f64 / fs;
             let frame_s = decoded.frame.samples(&air) as f64 / fs;
             let decoded_ok = decoded.ok();
+            let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected);
             let frame = PhyFrame {
                 container,
                 t_start: start,
@@ -2221,6 +2240,7 @@ impl<P: Ptt> Station<P> {
                 rung,
                 frame: decoded.frame,
                 modem: Rc::clone(&self.decoder),
+                trusted,
             };
             // A frame that decoded is real whatever its acquisition looked like, and a weak
             // one at the floor may have acquired below the gate below — it counts here. One
@@ -3863,6 +3883,20 @@ mod tests {
         // a low-confidence non-decode is a noise trigger: its +55 Hz is the correlator on
         // noise, not a rig error, and is not reported
         assert_eq!(reported_cfo(false, 0.8, 1.0, 55.0), None);
+    }
+
+    #[test]
+    fn the_link_trusts_what_the_receiver_acquired_with_confidence() {
+        // ADR-0020, from ND1J's 40 m path (2026-09-25): the frame that read -11 dB between
+        // frames decoding at +5 to +8 had chips at 1.06 and acquisition at 1.13 — a noise
+        // trigger, whose SNR the rate controller must not take, nor its failure
+        assert!(!trusted_measurement(1.06, 1.13));
+        // the frames that failed at +6 to +9 dB had both well clear: real frames, and their
+        // SNR is the path's
+        assert!(trusted_measurement(2.66, 1.67));
+        // a control frame's chips always read 1.0: its acquisition decides
+        assert!(trusted_measurement(1.0, 1.7));
+        assert!(!trusted_measurement(1.0, 1.2));
     }
 
     #[test]
