@@ -86,6 +86,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "config.set"
             | "ptt.test"
             | "heard.clear"
+            | "sessions.clear"
             | "counters.reset"
             | "frequencies.set"
             | "frequency.set"
@@ -141,6 +142,8 @@ pub struct DaemonState {
     pub supervised: bool,
     /// The stations heard, kept in a file beside the configuration.
     pub heard: crate::heard::HeardList,
+    /// The sessions this station has had, kept beside it.
+    pub sessions: crate::sessions::SessionLog,
     /// The remembered dials, kept beside it too.
     pub memories: crate::memories::Memories,
     /// The host interface, when one is listening.
@@ -186,6 +189,7 @@ impl DaemonState {
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
             heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
+            sessions: crate::sessions::SessionLog::open(Some(path.with_file_name("sessions.json"))),
             memories: crate::memories::Memories::open(Some(
                 path.with_file_name("frequencies.json"),
             )),
@@ -285,6 +289,37 @@ pub fn dispatch_with<P: Ptt>(
         }
         "heard.clear" => {
             let cleared = daemon.map_or(0, |d| d.heard.clear());
+            return Response::ok(request.id.clone(), json!({ "cleared": cleared }));
+        }
+        "sessions.list" => {
+            let remote = request.params.get("remote").and_then(Value::as_str);
+            let sessions = daemon
+                .as_ref()
+                .map_or_else(Vec::new, |d| d.sessions.sessions(remote));
+            return Response::ok(
+                request.id.clone(),
+                json!({
+                    "sessions": sessions,
+                    "limit": crate::sessions::LIMIT,
+                    "path": daemon.as_ref().and_then(|d| d.sessions.path()).map(|p| p.display().to_string()),
+                }),
+            );
+        }
+        "sessions.clear" => {
+            let Some(daemon) = daemon else {
+                return Response::ok(request.id.clone(), json!({ "cleared": 0 }));
+            };
+            let cleared = daemon.sessions.clear();
+            if let Err(error) = daemon.sessions.save() {
+                return Response::failed(
+                    request.id.clone(),
+                    ApiError::new(
+                        "cannot_save",
+                        format!("the session history was cleared but not written: {error}"),
+                        true,
+                    ),
+                );
+            }
             return Response::ok(request.id.clone(), json!({ "cleared": cleared }));
         }
         "frequencies.list" => {
@@ -898,6 +933,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "session": engine.session(),
         "mode": engine.current_mode(),
         "transmitting": station.transmitting(),
+        "probing": engine.probing(),
         "channel_busy": station.channel_busy(),
         "compressing": station.compressing(),
         "compression_saving": station.compression_saving(),
@@ -1485,6 +1521,77 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_sessions_are_listed_by_station_and_forgotten() {
+        let mut station = station();
+        let mut daemon = daemon();
+        let request = |method: &str, params: Value| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params,
+            token: None,
+        };
+        let session = |remote: &str, ended_ms: u64| crate::sessions::Session {
+            remote: remote.to_owned(),
+            started_ms: 0,
+            ended_ms,
+            duration_s: 95.5,
+            role: crate::sessions::Role::Caller,
+            bandwidth_hz: 500,
+            frequency_hz: Some(3_588_000),
+            bytes_sent: 1024,
+            bytes_acked: 1100,
+            bytes_received: 0,
+            end: "closed".to_owned(),
+            snr_db: Some(5.0),
+            best_snr_db: Some(7.5),
+            heard_there_db: Some(-1.0),
+            top_rung_sent: Some(5),
+            top_rung_heard: Some(7),
+            test: true,
+            recording: None,
+        };
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &request("sessions.list", json!({})),
+        );
+        let result = response.result.expect("result");
+        assert_eq!(result["sessions"].as_array().map(Vec::len), Some(0));
+        assert_eq!(result["limit"], crate::sessions::LIMIT);
+        daemon.sessions.add(session("ND1J", 1_000));
+        daemon.sessions.add(session("W4TGA", 2_000));
+        daemon.sessions.add(session("ND1J", 3_000));
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &request("sessions.list", json!({ "remote": "nd1j" })),
+        );
+        let result = response.result.expect("result");
+        let sessions = result["sessions"].as_array().expect("sessions");
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0]["ended_ms"], 3_000);
+        assert_eq!(sessions[0]["role"], "caller");
+        assert_eq!(sessions[0]["top_rung_sent"], 5);
+        assert_eq!(sessions[0]["test"], true);
+        assert!(is_mutating("sessions.clear") && !is_mutating("sessions.list"));
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &request("sessions.clear", json!({})),
+        );
+        assert_eq!(response.result.expect("result")["cleared"], 3);
+        assert!(daemon.sessions.sessions(None).is_empty());
+        // without the daemon's state there is no history, and the answer is an empty one
+        let response = dispatch(&mut station, &request("sessions.list", json!({})));
+        assert_eq!(
+            response.result.expect("result")["sessions"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
     fn daemon() -> DaemonState {
         let mut config = crate::config::Config::parse(crate::config::EXAMPLE).expect("example");
         config.control.token = Some("hunter2".to_owned());
@@ -1496,6 +1603,7 @@ mod tests {
         // and no file under the working directory for the stations heard, the dials or
         // the profiles
         daemon.heard = crate::heard::HeardList::open(None);
+        daemon.sessions = crate::sessions::SessionLog::open(None);
         daemon.memories = crate::memories::Memories::open(None);
         daemon.profiles = crate::profile::Store::open(None);
         // not the machine's own: enumerating audio devices on a machine with no audio

@@ -833,9 +833,12 @@ fn serve(
     let mut last_ptt_fault: Option<std::time::Instant> = None;
     let mut heard_changed_at: Option<std::time::Instant> = None;
     let mut last_audio = std::time::Instant::now();
+    let mut wind_down: Option<std::time::Instant> = None;
 
     loop {
-        if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+        if stopping.load(std::sync::atomic::Ordering::SeqCst)
+            && wound_down(station, daemon, &mut wind_down)
+        {
             stop(station, control, daemon, restarting);
             return Ok(());
         }
@@ -953,8 +956,35 @@ fn serve(
     }
 }
 
-/// The way out: the log says why, the stations heard are written, the radio is released,
-/// and every reply still on its way to a client is written.
+/// The longest a stop waits for a session's DISC and identifier to leave the air: a floor
+/// control frame is 3.2 s and a callsign in Morse at 20 wpm about six.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// Whether a daemon asked to stop may go now. A session is ended on the air first: its DISC,
+/// so the other station is not left to time out, and — when this one identifies — the
+/// identifier that ends the communication. Closing the desktop application in a session
+/// used to leave the peer transmitting into nothing (ND1J, 2026-09-25). Bounded by
+/// [`WIND_DOWN`]: a stop is a stop.
+fn wound_down(
+    station: &mut Station<Box<dyn Ptt>>,
+    daemon: &mut DaemonState,
+    wind_down: &mut Option<std::time::Instant>,
+) -> bool {
+    if wind_down.is_none() && !station.quiescent() {
+        daemon.log.record(
+            Level::Info,
+            "daemon",
+            "ending the session on the air before stopping",
+            &state_name(station),
+        );
+        station.abort();
+        *wind_down = Some(std::time::Instant::now());
+    }
+    wind_down.is_none_or(|since| station.quiescent() || since.elapsed() >= WIND_DOWN)
+}
+
+/// The way out: the log says why, the stations heard and the sessions are written, the
+/// radio is released, and every reply still on its way to a client is written.
 fn stop(
     station: &mut Station<Box<dyn Ptt>>,
     control: &aetherd::control::ControlChannel,
@@ -975,6 +1005,8 @@ fn stop(
             &state_name(station),
         );
     }
+    // a session the wind-down ended is history too
+    note_sessions(station, None, daemon);
     // Report the failure but do not return on it: there is nothing left to try, and
     // exiting quietly would hide a radio that is still keyed.
     if let Err(error) = station.shut_down() {
@@ -1034,6 +1066,39 @@ fn report_frames(
                 &state_name(station),
             );
         }
+    }
+    note_sessions(station, Some(control), daemon);
+}
+
+/// A session that ended joins the history, which is written at once — sessions end rarely
+/// — and the clients are told.
+fn note_sessions(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: Option<&aetherd::control::ControlChannel>,
+    daemon: &mut DaemonState,
+) {
+    let finished = station.take_finished_sessions();
+    if finished.is_empty() {
+        return;
+    }
+    let now_ms = unix_ms_now();
+    for session in finished {
+        let session = session.ended_at(now_ms);
+        if let Some(control) = control {
+            control.publish(&Event::new(
+                "session",
+                serde_json::to_value(&session).unwrap_or(serde_json::Value::Null),
+            ));
+        }
+        daemon.sessions.add(session);
+    }
+    if let Err(error) = daemon.sessions.save() {
+        daemon.log.record(
+            Level::Warn,
+            "sessions",
+            &format!("the session history was not saved: {error}"),
+            &state_name(station),
+        );
     }
 }
 
