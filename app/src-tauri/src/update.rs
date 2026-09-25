@@ -722,6 +722,122 @@ pub fn rollback_dir() -> Option<PathBuf> {
 }
 
 /// The newest kept installer older than what is running, if there is one.
+/// The settings schema each release reads, from the version it arrived in — the daemon's
+/// `config::SCHEMA_VERSION` through the releases. Going back to a version that reads an
+/// older shape than the file has been brought to leaves it unable to start (beta.56 to
+/// beta.52, 2026-09-25), so a restore looks here first. A schema bump adds a line; a test
+/// holds the last one to the daemon's constant.
+const SCHEMA_HISTORY: &[(&str, u32)] = &[
+    ("0.2.0-beta.1", 1),
+    ("0.2.0-beta.51", 2),
+    ("0.2.0-beta.53", 3),
+    ("0.2.0-beta.54", 4),
+    ("0.2.0-beta.56", 5),
+];
+
+/// The settings schema a version reads, if it is one this build knows of.
+fn schema_read_by(version: &semver::Version) -> Option<u32> {
+    SCHEMA_HISTORY
+        .iter()
+        .filter_map(|(from, schema)| Some((semver::Version::parse(from).ok()?, *schema)))
+        .filter(|(from, _)| from <= version)
+        .map(|(_, schema)| schema)
+        .next_back()
+}
+
+/// What a restore does with the settings file.
+#[derive(Debug, PartialEq, Eq)]
+enum SettingsPlan {
+    /// The earlier version reads it as it is.
+    Keep,
+    /// The earlier version reads an older shape: the copy kept before the file was brought
+    /// forward goes back in its place, and the file as it is now is kept beside it.
+    Swap {
+        /// The copy to put back.
+        backup: PathBuf,
+        /// The schema the file is at now.
+        from: u32,
+    },
+    /// The earlier version reads an older shape, and no copy it can read was kept.
+    Unreadable {
+        /// The schema the file is at now.
+        current: u32,
+        /// The newest the earlier version reads.
+        reads: u32,
+    },
+}
+
+/// What to do with a settings file at schema `current`, going back to a version that reads
+/// up to `reads` (unknown: as it always was), with `backups` kept beside it.
+fn plan_settings(current: u32, reads: Option<u32>, backups: &[(u32, PathBuf)]) -> SettingsPlan {
+    let Some(reads) = reads else {
+        return SettingsPlan::Keep;
+    };
+    if reads >= current {
+        return SettingsPlan::Keep;
+    }
+    backups
+        .iter()
+        .filter(|(schema, _)| *schema <= reads)
+        .max_by_key(|(schema, _)| *schema)
+        .map_or(SettingsPlan::Unreadable { current, reads }, |(_, path)| {
+            SettingsPlan::Swap {
+                backup: path.clone(),
+                from: current,
+            }
+        })
+}
+
+/// The schema a settings file says it is at; a file that does not say is the first.
+fn schema_of_file(path: &Path) -> u32 {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<toml::Table>(&text).ok())
+        .and_then(|table| {
+            table
+                .get("schema_version")
+                .and_then(toml::Value::as_integer)
+        })
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or(1)
+}
+
+/// The copies the daemon kept beside a settings file when it brought it forward
+/// (`<name>.bak-v<n>`), as (schema, path).
+fn backups_beside(path: &Path) -> Vec<(u32, PathBuf)> {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{name}.bak-v");
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file = entry.file_name();
+            let schema = file.to_str()?.strip_prefix(&prefix)?.parse().ok()?;
+            Some((schema, entry.path()))
+        })
+        .collect()
+}
+
+/// Put `backup` in the settings file's place, keeping the file as it is as
+/// `<name>.newer-v<from>` — the name the daemon gives a newer file it could not read.
+fn swap_settings(config: &Path, backup: &Path, from: u32) -> Result<(), String> {
+    let name = config.file_name().map_or_else(
+        || "station.toml".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let kept = config.with_file_name(format!("{name}.newer-v{from}"));
+    std::fs::copy(config, &kept).map_err(|e| format!("{}: {e}", kept.display()))?;
+    let incoming = config.with_file_name(format!("{name}.restoring"));
+    std::fs::copy(backup, &incoming).map_err(|e| format!("{}: {e}", incoming.display()))?;
+    std::fs::rename(&incoming, config).map_err(|e| format!("{}: {e}", config.display()))
+}
+
 fn previous_installer(current: &str) -> Option<(semver::Version, PathBuf)> {
     let current = semver::Version::parse(current).ok()?;
     let dir = rollback_dir()?;
@@ -761,12 +877,54 @@ pub fn restore_previous(app: &AppHandle) {
             });
         return;
     };
+    let config = crate::config_path().ok();
+    let plan = config.as_deref().map_or(SettingsPlan::Keep, |path| {
+        plan_settings(
+            schema_of_file(path),
+            schema_read_by(&version),
+            &backups_beside(path),
+        )
+    });
     let handle = app.clone();
+    let settings = match &plan {
+        SettingsPlan::Keep => "Your settings are not touched.".to_owned(),
+        SettingsPlan::Swap { backup, from } => format!(
+            "{version} reads an older form of settings file than this version wrote, so the \
+             copy kept when the settings were brought forward, {}, goes back in its place; \
+             your settings as they are now are kept beside it as station.toml.newer-v{from}.",
+            backup
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        ),
+        SettingsPlan::Unreadable { current: at, reads } => {
+            let handle = app.clone();
+            app.dialog()
+                .message(format!(
+                    "{version} reads an older form of settings file (schema {reads}) than \
+                     this version wrote (schema {at}), and no copy it can read was kept, so \
+                     it could not start. Keep this version, or install {version} from the \
+                     releases page and set it up again."
+                ))
+                .title("Restore the previous version")
+                .kind(MessageDialogKind::Warning)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Open the releases page".into(),
+                    "Keep this version".into(),
+                ))
+                .show(move |open| {
+                    if open {
+                        let _ = handle
+                            .opener()
+                            .open_url(format!("{REPOSITORY}/releases"), None::<&str>);
+                    }
+                });
+            return;
+        }
+    };
     app.dialog()
         .message(format!(
             "Go back from {current} to {version}? The modem will stop, {version} will \
-             install over this version, and Aether HF will start again. Your settings are \
-             not touched."
+             install over this version, and Aether HF will start again. {settings}"
         ))
         .title("Restore the previous version")
         .kind(MessageDialogKind::Warning)
@@ -776,16 +934,33 @@ pub fn restore_previous(app: &AppHandle) {
         ))
         .show(move |yes| {
             if yes {
-                run_installer(&handle, &installer);
+                let swap = match (plan, config) {
+                    (SettingsPlan::Swap { backup, from }, Some(config)) => {
+                        Some((config, backup, from))
+                    }
+                    _ => None,
+                };
+                run_installer(&handle, &installer, swap);
             }
         });
 }
 
-/// Run a kept installer over this installation, and get out of its way.
-fn run_installer(app: &AppHandle, installer: &Path) {
+/// Run a kept installer over this installation, and get out of its way — first putting
+/// back the settings the earlier version can read, when it cannot read these.
+fn run_installer(app: &AppHandle, installer: &Path, swap: Option<(PathBuf, PathBuf, u32)>) {
     crate::stop_daemon(&app.state::<crate::Daemon>());
     if let Err(error) = crate::release_daemon_binary(std::time::Duration::from_secs(15)) {
         report(app, format!("Could not go back: {error}"));
+        return;
+    }
+    // the modem is stopped, so nothing writes the file under us
+    if let Some((config, backup, from)) = swap
+        && let Err(error) = swap_settings(&config, &backup, from)
+    {
+        report(
+            app,
+            format!("Could not put back the earlier settings: {error}"),
+        );
         return;
     }
     if cfg!(windows) {
@@ -868,6 +1043,78 @@ mod tests {
             version_of(&installer_name("0.2.0")),
             Some(semver::Version::new(0, 2, 0))
         );
+    }
+
+    #[test]
+    fn every_release_is_known_by_the_settings_it_reads() {
+        let reads = |v: &str| schema_read_by(&semver::Version::parse(v).expect("version"));
+        assert_eq!(reads("0.2.0-beta.9"), Some(1));
+        assert_eq!(reads("0.2.0-beta.50"), Some(1));
+        assert_eq!(reads("0.2.0-beta.52"), Some(2));
+        assert_eq!(reads("0.2.0-beta.53"), Some(3));
+        assert_eq!(reads("0.2.0-beta.55"), Some(4));
+        assert_eq!(reads("0.2.0-beta.56"), Some(5));
+        assert_eq!(reads("0.2.0"), reads(env!("CARGO_PKG_VERSION")));
+        assert_eq!(reads("0.1.0"), None);
+        // the table's last line is the schema the daemon of this build writes: a schema bump
+        // without a line here fails
+        let config = include_str!("../../../core/aetherd/src/config.rs");
+        let current: u32 = config
+            .lines()
+            .find_map(|line| line.strip_prefix("pub const SCHEMA_VERSION: u32 = "))
+            .and_then(|rest| rest.trim_end_matches(';').parse().ok())
+            .expect("the daemon's schema");
+        assert_eq!(SCHEMA_HISTORY.last().map(|(_, s)| *s), Some(current));
+        assert_eq!(reads(env!("CARGO_PKG_VERSION")), Some(current));
+    }
+
+    #[test]
+    fn going_back_puts_back_the_settings_the_earlier_version_reads() {
+        let kept = |n: u32| (n, PathBuf::from(format!("station.toml.bak-v{n}")));
+        let backups = [kept(1), kept(2), kept(4)];
+        assert_eq!(plan_settings(5, Some(5), &backups), SettingsPlan::Keep);
+        assert_eq!(plan_settings(4, Some(5), &backups), SettingsPlan::Keep);
+        assert_eq!(plan_settings(5, None, &backups), SettingsPlan::Keep);
+        // beta.56 to beta.52: the copy beta.52 wrote goes back
+        assert_eq!(
+            plan_settings(5, Some(2), &backups),
+            SettingsPlan::Swap {
+                backup: PathBuf::from("station.toml.bak-v2"),
+                from: 5
+            }
+        );
+        // to a version that reads 3, the newest it can read — 2 — brought forward by it
+        assert_eq!(
+            plan_settings(5, Some(3), &backups),
+            SettingsPlan::Swap {
+                backup: PathBuf::from("station.toml.bak-v2"),
+                from: 5
+            }
+        );
+        assert_eq!(
+            plan_settings(5, Some(2), &[kept(4)]),
+            SettingsPlan::Unreadable {
+                current: 5,
+                reads: 2
+            }
+        );
+        // and the swap keeps the newer file beside the one put back
+        let dir = std::env::temp_dir().join(format!("aether-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let config = dir.join("station.toml");
+        std::fs::write(&config, "schema_version = 5\n").expect("write");
+        std::fs::write(dir.join("station.toml.bak-v2"), "schema_version = 2\n").expect("write");
+        assert_eq!(schema_of_file(&config), 5);
+        let found = backups_beside(&config);
+        assert_eq!(found.len(), 1);
+        swap_settings(&config, &found[0].1, 5).expect("swap");
+        assert_eq!(schema_of_file(&config), 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("station.toml.newer-v5")).expect("kept"),
+            "schema_version = 5\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

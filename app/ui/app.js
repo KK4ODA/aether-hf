@@ -3376,6 +3376,9 @@ function applyFaults(status) {
   if (status.audio_fault) {
     faults.push(`The sound card is unavailable — ${status.audio_fault}. The modem can neither hear nor transmit: choose the modem devices in Setup, step 2.`);
   }
+  if (status.config_note) {
+    faults.push(`Settings from a backup — ${status.config_note}`);
+  }
   banner.textContent = faults.join(" ");
   banner.hidden = faults.length === 0;
 }

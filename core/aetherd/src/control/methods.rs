@@ -124,6 +124,9 @@ pub struct DaemonState {
     /// Why the sound card could not be opened, when it could not. The station runs on
     /// silence until the devices are corrected, and the panel says so.
     pub audio_fault: Option<String>,
+    /// How the configuration had to be read to start: from the copy kept before a newer
+    /// version brought it forward, when that version's file is one this cannot read.
+    pub config_note: Option<String>,
     /// What the machine reports as audio devices and serial ports, for the bundle.
     ///
     /// A function rather than a call, because enumerating devices goes through the
@@ -179,6 +182,7 @@ impl DaemonState {
             loop_slowest_phase: String::new(),
             loop_stalls: 0,
             audio_fault: None,
+            config_note: None,
             devices: device_inventory,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
             heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
@@ -307,6 +311,7 @@ pub fn dispatch_with<P: Ptt>(
                 |d| d.host_json(),
             );
             result["audio_fault"] = json!(daemon.as_ref().and_then(|d| d.audio_fault.clone()));
+            result["config_note"] = json!(daemon.as_ref().and_then(|d| d.config_note.clone()));
             // which installation this daemon runs from: a shell that finds one already
             // listening decides from this whether it is its own to stop
             result["binary"] = json!(

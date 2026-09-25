@@ -83,9 +83,14 @@ setting says at that moment.
 
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
-for you, *Help > Restore the previous version…* goes back without a network. Your settings
-are never touched by an update or a restore; if a version changes the shape of the
-configuration file, the old file is backed up beside itself first (`station.toml.bak-v1`).
+for you, *Help > Restore the previous version…* goes back without a network. When a
+version changes the shape of the configuration file, it backs up the old file beside itself
+first (`station.toml.bak-v4`, named after the shape it was in). An older version cannot read
+a newer shape, so going back across such a change puts that copy back: from beta 57 a restore
+does it before installing, keeping your settings as they are now as
+`station.toml.newer-v5`, and a daemon that finds a newer file starts from the newest copy it
+can read and says so on the panel. Otherwise your settings are not touched by an update or a
+restore.
 
 ### Profiles
 

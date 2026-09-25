@@ -94,7 +94,16 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   written `stable` into nearly every file, and a tester on it was told the beta in hand was
   the newest; the shell reads the channel at every check (a Setup change needs no restart),
   reads a pre-schema-5 `stable` as the migration will leave it, and says *no stable release
-  yet* (`Phase::NoStableYet`) to a beta that chose stable.
+  yet* (`Phase::NoStableYet`) to a beta that chose stable. **Going back across a schema
+  change** (beta.57, after a tester restored beta.52 over a file beta.56 had brought to
+  schema 5): the shell's `SCHEMA_HISTORY` says which schema each release reads (a test holds
+  its last line to `config::SCHEMA_VERSION` — a schema bump adds a line), and a restore to a
+  version that reads less puts back the daemon's `station.toml.bak-v<n>` first, keeping the
+  current file as `station.toml.newer-v<m>` (`plan_settings`, `swap_settings`), or refuses when
+  no readable copy exists; a daemon that meets a newer file starts from the newest backup it
+  can read (`Config::load_noting`), keeps the newer file as `.newer-v<m>` and shows the note
+  on the panel (`status.config_note`); the startup error for a newer file no longer advises
+  a restore.
 * **Phase 6** — session recordings (`core/aetherd/src/record.rs`, `[record]`), replay
   (`replay.rs`, `aetherd --replay`, `field/sessions/` + `tests/field.rs`), the simulated
   channel (`sim.rs`, `[sim]`; `tests/two_daemons.rs` runs two real daemons through a

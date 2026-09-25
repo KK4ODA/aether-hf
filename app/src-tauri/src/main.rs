@@ -138,11 +138,17 @@ fn main() {
             // with the reason — a sound card at the wrong rate, a serial port that is held —
             // written somewhere nobody is looking.
             if let Some(message) = &app.state::<StartupError>().0 {
+                // going back is the wrong advice when the settings are a newer version's:
+                // that is what going back did (beta.56 to beta.52, 2026-09-25)
+                let hint = if message.contains("written by a newer aetherd") {
+                    "Your settings were written by a newer version of Aether HF than this one. \
+                     Install that version again: Help > Releases on GitHub."
+                } else {
+                    "If this began after an update, Help > Restore the previous version goes \
+                     back."
+                };
                 app.dialog()
-                    .message(format!(
-                        "{message}\n\nIf this began after an update, Help > Restore the \
-                         previous version goes back."
-                    ))
+                    .message(format!("{message}\n\n{hint}"))
                     .title("Aether HF could not start the modem")
                     .kind(MessageDialogKind::Error)
                     .show(|_| {});

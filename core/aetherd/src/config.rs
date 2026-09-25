@@ -874,9 +874,8 @@ impl Config {
         };
         if written_at > SCHEMA_VERSION {
             return Err(ConfigError::Parse(format!(
-                "this file was written by a newer aetherd (schema {written_at}; this one \
-                 reads up to {SCHEMA_VERSION}). Install that version, or start again from \
-                 `aetherd --example-config`"
+                "{}. Install that version, or start again from `aetherd --example-config`",
+                newer_file(written_at)
             )));
         }
         let reached = migrate_with(&mut table, written_at, MIGRATIONS);
@@ -898,8 +897,30 @@ impl Config {
     /// # Errors
     /// If the file cannot be read, or its contents are refused.
     pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
+        Self::load_noting(path).map(|(config, _)| config)
+    }
+
+    /// [`load`](Self::load), and what the operator has to be told about how it was read.
+    ///
+    /// A file a *newer* version wrote cannot be read: its keys may mean things this version
+    /// has never heard of. Refusing it left a station that went back a version unable to
+    /// start at all — the newer version had brought the file forward on its first start, and
+    /// the previous one was put back over it (beta.56 to beta.52, 2026-09-25). But bringing
+    /// it forward kept the file as it was, `<name>.bak-v<n>`: a version that finds a newer
+    /// file starts from the newest such copy it can read, keeps the newer file beside it as
+    /// `<name>.newer-v<m>`, and says so — in the note this returns, which the panel shows.
+    ///
+    /// # Errors
+    /// If the file cannot be read, or its contents are refused — a newer file too, when no
+    /// copy this version can read was kept beside it.
+    pub fn load_noting(path: &std::path::Path) -> Result<(Self, Option<String>), ConfigError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
+        if let Some(written_at) = schema_of(&text)
+            && written_at > SCHEMA_VERSION
+        {
+            return Self::load_from_backup(path, &text, written_at);
+        }
         let (config, written_at) = Self::parse_migrating(&text)?;
         if written_at < SCHEMA_VERSION {
             let backup = backup_path(path, written_at);
@@ -907,7 +928,50 @@ impl Config {
                 .map_err(|e| ConfigError::Read(format!("{}: {e}", backup.display())))?;
             config.save(path)?;
         }
-        Ok(config)
+        Ok((config, None))
+    }
+
+    /// Start from the newest copy beside `path` this version can read, the file at `path`
+    /// having been written by a newer one; keep that file as `<name>.newer-v<written_at>`.
+    fn load_from_backup(
+        path: &std::path::Path,
+        text: &str,
+        written_at: u32,
+    ) -> Result<(Self, Option<String>), ConfigError> {
+        let name = file_name_of(path);
+        let Some((schema, backup)) = backups_beside(path)
+            .into_iter()
+            .find(|(schema, _)| *schema <= SCHEMA_VERSION)
+        else {
+            return Err(ConfigError::Parse(format!(
+                "{}, and no copy it can read was kept beside it ({name}.bak-v<n>). Start the \
+                 newer version again, or start again from `aetherd --example-config`",
+                newer_file(written_at)
+            )));
+        };
+        let backup_text = std::fs::read_to_string(&backup)
+            .map_err(|e| ConfigError::Read(format!("{}: {e}", backup.display())))?;
+        let (config, _) = Self::parse_migrating(&backup_text).map_err(|e| {
+            ConfigError::Parse(format!(
+                "{}; the copy kept beside it, {}, was refused too: {e}",
+                newer_file(written_at),
+                file_name_of(&backup)
+            ))
+        })?;
+        let kept = path.with_file_name(format!("{name}.newer-v{written_at}"));
+        std::fs::write(&kept, text)
+            .map_err(|e| ConfigError::Read(format!("{}: {e}", kept.display())))?;
+        config.save(path)?;
+        let note = format!(
+            "{name} was written by a newer version of Aether HF (settings schema \
+             {written_at}; this one reads up to {SCHEMA_VERSION}), so this one started from \
+             {backup_name}, the copy kept before that version brought it forward (schema \
+             {schema}). The newer file is kept as {kept_name}: settings changed since then \
+             are in it.",
+            backup_name = file_name_of(&backup),
+            kept_name = file_name_of(&kept),
+        );
+        Ok((config, Some(note)))
     }
 
     /// Check the values against what the modem can actually do.
@@ -1184,6 +1248,55 @@ impl Config {
             .map_err(|e| ConfigError::Read(format!("{}: {e}", path.display())))?;
         Ok(())
     }
+}
+
+/// What a file from a newer version is, in words: its schema and this build's.
+fn newer_file(written_at: u32) -> String {
+    format!(
+        "this file was written by a newer aetherd (schema {written_at}; this one, {}, \
+         reads up to {SCHEMA_VERSION})",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+/// The schema a file says it is, if it is TOML that says; an unreadable one is left to the
+/// parser to explain.
+fn schema_of(text: &str) -> Option<u32> {
+    let table: toml::Table = toml::from_str(text).ok()?;
+    match table.get("schema_version") {
+        Some(toml::Value::Integer(n)) => u32::try_from(*n).ok(),
+        _ => None,
+    }
+}
+
+/// A path's file name, for a message.
+fn file_name_of(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || "station.toml".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// The copies bringing a file forward kept beside `path` (`<name>.bak-v<n>`), as (schema,
+/// path), newest schema first.
+fn backups_beside(path: &std::path::Path) -> Vec<(u32, std::path::PathBuf)> {
+    let prefix = format!("{}.bak-v", file_name_of(path));
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let mut found: Vec<(u32, std::path::PathBuf)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let schema = name.to_str()?.strip_prefix(&prefix)?.parse().ok()?;
+            Some((schema, entry.path()))
+        })
+        .collect();
+    found.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    found
 }
 
 /// Where the copy of an older file goes before it is rewritten.
@@ -1954,6 +2067,53 @@ mod tests {
             Config::parse(&chosen).expect("parse").update.channel,
             UpdateChannel::Stable
         );
+    }
+
+    #[test]
+    fn a_file_from_a_newer_version_starts_from_the_copy_kept_before_it() {
+        // beta.56 brought a beta.52 station's file to schema 5 and kept it as bak-v2; the
+        // previous version was then put back over it and would not start
+        let dir = std::env::temp_dir().join(format!("aether-newer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("station.toml");
+        let future = SCHEMA_VERSION + 1;
+        let newer = format!("schema_version = {future}\ncallsign = \"W4ODA\"\n");
+        std::fs::write(&path, &newer).expect("write");
+        // with nothing kept beside it, it is refused and says so, naming this build
+        let error = Config::load_noting(&path).unwrap_err().to_string();
+        assert!(error.contains("no copy it can read"), "{error}");
+        assert!(error.contains(env!("CARGO_PKG_VERSION")), "{error}");
+        // with copies kept, the newest this version reads is the one it starts from
+        std::fs::write(dir.join("station.toml.bak-v1"), "callsign = \"N0OLD\"\n").expect("write");
+        std::fs::write(
+            dir.join(format!("station.toml.bak-v{SCHEMA_VERSION}")),
+            format!("schema_version = {SCHEMA_VERSION}\ncallsign = \"KK4ODA\"\n"),
+        )
+        .expect("write");
+        std::fs::write(
+            dir.join(format!("station.toml.bak-v{future}")),
+            format!("schema_version = {future}\ncallsign = \"N0NEW\"\n"),
+        )
+        .expect("write");
+        let (config, note) = Config::load_noting(&path).expect("started from a copy");
+        assert_eq!(config.callsign, "KK4ODA");
+        let note = note.expect("the operator is told");
+        assert!(
+            note.contains(&format!("station.toml.bak-v{SCHEMA_VERSION}")),
+            "{note}"
+        );
+        assert!(
+            note.contains(&format!("station.toml.newer-v{future}")),
+            "{note}"
+        );
+        // the newer file is kept as it was, and the one in its place is this version's
+        let kept = dir.join(format!("station.toml.newer-v{future}"));
+        assert_eq!(std::fs::read_to_string(&kept).expect("kept"), newer);
+        let (again, note) = Config::load_noting(&path).expect("now it reads");
+        assert_eq!(again.callsign, "KK4ODA");
+        assert!(note.is_none(), "a file of its own is read without a word");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

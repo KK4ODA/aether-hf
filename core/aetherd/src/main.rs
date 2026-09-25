@@ -228,7 +228,7 @@ fn run() -> Result<Exit, String> {
     let path = args
         .config
         .ok_or("no configuration; try --example-config, then --config <path>")?;
-    let config = Config::load(&path).map_err(|e| e.to_string())?;
+    let (config, config_note) = Config::load_noting(&path).map_err(|e| e.to_string())?;
     // Canonicalise so `config.set` writes where the operator thinks it does even when the
     // daemon was started with a relative path — but strip Windows' extended-length prefix,
     // which is correct and unreadable and would be shown to a human.
@@ -242,6 +242,12 @@ fn run() -> Result<Exit, String> {
     // The log comes up before anything that can fail loudly, so that what fails is on record.
     let log = open_log(&config, &path)?;
     let mut daemon = DaemonState::new(config.clone(), path, log);
+    if let Some(note) = config_note {
+        // a version gone back to, finding the file a newer one wrote: on record, and on the
+        // panel for the life of this run
+        daemon.log.record(Level::Warn, "config", &note, "Idle");
+        daemon.config_note = Some(note);
+    }
     adopt_profile(&mut daemon);
 
     // A dry run keys nothing, whatever the file says. Somebody checking their configuration
