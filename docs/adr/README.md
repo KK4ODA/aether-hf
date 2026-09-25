@@ -21,3 +21,4 @@ context → decision → alternatives considered → consequences.
 | [0014](0014-fast-tones.md) | Fast tones — the floor's frame with its data at 50 and 100 baud, the 2 300 Hz ladder's middle rungs; link protocol 3 | accepted |
 | [0015](0015-narrow-middle-kinds.md) | The narrow middle kinds — four tones at 100 baud inside the floor's 400 Hz, the 500 Hz ladder's middle rungs; contradicted sync symbols; link protocol 4 | accepted |
 | [0016](0016-calls-on-the-floor.md) | Calls, probes and beacons start on the tone floor; a reading from the floor is a lower bound | accepted (amends 0006 and 0009's connect rule) |
+| [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted |

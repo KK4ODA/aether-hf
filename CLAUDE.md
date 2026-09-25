@@ -553,6 +553,39 @@ beta.55 interoperate. **Option on the roadmap (P9-12):** a spread-tone floor on 
 2 300 Hz air — the floor's tones across the passband for frequency diversity, the constant
 envelope kept — built only if the air shows the 400 Hz floor losing to selective fading.
 
+**The ND1J tests and ADR-0017 (2026-09-25, beta.58).** Three Test sessions with ND1J
+(Senoia ↔ Atlanta: 40 m and 80 m at 2 300 Hz, 80 m at 500 Hz) read as a ladder that would
+not climb ("0 rungs"). The ladder step had never run — the order was probe → call →
+message → file → ladder, and the transfers ate the budget — and the link *had* climbed
+(2 300 Hz: rung 7 → 3, which failed → 2, 9/9; 500 Hz: rung 5, 6/6 → 7) before its own
+transmitter pinned it to the tone floor: six 5.36 s tone frames are 32 s against the 30 s key
+watchdog, and the cut frame counted as a failure (7, 6 and 6 watchdog trips in the three
+sessions; since beta.52 — the sims had no key; sidecar `counters` are daemon-lifetime). ADR-0017, model first:
+`LinkConfig.max_burst_s` / `_burst_capacity` (`TwoStationSim(key_limit_s)`, `with_key_limit`
+in the port; a cut frame arrives undecodable); the daemon's `burst_limit_s(config, with_id)`
+= `max_key_s` − lead − tail − 1 s, less the Morse ID only on bursts shaped within
+`ID_LOOKAHEAD_S` (60 s) of it falling due (`refresh_burst_cap`), and an ID that would still
+overrun waits for the next transmission. `abort()` drops the rest of the burst (flush,
+`cut_short`) and puts a `Pause` before the DISC; every session's end is identified exactly
+once (`IdentifierState`, `Outgoing::Identifier`); a stopping daemon aborts and waits up to
+`WIND_DOWN` (12 s) for the DISC and ID (`wound_down`); the shell asks before closing when
+`close::interruptions(status)` names something (`CloseRequested`, `close_confirmed`; its kill
+timeout is 20 s); `status.probing`. The Test runs probe → connect → message → ladder → file →
+disconnect, sizes the message from `heard_there_db`, and `status.test` carries the progress
+the panel draws (`renderTestProgress`: step of six, a bar, the rung under test, the highest
+passed, failures in a row, the link's rung; no countdown). Also new: the session history
+(`sessions.rs`, `sessions.json`, `sessions.list {remote?}`/`sessions.clear`, `session`
+events, the Stations tab's Sessions list and each row's **Sessions** button — the stations
+heard stay one line per callsign), the Sent pane (`localStorage` `aether.sent`, 200), and the
+uninstaller's questions (`app/src-tauri/windows/hooks.nsh` via `installerHooks`: settings and
+caches → profiles, logs and history → recordings, each defaulting to keep; skipped for
+`/UPDATE`, passive and silent; compile-checked against the Tauri template with the NSIS in
+`%LOCALAPPDATA%\tauri\NSIS` and the generated `target/release/nsis/x64/installer.nsi` —
+never run). Found on the way: a second top-level `function clock` in `app.js`, an ES module,
+would have stopped the panel loading; `node --check` on a `.mjs` copy catches that, a `.js`
+one does not. Open: author → ND1J measured about 0 dB (+5 the other way), and rung 3
+(tone50-75) failed at about 0 dB on 80 m NVIS — the next runs with this build will say more.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

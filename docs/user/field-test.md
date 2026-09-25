@@ -109,16 +109,25 @@ frames it heard are the channel); keep both anyway.
 
 The one-button version of §3, for volunteers. Put the other station's callsign in
 **Call** on the Session tab and press **Test session**. The modem then runs, and records,
-a fixed sequence: a probe (both directions' SNR), a call, a 2 kB message, a 16 kB file,
-and the **mode ladder** — a short burst at every mode from the floor up, each one's
-acknowledgement kept as a rung, until three rungs in a row fail — then an orderly
+a fixed sequence: a probe (both directions' SNR), a call, a 2 kB message, the **mode
+ladder** — a short burst at every mode from the floor up, each one's acknowledgement kept
+as a rung, until three rungs in a row fail — then a 16 kB file and an orderly
 disconnect. About five minutes of transmitting, ten at most: the message and the file
-are sized to what the path can do (the probe's SNR sizes the message, the message's
-measured rate sizes the file to about two minutes' worth), the run keeps to a time budget,
-and **Stop test** — the same button while it runs — ends it at once, keeping what was
-learned. The Session tab shows the step, and the log says what each one found. The other station needs to do nothing but listen: an
-answer-only station (`[radio] answer_only`) is a fine partner, and the author's runs
-that way at agreed times.
+are sized to what the path can do (how the other station hears you, from the probe's
+answer, sizes the message; the message's measured rate sizes the file to about two
+minutes' worth of what is left), the run keeps to a time budget, and **Stop test** — the
+same button while it runs — ends it at once, keeping what was learned. The ladder runs
+before the file: with the file first, three tests with ND1J on a slow path spent the whole
+budget on the transfers and never reached a rung (2026-09-25).
+
+While it runs, the Session tab shows the step (*step 4 of 6, climbing the mode ladder*),
+the time elapsed and the most the budget leaves — never a countdown, since how long a
+step takes is the path's to say — a bar for the bytes acknowledged or the rungs tried, the
+rung under test (*rung 3 (tone50-75), rung 4 of 20, 4 frames*), the fastest rung that has
+passed, the failures in a row that end the ladder (three), the last rung's result, and
+the rung the link is using with how the other station hears you. The log says what each
+step found. The other station needs to do nothing but listen: an answer-only station
+(`[radio] answer_only`) is a fine partner, and the author's runs that way at agreed times.
 
 What it leaves is a recording named `…_<you>_<them>_test` whose sidecar carries, under
 `session.test`, the probe's numbers, both transfers' goodput, and the ladder — the
@@ -127,6 +136,11 @@ which no bench can give — with your grid, rig, power and antenna from **Setup 
 beside it, and the path length if you gave the other station's grid (`test.start` on
 the API takes `remote_grid`). Those four Setup fields are optional and only for this:
 fill them in once.
+
+Every session, tested or not, is also a line in the **Sessions** list on the Stations
+tab when it ends: when and how long, who called, what crossed each way, the fastest rung
+each way, how the other station heard you, how it ended, and the recording's name.
+**Sessions** on a station's row shows only that station's.
 
 **Contribute it**: Help › *Contribute the last test session* copies a link to a
 pre-filled GitHub issue; paste it into a browser, attach the sidecar (the `.json`
