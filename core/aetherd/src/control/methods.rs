@@ -526,6 +526,9 @@ fn config_set<P: Ptt>(
 }
 
 fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    if let Some(refusal) = refused_before_transmitting(station, request) {
+        return refusal;
+    }
     let id = request.id.clone();
     let params = &request.params;
     match request.method.as_str() {
@@ -544,6 +547,8 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "test.status" => Response::ok(id, station.test_status()),
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
         "callsigns.set" => set_callsigns(station, params, id),
+        "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
+        "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
         "beacon" => match station.beacon() {
             Ok(()) => Response::ok(id, json!({ "accepted": true })),
             Err(reason) => Response::failed(
@@ -600,33 +605,38 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
             Response::ok(id, json!({ "accepted": true, "orderly": false }))
         }
         "send" => send(station, params, id),
-        "listen" => match params.get("enabled").and_then(Value::as_bool) {
-            None => Response::failed(
-                id,
-                ApiError::new(
-                    "bad_params",
-                    "Listening is on or off: {\"enabled\": true}.",
-                    false,
-                ),
-            ),
-            // A station always answers a call; there is nothing to switch off yet, and
-            // saying so is better than accepting a setting that does nothing.
-            Some(true) => Response::ok(id, json!({ "enabled": true })),
-            Some(false) => Response::failed(
-                id,
-                ApiError::new(
-                    "unsupported",
-                    "This version always answers a call. Stop the daemon to stop listening.",
-                    false,
-                ),
-            ),
-        },
+        "listen" => listen(params, id),
         "devices.list" => devices(id),
         other => Response::failed(
             id,
             ApiError::new(
                 "unknown_method",
                 format!("This version does not have a method called {other:?}."),
+                false,
+            ),
+        ),
+    }
+}
+
+/// `listen`: whether the station answers calls.
+fn listen(params: &Value, id: Option<String>) -> Response {
+    match params.get("enabled").and_then(Value::as_bool) {
+        None => Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "Listening is on or off: {\"enabled\": true}.",
+                false,
+            ),
+        ),
+        // A station always answers a call; there is nothing to switch off yet, and
+        // saying so is better than accepting a setting that does nothing.
+        Some(true) => Response::ok(id, json!({ "enabled": true })),
+        Some(false) => Response::failed(
+            id,
+            ApiError::new(
+                "unsupported",
+                "This version always answers a call. Stop the daemon to stop listening.",
                 false,
             ),
         ),
@@ -860,6 +870,92 @@ fn set_callsigns<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<St
     }
 }
 
+/// A transmission the regulatory policy refuses (ADR-0018): the verdict's own words, and the
+/// whole decision for a client that shows it.
+fn refused_by_rules(
+    id: Option<String>,
+    what: &str,
+    decision: &crate::regulatory::Decision,
+) -> Response {
+    let mut response = Response::failed(
+        id,
+        ApiError::new(
+            "regulatory",
+            format!("Cannot {what}: {} {}", decision.summary, decision.detail),
+            true,
+        ),
+    );
+    response.result = Some(json!({ "decision": decision }));
+    response
+}
+
+/// Anything that would transmit asks the regulatory policy first, and a refusal says why
+/// (ADR-0018). This is the courtesy of an early answer; the gate in front of the transmitter
+/// decides again for every burst, whatever asked for it.
+fn refused_before_transmitting<P: Ptt>(
+    station: &mut Station<P>,
+    request: &Request,
+) -> Option<Response> {
+    use crate::regulatory::EmissionKind;
+    let params = &request.params;
+    // `None`: the station would start an exchange; `Some`: an operator's test of that kind
+    let (what, test) = match request.method.as_str() {
+        "probe" => ("probe", None),
+        "connect" => ("call", None),
+        "beacon" => ("beacon", None),
+        // zero is "stop", for a tune tone and for drive bursts: stopping is always allowed
+        "tune" if params.get("duration_s").and_then(Value::as_f64) != Some(0.0) => {
+            ("tune", Some(EmissionKind::Test))
+        }
+        "drive.set" if params.get("bursts").and_then(Value::as_u64) != Some(0) => {
+            ("set drive", Some(EmissionKind::Data))
+        }
+        "ptt.test" => ("key", Some(EmissionKind::Nothing)),
+        _ => return None,
+    };
+    let verdict = match test {
+        None => station.check_originate(),
+        Some(kind) => station.check_operator(kind),
+    };
+    verdict
+        .err()
+        .map(|decision| refused_by_rules(request.id.clone(), what, &decision))
+}
+
+/// `regulatory.profile`: the profile in force, as data, and the profiles this build knows.
+fn regulatory_profiles<P: Ptt>(station: &Station<P>) -> Value {
+    let known: Vec<Value> = crate::regulatory::profile::KNOWN
+        .iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect();
+    json!({ "profile": station.regulatory_profile(), "known": known })
+}
+
+/// `regulatory.check`: what the rules would say about a transmission, with any of the
+/// station's facts replaced — a dial, the control, the class, the sideband, who began the
+/// exchange, a rung — for the panel's diagnostics and for "what if" questions.
+fn regulatory_check<P: Ptt>(station: &mut Station<P>, params: &Value) -> Value {
+    use crate::regulatory::{ControlMode, Direction, LicenseClass, Sideband};
+    let word = |key: &str| params.get(key).and_then(Value::as_str);
+    let query = crate::station::RegulatoryQuery {
+        dial_hz: params.get("dial_hz").and_then(Value::as_f64),
+        control: word("control").and_then(ControlMode::parse),
+        license: word("license_class").and_then(LicenseClass::parse),
+        sideband: word("sideband").and_then(Sideband::parse),
+        direction: match word("direction") {
+            Some("originate") => Some(Direction::Originate),
+            Some("respond") => Some(Direction::Respond),
+            Some("operator") => Some(Direction::Operator),
+            _ => None,
+        },
+        rung: params
+            .get("rung")
+            .and_then(Value::as_u64)
+            .and_then(|r| usize::try_from(r).ok()),
+    };
+    station.regulatory_check(&query)
+}
+
 fn send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
     let Some(text) = params.get("data").and_then(Value::as_str) else {
         return Response::failed(
@@ -978,6 +1074,9 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             "seconds": seconds,
         })),
         "test": station.test_brief(),
+        // where the station stands with the rules (ADR-0018): the indicator, the ceiling on
+        // the link's rungs, the gate's last decision and the dials where its waveforms fit
+        "regulatory": station.regulatory_status(),
         // the messages sent with a reference that the other station does not yet have all
         // of, and the last ones resolved: a panel that missed a `sent` event looks here
         "sent": { "pending": sent_pending, "recent": sent_recent },

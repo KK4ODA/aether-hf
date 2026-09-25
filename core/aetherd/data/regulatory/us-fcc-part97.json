@@ -1,0 +1,186 @@
+{
+ "id": "us-fcc-part97",
+ "name": "United States — FCC Part 97",
+ "country": "US",
+ "authority": "Federal Communications Commission, 47 CFR Part 97 (Amateur Radio Service)",
+ "rules_as_of": "2026-09-23",
+ "last_amended": "2026-02-13",
+ "source": "https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97",
+ "itu_region": 2,
+ "notes": [
+  "Frequencies are hertz, both ends inclusive. Every range was read from the e-CFR text of 47 CFR Part 97 current to 2026-09-23 (last amended 2026-02-13).",
+  "Only the HF bands Aether uses are encoded, for a station in ITU Region 2 (the continental United States, Alaska and Hawaii). A station elsewhere is refused rather than judged against the wrong table.",
+  "The 80 m and 75 m bands of §97.301 are one band here, 3.5-4.0 MHz: a signal across 3.600 MHz is outside the data segment, not outside the band."
+ ],
+ "bandwidth": {
+  "rule": "§97.3(a)(8)",
+  "reading": "wider",
+  "why": "§97.3(a)(8) defines bandwidth as the width of a band outside of which the mean power is at least 26 dB below the mean power within it. Read as a ratio of powers it is the band holding all but 1/398 of the power; read as a spectral level it is where the density falls 26 dB below the mean density within the band. The two differ for Aether's narrow emissions (the tone floor: 434-445 Hz against 551-557 Hz), so the wider of the two decides."
+ },
+ "data": {
+  "max_bandwidth_hz": 2800,
+  "rule": "§97.307(f)(3)"
+ },
+ "cw_id": {
+  "max_wpm": 20,
+  "rule": "§97.119(b)(1)"
+ },
+ "bands": [
+  {"name": "160 m", "low_hz": 1800000, "high_hz": 2000000},
+  {"name": "80 m", "low_hz": 3500000, "high_hz": 4000000},
+  {"name": "60 m", "low_hz": 5330500, "high_hz": 5406400},
+  {"name": "40 m", "low_hz": 7000000, "high_hz": 7300000},
+  {"name": "30 m", "low_hz": 10100000, "high_hz": 10150000},
+  {"name": "20 m", "low_hz": 14000000, "high_hz": 14350000},
+  {"name": "17 m", "low_hz": 18068000, "high_hz": 18168000},
+  {"name": "15 m", "low_hz": 21000000, "high_hz": 21450000},
+  {"name": "12 m", "low_hz": 24890000, "high_hz": 24990000},
+  {"name": "10 m", "low_hz": 28000000, "high_hz": 29700000}
+ ],
+ "data_segments": [
+  {"band": "160 m", "low_hz": 1800000, "high_hz": 2000000, "rule": "§97.305(c)(2)(iii)"},
+  {"band": "80 m", "low_hz": 3500000, "high_hz": 3600000, "rule": "§97.305(c)(3)(i)"},
+  {"band": "60 m", "low_hz": 5351500, "high_hz": 5366500, "rule": "§97.303(h)(3), §97.305(c)(3)(iii), §97.307(f)(14)"},
+  {"band": "40 m", "low_hz": 7000000, "high_hz": 7125000, "rule": "§97.305(c)(3)(iv), (vi)"},
+  {"band": "30 m", "low_hz": 10100000, "high_hz": 10150000, "rule": "§97.305(c)(3)(viii)"},
+  {"band": "20 m", "low_hz": 14000000, "high_hz": 14150000, "rule": "§97.305(c)(3)(ix)"},
+  {"band": "17 m", "low_hz": 18068000, "high_hz": 18110000, "rule": "§97.305(c)(3)(xi)"},
+  {"band": "15 m", "low_hz": 21000000, "high_hz": 21200000, "rule": "§97.305(c)(3)(xiii)"},
+  {"band": "12 m", "low_hz": 24890000, "high_hz": 24930000, "rule": "§97.305(c)(3)(xv)"},
+  {"band": "10 m", "low_hz": 28000000, "high_hz": 28300000, "rule": "§97.305(c)(3)(xvii)"}
+ ],
+ "channels": {
+  "band": "60 m",
+  "rule": "§97.303(h)(3)",
+  "width_hz": 2800,
+  "carrier_offset_hz": 1500,
+  "carrier_tolerance_hz": 10,
+  "sideband": "usb",
+  "list": [
+   {"center_hz": 5332000},
+   {"center_hz": 5348000},
+   {"center_hz": 5373000},
+   {"center_hz": 5405000}
+  ],
+  "why": "On the four discrete channels a data emission's carrier is set 1.5 kHz below the centre frequency and a CW emission's at the centre; all 60 m emissions stay within 2.8 kHz. Aether's waveform is centred 1.5 kHz above its dial on USB, so its dial goes on the carrier frequency and it lands on the centre. The carrier is accepted within 10 Hz of the prescribed frequency."
+ },
+ "sixty_meter_emissions": {
+  "allowed": ["data", "rtty", "phone", "cw"],
+  "rule": "§97.307(f)(14)(i)"
+ },
+ "privileges": {
+  "extra": [
+   {"low_hz": 1800000, "high_hz": 2000000},
+   {"low_hz": 3500000, "high_hz": 4000000},
+   {"low_hz": 5330500, "high_hz": 5406400},
+   {"low_hz": 7000000, "high_hz": 7300000},
+   {"low_hz": 10100000, "high_hz": 10150000},
+   {"low_hz": 14000000, "high_hz": 14350000},
+   {"low_hz": 18068000, "high_hz": 18168000},
+   {"low_hz": 21000000, "high_hz": 21450000},
+   {"low_hz": 24890000, "high_hz": 24990000},
+   {"low_hz": 28000000, "high_hz": 29700000}
+  ],
+  "advanced": [
+   {"low_hz": 1800000, "high_hz": 2000000},
+   {"low_hz": 3525000, "high_hz": 3600000},
+   {"low_hz": 3700000, "high_hz": 4000000},
+   {"low_hz": 5330500, "high_hz": 5406400},
+   {"low_hz": 7025000, "high_hz": 7300000},
+   {"low_hz": 10100000, "high_hz": 10150000},
+   {"low_hz": 14025000, "high_hz": 14150000},
+   {"low_hz": 14175000, "high_hz": 14350000},
+   {"low_hz": 18068000, "high_hz": 18168000},
+   {"low_hz": 21025000, "high_hz": 21200000},
+   {"low_hz": 21225000, "high_hz": 21450000},
+   {"low_hz": 24890000, "high_hz": 24990000},
+   {"low_hz": 28000000, "high_hz": 29700000}
+  ],
+  "general": [
+   {"low_hz": 1800000, "high_hz": 2000000},
+   {"low_hz": 3525000, "high_hz": 3600000},
+   {"low_hz": 3800000, "high_hz": 4000000},
+   {"low_hz": 5330500, "high_hz": 5406400},
+   {"low_hz": 7025000, "high_hz": 7125000},
+   {"low_hz": 7175000, "high_hz": 7300000},
+   {"low_hz": 10100000, "high_hz": 10150000},
+   {"low_hz": 14025000, "high_hz": 14150000},
+   {"low_hz": 14225000, "high_hz": 14350000},
+   {"low_hz": 18068000, "high_hz": 18168000},
+   {"low_hz": 21025000, "high_hz": 21200000},
+   {"low_hz": 21275000, "high_hz": 21450000},
+   {"low_hz": 24890000, "high_hz": 24990000},
+   {"low_hz": 28000000, "high_hz": 29700000}
+  ],
+  "technician": [
+   {"low_hz": 3525000, "high_hz": 3600000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 7025000, "high_hz": 7125000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 21025000, "high_hz": 21200000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 28000000, "high_hz": 28300000, "emissions": ["cw", "rtty", "data"], "rule": "§97.305(c)(3)(xvii)"},
+   {"low_hz": 28300000, "high_hz": 28500000, "emissions": ["cw", "phone"], "rule": "§97.307(f)(10)"}
+  ],
+  "novice": [
+   {"low_hz": 3525000, "high_hz": 3600000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 7025000, "high_hz": 7125000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 21025000, "high_hz": 21200000, "emissions": ["cw"], "rule": "§97.307(f)(9)"},
+   {"low_hz": 28000000, "high_hz": 28300000, "emissions": ["cw", "rtty", "data"], "rule": "§97.305(c)(3)(xvii)"},
+   {"low_hz": 28300000, "high_hz": 28500000, "emissions": ["cw", "phone"], "rule": "§97.307(f)(10)"}
+  ],
+  "rule": "§97.301(b)-(e)"
+ },
+ "automatic": {
+  "segments": [
+   {"low_hz": 3585000, "high_hz": 3600000},
+   {"low_hz": 7100000, "high_hz": 7105000},
+   {"low_hz": 10140000, "high_hz": 10150000},
+   {"low_hz": 14095000, "high_hz": 14099500},
+   {"low_hz": 14100500, "high_hz": 14112000},
+   {"low_hz": 18105000, "high_hz": 18110000},
+   {"low_hz": 21090000, "high_hz": 21100000},
+   {"low_hz": 24925000, "high_hz": 24930000},
+   {"low_hz": 28120000, "high_hz": 28189000}
+  ],
+  "segments_rule": "§97.221(b)",
+  "elsewhere": {
+   "max_bandwidth_hz": 500,
+   "requires_response": true,
+   "rule": "§97.221(c)"
+  },
+  "excluded_bands": [
+   {"band": "60 m", "rule": "§97.221(c)", "why": "§97.221(c) excepts the 60 m channels of §97.303(h) from automatic control, and whether it reaches the 5351.5-5366.5 kHz segment as well is not clear; Aether does not operate automatically anywhere on 60 m."}
+  ]
+ },
+ "power": [
+  {"low_hz": 10100000, "high_hz": 10150000, "max_w": 200, "measure": "PEP", "rule": "§97.313(c)(1)"},
+  {"low_hz": 3525000, "high_hz": 3600000, "max_w": 200, "measure": "PEP", "classes": ["novice", "technician"], "rule": "§97.313(c)(2)"},
+  {"low_hz": 7025000, "high_hz": 7125000, "max_w": 200, "measure": "PEP", "classes": ["novice", "technician"], "rule": "§97.313(c)(2)"},
+  {"low_hz": 21025000, "high_hz": 21200000, "max_w": 200, "measure": "PEP", "classes": ["novice", "technician"], "rule": "§97.313(c)(2)"},
+  {"low_hz": 28000000, "high_hz": 28500000, "max_w": 200, "measure": "PEP", "classes": ["novice", "technician"], "rule": "§97.313(c)(2)"},
+  {"low_hz": 5351500, "high_hz": 5366500, "max_w": 9.15, "measure": "ERP", "rule": "§97.313(i)"},
+  {"low_hz": 5330500, "high_hz": 5406400, "max_w": 100, "measure": "ERP", "rule": "§97.313(i)"},
+  {"low_hz": 1800000, "high_hz": 29700000, "max_w": 1500, "measure": "PEP", "rule": "§97.313(b)"}
+ ],
+ "band_plan": {
+  "authority": "ARRL band plan (voluntary)",
+  "source": "https://www.arrl.org/band-plan",
+  "as_of": "2026-09-25",
+  "data": [
+   {"low_hz": 1800000, "high_hz": 1810000, "label": "160 m digital modes"},
+   {"low_hz": 3570000, "high_hz": 3600000, "label": "80 m RTTY/data"},
+   {"low_hz": 5330500, "high_hz": 5406400, "label": "60 m: one signal at a time on a channel; the 5351.5-5366.5 kHz segment for several low-power users"},
+   {"low_hz": 7080000, "high_hz": 7125000, "label": "40 m RTTY/data"},
+   {"low_hz": 10130000, "high_hz": 10150000, "label": "30 m RTTY and packet"},
+   {"low_hz": 14070000, "high_hz": 14099500, "label": "20 m RTTY and packet"},
+   {"low_hz": 14100500, "high_hz": 14112000, "label": "20 m packet"},
+   {"low_hz": 18100000, "high_hz": 18110000, "label": "17 m RTTY and packet"},
+   {"low_hz": 21070000, "high_hz": 21110000, "label": "15 m RTTY/data"},
+   {"low_hz": 24920000, "high_hz": 24930000, "label": "12 m RTTY and packet"},
+   {"low_hz": 28070000, "high_hz": 28150000, "label": "10 m RTTY"},
+   {"low_hz": 28120000, "high_hz": 28189000, "label": "10 m automatically controlled data"}
+  ],
+  "avoid": [
+   {"low_hz": 14099500, "high_hz": 14100500, "label": "the NCDXF/IARU beacons on 14.100 MHz"},
+   {"low_hz": 28200000, "high_hz": 28300000, "label": "10 m beacons"}
+  ]
+ }
+}

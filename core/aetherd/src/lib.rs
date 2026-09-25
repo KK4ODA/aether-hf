@@ -23,6 +23,7 @@ pub mod memories;
 pub mod profile;
 pub mod ptt;
 pub mod record;
+pub mod regulatory;
 pub mod replay;
 pub mod sessions;
 pub mod settings;

@@ -477,7 +477,20 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         }),
         cw_id_interval_s: config.radio.cw_id_interval_s,
         operator: config.operator.clone(),
+        regulatory: regulatory_settings(config),
         ..StationConfig::default()
+    }
+}
+
+/// The regulatory settings the station runs with (ADR-0018): the file's — except that a
+/// daemon on a simulated channel, which keys no transmitter, is not judged unless its file
+/// chooses a profile, so a bench pair needs no dial and no license class.
+fn regulatory_settings(config: &Config) -> aetherd::regulatory::Settings {
+    let simulated = config.sim.listen.is_some() || config.sim.connect.is_some();
+    if simulated && config.regulatory.profile.is_empty() {
+        aetherd::regulatory::Settings::unchecked()
+    } else {
+        config.regulatory.settings()
     }
 }
 
@@ -1048,6 +1061,9 @@ fn publish_station(
             serde_json::to_value(&delivery).unwrap_or(serde_json::Value::Null),
         ));
     }
+    for decision in station.take_regulatory_reports() {
+        report_regulatory(station, control, daemon, &decision);
+    }
     let received = station.take_received();
     if !received.is_empty() {
         // The payload reaches panels through this event and host programs through the
@@ -1059,6 +1075,67 @@ fn publish_station(
             json!({"data": aetherd::control::methods::to_base64(&received)}),
         ));
     }
+}
+
+/// A regulatory decision, logged as one structured line — everything an on-air test needs
+/// to show why the modem did what it did — and published whole as a `regulatory` event.
+fn report_regulatory(
+    station: &Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+    d: &aetherd::regulatory::Decision,
+) {
+    use aetherd::regulatory::Verdict;
+    let verdict = match d.verdict {
+        Verdict::Legal => "permitted",
+        Verdict::Warning => "permitted-with-warning",
+        Verdict::Blocked => "blocked",
+    };
+    let rf = match (d.rf_low_hz, d.rf_high_hz) {
+        (Some(lo), Some(hi)) => format!("{lo:.1}-{hi:.1}"),
+        _ => "unknown".to_owned(),
+    };
+    let word = |w: Option<&'static str>| w.unwrap_or("unset");
+    let line = format!(
+        "decision={verdict} rule=\"{}\" code={} callsign={} dial_hz={} dial_source={} \
+         sideband={} rf_hz={rf} bandwidth_hz={:.0} mode=\"{}\" emission={} control={} \
+         direction={} session={} license={} reason=\"{}\"",
+        d.rule,
+        d.code,
+        station.engine().my_call,
+        d.dial_hz
+            .map_or_else(|| "unknown".to_owned(), |hz| format!("{hz:.0}")),
+        d.dial_source.map_or("none", |s| match s {
+            aetherd::regulatory::DialSource::Radio => "radio",
+            aetherd::regulatory::DialSource::Declared => "declared",
+        }),
+        word(d.sideband.map(aetherd::regulatory::Sideband::name)),
+        d.bandwidth_hz,
+        d.what,
+        d.kind.name(),
+        word(d.control.map(aetherd::regulatory::ControlMode::name)),
+        serde_json::to_value(d.direction)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+        state_name(station),
+        word(d.license.map(aetherd::regulatory::LicenseClass::name)),
+        d.summary,
+    );
+    let level = if d.allowed() {
+        Level::Info
+    } else {
+        Level::Warn
+    };
+    daemon
+        .log
+        .record(level, "regulatory", &line, &state_name(station));
+    let mut event = serde_json::to_value(d).unwrap_or(serde_json::Value::Null);
+    if let Some(map) = event.as_object_mut() {
+        map.insert("callsign".into(), json!(station.engine().my_call));
+        map.insert("session".into(), json!(state_name(station)));
+    }
+    control.publish(&Event::new("regulatory", event));
 }
 
 /// Every frame the physical layer found goes out as it is, decoded or not: a display

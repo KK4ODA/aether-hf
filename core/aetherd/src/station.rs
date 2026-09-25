@@ -42,6 +42,10 @@ use crate::{
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
+    regulatory::{
+        AirOccupancy, Authorization, Ceiling, Decision, DialSource, Direction, Edges, EmissionKind,
+        Policy, Situation, Transmission,
+    },
     spectrum::{PassbandMonitor, Spectrum, SpectrumAnalyser},
 };
 
@@ -106,6 +110,9 @@ pub struct StationConfig {
     /// `tx/` in the recordings directory, with a sidecar describing its envelope: what
     /// the modem *sent*, for holding the air against it (`[record] tx_audio`).
     pub record_tx_audio: bool,
+    /// The regulatory policy's settings (ADR-0018): the profile, the station's control, the
+    /// operator's class, the sideband, and a dial for a radio that cannot report its own.
+    pub regulatory: crate::regulatory::Settings,
 }
 
 impl Default for StationConfig {
@@ -133,6 +140,8 @@ impl Default for StationConfig {
             cw_id_interval_s: 600.0,
             operator: crate::config::OperatorSection::default(),
             record_tx_audio: false,
+            // a harness checks nothing; the daemon always builds this from the file
+            regulatory: crate::regulatory::Settings::unchecked(),
         }
     }
 }
@@ -532,12 +541,49 @@ struct IdentifierState {
     final_due: bool,
 }
 
+/// A "what if" for the regulatory policy: the station's facts, any of them replaced.
+#[derive(Debug, Clone, Default)]
+pub struct RegulatoryQuery {
+    /// A dial, hertz.
+    pub dial_hz: Option<f64>,
+    /// The station's control.
+    pub control: Option<crate::regulatory::ControlMode>,
+    /// The operator's class.
+    pub license: Option<crate::regulatory::LicenseClass>,
+    /// The sideband.
+    pub sideband: Option<crate::regulatory::Sideband>,
+    /// Who began the exchange.
+    pub direction: Option<Direction>,
+    /// The fastest rung, in place of the station's `max_mode`.
+    pub rung: Option<usize>,
+}
+
 /// The dial frequency, asked of the radio now and then rather than on every frame.
 #[derive(Debug, Clone, Copy, Default)]
 struct FrequencyCache {
     value: Option<u64>,
     next_ask_s: f64,
+    /// Station time of the last reading the radio gave (or of a tune it accepted).
+    read_at_s: Option<f64>,
 }
+
+/// How old the radio's reading of its dial may be when a transmission is judged: older, and
+/// it is asked again first — the dial may have moved since.
+const DIAL_FRESH_S: f64 = 2.0;
+
+/// How old a reading may be and still stand for the dial at all, when the radio does not
+/// answer the fresh question.
+const DIAL_STALE_S: f64 = 15.0;
+
+/// How often the regulatory ceiling on the link's rungs is worked out again, station time.
+const CEILING_EVERY_S: f64 = 0.5;
+
+/// Decisions held for the daemon between two calls of `take_regulatory_reports`.
+const MAX_UNTAKEN_DECISIONS: usize = 64;
+
+/// How long a refusal of the same kind goes unreported after the last: the gate refuses every
+/// time, the log says so once.
+const REPORT_QUIET_S: f64 = 10.0;
 
 /// How far back the throughput reading looks, seconds.
 const THROUGHPUT_WINDOW_S: f64 = 30.0;
@@ -732,6 +778,29 @@ pub struct Station<P: Ptt> {
     /// The frames of the burst on the air: how long each is, and whether they are the
     /// tone floor's — what an abort that cuts it has to wait out before its DISC.
     on_air_frames: Option<(f64, bool)>,
+    /// The regulatory policy in force (ADR-0018).
+    policy: Policy,
+    /// What this air's transmissions occupy, measured; `None` when nothing is measured for
+    /// it — every data transmission is then refused.
+    occupancy: Option<&'static AirOccupancy>,
+    /// Leave to key for the transmission rendered and not yet keyed. Only the policy makes
+    /// one, and the keying path will not key without it.
+    authorized: Option<Authorization>,
+    /// Who began the session now up, or the last one: its frames are judged by it
+    /// (§97.221(c)(1)).
+    session_direction: Option<Direction>,
+    /// The fastest rung the rules allow now, and why not the next.
+    ceiling: Option<Ceiling>,
+    /// When the ceiling was last worked out.
+    ceiling_at_s: f64,
+    /// Decisions for the log and the clients: every refusal, and permitted automatic-control
+    /// transmissions when asked for.
+    regulatory_reports: Vec<Decision>,
+    /// The last decision reported, and when: a refusal repeated within
+    /// [`REPORT_QUIET_S`] is not reported again.
+    last_report: Option<(&'static str, String, f64)>,
+    /// The last decision the gate made, and when.
+    last_gate: Option<(f64, Decision)>,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -839,6 +908,15 @@ impl<P: Ptt> Station<P> {
             outbound: Vec::new(),
             identifier: IdentifierState::default(),
             on_air_frames: None,
+            policy: Policy::from_setting(&config.regulatory.profile),
+            occupancy: crate::regulatory::occupancy::air(params.bandwidth.hz()).ok(),
+            authorized: None,
+            session_direction: None,
+            ceiling: None,
+            ceiling_at_s: f64::NEG_INFINITY,
+            regulatory_reports: Vec::new(),
+            last_report: None,
+            last_gate: None,
             stats: StationStats::default(),
             config,
         }
@@ -1027,6 +1105,7 @@ impl<P: Ptt> Station<P> {
         self.frequency.next_ask_s = now + if answer.is_some() { 10.0 } else { 60.0 };
         if answer.is_some() {
             self.frequency.value = answer;
+            self.frequency.read_at_s = Some(now);
         }
         self.frequency.value
     }
@@ -1265,6 +1344,7 @@ impl<P: Ptt> Station<P> {
             .retain(|next| !matches!(next, Outgoing::Frames(_)));
         if self.transmitting && !self.playing_test {
             self.playback.clear();
+            self.authorized = None;
             self.clock.flush_device = true;
             self.clock.cut_short = true;
             if self.engine.state() != State::Idle
@@ -1327,6 +1407,7 @@ impl<P: Ptt> Station<P> {
     pub fn abandon_tx(&mut self) -> Result<(), PttError> {
         let was_transmitting = self.transmitting;
         self.playback.clear();
+        self.authorized = None;
         self.pending.clear();
         self.clock.flush_device = true;
         self.clock.cut_short = false;
@@ -1367,6 +1448,17 @@ impl<P: Ptt> Station<P> {
         self.config.record_auto = config.record.auto;
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
+        self.set_regulatory(config.regulatory.settings());
+    }
+
+    /// New regulatory settings, from the next transmission on: the policy is loaded again
+    /// when the profile changed, and the ceiling on the link's rungs is worked out again.
+    pub fn set_regulatory(&mut self, settings: crate::regulatory::Settings) {
+        if settings.profile != self.config.regulatory.profile {
+            self.policy = Policy::from_setting(&settings.profile);
+        }
+        self.config.regulatory = settings;
+        self.refresh_ceiling(true);
     }
 
     /// Tune the radio, when the keying interface can ask it to. Refused during a session
@@ -1390,7 +1482,9 @@ impl<P: Ptt> Station<P> {
             })?;
         // what the radio now reads, and a fresh reading soon after
         self.frequency.value = Some(hz);
+        self.frequency.read_at_s = Some(self.now());
         self.frequency.next_ask_s = self.now() + 2.0;
+        self.refresh_ceiling(true);
         self.note("tune", &format!("dial set to {hz} Hz"));
         Ok(())
     }
@@ -1861,11 +1955,13 @@ impl<P: Ptt> Station<P> {
         self.sample_passband(now);
 
         self.refresh_burst_cap(now);
+        self.refresh_ceiling(false);
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
             // the key was stuck: drop whatever was still queued rather than resume mid-burst
             self.stats.watchdog_trips += 1;
             self.playback.clear();
+            self.authorized = None;
             self.pending.clear();
             self.clock.flush_device = true;
             self.clock.cut_short = false;
@@ -1914,6 +2010,17 @@ impl<P: Ptt> Station<P> {
         }
 
         if !self.transmitting {
+            // Nothing the regulatory gate has not judged is keyed: leave is made only by the
+            // policy (`Policy::authorize`), in `start_pending`, and spent here.
+            if self.authorized.take().is_none() {
+                self.playback.clear();
+                self.events.push(
+                    "error:regulatory: audio reached the transmitter without the gate's leave; \
+                     nothing was keyed"
+                        .to_owned(),
+                );
+                return Ok(0);
+            }
             self.ptt.key(now)?;
             self.transmitting = true;
             self.clock.handed_at_key = self.clock.handed;
@@ -2290,6 +2397,13 @@ impl<P: Ptt> Station<P> {
             bytes_received: 0,
         });
         self.link_sent = 0;
+        // the frames of a session are the call's or the answer's (§97.221(c)(1))
+        self.session_direction = Some(if detail.ends_with("(iss)") {
+            Direction::Originate
+        } else {
+            Direction::Respond
+        });
+        self.refresh_ceiling(true);
         self.session_notes = Some(SessionNotes {
             remote: detail
                 .split_whitespace()
@@ -2444,6 +2558,11 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.held_since = None;
+        // the regulatory gate: every transmission, whatever it is, is judged before it is
+        // rendered, and keyed only with the leave the policy gives (ADR-0018)
+        if !self.gate(now) {
+            return;
+        }
         let Some(outgoing) = self.pending.pop_front() else {
             return;
         };
@@ -2717,6 +2836,12 @@ impl<P: Ptt> Station<P> {
         }
         let cw = crate::cwid::CwId {
             level: CW_ID_RELATIVE_LEVEL,
+            // an identifier keyed by an automatic device is sent no faster than the rules
+            // allow (§97.119(b)(1): 20 wpm)
+            wpm: self
+                .policy
+                .cw_id_max_wpm()
+                .map_or(cw.wpm, |max| cw.wpm.min(max)),
             ..cw
         };
         let audio = cw.audio(&self.engine.my_call, audio_rate);
@@ -2764,6 +2889,518 @@ impl<P: Ptt> Station<P> {
         let with_id = self.id_due_by(now + ID_LOOKAHEAD_S);
         self.engine
             .set_max_burst_s(Some(burst_limit_s(&self.config, with_id)));
+    }
+
+    // ── the regulatory gate (ADR-0018) ───────────────────────────────────
+
+    /// The situation the rules judge. The dial is the radio's when it can report it — asked
+    /// again first when `fresh` and the last reading is older than [`DIAL_FRESH_S`], and
+    /// only while not transmitting — or the dial the operator entered; unknown otherwise.
+    fn situation(&mut self, fresh: bool) -> Situation {
+        let now = self.now();
+        let settings = &self.config.regulatory;
+        let (dial_hz, source) = if self.ptt.can_tune() {
+            let stale = self
+                .frequency
+                .read_at_s
+                .is_none_or(|t| now - t > DIAL_FRESH_S);
+            if fresh && stale && !self.transmitting {
+                if let Some(hz) = self.ptt.inner_mut().frequency_hz() {
+                    self.frequency.value = Some(hz);
+                    self.frequency.read_at_s = Some(now);
+                    self.frequency.next_ask_s = now + 10.0;
+                }
+            } else if !fresh {
+                // the cadence the dial display keeps anyway: at most every ten seconds
+                let _ = self.frequency_hz();
+            }
+            let recent = self
+                .frequency
+                .read_at_s
+                .is_some_and(|t| now - t <= DIAL_STALE_S);
+            (
+                self.frequency.value.filter(|_| recent).map(|hz| hz as f64),
+                Some(DialSource::Radio),
+            )
+        } else {
+            (
+                settings.dial_hz.map(|hz| hz as f64),
+                Some(DialSource::Declared),
+            )
+        };
+        let settings = &self.config.regulatory;
+        Situation {
+            dial_hz,
+            dial_source: dial_hz.and(source),
+            sideband: settings.sideband,
+            control: settings.control,
+            license: settings.license,
+            itu_region: settings.itu_region,
+            margin_hz: settings.margin_hz,
+            band_plan: settings.band_plan,
+            power_w: self.config.operator.power_w,
+        }
+    }
+
+    /// Who began the exchange the next transmission belongs to, outside a frame that says:
+    /// the session's direction, or — for a station with none yet — an answer when it is
+    /// automatically controlled (answering is what it does) and a call otherwise.
+    fn standing_direction(&self) -> Direction {
+        if self.engine.state() != State::Idle
+            && let Some(direction) = self.session_direction
+        {
+            return direction;
+        }
+        match self.config.regulatory.control {
+            Some(crate::regulatory::ControlMode::Automatic) => Direction::Respond,
+            _ => Direction::Originate,
+        }
+    }
+
+    /// What a queued transmission is, as the rules class it: how wide, and who began it.
+    fn transmission_of(&self, outgoing: &Outgoing) -> Result<Transmission, String> {
+        let air = self.occupancy.ok_or_else(|| {
+            format!(
+                "nothing is measured for the {} Hz air",
+                self.config.params.bandwidth.hz()
+            )
+        })?;
+        match outgoing {
+            Outgoing::Frames(frames) | Outgoing::Drive(frames) => {
+                let mut edges: Option<Edges> = None;
+                for frame in frames {
+                    let e = match frame.container {
+                        Container::Data => air
+                            .rung(frame.mode)
+                            .ok_or_else(|| format!("rung {} is not measured", frame.mode))?,
+                        Container::Control => air.control(frame.floor),
+                    };
+                    edges = Some(edges.map_or(e, |x| x.union(e)));
+                }
+                let audio = edges.ok_or("an empty burst")?;
+                let (what, direction) = if matches!(outgoing, Outgoing::Drive(_)) {
+                    ("a drive burst".to_owned(), Direction::Operator)
+                } else {
+                    self.describe_frames(frames, air)
+                };
+                Ok(Transmission {
+                    what,
+                    kind: EmissionKind::Data,
+                    audio,
+                    direction,
+                })
+            }
+            Outgoing::Identifier => Ok(Transmission {
+                what: "the Morse identifier".to_owned(),
+                kind: EmissionKind::Cw,
+                audio: Edges::tone(
+                    self.config.cw_id.map_or(AUDIO_CENTER_HZ, |c| c.tone_hz),
+                    crate::regulatory::occupancy::CW_HALF_WIDTH_HZ,
+                ),
+                direction: self.session_direction.unwrap_or(Direction::Originate),
+            }),
+            Outgoing::Audio { silent: true, .. } => Ok(Transmission {
+                what: "a keying test".to_owned(),
+                kind: EmissionKind::Nothing,
+                audio: Edges::tone(AUDIO_CENTER_HZ, 0.0),
+                direction: Direction::Operator,
+            }),
+            Outgoing::Audio { .. } => Ok(Transmission {
+                what: "the tune tone".to_owned(),
+                kind: EmissionKind::Test,
+                audio: Edges::tone(
+                    AUDIO_CENTER_HZ,
+                    crate::regulatory::occupancy::TONE_HALF_WIDTH_HZ,
+                ),
+                direction: Direction::Operator,
+            }),
+            Outgoing::Pause { .. } => Err("a pause is not a transmission".to_owned()),
+        }
+    }
+
+    /// What a burst of frames is, in words, and who began its exchange: a call, a probe and
+    /// a beacon start one; an acceptance and a probe's answer answer one; everything else
+    /// belongs to the session.
+    fn describe_frames(
+        &self,
+        frames: &[aether_link::TxFrame],
+        air: &AirOccupancy,
+    ) -> (String, Direction) {
+        let session = self.session_direction.unwrap_or(Direction::Originate);
+        let Some(first) = frames.first() else {
+            return ("nothing".to_owned(), session);
+        };
+        match first.container {
+            Container::Data => match decode_data(&first.payload).map(|(h, _)| h.kind) {
+                Ok(DataKind::ConnectReq) => ("a call".to_owned(), Direction::Originate),
+                Ok(DataKind::ConnectAck) => ("the answer to a call".to_owned(), Direction::Respond),
+                Ok(DataKind::Beacon) => ("a beacon".to_owned(), Direction::Originate),
+                Ok(DataKind::Probe) => ("a probe".to_owned(), Direction::Originate),
+                Ok(DataKind::ProbeAck) => ("the answer to a probe".to_owned(), Direction::Respond),
+                _ => {
+                    let name = air.rungs.get(first.mode).map_or("", |r| r.name.as_str());
+                    (
+                        format!("a data burst at rung {} ({name})", first.mode),
+                        session,
+                    )
+                }
+            },
+            Container::Control => {
+                let kind = aether_link::frames::ControlFrame::decode(&first.payload)
+                    .map_or_else(|_| "control".to_owned(), |c| format!("{:?}", c.kind));
+                (format!("a {} frame", kind.to_lowercase()), session)
+            }
+        }
+    }
+
+    /// Judge the transmission at the head of the queue. With leave, it is kept for the
+    /// keying path and the transmission may be rendered; without, the transmission is
+    /// dropped and the refusal reported.
+    fn gate(&mut self, now: f64) -> bool {
+        let Some(next) = self.pending.front() else {
+            return false;
+        };
+        let judged = self.transmission_of(next);
+        let s = self.situation(true);
+        let result = match judged {
+            Ok(tx) => self.policy.authorize(&s, &tx),
+            Err(why) => Err(Box::new(self.policy.unmeasured(
+                &s,
+                "this transmission",
+                &why,
+            ))),
+        };
+        match result {
+            Ok(leave) => {
+                let decision = leave.decision().clone();
+                if self.config.regulatory.log_permitted
+                    && decision.control == Some(crate::regulatory::ControlMode::Automatic)
+                {
+                    self.report_decision(&decision, now);
+                }
+                self.last_gate = Some((now, decision));
+                self.authorized = Some(leave);
+                true
+            }
+            Err(decision) => {
+                self.refuse(*decision, now);
+                false
+            }
+        }
+    }
+
+    /// A transmission the rules refuse: it is dropped, reported, and — when it was a
+    /// session's — the session is over. Its DISC is judged like anything else and goes only
+    /// if it may; an abrupt disconnect frame that would itself be unlawful is never sent.
+    fn refuse(&mut self, decision: Decision, now: f64) {
+        let outgoing = self.pending.pop_front();
+        self.authorized = None;
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(now, "regulatory", &decision.summary, &state);
+        }
+        self.report_decision(&decision, now);
+        self.last_gate = Some((now, decision));
+        match outgoing {
+            Some(Outgoing::Frames(_)) if self.engine.state() != State::Idle => {
+                self.note(
+                    "regulatory",
+                    "session halted: its next transmission is not lawful",
+                );
+                self.engine.abort();
+                self.pump();
+            }
+            Some(Outgoing::Identifier) => self.identifier.final_due = false,
+            _ => {}
+        }
+    }
+
+    /// Put a decision in the log's and the clients' queue, unless the same one went a moment
+    /// ago.
+    fn report_decision(&mut self, decision: &Decision, now: f64) {
+        let repeat = self.last_report.as_ref().is_some_and(|(code, what, at)| {
+            *code == decision.code && *what == decision.what && now - at < REPORT_QUIET_S
+        });
+        if repeat {
+            return;
+        }
+        self.last_report = Some((decision.code, decision.what.clone(), now));
+        if self.regulatory_reports.len() >= MAX_UNTAKEN_DECISIONS {
+            self.regulatory_reports.remove(0);
+        }
+        self.regulatory_reports.push(decision.clone());
+    }
+
+    /// Decisions to log and publish since the last call.
+    pub fn take_regulatory_reports(&mut self) -> Vec<Decision> {
+        std::mem::take(&mut self.regulatory_reports)
+    }
+
+    /// Work out the regulatory ceiling on the link's rungs again, and hand it to the engine:
+    /// what the rules allow limits what link adaptation may choose (§97.221(c)(2) for an
+    /// automatic station answering outside the §97.221(b) segments, a segment's edge for
+    /// anybody). Now when `force`, otherwise at most every [`CEILING_EVERY_S`].
+    fn refresh_ceiling(&mut self, force: bool) {
+        let now = self.now();
+        if !force && now - self.ceiling_at_s < CEILING_EVERY_S {
+            return;
+        }
+        self.ceiling_at_s = now;
+        let Some(air) = self.occupancy else {
+            self.engine.set_ceiling(Some(0));
+            self.ceiling = None;
+            return;
+        };
+        let s = self.situation(false);
+        let direction = self.standing_direction();
+        let timing = self.engine.timing().clone();
+        let ceiling = self
+            .policy
+            .ceiling(&s, air, direction, &|r| timing.is_floor(r));
+        let rung = match self.policy {
+            Policy::NoProfile => None,
+            // nothing is allowed: the gate refuses whatever the engine offers, and the
+            // engine offers the least
+            _ => Some(ceiling.rung.unwrap_or(0)),
+        };
+        self.engine.set_ceiling(rung);
+        self.ceiling = Some(ceiling);
+    }
+
+    /// Whether the rules let this station start an exchange now — a call, a probe or a
+    /// beacon, whose first frame goes on the tone floor — or the refusal.
+    ///
+    /// # Errors
+    /// The refusal, with its reasoning.
+    pub fn check_originate(&mut self) -> Result<(), Box<Decision>> {
+        let rung = self.engine.robust_mode(true);
+        self.check(
+            Direction::Originate,
+            EmissionKind::Data,
+            Some(rung),
+            "a call, a probe or a beacon",
+        )
+    }
+
+    /// Whether the rules let an operator test the station now: a tune tone, a keying test or
+    /// drive bursts at the fastest rung.
+    ///
+    /// # Errors
+    /// The refusal, with its reasoning.
+    pub fn check_operator(&mut self, kind: EmissionKind) -> Result<(), Box<Decision>> {
+        let top = self.config.link.max_mode;
+        let (rung, what) = match kind {
+            EmissionKind::Data => (Some(top), "drive bursts"),
+            EmissionKind::Nothing => (None, "a keying test"),
+            _ => (None, "the tune tone"),
+        };
+        self.check(Direction::Operator, kind, rung, what)
+    }
+
+    fn check(
+        &mut self,
+        direction: Direction,
+        kind: EmissionKind,
+        rung: Option<usize>,
+        what: &str,
+    ) -> Result<(), Box<Decision>> {
+        let s = self.situation(true);
+        let Some(air) = self.occupancy else {
+            return Err(Box::new(self.policy.unmeasured(
+                &s,
+                what,
+                "nothing is measured for this air",
+            )));
+        };
+        let audio = match (kind, rung) {
+            (EmissionKind::Data, Some(r)) => air
+                .rung(r.min(air.rungs.len() - 1))
+                .unwrap_or(air.control_floor),
+            (EmissionKind::Nothing, _) => Edges::tone(AUDIO_CENTER_HZ, 0.0),
+            _ => Edges::tone(
+                AUDIO_CENTER_HZ,
+                crate::regulatory::occupancy::TONE_HALF_WIDTH_HZ,
+            ),
+        };
+        let tx = Transmission {
+            what: what.to_owned(),
+            kind,
+            audio,
+            direction,
+        };
+        let decision = self.policy.evaluate(&s, &tx);
+        if decision.allowed() {
+            Ok(())
+        } else {
+            Err(Box::new(decision))
+        }
+    }
+
+    /// Where the station stands with the rules: the situation, what its widest transmission
+    /// would be, the ceiling on the link's rungs, the gate's last decision and the dials
+    /// where its waveforms fit — for the panel's indicator and diagnostics.
+    pub fn regulatory_status(&mut self) -> serde_json::Value {
+        let s = self.situation(false);
+        let direction = self.standing_direction();
+        let policy_state = match &self.policy {
+            Policy::Unset => "unset",
+            Policy::NoProfile => "none",
+            Policy::Rules(_) => "rules",
+            Policy::Broken(_) => "broken",
+        };
+        let profile = self.policy.profile().map(|p| {
+            serde_json::json!({
+                "id": p.id, "name": p.name, "authority": p.authority,
+                "rules_as_of": p.rules_as_of, "source": p.source,
+                "bandwidth_reading": p.bandwidth.reading,
+            })
+        });
+        let error = match &self.policy {
+            Policy::Broken(e) => Some(e.clone()),
+            _ => None,
+        };
+        let Some(air) = self.occupancy else {
+            return serde_json::json!({ "policy": policy_state, "profile": profile, "error": "nothing is measured for this air" });
+        };
+        let top = self.config.link.max_mode.min(air.rungs.len() - 1);
+        let timing = self.engine.timing().clone();
+        let envelope = |upto: usize| {
+            (0..=upto)
+                .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
+                .reduce(Edges::union)
+                .unwrap_or(air.control_floor)
+        };
+        let widest = Transmission {
+            what: format!(
+                "the {} Hz waveform up to rung {top} ({})",
+                air.bandwidth_hz, air.rungs[top].name
+            ),
+            kind: EmissionKind::Data,
+            audio: envelope(top),
+            direction,
+        };
+        let floor = Transmission {
+            what: format!("the tone floor ({})", air.rungs[0].name),
+            kind: EmissionKind::Data,
+            audio: envelope(0),
+            direction,
+        };
+        let full = self.policy.evaluate(&s, &widest);
+        let ceiling = self.ceiling.clone();
+        let indicator = match ceiling.as_ref().and_then(|c| c.rung) {
+            Some(k) if !full.allowed() && k < top => {
+                let mut limited = self.policy.evaluate(
+                    &s,
+                    &Transmission {
+                        what: format!("rungs 0–{k}"),
+                        audio: envelope(k),
+                        ..widest.clone()
+                    },
+                );
+                limited.verdict = crate::regulatory::Verdict::Warning;
+                limited.summary = format!(
+                    "FCC: rungs 0–{k} only here — {}",
+                    full.summary.trim_start_matches("TX BLOCKED: ")
+                );
+                limited.detail = format!(
+                    "{} The link stays on rungs 0–{k} ({}), which fit.",
+                    full.detail, air.rungs[k].name
+                );
+                limited
+            }
+            _ => full,
+        };
+        let last = self.last_gate.as_ref().map(|(t, d)| {
+            serde_json::json!({ "t_s": t, "age_s": (self.now() - t).max(0.0), "decision": d })
+        });
+        serde_json::json!({
+            "policy": policy_state,
+            "profile": profile,
+            "error": error,
+            "situation": s,
+            "direction": direction,
+            "indicator": indicator,
+            "ceiling": ceiling.map(|c| serde_json::json!({
+                "rung": c.rung,
+                "name": c.rung.and_then(|r| air.rungs.get(r)).map(|r| r.name.clone()),
+                "of": air.rungs.len(),
+                "limit": c.limit,
+            })),
+            "last": last,
+            "occupied": {
+                "widest": { "audio": widest.audio, "rung": top },
+                "floor": { "audio": floor.audio, "rung": 0 },
+            },
+            "safe_dials": {
+                "widest": self.policy.safe_dials(&s, widest.audio, direction),
+                "floor": self.policy.safe_dials(&s, floor.audio, direction),
+            },
+        })
+    }
+
+    /// The profile in force, as data.
+    #[must_use]
+    pub fn regulatory_profile(&self) -> Option<serde_json::Value> {
+        self.policy
+            .profile()
+            .and_then(|p| serde_json::to_value(p).ok())
+    }
+
+    /// What the rules would say about a transmission with any of the station's facts
+    /// replaced: the decision, the dials where it would fit, and the ceiling on the link.
+    pub fn regulatory_check(&mut self, q: &RegulatoryQuery) -> serde_json::Value {
+        let mut s = self.situation(false);
+        if let Some(dial) = q.dial_hz {
+            s.dial_hz = Some(dial);
+            s.dial_source = Some(DialSource::Declared);
+        }
+        if q.control.is_some() {
+            s.control = q.control;
+        }
+        if q.license.is_some() {
+            s.license = q.license;
+        }
+        if q.sideband.is_some() {
+            s.sideband = q.sideband;
+        }
+        let direction = q.direction.unwrap_or_else(|| self.standing_direction());
+        let Some(air) = self.occupancy else {
+            return serde_json::json!({ "error": "nothing is measured for this air" });
+        };
+        let top = q
+            .rung
+            .unwrap_or(self.config.link.max_mode)
+            .min(air.rungs.len() - 1);
+        let timing = self.engine.timing().clone();
+        let audio = (0..=top)
+            .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
+            .reduce(Edges::union)
+            .unwrap_or(air.control_floor);
+        let tx = Transmission {
+            what: format!(
+                "the {} Hz waveform up to rung {top} ({})",
+                air.bandwidth_hz, air.rungs[top].name
+            ),
+            kind: EmissionKind::Data,
+            audio,
+            direction,
+        };
+        let ceiling = self
+            .policy
+            .ceiling(&s, air, direction, &|r| timing.is_floor(r));
+        serde_json::json!({
+            "decision": self.policy.evaluate(&s, &tx),
+            "safe_dials": self.policy.safe_dials(&s, audio, direction),
+            "ceiling": ceiling,
+            "situation": s,
+        })
+    }
+
+    /// Replace the policy: a test's own profile.
+    #[cfg(test)]
+    pub(crate) fn set_policy(&mut self, policy: Policy) {
+        self.policy = policy;
+        self.refresh_ceiling(true);
     }
 
     /// Whether it is polite to start transmitting.
@@ -4059,6 +4696,277 @@ mod tests {
         assert!(pending.is_empty());
         let names: Vec<&str> = recent.iter().map(|d| d.reference.as_str()).collect();
         assert_eq!(names, ["m0", "m1", "m2", "m3"]);
+    }
+
+    // ── the regulatory gate (ADR-0018) ───────────────────────────────────
+
+    /// United States rules for a station on a declared dial (a `NullPtt` cannot report one).
+    fn under_us_rules(
+        dial_hz: u64,
+        control: crate::regulatory::ControlMode,
+    ) -> crate::regulatory::Settings {
+        crate::regulatory::Settings {
+            profile: "us-fcc-part97".to_owned(),
+            control: Some(control),
+            license: Some(crate::regulatory::LicenseClass::General),
+            sideband: Some(crate::regulatory::Sideband::Usb),
+            itu_region: 2,
+            margin_hz: 50.0,
+            band_plan: false,
+            dial_hz: Some(dial_hz),
+            log_permitted: true,
+        }
+    }
+
+    fn lone_station(regulatory: crate::regulatory::Settings) -> Station<NullPtt> {
+        Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                regulatory,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        )
+    }
+
+    #[test]
+    fn a_transmission_the_rules_refuse_is_never_keyed() {
+        use crate::regulatory::ControlMode;
+        // a call from the 20 m data segment goes out
+        let mut lawful = lone_station(under_us_rules(14_078_000, ControlMode::Local));
+        lawful.connect("KK4XYZ").expect("idle");
+        run_alone(&mut lawful, 2.0, Station::transmitting);
+        assert!(lawful.transmitting(), "a lawful call is keyed");
+
+        // the same call from the 20 m phone segment does not, and the attempt ends
+        let mut unlawful = lone_station(under_us_rules(14_200_000, ControlMode::Local));
+        assert_eq!(
+            unlawful.check_originate().expect_err("refused").code,
+            "no_data_here"
+        );
+        unlawful.connect("KK4XYZ").expect("the engine takes it");
+        run_alone(&mut unlawful, 10.0, |_| false);
+        assert_eq!(unlawful.stats.transmissions, 0, "never keyed");
+        assert_eq!(unlawful.state(), State::Idle, "the attempt is over");
+        let reports = unlawful.take_regulatory_reports();
+        assert!(
+            reports
+                .iter()
+                .any(|d| d.code == "no_data_here" && d.what == "a call"),
+            "{reports:?}"
+        );
+
+        // nothing is guessed: no profile chosen, nothing keyed
+        let mut unset = lone_station(crate::regulatory::Settings {
+            profile: String::new(),
+            ..under_us_rules(14_078_000, ControlMode::Local)
+        });
+        unset.connect("KK4XYZ").expect("the engine takes it");
+        run_alone(&mut unset, 5.0, |_| false);
+        unset.beacon().expect("queued");
+        run_alone(&mut unset, 5.0, |_| false);
+        assert_eq!(unset.stats.transmissions, 0);
+        assert!(
+            unset
+                .take_regulatory_reports()
+                .iter()
+                .all(|d| d.code == "no_profile")
+        );
+    }
+
+    #[test]
+    fn the_keying_path_refuses_audio_the_gate_did_not_see() {
+        // audio that reached the playback queue by any path but the gate is dropped, not
+        // keyed: leave to key is made only by the policy
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        station.playback.extend(std::iter::repeat_n(0.5f32, 48_000));
+        let mut out = vec![0.0f32; 4096];
+        station.playback(&mut out).expect("playback");
+        assert!(!station.transmitting());
+        assert_eq!(station.stats.transmissions, 0);
+        assert!(station.playback.is_empty());
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("error:regulatory"))
+        );
+    }
+
+    #[test]
+    fn every_way_to_the_transmitter_passes_the_gate() {
+        // a call, a beacon, a probe, a tune tone, a keying test, drive bursts and a Morse
+        // identifier: with no profile chosen, not one of them keys the radio
+        let mut station = lone_station(crate::regulatory::Settings {
+            profile: String::new(),
+            ..crate::regulatory::Settings::unchecked()
+        });
+        station.connect("KK4XYZ").expect("queued");
+        run_alone(&mut station, 6.0, |_| false);
+        station.beacon().expect("queued");
+        run_alone(&mut station, 3.0, |_| false);
+        station.probe("KK4XYZ", None).expect("queued");
+        run_alone(&mut station, 3.0, |_| false);
+        station.tune(1.0).expect("queued");
+        run_alone(&mut station, 3.0, |_| false);
+        station.key_test(1.0).expect("queued");
+        run_alone(&mut station, 3.0, |_| false);
+        station.set_drive(1).expect("queued");
+        run_alone(&mut station, 6.0, |_| false);
+        station.pending.push_back(Outgoing::Identifier);
+        run_alone(&mut station, 3.0, |_| false);
+        assert_eq!(station.stats.transmissions, 0, "nothing was keyed");
+        let whats: Vec<String> = station
+            .take_regulatory_reports()
+            .into_iter()
+            .map(|d| d.what)
+            .collect();
+        for what in [
+            "a call",
+            "a beacon",
+            "a probe",
+            "the tune tone",
+            "a keying test",
+            "a drive burst",
+            "the Morse identifier",
+        ] {
+            assert!(
+                whats.iter().any(|w| w == what),
+                "{what} not judged: {whats:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_whose_dial_moves_out_of_the_data_segment_stops_transmitting() {
+        use crate::regulatory::ControlMode;
+        let rules = |dial| under_us_rules(dial, ControlMode::Local);
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            regulatory: rules(14_078_000),
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected());
+        let mut state = 0x9e37_79b9_u32;
+        let noise: Vec<u8> = (0..6000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state.to_le_bytes()[0]
+            })
+            .collect();
+        air.a.send(&noise);
+        air.run(8.0, |a, _| a.transmitting());
+        // the operator turns the dial to the phone segment in the middle of it
+        air.a.set_regulatory(rules(14_200_000));
+        air.run(20.0, |a, _| !a.transmitting());
+        let keyed_before = air.a.stats.transmissions;
+        air.run(90.0, |a, _| a.state() == State::Idle && a.quiescent());
+        assert_eq!(air.a.state(), State::Idle, "the session is halted");
+        assert_eq!(
+            air.a.stats.transmissions, keyed_before,
+            "and nothing more is keyed"
+        );
+        let reports = air.a.take_regulatory_reports();
+        assert!(
+            reports.iter().any(|d| d.code == "no_data_here"),
+            "{reports:?}"
+        );
+        // its disconnect would itself be unlawful there, so it was not sent either
+        assert!(
+            !air.b
+                .take_events()
+                .iter()
+                .any(|e| e == "disconnected:peer disconnected")
+        );
+    }
+
+    #[test]
+    fn an_automatic_station_answers_only_where_the_rules_let_it() {
+        use crate::regulatory::ControlMode;
+        let setup = |b_dial: u64| {
+            Air::with(1.0, 0.0005, move |config| StationConfig {
+                regulatory: if config.callsign == "KK4XYZ" {
+                    under_us_rules(b_dial, ControlMode::Automatic)
+                } else {
+                    under_us_rules(b_dial, ControlMode::Local)
+                },
+                ..config
+            })
+        };
+        // inside §97.221(b) (14.1005–14.112 MHz) it answers, and may call too
+        let mut inside = setup(14_103_000);
+        assert!(inside.b.check_originate().is_ok());
+        inside.a.connect("KK4XYZ").expect("idle");
+        inside.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(inside.b.connected());
+
+        // outside them it may not call; and no Aether emission is 500 Hz or less under the
+        // conservative reading of §97.3(a)(8), so it does not answer either
+        let mut outside = setup(14_080_000);
+        let refusal = outside.b.check_originate().expect_err("refused");
+        assert!(refusal.code.starts_with("automatic_"), "{}", refusal.code);
+        outside.a.connect("KK4XYZ").expect("idle");
+        outside.run(30.0, |_, _| false);
+        assert!(!outside.a.connected());
+        assert_eq!(
+            outside.b.stats.transmissions, 0,
+            "the automatic station never keyed"
+        );
+        assert!(
+            outside
+                .b
+                .take_regulatory_reports()
+                .iter()
+                .any(|d| d.code == "automatic_bandwidth")
+        );
+    }
+
+    #[test]
+    fn an_automatic_answer_never_climbs_past_500_hz_however_good_the_path() {
+        use crate::regulatory::ControlMode;
+        // the rules read as a ratio of powers, under which the tone floor's rungs are 500 Hz
+        // or less: the automatic station answers outside §97.221(b) and stays on them
+        let mut profile = crate::regulatory::profile::load("us-fcc-part97").expect("loads");
+        profile.bandwidth.reading = crate::regulatory::Reading::Power;
+        let policy = crate::regulatory::Policy::Rules(std::sync::Arc::new(profile));
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            regulatory: if config.callsign == "KK4XYZ" {
+                under_us_rules(14_080_000, ControlMode::Automatic)
+            } else {
+                under_us_rules(14_080_000, ControlMode::Local)
+            },
+            ..config
+        });
+        air.b.set_policy(policy);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(air.b.connected(), "answered under §97.221(c)");
+        air.b.send(&[0x55; 400]);
+        air.a.send(&[0x33; 400]);
+        air.run(400.0, |_, b| {
+            b.engine.all_acknowledged() && b.engine.stats.bytes_acked > 0
+        });
+        assert!(
+            air.b.engine.stats.bytes_acked > 0,
+            "the automatic station's data crossed"
+        );
+        assert_eq!(
+            air.b.engine.ceiling(),
+            Some(1),
+            "the ceiling: the tone floor's two rungs"
+        );
+        let permitted = air.b.take_regulatory_reports();
+        assert!(!permitted.is_empty());
+        for d in &permitted {
+            assert!(d.allowed(), "{d:?}");
+            assert_eq!(d.code, "automatic_response", "{}", d.what);
+            assert!(d.bandwidth_hz <= 500.0, "{}: {} Hz", d.what, d.bandwidth_hz);
+        }
     }
 
     #[test]

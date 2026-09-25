@@ -627,6 +627,97 @@ impl Default for HostSection {
     }
 }
 
+/// The regulatory policy's settings (ADR-0018): which administration's rules the station runs
+/// under, and the facts about it those rules turn on. Until the profile, the control and the
+/// license class are said, the station transmits nothing: none of them is guessed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegulatorySection {
+    /// The rules: `us-fcc-part97`; `none` for another administration's, which Aether does not
+    /// check (the control operator does); empty until chosen.
+    #[serde(default)]
+    pub profile: String,
+    /// How the station is controlled (§97.109): `local`, `remote` or `automatic` — the
+    /// relationship between the station and its control operator, not whether the modem's
+    /// software acknowledges and retries. Empty until said.
+    #[serde(default)]
+    pub control: String,
+    /// The control operator's class: `novice`, `technician`, `general`, `advanced` or
+    /// `extra`. Empty until said.
+    #[serde(default)]
+    pub license_class: String,
+    /// The sideband the radio transmits the modem's audio on: `usb` or `lsb`.
+    #[serde(default = "default_sideband")]
+    pub sideband: String,
+    /// The station's ITU region (the United States profile covers Region 2).
+    #[serde(default = "default_itu_region")]
+    pub itu_region: u8,
+    /// Room kept between the signal's occupied edges and a segment's, hertz: the radio's
+    /// frequency error and its transmit chain.
+    #[serde(default = "default_edge_margin")]
+    pub edge_margin_hz: f64,
+    /// Say where the voluntary band plan differs from where the station is (never a refusal).
+    #[serde(default = "default_true")]
+    pub band_plan: bool,
+    /// The dial frequency, hertz, for a radio that cannot report its own (serial-line keying).
+    /// Ignored when CAT or rigctld keying reads it from the radio.
+    #[serde(default)]
+    pub dial_hz: Option<u64>,
+    /// Log the rule behind every permitted transmission of an automatically controlled
+    /// station, not only refusals.
+    #[serde(default)]
+    pub log_permitted: bool,
+}
+
+fn default_sideband() -> String {
+    "usb".to_owned()
+}
+
+fn default_itu_region() -> u8 {
+    2
+}
+
+fn default_edge_margin() -> f64 {
+    50.0
+}
+
+impl Default for RegulatorySection {
+    fn default() -> Self {
+        Self {
+            profile: String::new(),
+            control: String::new(),
+            license_class: String::new(),
+            sideband: default_sideband(),
+            itu_region: default_itu_region(),
+            edge_margin_hz: default_edge_margin(),
+            band_plan: true,
+            dial_hz: None,
+            log_permitted: false,
+        }
+    }
+}
+
+impl RegulatorySection {
+    /// The settings the station runs with. A word this version does not know is left unset,
+    /// which the policy refuses to transmit on — though the settings registry refuses such a
+    /// file before it gets here.
+    #[must_use]
+    pub fn settings(&self) -> crate::regulatory::Settings {
+        use crate::regulatory::{ControlMode, LicenseClass, Settings, Sideband};
+        Settings {
+            profile: self.profile.clone(),
+            control: ControlMode::parse(&self.control),
+            license: LicenseClass::parse(&self.license_class),
+            sideband: Sideband::parse(&self.sideband),
+            itu_region: self.itu_region,
+            margin_hz: self.edge_margin_hz,
+            band_plan: self.band_plan,
+            dial_hz: self.dial_hz,
+            log_permitted: self.log_permitted,
+        }
+    }
+}
+
 /// A whole configuration file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -672,6 +763,9 @@ pub struct Config {
     /// Panel preferences the daemon keeps but does not act on.
     #[serde(default)]
     pub panel: PanelSection,
+    /// The regulatory policy.
+    #[serde(default)]
+    pub regulatory: RegulatorySection,
 }
 
 /// The shape of configuration file this version writes.
@@ -683,7 +777,7 @@ pub struct Config {
 /// backed up before it is rewritten, and a file from a *newer* version is refused rather
 /// than read with its unknown keys dropped — a downgrade that silently loses settings is
 /// worse than one that says so.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -700,6 +794,7 @@ pub const MIGRATIONS: &[Migration] = &[
     fast_rungs,
     narrow_middle_rungs,
     betas_follow_betas,
+    regulatory_settings,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -779,6 +874,64 @@ fn betas_follow_betas_on(table: &mut toml::Table, version: &str) {
     }
 }
 
+/// Schema 5 → 6, the regulatory policy (ADR-0018): a `[regulatory]` section. What can be
+/// read from the file is written into it — `radio.answer_only`, the unattended answer-only
+/// station, is automatic control; a callsign the FCC assigns is the United States profile —
+/// and what cannot (the control of any other station, the license class) is left for the
+/// operator to say: the station transmits nothing until it is.
+fn regulatory_settings(table: &mut toml::Table) {
+    if table.contains_key("regulatory") {
+        return;
+    }
+    let mut regulatory = toml::Table::new();
+    let answer_only = matches!(
+        table
+            .get("radio")
+            .and_then(|r| r.as_table())
+            .and_then(|r| r.get("answer_only")),
+        Some(toml::Value::Boolean(true))
+    );
+    if answer_only {
+        regulatory.insert("control".into(), toml::Value::String("automatic".into()));
+    }
+    if let Some(toml::Value::String(call)) = table.get("callsign")
+        && is_us_callsign(call)
+    {
+        regulatory.insert(
+            "profile".into(),
+            toml::Value::String("us-fcc-part97".into()),
+        );
+    }
+    if !regulatory.is_empty() {
+        table.insert("regulatory".into(), toml::Value::Table(regulatory));
+    }
+}
+
+/// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
+/// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
+#[must_use]
+pub fn is_us_callsign(call: &str) -> bool {
+    let base = call
+        .trim()
+        .split(['-', '/'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let bytes = base.as_bytes();
+    let Some(digit) = bytes.iter().position(u8::is_ascii_digit) else {
+        return false;
+    };
+    let (prefix, rest) = (&bytes[..digit], &bytes[digit + 1..]);
+    let letters = |b: &[u8]| b.iter().all(u8::is_ascii_uppercase);
+    let prefix_ok = match prefix {
+        [b'K' | b'N' | b'W'] => true,
+        [b'A', second] => (b'A'..=b'L').contains(second),
+        [b'K' | b'N' | b'W', second] => second.is_ascii_uppercase(),
+        _ => false,
+    };
+    prefix_ok && letters(rest) && (1..=3).contains(&rest.len())
+}
+
 /// Bring a parsed file forward through `migrations`, starting at `from`.
 ///
 /// Returns the version it ended at. Separated from the file handling so the machinery can
@@ -847,6 +1000,7 @@ impl Config {
             record: RecordSection::default(),
             sim: SimSection::default(),
             panel: PanelSection::default(),
+            regulatory: RegulatorySection::default(),
         }
     }
 
@@ -1139,6 +1293,15 @@ pub const LIVE_KEYS: &[&str] = &[
     "panel.waterfall.gain_db",
     "panel.waterfall.speed",
     "panel.waterfall.palette",
+    "regulatory.profile",
+    "regulatory.control",
+    "regulatory.license_class",
+    "regulatory.sideband",
+    "regulatory.itu_region",
+    "regulatory.edge_margin_hz",
+    "regulatory.band_plan",
+    "regulatory.dial_hz",
+    "regulatory.log_permitted",
 ];
 
 /// Whether two JSON values say the same thing, with `20` and `20.0` counting as the same:
@@ -1315,7 +1478,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 5
+schema_version = 6
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1446,6 +1609,20 @@ notes = ""
 # listen = "127.0.0.1:8600"
 # connect = "127.0.0.1:8600"
 snr_db = 30.0
+
+[regulatory]
+# The rules every transmission is judged against before the radio is keyed (ADR-0018,
+# docs/user/fcc-regulatory-controls.md). Until the profile, the control and the license
+# class are set, nothing is transmitted.
+# profile = "us-fcc-part97"           # or "none" under another administration's rules
+# control = "local"                   # local, remote or automatic (§97.109)
+# license_class = "general"           # novice, technician, general, advanced or extra
+sideband = "usb"                      # the sideband the radio sends the modem's audio on
+itu_region = 2
+edge_margin_hz = 50.0                 # room kept at a segment's edges
+band_plan = true                      # say where the voluntary band plan differs
+# dial_hz = 14105000                  # the dial, when the radio cannot report it (serial keying)
+log_permitted = false
 "#;
 
 #[cfg(test)]
