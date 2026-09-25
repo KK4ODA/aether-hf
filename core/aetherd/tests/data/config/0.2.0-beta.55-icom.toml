@@ -1,0 +1,25 @@
+# As beta.55 wrote a station keyed over CI-V: schema 4, and the stable channel the panel wrote
+# whether or not anybody chose it (schema 5 moves a beta's to "beta").
+schema_version = 4
+callsign = "W4ODA"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "cat"
+port = "COM6"
+protocol = "icom"
+baud = 9600
+civ_address = 148
+source = "data"
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+
+[update]
+channel = "stable"
+check = true

@@ -88,7 +88,13 @@ on-air attempt found two bugs (below), and the air is what remains (P6-6).
   `latest.json` is what a `[update] channel = "beta"` installation reads — never delete
   it. Stable uses GitHub's own *latest* release, which excludes pre-releases. The updater's
   private key is at `~/.tauri/aether-hf.key` on the author's machine, *not* in the
-  repository.
+  repository. **The channel follows the build** (beta.56): unset, a pre-release follows
+  `beta` (`UpdateChannel::for_build`, the shell's `channel_for_build`); configuration schema 5
+  (`betas_follow_betas`) turned a beta station's `stable` into `beta` once — the panel had
+  written `stable` into nearly every file, and a tester on it was told the beta in hand was
+  the newest; the shell reads the channel at every check (a Setup change needs no restart),
+  reads a pre-schema-5 `stable` as the migration will leave it, and says *no stable release
+  yet* (`Phase::NoStableYet`) to a beta that chose stable.
 * **Phase 6** — session recordings (`core/aetherd/src/record.rs`, `[record]`), replay
   (`replay.rs`, `aetherd --replay`, `field/sessions/` + `tests/field.rs`), the simulated
   channel (`sim.rs`, `[sim]`; `tests/two_daemons.rs` runs two real daemons through a

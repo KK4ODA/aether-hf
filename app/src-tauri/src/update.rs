@@ -70,21 +70,55 @@ pub struct Preferences {
     pub check: bool,
 }
 
+/// Whether `version` is a pre-release: a hyphen after the patch number (`0.2.0-beta.56`).
+fn is_prerelease(version: &str) -> bool {
+    version.contains('-')
+}
+
+/// The channel an installation follows unless its configuration says otherwise: a beta
+/// build the betas, a release the stable channel — as the daemon's own default does.
+fn channel_for_build(version: &str) -> Channel {
+    if is_prerelease(version) {
+        Channel::Beta
+    } else {
+        Channel::Stable
+    }
+}
+
+/// The configuration's schema from which a beta build's `stable` is the operator's choice:
+/// the daemon's migration to it turns a beta station's `stable` into `beta`, because the
+/// panel had written `stable` into nearly every file whether or not anybody chose it.
+const CHANNEL_CHOSEN_SCHEMA: i64 = 5;
+
 /// Read the `[update]` section of the daemon's configuration file.
 ///
-/// The daemon owns the file and the panel edits it; the shell only reads it, once, on the
-/// way up. A file that cannot be read means the defaults: stable, and do check.
+/// The daemon owns the file and the panel edits it; the shell reads it at every check, so
+/// a channel chosen in Setup counts from the next one. A file that cannot be read means
+/// the defaults: this build's channel, and do check.
 pub fn preferences(config: &Path) -> Preferences {
+    preferences_for(config, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`preferences`] as a build of `version` reads them.
+fn preferences_for(config: &Path, version: &str) -> Preferences {
     let text = std::fs::read_to_string(config).unwrap_or_default();
     let table: toml::Table = toml::from_str(&text).unwrap_or_default();
     let update = table.get("update").and_then(toml::Value::as_table);
+    let schema = table
+        .get("schema_version")
+        .and_then(toml::Value::as_integer)
+        .unwrap_or(1);
     let channel = match update
         .and_then(|u| u.get("channel"))
         .and_then(toml::Value::as_str)
     {
         Some("beta") => Channel::Beta,
         Some("nightly") => Channel::Nightly,
-        _ => Channel::Stable,
+        // a file the daemon has not brought forward yet reads as it will once it has
+        Some("stable") if schema >= CHANNEL_CHOSEN_SCHEMA || !is_prerelease(version) => {
+            Channel::Stable
+        }
+        _ => channel_for_build(version),
     };
     let check = update
         .and_then(|u| u.get("check"))
@@ -131,6 +165,9 @@ pub enum Phase {
     Checking,
     /// Nothing newer.
     UpToDate,
+    /// A beta following the stable channel, which has nothing newer to offer it: every
+    /// release is a beta until the first stable one.
+    NoStableYet,
     /// A newer version, waiting for a yes.
     Available {
         /// Its version.
@@ -198,25 +235,39 @@ pub struct View {
 
 /// The shell's side of the window: the view it shows and the update it holds.
 pub struct Updater {
-    channel: Channel,
+    /// The daemon's configuration file, read for the channel at every check.
+    config: Option<PathBuf>,
     view: Mutex<View>,
     pending: Mutex<Option<Update>>,
 }
 
 impl Updater {
-    /// Fresh, following `channel`.
+    /// Fresh, reading its channel from `config` (this build's own without one).
     #[must_use]
-    pub fn new(channel: Channel, current: &str) -> Self {
-        Self {
-            channel,
+    pub fn new(config: Option<PathBuf>, current: &str) -> Self {
+        let updater = Self {
+            config,
             view: Mutex::new(View {
                 phase: Phase::UpToDate,
                 current: current.to_owned(),
-                channel: channel.name(),
+                channel: channel_for_build(current).name(),
                 can_restore: previous_installer(current).is_some(),
             }),
             pending: Mutex::new(None),
+        };
+        let channel = updater.channel();
+        if let Ok(mut view) = updater.view.lock() {
+            view.channel = channel.name();
         }
+        updater
+    }
+
+    /// The channel the configuration names now.
+    fn channel(&self) -> Channel {
+        self.config.as_deref().map_or_else(
+            || channel_for_build(env!("CARGO_PKG_VERSION")),
+            |path| preferences(path).channel,
+        )
     }
 }
 
@@ -265,7 +316,14 @@ fn open_window(app: &AppHandle) {
 /// cannot be reached means the same — a start with the network down should look like
 /// nothing happened. From the menu the window opens first and says what it finds.
 pub async fn check(app: AppHandle, quiet: bool) {
-    let channel = app.state::<Updater>().channel;
+    let channel = {
+        let state = app.state::<Updater>();
+        let channel = state.channel();
+        if let Ok(mut view) = state.view.lock() {
+            view.channel = channel.name();
+        }
+        channel
+    };
     if !quiet {
         show(&app, Phase::Checking);
         open_window(&app);
@@ -307,7 +365,12 @@ pub async fn check(app: AppHandle, quiet: bool) {
         if quiet {
             return;
         }
-        if failures.is_empty() {
+        let current = app.package_info().version.to_string();
+        if failures.is_empty() && channel == Channel::Stable && is_prerelease(&current) {
+            // not "the newest": a beta on the stable channel is offered nothing while every
+            // release is a beta, and saying so is what tells a tester to choose betas
+            show(&app, Phase::NoStableYet);
+        } else if failures.is_empty() {
             show(&app, Phase::UpToDate);
         } else {
             show(
@@ -815,8 +878,35 @@ mod tests {
 
         std::fs::write(&path, "callsign = \"W4ODA\"\n").expect("write");
         let p = preferences(&path);
-        assert_eq!(p.channel, Channel::Stable);
+        assert_eq!(p.channel, channel_for_build(env!("CARGO_PKG_VERSION")));
         assert!(p.check);
+        // a file that names no channel follows the build: a beta the betas
+        assert_eq!(
+            preferences_for(&path, "0.2.0-beta.56").channel,
+            Channel::Beta
+        );
+        assert_eq!(preferences_for(&path, "0.2.0").channel, Channel::Stable);
+        // a beta's "stable" from before the daemon's migration reads as the migration will
+        // leave it; from schema 5 on it is a choice, and kept
+        std::fs::write(
+            &path,
+            "schema_version = 4\ncallsign = \"W4ODA\"\n[update]\nchannel = \"stable\"\n",
+        )
+        .expect("write");
+        assert_eq!(
+            preferences_for(&path, "0.2.0-beta.56").channel,
+            Channel::Beta
+        );
+        assert_eq!(preferences_for(&path, "0.2.0").channel, Channel::Stable);
+        std::fs::write(
+            &path,
+            "schema_version = 5\ncallsign = \"W4ODA\"\n[update]\nchannel = \"stable\"\n",
+        )
+        .expect("write");
+        assert_eq!(
+            preferences_for(&path, "0.2.0-beta.56").channel,
+            Channel::Stable
+        );
 
         std::fs::write(
             &path,
@@ -827,8 +917,10 @@ mod tests {
         assert_eq!(p.channel, Channel::Beta);
         assert!(!p.check);
 
-        let p = preferences(&dir.join("missing.toml"));
+        let p = preferences_for(&dir.join("missing.toml"), "0.2.0");
         assert_eq!(p.channel, Channel::Stable);
+        let p = preferences_for(&dir.join("missing.toml"), "0.2.0-beta.56");
+        assert_eq!(p.channel, Channel::Beta);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
