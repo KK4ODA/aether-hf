@@ -27,7 +27,7 @@ from aether_model.link.frames import (
     unpack_callsign,
     with_bandwidth,
 )
-from aether_model.link.phy import PhyTiming, TxFrame
+from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
 from aether_model.link.sim import TwoStationSim
 
@@ -668,6 +668,51 @@ def test_a_strong_path_called_on_the_floor_climbs_from_its_first_ordinary_burst(
     assert bursts[0] == fresh.first_mode(4.0), bursts
     assert bursts[1] == fresh.first_mode(20.0), bursts
     assert bursts[1] > bursts[0] + fresh.max_up_step, bursts
+
+
+def test_a_burst_fits_the_transmitters_key_time(timing: PhyTiming) -> None:
+    """ADR-0017: six tone frames are 32 s, and the daemon's 30 s key watchdog cut the last
+    one of every full tone burst on the air. The receiver acquired the cut frame and could
+    not decode it, which its rate controller counts as the channel's loss: the link stepped
+    down the tone floor, where every burst was full and cut again (ND1J, 2026-09-25). A
+    burst carries no more frames than fit in :attr:`LinkConfig.max_burst_s`."""
+    tone = timing.data_frame_s_for(0)
+    ofdm = timing.data_frame_s_for(timing.floor_modes)
+    assert 6 * tone > 30.0 > 5 * tone, "the case this exists for"
+    capped = LinkEngine("W4ODA", timing, LinkConfig(max_burst_s=29.0))
+    assert capped._burst_capacity(tone) == 5
+    assert capped._burst_capacity(ofdm) == 6, "a second a frame: six fit either way"
+    assert LinkEngine("W4ODA", timing, LinkConfig())._burst_capacity(tone) == 6
+
+    def session(max_burst_s: float | None) -> tuple[float, int, list[int]]:
+        cfg = LinkConfig(max_burst_s=max_burst_s)
+        a, b = _pair(timing, cfg)
+        sizes: list[int] = []
+        original = a._transmit
+
+        def record(frames: list[TxFrame]) -> None:
+            if frames and frames[0].container is Container.DATA and timing.is_floor(frames[0].mode):
+                sizes.append(len(frames))
+            original(frames)
+
+        a._transmit = record  # type: ignore[method-assign]
+        # −4 dB: the fast tones' range, and a transmitter that unkeys at 30 s as the
+        # daemon's watchdog does
+        sim = TwoStationSim(a, b, snr_db=-4.0, seed=3, key_limit_s=30.0)
+        a.connect("KK4XYZ")
+        a.send(bytes(2000))
+        a.disconnect()
+        took = sim.run(until=4000)
+        assert sim.delivered(1) == bytes(2000)
+        return took, a.stats.frames_resent, sizes
+
+    cut_took, cut_resent, cut_sizes = session(None)
+    fit_took, fit_resent, fit_sizes = session(30.0 - 1.0)
+    assert max(cut_sizes) == 6
+    assert max(fit_sizes) <= 5
+    assert fit_resent == 0, "a channel that carries the rung resends nothing"
+    assert cut_resent >= 10, "every full burst lost a frame, and the link fell with it"
+    assert fit_took < 0.5 * cut_took, (fit_took, cut_took)
 
 
 def test_a_call_starts_on_the_tone_floor_and_alternates(timing: PhyTiming) -> None:
