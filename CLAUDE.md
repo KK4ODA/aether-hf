@@ -681,6 +681,15 @@ open loop keep the margin at 2-6 dB and rungs 7-10. Not built: a trial climb off
 normal; the *other* side's recording decodes this station's ACKs, which carry the recommended
 rung — how a receiver's rate decisions are read after the fact.
 
+**Heard there, both ways (ADR-0021).** Every control frame other than an acknowledgement
+carries the SNR of the last frame of the session its sender decoded from the other station
+(`_heard_peer_db`), and a receiver takes it as `peer_snr_db`; the session's report still goes
+at its end, and the one it ended with is kept as `ended_peer_snr_db`, which the daemon's history
+takes first — so a station that was called and only received learns from the caller's
+disconnect how it was heard. The panel's history says "none sent" / "not said" in words where a
+direction had no traffic. Setup step 2's Interface list fills the fields in only when picked,
+shows Manual unless the fields are exactly an interface's, and never overrides them on Save.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
