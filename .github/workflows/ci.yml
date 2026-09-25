@@ -187,5 +187,9 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test --release
 
+      # every script of the panel is an ES module (app.js imports scopes.js, which the
+      # undocked signal window shares); parsed as a module whatever the runner's Node version
+      # would guess from the extension
       - name: The panel parses
-        run: node --check app/ui/app.js
+        shell: bash
+        run: for f in app/ui/*.js; do node --input-type=module --check < "$f" || exit 1; done
