@@ -888,39 +888,7 @@ fn serve(
         // that reports frames as it decodes them gives, and what VarAC builds its
         // opening signal report from
         report_frames(station, control, daemon, &mut heard_changed_at);
-        for event in station.take_events() {
-            let (name, detail) = event.split_once(':').unwrap_or(("log", event.as_str()));
-            daemon
-                .log
-                .record(level_of(name), name, detail, &state_name(station));
-            control.publish(&Event::new(
-                if name == "connected" || name == "disconnected" || name == "role" {
-                    "state"
-                } else {
-                    "log"
-                },
-                json!({
-                    "name": name,
-                    "detail": detail,
-                    "state": format!("{:?}", station.state()),
-                    // the callsign a session runs under is whichever of the station's the
-                    // caller asked for, so a host cannot know it without being told
-                    "callsign": station.engine().my_call,
-                    "remote": station.engine().remote_call,
-                }),
-            ));
-        }
-        let received = station.take_received();
-        if !received.is_empty() {
-            // The payload reaches panels through this event and host programs through the
-            // host interface. It never goes to standard output: that is a log sink, and a
-            // binary or compressed stream printed there is the garbage that filled the log
-            // of the first radio-to-radio test.
-            control.publish(&Event::new(
-                "data",
-                json!({"data": aetherd::control::methods::to_base64(&received)}),
-            ));
-        }
+        publish_station(station, control, daemon);
 
         // metrics are the operator's window into the link, so they go out while it runs
         if control.subscriber_count() > 0 && last_metrics.elapsed() >= METRICS_INTERVAL {
@@ -1028,6 +996,68 @@ fn stop(
             "stopping with a reply still unwritten: a client stopped reading",
             &state_name(station),
         );
+    }
+}
+
+/// What the station has to say goes to the log and the clients: its events (the session's
+/// comings and goings as `state`, the rest as `log`), what became of each message sent with
+/// a reference (`sent`), and the payload received (`data`).
+fn publish_station(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+) {
+    for event in station.take_events() {
+        let (name, detail) = event.split_once(':').unwrap_or(("log", event.as_str()));
+        daemon
+            .log
+            .record(level_of(name), name, detail, &state_name(station));
+        control.publish(&Event::new(
+            if name == "connected" || name == "disconnected" || name == "role" {
+                "state"
+            } else {
+                "log"
+            },
+            json!({
+                "name": name,
+                "detail": detail,
+                "state": format!("{:?}", station.state()),
+                // the callsign a session runs under is whichever of the station's the
+                // caller asked for, so a host cannot know it without being told
+                "callsign": station.engine().my_call,
+                "remote": station.engine().remote_call,
+            }),
+        ));
+    }
+    for delivery in station.take_deliveries() {
+        // how much, and whether it arrived: never the text itself
+        let said = if delivery.delivered {
+            format!("{} bytes of text delivered", delivery.bytes)
+        } else {
+            format!(
+                "{} bytes of text not delivered: {}",
+                delivery.bytes,
+                delivery.reason.as_deref().unwrap_or("the session ended")
+            )
+        };
+        daemon
+            .log
+            .record(Level::Info, "sent", &said, &state_name(station));
+        control.publish(&Event::new(
+            "sent",
+            serde_json::to_value(&delivery).unwrap_or(serde_json::Value::Null),
+        ));
+    }
+    let received = station.take_received();
+    if !received.is_empty() {
+        // The payload reaches panels through this event and host programs through the
+        // host interface. It never goes to standard output: that is a log sink, and a
+        // binary or compressed stream printed there is the garbage that filled the log
+        // of the first radio-to-radio test.
+        control.publish(&Event::new(
+            "data",
+            json!({"data": aetherd::control::methods::to_base64(&received)}),
+        ));
     }
 }
 

@@ -877,6 +877,28 @@ fn send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) ->
             ApiError::new("bad_params", "The data field is not valid base64.", false),
         );
     };
+    // a reference makes the message followed: a `sent` event says when the other station
+    // has all of it, or that the session ended first
+    let reference = match params.get("ref") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(reference))
+            if !reference.is_empty()
+                && reference.len() <= 64
+                && reference.chars().all(|c| c.is_ascii_graphic()) =>
+        {
+            Some(reference.as_str())
+        }
+        Some(_) => {
+            return Response::failed(
+                id,
+                ApiError::new(
+                    "bad_params",
+                    "A reference is 1 to 64 printable ASCII characters: {\"ref\": \"m1\"}.",
+                    false,
+                ),
+            );
+        }
+    };
     if !station.connected() {
         // accepting it would look like success and lose the data at the first disconnect
         return Response::failed(
@@ -889,8 +911,13 @@ fn send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) ->
         );
     }
     let count = bytes.len();
-    station.send(&bytes);
-    Response::ok(id, json!({ "accepted": count }))
+    if let Some(reference) = reference {
+        station.send_tracked(&bytes, reference);
+        Response::ok(id, json!({ "accepted": count, "ref": reference }))
+    } else {
+        station.send(&bytes);
+        Response::ok(id, json!({ "accepted": count }))
+    }
 }
 
 fn devices(id: Option<String>) -> Response {
@@ -913,6 +940,7 @@ fn devices(id: Option<String>) -> Response {
 /// Everything a client needs to render the station's current state.
 fn status<P: Ptt>(station: &mut Station<P>) -> Value {
     let frequency_hz = station.frequency_hz();
+    let (sent_pending, sent_recent) = station.delivery_status();
     let engine = station.engine();
     json!({
         "frequency_hz": frequency_hz,
@@ -950,6 +978,9 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             "seconds": seconds,
         })),
         "test": station.test_brief(),
+        // the messages sent with a reference that the other station does not yet have all
+        // of, and the last ones resolved: a panel that missed a `sent` event looks here
+        "sent": { "pending": sent_pending, "recent": sent_recent },
         "counters": counters(station),
         "recordings_dir": station.record_dir().map(|p| p.display().to_string()),
     })
@@ -1519,6 +1550,42 @@ mod tests {
                 .map(Vec::len),
             Some(0)
         );
+    }
+
+    #[test]
+    fn a_message_reference_is_checked_and_its_deliveries_are_in_status() {
+        let mut station = station();
+        let request = |params: Value| Request {
+            id: Some("1".into()),
+            method: "send".to_owned(),
+            params,
+            token: None,
+        };
+        let data = super::encode(b"hello\n");
+        for bad in [
+            json!(""),
+            json!(7),
+            json!("with space"),
+            json!("x".repeat(65)),
+        ] {
+            let response = dispatch(&mut station, &request(json!({"data": data, "ref": bad})));
+            assert_eq!(response.error.expect("refused").code, "bad_params", "{bad}");
+        }
+        // a good reference with no session: refused as any send is
+        let response = dispatch(&mut station, &request(json!({"data": data, "ref": "m1"})));
+        assert_eq!(response.error.expect("refused").code, "not_connected");
+        let status = dispatch(
+            &mut station,
+            &Request {
+                id: Some("2".into()),
+                method: "status".to_owned(),
+                params: json!({}),
+                token: None,
+            },
+        );
+        let sent = &status.result.expect("status")["sent"];
+        assert_eq!(sent["pending"].as_array().map(Vec::len), Some(0));
+        assert_eq!(sent["recent"].as_array().map(Vec::len), Some(0));
     }
 
     #[test]
