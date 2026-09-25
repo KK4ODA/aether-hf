@@ -803,7 +803,6 @@ details.hint > summary:hover {
 
 details.hint > p {
   margin: var(--s1) 0 0;
-  max-width: 78ch;
 }
 
 /* ── banners: faults, the rules, the session ─────────────────────── */
