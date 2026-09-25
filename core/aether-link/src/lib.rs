@@ -10,6 +10,7 @@
 //! * [`engine`] — the ARQ engine and session state machine.
 //! * [`sim`] — two engines over a lossy pipe, for testing the protocol without DSP.
 
+pub mod datagram;
 pub mod engine;
 pub mod frames;
 pub mod phy;

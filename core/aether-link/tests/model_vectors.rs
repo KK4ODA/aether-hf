@@ -14,6 +14,7 @@
 use std::{fs, path::PathBuf};
 
 use aether_link::{
+    datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
         ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, ProbeBody, decode_data,
         encode_data, pack_callsign, unpack_callsign,
@@ -56,6 +57,7 @@ fn data_kind(name: &str) -> DataKind {
         "BEACON" => DataKind::Beacon,
         "PROBE" => DataKind::Probe,
         "PROBE_ACK" => DataKind::ProbeAck,
+        "DATAGRAM" => DataKind::Datagram,
         other => panic!("unknown data kind {other}"),
     }
 }
@@ -258,6 +260,50 @@ fn connect_bodies_match_the_model() {
             (Some(got), Some(want)) => assert!((got - want).abs() < 1e-12, "SNR {got} vs {want}"),
             (got, want) => panic!("SNR presence differs, {got:?} vs {want:?}"),
         }
+    }
+}
+
+#[test]
+fn datagram_fragments_match_the_model() {
+    for case in vectors()["datagrams"].as_array().expect("datagrams") {
+        let capacity = int(case, "capacity");
+        let number = u8::try_from(int(case, "number")).expect("a number");
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let expected: Vec<Vec<u8>> = case["fragments"]
+            .as_array()
+            .expect("fragments")
+            .iter()
+            .map(|f| from_hex(f.as_str().expect("hex")))
+            .collect();
+        let label = format!("cap={capacity} size={}", payload.len());
+        let made = fragments(&payload, number, capacity).expect("fits");
+        assert_eq!(made, expected, "{label}: fragments differ from the model");
+        let mut joiner = Reassembler::default();
+        let joined = made
+            .iter()
+            .filter_map(|f| joiner.add(read_fragment(f).expect("a fragment"), 0.0))
+            .next_back();
+        assert_eq!(joined, Some(payload), "{label}: joined");
+    }
+}
+
+#[test]
+fn datagram_bodies_match_the_model() {
+    for case in vectors()["datagram_bodies"]
+        .as_array()
+        .expect("datagram bodies")
+    {
+        let source = case["source"].as_str().expect("source");
+        let frame_type = u8::try_from(int(case, "frame_type")).expect("a type");
+        let frame = from_hex(case["frame"].as_str().expect("frame"));
+        let expected = from_hex(case["body"].as_str().expect("body"));
+        let made = body(source, frame_type, &frame).expect("a body");
+        assert_eq!(made, expected, "{source}: body differs from the model");
+        assert_eq!(
+            parse_body(&made),
+            Some((source.to_owned(), frame_type, frame)),
+            "{source}: round trip"
+        );
     }
 }
 

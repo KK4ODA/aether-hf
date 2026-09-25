@@ -75,9 +75,25 @@ pub enum DataKind {
     /// probe arrived at. Answering is a *response* in the sense of §97.221(c), so a
     /// station that may only answer may answer this too; sending a probe is a call.
     ProbeAck,
+    /// A fragment of another program's frame — an AX.25 frame a KISS client handed the
+    /// modem — sent outside any session with no acknowledgement (ADR-0019). `seq` holds the
+    /// fragment's index in its high nibble and the last index in its low one; `session` the
+    /// datagram's number, 1–255. See [`crate::datagram`].
+    Datagram,
 }
 
 impl DataKind {
+    /// Whether frames of this kind are sent outside any session — a beacon, a probe or its
+    /// answer, a datagram — and so never belong to a session's stream, whatever their
+    /// session byte holds.
+    #[must_use]
+    pub const fn outside_sessions(self) -> bool {
+        matches!(
+            self,
+            Self::Beacon | Self::Probe | Self::ProbeAck | Self::Datagram
+        )
+    }
+
     const fn to_bits(self) -> u8 {
         match self {
             Self::Data => 0,
@@ -86,6 +102,7 @@ impl DataKind {
             Self::Beacon => 3,
             Self::Probe => 4,
             Self::ProbeAck => 5,
+            Self::Datagram => 6,
         }
     }
 
@@ -97,6 +114,7 @@ impl DataKind {
             3 => Some(Self::Beacon),
             4 => Some(Self::Probe),
             5 => Some(Self::ProbeAck),
+            6 => Some(Self::Datagram),
             _ => None,
         }
     }
