@@ -218,6 +218,9 @@ enum Outgoing {
     /// read the ALC and move the level before the next one lands. The clock starts when it
     /// reaches the front of the queue. Cut with the bursts.
     Pause { seconds: f64, until_s: Option<f64> },
+    /// The Morse identifier on its own: the end of a session whose last transmission did
+    /// not carry one — the link timed out, or the peer closed it without a word.
+    Identifier,
     /// Audio to play as it is: a keying test, or a tune tone.
     Audio {
         samples: Vec<f32>,
@@ -227,6 +230,32 @@ enum Outgoing {
         /// Whether it is a tune tone, which the operator may cut short.
         tone: bool,
     },
+}
+
+/// Room kept between a burst's air time and the key watchdog: the sound card's clock and
+/// the loop's are not the same clock, and a burst that ends a hair past the limit loses its
+/// last frame as surely as one that ends seconds past it.
+const KEY_TIME_MARGIN_S: f64 = 1.0;
+
+/// How long before a Morse identifier falls due the bursts are already sized to carry it:
+/// a burst is shaped when the engine decides it and rendered a moment later. In a session
+/// nothing holds a burst back, so a minute is room to spare.
+const ID_LOOKAHEAD_S: f64 = 60.0;
+
+/// The longest a burst of frames may be on the air, so that the whole transmission — the
+/// keying's lead, the frames, the Morse identifier when `with_id` says one rides on it, and
+/// the tail — ends inside the key watchdog's limit (ADR-0017). Six tone frames are 32 s; the
+/// watchdog cut the last of every full tone burst on the air, and the link fell to the floor
+/// for it. Never less than one OFDM frame's worth, so an extreme setting still sends
+/// something.
+fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
+    let identifier = config.cw_id.filter(|_| with_id).map_or(0.0, |cw| {
+        let rate = config.params.audio_rate as f64;
+        // the identifier and the moment of silence before it (`append_cw_id`)
+        cw.audio(&config.callsign, rate).len() as f64 / rate + 0.1
+    });
+    (config.max_key_s - config.key_lead_s - config.key_tail_s - identifier - KEY_TIME_MARGIN_S)
+        .max(1.1)
 }
 
 /// How much later than the playback lead a sound card's capture of this station's own
@@ -442,6 +471,38 @@ pub struct LinkAccount {
     pub bytes_received: usize,
 }
 
+/// What the session history will say of the session now up, gathered as it runs: the
+/// engine forgets its readings the moment a session ends, before the station hears of it.
+#[derive(Debug, Clone, Default)]
+struct SessionNotes {
+    remote: String,
+    caller: bool,
+    frequency_hz: Option<u64>,
+    /// The engine's acknowledged-bytes count when the session came up.
+    acked_at_start: usize,
+    snr_db: Option<f64>,
+    best_snr_db: Option<f64>,
+    heard_there_db: Option<f64>,
+    top_rung_sent: Option<usize>,
+    top_rung_heard: Option<usize>,
+}
+
+/// The most finished sessions held for the daemon between two calls of
+/// `take_finished_sessions`.
+const MAX_UNTAKEN_SESSIONS: usize = 64;
+
+/// Where the Morse identifier stands (§97.119).
+#[derive(Debug, Clone, Copy, Default)]
+struct IdentifierState {
+    /// When the last one went out, in station time.
+    last: Option<f64>,
+    /// Whether this station has transmitted since it last identified.
+    transmitted_since: bool,
+    /// A session ended after transmitting since the last identifier: the next transmission
+    /// carries one whatever the interval says, or one goes out on its own.
+    final_due: bool,
+}
+
 /// The dial frequency, asked of the radio now and then rather than on every frame.
 #[derive(Debug, Clone, Copy, Default)]
 struct FrequencyCache {
@@ -600,6 +661,10 @@ pub struct Station<P: Ptt> {
     events: Vec<String>,
     /// Frames the physical layer reported since a client last took them.
     reports: Vec<FrameReport>,
+    /// The session now up, as the history will record it.
+    session_notes: Option<SessionNotes>,
+    /// Sessions that ended since the daemon last took them.
+    finished: Vec<crate::sessions::Session>,
     /// The last frame, and its equalised constellation, for the diagnostics display.
     last_frame: Option<FrameReport>,
     last_symbols: Vec<Complex>,
@@ -625,8 +690,11 @@ pub struct Station<P: Ptt> {
     decompressor: Decompressor,
     /// Application bytes waiting for a session to negotiate compression.
     outbound: Vec<u8>,
-    /// When the last Morse identifier went out, in station time.
-    last_cw_id: Option<f64>,
+    /// The Morse identifier: when it last went out, and what is owed.
+    identifier: IdentifierState,
+    /// The frames of the burst on the air: how long each is, and whether they are the
+    /// tone floor's — what an abort that cuts it has to wait out before its DISC.
+    on_air_frames: Option<(f64, bool)>,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -667,6 +735,11 @@ impl<P: Ptt> Station<P> {
                 offered_capabilities(config.compress),
                 params.bandwidth.hz(),
             ),
+            // the first transmission identifies, so the first bursts keep room for it
+            max_burst_s: config
+                .link
+                .max_burst_s
+                .or_else(|| Some(burst_limit_s(&config, true))),
             ..config.link.clone()
         };
         let engine = LinkEngine::new(&config.callsign, timing, link, seed);
@@ -705,6 +778,8 @@ impl<P: Ptt> Station<P> {
             delivered: Vec::new(),
             events: Vec::new(),
             reports: Vec::new(),
+            session_notes: None,
+            finished: Vec::new(),
             last_frame: None,
             last_symbols: Vec::new(),
             spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
@@ -721,7 +796,8 @@ impl<P: Ptt> Station<P> {
             compressor: Compressor::new(false),
             decompressor: Decompressor::new(false),
             outbound: Vec::new(),
-            last_cw_id: None,
+            identifier: IdentifierState::default(),
+            on_air_frames: None,
             stats: StationStats::default(),
             config,
         }
@@ -819,6 +895,12 @@ impl<P: Ptt> Station<P> {
     /// Frames reported since the last call.
     pub fn take_frame_reports(&mut self) -> Vec<FrameReport> {
         std::mem::take(&mut self.reports)
+    }
+
+    /// Sessions that ended since the last call, for the history. Their wall-clock times
+    /// are the caller's to give ([`Session::ended_at`](crate::sessions::Session::ended_at)).
+    pub fn take_finished_sessions(&mut self) -> Vec<crate::sessions::Session> {
+        std::mem::take(&mut self.finished)
     }
 
     /// The last frame the physical layer found, decoded or not.
@@ -1052,10 +1134,49 @@ impl<P: Ptt> Station<P> {
         self.pump();
     }
 
-    /// Close the session now.
+    /// Close the session now: what is left of a burst goes with it, and one DISC goes out.
+    ///
+    /// The rest of the burst is the session's, and the session is over. Left to play, a
+    /// long tone burst ran on after the operator's abort until the key watchdog cut it,
+    /// ten seconds later (ND1J, 2026-09-25), with the DISC queued behind it.
+    ///
+    /// The DISC waits, key up, for what the cut would otherwise have run into: the rest of
+    /// the frame that was on the air, which the other station's receiver still holds the
+    /// span of, and the acknowledgement it then sends for the burst. Sent at once, the DISC
+    /// arrived inside the one and under the other, and the peer never heard it.
     pub fn abort(&mut self) {
+        self.pending
+            .retain(|next| !matches!(next, Outgoing::Frames(_)));
+        if self.transmitting && !self.playing_test {
+            self.playback.clear();
+            self.clock.flush_device = true;
+            self.clock.cut_short = true;
+            if self.engine.state() != State::Idle
+                && let Some((frame_s, floor)) = self.on_air_frames
+            {
+                let timing = self.engine.timing();
+                let wait = frame_s
+                    + self.engine.config().burst_gap_s
+                    + timing.control_frame_s_for(floor)
+                    + 2.0 * timing.turnaround_s
+                    + 0.5;
+                self.pending.push_back(Outgoing::Pause {
+                    seconds: wait,
+                    until_s: None,
+                });
+            }
+        }
         self.engine.abort();
         self.pump();
+    }
+
+    /// Nothing on the air, nothing queued for it, and no session: a station that may stop.
+    #[must_use]
+    pub fn quiescent(&self) -> bool {
+        !self.transmitting
+            && self.playback.is_empty()
+            && self.pending.is_empty()
+            && self.engine.state() == State::Idle
     }
 
     /// Stop transmitting and release the radio, now.
@@ -1121,6 +1242,7 @@ impl<P: Ptt> Station<P> {
         // applied as audio leaves, so it takes effect on a tone already playing
         self.config.tx_level = config.audio.tx_level;
         self.config.max_key_s = config.radio.max_key_s;
+        self.refresh_burst_cap(self.now());
         self.config.wait_for_clear = config.radio.wait_for_clear;
         self.config.link.max_mode = config.radio.fastest_mode();
         self.config.answer_only = config.radio.answer_only;
@@ -1622,6 +1744,7 @@ impl<P: Ptt> Station<P> {
         self.note_busy_transition(now);
         self.sample_passband(now);
 
+        self.refresh_burst_cap(now);
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
             // the key was stuck: drop whatever was still queued rather than resume mid-burst
@@ -1953,6 +2076,20 @@ impl<P: Ptt> Station<P> {
         if report.decoded || report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED {
             self.rx_until = self.rx_until.max(now + 0.5);
         }
+        if let Some(notes) = &mut self.session_notes
+            && report.decoded
+            && report.from.as_deref() == Some(notes.remote.as_str())
+        {
+            notes.snr_db = Some(report.snr_db);
+            notes.best_snr_db = Some(
+                notes
+                    .best_snr_db
+                    .map_or(report.snr_db, |b| b.max(report.snr_db)),
+            );
+            if report.kind == "data" {
+                notes.top_rung_heard = Some(notes.top_rung_heard.map_or(rung, |t| t.max(rung)));
+            }
+        }
         self.reports.push(report);
     }
 
@@ -1977,6 +2114,49 @@ impl<P: Ptt> Station<P> {
         {
             self.moved.pop_front();
         }
+    }
+
+    /// The session that just ended, for the history: called at the `disconnected` event,
+    /// while the account and the recording are still the session's.
+    fn finish_session(&mut self, end: &str) {
+        let (Some(notes), Some(link)) = (self.session_notes.take(), self.link) else {
+            return;
+        };
+        let session = crate::sessions::Session {
+            remote: notes.remote,
+            started_ms: 0,
+            ended_ms: 0,
+            duration_s: ((self.now() - link.started_s).max(0.0) * 10.0).round() / 10.0,
+            role: if notes.caller {
+                crate::sessions::Role::Caller
+            } else {
+                crate::sessions::Role::Called
+            },
+            bandwidth_hz: u32::try_from(self.config.params.bandwidth.hz()).unwrap_or(u32::MAX),
+            frequency_hz: self.frequency.value.or(notes.frequency_hz),
+            bytes_sent: link.bytes_sent,
+            bytes_acked: self
+                .engine
+                .stats
+                .bytes_acked
+                .saturating_sub(notes.acked_at_start),
+            bytes_received: link.bytes_received,
+            end: end.to_owned(),
+            snr_db: notes.snr_db,
+            best_snr_db: notes.best_snr_db,
+            heard_there_db: notes.heard_there_db,
+            top_rung_sent: notes.top_rung_sent,
+            top_rung_heard: notes.top_rung_heard,
+            test: self.test_running(),
+            recording: self.recording().and_then(|(path, _)| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            }),
+        };
+        if self.finished.len() >= MAX_UNTAKEN_SESSIONS {
+            self.finished.remove(0);
+        }
+        self.finished.push(session);
     }
 
     /// Take what the engine has decided and act on it.
@@ -2017,9 +2197,25 @@ impl<P: Ptt> Station<P> {
                             bytes_sent: 0,
                             bytes_received: 0,
                         });
+                        self.session_notes = Some(SessionNotes {
+                            remote: detail
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or_default()
+                                .to_owned(),
+                            caller: detail.ends_with("(iss)"),
+                            frequency_hz: self.frequency.value,
+                            acked_at_start: self.engine.stats.bytes_acked,
+                            ..SessionNotes::default()
+                        });
                         self.moved.clear();
                         connected = true;
                     } else if name == "disconnected" {
+                        // the end of a communication is identified, whatever ended it
+                        if self.config.cw_id.is_some() && self.identifier.transmitted_since {
+                            self.identifier.final_due = true;
+                        }
+                        self.finish_session(&detail);
                         self.link = None;
                         self.moved.clear();
                         self.compressor = Compressor::new(false);
@@ -2053,6 +2249,23 @@ impl<P: Ptt> Station<P> {
         }
         if connected {
             self.flush_outbound();
+        }
+        if let Some(notes) = &mut self.session_notes
+            && let Some(heard) = self.engine.peer_snr_db()
+        {
+            notes.heard_there_db = Some(heard);
+        }
+        // a DISC or DISC_ACK of ours still to go carries the identifier; a session that
+        // ended in silence — a link timeout, a peer that closed without a word — gets one
+        // on its own, after whatever is on the air now
+        if self.identifier.final_due
+            && !self
+                .pending
+                .iter()
+                .any(|next| matches!(next, Outgoing::Frames(_)))
+        {
+            self.identifier.final_due = false;
+            self.pending.push_back(Outgoing::Identifier);
         }
         self.account();
     }
@@ -2099,30 +2312,19 @@ impl<P: Ptt> Station<P> {
             Outgoing::Frames(frames) | Outgoing::Drive(frames) => frames,
             // handled above, before anything is popped
             Outgoing::Pause { .. } => return,
-            // raw audio goes out as it is, inside the same keying and lead and tail as a
-            // burst, so a keying test exercises exactly the path a transmission uses
-            Outgoing::Audio { samples, tone, .. } => {
-                let audio_rate = self.config.params.audio_rate as f64;
-                let lead = (self.config.key_lead_s * audio_rate) as usize;
-                let tail = (self.config.key_tail_s * audio_rate) as usize;
-                self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-                self.playback.extend(samples);
-                self.playback.extend(std::iter::repeat_n(0.0f32, tail));
-                self.playing_test = tone;
-                if self.config.record_tx_audio {
-                    self.tx_capture = Some(crate::record::TxCapture::begin(
-                        self.config.params.audio_rate as u32,
-                        self.config.tx_level,
-                        self.config.key_lead_s,
-                        self.config.key_tail_s,
-                        &[],
-                    ));
-                }
-                return;
-            }
+            Outgoing::Identifier => return self.render_identifier(now),
+            Outgoing::Audio { samples, tone, .. } => return self.render_audio(samples, tone),
         };
 
         self.record_sent(&frames, now);
+        self.on_air_frames = frames.first().map(|frame| {
+            let timing = self.engine.timing();
+            let floor = match frame.container {
+                aether_link::Container::Data => timing.is_floor(frame.mode),
+                aether_link::Container::Control => frame.floor,
+            };
+            (timing.frame_s(frame), floor)
+        });
         if self.config.record_tx_audio {
             self.tx_capture = Some(crate::record::TxCapture::begin(
                 self.config.params.audio_rate as u32,
@@ -2175,6 +2377,46 @@ impl<P: Ptt> Station<P> {
         self.append_cw_id(now, audio_rate);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
+    }
+
+    /// The Morse identifier on its own, inside the keying's lead and tail: the end of a
+    /// session no DISC of this station's carried it for.
+    fn render_identifier(&mut self, now: f64) {
+        let audio_rate = self.config.params.audio_rate as f64;
+        let lead = (self.config.key_lead_s * audio_rate) as usize;
+        let tail = (self.config.key_tail_s * audio_rate) as usize;
+        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+        self.identifier.final_due = true;
+        self.append_cw_id(now, audio_rate);
+        if self.playback.len() == lead {
+            // nothing to say after all — no identifier set any more, or none that fits the
+            // key: key nothing, and owe nothing, or the next pass would queue it again
+            self.playback.clear();
+            self.identifier.final_due = false;
+            return;
+        }
+        self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+    }
+
+    /// Raw audio goes out as it is, inside the same keying and lead and tail as a burst, so
+    /// a keying test exercises exactly the path a transmission uses.
+    fn render_audio(&mut self, samples: Vec<f32>, tone: bool) {
+        let audio_rate = self.config.params.audio_rate as f64;
+        let lead = (self.config.key_lead_s * audio_rate) as usize;
+        let tail = (self.config.key_tail_s * audio_rate) as usize;
+        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+        self.playback.extend(samples);
+        self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+        self.playing_test = tone;
+        if self.config.record_tx_audio {
+            self.tx_capture = Some(crate::record::TxCapture::begin(
+                self.config.params.audio_rate as u32,
+                self.config.tx_level,
+                self.config.key_lead_s,
+                self.config.key_tail_s,
+                &[],
+            ));
+        }
     }
 
     /// Act on the preambles acquisition found in this block: the start-of-frame signal.
@@ -2285,6 +2527,19 @@ impl<P: Ptt> Station<P> {
     /// stays invisible: a burst that decoded nowhere looks exactly like a burst that was
     /// never sent (`field/OTA-2-FINDINGS.md`).
     fn record_sent(&mut self, frames: &[aether_link::TxFrame], now: f64) {
+        if let Some(notes) = &mut self.session_notes {
+            let data = frames.iter().filter(|frame| {
+                frame.container == Container::Data
+                    && decode_data(&frame.payload).is_ok_and(|(h, _)| h.kind == DataKind::Data)
+            });
+            for frame in data {
+                notes.top_rung_sent = Some(
+                    notes
+                        .top_rung_sent
+                        .map_or(frame.mode, |t| t.max(frame.mode)),
+                );
+            }
+        }
         let Some(recording) = &mut self.recording else {
             return;
         };
@@ -2311,10 +2566,13 @@ impl<P: Ptt> Station<P> {
     /// transmitting either way.
     fn append_cw_id(&mut self, now: f64, audio_rate: f64) {
         let Some(cw) = self.config.cw_id else { return };
-        let due = self
-            .last_cw_id
-            .is_none_or(|last| now - last >= self.config.cw_id_interval_s);
+        let due = self.identifier.final_due
+            || self
+                .identifier
+                .last
+                .is_none_or(|last| now - last >= self.config.cw_id_interval_s);
         if !due {
+            self.identifier.transmitted_since = true;
             return;
         }
         let cw = crate::cwid::CwId {
@@ -2327,10 +2585,45 @@ impl<P: Ptt> Station<P> {
         }
         // a moment of silence so the identifier is not run into the data
         let gap = (0.1 * audio_rate) as usize;
+        // Bursts are sized to leave it room from a minute before it falls due; one that
+        // does not — an operator's own `max_burst_s`, a watchdog setting just lowered —
+        // passes it to the next transmission rather than taking the burst over the key's
+        // limit, where the watchdog would cut both.
+        let on_air =
+            (self.playback.len() + gap + audio.len()) as f64 / audio_rate + self.config.key_tail_s;
+        if on_air > self.config.max_key_s - KEY_TIME_MARGIN_S / 2.0 {
+            self.identifier.transmitted_since = true;
+            return;
+        }
         self.playback.extend(std::iter::repeat_n(0.0f32, gap));
         self.playback.extend(audio);
-        self.last_cw_id = Some(now);
+        self.identifier.last = Some(now);
         self.stats.cw_ids += 1;
+        self.identifier.transmitted_since = false;
+        self.identifier.final_due = false;
+    }
+
+    /// Whether a Morse identifier will be due by station time `t`.
+    fn id_due_by(&self, t: f64) -> bool {
+        self.config.cw_id.is_some()
+            && (self.identifier.final_due
+                || self
+                    .identifier
+                    .last
+                    .is_none_or(|last| t - last >= self.config.cw_id_interval_s))
+    }
+
+    /// Size the engine's bursts to the key: with room for the identifier when it falls due
+    /// within [`ID_LOOKAHEAD_S`], without it otherwise — an identifying station gives up a
+    /// tone frame only on the burst the identifier rides on. An explicit `max_burst_s` in
+    /// the link settings stands.
+    fn refresh_burst_cap(&mut self, now: f64) {
+        if self.config.link.max_burst_s.is_some() {
+            return;
+        }
+        let with_id = self.id_due_by(now + ID_LOOKAHEAD_S);
+        self.engine
+            .set_max_burst_s(Some(burst_limit_s(&self.config, with_id)));
     }
 
     /// Whether it is polite to start transmitting.
@@ -2811,6 +3104,28 @@ mod tests {
             let u2 =
                 (self.state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64;
             ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32
+        }
+
+        /// Run station `a` alone, hearing silence — `b` has gone off the air — for `seconds`
+        /// or until `done`, on the same sound-card clock.
+        pub(crate) fn run_a_alone(
+            &mut self,
+            seconds: f64,
+            mut done: impl FnMut(&Station<NullPtt>) -> bool,
+        ) {
+            let rate = WIDE_2300.audio_rate as f64;
+            let blocks = (seconds * rate / self.block as f64) as usize;
+            let mut out = vec![0.0f32; self.block];
+            let silence = vec![0.0f32; self.block];
+            for _ in 0..blocks {
+                self.a.device_played(self.played);
+                self.played += self.block as u64;
+                self.a.playback(&mut out).expect("playback");
+                self.a.capture(&silence).expect("capture");
+                if done(&self.a) {
+                    return;
+                }
+            }
         }
 
         /// Run for `seconds`, or until `done` says to stop.
@@ -3432,6 +3747,244 @@ mod tests {
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received(), message);
+    }
+
+    #[test]
+    fn a_burst_ends_inside_the_key_watchdog() {
+        // ADR-0017: six tone frames are 32 s and the watchdog's limit 30 s; on the air it
+        // cut the last frame of every full tone burst, and the link fell to the floor
+        let station = |max_key_s: f64, cw_id: Option<CwId>| {
+            Station::new(
+                StationConfig {
+                    callsign: "KK4ODA-1".to_owned(),
+                    max_key_s,
+                    cw_id,
+                    playback_lead_s: 0.25,
+                    ..StationConfig::default()
+                },
+                NullPtt::default(),
+                1,
+            )
+        };
+        let plain = station(30.0, None);
+        let tone = plain.engine.timing().data_frame_s_for(0);
+        let ofdm = plain
+            .engine
+            .timing()
+            .data_frame_s_for(plain.engine.timing().floor_modes);
+        assert_eq!(plain.engine.burst_capacity(tone), 5);
+        assert!(
+            5.0 * tone + plain.config.key_lead_s + plain.config.key_tail_s + KEY_TIME_MARGIN_S
+                <= 30.0
+        );
+        assert_eq!(plain.engine.burst_capacity(ofdm), 6);
+        // an identifier needs room on the bursts it rides on: the first transmission's, and
+        // those shaped within a minute of the next falling due — and only those
+        let mut identifying = station(30.0, Some(CwId::default()));
+        assert_eq!(identifying.engine.burst_capacity(tone), 4);
+        identifying.identifier.last = Some(0.0);
+        identifying.refresh_burst_cap(1.0);
+        assert_eq!(identifying.engine.burst_capacity(tone), 5);
+        let interval = identifying.config.cw_id_interval_s;
+        identifying.refresh_burst_cap(interval - ID_LOOKAHEAD_S - 1.0);
+        assert_eq!(identifying.engine.burst_capacity(tone), 5);
+        identifying.refresh_burst_cap(interval - ID_LOOKAHEAD_S + 1.0);
+        assert_eq!(identifying.engine.burst_capacity(tone), 4);
+        // the end of a session is identified at once, and its last bursts keep room for it
+        identifying.identifier.final_due = true;
+        identifying.refresh_burst_cap(2.0);
+        assert_eq!(identifying.engine.burst_capacity(tone), 4);
+        // and the limit follows the setting, live
+        let mut longer = station(30.0, None);
+        let mut config =
+            crate::config::Config::parse("callsign = \"KK4ODA-1\"\n[radio]\nmax_key_s = 60.0\n")
+                .expect("parse");
+        config.radio.max_key_s = 60.0;
+        longer.apply_live(&config);
+        assert_eq!(longer.engine.burst_capacity(tone), 6);
+    }
+
+    /// Run one station alone, hearing silence, for `seconds` or until `done`.
+    fn run_alone(
+        station: &mut Station<NullPtt>,
+        seconds: f64,
+        mut done: impl FnMut(&Station<NullPtt>) -> bool,
+    ) {
+        let mut out = vec![0.0f32; 4096];
+        let silence = vec![0.0f32; 4096];
+        let blocks = (seconds * WIDE_2300.audio_rate as f64 / 4096.0) as usize;
+        let mut played = 0u64;
+        for _ in 0..blocks {
+            station.device_played(played);
+            played += 4096;
+            station.playback(&mut out).expect("playback");
+            station.capture(&silence).expect("capture");
+            if done(station) {
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn an_abort_drops_the_rest_of_the_burst() {
+        // a long tone burst ran on after the operator's abort until the key watchdog cut it
+        // (ND1J, 2026-09-25): the session is over, and so is its burst
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.connect("KK4XYZ").expect("idle");
+        run_alone(&mut station, 1.0, |_| false);
+        assert!(station.transmitting(), "the call is on the air");
+        let aborted_at = station.now();
+        station.abort();
+        run_alone(&mut station, 5.0, |s| !s.transmitting());
+        assert!(!station.transmitting());
+        assert!(
+            station.now() - aborted_at < 0.3,
+            "the key stayed down {:.1} s after the abort",
+            station.now() - aborted_at
+        );
+        assert_eq!(station.stats.watchdog_trips, 0);
+    }
+
+    #[test]
+    fn a_session_that_ends_is_kept_for_the_history() {
+        // who called whom, what crossed, the fastest rung each way and how it ended: what
+        // three test sessions with ND1J left to be read out of recordings (2026-09-25)
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 300]);
+        air.run(120.0, |a, _| {
+            a.engine.all_acknowledged() && a.engine.stats.bytes_acked > 0
+        });
+        assert_eq!(air.b.take_received().len(), 300);
+        assert!(
+            air.a.take_finished_sessions().is_empty(),
+            "nothing has ended yet"
+        );
+        air.a.disconnect();
+        air.run(120.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+
+        let caller = air.a.take_finished_sessions();
+        let called = air.b.take_finished_sessions();
+        assert_eq!((caller.len(), called.len()), (1, 1));
+        let (a, b) = (&caller[0], &called[0]);
+        assert_eq!(
+            (a.remote.as_str(), a.role),
+            ("KK4XYZ", crate::sessions::Role::Caller)
+        );
+        assert_eq!(
+            (b.remote.as_str(), b.role),
+            ("W4ODA", crate::sessions::Role::Called)
+        );
+        assert_eq!(
+            (a.end.as_str(), b.end.as_str()),
+            ("closed", "peer disconnected")
+        );
+        assert_eq!((a.bytes_sent, b.bytes_received), (300, 300));
+        assert!(a.bytes_acked > 0 && b.bytes_acked == 0);
+        assert!(a.duration_s > 0.0 && (a.duration_s - b.duration_s).abs() < 10.0);
+        assert_eq!(a.bandwidth_hz, 2300);
+        // the data went at some rung and was heard at that rung; the SNRs were read while
+        // the session was up — the engine forgets them the moment it ends
+        let sent = a.top_rung_sent.expect("data was sent");
+        assert_eq!(b.top_rung_heard, Some(sent));
+        assert_eq!(
+            a.top_rung_heard, None,
+            "nothing but acknowledgements came back"
+        );
+        assert!(a.heard_there_db.is_some() && b.snr_db.is_some() && a.snr_db.is_some());
+        assert!(!a.test && a.recording.is_none());
+        assert!(air.a.take_finished_sessions().is_empty(), "taken once");
+    }
+
+    #[test]
+    fn a_session_ends_with_an_identifier_however_it_ends() {
+        // §97.119: the end of each communication is identified. An identifier rode only on a
+        // transmission that fell due by the interval, so a session that ended in silence —
+        // the peer's application closed, the link timed out — ended without one
+        let identifying = |config: StationConfig| StationConfig {
+            cw_id: (config.callsign == "W4ODA").then(CwId::default),
+            ..config
+        };
+
+        // an orderly close: the first transmission identifies, the end once more — twice in
+        // all, however long the session ran inside the interval
+        let mut air = Air::with(1.0, 0.0005, identifying);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 300]);
+        air.a.disconnect();
+        air.run(120.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle && a.quiescent()
+        });
+        air.run(10.0, |_, _| false);
+        assert_eq!(air.a.stats.cw_ids, 2, "one to start and one to end");
+        assert_eq!(air.b.stats.cw_ids, 0, "the other station does not identify");
+
+        // the peer goes silent mid-session: the link times out, and the identifier goes
+        // out on its own
+        let mut air = Air::with(1.0, 0.0005, identifying);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 3000]);
+        air.run(3.0, |_, _| false);
+        let before = air.a.stats.cw_ids;
+        air.run_a_alone(400.0, |a| a.state() == State::Idle && a.quiescent());
+        assert_eq!(air.a.state(), State::Idle, "the link timed out");
+        assert_eq!(air.a.stats.cw_ids, before + 1, "the end was identified");
+
+        // an abort mid-burst: the burst is cut, the DISC carries the identifier, and the
+        // peer hears the DISC rather than timing out
+        let mut air = Air::with(1.0, 0.0005, identifying);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 3000]);
+        air.run(20.0, |a, _| a.transmitting());
+        let before = air.a.stats.cw_ids;
+        air.a.abort();
+        air.run(30.0, |a, b| b.state() == State::Idle && a.quiescent());
+        assert_eq!(air.b.state(), State::Idle);
+        assert!(
+            air.b
+                .take_events()
+                .iter()
+                .any(|e| e == "disconnected:peer disconnected"),
+            "the peer heard the DISC"
+        );
+        assert_eq!(air.a.stats.cw_ids, before + 1);
+        assert_eq!(air.a.stats.watchdog_trips, 0);
+    }
+
+    #[test]
+    fn an_identifier_owed_but_impossible_is_dropped_not_queued_for_ever() {
+        // the operator turns identification off after a session that owed one: nothing is
+        // keyed, and the station does not queue the identifier again on every pass
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId::default()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.identifier.final_due = true;
+        station.config.cw_id = None;
+        run_alone(&mut station, 2.0, |_| false);
+        assert!(station.quiescent());
+        assert!(!station.identifier.final_due);
+        assert_eq!(station.stats.cw_ids, 0);
     }
 
     #[test]
