@@ -1666,17 +1666,142 @@ details.menu > .menu-list > button:hover:not(:disabled) {
   cursor: text;
 }
 
-/* what this station sent, set apart from what it received by the accent at its edge */
-.sent-log {
-  border-left: 3px solid var(--accent);
-  min-height: 4em;
-  max-height: 14em;
-  margin-top: var(--s1);
+/* The Send box: what this station has sent stays in it, above the line being typed —
+ * each message with the time it went, in the accent colour, and a mark for what became of
+ * it — and the line waits with a blinking cursor. The same size and surface as Received. */
+.composer {
+  display: flex;
+  flex-direction: column;
+  background: var(--plot-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px var(--s3);
+  font: 12.5px/1.55 var(--numerals);
+  color: var(--text);
+  cursor: text;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
-.sent-log .to {
-  color: var(--accent);
+
+.split .composer {
+  height: 15em;
+}
+
+.composer:hover {
+  border-color: var(--border-strong);
+}
+
+.composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.composer-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.composer-log:focus-visible {
+  outline: none;
+}
+
+.composer-log:empty::before {
+  content: "What you send stays here, with the time it went and a ✓ once the other station has it.";
+  color: var(--text-3);
+}
+
+.tx-line .when {
+  color: var(--text-3);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.tx-line .tx-text {
+  color: var(--accent);
+}
+
+.tx-line .tx-mark {
+  margin-left: 0.5em;
+  font-weight: 600;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tx-line[data-state="pending"] .tx-mark {
+  color: var(--text-3);
+}
+
+.tx-line[data-state="delivered"] .tx-mark {
+  color: var(--status-link);
+}
+
+.tx-line[data-state="failed"] .tx-mark,
+.tx-line[data-state="unknown"] .tx-mark {
+  color: var(--status-warning);
+}
+
+/* the line being typed, under a rule that keeps it apart from what already went */
+.composer-input {
+  position: relative;
+  flex: 0 0 auto;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.split .composer textarea {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 1.55em;
+  max-height: 6.2em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  resize: none;
+  overflow-y: auto;
+  font: inherit;
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.composer textarea:hover,
+.composer textarea:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+/* a blinking block where the typing starts, while the line waits empty; once it has focus
+ * the text caret, in the same colour, blinks there instead */
+.composer-input[data-empty="true"]:not(:focus-within)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(6px + 0.2em);
+  width: 0.6em;
+  height: 1.15em;
+  background: var(--accent);
+  animation: caret-blink 1.06s steps(1, end) infinite;
+  pointer-events: none;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-input[data-empty="true"]:not(:focus-within)::before {
+    animation: none;
+  }
 }
 
 /* the honest placeholder for payload that was not valid text */
