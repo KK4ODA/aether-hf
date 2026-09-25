@@ -1836,7 +1836,10 @@ impl LinkEngine {
         let Ok((header, body)) = decode_data(payload) else {
             return;
         };
-        if header.session != self.session {
+        // a frame of nobody's session — a beacon, a probe or its answer, a datagram — is never
+        // session data, whatever its session byte says: a datagram's holds its own number
+        // (ADR-0019), which can equal this session's
+        if header.kind.outside_sessions() || header.session != self.session {
             return;
         }
         record.payload = Some(payload.to_vec());
@@ -1854,9 +1857,12 @@ impl LinkEngine {
                 self.disarm(Timer::Ack);
                 return;
             }
-            // a beacon belongs to nobody's session; it is reported by the caller and
-            // never enters the sequence-numbered stream
-            DataKind::ConnectAck | DataKind::Beacon | DataKind::Probe | DataKind::ProbeAck => {
+            // an acceptance repeated: ours is on its way; nobody's frames never get this far
+            DataKind::ConnectAck
+            | DataKind::Beacon
+            | DataKind::Probe
+            | DataKind::ProbeAck
+            | DataKind::Datagram => {
                 return;
             }
             DataKind::Data => {}
@@ -2060,7 +2066,7 @@ impl LinkEngine {
             DataKind::ConnectAck => self.handle_connect_ack(header, &body, snr_db),
             DataKind::Probe => self.handle_probe(&body, snr_db),
             DataKind::ProbeAck => self.handle_probe_ack(&body, snr_db),
-            DataKind::Data | DataKind::Beacon => {}
+            DataKind::Data | DataKind::Beacon | DataKind::Datagram => {}
         }
     }
 

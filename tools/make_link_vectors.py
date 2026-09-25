@@ -21,7 +21,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
+from aether_model.link.datagram import body as datagram_body
+from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
+    DATA_HEADER,
     ConnectBody,
     ControlFlags,
     ControlFrame,
@@ -72,6 +75,42 @@ def data_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                         "encoded": encode_data(header, body, capacity).hex(),
                     }
                 )
+    return out
+
+
+def datagram_cases() -> list[dict]:  # type: ignore[type-arg]
+    """A KISS client's frame as DATAGRAM fragments (ADR-0019): the split, the headers and
+    the one-byte-short remainder that goes as two fragments."""
+    out = []
+    for capacity in (24, 26, 144):
+        full = capacity - DATA_HEADER
+        for size in (1, full - 2, full - 1, full, full + 1, 100, max_payload(capacity)):
+            payload = bytes((i * 131 + 7) % 256 for i in range(size))
+            number = (size * 13) % 255 + 1
+            out.append(
+                {
+                    "capacity": capacity,
+                    "number": number,
+                    "payload": payload.hex(),
+                    "fragments": [f.hex() for f in fragments(payload, number, capacity)],
+                }
+            )
+    return out
+
+
+def datagram_body_cases() -> list[dict]:  # type: ignore[type-arg]
+    """What a datagram carries: the sender's callsign, the KISS frame type and the frame."""
+    out = []
+    for source, frame_type, size in (("KK4ODA-1", 0, 20), ("W1AW", 1, 33), ("N0CALL/P", 2, 1)):
+        frame = bytes((i * 29 + 3) % 256 for i in range(size))
+        out.append(
+            {
+                "source": source,
+                "frame_type": frame_type,
+                "frame": frame.hex(),
+                "body": datagram_body(source, frame_type, frame).hex(),
+            }
+        )
     return out
 
 
@@ -235,6 +274,8 @@ def main() -> int:
         "data_frames": data_frame_cases(),
         "connect_bodies": connect_body_cases(),
         "probe_bodies": probe_body_cases(),
+        "datagrams": datagram_cases(),
+        "datagram_bodies": datagram_body_cases(),
         "control_frames": control_frame_cases(),
         "rate_traces": rate_trace_cases(),
     }
