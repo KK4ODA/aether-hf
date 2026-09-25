@@ -625,6 +625,28 @@ def test_a_probe_is_not_answered_during_a_session_or_in_another_bandwidth(
         a.probe("KK4XYZ")
 
 
+def test_a_datagram_numbered_like_the_session_is_not_session_data(timing: PhyTiming) -> None:
+    # a datagram's session byte holds its own number (ADR-0019); one that happens to equal
+    # the session's must not enter the session's stream
+    from aether_model.link.datagram import fragments
+    from aether_model.link.phy import Container
+    from aether_model.link.sim import SimFrame
+
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=29)
+    a.connect("KK4XYZ")
+    sim.run(until=40)
+    assert b.connected
+    received = b.stats.frames_received
+    for payload in fragments(bytes(60), b.session, timing.capacity(0)):
+        b.on_frame(SimFrame(Container.DATA, 0, 0, 12.0, 0.0, 1.0, payload, 0.0, floor=True), b.now)
+    assert b.stats.frames_received == received
+    message = bytes(range(200))
+    a.send(message)
+    sim.run(until=200)
+    assert sim.delivered(1) == message
+
+
 # ── calls, probes and their answers on the tone floor (ADR-0016) ─────────
 
 

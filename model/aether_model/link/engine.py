@@ -137,6 +137,12 @@ class LinkConfig:
     another is ignored — see ``docs/spec/air-interface.md`` §7.3."""
 
 
+OUTSIDE_SESSIONS = frozenset(
+    {DataKind.BEACON, DataKind.PROBE, DataKind.PROBE_ACK, DataKind.DATAGRAM}
+)
+"""DATA kinds sent outside any session: never taken into a session's stream."""
+
+
 class State(Enum):
     IDLE = "idle"
     CONNECTING = "connecting"
@@ -1170,7 +1176,10 @@ class LinkEngine:
         except ValueError:
             rec.payload = None
             return
-        if header.session != self.session:
+        # a frame of nobody's session — a beacon, a probe or its answer, a datagram — is never
+        # session data, whatever its session byte says: a datagram's holds its own number
+        # (ADR-0019), which can equal this session's
+        if header.kind in OUTSIDE_SESSIONS or header.session != self.session:
             rec.payload = None
             return
         self._note_peer_frame(rec.frame)
