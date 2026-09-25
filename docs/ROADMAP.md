@@ -836,3 +836,11 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     same beta): a token design system, the signal-analysis card that undocks into a window of
     its own, Speed as the Status tab's first chart, Keying and drive always in reach, the log
     as one entry a row with filters, and Help / About with the updater's status.
+14. **The KISS port** (done 2026-09-25, ADR-0019): programs set up for VARA HF's KISS port —
+    VarAC's broadcasts, APRS clients, packet programs — work with Aether unchanged: KISS over
+    TCP on 127.0.0.1:8100, VARA's frame types (0 AX.25, 1 eight-byte addresses, 2 data) told
+    apart from the standard parameters by length, ACKMODE, several clients, backpressure,
+    Winlink priority and `IGNOREKISSDCD` from the host interface. On the air each frame is a
+    **datagram** — a new DATA kind outside sessions, at the tone floor's tone-36 by default so
+    stations of both bandwidths hear it, through the regulatory gate. Owed: VarAC, Winlink
+    Express Packet, BPQ32 and the APRS programs on the bench, then the air.

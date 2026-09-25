@@ -1,8 +1,9 @@
 # Aether host interfaces — specification v0.1
 
 Status: **draft**, and implemented in `core/aetherd/src/host/`. This documents the
-compatibility interface that lets software people already run — Winlink Express, Pat, VarAC,
-BPQ32 — use an Aether station without being modified.
+compatibility interfaces that let software people already run — Winlink Express, Pat, VarAC,
+BPQ32, and APRS and packet programs over KISS (§8) — use an Aether station without being
+modified.
 
 Companion documents: `control-api.md` (the modem's own interface, which is the one to build
 new things against), `air-interface.md` (what goes over the air),
@@ -71,8 +72,8 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `ABORT` | Drops it immediately | Not orderly |
 | `LISTEN ON` / `LISTEN OFF` | Answer incoming calls, or not | |
 | `LISTEN CQ` | VarAC: hear only CQ frames | Recorded as listening; this station hears everything and answers calls to its own callsigns either way |
-| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | Recorded. The short frames it means are a different air interface this modem does not have; `OK` tells the host the modem heard, which is what keeps VarAC from calling it broken |
-| `IGNOREKISSDCD ON` / `OFF` | A KISS-port detail | Heard; there is no KISS port |
+| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | While this host is attached, frames from KISS programs are sent only after `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never. It says nothing about sessions, which run as they always do |
+| `IGNOREKISSDCD ON` / `OFF` | The KISS port's channel access | `ON`: frames from KISS programs go without waiting for a clear channel while this host is attached (§8.4). VarAC says it when its *Ignore DCD* box is ticked |
 | `BW2300`, `BW500` | Names the bandwidth | `OK` when it is the one the station runs (`[radio] bandwidth`; a host learns it from `capabilities`), `WRONG` otherwise: the bandwidth is the modem's configuration, not a session setting, and both stations of a session run the same one |
 | `BW2750` | — | **Refused.** Not a waveform this version has; see §5 |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
@@ -127,7 +128,7 @@ in the station's configuration (`[radio] bandwidth`, 2300 or 500; the panel's Se
 `CONNECTED` reports it.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `CHAT`, `LISTEN CQ`. The setting is remembered and reported back, and the
+`P2P SESSION`, `LISTEN CQ` (`CHAT` and `IGNOREKISSDCD` govern the KISS port, §8.4). The setting is remembered and reported back, and the
 modem answers `OK` because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
@@ -172,7 +173,115 @@ this table is what the compatibility claim rests on, and it should be read as ex
 
 ---
 
-## 8. Open items for v1.0
+## 8. The KISS port
+
+APRS and packet programs, and VarAC's broadcast messages, do not use sessions. They hand a
+modem whole frames over **KISS** — the TNC framing of Chepponis and Karn (1987) — and expect
+each on the air as it is, with no acknowledgement; they do their own repeating. VARA HF has
+a KISS port beside its command and data ports, and Aether has one that answers the same way
+(`core/aetherd/src/kiss/`, ADR-0019). It carries frames as **datagrams**: the `DATAGRAM` DATA
+kind of `air-interface.md`, sent outside sessions and handed to the KISS programs of every
+station that decodes them. Like the adapter above it is a client of the control API
+(`datagram.send`, the `datagram` and `datagram-sent` events, `control-api.md` §4.11), and it
+is **off by default** (`[kiss] enabled = false`): it lets other software make this station
+transmit.
+
+### 8.1 Transport
+
+| | |
+|---|---|
+| Port | TCP, default `127.0.0.1:8100` — VARA HF's KISS port, so a program set up for VARA needs no change |
+| Framing | KISS: `FEND` (0xC0) … `FEND`, `FESC` (0xDB) `TFEND` (0xDC) for a 0xC0 in the frame and `FESC` `TFESC` (0xDD) for a 0xDB; the type byte after `FEND` is escaped too |
+| Frames | Reassembled across TCP reads and split out of one; up to 2 048 bytes a frame, type byte included (the KISS paper asks for at least 1 024) |
+| Clients | Several at once (`[kiss] max_clients`, 4; VARA 4.8 takes several). A client past the limit is closed at once, with a log line |
+| Received frames | To every client, with the type they came with, at their exact length |
+| Backpressure | Sixteen datagrams wait at most (`control-api.md` §4.11); past that the port stops reading the client until there is room, and TCP holds the rest — nothing is dropped for being early |
+
+A malformed frame — a `FESC` followed by anything but `TFEND`/`TFESC`, an escape the frame
+ended in, a frame over the limit — is dropped and counted (`status.kiss.malformed`), and the
+decoder carries on at the next `FEND`. Empty frames (`FEND FEND`, the usual idle fill) are
+nothing.
+
+### 8.2 The type byte
+
+Standard KISS gives the type byte's high nibble to the port and its low nibble to a command.
+VARA's KISS port reads the byte after `FEND` as a **frame type** instead (EA5HVK, *VARA KISS
+Interface*, 2024): 0 an AX.25 frame (the APRS programs), 1 an AX.25 frame whose address fields
+are eight bytes rather than seven (VarAC's broadcasts), 2 unformatted data. The two readings
+collide at 1 and 2 — TXDELAY and P — and both kinds of program connect to a port like this one,
+so the port tells them apart by length:
+
+| Byte | Data | Meaning here |
+|---|---|---|
+| `0x00` | a frame | Send it, type 0 |
+| `0x01` | exactly one byte | TXDELAY: accepted and ignored — the modem keys with its own lead |
+| `0x01` | anything else | Send it, type 1 (VarAC) |
+| `0x02` | exactly one byte | P: the client's p-persistence, `(P + 1) / 256` |
+| `0x02` | anything else | Send it, type 2 |
+| `0x03` | one byte | SLOTTIME: the client's slot, in 10 ms units |
+| `0x04`, `0x05` | one byte | TXTAIL, FULLDUPLEX: accepted and ignored — the modem holds the key with its own tail and is half duplex |
+| `0x06` | anything | SETHARDWARE: accepted and ignored |
+| `0x0C` | two bytes, then a frame | **ACKMODE** (the extension BPQ32, QtTermTCP and Winlink Express use to pace AX.25 on a slow modem): send the frame, type 0, and send the two bytes back as `FEND 0x0C id id FEND` once it has gone out — after the last burst that carries it has left the sound card. A frame that does not go out (refused by the rules, cut short, dropped with the port) is not acknowledged; the program's own timers take over |
+| `0xFF` | — | RETURN: accepted and ignored; a TCP port has no KISS mode to leave |
+| port ≠ 0 | — | Refused and logged: this modem has one port |
+
+A one-byte type-2 frame would be read as P; that is the price of serving both kinds of program
+on one port, and no program known sends one. Received frames go to the programs as
+`FEND type frame FEND` — the type they were sent with — so VarAC gets its type-1 frames back as
+type 1, and an APRS program gets `0x00`.
+
+### 8.3 On the air
+
+Each frame is one **datagram**: its bytes and type, with the sending station's callsign in front
+— every datagram identifies its station in the emission itself, whatever the program's frame
+holds — split into DATA frames of kind `DATAGRAM` at the rung `[kiss] rung` names (1, tone-36, by
+default: the tone floor's frames are the same in both bandwidths, so a station of either decodes
+them, as VARA sends its KISS frames on its 500 Hz waveform for the same reason), in bursts that
+each fit the key limit. A datagram waits while a session is up — the session's turn-taking has
+no room for a stranger's burst — and then for a clear channel, and draws p-persistence each
+slot, as a KISS TNC does. It reaches the air through the regulatory gate like every other
+transmission (ADR-0018), as a transmission this station originates: an automatically controlled
+station sends datagrams only where it may originate. A fragment carries its frame's payload less
+the three-byte DATA header — 33 bytes at tone-36, one 5.4 s frame each — so a 60-byte APRS
+position (68 bytes with the callsign and type) is three fragments, 16 s on the air, and the
+longest frame a datagram carries at tone-36 is 520 bytes (sixteen fragments). A faster rung
+carries more, sooner, to fewer stations.
+
+### 8.4 Beside the VARA-compatible port
+
+VARA gives a program on its command port a say over its KISS port, and Aether does the same:
+
+* **Winlink priority.** While a program holds the command port (§2) without having said
+  `CHAT ON`, frames from KISS programs are **not sent** — they are dropped and counted, with one
+  log line saying why — so that APRS beacons cannot key the radio in the middle of a Winlink
+  station's listening. VarAC says `CHAT ON` on every start; Winlink Express does not. Received
+  frames still go to the KISS programs. `status.kiss.paused` says when this is in force.
+* **`IGNOREKISSDCD ON`**: frames from KISS programs go without waiting for a clear channel
+  while that program is attached (`[kiss] wait_for_clear` otherwise, true by default).
+* **`SN <dB>`** on the command port for every decoded frame, datagrams included: VarAC shows the
+  SNR of a broadcast it received from the `SN` that came with it.
+
+When the host disconnects, both are forgotten.
+
+### 8.5 Security
+
+The port asks no password: whoever reaches it can make the station transmit. It listens on
+loopback by default; any other address is logged as a warning when the port opens, reported as
+`status.kiss.exposed`, and said in the panel. The control API's token (`[control] token`) does
+not cover it — a KISS program has no way to present one — so an address other than loopback
+belongs only on a network the operator controls.
+
+### 8.6 Verification status
+
+| Client | Status |
+|---|---|
+| The test suite's own KISS clients | **Passing** — framing and escapes, partial and joined reads, malformed frames, the VARA type bytes and the standard parameters, ACKMODE, several clients, backpressure, Winlink priority, a client that vanishes, four clients writing a hundred frames each in ragged pieces at once; and `a_kiss_frame_crosses_from_one_daemons_kiss_port_to_the_others` (`tests/two_daemons.rs`): a frame written to one daemon's KISS port arrives, byte for byte and with its type, at a client of the other's, over `[sim]` |
+| `tools/kiss_test_client.py` | **Passing on the bench** (2026-09-25): two daemons over `[sim]`, an AX.25 UI frame from one KISS port to the other |
+| VarAC, Winlink Express Packet, BPQ32, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | Not yet verified; `docs/user/kiss.md` says how each is set up |
+
+---
+
+## 9. Open items for v1.0
 
 * Pat and Winlink Express on the air (the bench is done for both; `docs/user/field-test.md`),
   then BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the matrix, and VarAC waits on the
