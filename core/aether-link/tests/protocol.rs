@@ -1010,6 +1010,33 @@ fn a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it() {
 }
 
 #[test]
+fn a_station_that_only_received_learns_how_it_was_heard() {
+    // ADR-0021: a station says how it hears the other in its acknowledgements, and the one
+    // that only receives is never acknowledged — ND1J called and sent, and KK4ODA-1's history
+    // could not say how it was heard. Every control frame now carries it, and the disconnect
+    // brings it to the station that only received; kept, once the session has ended, for the
+    // account written after it
+    let t = timing(false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let mut sim = TwoStationSim::new(a, b, 15.0, 9);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(&[0x5A; 400]);
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert_eq!(
+        sim.engine(1).peer_snr_db(),
+        None,
+        "the session's own report goes with it"
+    );
+    let heard = sim
+        .engine(1)
+        .ended_peer_snr_db()
+        .expect("the disconnect said how it heard this station");
+    assert!((heard - 15.0).abs() < 3.0, "{heard}");
+}
+
+#[test]
 fn the_tests_ladder_does_not_teach_the_receiver_a_margin() {
     // ADR-0020: a session settles, the sender pins the fastest rung for a while — far past
     // the path, every frame failing until it is re-encoded — and unpins; the receiving

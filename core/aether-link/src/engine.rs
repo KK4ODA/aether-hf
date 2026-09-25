@@ -376,9 +376,17 @@ pub struct LinkEngine {
     bursts_since_turn: usize,
     peer_request: PeerRequest,
     recommended: usize,
-    /// The SNR the peer measured on this station's last burst, carried in its ACK:
-    /// the one number an operator cannot get from their own receiver.
+    /// The SNR the peer measured on this station's last burst, carried in its ACK — or on
+    /// its last frame, carried in its other control frames (ADR-0021): the one number an
+    /// operator cannot get from their own receiver.
     peer_snr_db: Option<f64>,
+    /// `peer_snr_db` as the session that ended last left it: a disconnect is the frame that
+    /// carries it to a station that only received, and a session's account is written once
+    /// the session has ended (ADR-0021).
+    ended_peer_snr_db: Option<f64>,
+    /// The SNR of the last frame of this session decoded from the other station: what this
+    /// station's control frames other than acknowledgements say of how it hears it.
+    heard_peer_db: Option<f64>,
     turn_tries: usize,
     disc_requested: bool,
     disc_tries: usize,
@@ -485,6 +493,8 @@ impl LinkEngine {
             peer_request: PeerRequest::None,
             recommended,
             peer_snr_db: None,
+            ended_peer_snr_db: None,
+            heard_peer_db: None,
             turn_tries: 0,
             disc_requested: false,
             disc_tries: 0,
@@ -533,10 +543,18 @@ impl LinkEngine {
     }
 
     /// The SNR the peer last reported hearing this station at, in dB (3 kHz reference),
-    /// once an acknowledgement has carried one this session.
+    /// once an acknowledgement — or another control frame (ADR-0021) — has carried one this
+    /// session.
     #[must_use]
     pub fn peer_snr_db(&self) -> Option<f64> {
         self.peer_snr_db
+    }
+
+    /// [`peer_snr_db`](Self::peer_snr_db) as the session that ended last left it: what the
+    /// other station's disconnect said, for a station that only received (ADR-0021).
+    #[must_use]
+    pub fn ended_peer_snr_db(&self) -> Option<f64> {
+        self.ended_peer_snr_db
     }
 
     /// What the rate controller has measured of the other station's signal: the
@@ -1045,6 +1063,15 @@ impl LinkEngine {
         snr_db: Option<f64>,
         recommended_mode: u8,
     ) -> TxFrame {
+        // every control frame says how its sender hears the other station (ADR-0021): an
+        // acknowledgement says it of the burst it answers; a poll, a turn, a disconnect and
+        // its answer of the last frame heard — so a station that only received, and was
+        // never acknowledged, still learns how it was heard
+        let snr_db = if kind == ControlKind::Ack {
+            snr_db
+        } else {
+            snr_db.or(self.heard_peer_db)
+        };
         let frame = ControlFrame {
             kind,
             session: self.session,
@@ -1868,6 +1895,7 @@ impl LinkEngine {
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
         self.note_peer_data(record.mode);
+        self.heard_peer_db = Some(record.snr_db);
         self.arm(Timer::Link, self.link_timeout());
         self.stats.frames_received += 1;
 
@@ -2046,6 +2074,15 @@ impl LinkEngine {
             return;
         }
         self.peer_floor = frame.floor();
+        self.heard_peer_db = Some(frame.snr_db());
+        if control.kind != ControlKind::Ack
+            && let Some(heard) = control.snr_db
+        {
+            // how the other station hears this one, from a frame other than an
+            // acknowledgement (ADR-0021): a disconnect carries it to a station that only
+            // received
+            self.peer_snr_db = Some(heard);
+        }
         self.arm(Timer::Link, self.link_timeout());
         match control.kind {
             ControlKind::Disc => {
@@ -2238,6 +2275,7 @@ impl LinkEngine {
         self.peer_capabilities = request.caps;
         self.state = State::Connected;
         self.role = Role::Irs;
+        self.heard_peer_db = Some(snr_db);
         self.arm(Timer::Link, self.link_timeout());
         // the request is the first measurement of how the caller is heard: the
         // controller starts from it, and the acceptance carries it back so the caller's
@@ -2282,6 +2320,7 @@ impl LinkEngine {
         self.peer_capabilities = accept.caps;
         self.state = State::Connected;
         self.role = Role::Iss;
+        self.heard_peer_db = Some(snr_db);
         self.arm(Timer::Link, self.link_timeout());
         let detail = format!("{} (iss)", self.remote_call);
         self.actions.push(Action::Event {
@@ -2319,6 +2358,7 @@ impl LinkEngine {
         self.peer_request = PeerRequest::None;
         self.recommended = self.config.initial_mode;
         self.peer_snr_db = None;
+        self.heard_peer_db = None;
         self.turn_tries = 0;
         self.disc_tries = 0;
         self.disc_requested = false;
@@ -2341,6 +2381,7 @@ impl LinkEngine {
     }
 
     fn end_session(&mut self, reason: &str) {
+        self.ended_peer_snr_db = self.peer_snr_db;
         self.state = State::Idle;
         self.role = Role::None;
         self.reset_transfer_state();
