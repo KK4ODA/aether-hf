@@ -1477,8 +1477,9 @@ function renderSessions() {
       return mode && mode.name ? `rung ${value} (${mode.name} on the ${s.bandwidth_hz} Hz air)` : `rung ${value}`;
     };
     // A direction with no traffic has nothing to show, and says so: in a session the other
-    // station called and sent, this one only acknowledged — no rung out — and a station says
-    // how it hears the other only when it acknowledges what that one sent.
+    // station called and sent, this one only acknowledged — no rung out — and before beta.64
+    // a station said how it heard the other only when it acknowledged what that one sent
+    // (ADR-0021: now its disconnect says it too).
     const pair = (out, back) => {
       const span = document.createDocumentFragment();
       const first = document.createElement("span");
@@ -1505,7 +1506,7 @@ function renderSessions() {
       ),
       "num",
       s.heard_there_db == null
-        ? `${s.remote} did not say how it heard this station: a station says that in its acknowledgements of what the other sends${sentNothing ? ", and this station sent nothing" : ""}; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`
+        ? `${s.remote} did not say how it heard this station: a station says so when it acknowledges what the other sent${sentNothing ? " — this station sent nothing" : ""} — and, from beta.64, in its other control frames, its disconnect included; this session had none (a version before that, or a session that ended without one). Its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`
         : `${s.remote} last said it heard this station at ${db(s.heard_there_db)} dB; its last frame here was ${db(s.snr_db)} dB, the best ${db(s.best_snr_db)} dB`,
     );
     const ended = cell(s.end, "", s.recording ? `Recorded as ${s.recording}` : "Not recorded");
