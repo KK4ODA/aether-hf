@@ -24,6 +24,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod close;
 mod update;
 
 use std::{
@@ -41,7 +42,7 @@ use tauri::{
     Manager as _,
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
-use tauri_plugin_dialog::{DialogExt as _, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt as _;
 
 /// Where the daemon listens by default. The shell does not currently offer to change it;
@@ -51,8 +52,10 @@ const CONTROL: &str = "127.0.0.1:8515";
 /// How long to wait for a freshly started daemon to answer before giving up on it.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// How long to let the daemon finish releasing the radio before killing it.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long to let the daemon stop before killing it: time to end a session on the air
+/// first — a DISC and the identifier, twelve seconds at most (`WIND_DOWN` in `aetherd`) —
+/// and then release the radio.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The exit status with which the daemon asks to be started again (`RESTART_EXIT_CODE` in
 /// `aetherd`; `EX_TEMPFAIL`). Any other exit is a stop, or a failure.
@@ -71,6 +74,18 @@ const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 pub struct Daemon {
     child: Mutex<Option<Child>>,
     adopted: AtomicBool,
+    /// The operator has said to close although the modem was busy (or it was not): the
+    /// next close request of the main window goes through.
+    close_confirmed: AtomicBool,
+}
+
+impl Daemon {
+    /// Whether closing the window stops this daemon: one started here, or adopted. One
+    /// attached to — a gateway service, a checkout — runs on, and closing interrupts
+    /// nothing of it.
+    fn owned(&self) -> bool {
+        self.adopted.load(Ordering::SeqCst) || self.child.lock().is_ok_and(|slot| slot.is_some())
+    }
 }
 
 /// What the daemon needs to be started, kept so it can be started again.
@@ -117,6 +132,7 @@ fn main() {
         .manage(Daemon {
             child: Mutex::new(started),
             adopted: AtomicBool::new(adopted),
+            close_confirmed: AtomicBool::new(false),
         })
         .manage(StartupError(failure))
         .manage(launch)
@@ -164,10 +180,22 @@ fn main() {
         })
         .on_window_event(|window, event| {
             // the panel's window closing is the shell closing; the updater's is not
-            if let tauri::WindowEvent::Destroyed = event
-                && window.label() == "main"
-            {
-                stop_daemon(&window.state::<Daemon>());
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                // closing stops the modem: ask first when that interrupts something
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let daemon = window.state::<Daemon>();
+                    if daemon.close_confirmed.load(Ordering::SeqCst) || !daemon.owned() {
+                        return;
+                    }
+                    api.prevent_close();
+                    let window = window.clone();
+                    std::thread::spawn(move || confirm_close(&window));
+                }
+                tauri::WindowEvent::Destroyed => stop_daemon(&window.state::<Daemon>()),
+                _ => {}
             }
         })
         .run(context)
@@ -337,6 +365,43 @@ fn watch_daemon(app: tauri::AppHandle) {
             }
         })
         .ok();
+}
+
+/// Close the main window, asking first when that would interrupt a session, a Test, a
+/// call, a probe or a transmission — closing stops the modem (`close.rs`). Run off the
+/// event loop: the daemon is asked over loopback, which takes a moment.
+fn confirm_close(window: &tauri::Window) {
+    let close_now = |window: &tauri::Window| {
+        window
+            .state::<Daemon>()
+            .close_confirmed
+            .store(true, Ordering::SeqCst);
+        let _ = window.close();
+    };
+    // a daemon that does not answer has nothing on the air to protect
+    let interrupted = daemon_status()
+        .map(|status| close::interruptions(&status))
+        .unwrap_or_default();
+    if interrupted.is_empty() {
+        close_now(window);
+        return;
+    }
+    let target = window.clone();
+    window
+        .dialog()
+        .message(close::message(&interrupted))
+        .title("Close Aether HF?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Close anyway".to_owned(),
+            "Keep running".to_owned(),
+        ))
+        .parent(window)
+        .show(move |close| {
+            if close {
+                close_now(&target);
+            }
+        });
 }
 
 /// A daemon that stopped, or would not start again, explained on screen.
@@ -584,6 +649,12 @@ fn stop_stray_daemons(binary: &std::path::Path) {
 
 /// The executable the daemon on the control port runs from, if one answers and says.
 fn daemon_binary_on_port() -> Option<PathBuf> {
+    daemon_status()?["binary"].as_str().map(PathBuf::from)
+}
+
+/// The daemon's `status`, if one answers on the control port: `POST /v1/status` over
+/// loopback, which needs no token, hand-written like `ask_to_stop`.
+fn daemon_status() -> Option<serde_json::Value> {
     use std::io::{Read as _, Write as _};
     let address = CONTROL.parse().ok()?;
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(500)).ok()?;
@@ -600,8 +671,8 @@ fn daemon_binary_on_port() -> Option<PathBuf> {
     let mut response = String::new();
     let _ = stream.read_to_string(&mut response);
     let (_, body) = response.split_once("\r\n\r\n")?;
-    let reply: serde_json::Value = serde_json::from_str(body).ok()?;
-    reply["result"]["binary"].as_str().map(PathBuf::from)
+    let mut reply: serde_json::Value = serde_json::from_str(body).ok()?;
+    Some(reply["result"].take())
 }
 
 /// Whether two paths name one file, allowing for case and the `\\?\` prefix on Windows.
