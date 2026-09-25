@@ -140,6 +140,7 @@ function onEvent(frame) {
         markSession(data.remote || data.detail);
         showBanner("connected", `CONNECTED — ${data.remote || data.detail}`);
         chime("up");
+        focusComposer();
       } else if (data.name === "disconnected") {
         showBanner("ended", `SESSION ENDED — ${data.detail}`, 15000);
         chime("down");
@@ -151,6 +152,9 @@ function onEvent(frame) {
       break;
     case "heard":
       noteHeard(data);
+      break;
+    case "sent":
+      onSent(data);
       break;
     case "session":
       noteSession(data);
@@ -446,6 +450,7 @@ async function refreshStatus() {
   testRunning = Boolean(status.test);
   renderTestProgress(status.test ?? null);
   if (status.remote) lastRemote = status.remote;
+  reconcileSent(status);
   applyRecording(status.recording ?? null);
   applyFaults(status);
   applyRecordingsDir(status.recordings_dir ?? null);
@@ -3360,7 +3365,17 @@ function wire() {
   $("btn-clear-received").addEventListener("click", clearReceived);
   $("btn-copy-sent").addEventListener("click", copySent);
   $("btn-clear-sent").addEventListener("click", clearSent);
+  $("outgoing").addEventListener("input", fitComposer);
+  // a click anywhere in the Send box that is not a selection of what was sent puts the
+  // cursor on the typing line
+  $("composer").addEventListener("click", (event) => {
+    if (event.target === $("outgoing")) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && $("sent-log").contains(selection.anchorNode)) return;
+    $("outgoing").focus();
+  });
   loadSent();
+  fitComposer();
   $("btn-reset-counters").addEventListener("click", async () => {
     await act(() => call("counters.reset"), "counters reset");
   });
@@ -3676,18 +3691,43 @@ async function sendOutgoing() {
   }
   const message = /[\r\n]$/.test(text) ? text : `${text}\n`;
   const bytes = new TextEncoder().encode(message).length;
-  const ok = await act(() => call("send", { data: toBase64(message) }), `queued ${bytes} bytes`);
-  if (ok) {
-    box.value = "";
-    addSent({ at: Date.now(), to: lastRemote ?? "", text: message.replace(/\r?\n$/, ""), bytes });
+  // the modem follows the message under this reference and says, in a `sent` event, when
+  // the other station has all of it
+  const ref = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  // The line is taken at once and the message shown on its way: what is typed while the
+  // modem answers starts the next line. Cleared only after the answer, a quick typist's
+  // next words were sent glued to the last message.
+  box.value = "";
+  fitComposer();
+  const entry = {
+    ref,
+    at: Date.now(),
+    to: lastRemote ?? "",
+    text: message.replace(/\r?\n$/, ""),
+    bytes,
+    state: "pending",
+  };
+  addSent(entry);
+  const ok = await act(() => call("send", { data: toBase64(message), ref }), `queued ${bytes} bytes`);
+  if (!ok) {
+    // not taken: the text goes back on the line, ahead of anything typed since, and the
+    // message comes off the list
+    sentEntries = sentEntries.filter((e) => e !== entry);
+    saveSent();
+    renderSent();
+    box.value = text + box.value;
+    fitComposer();
   }
 }
 
-// ── the sent text ────────────────────────────────────────────────────
-// What this station sent stays in view with the time and the station it went to, apart
-// from what it received; it used to vanish from the box the moment it was queued. Kept in
-// this browser only (the last two hundred), as the received pane is: the daemon's log
-// records that text was sent and how much, never the text itself, and a clear here takes
+// ── the Send box ─────────────────────────────────────────────────────
+// What this station sends stays in the Send box, above the line being typed: each message
+// with the time it went, in the accent colour, and a mark for what became of it — … on its
+// way, ✓ once the other station has all of it (the modem's `sent` event, from the link's
+// acknowledgements in order), ✗ if the session ended first. It used to vanish from the box
+// the moment it was queued; the author asked for it to stay there, not in a box of its own
+// (2026-09-25). Kept in this browser (the last two hundred): the daemon's log records that
+// text was sent, delivered or not, and how much, never the text itself, and Clear takes
 // nothing back from the session or its recording.
 
 const SENT_KEY = "aether.sent";
@@ -3721,27 +3761,103 @@ function addSent(entry) {
   renderSent();
 }
 
+const SENT_MARK = { pending: "…", delivered: "✓", failed: "✗", unknown: "?" };
+
+function sentVerdict(entry) {
+  const to = entry.to || "the other station";
+  switch (entry.state) {
+    case "pending":
+      return `on its way — ${to} does not have all of it yet`;
+    case "delivered":
+      return `delivered: ${to} has all of it`;
+    case "failed":
+      return `not delivered: ${entry.reason || "the session ended first"}`;
+    default:
+      return "no word from the modem on this one: it restarted, or this window was closed when it was settled";
+  }
+}
+
 function renderSent() {
   const pane = $("sent-log");
   pane.replaceChildren(
     ...sentEntries.map((entry) => {
       const line = document.createElement("div");
-      line.className = "rx-line";
+      line.className = "tx-line";
+      // entries kept by beta.58 had no state: they were queued, and nothing more is known
+      const state = entry.state ?? "unknown";
+      line.dataset.state = state;
       const when = document.createElement("span");
       when.className = "when";
       when.textContent = `${new Date(entry.at).toLocaleTimeString()}  `;
-      const to = document.createElement("span");
-      to.className = "to";
-      to.textContent = entry.to ? `→ ${entry.to}  ` : "";
       const body = document.createElement("span");
-      body.className = "rx-text";
+      body.className = "tx-text";
       body.textContent = entry.text;
-      line.title = `${new Date(entry.at).toLocaleString()} · ${entry.bytes} bytes`;
-      line.append(when, to, body);
+      const mark = document.createElement("span");
+      mark.className = "tx-mark";
+      mark.textContent = SENT_MARK[state] ?? "";
+      mark.setAttribute("aria-label", sentVerdict({ ...entry, state }));
+      const to = entry.to ? ` to ${entry.to}` : "";
+      line.title = `Sent${to} at ${new Date(entry.at).toLocaleString()}, ${entry.bytes} bytes — ${sentVerdict({ ...entry, state })}`;
+      line.append(when, body, mark);
       return line;
     }),
   );
   pane.scrollTop = pane.scrollHeight;
+}
+
+/** The modem settled a message: the other station has all of it, or the session ended. */
+function onSent(data) {
+  const entry = sentEntries.find((e) => e.ref && e.ref === data.ref);
+  if (!entry) return;
+  entry.state = data.delivered ? "delivered" : "failed";
+  entry.reason = data.reason ?? null;
+  saveSent();
+  renderSent();
+}
+
+/**
+ * A `sent` event missed — the window was reloaded, or the modem restarted — is looked up in
+ * the status: a message the modem still follows stays on its way, one it settled lately
+ * takes that verdict, and one it has no word of is marked unknown. A message queued in the
+ * last few seconds is left alone: a status asked for before it was sent would not know it.
+ */
+function reconcileSent(status) {
+  const sent = status.sent;
+  if (!sent) return;
+  const pending = new Set(sent.pending ?? []);
+  const recent = new Map((sent.recent ?? []).map((d) => [d.ref, d]));
+  let changed = false;
+  for (const entry of sentEntries) {
+    if (entry.state !== "pending" || !entry.ref || Date.now() - entry.at < 5000) continue;
+    const settled = recent.get(entry.ref);
+    if (settled) {
+      entry.state = settled.delivered ? "delivered" : "failed";
+      entry.reason = settled.reason ?? null;
+      changed = true;
+    } else if (!pending.has(entry.ref)) {
+      entry.state = "unknown";
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSent();
+    renderSent();
+  }
+}
+
+/** The typing line grows with what is typed, a few lines at most, and says when it is empty. */
+function fitComposer() {
+  const box = $("outgoing");
+  box.style.height = "auto";
+  box.style.height = `${box.scrollHeight}px`;
+  $("composer-input").dataset.empty = String(box.value === "");
+}
+
+/** Put the cursor on the typing line when a session comes up and nothing else has it. */
+function focusComposer() {
+  const onSession = $("tab-session").getAttribute("aria-selected") === "true";
+  const free = !document.activeElement || document.activeElement === document.body;
+  if (onSession && free) $("outgoing").focus();
 }
 
 async function copySent() {
