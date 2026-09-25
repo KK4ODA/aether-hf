@@ -575,7 +575,7 @@ CONTROL container:
 | 1 | session id |
 | 2 | base sequence number — the next one the receiver needs |
 | 3–4 | bitmap: bit *i* set ⇔ `base + i` received |
-| 5 | measured SNR, signed dB, 3 kHz reference; 0x7F = unknown — in an acknowledgement, the mean over the burst's frames that decoded or that the receiver acquired with confidence, unknown when there was none (ADR-0020) |
+| 5 | measured SNR, signed dB, 3 kHz reference; 0x7F = unknown — in an acknowledgement, the mean over the burst's frames that decoded or that the receiver acquired with confidence, unknown when there was none (ADR-0020); in any other control frame, the SNR of the last frame of the session its sender decoded from the other station (ADR-0021) |
 | 6 | recommended mode (5 bits) \| counter (3 bits) |
 
 Kinds: `ACK`, `POLL`, `TURN`, `DISC`, `DISC_ACK`. The recommended mode is a rung of the
