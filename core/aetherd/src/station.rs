@@ -20,7 +20,12 @@
 //! occupancy, and letting it into the noise-floor estimate would blind the detector for
 //! several seconds afterwards.
 
+mod datagrams;
 mod fieldtest;
+pub use datagrams::{
+    DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
+    ReceivedDatagram,
+};
 pub use fieldtest::{Rung, Step, TestPlan, TestRun, Transfer};
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
@@ -230,6 +235,15 @@ enum Outgoing {
     /// The Morse identifier on its own: the end of a session whose last transmission did
     /// not carry one — the link timed out, or the peer closed it without a word.
     Identifier,
+    /// A burst of a KISS client's datagram (ADR-0019): frames outside any session, which
+    /// reached the queue through their own channel access (`feed_datagram`).
+    Datagram {
+        frames: Vec<aether_link::TxFrame>,
+        /// The client's reference, for the report of what became of it.
+        reference: Option<String>,
+        /// Whether it is the datagram's last burst.
+        last: bool,
+    },
     /// Audio to play as it is: a keying test, or a tune tone.
     Audio {
         samples: Vec<f32>,
@@ -801,6 +815,8 @@ pub struct Station<P: Ptt> {
     last_report: Option<(&'static str, String, f64)>,
     /// The last decision the gate made, and when.
     last_gate: Option<(f64, Decision)>,
+    /// KISS clients' datagrams: waiting, on the air, and heard (ADR-0019).
+    datagrams: datagrams::Datagrams,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -917,6 +933,7 @@ impl<P: Ptt> Station<P> {
             regulatory_reports: Vec::new(),
             last_report: None,
             last_gate: None,
+            datagrams: datagrams::Datagrams::new(seed),
             stats: StationStats::default(),
             config,
         }
@@ -1408,7 +1425,16 @@ impl<P: Ptt> Station<P> {
         let was_transmitting = self.transmitting;
         self.playback.clear();
         self.authorized = None;
-        self.pending.clear();
+        // a datagram on the air, or its burst waiting, is lost with the transmission
+        self.datagram_transmitted(true);
+        for dropped in std::mem::take(&mut self.pending) {
+            if let Outgoing::Datagram {
+                reference, last, ..
+            } = dropped
+            {
+                self.refuse_datagram(reference, last, "the transmitter failed");
+            }
+        }
         self.clock.flush_device = true;
         self.clock.cut_short = false;
         self.tx_capture = None;
@@ -2054,6 +2080,7 @@ impl<P: Ptt> Station<P> {
     /// The transmission is over — its queue drained and, by the card's clock, its last
     /// sample gone: release the key, tell the engine, close the capture of what was sent.
     fn finish_transmission(&mut self, now: f64) -> Result<(), PttError> {
+        let cut = self.clock.cut_short;
         self.clock.cut_short = false;
         self.transmitting = false;
         self.playing_test = false;
@@ -2081,6 +2108,7 @@ impl<P: Ptt> Station<P> {
             }
         }
         self.ptt.unkey(now)?;
+        self.datagram_transmitted(cut);
         // the queue drained now, and what the sound card still holds is the tail's
         // silence: the burst itself has already left
         self.engine.on_tx_done(now);
@@ -2277,7 +2305,14 @@ impl<P: Ptt> Station<P> {
                     }
                 }
                 DataKind::Data => report.from = ours(header.session),
+                DataKind::Datagram => report.kind = "datagram",
             }
+        }
+        // a piece of somebody's datagram: joined with the others, and named by the first
+        if report.kind == "datagram"
+            && let Some(piece) = payload
+        {
+            report.from = self.heard_datagram_piece(piece, report.snr_db, rung, now);
         }
         // the constellation, thinned evenly so a long frame costs a display no more
         // than a short one; a tone frame has none — one tone at a time, detected by energy
@@ -2535,8 +2570,26 @@ impl<P: Ptt> Station<P> {
             self.start_pending(now);
             return;
         }
-        let Some(next) = self.pending.front() else {
+        // a KISS client's datagram goes when nothing else is queued and no session is up
+        if self.pending.is_empty() {
+            self.feed_datagram(now);
+        }
+        if self.pending.is_empty() || self.held_for_busy(now) {
             return;
+        }
+        // the regulatory gate: every transmission, whatever it is, is judged before it is
+        // rendered, and keyed only with the leave the policy gives (ADR-0018)
+        if !self.gate(now) {
+            return;
+        }
+        self.render_next(now);
+    }
+
+    /// Whether the transmission at the head of the queue waits for a busy channel: a
+    /// transmission this station starts, when the operator asked to wait for a clear one.
+    fn held_for_busy(&mut self, now: f64) -> bool {
+        let Some(next) = self.pending.front() else {
+            return true;
         };
         // silence radiates nothing, so a keying test does not wait for the channel
         let radiates = !matches!(next, Outgoing::Audio { silent: true, .. });
@@ -2547,7 +2600,14 @@ impl<P: Ptt> Station<P> {
         // A connect answer never reaches here held: the station is Connected by then and
         // `channel_clear` lets a session's frames through.
         let responding = matches!(next, Outgoing::Frames(frames) if is_probe_answer(frames));
-        if radiates && !responding && self.config.wait_for_clear && !self.channel_clear(now) {
+        // a datagram has had its own channel access already: the client's DCD and persistence
+        let own_access = matches!(next, Outgoing::Datagram { .. });
+        if radiates
+            && !responding
+            && !own_access
+            && self.config.wait_for_clear
+            && !self.channel_clear(now)
+        {
             self.stats.deferred_for_busy += 1;
             // the engine's timers move with the burst, or a retry fires against a burst
             // that has not left yet and the two go out back to back when the channel clears
@@ -2555,20 +2615,30 @@ impl<P: Ptt> Station<P> {
                 self.engine.on_tx_delayed(now - since);
             }
             self.held_since = Some(now);
-            return;
+            return true;
         }
         self.held_since = None;
-        // the regulatory gate: every transmission, whatever it is, is judged before it is
-        // rendered, and keyed only with the leave the policy gives (ADR-0018)
-        if !self.gate(now) {
-            return;
-        }
+        false
+    }
+
+    /// Take the transmission at the head of the queue — judged and allowed — and render it.
+    fn render_next(&mut self, now: f64) {
         let Some(outgoing) = self.pending.pop_front() else {
             return;
         };
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
         let frames = match outgoing {
             Outgoing::Frames(frames) | Outgoing::Drive(frames) => frames,
+            Outgoing::Datagram {
+                frames,
+                reference,
+                last,
+            } => {
+                if last {
+                    self.datagrams.on_air = Some(datagrams::OnAir { reference });
+                }
+                frames
+            }
             // handled above, before anything is popped
             Outgoing::Pause { .. } => return,
             Outgoing::Identifier => return self.render_identifier(now),
@@ -2982,7 +3052,9 @@ impl<P: Ptt> Station<P> {
             )
         })?;
         match outgoing {
-            Outgoing::Frames(frames) | Outgoing::Drive(frames) => {
+            Outgoing::Frames(frames)
+            | Outgoing::Drive(frames)
+            | Outgoing::Datagram { frames, .. } => {
                 let mut edges: Option<Edges> = None;
                 for frame in frames {
                     let e = match frame.container {
@@ -3053,6 +3125,9 @@ impl<P: Ptt> Station<P> {
                 Ok(DataKind::Beacon) => ("a beacon".to_owned(), Direction::Originate),
                 Ok(DataKind::Probe) => ("a probe".to_owned(), Direction::Originate),
                 Ok(DataKind::ProbeAck) => ("the answer to a probe".to_owned(), Direction::Respond),
+                Ok(DataKind::Datagram) => {
+                    ("a KISS client's datagram".to_owned(), Direction::Originate)
+                }
                 _ => {
                     let name = air.rungs.get(first.mode).map_or("", |r| r.name.as_str());
                     (
@@ -3110,6 +3185,7 @@ impl<P: Ptt> Station<P> {
     /// if it may; an abrupt disconnect frame that would itself be unlawful is never sent.
     fn refuse(&mut self, decision: Decision, now: f64) {
         let outgoing = self.pending.pop_front();
+        let why = decision.summary.clone();
         self.authorized = None;
         if let Some(recording) = &mut self.recording {
             let state = format!("{:?}", self.engine.state());
@@ -3127,6 +3203,9 @@ impl<P: Ptt> Station<P> {
                 self.pump();
             }
             Some(Outgoing::Identifier) => self.identifier.final_due = false,
+            Some(Outgoing::Datagram {
+                reference, last, ..
+            }) => self.refuse_datagram(reference, last, &why),
             _ => {}
         }
     }
@@ -4813,8 +4892,9 @@ mod tests {
 
     #[test]
     fn every_way_to_the_transmitter_passes_the_gate() {
-        // a call, a beacon, a probe, a tune tone, a keying test, drive bursts and a Morse
-        // identifier: with no profile chosen, not one of them keys the radio
+        // a call, a beacon, a probe, a tune tone, a keying test, drive bursts, a Morse
+        // identifier and a KISS client's datagram: with no profile chosen, not one of them
+        // keys the radio
         let mut station = lone_station(crate::regulatory::Settings {
             profile: String::new(),
             ..crate::regulatory::Settings::unchecked()
@@ -4833,6 +4913,10 @@ mod tests {
         run_alone(&mut station, 6.0, |_| false);
         station.pending.push_back(Outgoing::Identifier);
         run_alone(&mut station, 3.0, |_| false);
+        station
+            .send_datagram(datagram(vec![0x82; 20], None))
+            .expect("queued");
+        run_alone(&mut station, 6.0, |_| false);
         assert_eq!(station.stats.transmissions, 0, "nothing was keyed");
         let whats: Vec<String> = station
             .take_regulatory_reports()
@@ -4847,6 +4931,7 @@ mod tests {
             "a keying test",
             "a drive burst",
             "the Morse identifier",
+            "a KISS client's datagram",
         ] {
             assert!(
                 whats.iter().any(|w| w == what),
@@ -6087,5 +6172,143 @@ mod tests {
         station.connect("KK4XYZ").expect("idle");
         // pretend the handshake completed: the engine is what decides this in a real session
         assert!(!station.channel_clear(station.now()), "still only calling");
+    }
+
+    // ── datagrams for KISS clients (ADR-0019) ────────────────────────────────
+
+    fn datagram(frame: Vec<u8>, reference: Option<&str>) -> DatagramRequest {
+        DatagramRequest {
+            frame_type: 0,
+            frame,
+            reference: reference.map(str::to_owned),
+            rung: Some(1),
+            wait_for_clear: false,
+            persistence: 1.0,
+            slot_s: 0.1,
+        }
+    }
+
+    #[test]
+    fn a_kiss_frame_goes_out_as_bursts_that_fit_the_key() {
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        let queued = station
+            .send_datagram(datagram(vec![0x42; 300], Some("r1")))
+            .expect("queued");
+        // 300 bytes, the sender's callsign and the type, at tone-36's 33 a frame: ten
+        // fragments, and more than one keying — six tone frames would outrun the key
+        assert_eq!((queued.fragments, queued.rung), (10, 1));
+        assert!(queued.bursts >= 2);
+        run_alone(&mut station, 200.0, |s| {
+            s.datagram_status()["sent"] == 1 && !s.transmitting()
+        });
+        assert_eq!(station.stats.transmissions, queued.bursts);
+        assert_eq!(
+            station.take_datagram_reports(),
+            [DatagramReport {
+                reference: "r1".to_owned(),
+                sent: true,
+                reason: None
+            }]
+        );
+    }
+
+    #[test]
+    fn a_kiss_frame_waits_while_a_session_is_up() {
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        station.connect("KK4XYZ").expect("idle");
+        station
+            .send_datagram(datagram(vec![1; 20], None))
+            .expect("queued");
+        run_alone(&mut station, 12.0, |_| false);
+        assert_eq!(station.datagram_status()["queued"], 1, "held while calling");
+        station.abort();
+        run_alone(&mut station, 120.0, |s| {
+            s.datagram_status()["sent"] == 1 && !s.transmitting()
+        });
+        assert_eq!(
+            station.datagram_status()["sent"],
+            1,
+            "sent once the station is idle"
+        );
+    }
+
+    #[test]
+    fn a_kiss_frame_that_cannot_go_is_refused_at_once() {
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        assert!(matches!(
+            station.send_datagram(datagram(vec![0; 2000], None)),
+            Err(DatagramRefusal::Invalid(_))
+        ));
+        for _ in 0..DATAGRAM_QUEUE {
+            station
+                .send_datagram(datagram(vec![0; 10], None))
+                .expect("room");
+        }
+        assert_eq!(
+            station.send_datagram(datagram(vec![0; 10], None)),
+            Err(DatagramRefusal::QueueFull)
+        );
+        let mut answering = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                answer_only: true,
+                regulatory: crate::regulatory::Settings::unchecked(),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert!(matches!(
+            answering.send_datagram(datagram(vec![0; 10], None)),
+            Err(DatagramRefusal::NotAllowed(_))
+        ));
+    }
+
+    #[test]
+    fn a_kiss_frame_the_rules_refuse_is_reported_and_never_keyed() {
+        let mut station = lone_station(crate::regulatory::Settings {
+            profile: String::new(),
+            ..crate::regulatory::Settings::unchecked()
+        });
+        station
+            .send_datagram(datagram(vec![7; 100], Some("r2")))
+            .expect("queued");
+        run_alone(&mut station, 20.0, |_| false);
+        assert_eq!(station.stats.transmissions, 0);
+        let reports = station.take_datagram_reports();
+        assert_eq!(reports.len(), 1);
+        assert!(!reports[0].sent && reports[0].reference == "r2");
+        assert!(
+            station
+                .take_regulatory_reports()
+                .iter()
+                .any(|d| d.what == "a KISS client's datagram")
+        );
+    }
+
+    #[test]
+    fn a_datagram_heard_in_pieces_is_joined_and_names_its_sender() {
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        let frame = vec![0x5A; 70];
+        let carried = aether_link::datagram::body("KK4XYZ", 1, &frame).expect("body");
+        let pieces = aether_link::datagram::fragments(&carried, 7, 36).expect("fits");
+        assert!(pieces.len() > 1);
+        let named: Vec<Option<String>> = pieces
+            .iter()
+            .rev()
+            .map(|piece| station.heard_datagram_piece(piece, 3.5, 1, 10.0))
+            .collect();
+        // the first piece carries the callsign; whichever order they come in
+        assert_eq!(named.last().cloned().flatten().as_deref(), Some("KK4XYZ"));
+        assert_eq!(
+            station.take_received_datagrams(),
+            [ReceivedDatagram {
+                source: "KK4XYZ".to_owned(),
+                frame_type: 1,
+                frame,
+                snr_db: 3.5,
+                rung: 1,
+            }]
+        );
     }
 }

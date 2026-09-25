@@ -121,7 +121,11 @@ impl HostServer {
     /// # Errors
     /// If either address cannot be bound. The data port is the command port plus one, which
     /// is what every client of the published interface expects.
-    pub fn start(config: &HostConfig, handle: ControlHandle) -> Result<Self, HostError> {
+    pub fn start(
+        config: &HostConfig,
+        handle: ControlHandle,
+        flags: crate::kiss::HostFlags,
+    ) -> Result<Self, HostError> {
         let (command, data) = bind_pair(&config.bind)?;
         let command_address = command
             .local_addr()
@@ -133,7 +137,7 @@ impl HostServer {
         let running = Arc::new(AtomicBool::new(true));
         let pipe: Arc<Mutex<DataPipe>> = Arc::new(Mutex::new(DataPipe::default()));
         let busy = Arc::new(AtomicBool::new(false));
-        let connected = Arc::new(AtomicBool::new(false));
+        let connected = Arc::clone(&flags.attached);
 
         spawn_data_loop(data, Arc::clone(&pipe), Arc::clone(&running))?;
         spawn_command_loop(
@@ -142,7 +146,7 @@ impl HostServer {
             pipe,
             busy,
             Arc::clone(&running),
-            Arc::clone(&connected),
+            flags,
             config.trace,
         )?;
 
@@ -278,9 +282,10 @@ fn spawn_command_loop(
     pipe: Arc<Mutex<DataPipe>>,
     busy: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
-    taken: Arc<AtomicBool>,
+    flags: crate::kiss::HostFlags,
     trace: bool,
 ) -> Result<(), HostError> {
+    let taken = Arc::clone(&flags.attached);
     std::thread::Builder::new()
         .name("aetherd-host-cmd".to_owned())
         .spawn(move || {
@@ -301,12 +306,15 @@ fn spawn_command_loop(
                 let pipe = Arc::clone(&pipe);
                 let busy = Arc::clone(&busy);
                 let running = Arc::clone(&running);
-                let released = Arc::clone(&taken);
+                let flags = flags.clone();
                 let spawned = std::thread::Builder::new()
                     .name("aetherd-host-conn".to_owned())
                     .spawn(move || {
-                        serve_commands(&stream, &handle, &pipe, &busy, &running, trace);
-                        released.store(false, Ordering::SeqCst);
+                        serve_commands(&stream, &handle, &pipe, &busy, &running, &flags, trace);
+                        // what this host said about the KISS port goes with it
+                        flags.chat.store(false, Ordering::SeqCst);
+                        flags.ignore_dcd.store(false, Ordering::SeqCst);
+                        flags.attached.store(false, Ordering::SeqCst);
                     });
                 if spawned.is_err() {
                     taken.store(false, Ordering::SeqCst);
@@ -325,6 +333,7 @@ fn serve_commands(
     pipe: &Arc<Mutex<DataPipe>>,
     busy: &AtomicBool,
     running: &AtomicBool,
+    flags: &crate::kiss::HostFlags,
     trace: bool,
 ) {
     if stream.set_read_timeout(Some(POLL)).is_err() {
@@ -392,6 +401,11 @@ fn serve_commands(
                     eprintln!("host <- {}", text.trim());
                 }
                 let outcome = host.command(&text);
+                // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here
+                flags.chat.store(host.recorded.chat, Ordering::SeqCst);
+                flags
+                    .ignore_dcd
+                    .store(host.recorded.ignore_kiss_dcd, Ordering::SeqCst);
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
                         return;
@@ -811,6 +825,7 @@ mod tests {
                 trace: false,
             },
             handle,
+            crate::kiss::HostFlags::default(),
         )
         .expect("start");
         (server, worker, stop, seen)
@@ -923,6 +938,7 @@ mod tests {
                 trace: false,
             },
             handle,
+            crate::kiss::HostFlags::default(),
         )
         .expect("start");
         let mut client = Client::connect(&server);
@@ -967,6 +983,7 @@ mod tests {
                 trace: false,
             },
             handle,
+            crate::kiss::HostFlags::default(),
         )
         .expect("start");
         let _client = Client::connect(&server);

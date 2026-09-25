@@ -283,6 +283,25 @@ pub const RULES: &[Rule] = &[
         why: "a dial frequency is hertz",
         ..rule("regulatory.dial_hz")
     },
+    // ── the KISS port (ADR-0019) ────────────────────────────────────────────────────
+    Rule {
+        // where the port listens is this computer's business: a profile made elsewhere must
+        // not open a port that keys the radio to somebody else's network
+        scope: Scope::Machine,
+        ..rule("kiss.bind")
+    },
+    Rule {
+        min: Some(0.0),
+        max: Some(19.0),
+        why: "a rung of the ladder: 0 and 1 are the tone floor both bandwidths hear",
+        ..rule("kiss.rung")
+    },
+    Rule {
+        min: Some(1.0),
+        max: Some(16.0),
+        why: "from one program to sixteen at once",
+        ..rule("kiss.max_clients")
+    },
 ];
 
 /// The rule for a key: its own, the rule of the table it is in, or the default.
@@ -389,6 +408,14 @@ ui_dir = "ui"
 [host]
 enabled = false
 bind = "127.0.0.1:8300"
+trace = false
+
+[kiss]
+enabled = false
+bind = "127.0.0.1:8100"
+rung = 1
+wait_for_clear = true
+max_clients = 4
 trace = false
 
 [log]
@@ -826,6 +853,12 @@ mod tests {
         assert!(is_portable("audio.input"), "a device name travels, checked");
         assert!(is_portable("ptt.port"));
         assert!(is_portable("host.bind"));
+        assert!(is_portable("kiss.enabled"));
+        assert!(is_portable("kiss.rung"));
+        assert!(
+            !is_portable("kiss.bind"),
+            "a profile never opens this machine's KISS port to a network"
+        );
         assert!(is_portable("panel.waterfall.gain_db"));
         assert!(!is_portable("control.token"), "a secret never leaves");
         assert!(!is_portable("control.bind"), "this installation's port");
