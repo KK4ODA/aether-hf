@@ -242,6 +242,47 @@ pub const RULES: &[Rule] = &[
         nullable: true,
         ..rule("panel.interface")
     },
+    // ── the regulatory policy (ADR-0018) ───────────────────────────────────────────
+    Rule {
+        options: &["", "none", "us-fcc-part97"],
+        why: "those are the regulatory profiles this version has (empty: not chosen yet)",
+        ..rule("regulatory.profile")
+    },
+    Rule {
+        options: &["", "local", "remote", "automatic"],
+        why: "a station is controlled locally, remotely or automatically (§97.109)",
+        ..rule("regulatory.control")
+    },
+    Rule {
+        options: &["", "novice", "technician", "general", "advanced", "extra"],
+        why: "those are the license classes (§97.301)",
+        ..rule("regulatory.license_class")
+    },
+    Rule {
+        options: &["usb", "lsb"],
+        why: "the modem's audio goes out on the upper or the lower sideband",
+        ..rule("regulatory.sideband")
+    },
+    Rule {
+        min: Some(1.0),
+        max: Some(3.0),
+        why: "there are three ITU regions",
+        ..rule("regulatory.itu_region")
+    },
+    Rule {
+        min: Some(0.0),
+        max: Some(1000.0),
+        why: "the margin is hertz kept at a segment's edges, up to a kilohertz",
+        ..rule("regulatory.edge_margin_hz")
+    },
+    Rule {
+        // the dial of this radio, not of a station carried elsewhere
+        scope: Scope::Machine,
+        nullable: true,
+        min: Some(1.0),
+        why: "a dial frequency is hertz",
+        ..rule("regulatory.dial_hz")
+    },
 ];
 
 /// The rule for a key: its own, the rule of the table it is in, or the default.
@@ -379,6 +420,17 @@ floor_db = -90.0
 gain_db = 45.0
 speed = 8
 palette = "aether"
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "general"
+sideband = "usb"
+itu_region = 2
+edge_margin_hz = 50.0
+band_plan = true
+dial_hz = 14105000
+log_permitted = false
 "#;
 
 /// The template, parsed but not validated: it sets both `[sim]` addresses, which a running

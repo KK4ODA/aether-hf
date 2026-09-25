@@ -446,11 +446,17 @@ impl<P: Ptt> Station<P> {
         {
             return Err(format!("{call} is not one of this station's callsigns"));
         }
+        // the Test starts with a probe and a call: the rules must allow this station to
+        // start an exchange here, and say why not when they do not
+        self.check_originate().map_err(|d| d.summary)?;
+        // the ladder climbs only as far as the rules allow here (ADR-0018)
+        let ceiling = self.engine.ceiling().map_or(usize::MAX, |c| c + 1);
         let timing = self.engine.timing();
         let modes: Vec<usize> = (0..timing
             .data_capacity
             .len()
-            .min(self.config.link.max_mode + 1))
+            .min(self.config.link.max_mode + 1)
+            .min(ceiling))
             .collect();
         // a body every mode can carry, and one short of the length the container cannot
         let body_bytes = modes
