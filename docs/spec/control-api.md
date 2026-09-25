@@ -92,7 +92,7 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `transmitting`, `probing` (a probe is out and its answer awaited — the state stays `idle`), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, and `connected`: whether a host program holds the port right now), `regulatory` (where the station stands with the rules, §4.10), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
+| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `transmitting`, `probing` (a probe is out and its answer awaited — the state stays `idle`), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, `connected`: whether a host program holds the port right now, and `chat`: whether it said `CHAT ON`), `kiss` (the KISS port, §4.11), `datagrams` (`queued` of `limit`, `sent`, `heard`, `incomplete_dropped`: §4.11), `regulatory` (where the station stands with the rules, §4.10), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `config.schema` | — | the settings registry (§4.9): every setting with its `key`, `type`, `default`, `nullable`, `scope`, `live`, and its `min`/`max`/`options` and `why` where it has a bound; `live_keys`; the profile format's name and both schema numbers |
@@ -209,10 +209,12 @@ was on. Each change goes out as a `heard` event.
 |---|---|---|
 | `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
 | `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `excess_peak_db` (the largest level-over-floor the detector tested since the last reading — the decision is made forty times a second on a 50 ms quantity, so the excursions that cross the threshold are the ones a sampled reading almost never lands on), `shape_db` (the passband's highest spectral bin over its median bin, per 200 ms: flat noise reads about 6 dB, a narrowband signal — FT8, CW, PSK — 15 and up, and a receiver's AGC cannot compress it), `channel_busy`, `busy_reason` (`level` when the threshold last marked it, `shape` when the passband's spectrum did, `frame` when a decoded frame did, null if never — an acquired preamble alone never marks the channel busy: on a real band acquisition confidence overlaps between a phantom and a weak real frame, and only a decode is evidence), `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
-| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only a DATA frame carries — a CONTROL frame always reports 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`, `datagram`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only a DATA frame carries — a CONTROL frame always reports 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `sent` | a message sent with a `ref` was settled | `ref`, `bytes`, `delivered` (the other station has all of it), `reason` (how the session ended, when it ended first). `status.sent` has the references still waiting (`pending`) and the last 32 settled (`recent`), for a client that missed the event |
 | `session` | a session ended | the entry as `sessions.list` reports it |
+| `datagram` | a datagram was heard and joined (§4.11) | `source` (the sending station), `frame_type` (0 AX.25, 1 AX.25 with eight-byte addresses, 2 unformatted), `data` (base64: the frame, byte for byte), `bytes`, `snr_db` and `rung` (of its last piece) |
+| `datagram-sent` | a datagram sent with a `ref` has left, or will not | `ref`, `sent` (all of it went out), `reason` (why not: refused by the rules, cut short, dropped when the KISS port closed) |
 | `regulatory` | the regulatory gate refused a transmission — or, with `log_permitted`, allowed one an automatically controlled station made (§4.10) | the decision as §4.10 describes it, with `callsign` and `session` (the state it was judged in) |
 | `profile` | the settings, the dials or the profiles changed | what `profile.list` answers: `active`, `name`, `dirty`, `profiles` — so a panel's mark by the profile's name is never stale, whichever client made the change |
 | `data` | payload received | data (base64) |
@@ -376,6 +378,40 @@ The settings are `[regulatory]` in the configuration, all live: `profile` (`""`,
 `us-fcc-part97`), `control`, `license_class`, `sideband`, `itu_region`, `edge_margin_hz`,
 `band_plan`, `dial_hz` (for a radio that cannot report its dial; this machine's, not a profile's)
 and `log_permitted`.
+
+### 4.11 Datagrams and the KISS port
+
+A **datagram** is another program's frame — an AX.25 frame from an APRS or packet program —
+sent outside any session with no acknowledgement, and handed to the programs of every station
+that decodes it (ADR-0019; the frame format is in `air-interface.md`). The daemon's KISS port
+(`host-interfaces.md` §8) is a client of these methods, as the VARA-compatible adapter is of the
+session ones.
+
+| Method | Params | Result |
+|---|---|---|
+| `datagram.send` | `data` (base64: the frame), `frame_type?` (0, 1 or 2; 0), `ref?` (reported back by `datagram-sent`), `rung?` (the rung to send at; tone-36, rung 1), `wait_for_clear?` (true), `persistence?` (0.25) and `slot_s?` (0.1): the client's channel access | `accepted`, `queued` (datagrams waiting, this one included) of `limit` (16), `fragments`, `bursts` (keyings: each fits the key limit), `air_s` and `rung`. Refused `queue_full` (retryable) when sixteen are waiting — the KISS port stops reading its client until there is room — `bad_params` when the frame is empty, of an unknown type or longer than sixteen fragments at the rung, and `refused` on an answer-only station |
+| `kiss.status` | — | the KISS port as `status.kiss` has it |
+| `kiss.disconnect` | `client?` (an `id` from `kiss.status`) | `disconnected`: how many connections were closed — that one, or every one. The programs may connect again; refused `not_listening` when the port is not open |
+
+A datagram waits in a queue of its own and goes only while the station is in no session and has
+nothing else to send: the session's turn-taking has no room for a stranger's burst. Then it
+waits for a clear channel (when `wait_for_clear`) and draws p-persistence each slot, as a KISS
+TNC does, and reaches the air through the regulatory gate like every other transmission — as
+*originated* by this station (§4.10). A datagram whose rungs the rules do not allow is reported
+by `datagram-sent` with the decision's words.
+
+`status.kiss` is `enabled`, `bind`, `rung`, `wait_for_clear`, `ignore_dcd` (a host program said
+`IGNOREKISSDCD ON`), `listening`, `address`, `exposed` (the address lets other computers in),
+`error` (why it is not listening, when it should be), `paused` (why frames from programs are
+not being sent — a host program holds the VARA-compatible port without `CHAT ON`), `frames_in`,
+`frames_out`, `malformed`, and `clients`: one entry per connection with `id`, `peer`, `app` (a
+guess from what it sends, for display only), `since_ms`, `frames_in`, `frames_out` and
+`dropped`.
+
+The settings are `[kiss]`, all live: `enabled` (false), `bind` (`127.0.0.1:8100`; this machine's,
+never carried by a profile), `rung` (1),
+`wait_for_clear` (true), `max_clients` (4, 1–16) and `trace` (log each frame's command, type,
+length and fate — never its contents).
 
 ### 4.6 The diagnostic bundle
 

@@ -634,6 +634,31 @@ its head. The log is one entry a row with tags and filters (`log(message, level,
 badge and its reasoning panel (`reg-detail`), the Session tab's chip and *Dial is at* row, the
 Setup-needed banner, Setup step 1's rules fields, and the Diagnostics tab's Rules card.
 
+**The KISS port (ADR-0019, `docs/user/kiss.md`, `host-interfaces.md` §8).** Programs set up for
+VARA HF's KISS port work unchanged: `core/aetherd/src/kiss/` — `framing.rs` (FEND/FESC, partial
+and joined reads, 2 048-byte limit, malformed frames counted), `dialect.rs` (the type byte as
+VARA reads it: 0 AX.25, 1 AX.25 with eight-byte addresses — VarAC —, 2 data; TXDELAY and P are
+told from types 1 and 2 by carrying exactly one byte; P/SLOTTIME set the client's access,
+TXDELAY/TXTAIL/FULLDUPLEX/SETHARDWARE/RETURN are ignored; ACKMODE `0x0C` honoured; port ≠ 0
+refused), `server.rs` (a control-API client like the host adapter: `datagram.send`, the
+`datagram`/`datagram-sent` events; several clients; `queue_full` → stop reading the socket,
+retry every 250 ms; ACKMODE acks from `datagram-sent`). `HostFlags` (attached, `CHAT ON`,
+`IGNOREKISSDCD ON`) are shared with the host server: a host without `CHAT ON` holds KISS frames
+back — VARA's Winlink priority. On the air a frame is a **datagram** (model first:
+`aether_model/link/datagram.py`, `DataKind.DATAGRAM = 6`; seq = index|last nibbles, session =
+datagram number 1–255; body = sender's callsign + type + frame; ≤ 16 fragments; reassembly
+120 s, keep 8); `OUTSIDE_SESSIONS` kinds are never session data (the engine's `_accept`, both
+suites). `station/datagrams.rs` queues 16, feeds one only when the queue is empty and the
+engine idle, applies the client's DCD and p-persistence (not the generic busy hold), bursts
+within `burst_limit_s`, judged by the gate as *originated*. `[kiss]` is live (`sync_kiss`
+restarts it in place; a port that would not bind is retried every 10 s): `enabled` (false),
+`bind` (`127.0.0.1:8100`; `Scope::Machine`, never in a profile), `rung` (1, tone-36: both
+bandwidths hear it), `wait_for_clear`,
+`max_clients` (4), `trace` (never contents). Panel: Setup step 5 *KISS programs*, the header's
+`apps-chip`, the Diagnostics *KISS* reading, "KISS frame" among the stations heard.
+`tools/kiss_test_client.py` (stdlib) drives any KISS port by hand; the bench pair's KISS ports are
+8110/8111. `two_daemons.rs` carries a frame from one daemon's KISS port to the other's client.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
