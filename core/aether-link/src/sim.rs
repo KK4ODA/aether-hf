@@ -161,8 +161,17 @@ impl Rng {
 
 #[derive(Debug, Clone)]
 enum EvKind {
-    Arrive { frame: TxFrame, t0: f64, t1: f64 },
-    Preamble { t0: f64, frame_s: f64 },
+    Arrive {
+        frame: TxFrame,
+        t0: f64,
+        t1: f64,
+        /// Cut by the sender's key watchdog: acquired, and undecodable.
+        cut: bool,
+    },
+    Preamble {
+        t0: f64,
+        frame_s: f64,
+    },
     TxDone,
 }
 
@@ -241,6 +250,8 @@ pub struct TwoStationSim {
     modes_sent: Vec<usize>,
     /// The most a tone-floor frame's SNR reads ([`with_floor_reading_cap`](Self::with_floor_reading_cap)).
     floor_reading_cap_db: Option<f64>,
+    /// The transmitter's key-time limit ([`with_key_limit`](Self::with_key_limit)).
+    key_limit_s: Option<f64>,
 }
 
 impl TwoStationSim {
@@ -260,6 +271,7 @@ impl TwoStationSim {
             modes_sent: Vec::new(),
             snr_schedule: None,
             floor_reading_cap_db: None,
+            key_limit_s: None,
         }
     }
 
@@ -291,6 +303,16 @@ impl TwoStationSim {
     #[must_use]
     pub fn with_floor_reading_cap(mut self, cap_db: f64) -> Self {
         self.floor_reading_cap_db = Some(cap_db);
+        self
+    }
+
+    /// The transmitter's key-time limit: the daemon's watchdog unkeys the radio when a
+    /// transmission reaches it. The frame on the air at that moment arrives cut — its
+    /// receiver acquires it and cannot decode it, which counts as a frame the channel lost
+    /// — and nothing after it is sent.
+    #[must_use]
+    pub fn with_key_limit(mut self, seconds: f64) -> Self {
+        self.key_limit_s = Some(seconds);
         self
     }
 
@@ -370,8 +392,13 @@ impl TwoStationSim {
         self.stations[who].busy.push((t, t + duration_s));
         let timing = self.stations[who].engine.timing().clone();
         let peer = 1 - who;
+        let key_up = self.key_limit_s.map_or(f64::INFINITY, |limit| t + limit);
         for frame in frames {
             let duration = timing.frame_s(&frame);
+            if t >= key_up - 1e-9 {
+                break; // the key is up: nothing more goes out
+            }
+            let cut = t + duration > key_up + 1e-9;
             let floor = match frame.container {
                 Container::Data => timing.is_floor(frame.mode),
                 Container::Control => frame.floor,
@@ -398,6 +425,7 @@ impl TwoStationSim {
                     frame,
                     t0: t,
                     t1: t + duration,
+                    cut,
                 },
             );
             t += duration;
@@ -413,7 +441,7 @@ impl TwoStationSim {
             .any(|&(a, b)| a < t1 - 1e-9 && t0 + 1e-9 < b)
     }
 
-    fn deliver(&mut self, rx: usize, frame: &TxFrame, t0: f64, t1: f64) {
+    fn deliver(&mut self, rx: usize, frame: &TxFrame, t0: f64, t1: f64, cut: bool) {
         if frame.container == Container::Data {
             self.modes_sent.push(frame.mode);
         }
@@ -454,7 +482,8 @@ impl TwoStationSim {
             t_start: t0 + self.prop_s,
             t_end: arrival,
             payload: frame.payload.clone(),
-            draw: self.rng.next_unit(),
+            // a frame cut by the sender's watchdog is acquired and past every probability
+            draw: if cut { 2.0 } else { self.rng.next_unit() },
             threshold,
             floor,
         };
@@ -512,7 +541,9 @@ impl TwoStationSim {
                     break;
                 }
                 match ev.kind {
-                    EvKind::Arrive { frame, t0, t1 } => self.deliver(ev.who, &frame, t0, t1),
+                    EvKind::Arrive { frame, t0, t1, cut } => {
+                        self.deliver(ev.who, &frame, t0, t1, cut);
+                    }
                     EvKind::Preamble { t0, frame_s } => self.announce(ev.who, t0, ev.t, frame_s),
                     EvKind::TxDone => {
                         self.stations[ev.who].engine.on_tx_done(next);

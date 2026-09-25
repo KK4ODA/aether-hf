@@ -46,6 +46,15 @@ use crate::{
 pub struct LinkConfig {
     /// Frames per burst (at most [`MAX_BURST`]). Longer bursts amortise the turnaround.
     pub burst_frames: usize,
+    /// The longest a burst may be on the air, seconds — the transmitter's key-time limit
+    /// less the keying's lead and tail and anything appended to a burst (a Morse
+    /// identifier). A burst carries at most as many frames as fit, one at least; unset,
+    /// the frame count alone decides. Six tone frames (ADR-0013) are 32 s, and the
+    /// daemon's 30 s key watchdog cut the last one of every full tone burst on the air: the
+    /// receiver acquired it and could not decode it, its rate controller counted that as the
+    /// channel's loss, and the link stepped down the tone floor, where every burst was full
+    /// again (ND1J, 2026-09-25; ADR-0017).
+    pub max_burst_s: Option<f64>,
     /// Consecutive unanswered bursts or polls before the link is declared dead.
     pub max_retries: usize,
     /// Connection attempts before giving up.
@@ -92,6 +101,7 @@ impl Default for LinkConfig {
     fn default() -> Self {
         Self {
             burst_frames: 6,
+            max_burst_s: None,
             max_retries: 8,
             connect_retries: 8,
             turn_retries: 3,
@@ -1070,13 +1080,35 @@ impl LinkEngine {
             .peer_data_frame_s()
             .max(self.timing.data_frame_s_for(self.burst_mode()));
         let floor = self.peer_floor || self.timing.is_floor(self.burst_mode());
-        let exchange = self.config.burst_frames as f64 * frame
+        let exchange = self.burst_capacity(frame) as f64 * frame
             + self.timing.control_frame_s_for(floor)
             + 2.0 * self.timing.turnaround_s
             + self.config.burst_gap_s;
         self.config
             .link_timeout_s
             .max(self.config.link_timeout_exchanges * exchange)
+    }
+
+    /// Frames of `frame_s` seconds one burst may carry: the configured count, and no more
+    /// than fit in [`LinkConfig::max_burst_s`] — one at least.
+    #[must_use]
+    pub fn burst_capacity(&self, frame_s: f64) -> usize {
+        let count = self.config.burst_frames.min(MAX_BURST);
+        match self.config.max_burst_s {
+            Some(limit) if frame_s > 0.0 => {
+                // truncation to whole frames is the point: a partial frame is a lost one
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let fit = (limit / frame_s + 1e-9).floor().max(1.0) as usize;
+                count.min(fit)
+            }
+            _ => count,
+        }
+    }
+
+    /// A new limit on a burst's air time, from the next burst on: the key-time limit is a
+    /// live setting of the station's.
+    pub fn set_max_burst_s(&mut self, seconds: Option<f64>) {
+        self.config.max_burst_s = seconds;
     }
 
     /// The longest DATA frame the peer may send next: the family of what we recommended
@@ -1393,12 +1425,17 @@ impl LinkEngine {
             .into_iter()
             .filter(|&s| self.timing.is_floor(self.mode_of(s)) == family)
             .collect();
-        seqs.truncate(self.config.burst_frames);
+        // every frame of a burst is one family, and so one length: as many as fit
+        let frame_s = self
+            .timing
+            .data_frame_s_for(seqs.first().map_or(mode, |&s| self.mode_of(s)));
+        let room = self.burst_capacity(frame_s);
+        seqs.truncate(room);
         let new_frames = family == self.timing.is_floor(mode);
         let capacity = data_capacity(self.timing.capacity(mode));
 
         while new_frames
-            && seqs.len() < self.config.burst_frames.min(MAX_BURST)
+            && seqs.len() < room
             && self.outstanding() < WINDOW
             && !self.tx_queue.is_empty()
         {
