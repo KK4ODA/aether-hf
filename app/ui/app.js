@@ -4108,6 +4108,7 @@ function wire() {
   }, 5000);
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   $("btn-contribute").addEventListener("click", contributeTestSession);
+  $("contribute-link").addEventListener("click", openContributeLink);
   $("wz-profile").addEventListener("change", () => {
     profileChosen = true;
     applyProfile();
@@ -4245,10 +4246,35 @@ async function contributeTestSession() {
     const url = contributeUrl(test.results, status, liveConfig?.operator ?? {});
     link.href = url;
     link.hidden = false;
-    await navigator.clipboard.writeText(url);
-    line.textContent = "A link to the pre-filled report is on the clipboard and beside the button: open it, attach the .json, and send. Thank you.";
+    try {
+      await navigator.clipboard.writeText(url);
+      line.textContent = "A link to the pre-filled report is on the clipboard and beside the button: open it, attach the .json, and send. Thank you.";
+    } catch {
+      line.textContent = "The pre-filled report is beside the button: open it, attach the .json, and send. Thank you.";
+    }
   } catch (error) {
     line.textContent = `Could not prepare the report: ${error.message ?? error}`;
+  }
+}
+
+// The report opens in the browser. Under the desktop shell a new-window link is the
+// opener's to open, and a shell that may not open it (before beta.62) did nothing at all
+// when it was clicked: this asks it, and says where the link is when it cannot.
+async function openContributeLink(event) {
+  const opener = window.__TAURI__?.opener;
+  if (!opener?.openUrl) return; // a browser opens it itself
+  event.preventDefault();
+  const url = $("contribute-link").href;
+  try {
+    await opener.openUrl(url);
+  } catch {
+    try {
+      await navigator.clipboard.writeText(url);
+      $("contribute-note").textContent =
+        "This version of the application cannot open the browser for you — the link is on the clipboard: paste it into your browser, attach the .json, and send. Thank you.";
+    } catch {
+      $("contribute-note").textContent = `Open this in your browser: ${url}`;
+    }
   }
 }
 
@@ -4332,20 +4358,50 @@ function applyLastSession(status) {
   if (lastSessionText) line.textContent = lastSessionText;
 }
 
+// Under the desktop shell the opener shows the folder: it may open the folder the shell
+// itself puts recordings in (its capability names that one, and only as a folder, so no
+// file in it can be launched from here), and it may always show a file in its folder — the
+// newest recording, or a folder of the operator's own choosing within its parent. Only a
+// plain browser, which can do neither, gets the path on the clipboard, and says so.
 async function openRecordingsFolder() {
   if (!recordingsDir) return;
-  // under the desktop shell the opener reveals it; a plain browser cannot, so the
-  // path is copied instead and the note says what to do with it
+  const note = $("record-note");
   const opener = window.__TAURI__?.opener;
   if (opener?.openPath) {
     try {
       await opener.openPath(recordingsDir);
+      note.textContent = "";
       return;
     } catch {
-      // fall through to copying the path
+      // a folder of the operator's own choosing: shown in its parent below
+    }
+  }
+  if (opener?.revealItemInDir) {
+    for (const item of [await newestRecording(), recordingsDir]) {
+      if (!item) continue;
+      try {
+        await opener.revealItemInDir(item);
+        note.textContent = "";
+        return;
+      } catch {
+        // gone since, or not there: try the next
+      }
     }
   }
   await copyRecordingsPath(true);
+}
+
+/// The newest recording's audio, from the session history: the file to show the folder at.
+async function newestRecording() {
+  try {
+    const { sessions = [] } = await call("sessions.list");
+    const name = sessions.find((s) => s.recording)?.recording;
+    if (!name) return null;
+    const separator = recordingsDir.includes("\\") ? "\\" : "/";
+    return `${recordingsDir.replace(/[\\/]+$/, "")}${separator}${name}.wav`;
+  } catch {
+    return null;
+  }
 }
 
 async function copyRecordingsPath(fallback = false) {

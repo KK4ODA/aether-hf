@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel-window",
-  "description": "The panel, served by the daemon at its control port and shown in the main window, and its signal-analysis card undocked into the signal window: they may size the window they live in (compact view), keep the card's window on top, open the recordings folder in the file manager, and talk to the shell through events alone — the About card's update status and check, the card's undocking. No command of the shell is reachable from them.",
+  "description": "The panel, served by the daemon at its control port and shown in the main window, and its signal-analysis card undocked into the signal window: they may size the window they live in (compact view), keep the card's window on top, open the recordings folder in the file manager (that folder alone: no file in it can be launched) or show a file in its folder, open web and mail links in the default browser and mail program, and talk to the shell through events alone — the About card's update status and check, the card's undocking. No command of the shell is reachable from them.",
   "windows": [
     "main",
     "signal"
@@ -21,7 +21,15 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:event:allow-emit",
-    "opener:allow-open-path",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$CONFIG/aether-hf/recordings" },
+        { "path": "$HOME/.config/aether-hf/recordings" }
+      ]
+    },
     "opener:allow-reveal-item-in-dir"
   ]
 }
