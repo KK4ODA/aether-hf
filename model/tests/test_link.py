@@ -542,6 +542,24 @@ def test_the_sender_learns_how_the_other_station_hears_it(timing: PhyTiming) -> 
     assert a.peer_snr_db is None
 
 
+def test_a_station_that_only_received_learns_how_it_was_heard(timing: PhyTiming) -> None:
+    """ADR-0021: ND1J called and sent, KK4ODA-1 only acknowledged, and its history could not
+    say how ND1J heard it — a station says that in its acknowledgements, and the one that only
+    receives is never acknowledged. Every control frame now carries how its sender hears the
+    other station, and the disconnect brings it to the station that only received; kept, once
+    the session has ended, for the account written after it."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=9)
+    a.connect("KK4XYZ")
+    a.send(bytes([0x5A]) * 400)
+    a.disconnect()
+    sim.run(until=300)
+    assert b.state is State.IDLE
+    assert b.peer_snr_db is None, "the session's own report goes with it"
+    assert b.ended_peer_snr_db is not None
+    assert abs(b.ended_peer_snr_db - 15.0) < 3.0
+
+
 def test_a_probe_is_answered_with_the_snr_it_arrived_at(timing: PhyTiming) -> None:
     # "can you hear me, and how well?" without a session: the probed station answers with
     # the SNR the probe arrived at, and the prober reports both directions of the path

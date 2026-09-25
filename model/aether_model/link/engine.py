@@ -308,9 +308,17 @@ class LinkEngine:
         self._peer_wants_tx = False
         self._peer_break = False
         self._recommended = self.cfg.initial_mode
-        # the SNR the peer measured on our last burst, carried in its ACK: the
-        # one number an operator cannot get from their own receiver
+        # the SNR the peer measured on our last burst, carried in its ACK — or on our last
+        # frame, carried in its other control frames (ADR-0021): the one number an operator
+        # cannot get from their own receiver
         self.peer_snr_db: float | None = None
+        self.ended_peer_snr_db: float | None = None
+        """:attr:`peer_snr_db` as the session that ended last left it: a disconnect is the
+        frame that carries it to a station that only received, and a session's account is
+        written once the session has ended (ADR-0021)."""
+        self._heard_peer_db: float | None = None
+        """The SNR of the last frame of this session decoded from the other station: what this
+        station's control frames other than acknowledgements say of how it hears it."""
         self._turn_tries = 0
         self._disc_requested = False
         self._disc_tries = 0
@@ -665,6 +673,12 @@ class LinkEngine:
         self.actions.append(Transmit(frames, dur))
 
     def _control(self, kind: ControlKind, **kw: object) -> TxFrame:
+        if kind is not ControlKind.ACK:
+            # every control frame says how its sender hears the other station (ADR-0021): an
+            # acknowledgement says it of the burst it answers; a poll, a turn, a disconnect
+            # and its answer of the last frame heard — so a station that only received, and
+            # was never acknowledged, still learns how it was heard
+            kw.setdefault("snr_db", self._heard_peer_db)
         payload = ControlFrame(kind, self.session, **kw).encode()  # type: ignore[arg-type]
         return TxFrame(Container.CONTROL, payload, floor=self._control_floor())
 
@@ -1198,6 +1212,7 @@ class LinkEngine:
             return
         self._note_peer_frame(rec.frame)
         self._last_peer_frame = self.now
+        self._heard_peer_db = rec.frame.snr_db
         self._arm("link", self._link_timeout())
         rec.seq = header.seq
         self.stats.frames_received += 1
@@ -1331,6 +1346,12 @@ class LinkEngine:
         ):
             return
         self._last_peer_frame = self.now
+        self._heard_peer_db = frame.snr_db
+        if ctl.kind is not ControlKind.ACK and ctl.snr_db is not None:
+            # how the other station hears this one, from a frame other than an
+            # acknowledgement (ADR-0021): a disconnect carries it to a station that only
+            # received
+            self.peer_snr_db = ctl.snr_db
         self._arm("link", self._link_timeout())
         if ctl.kind is ControlKind.DISC:
             self._transmit([self._control(ControlKind.DISC_ACK)])
@@ -1467,6 +1488,7 @@ class LinkEngine:
         self.role = Role.IRS
         self._confirmed = False
         self._last_peer_frame = self.now
+        self._heard_peer_db = snr_db
         self._arm("link", self._link_timeout())
         # the request is the first measurement of how the caller is heard: the
         # controller starts from it, and the acceptance carries it back so the caller's
@@ -1498,6 +1520,7 @@ class LinkEngine:
         self.role = Role.ISS
         self._confirmed = True
         self._last_peer_frame = self.now
+        self._heard_peer_db = snr_db
         self._arm("link", self._link_timeout())
         self.actions.append(Event("connected", f"{self.remote_call} (iss)"))
         # the acceptance says how the request was heard: the first burst starts at what
@@ -1541,6 +1564,7 @@ class LinkEngine:
         self._peer_wants_tx = self._peer_break = False
         self._recommended = self.cfg.initial_mode
         self.peer_snr_db = None
+        self._heard_peer_db = None
         self._turn_tries = self._disc_tries = 0
         self._disc_requested = False
         self._waiting_for = None
@@ -1561,6 +1585,7 @@ class LinkEngine:
             self._disarm(name)
 
     def _end_session(self, reason: str) -> None:
+        self.ended_peer_snr_db = self.peer_snr_db
         self.state = State.IDLE
         self.role = Role.NONE
         self._reset_transfer_state()
