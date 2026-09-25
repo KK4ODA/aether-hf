@@ -881,7 +881,11 @@ fn refused_by_rules(
         id,
         ApiError::new(
             "regulatory",
-            format!("Cannot {what}: {} {}", decision.summary, decision.detail),
+            format!(
+                "Cannot {what} — {}. {}",
+                decision.summary,
+                sentence(&decision.detail)
+            ),
             true,
         ),
     );
@@ -929,6 +933,14 @@ fn regulatory_profiles<P: Ptt>(station: &Station<P>) -> Value {
         .map(|(id, name)| json!({ "id": id, "name": name }))
         .collect();
     json!({ "profile": station.regulatory_profile(), "known": known })
+}
+
+/// A clause as a sentence of its own: its first letter in capitals.
+fn sentence(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// `regulatory.check`: what the rules would say about a transmission, with any of the
