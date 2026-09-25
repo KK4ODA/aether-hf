@@ -2,10 +2,12 @@
 //! recorded, so that every such contact leaves a sidecar the bench can replay and a
 //! ladder of frame error rates per mode on a real path.
 //!
-//! The sequence: a probe (both directions' SNR, ADR-0006); a session; a message and a file
-//! of incompressible bytes, timed; then the **mode ladder** — a short burst pinned at each
-//! mode from the floor up, its acknowledgement kept as a rung, until three rungs in a row
-//! decode fewer than half their frames — and an orderly disconnect. The other station
+//! The sequence: a probe (both directions' SNR, ADR-0006); a session; a message of
+//! incompressible bytes, timed; the **mode ladder** — a short burst pinned at each mode from
+//! the floor up, its acknowledgement kept as a rung, until three rungs in a row decode fewer
+//! than half their frames; a file, when the budget has room left; and an orderly
+//! disconnect. The ladder comes before the file: on a slow path the file used to take the
+//! whole budget, and three tests with ND1J (2026-09-25) never reached a rung. The other station
 //! needs nothing but to be listening: it answers the probe and the call and acknowledges
 //! what it decodes, as it would for any session. What the run learns goes into the
 //! recording's sidecar under `session.test`, with the operator's grid, rig, power and
@@ -228,15 +230,27 @@ const FILE_TARGET_S: f64 = 120.0;
 /// path heard below 0 dB, a kilobyte below 6 dB or when the probe went unanswered, the
 /// ceiling above that. The message is the first transfer and the one that measures the
 /// rate the file is sized from, so it is kept short where the rate will be low.
+///
+/// The SNR is the one the message travels at: how the other station hears this one, the
+/// probe's `heard_there_db` — or how this one hears it when the answer did not say. It
+/// was sized from `heard_here_db`, the other direction: ND1J at 100 W heard KK4ODA at
+/// −1 dB and was heard at +5, and a kilobyte took five minutes of a ten-minute budget.
 #[must_use]
-pub fn message_size_for(heard_here_db: Option<f64>, ceiling: usize) -> usize {
-    let earned = match heard_here_db {
+pub fn message_size_for(snr_db: Option<f64>, ceiling: usize) -> usize {
+    let earned = match snr_db {
         Some(snr) if snr < 0.0 => 512,
         Some(snr) if snr < 6.0 => 1024,
         Some(_) => usize::MAX,
         None => 1024,
     };
     ceiling.min(earned)
+}
+
+/// The SNR a message sent to the other station travels at, from the probe: how it hears
+/// this station, or — when its answer did not say — how this one hears it.
+#[must_use]
+pub fn message_snr(probe: Option<(Option<f64>, f64)>) -> Option<f64> {
+    probe.map(|(there, here)| there.unwrap_or(here))
 }
 
 /// The file the measured rate earns: about two minutes' worth, at least a kilobyte,
@@ -286,6 +300,10 @@ pub struct TestRun {
     ended_s: Option<f64>,
     message_size: usize,
     file_size: usize,
+    /// The engine's acknowledged-bytes count when the transfer now running began.
+    acked_at_step: usize,
+    /// The fastest rung that passed, once one has.
+    highest_passed: Option<usize>,
     /// What was shortened or skipped, and why, for the report.
     pub adjustments: Vec<String>,
 }
@@ -318,6 +336,8 @@ impl TestRun {
             ended_s: None,
             message_size: 0,
             file_size: 0,
+            acked_at_step: 0,
+            highest_passed: None,
             adjustments: Vec::new(),
         }
     }
@@ -372,6 +392,8 @@ impl TestRun {
             "message": self.message.map(Transfer::json),
             "file": self.file.map(Transfer::json),
             "ladder": self.rungs.iter().copied().map(Rung::json).collect::<Vec<_>>(),
+            "ladder_rungs": self.modes.len(),
+            "highest_passed": self.highest_passed,
             "budget_s": self.plan.budget_s,
             "adjustments": self.adjustments,
             "path": {
@@ -510,18 +532,69 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// A line for `status`: the step a running Test session is at, or nothing.
+    /// A running Test session's progress for `status`, or nothing: the step; for a
+    /// transfer the bytes acknowledged of the total; for the ladder the rung under test out
+    /// of all of them, the fastest that has passed and the failures in a row that stop it;
+    /// the rung the link is using now and how the other station hears it; and the time,
+    /// elapsed and at most left. No countdown: how long a step takes is the path's to say.
     #[must_use]
     pub fn test_brief(&self) -> Value {
-        match &self.test {
-            Some(run) if run.running() => json!({
-                "remote": run.plan.remote,
-                "step": run.step.name(),
-                "elapsed_s": round1(self.now() - run.started_s),
-                "rungs": run.rungs.len(),
-            }),
+        let Some(run) = self.test.as_ref().filter(|run| run.running()) else {
+            return Value::Null;
+        };
+        let now = self.now();
+        let air = self.air();
+        let ladder = air.ladder();
+        let name = |mode: usize| ladder.get(mode).map(aether_phy::modes::Rung::name);
+        let transfer = match run.step {
+            Step::Message | Step::File if run.entered => {
+                let total = if run.step == Step::Message {
+                    run.message_size
+                } else {
+                    run.file_size
+                };
+                let acked = self
+                    .engine
+                    .stats
+                    .bytes_acked
+                    .saturating_sub(run.acked_at_step)
+                    .min(total);
+                json!({ "bytes": total, "acked": acked })
+            }
             _ => Value::Null,
-        }
+        };
+        let testing = (run.step == Step::Ladder && run.ladder_next < run.modes.len())
+            .then(|| run.modes[run.ladder_next]);
+        let last = run.rungs.last().copied().map(Rung::json);
+        json!({
+            "remote": run.plan.remote,
+            "step": run.step.name(),
+            "elapsed_s": round1(now - run.started_s),
+            "budget_s": run.plan.budget_s,
+            "remaining_s": round1(run.remaining_s(now).max(0.0)),
+            "rungs": run.rungs.len(),
+            "transfer": transfer,
+            "ladder": {
+                "total": run.modes.len(),
+                "done": run.rungs.len(),
+                "testing": testing,
+                "testing_name": testing.and_then(name),
+                "frames": run.plan.rung_frames,
+                "highest_passed": run.highest_passed,
+                "highest_passed_name": run.highest_passed.and_then(name),
+                "failures_in_row": run.ladder_fails,
+                "failures_allowed": LADDER_FAILS,
+                "last": last,
+            },
+            "link": (self.engine.state() == State::Connected).then(|| {
+                let mode = self.engine.current_mode();
+                json!({
+                    "rung": mode,
+                    "rung_name": name(mode),
+                    "heard_there_db": self.engine.peer_snr_db().map(round1),
+                })
+            }),
+        })
     }
 
     /// Move a running Test session along: called once per audio block.
@@ -569,10 +642,13 @@ impl<P: Ptt> Station<P> {
                         None => self.note("test", "probe: no answer; calling anyway"),
                     }
                     run.message_size =
-                        message_size_for(run.probe.map(|(_, here)| here), run.plan.message_bytes);
+                        message_size_for(message_snr(run.probe), run.plan.message_bytes);
                     if run.message_size < run.plan.message_bytes {
                         let why = match run.probe {
-                            Some((_, here)) => format!("heard at {here:.0} dB"),
+                            Some((Some(there), _)) => {
+                                format!("{} hears us at {there:.0} dB", run.plan.remote)
+                            }
+                            Some((None, here)) => format!("heard at {here:.0} dB"),
                             None => "the probe went unanswered".to_owned(),
                         };
                         run.adjustments
@@ -599,14 +675,15 @@ impl<P: Ptt> Station<P> {
             }
             Step::Message | Step::File => {
                 let (bytes, salt, next) = if run.step == Step::Message {
-                    (run.message_size, 1, Step::File)
+                    (run.message_size, 1, Step::Ladder)
                 } else {
-                    (run.file_size, 2, Step::Ladder)
+                    (run.file_size, 2, Step::Disconnect)
                 };
                 if bytes == 0 {
                     run.enter(next, now);
                 } else if !run.entered {
                     let data = run.test_bytes(bytes, salt);
+                    run.acked_at_step = self.engine.stats.bytes_acked;
                     self.send(&data);
                     run.entered = true;
                 } else if self.engine.state() != State::Connected {
@@ -627,23 +704,6 @@ impl<P: Ptt> Station<P> {
                     );
                     if run.step == Step::Message {
                         run.message = Some(transfer);
-                        // the file is what the measured rate earns in about two minutes
-                        run.file_size = file_size_for(
-                            transfer.bps(),
-                            run.plan.file_bytes,
-                            run.remaining_s(now),
-                        );
-                        if run.file_size == 0 && run.plan.file_bytes > 0 {
-                            run.adjustments
-                                .push("file skipped: no time left".to_owned());
-                            self.note("test", "file skipped: no time left in the budget");
-                        } else if run.file_size < run.plan.file_bytes {
-                            run.adjustments.push(format!(
-                                "file {} bytes: {:.0} bit/s measured",
-                                run.file_size,
-                                transfer.bps()
-                            ));
-                        }
                     } else {
                         run.file = Some(transfer);
                     }
@@ -674,7 +734,21 @@ impl<P: Ptt> Station<P> {
                     if run.plan.ladder {
                         self.note("test", &format!("ladder: {} rungs, done", run.rungs.len()));
                     }
-                    run.enter(Step::Disconnect, now);
+                    // the file is what the message's rate earns in about two minutes, in the
+                    // time the ladder left
+                    let bps = run.message.map_or(0.0, |m| m.bps());
+                    run.file_size = file_size_for(bps, run.plan.file_bytes, run.remaining_s(now));
+                    if run.file_size == 0 && run.plan.file_bytes > 0 {
+                        run.adjustments
+                            .push("file skipped: no time left".to_owned());
+                        self.note("test", "file skipped: no time left in the budget");
+                    } else if run.file_size < run.plan.file_bytes {
+                        run.adjustments.push(format!(
+                            "file {} bytes: {bps:.0} bit/s measured",
+                            run.file_size
+                        ));
+                    }
+                    run.enter(Step::File, now);
                 } else if !run.entered {
                     let mode = run.modes[run.ladder_next];
                     let _ = self.engine.pin_mode(Some(mode), Some(run.body_bytes));
@@ -707,6 +781,8 @@ impl<P: Ptt> Station<P> {
                         run.ladder_fails = if rung.failed() {
                             run.ladder_fails + 1
                         } else {
+                            run.highest_passed =
+                                Some(run.highest_passed.map_or(rung.mode, |h| h.max(rung.mode)));
                             0
                         };
                         run.rungs.push(rung);
@@ -819,6 +895,15 @@ mod tests {
         assert_eq!(message_size_for(Some(-4.0), 2048), 512);
         assert_eq!(message_size_for(None, 2048), 1024);
         assert_eq!(message_size_for(Some(-4.0), 300), 300);
+        // the message travels to the other station: its reading of this one sizes it — ND1J
+        // heard KK4ODA at -1 dB and was heard at +5, and a kilobyte took five minutes
+        assert_eq!(message_snr(Some((Some(-1.0), 5.0))), Some(-1.0));
+        assert_eq!(
+            message_size_for(message_snr(Some((Some(-1.0), 5.0))), 2048),
+            512
+        );
+        assert_eq!(message_snr(Some((None, 5.0))), Some(5.0));
+        assert_eq!(message_snr(None), None);
         // two minutes' worth at the measured rate, within a kilobyte and the ceiling
         assert_eq!(file_size_for(1000.0, 16_384, 600.0), 14_848);
         assert_eq!(file_size_for(2000.0, 16_384, 600.0), 16_384);
@@ -847,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn a_test_session_runs_its_sequence_and_records_it() {
         let dir = std::env::temp_dir().join(format!("aether-test-session-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -867,7 +953,59 @@ mod tests {
             air.a.start_test(TestPlan::default()),
             Err("a test session is already running".to_owned())
         );
-        air.run(400.0, |a, _| !a.test_running());
+        // what the panel is shown, step by step: the ladder before the file (ND1J's three
+        // tests spent their budgets on the transfers and never reached a rung), and while
+        // it climbs, the rung under test out of all of them
+        let mut steps: Vec<String> = Vec::new();
+        let mut during_ladder = Value::Null;
+        let mut during_message = Value::Null;
+        air.run(400.0, |a, _| {
+            let brief = a.test_brief();
+            if let Some(step) = brief["step"].as_str()
+                && steps.last().is_none_or(|last| last != step)
+            {
+                steps.push(step.to_owned());
+            }
+            if brief["step"] == "ladder" && brief["ladder"]["testing"].as_u64() == Some(3) {
+                during_ladder = brief.clone();
+            }
+            if brief["step"] == "message" && !brief["transfer"].is_null() {
+                during_message = brief.clone();
+            }
+            !a.test_running()
+        });
+        assert_eq!(
+            steps,
+            [
+                "probe",
+                "connect",
+                "message",
+                "ladder",
+                "file",
+                "disconnect"
+            ],
+            "{steps:?}"
+        );
+        assert_eq!(during_ladder["ladder"]["total"], 20, "{during_ladder}");
+        assert_eq!(during_ladder["ladder"]["testing_name"], "tone50-75");
+        assert_eq!(during_ladder["ladder"]["done"], 3);
+        assert_eq!(during_ladder["ladder"]["highest_passed"], 2);
+        assert_eq!(during_ladder["ladder"]["failures_allowed"], 3);
+        assert!(
+            during_ladder["link"]["rung_name"].is_string(),
+            "{during_ladder}"
+        );
+        assert!(
+            during_ladder["remaining_s"]
+                .as_f64()
+                .is_some_and(|r| r > 0.0 && r < 600.0)
+        );
+        assert_eq!(during_message["transfer"]["bytes"], 300, "{during_message}");
+        assert!(
+            during_message["transfer"]["acked"]
+                .as_u64()
+                .is_some_and(|a| a <= 300)
+        );
         let status = air.a.test_status();
         let results = &status["results"];
         assert_eq!(results["outcome"], "complete", "{results}");
