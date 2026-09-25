@@ -1157,6 +1157,62 @@ fn a_strong_path_called_on_the_floor_climbs_from_its_first_ordinary_burst() {
     );
 }
 
+#[test]
+fn a_burst_fits_the_transmitters_key_time() {
+    // ADR-0017: six tone frames are 32 s, and the daemon's 30 s key watchdog cut the last one
+    // of every full tone burst on the air; the receiver acquired the cut frame and could not
+    // decode it, and the link stepped down the tone floor where every burst was cut again
+    let t = timing(false);
+    let tone = t.data_frame_s_for(0);
+    let ofdm = t.data_frame_s_for(t.floor_modes);
+    assert!(
+        6.0 * tone > 30.0 && 30.0 > 5.0 * tone,
+        "the case this exists for"
+    );
+    let capped = LinkEngine::new(
+        "W4ODA",
+        t.clone(),
+        LinkConfig {
+            max_burst_s: Some(29.0),
+            ..LinkConfig::default()
+        },
+        1,
+    );
+    assert_eq!(capped.burst_capacity(tone), 5);
+    assert_eq!(
+        capped.burst_capacity(ofdm),
+        6,
+        "a second a frame: six fit either way"
+    );
+    let session = |max_burst_s: Option<f64>| {
+        let config = LinkConfig {
+            max_burst_s,
+            ..LinkConfig::default()
+        };
+        let (mut a, b) = pair(&t, &config);
+        let message = vec![0u8; 2000];
+        a.connect("KK4XYZ").expect("idle");
+        a.send(&message);
+        a.disconnect();
+        // -4 dB: the fast tones' range, and a transmitter that unkeys at 30 s
+        let mut sim = TwoStationSim::new(a, b, -4.0, 3).with_key_limit(30.0);
+        let took = sim.run(4000.0, 3.0);
+        assert_eq!(sim.delivered(1), message.as_slice());
+        (took, sim.engine(0).stats.frames_resent)
+    };
+    let (cut_took, cut_resent) = session(None);
+    let (fit_took, fit_resent) = session(Some(29.0));
+    assert_eq!(
+        fit_resent, 0,
+        "a channel that carries the rung resends nothing"
+    );
+    assert!(
+        cut_resent >= 10,
+        "every full burst lost a frame: {cut_resent}"
+    );
+    assert!(fit_took < 0.5 * cut_took, "{fit_took} {cut_took}");
+}
+
 /// A frame handed straight to an engine: a payload that always decodes.
 struct Handed {
     payload: Vec<u8>,
