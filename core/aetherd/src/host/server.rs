@@ -421,7 +421,8 @@ fn serve_commands(
                         return;
                     }
                 }
-                match apply(&outcome.action, handle, &mut host, &mut writer, &say) {
+                let own = connected_to.is_some() || calling;
+                match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
                     Applied::Done => {}
                     // Armed as soon as the modem has taken the call. What the modem said
                     // before then — the `disconnected` of a call just aborted — was sent
@@ -434,10 +435,17 @@ fn serve_commands(
         }
 
         // ── payload the host wrote on the data port ───────────────────
-        let outbound = pipe
-            .lock()
-            .map(|mut pipe| std::mem::take(&mut pipe.to_radio))
-            .unwrap_or_default();
+        // What the program wrote goes into its own session: written with none up, it waits
+        // in the pipe for the next — never into a session the panel started, whose other end
+        // is not the program's correspondent (and the modem refused it before any session,
+        // which lost it).
+        let outbound = if connected_to.is_some() {
+            pipe.lock()
+                .map(|mut pipe| std::mem::take(&mut pipe.to_radio))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         if !outbound.is_empty() {
             let _ = handle.call(request("send", json!({ "data": to_base64(&outbound) })));
         }
@@ -451,7 +459,8 @@ fn serve_commands(
                         return;
                     }
                 }
-                "data" => {
+                // the program hears the payload of its own sessions only
+                "data" if connected_to.is_some() => {
                     if let Some(text) = event.data["data"].as_str() {
                         if let Some(bytes) = from_base64(text)
                             && let Ok(mut pipe) = pipe.lock()
@@ -536,7 +545,9 @@ fn serve_commands(
                             return;
                         }
                     }
-                    if let Some(queued) = event.data["queued_bytes"].as_u64() {
+                    if let Some(queued) = event.data["queued_bytes"].as_u64()
+                        && connected_to.is_some()
+                    {
                         let queued = queued as usize;
                         if queued != host.buffer {
                             host.buffer = queued;
@@ -550,8 +561,14 @@ fn serve_commands(
                     // DCD (VarAC with Ignore DCD off, which holds "busy" for ten seconds
                     // after each) would never find a moment to hand its data over. The
                     // modem does the turn-taking, so a session reads as a clear channel.
-                    let now_busy = connected_to.is_none()
-                        && event.data["channel_busy"].as_bool().unwrap_or(false);
+                    // A session the program did not start — the panel's — reads busy for
+                    // its whole length: the channel is taken, and a program that waits for a
+                    // clear one to beacon or call waits for the session to end rather than
+                    // finding the gaps between its frames.
+                    let others = connected_to.is_none() && !event.data["link"].is_null();
+                    let now_busy = others
+                        || (connected_to.is_none()
+                            && event.data["channel_busy"].as_bool().unwrap_or(false));
                     if now_busy != busy.swap(now_busy, Ordering::Relaxed)
                         && !say(&mut writer, &Notification::Busy(now_busy).line())
                     {
@@ -610,6 +627,14 @@ fn report_state(
             let mut words = detail.split_whitespace();
             let remote = words.next().unwrap_or("").to_owned();
             let called = words.next() == Some("(irs)");
+            // A session the panel started — a call, or a Test from the Session tab — is not
+            // this program's: it placed no call and none came to it. Told of one, VarAC opened
+            // it as its own, and its idle timer ended the operator's Test (ND1J, 2026-09-26).
+            // The program keeps keying the radio for it (PTT ON/OFF) and hears the channel
+            // busy, and nothing else.
+            if !called && !*calling {
+                return true;
+            }
             *connected_to = Some(remote.clone());
             // whatever the host was calling, what it hears now is a session
             *calling = false;
@@ -681,15 +706,21 @@ impl From<bool> for Applied {
     }
 }
 
-/// Carry out what a command asked for, through the modem's own control API.
+/// Carry out what a command asked for, through the modem's own control API. `own` is
+/// whether the program has a session or a call of its own going.
 fn apply(
     action: &HostAction,
+    own: bool,
     handle: &ControlHandle,
     host: &mut HostState,
     writer: &mut &TcpStream,
     say: &impl Fn(&mut &TcpStream, &str) -> bool,
 ) -> Applied {
     match action {
+        // `DISCONNECT` and `ABORT` end the program's own session or call, and nothing else: a
+        // session the panel started is not the program's to end — and a program that resets
+        // its modem with them on attaching would end whatever the operator had running
+        HostAction::Disconnect | HostAction::Abort if !own => Applied::Done,
         // VARA's BW commands set the modem's mode: the station moves between sessions and
         // this is OK once it runs what was asked — 2750 is 2300 here, a narrower signal being
         // inside what was asked — or WRONG when it could not move and runs something else
@@ -1300,8 +1331,30 @@ mod tests {
             "{methods:?}"
         );
 
-        // in a session it is the orderly close it always was
+        // in a session of its own it is the orderly close it always was (one the program did
+        // not start is not its to close: `a_session_the_panel_started_is_not_the_programs`)
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // the OK is said before the adapter hands the call over: the session comes up once
+        // the modem has taken it
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while *state.lock().expect("state") != "connecting" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the call never reached the modem"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         *state.lock().expect("state") = "connected";
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
+        );
+        assert!(
+            client
+                .expect(|l| l.starts_with("CONNECTED"))
+                .contains("KK4XYZ")
+        );
         client.send("DISCONNECT");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1359,7 +1412,15 @@ mod tests {
                     {
                         seen.push(data.to_owned());
                     }
+                    let connect = command.request.method == "connect";
                     let _ = command.reply.send(Response::ok(None, json!({})));
+                    if connect {
+                        // the call the program placed comes up
+                        control.publish(&Event::new(
+                            "state",
+                            json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
+                        ));
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -1375,9 +1436,20 @@ mod tests {
             crate::kiss::HostFlags::default(),
         )
         .expect("start");
-        let _client = Client::connect(&server);
+        let mut client = Client::connect(&server);
         let mut data = TcpStream::connect(server.data_address).expect("data port");
+        // written before a session of the program's own, it waits for one: the modem would
+        // refuse it now, and a session the panel starts is not where it belongs
         data.write_all(b"hello over the air").expect("write");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            seen.lock().expect("seen").is_empty(),
+            "sent with no session"
+        );
+        client.send("MYCALL W4ODA");
+        client.expect(|l| l == "OK");
+        client.send("CONNECT W4ODA KK4XYZ");
+        client.expect(|l| l == "OK");
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut got = Vec::new();
@@ -1646,6 +1718,70 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!attached() && !listening());
+    }
+
+    #[test]
+    fn a_session_the_panel_started_is_not_the_programs() {
+        // a Test or a call from the Session tab while VarAC is attached: VarAC keys the radio
+        // for it, and is told nothing else — no CONNECTED, none of its payload — so its idle
+        // timer cannot end it, and its DISCONNECT and ABORT leave it alone (ND1J, 2026-09-26)
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let mut data = TcpStream::connect(server.data_address).expect("data port");
+        data.set_read_timeout(Some(Duration::from_millis(400)))
+            .expect("timeout");
+        // the panel's session comes up, carries payload both ways, and the channel is keyed
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "ND1J (iss)", "callsign": "W4ODA"}),
+        );
+        modem.publish("data", json!({"data": to_base64(b"the panel's traffic")}));
+        modem.publish(
+            "metrics",
+            json!({"queued_bytes": 512, "channel_busy": false, "mode": 4,
+                   "link": {"remote": "ND1J", "seconds": 3.0}}),
+        );
+        modem.publish("ptt", json!({"on": true}));
+        // the channel is taken for the whole session, between the frames too: a program that
+        // waits for a clear channel to beacon waits for the session to end
+        assert_eq!(client.expect(|l| l.starts_with("BUSY")), "BUSY ON");
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
+        client.send("VERSION");
+        let next = client.expect(|l| {
+            l.starts_with("CONNECTED") || l.starts_with("VERSION") || l.starts_with("BUFFER 512")
+        });
+        assert!(next.starts_with("VERSION"), "the program was told: {next}");
+        let mut heard = [0u8; 64];
+        assert!(
+            std::io::Read::read(&mut data, &mut heard).is_err(),
+            "the panel's payload reached the program"
+        );
+        // what the program writes waits for a session of its own
+        data.write_all(b"not for this session").expect("write");
+        // and its DISCONNECT and ABORT end nothing of the panel's
+        for line in ["DISCONNECT", "ABORT"] {
+            client.send(line);
+            assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let methods = modem.methods();
+        for method in ["disconnect", "abort", "send"] {
+            assert!(
+                !methods.iter().any(|m| m == method),
+                "{method} reached the modem: {methods:?}"
+            );
+        }
+        // the panel's session ends: nothing to say to the program either, and the channel is
+        // the busy detector's again
+        modem.publish("state", ended("closed"));
+        assert!(!told_disconnected_before_version(&mut client));
+        modem.publish(
+            "metrics",
+            json!({"queued_bytes": 0, "channel_busy": false, "mode": 4, "link": null}),
+        );
+        assert_eq!(client.expect(|l| l.starts_with("BUSY")), "BUSY OFF");
     }
 
     #[test]

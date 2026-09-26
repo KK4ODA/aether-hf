@@ -106,6 +106,11 @@ Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune thr
 * **Answering calls.** With a program attached, Aether answers calls only once the program has
   said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does. The header says
   *host program · not answering* until then, and the log names every call left unanswered.
+* **Aether's own sessions.** A call or a Test session started from Aether's Session tab while a
+  program is attached is not the program's: the program keys the radio for it, when it owns the
+  radio, and sees the channel busy — and is told nothing else. Its idle timer cannot end the
+  session, its Disconnect leaves it alone, and what you type in the program waits for a session
+  of the program's own.
 
 ## Known limits
 
