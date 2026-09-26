@@ -406,6 +406,17 @@ impl TwoStationSim {
         &mut self.stations[who].engine
     }
 
+    /// Hand `data` to station `who` at `at`, as a host program does when its operator presses
+    /// Enter: the simulation runs up to `at` first, and what the engine makes of it goes out
+    /// from `at` — the chat bench's typed lines (ADR-0027).
+    pub fn send_at(&mut self, who: usize, data: &[u8], at: f64) {
+        self.run(at, f64::INFINITY);
+        self.t = self.t.max(at);
+        self.stations[who].engine.tick(at);
+        self.stations[who].engine.send(data);
+        self.pump(who, at);
+    }
+
     // ── scheduling ────────────────────────────────────────────────────
 
     fn push(&mut self, t: f64, who: usize, kind: EvKind) {
