@@ -41,3 +41,24 @@ the approximate number of commenters (and upvotes) behind each.
 6. **Public gateway registry** and beacon/CQ discovery frames are in scope.
 
 Everything else in the thread is already addressed by the roadmap as written.
+
+## Where each stands (2026-09-26, `v0.2.0-beta.68`)
+
+| # | State |
+|---|---|
+| 1 | The headless daemon for Linux x86-64 and ARM64, the systemd unit and the gateway kit ship with every release. Open: the public gateway registry and the approach to the Winlink Development Team, which waits for field data. |
+| 2 | The VARA-compatible host interface (Pat, Winlink Express and VarAC pass the bench) and a KISS port that answers as VARA's does; the frequency plan keeps clear of VARA and ARDOP. Open: the busy detector sees any signal by its level and a narrowband one by its shape, but does not recognise VARA or ARDOP as such. |
+| 3 | Installers for Windows, Linux and macOS; the panel's Setup finds the devices and ports and presets the common interfaces. Hamlib is not bundled: the daemon speaks Yaesu, Kenwood and Icom CAT itself and uses `rigctld` for the rest. |
+| 4 | The station panel, redesigned in betas .60–.68. |
+| 5 | A per-user NSIS installer with signed in-place updates; not yet Authenticode-signed, so SmartScreen asks. |
+| 6 | Linux `.deb` and AppImage, and the daemon alone for Linux x86-64 and ARM64, Windows and macOS. |
+| 7 | Every rung has a committed curve; the tone floor decodes at −19 dB SNR (3 kHz) on AWGN (`bench/README.md`). On-air measurements are being logged (`field/LOG.md`). |
+| 8 | Peak reduction (ADR-0004); *Set drive* sends real bursts so the drive is set against the peaks traffic presents; the last transmission's peak is shown. |
+| 9 | No speech; callsigns ride in the frames, and a Morse identifier is optional. |
+| 10 | The air interface is public (`docs/spec/air-interface.md`). |
+| 11 | The frequency plan, the busy detector on by default, and the regulatory gate that refuses what the rules do not allow at the dial the radio is on. |
+| 12 | Native CAT (the IC-7300's CI-V reply fixed in beta.56), `rigctld`, CM108 GPIO keying (untested on hardware). |
+| 13 | VarAC pings and connects at 500 Hz over the simulated channel; the air with a VarAC station remains. |
+| 14 | Beacons, once or on a timer, and a probe; the Stations tab lists everyone heard and counts their beacons. The registry is open (1). |
+| 15 | The panel is served by the daemon to any browser; a phone application is Phase 8, on the back burner. |
+| 16 | Betas since 2026-09-14, signed, updating in place. |

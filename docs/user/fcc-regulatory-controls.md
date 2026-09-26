@@ -119,7 +119,9 @@ General and Advanced privileges start 25 kHz into several of these (for example 
 it above 50.1 MHz. On 6 m §97.307(f)(5) authorizes 20 kHz and (f)(2) holds a non-phone emission to
 the width of a communications-quality phone emission of the same modulation type — a single-
 sideband voice channel, read as HF's 2.8 kHz — so the narrower decides; Aether's widest signal is
-2.52 kHz. §97.313(b)'s 1.5 kW is the only power limit there. The Diagnostics tab lists, for your class, the exact dial ranges where the
+2.52 kHz. §97.313(b)'s 1.5 kW is the only power limit there.
+
+The Diagnostics tab's **Rules** card lists, for your class, the exact dial ranges where the
 widest waveform and the tone floor fit, on your sideband and with your margin.
 
 ## Local and remote control
@@ -153,6 +155,21 @@ whether that reaches the 60 m segment too is not clear, so Aether reads it as ex
 Tests at the control point — the tune tone, drive bursts, the keying test — are judged as a
 locally controlled station's: somebody is at the radio when they are pressed.
 
+## Beacons and the Morse identifier
+
+* A **beacon** — one frame with your callsign, addressed to nobody, on the tone floor — is
+  judged like any other transmission. A **repeating** beacon (the Session tab's *Repeat* list,
+  or `beacon.every`) needs a control operator: Aether refuses one under automatic control,
+  because §97.203(d) lets a beacon be automatically controlled only on 28.20–28.30 MHz,
+  50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so never for Aether's data) and a few
+  segments above 6 m. An answer-only station sends no beacon at all.
+* The **Morse identifier** (`cw_id`, off by default: Aether's frames carry both callsigns, and
+  §97.119(b)(3) accepts a documented digital code) is judged as a CW emission at the dial it
+  goes out on. It is sent at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent
+  by an automatic device: a faster setting is held to 20, and Setup step 4 and the log say so.
+  A session's end is identified once, and a station waits out the other station's identifier
+  before it keys (ADR-0022).
+
 ## 60 m
 
 * **Channels** (centres 5332, 5348, 5373 and 5405 kHz): a data emission's carrier goes 1.5 kHz
@@ -170,6 +187,9 @@ Aether judges every burst, so a dial turned out of the segment, a sideband or co
 changed, stops the session at the next transmission: the refusal is logged with its reason, and
 Aether does **not** send a disconnect frame there — it would be as unlawful as the data. The other
 station times out. The link's ceiling is recomputed at once.
+
+The rules settings take effect when Setup is saved: a change made on the Setup tab and not saved
+is not in force, and the panel says so on every tab until it is saved or discarded.
 
 ## LEGAL, WARNING, TX BLOCKED
 

@@ -193,11 +193,18 @@ def story(s: dict) -> list:
             "Check them before you key up."
         ),
         p(
-            "Aether occupies <b>2.3 kHz</b> or <b>500 Hz</b>, whichever the station is set to. "
-            "That single number decides most of what follows, because it decides what fits "
-            "where. Aether's code is publicly documented, which is what 47 CFR 97.309(a)(4) "
-            "requires of a digital code used on the amateur bands; the specification lives at "
-            "docs/spec/air-interface.md in the project."
+            "Aether runs at <b>2.3 kHz</b> or <b>500 Hz</b>, whichever the station is set to; "
+            "measured by the rules' own 26 dB definition of bandwidth, the signals occupy up to "
+            "<b>2.52 kHz</b> and <b>0.71 kHz</b>. That number decides most of what follows, "
+            "because it decides what fits where. Aether's code is publicly documented, which is "
+            "what 47 CFR 97.309(a)(4) requires of a digital code used on the amateur bands; the "
+            "specification lives at docs/spec/air-interface.md in the project."
+        ),
+        p(
+            "Aether checks every transmission against these rules before it keys the radio - "
+            "the segment, your licence class, how the station is controlled - and refuses what "
+            "they do not allow. Tell it once, in Setup step 1. It is a safeguard against "
+            "mistakes, not a substitute for the control operator, who is still you."
         ),
         p(
             "Aether is new on crowded bands, so <b>Aether moves</b> - not the established mode "
@@ -227,19 +234,23 @@ def story(s: dict) -> list:
             "legal:"
         ),
         p(
-            "<b>Inside the 97.221(b) segments</b> (the third table below), the station may do "
-            "anything: call, beacon, start a session, at 2.3 kHz or 500 Hz."
+            "<b>Inside the 97.221(b) segments</b> (the third table below), and anywhere on "
+            "6 m, the station may call, answer and start a session, at 2.3 kHz or 500 Hz. It "
+            "will not beacon on a timer: 97.203(d) allows an automatically controlled beacon "
+            "only in a few segments."
         ),
         p(
-            "<b>Outside them, at 500 Hz or less</b>, 97.221(c) lets the station transmit only "
-            "<b>in response</b> to a station under local or remote control. It may answer; it "
-            "may never call, beacon or start a session. Aether has a setting for exactly this: "
-            "<b>answer only</b> in Setup, step 4 (<font face='Courier'>[radio] answer_only = "
-            "true</font>), under which it takes calls and refuses to make one."
+            "<b>Outside them</b>, 97.221(c) lets a station transmit only <b>in response</b> to "
+            "a station under local or remote control, and only at 500 Hz or less. Aether's "
+            "signals all measure wider than that - even the 500 Hz setting's - so Aether does "
+            "not use this allowance: under automatic control it transmits inside the (b) "
+            "segments and on 6 m, and nowhere else. <b>Answer only</b> in Setup, step 4 "
+            "(<font face='Courier'>[radio] answer_only = true</font>) keeps an unattended "
+            "station from calling, beaconing or probing on its own."
         ),
         p(
-            "At 2.3 kHz there is no such allowance. An unattended 2.3 kHz station belongs in "
-            "the 97.221(b) segments and nowhere else.",
+            "Only you know how the station is controlled: set <b>Control</b> in Setup, step 1, "
+            "to Automatic whenever nobody is at the radio. The modem never works it out.",
             "note",
         ),
     ]
@@ -296,6 +307,12 @@ def story(s: dict) -> list:
                 ["15 m", "21.000 - 21.200", "21.025 - 21.200", ""],
                 ["12 m", "24.890 - 24.930", "24.890 - 24.930", ""],
                 ["10 m", "28.000 - 28.300", "28.000 - 28.300", "Technicians too, at 200 W."],
+                [
+                    "6 m",
+                    "50.100 - 54.000",
+                    "50.100 - 54.000",
+                    "Technicians too, all of it. 50.0 - 50.1 is CW only.",
+                ],
             ],
             [0.58 * inch, 1.12 * inch, 1.42 * inch, width - 3.12 * inch],
             s,
@@ -315,22 +332,22 @@ def story(s: dict) -> list:
                 ["Bandwidth", "Sits above the dial", "Clear space needed", "Use it for"],
                 [
                     "2.3 kHz",
-                    "about 300 Hz to 2600 Hz",
-                    "roughly 2.6 kHz above the dial",
+                    "240 Hz to 2760 Hz (measured)",
+                    "roughly 2.8 kHz above the dial",
                     "Winlink and Pat traffic, the most throughput, attended contacts with room to spare.",
                 ],
                 [
                     "500 Hz",
-                    "about 1260 Hz to 1740 Hz",
-                    "roughly 0.5 kHz, centred 1.5 kHz above the dial",
-                    "Peer-to-peer work, VarAC, crowded bands, weak paths, and any unattended answer-only station outside the segments.",
+                    "1140 Hz to 1850 Hz (measured)",
+                    "roughly 0.7 kHz, centred 1.5 kHz above the dial",
+                    "Peer-to-peer work, VarAC, crowded bands, weak paths.",
                 ],
             ],
             [0.88 * inch, 1.45 * inch, 1.72 * inch, width - 4.05 * inch],
             s,
         ),
         p(
-            "So a 500 Hz station on a 7.056 dial is actually occupying about 7.0573 to 7.0577 "
+            "So a 500 Hz station on a 7.056 dial is actually occupying about 7.0571 to 7.0579 "
             "- a kilohertz and a half up from where the dial reads. Listen across that, not "
             "just at the dial.",
             "note",
@@ -342,9 +359,8 @@ def story(s: dict) -> list:
     out += [
         p("3. Automatic control segments, 47 CFR 97.221(b)", "h1"),
         p(
-            "The only places an <b>unattended</b> Aether station may call, beacon or start a "
-            "session. Outside them it must be answer-only and 500 Hz or less. An attended "
-            "station is not restricted to these at all."
+            "The only places on HF an <b>unattended</b> Aether station transmits at all - "
+            "and all of 6 m besides. An attended station is not restricted to these."
         ),
         table(
             [
@@ -353,7 +369,7 @@ def story(s: dict) -> list:
                 [
                     "40 m",
                     "7.100 - 7.105",
-                    "one dial only, 7.101",
+                    "dials 7.0998 - 7.1022",
                     "5 kHz wide and shared with Winlink, VARA and ARDOP gateways. Expect it to be busy.",
                 ],
                 [
@@ -372,6 +388,12 @@ def story(s: dict) -> list:
                 ["15 m", "21.090 - 21.100", "yes", ""],
                 ["12 m", "24.925 - 24.930", "tight", "Only 5 kHz."],
                 ["10 m", "28.120 - 28.189", "plenty", "Wide, when the band is open at all."],
+                [
+                    "6 m",
+                    "all of it (data from 50.1)",
+                    "plenty",
+                    "97.221(b) opens the 6 m and shorter bands throughout.",
+                ],
             ],
             [0.58 * inch, 1.72 * inch, 1.12 * inch, width - 3.42 * inch],
             s,
@@ -394,14 +416,15 @@ def story(s: dict) -> list:
         table(
             [
                 ["Band", "Dial (USB)", "Bandwidth", "Signal occupies", "Clear of"],
-                ["80 m", "3.590", "2.3 kHz", "3.5903 - 3.5926", "FT8 at 3.573, JS8 at 3.578"],
-                ["40 m", "7.101", "2.3 kHz", "7.1013 - 7.1036", "FT8 at 7.074, JS8 at 7.078"],
-                ["30 m", "10.141", "500 Hz", "10.1423 - 10.1427", "see the caution below"],
-                ["20 m", "14.107", "2.3 kHz", "14.1073 - 14.1096", "the beacon project on 14.100"],
-                ["17 m", "18.107", "2.3 kHz", "18.1073 - 18.1096", "JS8 at 18.104"],
-                ["15 m", "21.094", "2.3 kHz", "21.0943 - 21.0966", ""],
-                ["12 m", "24.926", "2.3 kHz", "24.9263 - 24.9286", "JS8 at 24.922"],
-                ["10 m", "28.126", "2.3 kHz", "28.1263 - 28.1286", "FT4 at 28.180"],
+                ["80 m", "3.590", "2.3 kHz", "3.5902 - 3.5928", "FT8 at 3.573, JS8 at 3.578"],
+                ["40 m", "7.101", "2.3 kHz", "7.1012 - 7.1038", "FT8 at 7.074, JS8 at 7.078"],
+                ["30 m", "10.141", "500 Hz", "10.1421 - 10.1429", "see the caution below"],
+                ["20 m", "14.107", "2.3 kHz", "14.1072 - 14.1098", "the beacon project on 14.100"],
+                ["17 m", "18.107", "2.3 kHz", "18.1072 - 18.1098", "JS8 at 18.104"],
+                ["15 m", "21.094", "2.3 kHz", "21.0942 - 21.0968", ""],
+                ["12 m", "24.926", "2.3 kHz", "24.9262 - 24.9288", "JS8 at 24.922"],
+                ["10 m", "28.126", "2.3 kHz", "28.1262 - 28.1288", "FT4 at 28.180"],
+                ["6 m", "50.690", "2.3 kHz", "50.6902 - 50.6928", "packet calling at 50.620"],
             ],
             [0.52 * inch, 0.72 * inch, 0.72 * inch, 1.28 * inch, width - 3.24 * inch],
             s,
@@ -448,7 +471,8 @@ def story(s: dict) -> list:
         p(
             "Two of these sit inside 97.221(b) segments: WSPR at 14.0956 is within 14.0950 - "
             "14.0995, and PSK31 at 28.120 is on the bottom edge of 28.120 - 28.189. Being "
-            "legal and being welcome are not the same thing.",
+            "legal and being welcome are not the same thing. On 6 m the weak-signal modes "
+            "(FT8, FT4, WSPR, MSK144) gather around 50.26 - 50.33, well below the 50.690 dial.",
             "note",
         ),
     ]
@@ -495,6 +519,12 @@ def story(s: dict) -> list:
 
     out += [
         p("7. Before you transmit", "h1"),
+        p(
+            "<b>Tell the modem the rules.</b> Setup, step 1: the rules, how the station is "
+            "controlled, and your licence class. Until they are set nothing is transmitted; "
+            "then the badge in the header says LEGAL, WARNING or TX BLOCKED for the dial the "
+            "radio is on, and why."
+        ),
         p(
             "<b>Set the bandwidth on both stations the same.</b> A call in the other bandwidth "
             "is simply not heard. Setup, step 4."

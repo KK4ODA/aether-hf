@@ -41,8 +41,17 @@ beside it and the run before it is `aetherd.prev.log`, and *Help > Open the conf
 folder* takes you there. If restarting the modem made a problem go away, the log worth
 reading is `aetherd.prev.log` — the one from the run that misbehaved.
 
+**A change in Setup takes effect when you save it.** Until then the modem runs on what it had,
+and the panel says so: the Setup tab carries an amber dot, the step you changed is marked, the
+save bar at the foot of the tab names what is not saved, and every other tab shows a banner with
+*Review in Setup* and *Discard changes*. Most settings apply the moment they are saved; a sound
+card, a serial port or the callsign restarts the modem, which takes a few seconds.
+
 **Keying, and the dial.** Setup step 2 keys the radio through a serial line (RTS or DTR), the
-radio's own *CAT command*, a CM108-class interface's GPIO pin, or `rigctld`. Only CAT and
+radio's own *CAT command*, a CM108-class interface's GPIO pin, or `rigctld`. Its *Interface*
+list fills the fields in for a known interface (an Icom with USB audio, a Yaesu, a
+SignaLink, a DRA or URI board) once, when you pick it; the fields are what the modem uses, and
+changing one by hand shows *Manual*. Only CAT and
 `rigctld` also read the dial, which the rules are judged at; with any other keying you say
 where the dial is on the Session tab, and again after every change of frequency. An **Icom
 with USB audio** (IC-7300, IC-7610, IC-9700, IC-705) needs nothing but its USB cable: choose
@@ -117,8 +126,8 @@ stable release the stable releases. (Beta 56 moved a beta installation still set
 to *betas too*: every release so far has been a beta, and the panel had written *stable*
 into nearly every configuration whether or not anybody chose it. Choosing stable again is
 kept; the updates window then says there is no stable release yet.) A stable installation
-is never offered a beta or a nightly. *Help > Check for updates…* asks now, on whatever the
-setting says at that moment.
+is never offered a beta or a nightly. *Help > Check for updates…*, or *Check for Updates* on
+the panel's Help / About tab, asks now, on whatever the setting says at that moment.
 
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
@@ -157,8 +166,8 @@ rest: a new profile from the defaults, rename, duplicate, delete.
 ## 2. The daemon on its own
 
 For a gateway, or a station run from a terminal. `aetherd-<version>-<target>.tar.gz` (Linux
-x86_64 and aarch64 — a Raspberry Pi 4 or 5 on Raspberry Pi OS 12 or later) or `.zip`
-(Windows) holds the binary, the station panel it serves, the systemd unit and the gateway
+x86_64 and aarch64 — a Raspberry Pi 4 or 5 on Raspberry Pi OS 12 or later — and macOS on
+Apple Silicon) or `.zip` (Windows) holds the binary, the station panel it serves, the systemd unit and the gateway
 documentation. `docs/user/gateway-kit.md` is the rest of the story.
 
 ```bash

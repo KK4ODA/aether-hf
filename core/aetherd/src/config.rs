@@ -240,10 +240,11 @@ pub struct RadioSection {
     /// session use the same one; a call in the other bandwidth is not heard.
     #[serde(default = "default_bandwidth")]
     pub bandwidth: u32,
-    /// Answer calls but never make one, and never beacon. An automatically controlled
-    /// station may use 500 Hz outside the §97.221(b) sub-bands only to *respond* to a
-    /// station under local or remote control (§97.221(c)), so this is how an unattended
-    /// station is left on such a frequency; `docs/user/frequency-plan.md` says which.
+    /// Answer calls but never make one, and send no beacon, probe or datagram: a station
+    /// left listening with nobody at it. §97.221(c) would let an automatically controlled
+    /// station *respond* outside the §97.221(b) sub-bands at 500 Hz or less, but every Aether
+    /// signal measures wider than that (ADR-0018), so the regulatory gate keeps an automatic
+    /// station inside the sub-bands whatever this says; `docs/user/frequency-plan.md`.
     #[serde(default)]
     pub answer_only: bool,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
@@ -1624,8 +1625,10 @@ busy_threshold_db = 6.0
 # The waveform: 2300 Hz, or 500 Hz — the bandwidth peer-to-peer contacts and VarAC's
 # calling frequencies use. Both stations of a session use the same one.
 bandwidth = 2300
-# Answer calls but never make one, and never beacon: how an unattended station is left on
-# a 500 Hz frequency outside the automatic sub-bands (§97.221(c)).
+# Answer calls but never make one, and send no beacon, probe or KISS datagram: a station
+# left listening with nobody at it. Under automatic control ([regulatory] control) it still
+# transmits only inside the §97.221(b) sub-bands, or on 6 m: every Aether signal measures over
+# the 500 Hz that §97.221(c) allows elsewhere (docs/user/fcc-regulatory-controls.md).
 answer_only = false
 # The fastest mode this station will use: a rung of the ladder — the tone floor's kinds (six
 # at 2300 Hz, four at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has
@@ -1695,17 +1698,20 @@ check = true
 # control API (or the panel's Record button) starts one; `auto = true` records every session
 # on its own, which is what a gateway and field validation want.
 # dir = "recordings"                  # default: recordings/ beside this file
+auto = false
+# What every automatic recording says about the station: the band, the antenna, the
+# frequency when there is no rig control to ask (with [ptt] kind = "cat" or "rigctld" the
+# frequency is asked for and recorded on its own).
+notes = ""
+# Every transmission's exact audio too, under tx/ with an envelope sidecar: for chasing a
+# problem in the transmitted signal, not for everyday use.
+# tx_audio = false
 
 # [panel]
 # The desktop panel keeps its own choices here; it writes this itself.
 # interface = "yaesu-usb"             # the Setup interface the operator picked
 # [panel.waterfall]                   # how the waterfall is drawn: auto, floor_db,
 #                                     # gain_db, speed, palette
-auto = false
-# What every automatic recording says about the station: the band, the antenna, the
-# frequency when there is no rig control to ask (with [ptt] kind = "rigctld" the frequency
-# is asked for and recorded on its own).
-notes = ""
 
 [sim]
 # A simulated channel instead of a sound card: two daemons joined by a socket, with noise

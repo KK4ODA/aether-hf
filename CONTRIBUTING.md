@@ -37,7 +37,15 @@ request meets the rules the first time.
    LINK lamp lit and the readings populated. `node --check` proves syntax, not that the
    page works: a beta once shipped with an infinitely recursive redraw that passed
    `node --check`, threw on every tick, and left the Status page blank and reading
-   "Not connected to a modem".
+   "Not connected to a modem". A tab is built of titled boxes from the design system at the
+   top of `app/ui/style.css`, with its explanations behind a small `?`.
+10. **A new configuration key is a new schema.** An older release refuses a file with a key
+    it does not know, so a key added to `station.toml` comes with a `schema_version` bump, a
+    migration step and a fixture (`core/aetherd/src/config.rs`,
+    `core/aetherd/tests/data/config/`) and a line in the shell's `SCHEMA_HISTORY` — that is
+    what lets going back to an older version restore a file it can read.
+11. **Nothing keys the radio around the regulatory gate** (ADR-0018). A new way to transmit
+    is judged by the policy before the key goes down, and a test holds it to that.
 
 ## Workflow
 
@@ -61,23 +69,33 @@ request meets the rules the first time.
 The ordered queue is `docs/ROADMAP.md` §14. Things that help right now, no modem expertise
 needed:
 
-* **On-air sessions**, logged the way [`docs/user/field-test.md`](docs/user/field-test.md)
-  describes, with the recording — every one becomes a regression test the bench replays.
+* **Test sessions on the air** with another station, run and contributed the way
+  [`docs/user/field-test.md`](docs/user/field-test.md) describes (Session → *Test session*,
+  then *Contribute the last test session*) — every one becomes a measurement the bench
+  replays, and a recording becomes a regression test.
 * **Host programs on the bench**: BPQ32 over the simulated channel (Pat, Winlink Express and
-  VarAC are done — `docs/spec/host-interfaces.md` §7 says how).
-* **Setup on hardware we do not have**: CM108/HID keying (SignaLink-class interfaces),
-  radios whose CAT keying is untested, Linux sound-card notes for `docs/user/`.
+  VarAC are done — `docs/spec/host-interfaces.md` §7 says how), and the KISS programs of
+  [`docs/user/kiss.md`](docs/user/kiss.md) — VarAC's broadcasts, APRS clients, BPQ32's KISS
+  port — none of which has been tried yet.
+* **Setup on hardware we do not have**: CM108 GPIO keying (DRA, URI and similar boards —
+  built, untested on hardware), radios whose CAT keying is untested, a Mac with a radio,
+  Linux sound-card notes for `docs/user/`.
+* **Rules for another country**: a regulatory profile beside
+  `core/aetherd/data/regulatory/us-fcc-part97.json`, from the administration's published
+  rules ([`docs/user/fcc-regulatory-controls.md`](docs/user/fcc-regulatory-controls.md)).
 * **Documentation**: anything you had to work out for yourself while installing.
 
-The modem itself (Phase 9: a wide-band floor family, time diversity, the A/B bench
-against VARA) is open too, with the rules above: model first, a curve for every claim.
+The modem itself (Phase 9: pilots, the cyclic prefix and a 2 750 Hz variant, a spread-tone
+floor, time diversity as an opt-in experiment, the A/B bench against VARA) is open too, with
+the rules above: model first, a curve for every claim.
 
 ## Reporting
 
-- **Bugs**: use the bug-report issue template and attach the diagnostic bundle (Help tab →
-  Diagnostic bundle), or the exact command and output for the model.
-- **On-air reports**: use the on-air template and, if you can, attach the session recording
-  (48 kHz mono WAV plus its sidecar) — recordings become regression tests.
+- **Bugs**: use the bug-report issue template and attach the diagnostic bundle (Log tab →
+  *Copy diagnostic bundle*), or the exact command and output for the model.
+- **On-air reports**: use the on-air template — *Contribute the last test session* on the
+  Session tab opens it filled in — and, if you can, attach the session recording (48 kHz mono
+  WAV plus its sidecar) — recordings become regression tests.
 - **Security**: see [`SECURITY.md`](SECURITY.md).
 
 ## Code of conduct

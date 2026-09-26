@@ -31,4 +31,4 @@ body:
     id: recording
     attributes:
       label: Recording
-      description: Attach a 48 kHz mono WAV of the received audio if you have one — it becomes a regression test.
+      description: Attach the session's sidecar (the .json beside the .wav in the recordings folder — the Session tab's Open folder) and, zipped, the 48 kHz mono WAV of the received audio if you are happy to share it — it becomes a regression test. A Test session's report is filled in by Contribute the last test session on the Session tab.

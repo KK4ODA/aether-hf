@@ -23,7 +23,10 @@ Two things that are not obvious and cost people days:
 
 * **The transmit audio level matters more than the power.** An overdriven sound card turns a
   clean OFDM signal into splatter, and splatter is what gets a mode a reputation. Start at
-  the default `tx_level = 0.25`, watch the rig's ALC, and reduce until ALC barely moves.
+  the default `tx_level = 0.25`, watch the rig's ALC, and reduce until ALC barely moves — on
+  real bursts, not the tune tone: the waveform peaks 6–7 dB above a tone of the same level.
+  The panel's *Set drive* (Session tab → Keying and drive, or `drive.set` on the control
+  API) sends such bursts for exactly this.
 * **Disable every audio "enhancement" the operating system offers.** Automatic gain control,
   noise suppression and echo cancellation all destroy a data signal, and on a fresh install
   at least one of them is usually on.
@@ -69,8 +72,8 @@ aetherd --list-devices    # find the exact device names
 aetherd --list-ports      # and the serial port, if you key that way
 ```
 
-Edit `station.toml`: the callsign, the two device names, and the keying. Then, **before
-connecting an antenna**:
+Edit `station.toml`: the callsign, the two device names, the keying, and the rules the
+station runs under. Then, **before connecting an antenna**:
 
 ```bash
 aetherd --config station.toml --dry-run
@@ -82,6 +85,7 @@ putting a carrier on the air.
 A minimal gateway configuration:
 
 ```toml
+schema_version = 7
 callsign = "W4ODA"
 
 [audio]
@@ -101,7 +105,27 @@ wait_for_clear = true
 [host]
 enabled = true            # so Winlink software can use it
 bind = "127.0.0.1:8300"
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "automatic"     # nobody at the radio (§97.109, §97.221)
+license_class = "general"
+sideband = "usb"
+log_permitted = true      # log the basis of every transmission, not only the refusals
+
+[record]
+auto = true               # every session as a WAV and a sidecar
 ```
+
+**Nothing is transmitted until `[regulatory]` names the rules, the control and the licence
+class** (ADR-0018, [fcc-regulatory-controls.md](fcc-regulatory-controls.md)). Under
+**automatic** control the daemon transmits only inside the automatic-control sub-bands of
+§97.221(b), or on 6 m where data is allowed — every Aether signal measures more than the
+500 Hz that §97.221(c) allows elsewhere — and near a sub-band's edge it holds the link to the
+rungs that fit. It refuses a repeating beacon (§97.203(d)). A radio keyed over a serial line
+or a CM108 interface cannot report its dial, so give it `dial_hz = …`; over CAT or `rigctld`
+the dial is read before every transmission. `[radio] answer_only = true` makes the station
+take calls and make none, and send no beacon, probe or datagram.
 
 The daemon keeps the station's settings as a **profile** too: on its first start it writes
 `profiles/Default.aetherprofile` beside the configuration (the portable settings as JSON —
@@ -173,10 +197,16 @@ configuration to start and warn about.
 The host interface (`docs/spec/host-interfaces.md`) speaks the published VARA TCP protocol, so
 Pat, Winlink Express, VarAC and BPQ32 can use the station without being modified.
 
-**None of these has been verified against a real station yet.** §7 of that document is the
-verification table and it is honest about what has and has not been run. If you try one,
-please report what happened — that table is the compatibility claim, and it should reflect
-what people have actually done.
+**On the bench, not yet on the air.** Pat 1.0.0 and Winlink Express 1.8.5.0 each complete a
+peer-to-peer B2F session with an attachment over two daemons joined by the simulated channel,
+and two VarAC copies ping and connect at 500 Hz; BPQ32 and RMS Trimode have not been run.
+§7 of that document is the verification table and it is honest about what has and has not
+been run. If you try one, please report what happened — that table is the compatibility
+claim, and it should reflect what people have actually done.
+
+Programs that use VARA's **KISS** port — APRS clients, VarAC's broadcasts, packet programs —
+use `[kiss]` instead ([kiss.md](kiss.md)): off unless enabled, loopback, and each frame goes
+on the air as a datagram outside any session, judged by the same rules.
 
 ### Pat
 
@@ -210,4 +240,9 @@ interface, not on the air: an Aether station cannot decode a VARA signal and nev
   stuck key on an unattended station is the worst thing this software can do.
 * If your licence requires identification in a particular form, turn on `cw_id`. Aether's
   frames carry both callsigns, but whether that satisfies your licence conditions is your
-  call, not the modem's.
+  call, not the modem's. With it on, every session's end is identified once, and a long
+  session at least every `cw_id_interval_s` (ten minutes); under the US rules the identifier
+  goes at 20 wpm at most (§97.119(b)(1)) whatever `cw_id_wpm` asks for, and the log says so.
+* Leave a gateway **unattended only where the rules allow it** — the daemon enforces the
+  sub-bands, but whether your station may run under automatic control at all, and on which
+  bands, is yours to know.

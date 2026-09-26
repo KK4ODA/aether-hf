@@ -40,6 +40,9 @@ Reference points from `ldpc_bg2_awgn.csv` (BLER = 10 %):
 
 ## PHY, current air interface (`phy_fer.csv`, P2-3, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
 
+On the link's ladder these OFDM modes are rungs 6–19 at 2 300 Hz (mode *m* at rung *m* + 6);
+rungs 0–5 are the tone floor and the fast tones, further down.
+
 Minimum usable SNR (3 kHz noise bandwidth) for FER ≤ 10 %, linearly interpolated:
 
 | Mode | AWGN | ITU Good | ITU Moderate | ITU Poor |
@@ -61,6 +64,11 @@ fading columns are essentially unchanged from Phase 1, as expected: only the low
 acquisition path changed.
 
 ## PHY, the 500 Hz waveform (`phy_fer_500.csv`, P7-0 and ADR-0009, 30 frames/point, random ±100 Hz CFO and ±50 ppm SRO)
+
+*On the ladder since 2026-09-24:* the tone floor (ADR-0013, below) replaced modes 0 and 1, the
+floor family, which are on no rung now; the four-tone middle kinds (ADR-0015) sit between it and
+the OFDM modes, and narrow OFDM mode *m* is rung *m* + 2. The table stays as the measurement of
+the OFDM modes.
 
 The narrow waveform (`docs/spec/air-interface.md` §2.3; ADR-0002's P7-0 amendment, the
 floor family of ADR-0009) at the same 3 kHz-referenced SNR as the wide one — the same
@@ -111,6 +119,9 @@ reach 10 % FER on Poor within the sweep, where 16-QAM ¾ at 2 300 Hz does not ei
 359 bit/s on Poor at +12.
 
 ## PHY, where the 500 Hz floor breaks (`floor_500.csv`, ADR-0009, 20 frames/point, random ±100 Hz CFO)
+
+*Superseded:* the OFDM floor measured here was replaced by the tone floor (ADR-0013); this is
+the record of why.
 
 `tools/bench_floor.py`: for each frame, how many of twenty the detector placed within half
 a symbol of the truth, how many decoded through the detector, and how many decoded with
@@ -330,9 +341,9 @@ detector:
 
 | | AWGN | ITU Good | ITU Moderate | ITU Poor |
 |---|---|---|---|---|
-| tone-24, 36 bit/s | −19.0 dB | −12.0 | −13.2 | −14.5 |
+| tone-24, 36 bit/s | −19.0 dB | −11.7 | −13.2 | −14.5 |
 | tone-36, 54 bit/s | −17.3 | −8.8 | −10.3 | −10.9 |
-| tone-control | −19.5 | −11.2 | −14.7 | −15.8 |
+| tone-control | −19.5 | −11.1 | −14.5 | −15.8 |
 | (the OFDM floor it replaced, 36 bit/s) | −13.0 | −4.0 | −4.7 | −3.0 |
 
 ADR-0013's gate — 3 dB over the best existing frame at the same rate, on Good and Moderate —
