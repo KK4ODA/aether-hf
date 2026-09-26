@@ -10,7 +10,15 @@ from itertools import pairwise
 import pytest
 
 from aether_model.frame.modes import LONG, MODES, SHORT, WIDE
-from aether_model.link.engine import LinkConfig, LinkEngine, ProbeResult, Role, State, Transmit
+from aether_model.link.engine import (
+    Event,
+    LinkConfig,
+    LinkEngine,
+    ProbeResult,
+    Role,
+    State,
+    Transmit,
+)
 from aether_model.link.frames import (
     CAP_COMPRESSION,
     CONNECT_BODY_BYTES,
@@ -1927,6 +1935,44 @@ def test_an_unanswered_burst_steps_the_recommendation_down(timing: PhyTiming) ->
     assert a._recommended == modes[0]
 
 
+@pytest.mark.parametrize("start", ["top", "first-ordinary"])
+def test_unanswered_polls_step_the_recommendation_down(timing: PhyTiming, start: str) -> None:
+    """A poll and its answer fade together as a burst and its acknowledgement do, and a poll
+    goes out in the family of the rung the sender would send at (ADR-0009): repeated as it
+    was, an ordinary poll on a path that has fallen below the ordinary control frame is lost
+    as often as the first. From the second silence in a row each steps the recommendation
+    down as a burst's does (P9-7): from the first OFDM rung the third poll goes on the tone
+    floor, and from the top of the ladder the polls reach it with retries to spare. The
+    first silence steps nothing: its repeat stays in its family (ADR-0032)."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.now, a.session = Role.ISS, State.CONNECTED, 100.0, 7
+    modes = a.rate.modes
+    ordinary = [m for m in modes if not timing.is_floor(m)]
+    begin = modes[-1] if start == "top" else ordinary[0]
+    a._recommended = begin
+    a._send_poll()
+    floors: list[bool] = []
+    rungs: list[int] = []
+    for _ in range(3 * a.cfg.max_retries):
+        actions = a.drain()
+        sent = [x for x in actions if isinstance(x, Transmit)]
+        if not sent:
+            break
+        floors.append(sent[0].frames[0].floor)
+        rungs.append(a._recommended)
+        a.on_tx_done(a.now + sent[0].duration_s)
+        a.tick(a._deadlines["wait"])
+    assert len(floors) == a.cfg.max_retries + 1, "every retry is a poll"
+    assert rungs[:2] == [begin, begin] and floors[:2] == [False, False], "one silence is no fade"
+    first = floors.index(True)
+    assert all(floors[first:]), floors
+    if start == "first-ordinary":
+        assert first == 2, floors
+    assert len(floors) - first >= 2, floors
+    assert a._recommended < a.timing.floor_modes
+    assert any(isinstance(x, Event) and x.detail == "no response" for x in actions)
+
+
 def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
     """An IRS that expects ordinary frames (the connect frames were) must not answer in the
     middle of a floor frame four times as long: the preamble names the frame's length and
@@ -2423,6 +2469,62 @@ def test_a_burst_is_not_repeated_over_its_acknowledgement_arriving(timing: PhyTi
     a.on_frame(frame, t_start + control + 0.01)
     assert a._waiting_for is None and a.all_acknowledged
     assert a.stats.ack_timeouts == 0
+
+
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_the_polls_step_down_to_the_floor_through_a_fade(bandwidth: int) -> None:
+    """ADR-0030 §3, found on the chat bench: an ordinary poll and its ordinary answer lost
+    together in a slow ITU Good fade, polled again every 2.3 s until the retries ran out —
+    "no response" — while the tone floor, 14 dB lower, was never tried: an unanswered poll
+    stepped nothing down. Here a minute and a half below the ordinary control frame and above
+    the floor's, after a strong start: the polls step down to the floor, the session stays up
+    through the fade, and what is sent after it arrives (ADR-0032)."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.sim import control_thresholds_for
+
+    air = WIDE if bandwidth == 2300 else NARROW
+    timing = phy_timing(air.params)
+    config = LinkConfig(max_mode=air.n_rungs - 1)
+    a = LinkEngine("W4ODA", timing, config, seed=1)
+    b = LinkEngine("KK4XYZ", timing, config, seed=2)
+    fade = (60.0, 150.0)
+    deep = -12.0
+    controls = control_thresholds_for(timing)
+    assert controls[True] + 6.0 < deep < controls[False] - 6.0, "not the case measured"
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_db=15.0,
+        seed=3,
+        snr_schedule=lambda t: deep if fade[0] <= t < fade[1] else 15.0,
+    )
+    polls: list[tuple[float, bool]] = []  # when each of the sender's polls went, and on what
+    original = a._transmit
+
+    def record(frames: list[TxFrame]) -> None:
+        for f in frames:
+            if f.container is Container.CONTROL and f.payload[0] >> 4 == ControlKind.POLL.value:
+                polls.append((a.now, f.floor))
+        original(frames)
+
+    a._transmit = record  # type: ignore[method-assign]
+    first, second = bytes(range(200)), bytes(range(56, 256)) * 2
+    a.connect("KK4XYZ")
+    a.send(first)
+    sim.run(until=fade[0])
+    assert sim.delivered(1) == first, (sim.events(0), sim.events(1))
+    assert a.role is Role.ISS and not a._control_floor(), "not the case measured"
+    heard = a.stats.acks_received
+    sim.run(until=fade[1])
+    assert a.connected and b.connected, (sim.events(0), sim.events(1))
+    during = [floor for t, floor in polls if fade[0] <= t < fade[1]]
+    assert during[0] is False and True in during, during
+    assert a.stats.acks_received > heard, "no poll was answered in the fade"
+    _type(sim, 0, second, fade[1] + 1.0)
+    sim.run(until=fade[1] + 300.0)
+    assert sim.delivered(1) == first + second, (sim.events(0), sim.events(1))
+    assert not [e for e in sim.events(0) + sim.events(1) if e.startswith("disconnected")]
 
 
 def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:

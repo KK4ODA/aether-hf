@@ -128,14 +128,23 @@ class LinkConfig:
     """With a WANT_TX peer, the ISS hands over after this many bursts of its own."""
     silence_step: int = 2
     """Usable modes the ISS steps its own recommendation down by for every burst that goes
-    unanswered (P9-7). The recommendation otherwise moves only when an acknowledgement
-    brings one, and on a fading path the burst and its acknowledgement fade together: a
-    session whose first bursts went out on a connect frame measured at a peak repeated
-    them at a mode the path could not carry until the link timed out, one session in
-    twenty at 0–3 dB on the 500 Hz fading bench. Two steps a silence reaches the bottom of
-    either table within the retries, and the frames stranded up there are re-encoded on
-    the way (after :attr:`max_combines`); the next acknowledgement puts the peer's own
-    recommendation back."""
+    unanswered (P9-7), and for every poll from the :attr:`poll_silences`-th in a row
+    (ADR-0032). The recommendation otherwise moves only when an acknowledgement brings one,
+    and on a fading path the burst and its acknowledgement fade together: a session whose
+    first bursts went out on a connect frame measured at a peak repeated them at a mode the
+    path could not carry until the link timed out, one session in twenty at 0–3 dB on the
+    500 Hz fading bench. Two steps a silence reaches the bottom of either table within the
+    retries, and the frames stranded up there are re-encoded on the way (after
+    :attr:`max_combines`); the next acknowledgement puts the peer's own recommendation back."""
+    poll_silences: int = 2
+    """Unanswered polls in a row after which each further silence steps the recommendation
+    down, as every unanswered burst's does (:attr:`silence_step`) — and a poll goes out in
+    the family of that recommendation, so the polls reach the tone floor within the retries
+    (ADR-0032). Repeated in the ordinary family, a poll and its answer lost together in a slow
+    fade were lost again every time until the retries ran out: "no response", with the floor,
+    14 dB lower, never tried. One silence is no fade: near the ordinary control frame's
+    threshold a poll or its answer is lost now and then on a path that carries the next, and
+    a repeat on the floor costs 3.2 s and an answer as long."""
     max_combines: int = 4
     """HARQ buffers are reset after this many failed combines (guards a wrong inference)."""
     capabilities: int = 0
@@ -838,7 +847,7 @@ class LinkEngine:
         return max(self.timing.data_frame_s_for(m) for m in modes)
 
     def _back_off(self) -> None:
-        """An unanswered burst is evidence too: step the recommendation down
+        """An unanswered burst or poll is evidence too: step the recommendation down
         :attr:`LinkConfig.silence_step` usable modes (never below the table's first)."""
         modes = self.rate.modes
         current = min(self._recommended, self._cap())
@@ -1055,6 +1064,16 @@ class LinkEngine:
             self._back_off()
             self._send_burst()  # same composition: nothing was acknowledged
         elif what == "poll":
+            # A poll and its answer fade together as a burst and its acknowledgement do, and a
+            # poll goes out in the family of the rung this station would send at: repeated as
+            # it was, an ordinary poll into a fade below the ordinary control frame was lost
+            # every time, until the retries ran out with the tone floor, 14 dB lower, never
+            # tried — "no response" on the chat bench (ADR-0030 §3). From the second silence in
+            # a row each steps the recommendation down as a burst's does, and the polls reach
+            # the floor within the retries; the answer puts the other station's recommendation
+            # back. A single silence is no fade, and its repeat stays in its family (ADR-0032).
+            if self._retries >= self.cfg.poll_silences:
+                self._back_off()
             self._send_poll()
 
     # ── ISS: bursts ───────────────────────────────────────────────────

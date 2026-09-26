@@ -2080,6 +2080,91 @@ fn a_poll_is_not_repeated_over_its_answer_arriving() {
 }
 
 #[test]
+fn the_polls_step_down_to_the_floor_through_a_fade() {
+    // ADR-0030 §3, found on the chat bench: an ordinary poll and its ordinary answer lost
+    // together in a slow ITU Good fade, polled again every 2.3 s until the retries ran out —
+    // "no response" — while the tone floor, 14 dB lower, was never tried: an unanswered poll
+    // stepped nothing down. Here a minute and a half below the ordinary control frame and above
+    // the floor's, after a strong start: the polls step down to the floor, the session stays up
+    // through the fade, and what is sent after it arrives (ADR-0031)
+    const FADE: (f64, f64) = (60.0, 150.0);
+    const DEEP: f64 = -12.0;
+    for params in [WIDE_2300, NARROW_500] {
+        let t = air_timing(params, true);
+        let controls = t.control_threshold_db.expect("the air's control frames");
+        assert!(
+            controls[1] + 6.0 < DEEP && DEEP < controls[0] - 6.0,
+            "not the case measured"
+        );
+        let config = LinkConfig {
+            max_mode: air_interface(params).n_rungs() - 1,
+            ..LinkConfig::default()
+        };
+        let (a, b) = pair(&t, &config);
+        let mut sim = TwoStationSim::new(a, b, 15.0, 3).with_snr_schedule(Box::new(|at| {
+            if (FADE.0..FADE.1).contains(&at) {
+                DEEP
+            } else {
+                15.0
+            }
+        }));
+        let first: Vec<u8> = (0..200u8).collect();
+        let second: Vec<u8> = (56..=255u8).chain(56..=255u8).collect();
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        sim.engine_mut(0).send(&first);
+        sim.run(FADE.0, 3.0);
+        let bandwidth = params.bandwidth;
+        assert_eq!(
+            sim.delivered(1),
+            first.as_slice(),
+            "{bandwidth:?}: {:?} {:?}",
+            sim.events(0),
+            sim.events(1)
+        );
+        assert_eq!(sim.engine(0).role(), Role::Iss, "not the case measured");
+        let before = sim.frames_sent(0).len();
+        let heard = sim.engine(0).stats.acks_received;
+        sim.run(FADE.1, 3.0);
+        assert!(
+            sim.engine(0).connected() && sim.engine(1).connected(),
+            "{bandwidth:?}: {:?} {:?}",
+            sim.events(0),
+            sim.events(1)
+        );
+        let during: Vec<bool> = sim.frames_sent(0)[before..]
+            .iter()
+            .filter(|f| f.container == Container::Control)
+            .map(|f| f.floor)
+            .collect();
+        assert!(
+            during.first() == Some(&false) && during.contains(&true),
+            "{bandwidth:?}: {during:?}"
+        );
+        assert!(
+            sim.engine(0).stats.acks_received > heard,
+            "{bandwidth:?}: no poll was answered in the fade"
+        );
+        sim.send_at(0, &second, FADE.1 + 1.0);
+        sim.run(FADE.1 + 300.0, 3.0);
+        let both: Vec<u8> = first.iter().chain(&second).copied().collect();
+        assert_eq!(
+            sim.delivered(1),
+            both.as_slice(),
+            "{bandwidth:?}: {:?} {:?}",
+            sim.events(0),
+            sim.events(1)
+        );
+        assert!(
+            !sim.events(0)
+                .iter()
+                .chain(sim.events(1))
+                .any(|e| e.starts_with("disconnected")),
+            "{bandwidth:?}"
+        );
+    }
+}
+
+#[test]
 fn a_burst_is_not_repeated_over_its_acknowledgement_arriving() {
     // A burst's acknowledgement can start late too — the receiving station's quiet stretched
     // by a frame it heard arriving, a receiver running behind — and a burst sent again over it

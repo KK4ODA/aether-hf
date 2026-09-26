@@ -83,8 +83,10 @@ pub struct LinkConfig {
     /// sessions in three at −4 dB on the fading bench that four exchanges carried.
     pub link_timeout_exchanges: f64,
     /// Usable modes the sending station steps its own recommendation down by for every
-    /// burst that goes unanswered (ADR-0012): a burst and its acknowledgement fade together,
-    /// and the recommendation otherwise moves only when an acknowledgement brings one.
+    /// burst or poll that goes unanswered (ADR-0012, ADR-0031): a burst and its
+    /// acknowledgement fade together, and the recommendation otherwise moves only when an
+    /// acknowledgement brings one. A poll goes out in the family of that recommendation, and
+    /// an ordinary one repeated into a fade the tone floor would have crossed ended sessions.
     pub silence_step: usize,
     /// Slack added to every wait for a peer response.
     pub ack_margin_s: f64,
@@ -1285,7 +1287,7 @@ impl LinkEngine {
             .find(|&mode| self.fits(body_len, mode))
     }
 
-    /// An unanswered burst is evidence too: step the recommendation down
+    /// An unanswered burst or poll is evidence too: step the recommendation down
     /// [`LinkConfig::silence_step`] usable modes, never below the table's first. The frames
     /// stranded above are re-encoded on the way, after `max_combines` transmissions, and the
     /// next acknowledgement puts the peer's own recommendation back.
@@ -1691,7 +1693,17 @@ impl LinkEngine {
                 self.back_off();
                 self.send_burst();
             }
-            Some(Waiting::Poll) => self.send_poll(),
+            // A poll and its answer fade together as a burst and its acknowledgement do, and a
+            // poll goes out in the family of the rung this station would send at: repeated as
+            // it was, an ordinary poll into a fade below the ordinary control frame was lost
+            // every time, until the retries ran out with the tone floor, 14 dB lower, never
+            // tried — "no response" on the chat bench (ADR-0030 §3). The silence steps the
+            // recommendation down as a burst's does, and the polls reach the floor within the
+            // retries; the answer puts the other station's recommendation back (ADR-0031).
+            Some(Waiting::Poll) => {
+                self.back_off();
+                self.send_poll();
+            }
             _ => {}
         }
     }
@@ -3059,6 +3071,58 @@ mod tests {
         assert_eq!(e.recommended, modes[0]);
         e.back_off();
         assert_eq!(e.recommended, modes[0]);
+    }
+
+    #[test]
+    fn an_unanswered_poll_steps_the_recommendation_down() {
+        // A poll and its answer fade together as a burst and its acknowledgement do, and a
+        // poll goes out in the family of the rung the sender would send at: repeated as it
+        // was, an ordinary poll on a path that has fallen below the ordinary control frame is
+        // lost as often as the first. A silence steps the recommendation down as a burst's
+        // does, and from the top of the ladder the polls reach the tone floor with retries to
+        // spare (ADR-0031)
+        for timing in [wide(), narrow()] {
+            let mut e = LinkEngine::new("W4ODA", timing, LinkConfig::default(), 1);
+            e.role = Role::Iss;
+            e.state = State::Connected;
+            e.now = 100.0;
+            e.tx_busy_until = 100.0;
+            e.session = 7;
+            let top = *e.rate.modes().last().expect("a ladder");
+            e.recommended = top;
+            e.send_poll();
+            let mut floors: Vec<bool> = Vec::new();
+            let mut ended = false;
+            for _ in 0..3 * e.config.max_retries {
+                let actions = e.drain();
+                ended |= actions.iter().any(|action| {
+                    matches!(action, Action::Event { detail, .. } if detail == "no response")
+                });
+                let Some((frames, duration_s)) = actions.into_iter().find_map(|action| match action
+                {
+                    Action::Transmit { frames, duration_s } => Some((frames, duration_s)),
+                    _ => None,
+                }) else {
+                    break;
+                };
+                floors.push(frames[0].floor);
+                if floors.len() == 1 {
+                    assert_eq!(e.recommended, top, "the first poll is no silence yet");
+                }
+                e.on_tx_done(e.now + duration_s);
+                e.tick(e.deadline_of(Timer::Wait).expect("waiting for the answer"));
+            }
+            assert_eq!(
+                floors.len(),
+                e.config.max_retries + 1,
+                "every retry is a poll: {floors:?}"
+            );
+            let first = floors.iter().position(|&f| f).expect("the polls reached the floor");
+            assert!(first > 0 && floors[first..].iter().all(|&f| f), "{floors:?}");
+            assert!(floors.len() - first >= 2, "{floors:?}");
+            assert!(e.recommended < e.timing.floor_modes);
+            assert!(ended, "the session ends with no response");
+        }
     }
 
     #[test]
