@@ -320,6 +320,22 @@ to three times pessimistic at the low SNRs, which is where the start of a sessio
 rate controller's margin were tuned on it (ADR-0007, ADR-0008). Questions of the start and
 the rate control are settled on `--fading` from P9-6 on.
 
+## Link layer, a poll's late answer (`poll_wait.csv`, ADR-0028)
+
+`tools/bench_chat.py` (ADR-0027's keyboard-to-keyboard bench) for today's turn-taking
+(`policy` = `base`) and ADR-0027's (`request`), on four engines (`engine`): `before` (the model at
+`7345694` and ADR-0027's), `adr-0028` (this wait alone), `adr-0030` (ADR-0030's hold alone, as it
+landed) and `adr-0030+adr-0028` (master with this wait). Runs (`run`): `grid`, −12 to +12 dB on
+the four classes at both bandwidths, 30 sessions a point (`first_trial` 0); `drops`, −12, −6 and
+0 dB on Good, Moderate and Poor, 100 a point (`first_trial` 100); `drops200`, the same points, 200
+more a point (`first_trial` 200); `missed-preambles`, the `drops` run with a fifth of all preamble
+announcements missed (the frames still arrive). Rows not run at `f17fec5` or on this change's
+commit ran the same code patched onto the model, which reproduces both commits' `drops` rows
+exactly. The wait alone: 15 → 5 sessions dropped of 1 800 (126 → 28 lines lost) with today's
+turn-taking and 13 → 7 (104 → 34) with the request; on top of ADR-0030's hold, a few sessions
+either way; a line's time and the keyed time unchanged throughout. ADR-0028 has the tables;
+`bench_link.py` is identical before and after in every session.
+
 ## Peak-to-average as transmitted (`peak_to_average.csv`, P9-6)
 
 A transmitter is driven to a fixed peak, so a frame's average power is that peak less its
