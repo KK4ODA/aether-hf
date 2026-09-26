@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use aetherd::replay::{Expectation, compare, replay};
+use aetherd::replay::{BLOCK_S, Expectation, compare, replay_expecting};
 
 fn sessions_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../field/sessions")
@@ -31,8 +31,9 @@ fn every_recorded_session_still_decodes_what_it_decoded_on_the_day() {
     for sidecar in &sidecars {
         let wav = sidecar.with_extension("wav");
         let expectation = Expectation::from_sidecar(sidecar).expect("a session sidecar");
-        let found = replay(&wav, &expectation.muted, expectation.bandwidth_hz)
-            .expect("a readable recording");
+        // as the station ran it: its waveform, its keyed spans, its moves (ADR-0026)
+        let (found, _) =
+            replay_expecting(&wav, &expectation, BLOCK_S).expect("a readable recording");
         let verdict = compare(&expectation.frames, &found);
         eprintln!(
             "{}: recorded {} decoded, replay decoded {} of {} found",

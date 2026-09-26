@@ -20,7 +20,11 @@ layer and nothing more:
   The waveform is Aether's own and is specified in `air-interface.md`. Over-the-air
   compatibility with a proprietary waveform is not achievable and is not attempted.
 * **Nothing here is derived from VARA's internals.** Only the documented command set is
-  implemented, from its documented behaviour.
+  implemented, from its documented behaviour: EA5HVK, *VARA Protocol Native TNC Commands*
+  (13 February 2022), and what the host programs themselves were seen to send on the bench.
+  Commands the programs send that the published list lacks — `TUNE`, `DRIVELEVEL`, `CWID`,
+  `PUBLIC`, `VERSION`, `IGNOREKISSDCD`, `LISTEN CQ` — are handled as §3 says, and recorded rather
+  than guessed at where their meaning is not evident.
 * **The modem never claims to be VARA.** `VERSION` answers `VERSION Aether HF <version>` —
   three words, the shape of the published reply, so a host that takes the version from the
   fourth token finds one (VarAC does); the name is this modem's.
@@ -70,12 +74,11 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `CONNECT <from> <to>` | Starts a session, as `<from>` when that is one of the `MYCALL` callsigns | A station that answers to a club or tactical call besides its own chooses between them here; the called station answers as whichever of its callsigns was called. After the `OK` the host hears `CONNECTED` or `DISCONNECTED`, one or the other, whatever becomes of the call: when the modem refuses it — a session already up, an answer-only station, the rules (ADR-0018) — `DISCONNECTED` follows at once, the reason in the daemon's log; when it ends without a session — nobody answers, `ABORT`, `DISCONNECT` — `DISCONNECTED` says so |
 | `DISCONNECT` | Closes the session in order: a sending station sends what is queued first; a receiving station sends its disconnect between the other station's bursts (ADR-0023). During a call, stops calling | Orderly in a session. During a call — the modem's `status.state` is `connecting` — it is the control API's `abort`, as the panel's *Stop calling* is: nothing of a call is there to close in order, and the modem's own `disconnect` would go on calling and close the session once it came up |
 | `ABORT` | Ends it now: the rest of a burst on the air is cut and one disconnect follows; during a call, stops calling | Not orderly |
-| `LISTEN ON` / `LISTEN OFF` | Whether to answer incoming calls | Recorded: this station answers calls to its callsigns either way (§9) |
-| `LISTEN CQ` | VarAC: hear only CQ frames | Recorded as listening; this station hears everything and answers calls to its own callsigns either way |
-| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never. It says nothing about sessions, which run as they always do |
+| `LISTEN ON` / `LISTEN OFF` | Whether calls to this station are answered while this program is attached | Acted on (ADR-0026): off until the program says `LISTEN ON`, `LISTEN CQ` or `CHAT ON` — VARA's default, in its published command list — and a call or a probe to the station is then not answered; the daemon's log says so once a minute a caller, and `status.answering` is false. With no program attached the station answers every call to its callsigns. The published note that `LISTEN` received mid-connection disconnects is not copied: a session runs to its end |
+| `LISTEN CQ` | VarAC: hear only CQ frames | As `LISTEN ON`: calls are answered. This station hears everything, beacons included, either way |
+| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | `CHAT ON` includes `LISTEN ON`, as the published command list says. While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never |
 | `IGNOREKISSDCD ON` / `OFF` | The KISS port's channel access | `ON`: frames from KISS programs go without waiting for a clear channel while this host is attached (§8.4). VarAC says it when its *Ignore DCD* box is ticked |
-| `BW2300`, `BW500` | Names the bandwidth | `OK` when it is the one the station runs (`[radio] bandwidth`; a host learns it from `capabilities`), `WRONG` otherwise: the bandwidth is the modem's configuration, not a session setting, and both stations of a session run the same one |
-| `BW2750` | Asks for up to 2750 Hz | `OK` on a 2300 Hz station, which is inside what was asked — Winlink Express sends its widest setting, 2750 unless changed — and the station runs 2300; refused on a 500 Hz station (§5) |
+| `BW500`, `BW2300`, `BW2750` | Sets the bandwidth the station runs, as VARA's published commands set its mode (ADR-0026) | The station moves between sessions (the control API's `bandwidth.set`) and the answer is `OK` once it runs what was asked. `BW2750` is 2300 Hz: a narrower signal is always inside what was asked, and Winlink Express sends its widest setting, 2750 unless changed. With a session, a call, a probe or a transmission under way the station stays, and the answer is `WRONG` unless it already runs what was asked. The request holds while the program is attached; when it goes, the station goes back to its own (`[radio] bandwidth`) once idle (§5) |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
 | `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
@@ -101,7 +104,7 @@ Unsolicited, at any time.
 | `PTT ON` / `PTT OFF` | The transmitter was keyed or released — and, on a station keyed by the host program (`[ptt] kind = "host"`, ADR-0025), the host's cue to key the radio: VarAC keys it over CAT, as it does for VARA, and the first audio follows `PTT ON` by `lead_ms` (150 ms unless set) |
 | `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel — outside a session. While a session is up the channel is the session's and reads `BUSY OFF`: the detector marks it busy at every frame of the other station, and a host that honours DCD (VarAC with *Ignore DCD* off holds "busy" for ten seconds after each) would never find a moment to hand its data over; the modem does the turn-taking |
 | `PENDING` | The called side, just before its `CONNECTED`: the order every client expects, from a modem that answers a call in one step |
-| `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
+| `CONNECTED <caller> <called> <bandwidth>` | A session came up, in the bandwidth the station runs now — which a 2300 Hz station answering a 500 Hz call runs for the session (ADR-0026). The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
 | `ENCRYPTION DISABLED` | After `CONNECTED`: the link carries no encryption, which VARA states of its links and is simply true of this modem |
 | `LINK REGISTERED` | After `ENCRYPTION DISABLED`: the station at the other end is not speed-limited, as VARA says of a registered peer. Nobody is: Aether has no registration |
 | `MISSING SOUNDCARD` | When a host attaches to a modem whose sound card would not open (it runs on silence and can neither hear nor transmit): VARA's word for a sound card that has gone, which a gateway's host acts on. `CANCELPENDING` is never sent: `PENDING` is said only as a session comes up, so there is no pending call to cancel |
@@ -123,18 +126,19 @@ limit, so the honest answer to "is this station limited?" is no.
 
 The three are deliberately distinguished, and a client can tell them apart.
 
-**Refused** (`WRONG`): whichever of `BW2300` / `BW500` is not the bandwidth the station runs,
-and `BW2750` on a 500 Hz station. Accepting a request for one bandwidth and then transmitting a
-wider one would put a station outside the bandwidth its operator chose, which is an operator's
-decision and sometimes a legal one — a 2 300 Hz signal on a 500 Hz calling frequency most of
-all. A narrower one is always inside what was asked, which is why `BW2750` is `OK` on a 2 300 Hz
-station. The bandwidth is set
-in the station's configuration (`[radio] bandwidth`, 2300 or 500; the panel's Setup tab), and
-`CONNECTED` reports it.
+**The bandwidth** (ADR-0026). A station has its own, `[radio] bandwidth` (2300 or 500; the
+panel's Setup tab), and runs it unless something moves it, between sessions only: a host
+program's `BW<n>`, for as long as the program is attached, or a call to a 2300 Hz station in
+500 Hz, which it answers at 500 Hz — calls begin on the tone floor, whose frames are the same
+on both airs — going back 20 s after the session. `CONNECTED` reports the bandwidth of the
+session. A 500 Hz station never answers a 2300 Hz call, and a `BW<n>` the station cannot
+follow now is refused (`WRONG`) rather than accepted and not honoured: a client that asked for
+500 Hz and got 2300 would be transmitting outside what its operator chose — a 2300 Hz signal
+on a 500 Hz calling frequency most of all.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `LISTEN ON` / `LISTEN OFF` / `LISTEN CQ`, `DRIVELEVEL` (`CHAT` and
-`IGNOREKISSDCD` govern the KISS port, §8.4). The setting is remembered and reported back, and the
+`P2P SESSION`, `DRIVELEVEL` (`CHAT` and `IGNOREKISSDCD` govern the KISS port, §8.4; `LISTEN`
+and `BW<n>` are acted on, above). The setting is remembered and reported back, and the
 modem answers `OK` because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
@@ -154,12 +158,13 @@ API's `probe` and the panel's Probe button, not through this adapter.
 
 ## 6. How it is built
 
-The adapter is a *client of the modem's own control API*. It sends `capabilities` (once, on
-attach: the bandwidth and the bit rates `BITRATE` reports), `callsigns.set`, `connect`, `send`,
-`disconnect`, `abort`, `status` (for `DISCONNECT`: whether a call is going out), `beacon`,
-`tune` and `config.get` (for `TUNE ?`), and listens for
-`state`, `data`, `ptt`, `frame` (for `SN`) and `metrics` (for `BUFFER`, `BITRATE`, `BUSY`)
-events. It has no privileged access to the station and can do nothing a scripted client could
+The adapter is a *client of the modem's own control API*. It sends `capabilities` (on attach,
+and after every move to the other bandwidth: the bandwidth and the bit rates `BITRATE`
+reports), `callsigns.set`, `connect`, `send`, `disconnect`, `abort`, `status` (for
+`DISCONNECT`: whether a call is going out), `beacon`, `bandwidth.set` (for `BW<n>`), `tune`
+and `config.get` (for `TUNE ?`), and listens for `state`, `data`, `ptt`, `frame` (for `SN`),
+`bandwidth` and `metrics` (for `BUFFER`, `BITRATE`, `BUSY`) events. What it heard of `LISTEN`
+and `CHAT` reaches the station through flags it shares with the run loop. It has no privileged access to the station and can do nothing a scripted client could
 not do.
 
 That layering is deliberate: the compatibility surface is the part most likely to need
@@ -301,9 +306,6 @@ belongs only on a network the operator controls.
 * Whether `COMPRESSION` should choose the station's compression, which the two stations
   already negotiate in the connect handshake (P3-6): it would then be acted on rather than
   recorded.
-* Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always
-  answers; the setting is recorded, and the control API says so explicitly rather than
-  pretending.
 * **VarAC on the air.** The bench passes (§7); the air with a VarAC station is what remains.
   VarAC's "ping" is a short session — connect, one report, disconnect — over the `CONNECT`
   the adapter serves; VARA's published command set has no `PING` (that vocabulary is

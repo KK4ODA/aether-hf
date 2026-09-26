@@ -24,8 +24,9 @@ In **Aether**:
    ON**. The rules in step 1 change to **None** with it: Aether cannot read the dial of a radio
    it does not control. *ms before the audio* (150) is how long Aether waits after `PTT ON`
    before it starts the audio; VARA allows 100.
-2. Setup step 4, *Bandwidth*: **500 Hz** for VarAC's calling frequencies (both stations of a
-   session run the same one).
+2. Setup step 4, *Bandwidth*: whichever you use most. VarAC says `BW500` when it starts, and
+   Aether moves to 500 Hz for as long as VarAC is attached, without a restart; it goes back to
+   this one when VarAC closes.
 3. Setup step 5: **Host programs** on (port 8300), and **KISS programs** on (port 8100) for
    VarAC's broadcasts.
 4. Save, and save it as a profile — *VarAC*, say.
@@ -60,8 +61,8 @@ CAT port. Tune from the Session tab's dial list (*Tune*) or by hand.
   gateway — and an Aether gateway must never be listed as a VARA one.
 * *Vara HF* setup: the TNC path is Aether's application (above), with or without auto-launch;
   host `127.0.0.1`, port `8300`.
-* The session bandwidth must be the one Aether runs (Setup step 4). Winlink Express's widest,
-  2750, is accepted by a 2300 Hz station, which runs 2300.
+* The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
+  runs 2300 Hz for Winlink Express's widest, 2750.
 * Winlink Express leaves keying to the modem, as with VARA: keep **Aether keying the radio**
   (the second way above). If Aether keys on a serial line or a CM108 pin, Winlink Express can
   still do its own frequency control on the radio's CAT port.
@@ -72,16 +73,26 @@ CAT port. Tune from the Session tab's dial list (*Tune*) or by hand.
 "varahf": { "host": "localhost", "cmdPort": 8300, "dataPort": 8301, "bandwidth": "2300" }
 ```
 
-`bandwidth` is the one Aether runs (`"500"` or `"2300"`). Pat can tune through Hamlib's
+Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune through Hamlib's
 `rigctld`; with Aether keying the radio, leave Pat's own PTT control off.
+
+## How Aether follows the program
+
+* **The bandwidth.** Setup step 4 is Aether's own. A program's `BW500` or `BW2300` moves it while
+  the program is attached — between sessions, never during one — and it comes back when the
+  program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
+  500 Hz connections* does, and comes back 20 s after the session; a 500 Hz station never answers
+  a 2300 Hz call. The panel's header shows the bandwidth, and why, whenever it is not Aether's own.
+* **Answering calls.** With a program attached, Aether answers calls only once the program has
+  said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does. The header says
+  *host program · not answering* until then, and the log names every call left unanswered.
 
 ## Known limits
 
-* **The bandwidth is Aether's setting**, not the program's: a program asking for the other one
-  is refused (`BW500` on a 2300 Hz station), so change Setup step 4 to match. Following the
-  program's request is the next step on the roadmap.
-* A VarAC **ping** to a station whose callsign has an SSID fails: VarAC's `-T` alias makes it
-  longer than the nine characters Aether's frames carry. Plain callsigns work.
+* A VarAC **ping** to a station whose callsign has an SSID fails: VarAC calls `<callsign>-T`, and
+  `KK4ODA-1-T` is ten characters with two suffixes — longer than Aether's frames carry, and not a
+  callsign VARA's own rules allow either (three to seven characters, then an optional `-1` to
+  `-15`, `-T` or `-R`). Plain callsigns work.
 * VarAC's *Remember VARA audio level per band* is ignored: set the level with Aether's *Set
   drive* (Session tab, Keying and drive).
 * The rules check needs Aether to know the dial; with the host program owning the radio it is

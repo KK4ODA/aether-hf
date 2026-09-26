@@ -185,6 +185,11 @@ function onEvent(frame) {
     case "regulatory":
       onRegulatory(data);
       break;
+    case "bandwidth":
+      // the station moved to its other bandwidth, or back (ADR-0026): another ladder of modes
+      renderBandwidth(data);
+      loadCapabilities();
+      break;
     default:
       log(JSON.stringify(data), false, frame.event);
   }
@@ -417,6 +422,7 @@ async function refreshStatus() {
   syncBanner(status);
 
   $("callsign").textContent = status.callsign || "—";
+  renderBandwidth(status.bandwidth);
   // a first run: the configuration still has the placeholder callsign, so the wizard is
   // where this panel should open — once, and only until Setup is saved
   if (!firstRunShown && status.callsign === "N0CALL") {
@@ -3353,9 +3359,11 @@ function applyKiss(kiss, host, datagrams) {
     ? `${k.frames_in ?? 0} in · ${k.frames_out ?? 0} out · ${waiting} waiting`
     : "turn on KISS programs in Setup";
 
-  // the header: which programs are using this station now
+  // the header: which programs are using this station now — and a host program that has not
+  // said LISTEN ON, which keeps the station from answering calls, as VARA's default does
   const using = [];
-  if (host?.connected) using.push("host program");
+  const deaf = host?.connected && lastStatus?.answering === false;
+  if (host?.connected) using.push(deaf ? "host program · not answering" : "host program");
   if (count > 0) using.push(`${count} KISS`);
   const chip = $("apps-chip");
   chip.hidden = using.length === 0;
@@ -3363,8 +3371,28 @@ function applyKiss(kiss, host, datagrams) {
   const who = clients.map((c) => `${c.app} (${c.peer})`);
   chip.title = [
     host?.connected ? "A host program is attached on the VARA-compatible interface" : "",
+    deaf ? "It has not said LISTEN ON, so calls to this station are not answered" : "",
     who.length ? `KISS: ${who.join(", ")}` : "",
   ].filter(Boolean).join(". ") || "Programs using this station now";
+}
+
+// The bandwidth the station runs, in the header, when it is not its own (ADR-0026): a host
+// program's BW command moved it, or a call in the narrower one did.
+function renderBandwidth(bandwidth) {
+  const chip = $("bw-chip");
+  if (!bandwidth || bandwidth.why === "configured" || bandwidth.bandwidth_hz === bandwidth.home_hz) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  const hz = bandwidth.bandwidth_hz;
+  if (bandwidth.why === "call") {
+    chip.textContent = `${hz} Hz · ${bandwidth.caller ?? "a call"}`;
+    chip.title = `${bandwidth.caller ?? "A station"} called in ${hz} Hz, and the station answered in it; it goes back to its own ${bandwidth.home_hz} Hz after the session`;
+  } else {
+    chip.textContent = `${hz} Hz · host program`;
+    chip.title = `The host program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
+  }
 }
 
 function renderKissClients(clients) {

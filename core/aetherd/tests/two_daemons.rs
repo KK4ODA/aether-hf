@@ -540,6 +540,77 @@ fn two_daemons_complete_a_session_at_500_hz() {
 }
 
 #[test]
+fn a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call() {
+    // ADR-0026, end to end: VarAC's BW500 moves a 2 300 Hz station to 500 Hz; its call is
+    // answered by another 2 300 Hz station, which moves for the session; the host hears the
+    // bandwidth in CONNECTED; when the host goes, its station goes back to its own
+    let dir = std::env::temp_dir().join(format!("aether-follow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let host = "\n[host]\nenabled = true\nbind = \"127.0.0.1:0\"";
+    let mut a = Daemon::start_with(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"", host);
+    let channel = a.sim_address();
+    let b = Daemon::start(&dir, "b", "KK4XYZ", &format!("connect = \"{channel}\""));
+    let mut client = Host::attach(&a);
+    let answer = |client: &mut Host| client.next(|l| l == "OK" || l == "WRONG");
+    client.send("MYCALL W4ODA");
+    assert_eq!(answer(&mut client), "OK");
+    client.send("BW500");
+    assert_eq!(answer(&mut client), "OK");
+    let bandwidth = a.status()["bandwidth"].clone();
+    assert_eq!(bandwidth["bandwidth_hz"], 500, "{bandwidth}");
+    assert_eq!(bandwidth["why"], "host");
+    assert_eq!(
+        a.call("capabilities", &json!({}))["result"]["bandwidth_hz"],
+        500
+    );
+
+    client.send("LISTEN ON");
+    assert_eq!(answer(&mut client), "OK");
+    client.send("CONNECT W4ODA KK4XYZ");
+    assert_eq!(answer(&mut client), "OK");
+    a.wait_for_state(&b, "connected", "the 500 Hz call was not answered");
+    assert_eq!(
+        client.next(|l| l.starts_with("CONNECTED")),
+        "CONNECTED W4ODA KK4XYZ 500"
+    );
+    let theirs = b.status()["bandwidth"].clone();
+    assert_eq!(theirs["bandwidth_hz"], 500, "{theirs}");
+    assert_eq!(theirs["why"], "call");
+    assert_eq!(theirs["caller"], "W4ODA");
+
+    let message = "Answered at 500 Hz by a station set to 2300.";
+    let encoded = aetherd::control::methods::to_base64(message.as_bytes());
+    assert_eq!(a.call("send", &json!({"data": encoded}))["ok"], true);
+    let received = receive(b.control, message.len(), || b.status()["counters"].clone());
+    assert_eq!(String::from_utf8_lossy(&received), message);
+
+    client.send("DISCONNECT");
+    assert_eq!(answer(&mut client), "OK");
+    assert_eq!(client.next(|l| l == "DISCONNECTED"), "DISCONNECTED");
+    a.wait_for_state(&b, "idle", "the session never closed");
+    // the host goes: its station goes back to its own at once, the station that was called
+    // after a quiet spell
+    drop(client);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while a.status()["bandwidth"]["bandwidth_hz"] != 2300
+        || b.status()["bandwidth"]["bandwidth_hz"] != 2300
+    {
+        assert!(
+            Instant::now() < deadline,
+            "a={} b={}",
+            a.status()["bandwidth"],
+            b.status()["bandwidth"]
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(a.status()["bandwidth"]["why"], "configured");
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn two_daemons_run_a_test_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

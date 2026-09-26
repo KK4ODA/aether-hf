@@ -254,7 +254,9 @@ pub struct RadioSection {
     pub busy_threshold_db: f64,
     /// The waveform's bandwidth in hertz: 2300, the default, or 500 — the bandwidth
     /// peer-to-peer contacts and `VarAC`'s calling frequencies use. Both stations of a
-    /// session use the same one; a call in the other bandwidth is not heard.
+    /// session use the same one. It is the station's own: a host program's `BW500` or
+    /// `BW2300` moves it to the other while the program is attached, and a 2300 Hz station
+    /// answers a 500 Hz call at 500 Hz, going back after the session (ADR-0026).
     #[serde(default = "default_bandwidth")]
     pub bandwidth: u32,
     /// Answer calls but never make one, and send no beacon, probe or datagram: a station
@@ -1388,6 +1390,9 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.max_key_s",
     "radio.wait_for_clear",
     "radio.max_mode",
+    // the station moves to its own bandwidth once idle, as it does for a host program's
+    // BW commands (ADR-0026)
+    "radio.bandwidth",
     "radio.answer_only",
     "radio.busy_threshold_db",
     // the identifier is rendered at each transmission, so its settings apply to the next
@@ -1650,7 +1655,9 @@ max_key_s = 30.0
 wait_for_clear = true
 busy_threshold_db = 6.0
 # The waveform: 2300 Hz, or 500 Hz — the bandwidth peer-to-peer contacts and VarAC's
-# calling frequencies use. Both stations of a session use the same one.
+# calling frequencies use. Both stations of a session use the same one. This is the station's
+# own: a host program's BW500/BW2300 moves it while the program is attached, and a 2300 Hz
+# station answers a 500 Hz call at 500 Hz, then comes back.
 bandwidth = 2300
 # Answer calls but never make one, and send no beacon, probe or KISS datagram: a station
 # left listening with nobody at it. Under automatic control ([regulatory] control) it still
@@ -2068,8 +2075,9 @@ mod tests {
         assert!(Config::is_live("radio.max_mode"));
         assert!(Config::is_live("radio.wait_for_clear"));
         assert!(Config::is_live("radio.answer_only"));
-        // the waveform is the modem: a change to it is a restart
-        assert!(!Config::is_live("radio.bandwidth"));
+        // the waveform was once a restart; the station moves between its two bandwidths
+        // while idle now, for a host program's BW commands as for its own (ADR-0026)
+        assert!(Config::is_live("radio.bandwidth"));
         // a station switched to 500 Hz with nothing else touched runs every narrow rung:
         // the wide default of 19 clamps to the narrow ladder's last, 14 (ADR-0015)
         let narrow = Config::parse("callsign = \"W4ODA\"\n[radio]\nbandwidth = 500\n")

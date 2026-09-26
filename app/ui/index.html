@@ -41,6 +41,7 @@
           <span id="reg-badge-text" title="The verdict on this station's widest transmission, here and now">—</span>
         </button>
         <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
+        <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
         <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT or rigctld" hidden></span>
         <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
@@ -996,8 +997,11 @@
                 <details class="help-pop push-right" id="step-4-help" title="What these settings do">
                   <summary title="What these settings do" aria-label="What these settings do">?</summary>
                   <p>
-                    Both stations of a session use the same <strong>bandwidth</strong>; a call in the
-                    other one is not heard, and changing it restarts the modem. <strong>Answer
+                    Both stations of a session use the same <strong>bandwidth</strong>. This is the
+                    station's own: a host program's <em>BW500</em> or <em>BW2300</em> moves it while the
+                    program is attached, and a 2300 Hz station answers a 500 Hz call at 500 Hz and comes
+                    back after the session. A change here takes effect once the station is idle, with no
+                    restart. <strong>Answer
                     only</strong> makes no call and sends no beacon; an unattended station is also
                     <em>Automatic</em> under Control in step 1, and the rules then decide where it may
                     answer (§97.221). <strong>Compression</strong> is deflate over the whole session, so
@@ -1012,7 +1016,7 @@
               </div>
               <div class="row">
                 <label for="radio-bandwidth">Bandwidth</label>
-                <select id="radio-bandwidth" title="The waveform's width; both stations must run the same one, and changing it restarts the modem">
+                <select id="radio-bandwidth" title="The station's own bandwidth; both stations of a session run the same one. A host program's BW500 or BW2300 moves it while the program is attached, and a 2300 Hz station answers a 500 Hz call at 500 Hz">
                   <option value="2300">2300 Hz — Winlink, Pat, the most data</option>
                   <option value="500">500 Hz — peer-to-peer and VarAC</option>
                 </select>

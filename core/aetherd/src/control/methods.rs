@@ -666,6 +666,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
         "beacon" => beacon(station, params, id),
         "beacon.every" => beacon_every(station, params, id),
+        "bandwidth.set" => bandwidth_set(station, params, id),
         "ptt.test" => {
             let seconds = params
                 .get("duration_s")
@@ -1325,6 +1326,43 @@ fn beacon_every<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Str
     }
 }
 
+/// `bandwidth.set {hz}`: the bandwidth a host program asked for with VARA's `BW500`, `BW2300`
+/// or `BW2750` — 2750 is 2300 here — or `null` to go back to the station's own (ADR-0026). The
+/// station moves between sessions only: refused, and retryable, while anything is under way.
+fn bandwidth_set<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let hz = match params.get("hz") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(hz @ (500 | 2300 | 2750)) => usize::try_from(hz).ok(),
+            _ => {
+                return Response::failed(
+                    id,
+                    ApiError::new(
+                        "bad_params",
+                        "The bandwidth is 500, 2300 or 2750 hertz, or null for the station's \
+                         own: {\"hz\": 500}.",
+                        false,
+                    ),
+                );
+            }
+        },
+    };
+    match station.host_bandwidth(hz) {
+        Ok(_) => Response::ok(id, station.bandwidth_status()),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                "refused",
+                format!(
+                    "The station stays at {} Hz for now: {reason}.",
+                    station.bandwidth_hz()
+                ),
+                true,
+            ),
+        ),
+    }
+}
+
 /// Everything a client needs to render the station's current state.
 fn status<P: Ptt>(station: &mut Station<P>) -> Value {
     let frequency_hz = station.frequency_hz();
@@ -1383,6 +1421,11 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "sent": { "pending": sent_pending, "recent": sent_recent },
         "counters": counters(station),
         "recordings_dir": station.record_dir().map(|p| p.display().to_string()),
+        // the bandwidth it runs, its own, a host program's request, and why (ADR-0026)
+        "bandwidth": station.bandwidth_status(),
+        // whether calls are answered: always, unless a host program attached has not said
+        // LISTEN ON
+        "answering": station.answering(),
     })
 }
 
@@ -2271,6 +2314,45 @@ mod tests {
                 .error
                 .is_none_or(|error| error.message != NO_HOST_TO_KEY),
             "a station keying the radio itself was asked for a host"
+        );
+    }
+
+    #[test]
+    fn bandwidth_set_moves_the_station_between_sessions_and_says_why_not_otherwise() {
+        // a host program's BW commands, through the control API (ADR-0026)
+        let mut station = station();
+        let moved = call(&mut station, "bandwidth.set", json!({"hz": 500}));
+        assert!(moved.ok, "{:?}", moved.error);
+        let result = moved.result.expect("result");
+        assert_eq!(result["bandwidth_hz"], 500);
+        assert_eq!(result["home_hz"], 2300);
+        assert_eq!(result["why"], "host");
+        let status = call(&mut station, "status", json!({}))
+            .result
+            .expect("status");
+        assert_eq!(status["bandwidth"]["bandwidth_hz"], 500);
+        assert_eq!(status["answering"], true);
+        let caps = call(&mut station, "capabilities", json!({}))
+            .result
+            .expect("capabilities");
+        assert_eq!(caps["bandwidth_hz"], 500);
+        // 2750 is 2300 here; null is the station's own
+        let wide = call(&mut station, "bandwidth.set", json!({"hz": 2750}));
+        assert_eq!(wide.result.expect("result")["bandwidth_hz"], 2300);
+        let own = call(&mut station, "bandwidth.set", json!({"hz": null}));
+        assert_eq!(own.result.expect("result")["host_hz"], Value::Null);
+        // a bandwidth nobody runs is a bad request; a call going out is a refusal to retry
+        let odd = call(&mut station, "bandwidth.set", json!({"hz": 1800}));
+        assert_eq!(odd.error.expect("error").code, "bad_params");
+        call(&mut station, "connect", json!({"remote": "KK4XYZ"}));
+        let busy = call(&mut station, "bandwidth.set", json!({"hz": 500}));
+        let error = busy.error.expect("error");
+        assert_eq!(error.code, "refused");
+        assert!(error.retryable);
+        assert!(
+            error.message.contains("a call is going out"),
+            "{}",
+            error.message
         );
     }
 

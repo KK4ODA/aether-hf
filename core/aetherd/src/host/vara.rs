@@ -16,10 +16,11 @@
 //! Aether would strand every real-VARA client that called it. The compatibility is in the
 //! host interface, and saying so is the point rather than a limitation.
 //!
-//! The bandwidth is the station's configuration (`[radio] bandwidth`, 2300 or 500), so `BW2300`
-//! or `BW500` is accepted only when it names the one the station runs and the others are
-//! refused rather than silently ignored: a client that asked for 500 Hz and got 2300 would be
-//! transmitting outside what its operator chose.
+//! `BW500`, `BW2300` and `BW2750` set the station's bandwidth, as VARA's published commands set
+//! its mode (ADR-0026): the station moves between sessions and says `OK`, or stays and says
+//! `WRONG` when something is under way — a client told `OK` for 500 Hz that went on
+//! transmitting 2300 would be outside what its operator chose. `LISTEN ON` / `OFF` decides
+//! whether calls are answered, off until the program says otherwise, as VARA has it.
 
 use std::fmt::Write as _;
 
@@ -69,6 +70,9 @@ pub enum HostAction {
     /// and beacons are `CQFRAME KK4ODA-9 500` and the like, and the suffix means something
     /// to the program at the other end (ADR-0024).
     CqFrame(Option<String>),
+    /// Run this bandwidth (`BW<n>`), in hertz; the server says `OK` or `WRONG` once the modem
+    /// has moved or said why it cannot (ADR-0026).
+    Bandwidth(u32),
 }
 
 /// What the adapter should do with a command: what to say, and what to act on.
@@ -131,7 +135,9 @@ pub enum SessionKind {
 pub struct HostState {
     /// Callsigns this station will answer to. The first is the station's own.
     pub callsigns: Vec<String>,
-    /// Whether the host wants incoming calls answered.
+    /// Whether the host wants incoming calls answered: `LISTEN ON`, `LISTEN CQ` or `CHAT ON`,
+    /// which the published command list says includes it. Off until it says so, VARA's
+    /// default — and the station answers no call while a program attached has not said it.
     pub listening: bool,
     /// Whether the station may be listed publicly.
     pub public: bool,
@@ -143,8 +149,8 @@ pub struct HostState {
     pub cw_id: bool,
     /// Bytes the modem still has to send, as last reported.
     pub buffer: usize,
-    /// The bandwidth the station runs, in hertz: the one `BW<n>` is accepted for, and
-    /// the one `CONNECTED` reports. The server sets it from the modem's `capabilities`.
+    /// The bandwidth the station runs, in hertz: the one `CONNECTED` reports. The server sets
+    /// it from the modem's `capabilities`, and again whenever the station moves (ADR-0026).
     pub bandwidth_hz: u32,
     /// Settings the host asked for that this modem hears and does not act on.
     pub recorded: Recorded,
@@ -156,13 +162,13 @@ pub struct HostState {
 pub struct Recorded {
     /// `CHAT ON`: `VarAC` asks for it on every start. On VARA it lets the KISS port transmit
     /// while this host holds the command port ("Winlink priority" otherwise); here it does
-    /// the same for Aether's KISS port (ADR-0019).
+    /// the same for Aether's KISS port (ADR-0019). It includes `LISTEN ON`.
     pub chat: bool,
     /// `IGNOREKISSDCD ON`: KISS frames go without waiting for a clear channel — `VarAC` says it
     /// for its broadcasts.
     pub ignore_kiss_dcd: bool,
-    /// `LISTEN CQ`: hear only CQ frames. This station hears everything and answers calls to
-    /// its own callsigns either way.
+    /// `LISTEN CQ`: hear only CQ frames. This station hears everything, and answers calls to
+    /// its own callsigns as after `LISTEN ON` — what a host wanting CQs also wants.
     pub cq_only: bool,
     /// `DRIVELEVEL <n>`: the transmit level a host would set, on a scale VARA does not
     /// publish. Kept as the host said it; the drive stays the operator's `audio.tx_level`.
@@ -274,9 +280,11 @@ impl HostState {
                 self.recorded.cq_only = true;
                 HostOutcome::acting(HostAction::Listen(true))
             }
+            // "Includes the LISTEN ON command", in the published command list
             ("CHAT", ["ON"]) => {
                 self.recorded.chat = true;
-                HostOutcome::ok()
+                self.listening = true;
+                HostOutcome::acting(HostAction::Listen(true))
             }
             ("CHAT", ["OFF"]) => {
                 self.recorded.chat = false;
@@ -331,18 +339,7 @@ impl HostState {
                 self.recorded.drive_level = Some((*level).to_owned());
                 HostOutcome::ok()
             }
-            // The station runs one bandwidth, chosen in its configuration (2300 or 500 Hz).
-            // A host asking for that one is answered `OK`; one asking for another is refused,
-            // because accepting and then transmitting the configured bandwidth anyway would
-            // put the station outside what its operator asked for — VarAC at 500 Hz on a
-            // calling frequency most of all.
-            ("BW2300" | "BW500", []) if Self::bandwidth_of(verb) == Some(self.bandwidth_hz) => {
-                HostOutcome::ok()
-            }
-            // Winlink Express sends its widest setting, 2750 Hz unless changed. A 2300 Hz
-            // station is inside what that asks for — a narrower signal always is — so it
-            // answers OK and runs 2300; a 500 Hz station is not what was asked, and refuses.
-            ("BW2750", []) if self.bandwidth_hz == 2300 => HostOutcome::ok(),
+            ("BW2300" | "BW500" | "BW2750", []) => Self::bandwidth(verb),
             // the KISS port's channel access, as VARA has it (ADR-0019)
             ("IGNOREKISSDCD", [on @ ("ON" | "OFF")]) => {
                 self.recorded.ignore_kiss_dcd = *on == "ON";
@@ -357,6 +354,22 @@ impl HostState {
         HostOutcome::acting(HostAction::CqFrame(
             args.first().map(|source| (*source).to_owned()),
         ))
+    }
+
+    /// `BW500`, `BW2300`, `BW2750`: the published commands set the modem's mode. The station
+    /// moves to the bandwidth asked for between sessions, and the server says `OK` once it
+    /// runs it — or `WRONG`, because accepting and transmitting the other anyway would put the
+    /// station outside what its operator chose, `VarAC` at 500 Hz on a calling frequency most
+    /// of all (ADR-0026). Winlink Express sends its widest setting, 2750 Hz unless changed, and
+    /// a 2300 Hz station is inside what that asks for.
+    fn bandwidth(verb: &str) -> HostOutcome {
+        match Self::bandwidth_of(verb) {
+            Some(hz) => HostOutcome {
+                replies: Vec::new(),
+                action: HostAction::Bandwidth(hz),
+            },
+            None => HostOutcome::wrong(),
+        }
     }
 
     /// The bandwidth a `BW<n>` command names.
@@ -592,16 +605,22 @@ mod tests {
         // verbatim from VarAC 15.0.18's first conversation with this modem: three of these
         // came back WRONG, which is what a modem says to a command it has never heard of
         let mut host = HostState::default();
-        assert_eq!(host.command("CHAT ON").replies, vec!["OK"]);
-        assert!(host.recorded.chat);
+        // CHAT ON "includes the LISTEN ON command", in the published list
+        let chat = host.command("CHAT ON");
+        assert_eq!(chat.replies, vec!["OK"]);
+        assert_eq!(chat.action, HostAction::Listen(true));
+        assert!(host.recorded.chat && host.listening);
         assert_eq!(host.command("CHAT OFF").replies, vec!["OK"]);
         assert_eq!(host.command("IGNOREKISSDCD ON").replies, vec!["OK"]);
         let listen = host.command("LISTEN CQ");
         assert_eq!(listen.replies, vec!["OK"]);
         assert_eq!(listen.action, HostAction::Listen(true));
         assert!(host.listening && host.recorded.cq_only);
-        // and the two it says that this modem genuinely cannot do stay refused
-        assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
+        // BW500 goes to the modem, which moves and is answered OK, or cannot and is answered
+        // WRONG, by the server once it knows (ADR-0026)
+        let bandwidth = host.command("BW500");
+        assert!(bandwidth.replies.is_empty());
+        assert_eq!(bandwidth.action, HostAction::Bandwidth(500));
         // Winlink Express 1.8.5's own opening line, verbatim: PUBLIC ON, CWID ON,
         // COMPRESSION ON, BW<max>, MYCALL, LISTEN ON
         assert_eq!(host.command("COMPRESSION ON").replies, vec!["OK"]);
@@ -614,23 +633,24 @@ mod tests {
     }
 
     #[test]
-    fn the_one_bandwidth_this_phy_has_is_accepted_and_the_others_refused() {
-        // silently substituting 2300 for a client that asked for 500 would put the station
-        // outside the bandwidth its operator chose
+    fn a_bandwidth_command_goes_to_the_modem_and_anything_else_is_refused() {
+        // VARA's BW commands set the modem's mode: each goes to the modem, and the server says
+        // OK once the station runs what was asked, WRONG when it could not move — whatever the
+        // station ran before (ADR-0026). A bandwidth nobody publishes is no command at all.
+        for (line, hz) in [("BW2300", 2300), ("BW500", 500), ("BW2750", 2750)] {
+            for running in [2300, 500] {
+                let mut host = HostState {
+                    bandwidth_hz: running,
+                    ..HostState::default()
+                };
+                let outcome = host.command(line);
+                assert!(outcome.replies.is_empty(), "{line}");
+                assert_eq!(outcome.action, HostAction::Bandwidth(hz));
+            }
+        }
         let mut host = state();
-        assert_eq!(host.command("BW2300").replies, vec!["OK"]);
-        assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
-        // Winlink Express asks for its widest setting: 2300 Hz is inside 2750, so the wide
-        // station accepts it and runs 2300
-        assert_eq!(host.command("BW2750").replies, vec!["OK"]);
-        // a station running the narrow waveform accepts BW500 and refuses BW2300
-        let mut narrow = HostState {
-            bandwidth_hz: 500,
-            ..HostState::default()
-        };
-        assert_eq!(narrow.command("BW500").replies, vec!["OK"]);
-        assert_eq!(narrow.command("BW2300").replies, vec!["WRONG"]);
-        assert_eq!(narrow.command("BW2750").replies, vec!["WRONG"]);
+        assert_eq!(host.command("BW1800").replies, vec!["WRONG"]);
+        assert_eq!(host.command("BW500 NOW").replies, vec!["WRONG"]);
     }
 
     #[test]

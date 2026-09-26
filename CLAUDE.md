@@ -486,7 +486,8 @@ the burst it sent. Port: `aether-phy/src/tone.rs` (codec, detector, `ToneStream`
 `Received::{Ofdm, Tone}`, the streaming receiver keeps the longest tone frame and announces
 arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons went at
 `control_rung()` (they had been going out at rung 0; since ADR-0016 they go on the floor). A wide station hears a narrow station's
-floor calls — the frames are the same — and ignores them by the bandwidth bits.
+floor calls — the frames are the same — and ignored them by the bandwidth bits (since ADR-0026
+it moves to 500 Hz and answers).
 **P9-9 fast tones** (ADR-0014, beta.53; the author's "phase 4"): the floor's frame with its
 data at 50 and 100 Bd (two or four data symbols a slot, 800/1 600 Hz, 2 300 Hz only) —
 `tone50-51`, `tone50-75`, `tone100-105`, `tone100-153` (76–228 bit/s) are rungs 2–5 of a
@@ -811,8 +812,30 @@ no-op step; fixture `0.2.0-beta.68-cat.toml`; `SCHEMA_HISTORY` gains beta.69 —
 compares the package version, so the schema line ships in the release push). The shell runs one
 instance (`tauri-plugin-single-instance`: a host program launching `aether-hf.exe` while it
 runs brings up the window). `docs/user/host-programs.md` is the setup guide for both ways.
-Winlink Express leaves keying to the modem, so it runs with Aether owning the radio. Still
-owed: the bandwidth following the host's `BW` command, and chat-mode turn-taking (Tier 2).
+Winlink Express leaves keying to the modem, so it runs with Aether owning the radio.
+
+**Tier 2 of the drop-in (2026-09-26, after beta.69; the author: "pursue all the items that do not
+need my intervention").** VARA's published command list (EA5HVK, *VARA Protocol Native TNC
+Commands*, 13 Feb 2022; its text in `docs/spec/host-interfaces.md` §1 by reference) settled what
+the adapter had guessed: `BW<n>` sets the modem's mode, `LISTEN OFF` is the default and turns
+answering off, `CHAT ON` includes `LISTEN ON`; `CLEANTXBUFFER`, `DRIVELEVEL` and `CWID` are not in
+it, and its callsign grammar (3–7 characters, then `-1`…`-15`, `-T` or `-R`) excludes VarAC's
+`KK4ODA-1-T` too. **ADR-0026:** the engine moves between airs between sessions
+(`LinkEngine.set_air`, and `set_max_mode` — a live `max_mode` had never reached the engine; model
+first); `station/bandwidth.rs` rebuilds the receiver, modems, band filters, busy detector,
+occupancy and engine while idle (`move_to`; `rx_origin` keeps frame times in the station's
+clock); a host's `BW500`/`BW2300`/`BW2750` is `bandwidth.set` (OK once moved, WRONG when busy
+unless already satisfied; held while the host is attached); a 2300 Hz station answers a 500 Hz
+connect request to it at 500 Hz (`narrower_call`, before the engine sees it) and goes back after
+`RETURN_QUIET_S` (20 s) of quiet — never the other way; `[radio] bandwidth` is live;
+`status.bandwidth`, `status.answering`, the `bandwidth` event (the adapter refetches
+`capabilities` on it), the panel's `#bw-chip`; recordings carry an `air` event and
+`replay_expecting` rebuilds the receiver there. `station/host.rs`: while a host is attached the
+station answers calls and probes only after `LISTEN ON`/`CQ`/`CHAT ON` (`HostFlags.listening`,
+`HostPresence`, `calls_unanswered`). The end-to-end test is `two_daemons.rs`'s
+`a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call`. No config key and no schema bump:
+**a new config key has to ship with a release** (the shell's `SCHEMA_HISTORY` test ties the
+schema to the package version), so work that adds one waits on a branch for the release.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

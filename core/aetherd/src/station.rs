@@ -20,15 +20,19 @@
 //! occupancy, and letting it into the noise-floor estimate would blind the detector for
 //! several seconds afterwards.
 
+mod bandwidth;
 mod beacons;
 mod datagrams;
 mod fieldtest;
+mod host;
+pub use bandwidth::{RETURN_QUIET_S, Why as BandwidthWhy, params_for};
 pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
     ReceivedDatagram,
 };
 pub use fieldtest::{Rung, Step, TestPlan, TestRun, Transfer};
+pub use host::HostPresence;
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
@@ -120,6 +124,10 @@ pub struct StationConfig {
     /// The regulatory policy's settings (ADR-0018): the profile, the station's control, the
     /// operator's class, the sideband, and a dial for a radio that cannot report its own.
     pub regulatory: crate::regulatory::Settings,
+    /// `[radio] max_mode` as the operator set it, which indexes the ladder of whichever
+    /// bandwidth runs: `link.max_mode` is it held to the ladder running now, and a move to the
+    /// other bandwidth (ADR-0026) holds it to that one's. `None` takes `link.max_mode`.
+    pub max_mode_setting: Option<usize>,
 }
 
 impl Default for StationConfig {
@@ -149,6 +157,7 @@ impl Default for StationConfig {
             record_tx_audio: false,
             // a harness checks nothing; the daemon always builds this from the file
             regulatory: crate::regulatory::Settings::unchecked(),
+            max_mode_setting: None,
         }
     }
 }
@@ -684,6 +693,9 @@ pub struct StationStats {
     pub beacons_sent: usize,
     /// Beacons heard from other stations.
     pub beacons_heard: usize,
+    /// Calls and probes to this station left unanswered because the host program attached
+    /// had not said `LISTEN ON`.
+    pub calls_unanswered: usize,
 }
 
 /// The two playback clocks, and how the transmission now running stands against them.
@@ -872,6 +884,13 @@ pub struct Station<P: Ptt> {
     datagrams: datagrams::Datagrams,
     /// The repeating beacon's timer and what the beacons did.
     beacons: beacons::Beacons,
+    /// The bandwidth the station should run, and why it runs what it does (ADR-0026).
+    bandwidth: bandwidth::Bandwidth,
+    /// Where the receiver's sample count starts in the station's: the receiver is built again
+    /// when the station moves to another bandwidth, and counts from there.
+    rx_origin: usize,
+    /// What the host program attached now said about this station: whether to answer calls.
+    host: host::Host,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -902,6 +921,7 @@ impl<P: Ptt> Station<P> {
         // the transmission ends, and on the air as a frame nobody can decode. The bench
         // never showed it: the simulated channel carries audio whether keyed or not.
         config.key_tail_s += config.playback_lead_s;
+        config.max_mode_setting.get_or_insert(config.link.max_mode);
         let params = config.params;
         let mut timing = phy_timing(params);
         timing.tx_latency_s = config.key_lead_s + config.playback_lead_s + config.key_tail_s;
@@ -993,6 +1013,9 @@ impl<P: Ptt> Station<P> {
             last_gate: None,
             datagrams: datagrams::Datagrams::new(seed),
             beacons: beacons::Beacons::default(),
+            bandwidth: bandwidth::Bandwidth::new(params.bandwidth.hz()),
+            rx_origin: 0,
+            host: host::Host::default(),
             stats: StationStats::default(),
             config,
         };
@@ -1530,7 +1553,15 @@ impl<P: Ptt> Station<P> {
         self.config.max_key_s = config.radio.max_key_s;
         self.refresh_burst_cap(self.now());
         self.config.wait_for_clear = config.radio.wait_for_clear;
-        self.config.link.max_mode = config.radio.fastest_mode();
+        // the operator's fastest rung, on the ladder running now — and in the engine, which
+        // used to keep the one it started with until the modem restarted
+        self.config.max_mode_setting = Some(config.radio.max_mode);
+        let top = self.top_rung();
+        self.config.link.max_mode = top;
+        self.engine.set_max_mode(top);
+        // the station's own bandwidth: it moves to it once idle, unless a host program or a
+        // call holds it on the other (ADR-0026)
+        self.bandwidth.home_hz = config.radio.bandwidth as usize;
         self.config.answer_only = config.radio.answer_only;
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
@@ -2161,6 +2192,7 @@ impl<P: Ptt> Station<P> {
         self.pump();
         self.advance_test();
         self.advance_beacons(now);
+        self.advance_bandwidth(now);
         Ok(())
     }
 
@@ -2302,6 +2334,9 @@ impl<P: Ptt> Station<P> {
     /// Feed the streaming receiver and pass what it finds to the engine.
     fn absorb(&mut self, baseband: &[Complex], now: f64) {
         let fs = self.config.params.fs_baseband;
+        // where this receiver's positions start: a move to the other bandwidth (ADR-0026)
+        // builds another, but what this one found is placed by its own count
+        let origin = self.rx_origin;
         let frames = self.receiver.feed(baseband);
         let preambles = self.receiver.take_preambles();
         self.baseband_seen += baseband.len();
@@ -2373,10 +2408,30 @@ impl<P: Ptt> Station<P> {
             } else {
                 Container::Data
             };
-            let start = decoded.frame.start() as f64 / fs;
+            let start = (origin + decoded.frame.start()) as f64 / fs;
             let frame_s = decoded.frame.samples(&air) as f64 / fs;
             let decoded_ok = decoded.ok();
             let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected);
+            // A frame that decoded is real whatever its acquisition looked like, and a weak
+            // one at the floor may have acquired below the gate below — it counts here. One
+            // that did not decode is a soft frame the engine may still combine, and it says
+            // nothing about the channel: a phantom gets this far too.
+            if decoded_ok {
+                self.busy.mark_frame(now, detected);
+            }
+            // a call or a probe to this station while the host program attached says not to
+            // answer (`LISTEN OFF`, VARA's default until it says otherwise)
+            if self.unanswered(&decoded) {
+                continue;
+            }
+            // A call to this station in the narrower bandwidth: the station moves to it before
+            // the engine sees the call, which it then answers on the caller's air (ADR-0026).
+            // The frame is the tone floor's, the same on both airs, and its rung is the same.
+            let mut rung = rung;
+            if let Some(caller) = self.narrower_call(&decoded) {
+                self.move_to(500, BandwidthWhy::Call(caller));
+                rung = decoded.frame.rung(&self.air()).unwrap_or(rung);
+            }
             let frame = PhyFrame {
                 container,
                 t_start: start,
@@ -2386,17 +2441,10 @@ impl<P: Ptt> Station<P> {
                 modem: Rc::clone(&self.decoder),
                 trusted,
             };
-            // A frame that decoded is real whatever its acquisition looked like, and a weak
-            // one at the floor may have acquired below the gate below — it counts here. One
-            // that did not decode is a soft frame the engine may still combine, and it says
-            // nothing about the channel: a phantom gets this far too.
-            if decoded_ok {
-                self.busy.mark_frame(now, detected);
-            }
             self.engine.on_frame(&frame, now);
         }
 
-        self.heed_preambles(&preambles, now);
+        self.heed_preambles(&preambles, origin, now);
         self.pump();
     }
 
@@ -2966,7 +3014,7 @@ impl<P: Ptt> Station<P> {
     /// [`DETECT_CONFIDENCE_TRUSTED`]; a tone frame (ADR-0013) is announced only once its
     /// first sync block has cleared a threshold set over the noise maximum of that block and
     /// beaten its neighbours for three symbols, which is the gate already.
-    fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], now: f64) {
+    fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], origin: usize, now: f64) {
         let air = self.air();
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
@@ -2980,7 +3028,7 @@ impl<P: Ptt> Station<P> {
             let frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
             self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
             self.engine
-                .on_preamble(pending.start as f64 / fs, now, Some(frame_s));
+                .on_preamble((origin + pending.start) as f64 / fs, now, Some(frame_s));
         }
     }
 
@@ -6275,23 +6323,99 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_wide_station_does_not_answer_a_narrow_call() {
-        // the two OFDM waveforms do not decode each other's preambles: a 500 Hz call's
-        // ordinary tries are silence at a 2 300 Hz station. The tone floor (ADR-0013) is the
-        // same frames on both airs, so its tries on the floor reach the wide station — which
-        // leaves them alone, because the call states its bandwidth
-        let mut air = Air::new(1.0, 0.0005);
-        air.a = Station::new(
+    /// A station of `params` calling as W4ODA, for the tests of the two airs meeting.
+    fn caller_on(params: aether_phy::waveform::WaveformParams) -> Station<NullPtt> {
+        Station::new(
             StationConfig {
                 callsign: "W4ODA".to_owned(),
-                params: aether_phy::waveform::NARROW_500,
+                params,
                 wait_for_clear: false,
                 ..StationConfig::default()
             },
             NullPtt::default(),
             1,
+        )
+    }
+
+    #[test]
+    fn a_wide_station_answers_a_narrow_call_at_500_hz_and_goes_back_after() {
+        // ADR-0026, as VARA's "Accept 500 Hz connections": the two OFDM waveforms do not
+        // decode each other's preambles, but the tone floor (ADR-0013) is the same frames on
+        // both airs, so a 500 Hz call's first try — on the floor since ADR-0016 — reaches a
+        // 2 300 Hz station, which moves to 500 Hz and answers on the caller's air
+        let mut air = Air::new(1.0, 0.0005);
+        air.a = caller_on(aether_phy::waveform::NARROW_500);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.b.take_events()
         );
+        assert_eq!(air.b.bandwidth_hz(), 500);
+        let status = air.b.bandwidth_status();
+        assert_eq!(status["why"], "call");
+        assert_eq!(status["caller"], "W4ODA");
+        assert_eq!(status["home_hz"], 2300);
+        assert_eq!(
+            aether_link::frames::bandwidth_code(air.b.engine().peer_capabilities()),
+            1
+        );
+        // whatever the wide station heard before it moved was the floor's, never the narrow
+        // OFDM: its first report is a floor rung
+        let reports = air.b.take_frame_reports();
+        assert!(reports[0].mode < 2 && reports[0].decoded, "{reports:?}");
+        let message = b"answered in the bandwidth it was called in";
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received(), message);
+        // the session ends; the station stays for a quiet spell — the other station's
+        // goodbye, a call that follows a ping — and then goes back to its own
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        assert_eq!(air.b.state(), State::Idle);
+        assert_eq!(air.b.bandwidth_hz(), 500);
+        air.run(RETURN_QUIET_S + 10.0, |_, b| b.bandwidth_hz() == 2300);
+        assert_eq!(air.b.bandwidth_hz(), 2300);
+        assert_eq!(air.b.bandwidth_status()["why"], "configured");
+        assert_eq!(
+            aether_link::frames::bandwidth_code(air.b.engine().config().capabilities),
+            0
+        );
+        let events = air.b.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("bandwidth:2300 Hz → 500 Hz: W4ODA called in it")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("bandwidth:500 Hz → 2300 Hz")),
+            "{events:?}"
+        );
+        // and it answers at 2 300 Hz as before
+        air.a = caller_on(WIDE_2300);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        assert_eq!(air.b.bandwidth_hz(), 2300);
+    }
+
+    #[test]
+    fn a_narrow_station_does_not_answer_a_wide_call() {
+        // never the other way: a 2 300 Hz signal where the operator or a host program chose
+        // 500 Hz — a 500 Hz calling frequency, most of all — is nobody's choice. The wide
+        // call's floor tries reach the narrow station, which leaves them alone, because the
+        // call states its bandwidth
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(90.0, |_, b| {
             b.events
@@ -6306,14 +6430,123 @@ mod tests {
                 .any(|e| e.starts_with("ignored:W4ODA calls in another bandwidth")),
             "{events:?}"
         );
-        // and whatever the wide station heard was the floor's, never the narrow OFDM
-        let floor = air.b.engine().timing().floor_modes;
+        assert_eq!(air.b.bandwidth_hz(), 500);
+        // and whatever the narrow station heard was the floor's, never the wide OFDM
+        let floor = 2;
         let reports = air.b.take_frame_reports();
         assert!(!reports.is_empty());
         assert!(
             reports.iter().all(|r| r.mode < floor && r.decoded),
             "{reports:?}"
         );
+    }
+
+    #[test]
+    fn a_host_program_moves_the_bandwidth_between_sessions_and_takes_it_back() {
+        // VARA's BW commands set the modem's mode (ADR-0026): the station moves while idle,
+        // holds the host's bandwidth while the host is attached, and goes back when it goes
+        let mut station = idle_station();
+        assert_eq!(station.bandwidth_hz(), 2300);
+        station.set_host(HostPresence {
+            attached: true,
+            listening: true,
+        });
+        assert_eq!(station.host_bandwidth(Some(500)), Ok(500));
+        assert_eq!(station.bandwidth_hz(), 500);
+        assert_eq!(station.bandwidth_status()["why"], "host");
+        assert_eq!(station.bandwidth_status()["host_hz"], 500);
+        // the engine is on the narrow air: its ladder, its handshake bandwidth, its top rung
+        let narrow = aether_phy::modes::air_interface(aether_phy::waveform::NARROW_500);
+        assert_eq!(
+            station.engine().timing().data_capacity.len(),
+            narrow.n_rungs()
+        );
+        assert_eq!(station.engine().config().max_mode, narrow.n_rungs() - 1);
+        assert_eq!(
+            aether_link::frames::bandwidth_code(station.engine().config().capabilities),
+            1
+        );
+        // 2750, Winlink Express's widest, is 2300: a narrower signal is inside what was asked
+        assert_eq!(station.host_bandwidth(Some(2750)), Ok(2300));
+        assert_eq!(station.bandwidth_hz(), 2300);
+        assert!(station.host_bandwidth(Some(1800)).is_err());
+        // nothing moves while a call is going out: it runs on the air it started on
+        station.host_bandwidth(Some(500)).expect("idle");
+        station.connect("KK4ABC").expect("idle");
+        let refused = station.host_bandwidth(Some(2300)).expect_err("calling");
+        assert!(refused.contains("a call is going out"), "{refused}");
+        assert_eq!(station.bandwidth_hz(), 500);
+        station.abort();
+        // the host goes, and takes its bandwidth with it once the station is quiet
+        station.set_host(HostPresence::default());
+        let rate = WIDE_2300.audio_rate as f64;
+        let mut out = vec![0.0f32; 4096];
+        for seed in 0..(30.0 * rate / 4096.0) as u32 {
+            station.playback(&mut out).expect("playback");
+            station.capture(&quiet_block(seed)).expect("capture");
+            if station.bandwidth_hz() == 2300 {
+                break;
+            }
+        }
+        assert_eq!(station.bandwidth_hz(), 2300);
+        assert_eq!(station.bandwidth_status()["why"], "configured");
+        assert_eq!(
+            station.bandwidth_status()["host_hz"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn a_station_whose_host_has_not_said_listen_on_answers_no_call() {
+        // VARA's LISTEN OFF, its default: incoming connections disabled until the program
+        // attached says LISTEN ON (or CHAT ON, which includes it)
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.set_host(HostPresence {
+            attached: true,
+            listening: false,
+        });
+        assert!(!air.b.answering());
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 2);
+        assert!(!air.b.connected());
+        assert!(air.b.stats.calls_unanswered >= 2);
+        let events = air.b.take_events();
+        let said: Vec<&String> = events
+            .iter()
+            .filter(|e| e.starts_with("listen:a call from W4ODA to KK4XYZ not answered"))
+            .collect();
+        // said once for the caller's tries, not once a try
+        assert_eq!(said.len(), 1, "{events:?}");
+        // the program says LISTEN ON: the next try is answered
+        air.b.set_host(HostPresence {
+            attached: true,
+            listening: true,
+        });
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        // and a station with no program attached answers, as it always did
+        assert!(HostPresence::default().answering());
+    }
+
+    #[test]
+    fn a_new_fastest_rung_reaches_the_link_and_follows_the_ladder_running() {
+        // `radio.max_mode` is live: it reaches the engine, not only the gate and the Test's
+        // ladder; and it indexes the ladder of the bandwidth running (ADR-0026)
+        let mut station = idle_station();
+        let mut config = crate::config::Config::parse(&format!(
+            "schema_version = {}\ncallsign = \"KK4XYZ\"\n[radio]\nmax_mode = 8\n",
+            crate::config::SCHEMA_VERSION
+        ))
+        .expect("a configuration");
+        station.apply_live(&config);
+        assert_eq!(station.engine().config().max_mode, 8);
+        config.radio.max_mode = 19;
+        station.apply_live(&config);
+        assert_eq!(station.engine().config().max_mode, 19);
+        station.host_bandwidth(Some(500)).expect("idle");
+        assert_eq!(station.engine().config().max_mode, 14);
+        station.host_bandwidth(Some(2300)).expect("idle");
+        assert_eq!(station.engine().config().max_mode, 19);
     }
 
     #[test]
@@ -6711,7 +6944,7 @@ mod tests {
 
         // just over the threshold: what noise produces
         let phantom = preamble(1.05);
-        station.heed_preambles(&[phantom], now);
+        station.heed_preambles(&[phantom], 0, now);
         assert!(
             !station.channel_busy(),
             "a phantom acquisition must not silence the station"
@@ -6719,7 +6952,7 @@ mod tests {
 
         // well clear of it, as a frame would be — still nothing: acquisition is not evidence
         let confident = preamble(2.5);
-        station.heed_preambles(&[confident], now);
+        station.heed_preambles(&[confident], 0, now);
         assert!(
             !station.channel_busy(),
             "an acquisition alone must not mark the channel, however confident"
