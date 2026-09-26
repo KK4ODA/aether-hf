@@ -914,6 +914,11 @@
                 <label for="dev-out">Playback</label>
                 <select id="dev-out" title="Sound card output feeding the radio's transmit audio"></select>
               </div>
+              <div class="row">
+                <span class="label-like" title="The transmit audio level: it sets the radio's output power, and each profile keeps its own">Transmit level</span>
+                <span class="numerals" id="setup-tx-level" title="The transmit level this station runs at, in dB below full scale. It is part of the profile — a profile loaded brings its own — and it is set with the slider and Set drive under Keying and drive on the Session tab" role="status" aria-live="polite">−12 dB</span>
+                <button class="quiet small" id="setup-tx-goto" title="Open Keying and drive on the Session tab, where the level is set against the radio's ALC">Set it on the Session tab</button>
+              </div>
               <h4 class="sub-heading" title="How the radio is keyed, and how its dial is read">Keying</h4>
               <div class="row">
                 <label for="dev-ptt">Keying</label>

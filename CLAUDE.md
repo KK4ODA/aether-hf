@@ -843,6 +843,35 @@ types a line at a moment. The panel's own Send box does not turn it on (the auth
 **a new config key has to ship with a release** (the shell's `SCHEMA_HISTORY` test ties the
 schema to the package version), so work that adds one waits on a branch for the release.
 
+**ND1J's five sessions and what they found (2026-09-26 evening).** The Test run ended because
+VarAC, attached with the host program keying the radio, had been told `CONNECTED` for the
+panel's Test and its idle timer disconnected it; the other four failed on the drive — the
+Default profile's `tx_level` 0.025 against the VarAC profile's 0.158, 16 dB apart and shown
+nowhere in Setup. Now the host adapter reports only the program's own sessions (a call it
+placed, or a call answered while it listens): a session the panel started gets no
+`CONNECTED`, none of its payload, no `BUFFER`, and the program's `DISCONNECT`/`ABORT` end only
+its own session or call — what it writes on the data port waits for one
+(`a_session_the_panel_started_is_not_the_programs`); it still keys the radio for the panel's
+session. Setup step 2 shows the transmit level (`#setup-tx-level`, a button to Keying and
+drive), and a profile switch says what it changed with values (`profileChanges`: level in dB,
+keying, bandwidth, devices, callsign, rules). **A profile switch took 8–16 s**: `profile.load`,
+`save`, `import`, `devices.list`, `diagnostics` and every start listed the audio devices on the
+run loop, and cpal 0.15's WASAPI `supported_*_configs` tries ~65 rate-and-format pairs a device
+through the audio engine (0.1–11 s a device) — the modem stood still ("the modem is behind"),
+and the panel's 10 s call timeout fired while the switch went on. Now Windows reports the
+default format's rate, the only one shared mode runs at (`audio::rates`); the daemon lists on
+a thread of its own at start and at each `devices.list` (`devices.rs`: `DeviceList`;
+`DaemonState::inventory` waits only for the first listing, `FIRST_WAIT`), a listing that
+differs from what the clients were given is a `devices` event the panel refills from, keeping
+what is chosen (`fillDevices`; the lists' handlers are wired once, `wireDevices`), and the
+first-start adoption lists only when it will adopt (`Store::will_adopt`). Measured on the
+author's machine under load (`C:\Dev\AetherBench\profile-switch\time_switch.py`): a switch
+8.4–9.4 s → 0.03 s, `devices.list` 8.9 → 0.08 s, the start 19.6–23 → 1.2 s (the old code's
+listing took 2.9 s on a quiet machine, 16.6 s in the morning's measurement); the old and new
+listings are identical, twelve devices at the same rates. The host adapter's BUSY reads ON for
+the whole of a session the panel started, so a program waiting for a clear channel waits for its
+end.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
