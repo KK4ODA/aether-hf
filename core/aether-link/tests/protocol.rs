@@ -327,6 +327,89 @@ fn a_call_stating_another_bandwidth_is_not_answered() {
 }
 
 #[test]
+fn a_station_moved_to_another_air_answers_calls_in_it() {
+    use aether_link::frames::{bandwidth_code, with_bandwidth};
+    // ADR-0026: the daemon moves the engine between sessions — to the bandwidth a host
+    // program asked for, or to the narrower one a call to it came in — and the engine keeps
+    // its callsigns, its counters and its session numbering across the move
+    let wide_timing = timing(false);
+    let narrow_timing = air_timing(NARROW_500, false);
+    let narrow = LinkConfig {
+        capabilities: with_bandwidth(0, 500),
+        ..LinkConfig::default()
+    };
+    let wide = LinkConfig {
+        capabilities: with_bandwidth(0, 2300),
+        ..LinkConfig::default()
+    };
+    let a = LinkEngine::new("W4ODA", narrow_timing.clone(), narrow, 1);
+    let mut b = LinkEngine::new("KK4XYZ", wide_timing.clone(), wide, 2);
+    b.set_callsigns(&["KK4XYZ", "KK4XYZ-1"]).expect("idle");
+    b.stats.probes_sent = 3;
+    let top = narrow_timing.mode_threshold_db.len() - 1;
+    b.set_air(narrow_timing.clone(), with_bandwidth(0, 500), Some(top))
+        .expect("idle");
+    assert_eq!(
+        b.timing().mode_threshold_db,
+        narrow_timing.mode_threshold_db
+    );
+    assert_eq!(bandwidth_code(b.config().capabilities), 1);
+    assert_eq!(b.config().max_mode, top);
+    assert_eq!(b.stats.probes_sent, 3);
+    let mut sim = TwoStationSim::new(a, b, 15.0, 6);
+    sim.engine_mut(0).connect("KK4XYZ-1").expect("idle");
+    sim.engine_mut(0).send(b"a narrow call answered");
+    sim.run(40.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    assert_eq!(sim.engine(1).state(), State::Connected);
+    assert_eq!(bandwidth_code(sim.engine(0).peer_capabilities()), 1);
+    assert_eq!(bandwidth_code(sim.engine(1).peer_capabilities()), 1);
+    // nothing moves while the session runs: it ends on the air it started on
+    assert!(
+        sim.engine_mut(1)
+            .set_air(wide_timing.clone(), with_bandwidth(0, 2300), None)
+            .is_err()
+    );
+    sim.engine_mut(0).disconnect();
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), b"a narrow call answered");
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    // and back, once it is over
+    let wide_top = wide_timing.mode_threshold_db.len() - 1;
+    sim.engine_mut(1)
+        .set_air(wide_timing.clone(), with_bandwidth(0, 2300), Some(wide_top))
+        .expect("idle");
+    assert_eq!(bandwidth_code(sim.engine(1).config().capabilities), 0);
+    assert_eq!(
+        sim.engine(1).timing().mode_threshold_db,
+        wide_timing.mode_threshold_db
+    );
+    // a call or a probe under way holds the air too
+    let (mut c, _) = pair(&wide_timing, &LinkConfig::default());
+    c.connect("KK4ABC").expect("idle");
+    assert!(
+        c.set_air(narrow_timing.clone(), with_bandwidth(0, 500), None)
+            .is_err()
+    );
+    let (mut p, _) = pair(&wide_timing, &LinkConfig::default());
+    p.probe("KK4ABC", None).expect("idle");
+    assert!(
+        p.set_air(narrow_timing, with_bandwidth(0, 500), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_new_fastest_rung_reaches_the_link() {
+    // `max_mode` is a live setting of the station's: a change reaches the link from the
+    // next burst on, under the rules' ceiling as before
+    let (mut a, _) = pair(&timing(false), &LinkConfig::default());
+    assert_eq!(a.config().max_mode, LinkConfig::default().max_mode);
+    a.set_max_mode(8);
+    assert_eq!(a.config().max_mode, 8);
+}
+
+#[test]
 fn a_probe_is_answered_with_the_snr_it_arrived_at() {
     // "can you hear me, and how well?" without a session: the probed station answers
     // with the SNR the probe arrived at, and the prober reports both directions
