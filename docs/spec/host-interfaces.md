@@ -75,7 +75,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `CHAT ON` / `CHAT OFF` | VarAC's chat mode | While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never. It says nothing about sessions, which run as they always do |
 | `IGNOREKISSDCD ON` / `OFF` | The KISS port's channel access | `ON`: frames from KISS programs go without waiting for a clear channel while this host is attached (§8.4). VarAC says it when its *Ignore DCD* box is ticked |
 | `BW2300`, `BW500` | Names the bandwidth | `OK` when it is the one the station runs (`[radio] bandwidth`; a host learns it from `capabilities`), `WRONG` otherwise: the bandwidth is the modem's configuration, not a session setting, and both stations of a session run the same one |
-| `BW2750` | — | **Refused.** Not a waveform this version has; see §5 |
+| `BW2750` | Asks for up to 2750 Hz | `OK` on a 2300 Hz station, which is inside what was asked — Winlink Express sends its widest setting, 2750 unless changed — and the station runs 2300; refused on a 500 Hz station (§5) |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
 | `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
@@ -103,6 +103,8 @@ Unsolicited, at any time.
 | `PENDING` | The called side, just before its `CONNECTED`: the order every client expects, from a modem that answers a call in one step |
 | `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
 | `ENCRYPTION DISABLED` | After `CONNECTED`: the link carries no encryption, which VARA states of its links and is simply true of this modem |
+| `LINK REGISTERED` | After `ENCRYPTION DISABLED`: the station at the other end is not speed-limited, as VARA says of a registered peer. Nobody is: Aether has no registration |
+| `MISSING SOUNDCARD` | When a host attaches to a modem whose sound card would not open (it runs on silence and can neither hear nor transmit): VARA's word for a sound card that has gone, which a gateway's host acts on. `CANCELPENDING` is never sent: `PENDING` is said only as a session comes up, so there is no pending call to cancel |
 | `DISCONNECTED` | A session the host was told of with `CONNECTED` ended, or a call it placed ended without one (nobody answered, `ABORT`, `DISCONNECT`, the rules) — or, straight after the `OK` to a `CONNECT`, the modem refused the call. Once for each: a host that aborts a call and places another without waiting hears the first one's `DISCONNECTED` before the second one's `OK`. A call or session the host did not start — the panel's — is not reported |
 | `BUFFER <bytes>` | The number of payload bytes still to send changed — and `BUFFER 0` once, as the first line a host hears when it attaches. VarAC sends nothing on the data port until it has heard how full the modem's buffer is (found on the bench: a ping sat for ninety seconds with both ends waiting) |
 | `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |
@@ -121,10 +123,12 @@ limit, so the honest answer to "is this station limited?" is no.
 
 The three are deliberately distinguished, and a client can tell them apart.
 
-**Refused** (`WRONG`): `BW2750`, and whichever of `BW2300` / `BW500` is not the bandwidth the
-station runs. Accepting a request for one bandwidth and then transmitting another would put a
-station outside the bandwidth its operator chose, which is an operator's decision and sometimes
-a legal one — a 2 300 Hz signal on a 500 Hz calling frequency most of all. The bandwidth is set
+**Refused** (`WRONG`): whichever of `BW2300` / `BW500` is not the bandwidth the station runs,
+and `BW2750` on a 500 Hz station. Accepting a request for one bandwidth and then transmitting a
+wider one would put a station outside the bandwidth its operator chose, which is an operator's
+decision and sometimes a legal one — a 2 300 Hz signal on a 500 Hz calling frequency most of
+all. A narrower one is always inside what was asked, which is why `BW2750` is `OK` on a 2 300 Hz
+station. The bandwidth is set
 in the station's configuration (`[radio] bandwidth`, 2300 or 500; the panel's Setup tab), and
 `CONNECTED` reports it.
 
