@@ -468,6 +468,19 @@ and 0 dB (`first_trial` 100); `engine` says which. Drops 15 → 9 and 13 → 1 o
 keyed time unchanged. `wait_out_link.csv` is `bench_link.py --fading --floor-cap`, 2 kB, 20
 sessions a point: 546 of 600 identical, none slower by more than 0.4 %. ADR-0030 has the table.
 
+## A TURN heard again (`turn_offer.csv`, ADR-0029)
+
+`tools/bench_chat.py` before and after ADR-0029 (`engine`) on two masters (`base`: ce23476, the
+engine of ADR-0027 where the fault was found; f17fec5, with ADR-0030), for today's policy, the chat
+request and the two handover candidates, both airs: `run` `drops` is 100 fresh sessions a point
+(`first_trial` 100) at −12, −6 and 0 dB on Good, Moderate and Poor; `run` `grid` is 30 a point on
+the four classes from −12 to +12 dB; on f17fec5 the handover candidates' drop run also ablated
+(`answer-alone`, `without-answer`). On ADR-0027's engine the handover candidates' lost sessions
+fall from 72 and 66 of 1 800 to 17 and 18; on f17fec5, where ADR-0030 had taken them to 12 and 5,
+the drop run's "no response" goes from 10 to 2 and none of the six that were two senders is left.
+A line's delay and the keyed time are unchanged for every policy. `bench_link.py`'s transfers are
+identical in every column. ADR-0029 has the tables.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
