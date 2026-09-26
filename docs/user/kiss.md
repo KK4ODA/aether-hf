@@ -137,7 +137,8 @@ BPQ32's *VARA* driver is the host interface (port 8300), not this.
   channel, then for its p-persistence slot.
 * It goes through the same **regulatory gate** as everything else (`fcc-regulatory-controls.md`):
   as a transmission your station originates. An automatically controlled station sends datagrams
-  only where it may originate.
+  only where it may originate, and an **answer-only** station (`[radio] answer_only`) sends none
+  — a datagram starts an exchange; what it hears still goes to its programs.
 * A station that decodes every fragment hands the frame to its KISS programs with the type it was
   sent with. A fragment lost is not retransmitted: the datagram is dropped after two minutes, and
   the program's own protocol (APRS's repeats, AX.25's retries) does what it does on any lossy

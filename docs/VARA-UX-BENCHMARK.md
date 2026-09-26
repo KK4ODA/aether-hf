@@ -96,7 +96,33 @@ appropriate for Aether.
 * **A CPU gauge** — a number that would always read low; the log's dropped-sample warning is
   the reading that matters.
 
-## 5. Found on the way
+## 5. Since beta.14 (to beta.68)
+
+The matrix above is the snapshot of 2026-09-15. What has changed in its rows since:
+
+* **What the other station hears you at** — outside a session too: the probe (ADR-0006,
+  beta.16), on the tone floor since ADR-0016 and answered down to −12 dB; and every control
+  frame of a session carries it, so a station that only received learns it from the other's
+  disconnect (ADR-0021).
+* **Ping** — the probe is Aether's; VarAC's ping, a short session over `CONNECT`, works through
+  the host interface at 500 Hz on the bench (beta.18).
+* **Bandwidth** — 500 Hz shipped (P7-0, beta.15); 2 750 Hz is still P9-3.
+* **CQ / beacon** — beacons repeat on a timer (10–240 minutes, beta.67), wait for a clear
+  channel, and are counted per station on the Stations tab, which also keeps the history of
+  sessions (beta.58).
+* **Drive level and tune** — *Set drive* sends real bursts for the ALC to see; the tune tone
+  reads 6–7 dB under the waveform's peaks and is for antenna tuners only.
+* **Dial frequency** — the Session tab keeps dial memories and tunes the radio over CAT or
+  `rigctld`.
+* **KISS** — a KISS port that answers as VARA HF's does, for APRS and packet programs and
+  VarAC's broadcasts (ADR-0019, beta.61).
+* **The rules** — nothing VARA has: every transmission is judged against Part 97 at the dial
+  the radio is on, with a LEGAL / WARNING / TX BLOCKED badge and its reasoning (ADR-0018,
+  beta.60).
+* **The panel** — redesigned in betas .60–.68, the signal card undockable into its own
+  window.
+
+## 6. Found on the way
 
 A DATA body one byte short of a full frame is the one length the container cannot carry (a
 partial body needs its two length bytes, and then it no longer fits); the engine built it

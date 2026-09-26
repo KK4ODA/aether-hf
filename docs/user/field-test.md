@@ -28,8 +28,10 @@ this is the first place the real audio path — the sound cards' buffers, the da
 playback backlog, the receiver's own latency — meets the protocol's timers. The engine
 knows the daemon's own latency (`PhyTiming.tx_latency_s`); the cable proves it.
 
-**Set the level.** Setup → step 3 (receive) and step 4 (tune, against the rig's ALC), on
-both stations. An overdriven card is the most common reason a mode "does not work".
+**Set the level.** Setup step 3 for the receive level, and the Session tab's **Keying and
+drive** → *Set drive* for the transmit level against the rig's ALC (the guide is in that
+card), on both stations. An overdriven card is the most common reason a mode "does not
+work".
 
 **The rig's AGC.** FAST or AUTO, or OFF with the RF gain set so the band noise sits well
 above the sound card's own floor. The busy detector learns the noise floor from the
@@ -142,10 +144,10 @@ tab when it ends: when and how long, who called, what crossed each way, the fast
 each way, how the other station heard you, how it ended, and the recording's name.
 **Sessions** on a station's row shows only that station's.
 
-**Contribute it**: Help › *Contribute the last test session* copies a link to a
-pre-filled GitHub issue; paste it into a browser, attach the sidecar (the `.json`
-beside the `.wav` in the recordings folder — Help › *Open the configuration folder*),
-and send. The audio is yours to attach or not. `tools/field_ingest.py` folds what
+**Contribute it**: *Contribute the last test session*, at the foot of the Session tab's
+**Recording and last session** box, opens a pre-filled GitHub issue (in a plain browser it
+copies the link instead); attach the sidecar — the `.json` beside the `.wav` in the
+recordings folder, which *Open folder* in the same box shows you — and send. The audio is yours to attach or not. `tools/field_ingest.py` folds what
 arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
 <sidecar>` runs the model's engines against what the path did.
 

@@ -13,7 +13,7 @@ body:
     id: area
     attributes:
       label: Area
-      options: [model / simulator, DSP / waveform, FEC, ARQ / protocol, host interface (VARA-compatible TCP), audio / PTT / CAT, desktop app, installer / updater, docs]
+      options: [model / simulator, DSP / waveform, FEC, ARQ / protocol, host interface (VARA-compatible TCP), KISS port, regulatory rules, audio / PTT / CAT, desktop app, installer / updater, docs]
     validations:
       required: true
   - type: textarea
@@ -33,4 +33,4 @@ body:
     id: bundle
     attributes:
       label: Diagnostics
-      description: Attach the diagnostic bundle (app) or test/benchmark output (model). Logs and a 48 kHz WAV of received audio are gold.
+      description: Attach the diagnostic bundle (the panel's Log tab → Copy diagnostic bundle) or test/benchmark output (model). Logs and a 48 kHz WAV of received audio are gold.

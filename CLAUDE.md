@@ -49,10 +49,11 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.20` on 2026-09-14…16, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.68` on 2026-09-14…26, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
-its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, the first
-on-air attempt found two bugs (below), and the air is what remains (P6-6).
+its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
+other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
+(P6-6); the paragraphs below run in date order.
 
 * **P3-1/P3-2** — the whole modem is ported and cross-validated. `aether-fec` (CRC, LDPC,
   rate matching), `aether-phy` (waveform, constellations, modes, frame codec, OFDM, preamble,
@@ -760,6 +761,21 @@ frames in flight. Simulators: `unheard` / `with_unheard` (a frame never detected
 `loadConfig` fills the form and re-settled by the late lists until the operator edits; any
 difference marks the Setup tab (dot), the step and its index link (amber), the save bar (names,
 Discard) and every other tab (`#unsaved-banner`, Review / Discard).
+
+**The documentation review (2026-09-26, after beta.68).** README, the user guides, the three
+specs, the roadmap, the contribution and maintenance guides, the templates and the core/app
+READMEs brought up to date; the spec audits found no wire change, only prose that had fallen
+behind (protocol version 4, the connect body's rung, the tone SNR ceilings, RV 3 decodes alone,
+re-encoding, one family per burst, the key-time cap). `tools/make_frequency_guide.py` (the
+printable Region 2 guide, `uv run --with reportlab`) carries its own copy of the frequency
+plan's tables: edit both. Every Aether signal measures over 500 Hz by the wider reading, so
+`answer_only` is no §97.221(c) allowance — an automatic station keeps to the (b) segments at
+either bandwidth, and the docs and the example file now say so. Found on the way: three Rust
+string literals whose `\` line continuation had been lost to a shell heredoc (the Morse-speed
+note, the busy transition's log line, a test message) — **write edit scripts to files, never
+through a heredoc, when they contain backslashes**; `field/LOG.md` has had no row since
+2026-09-17 — the sidecars are in the author's recordings folder, and folding them in
+(`field_ingest.py --class …`) needs the author's channel class for each path.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

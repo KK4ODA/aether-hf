@@ -27,9 +27,10 @@ Read each new issue once and give it one of three answers within a few days:
 * **A bug with a way to reproduce it** — label `bug`, and either fix it or say when.
   A diagnostic bundle or a session recording (`.wav` + sidecar) is the evidence to ask
   for; `docs/user/field-test.md` says how to make one.
-* **An on-air report** — label `field`, thank them, and fold the recording into
-  `field/sessions/` as a regression test when it decodes (or into the field log when it
-  does not).
+* **An on-air report** — label `field`, thank them, fold its sidecar into the field log
+  (`python tools/field_ingest.py <sidecar.json> --class <awgn|good|moderate|poor>`: a row in
+  `field/LOG.md`, `field/paths.csv` and `field/ladders.csv`), and put the recording into
+  `field/sessions/` as a regression test when it decodes.
 * **A feature request** — say whether it is on the roadmap (`docs/ROADMAP.md` §14 is the
   queue) and where. Things this project has decided *not* to do (a VARA-compatible air
   interface, encryption, chat features that belong in the host program) get a polite
@@ -92,8 +93,9 @@ Every one of these has cost the project a day at some point; none is decoration.
    notes say so.
 6. **A benchmark delta for DSP and protocol changes.** The PR template asks for it. "No
    change expected" is acceptable for a refactor when the vectors and the suites say so;
-   a claimed improvement needs the curve (`tools/bench_phy.py`, `tools/bench_link.py`,
-   `tools/bench_floor.py`) in `bench/baselines/` and the table in `bench/README.md`.
+   a claimed improvement needs the curve (`tools/bench_phy.py`, `tools/bench_tone.py`,
+   `tools/bench_link.py --fading`, `tools/bench_calls.py`) in `bench/baselines/` and the
+   table in `bench/README.md`.
 7. **Public sources only.** Nothing derived from VARA's internals, from decompiling, or
    from "I captured VARA's audio and matched it". Ask where a design came from when it is
    not obvious; a reference to a standard, a paper or an open implementation is the
@@ -123,7 +125,15 @@ Every one of these has cost the project a day at some point; none is decoration.
     (`every_way_to_the_transmitter_passes_the_gate`).
 14. **The panel's look comes from the tokens.** Sizes, spacing, radii, control heights and
     colours are the tokens at the top of `app/ui/style.css`; a new component uses them (and
-    the `.card` / `.card-head` / `.badge` / `.chip` pieces) rather than numbers of its own.
+    the `.card` / `.card-head` / `.badge` / `.chip` pieces) rather than numbers of its own. A
+    tab is titled boxes (`.card-title` inside the box), with its explanations behind a small
+    `?` (`details.help-pop`) rather than in running text.
+15. **A new configuration key is a schema bump.** Every table in `station.toml` refuses keys
+    it does not know, so an older release cannot read a file with a new one: the key comes
+    with a `schema_version` bump, a migration step (even one that changes nothing), a fixture
+    under `core/aetherd/tests/data/config/`, and a line in the shell's `SCHEMA_HISTORY`, which
+    is what lets a restore to an older version put back a file it can read. A new setting is
+    in profiles unless `settings.rs` gives it a rule.
 
 ### 3.4 Run it
 
@@ -168,8 +178,9 @@ when done. Never rebase or force-push a contributor's branch yourself.
 `CLAUDE.md` § "Cutting a release" is the procedure (`tools/release.py bump`, the tag, the
 Release workflow). Two things a contributor's change can need from you: an air-interface
 change means a note in the release that says every station must update, and a change to
-the configuration schema means a migration step in `core/aetherd/src/config.rs` and a
-fixture under `core/aetherd/tests/data/config/`.
+the configuration schema — a new key is one (rule 15) — means a migration step in
+`core/aetherd/src/config.rs`, a fixture under `core/aetherd/tests/data/config/` and a line in
+the shell's `SCHEMA_HISTORY`.
 
 ## 5. Repository settings (set 2026-09-16)
 
