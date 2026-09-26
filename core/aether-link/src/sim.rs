@@ -328,9 +328,10 @@ impl TwoStationSim {
         self.unheard.as_ref().is_some_and(|f| f(rx, container, t0))
     }
 
-    /// Use per-mode thresholds other than the AWGN table — a fading channel, say.
+    /// Use per-rung thresholds other than the air's AWGN table — a fading channel, say, or a
+    /// path that never carries one rung: one entry per rung of the ladder.
     #[must_use]
-    pub fn with_thresholds(mut self, thresholds: [f64; 14]) -> Self {
+    pub fn with_thresholds(mut self, thresholds: &[f64]) -> Self {
         self.thresholds = Some(thresholds.to_vec());
         self
     }

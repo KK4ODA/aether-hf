@@ -275,6 +275,16 @@ struct TxRecord {
     reencoded: usize,
 }
 
+impl TxRecord {
+    /// It has gone on the air, under this codeword or an earlier one. A re-encoding starts
+    /// `tx_count` again, and a frame re-encoded into a burst with no room left for it — six
+    /// stranded OFDM frames given tone codewords, five of which fit the key time — has not
+    /// gone under its new one; it is unacknowledged all the same (ADR-0031).
+    fn sent(&self) -> bool {
+        self.tx_count > 0 || self.reencoded > 0
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RxRecord {
     slot: usize,
@@ -1692,7 +1702,7 @@ impl LinkEngine {
         let mut seqs: Vec<u8> = self
             .records
             .iter()
-            .filter(|r| !r.acked && r.tx_count > 0)
+            .filter(|r| !r.acked && r.sent())
             .map(|r| r.seq)
             .collect();
         let base = self.tx_base;
@@ -1871,11 +1881,7 @@ impl LinkEngine {
             let fresh: Vec<u8> = seqs
                 .iter()
                 .copied()
-                .filter(|&s| {
-                    self.records
-                        .iter()
-                        .any(|r| r.seq == s && r.tx_count == 0 && r.reencoded == 0)
-                })
+                .filter(|&s| self.records.iter().any(|r| r.seq == s && !r.sent()))
                 .collect();
             if !fresh.is_empty() {
                 self.ladder_pending = Some((mode, fresh));
@@ -1888,7 +1894,7 @@ impl LinkEngine {
                 continue;
             };
             let mut record = self.records[index].clone();
-            if record.tx_count > 0 || record.reencoded > 0 {
+            if record.sent() {
                 self.stats.frames_resent += 1;
             }
             frames.push(self.data_frame(&mut record));
@@ -1972,7 +1978,7 @@ impl LinkEngine {
             });
         }
         for record in &mut self.records {
-            if !record.acked && record.tx_count > 0 && ack.received(record.seq) {
+            if !record.acked && record.sent() && ack.received(record.seq) {
                 record.acked = true;
                 self.stats.bytes_acked += record.body.len();
             }
@@ -2974,6 +2980,71 @@ mod tests {
                 e.link_timeout()
             );
         }
+    }
+
+    #[test]
+    fn a_frame_sent_under_an_earlier_codeword_is_still_unacknowledged() {
+        // The bookkeeping under ADR-0031: a frame given a new codeword counts as sent — it
+        // went on the air under the old one — so it is unacknowledged until acknowledged, goes
+        // out in the next burst that has room for its family, keeps the sender from closing,
+        // and an acknowledgement covers it whichever codeword the other station decoded
+        let config = LinkConfig {
+            max_mode: 4,
+            max_burst_s: Some(28.85),
+            ..LinkConfig::default()
+        };
+        let mut e = LinkEngine::new("W4ODA", narrow(), config, 1);
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.tx_busy_until = 100.0;
+        e.session = 7;
+        e.recommended = 4;
+        let body = crate::frames::data_capacity(e.timing.data_capacity[4]);
+        e.send(&vec![0u8; 6 * body]);
+        let first: Vec<usize> = transmitted(&mut e).iter().map(|f| f.mode).collect();
+        assert_eq!(first, vec![4; 6]);
+        let stranded = e.config.max_combines;
+        for record in &mut e.records {
+            record.tx_count = stranded; // stranded at the rung
+        }
+        e.recommended = 0;
+        e.waiting_for = None;
+        e.disarm(Timer::Wait);
+        e.now = 200.0;
+        e.tx_busy_until = 200.0;
+        e.send_burst();
+        let second: Vec<usize> = transmitted(&mut e).iter().map(|f| f.mode).collect();
+        assert_eq!(second, vec![0; 5], "five tone frames fit the key");
+        let left: Vec<&TxRecord> = e.records.iter().filter(|r| r.tx_count == 0).collect();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].reencoded, stranded);
+        let left = left[0].seq;
+        assert_eq!(
+            e.unacked().last(),
+            Some(&left),
+            "left out of its burst, and still unacknowledged"
+        );
+        e.disconnect();
+        assert!(
+            e.state == State::Connected && e.disconnect_requested(),
+            "closed with a frame missing"
+        );
+        // the other station decoded the sixth under its old codeword: the acknowledgement
+        // covers it
+        let ack = ControlFrame {
+            kind: ControlKind::Ack,
+            session: 7,
+            flags: 0,
+            base: 6,
+            bitmap: 0,
+            snr_db: None,
+            recommended_mode: 0,
+            counter: 0,
+        };
+        e.on_ack(&ack);
+        assert!(e.all_acknowledged());
+        assert!(e.unacked().is_empty());
     }
 
     #[test]
