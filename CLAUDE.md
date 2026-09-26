@@ -833,7 +833,13 @@ connect request to it at 500 Hz (`narrower_call`, before the engine sees it) and
 `replay_expecting` rebuilds the receiver there. `station/host.rs`: while a host is attached the
 station answers calls and probes only after `LISTEN ON`/`CQ`/`CHAT ON` (`HostFlags.listening`,
 `HostPresence`, `calls_unanswered`). The end-to-end test is `two_daemons.rs`'s
-`a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call`. No config key and no schema bump:
+`a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call`. **ADR-0027**
+(measured on `tools/bench_chat.py`, model first): under the host's `CHAT ON`
+(`HostPresence.chat` → `LinkEngine::set_chat`) an IRS with a line to send asks for the turn
+with an unasked ACK carrying WANT_TX once the channel is quiet (`reaction_s`, the `Request`
+timer, `stated_want`), an idle chat ISS takes it and hands over, and holds its keepalive past
+a frame heard arriving; −36 % median latency a line, no more drops. `TwoStationSim::send_at`
+types a line at a moment. The panel's own Send box does not turn it on (the author's call). No config key and no schema bump:
 **a new config key has to ship with a release** (the shell's `SCHEMA_HISTORY` test ties the
 schema to the package version), so work that adds one waits on a branch for the release.
 

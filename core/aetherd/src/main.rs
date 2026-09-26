@@ -1030,6 +1030,7 @@ fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
     aetherd::station::HostPresence {
         attached: flags.attached.load(std::sync::atomic::Ordering::SeqCst),
         listening: flags.listening.load(std::sync::atomic::Ordering::SeqCst),
+        chat: flags.chat.load(std::sync::atomic::Ordering::SeqCst),
     }
 }
 

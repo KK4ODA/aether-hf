@@ -6450,8 +6450,13 @@ mod tests {
         station.set_host(HostPresence {
             attached: true,
             listening: true,
+            chat: true,
         });
+        // CHAT ON reaches the link: the station without the turn asks for it (ADR-0027)
+        assert!(station.engine().config().chat);
         assert_eq!(station.host_bandwidth(Some(500)), Ok(500));
+        // and a move to the other air keeps it
+        assert!(station.engine().config().chat);
         assert_eq!(station.bandwidth_hz(), 500);
         assert_eq!(station.bandwidth_status()["why"], "host");
         assert_eq!(station.bandwidth_status()["host_hz"], 500);
@@ -6477,8 +6482,9 @@ mod tests {
         assert!(refused.contains("a call is going out"), "{refused}");
         assert_eq!(station.bandwidth_hz(), 500);
         station.abort();
-        // the host goes, and takes its bandwidth with it once the station is quiet
+        // the host goes, and takes its bandwidth and its chat with it once the station is quiet
         station.set_host(HostPresence::default());
+        assert!(!station.engine().config().chat);
         let rate = WIDE_2300.audio_rate as f64;
         let mut out = vec![0.0f32; 4096];
         for seed in 0..(30.0 * rate / 4096.0) as u32 {
@@ -6504,6 +6510,7 @@ mod tests {
         air.b.set_host(HostPresence {
             attached: true,
             listening: false,
+            chat: false,
         });
         assert!(!air.b.answering());
         air.a.connect("KK4XYZ").expect("idle");
@@ -6521,6 +6528,7 @@ mod tests {
         air.b.set_host(HostPresence {
             attached: true,
             listening: true,
+            chat: false,
         });
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());

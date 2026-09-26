@@ -1485,10 +1485,14 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
+        // calls and probes kept unanswered for want of the host program's LISTEN ON (ADR-0026)
+        "calls_unanswered": station.stats.calls_unanswered,
         "probes_sent": stats.probes_sent,
         "probes_answered": stats.probes_answered,
         "probe_replies": stats.probe_replies,
         "frames_reencoded": stats.frames_reencoded,
+        // a chat's requests for the turn (ADR-0027)
+        "turn_requests": stats.turn_requests,
     })
 }
 

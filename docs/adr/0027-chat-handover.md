@@ -1,10 +1,13 @@
 # ADR-0027: In a chat, the receiving station asks for the turn — and the sender does not hand it over unasked
 
-**Status:** proposed, 2026-09-26 (draft for review). Model first (`aether_model/link/engine.py`:
-`LinkConfig.chat`, `LinkEngine.set_chat`, `LinkStats.turn_requests`); the port (`aether-link`),
-the daemon (the host adapter's `CHAT ON` / `CHAT OFF`) and the panel after review. No frame
-changes and no link protocol change: the request is an acknowledgement, and a station without
-chat — an earlier version included — ignores it and polls as before.
+**Status:** accepted, 2026-09-26. Model first (`aether_model/link/engine.py`: `LinkConfig.chat`,
+`LinkEngine.set_chat`, `LinkStats.turn_requests`), then the port (`aether-link`: the same, with
+the model's tests mirrored and `TwoStationSim::send_at` for a line typed at a moment) and the
+daemon (the host adapter's `CHAT ON` / `CHAT OFF` through `HostPresence.chat`; off when the
+host program detaches; `counters.turn_requests`). The panel's own Send box does not turn it on
+(the author's question, §8). No frame changes and no link protocol change: the request is an
+acknowledgement, and a station without chat — an earlier version included — ignores it and
+polls as before.
 
 ## 1. Context
 
