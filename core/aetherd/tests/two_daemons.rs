@@ -366,6 +366,118 @@ fn a_kiss_frame_crosses_from_one_daemons_kiss_port_to_the_others() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A host program on a daemon's VARA-compatible port: lines out, lines in.
+struct Host {
+    stream: TcpStream,
+    reader: std::io::BufReader<TcpStream>,
+}
+
+impl Host {
+    fn attach(daemon: &Daemon) -> Self {
+        let address = daemon.status()["host"]["command_address"]
+            .as_str()
+            .expect("the host port's address")
+            .to_owned();
+        let stream = TcpStream::connect(address).expect("command port");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("timeout");
+        let reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+        Self { stream, reader }
+    }
+
+    fn send(&mut self, line: &str) {
+        self.stream
+            .write_all(format!("{line}\r").as_bytes())
+            .expect("write");
+    }
+
+    /// The next line `want` accepts, past the ones it does not — `PTT`, `BUFFER`, `IAMALIVE`.
+    fn next(&mut self, want: impl Fn(&str) -> bool) -> String {
+        use std::io::BufRead as _;
+        let mut passed = Vec::new();
+        loop {
+            let mut raw = Vec::new();
+            self.reader
+                .read_until(b'\r', &mut raw)
+                .unwrap_or_else(|e| panic!("{e}; heard only {passed:?}"));
+            let line = String::from_utf8_lossy(&raw).trim().to_owned();
+            if want(&line) {
+                return line;
+            }
+            passed.push(line);
+        }
+    }
+
+    /// Whether `DISCONNECTED` comes before the answer to a `VERSION` asked now.
+    fn told_disconnected(&mut self) -> bool {
+        std::thread::sleep(Duration::from_millis(300));
+        self.send("VERSION");
+        self.next(|l| l == "DISCONNECTED" || l.starts_with("VERSION")) == "DISCONNECTED"
+    }
+}
+
+#[test]
+fn a_host_hears_how_each_of_its_calls_ended() {
+    // Winlink Express, Pat and VarAC wait for CONNECTED or DISCONNECTED after a CONNECT. A
+    // call that ended without a session — aborted, or given up on — said neither, and a
+    // DISCONNECT during a call went on calling. One daemon and nobody to answer it.
+    let dir = std::env::temp_dir().join(format!("aether-host-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let host = "\n[host]\nenabled = true\nbind = \"127.0.0.1:0\"";
+    let daemon = Daemon::start_with(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"", host);
+    let mut client = Host::attach(&daemon);
+    let answer = |client: &mut Host| client.next(|l| l == "OK" || l == "WRONG");
+    // the adapter says OK as it hands a command on, so the modem may not have it yet
+    let calling = || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while daemon.status()["state"] != "connecting" {
+            assert!(Instant::now() < deadline, "{}", daemon.status());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    client.send("MYCALL W4ODA");
+    assert_eq!(answer(&mut client), "OK");
+
+    // ABORT during a call
+    client.send("CONNECT W4ODA KK4XYZ");
+    assert_eq!(answer(&mut client), "OK");
+    calling();
+    client.send("ABORT");
+    assert_eq!(answer(&mut client), "OK");
+    assert_eq!(client.next(|l| l == "DISCONNECTED"), "DISCONNECTED");
+    assert_eq!(daemon.status()["state"], "idle");
+
+    // DISCONNECT during a call stops it
+    client.send("CONNECT W4ODA KK4XYZ");
+    assert_eq!(answer(&mut client), "OK");
+    calling();
+    client.send("DISCONNECT");
+    assert_eq!(answer(&mut client), "OK");
+    assert_eq!(client.next(|l| l == "DISCONNECTED"), "DISCONNECTED");
+    assert_eq!(daemon.status()["state"], "idle", "it went on calling");
+
+    // a call aborted and another placed at once, without waiting: one DISCONNECTED each
+    client.send("CONNECT W4ODA KK4XYZ\rABORT\rCONNECT W4ODA KK4XYZ");
+    assert_eq!(client.next(|l| l == "DISCONNECTED"), "DISCONNECTED");
+    assert!(
+        !client.told_disconnected(),
+        "the first call's end was reported twice"
+    );
+    calling();
+    client.send("ABORT");
+    assert_eq!(
+        client.next(|l| l == "DISCONNECTED"),
+        "DISCONNECTED",
+        "the second call's end was taken for the first's"
+    );
+    assert!(!client.told_disconnected());
+    drop(client);
+    drop(daemon);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn two_daemons_complete_a_session_at_500_hz() {
     // the narrow waveform end to end through the daemon: its own mode table, the

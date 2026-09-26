@@ -661,6 +661,13 @@ fn answer_commands(
                 &state_name(station),
             );
         }
+        // What the request set in motion goes out before its answer, in the order the end of
+        // a pass gives it — the history, then the station's events — so a client holding the
+        // reply to `abort` has been sent the `disconnected` it caused, and cannot take it for
+        // the end of whatever it asks for next. The VARA adapter relies on this: a host that
+        // aborts a call and at once places another hears DISCONNECTED for the first alone.
+        note_sessions(station, Some(control), daemon);
+        publish_station(station, control, daemon);
         let _ = command.reply.send(response);
     }
     // a change to the settings, the dials or the profiles moves the station on or off

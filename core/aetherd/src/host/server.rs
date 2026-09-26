@@ -372,6 +372,9 @@ fn serve_commands(
     let events = handle.subscribe();
     let mut last_keepalive = std::time::Instant::now();
     let mut connected_to: Option<String> = None;
+    // a call this host placed that has neither come up nor been said to have ended: a host
+    // waits for CONNECTED or DISCONNECTED after its CONNECT, and would wait for ever on neither
+    let mut calling = false;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -411,8 +414,14 @@ fn serve_commands(
                         return;
                     }
                 }
-                if !apply(&outcome.action, handle, &host, &mut writer, &say) {
-                    return;
+                match apply(&outcome.action, handle, &host, &mut writer, &say) {
+                    Applied::Done => {}
+                    // Armed as soon as the modem has taken the call. What the modem said
+                    // before then — the `disconnected` of a call just aborted — was sent
+                    // before the answer to the command that caused it, and has been read by
+                    // now: the daemon publishes what a request sets in motion before its reply
+                    Applied::Calling => calling = true,
+                    Applied::Closed => return,
                 }
             }
         }
@@ -445,7 +454,14 @@ fn serve_commands(
                     }
                 }
                 "state" => {
-                    if !report_state(&event.data, &host, &mut connected_to, &mut writer, &say) {
+                    if !report_state(
+                        &event.data,
+                        &host,
+                        &mut connected_to,
+                        &mut calling,
+                        &mut writer,
+                        &say,
+                    ) {
                         return;
                     }
                 }
@@ -511,10 +527,14 @@ fn serve_commands(
 }
 
 /// Turn a state event into the lines the published interface uses.
+///
+/// `connected_to` is the session the host was told of with `CONNECTED`; `calling`, a call it
+/// placed that has not come up.
 fn report_state(
     data: &serde_json::Value,
     host: &HostState,
     connected_to: &mut Option<String>,
+    calling: &mut bool,
     writer: &mut &TcpStream,
     say: &impl Fn(&mut &TcpStream, &str) -> bool,
 ) -> bool {
@@ -531,6 +551,8 @@ fn report_state(
             let remote = words.next().unwrap_or("").to_owned();
             let called = words.next() == Some("(irs)");
             *connected_to = Some(remote.clone());
+            // whatever the host was calling, what it hears now is a session
+            *calling = false;
             // the modem says which of the station's callsigns the session runs under; a host
             // that never said MYCALL is told the modem's own name
             let mine = data["callsign"]
@@ -563,11 +585,37 @@ fn report_state(
                 // what VARA says of a link once it is up, and true here
                 && say(writer, &Notification::EncryptionDisabled.line())
         }
-        // only report a disconnect for a session the host was told about
-        "disconnected" if connected_to.take().is_some() => {
-            say(writer, &Notification::Disconnected.line())
+        // A session the host was told about, or a call it placed that ended without one: no
+        // answer, `ABORT`, `DISCONNECT` while calling, the rules. Anything else — a call the
+        // panel placed — is not this host's business.
+        "disconnected" => {
+            let told = connected_to.take().is_some();
+            let placed = std::mem::take(calling);
+            if told || placed {
+                say(writer, &Notification::Disconnected.line())
+            } else {
+                true
+            }
         }
         _ => true,
+    }
+}
+
+/// What carrying out a command came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Applied {
+    /// Done, with nothing to remember.
+    Done,
+    /// The modem took a call: how it ends — a session, or none — is the host's to hear.
+    Calling,
+    /// A line could not be written: the host has gone.
+    Closed,
+}
+
+impl From<bool> for Applied {
+    /// Whatever had to be said was: done, or the host has gone.
+    fn from(said: bool) -> Self {
+        if said { Self::Done } else { Self::Closed }
     }
 }
 
@@ -578,14 +626,14 @@ fn apply(
     host: &HostState,
     writer: &mut &TcpStream,
     say: &impl Fn(&mut &TcpStream, &str) -> bool,
-) -> bool {
+) -> Applied {
     match action {
-        HostAction::None | HostAction::Listen(_) => true,
+        HostAction::None | HostAction::Listen(_) => Applied::Done,
         HostAction::Callsigns(calls) => {
             // the reply already said OK, which is the truth: the modem takes the list, and
             // when a session is up it takes effect as that session ends
             let _ = handle.call(request("callsigns.set", json!({ "callsigns": calls })));
-            true
+            Applied::Done
         }
         HostAction::Connect { from, to } => {
             // CONNECT names the calling station; when it is one the host registered, the
@@ -597,34 +645,45 @@ fn apply(
             }
             let response = handle.call(request("connect", params));
             match response {
-                Ok(reply) if reply.ok => true,
+                Ok(reply) if reply.ok => Applied::Calling,
                 // the modem refused: the host has to hear that the call did not happen
-                _ => say(writer, &Notification::Disconnected.line()),
+                _ => say(writer, &Notification::Disconnected.line()).into(),
             }
         }
         HostAction::Disconnect => {
-            let _ = handle.call(request("disconnect", json!({})));
-            true
+            // A host that says DISCONNECT while its call is going out means "stop calling",
+            // as a VARA host does; the modem's own `disconnect` keeps calling and closes the
+            // session once it is up. Nothing of a call is there to close in order, so it is
+            // abandoned, as the panel's Stop calling does — and the host hears DISCONNECTED
+            // for it.
+            let calling = handle
+                .call(request("status", json!({})))
+                .ok()
+                .and_then(|reply| reply.result)
+                .is_some_and(|status| status["state"] == "connecting");
+            let method = if calling { "abort" } else { "disconnect" };
+            let _ = handle.call(request(method, json!({})));
+            Applied::Done
         }
         HostAction::Abort => {
             let _ = handle.call(request("abort", json!({})));
-            true
+            Applied::Done
         }
         HostAction::CqFrame => {
             let _ = handle.call(request("beacon", json!({})));
-            true
+            Applied::Done
         }
         // `TUNE OFF`: cut the tone short, if one is playing or queued
         HostAction::Tune(seconds) if *seconds <= 0.0 => {
             let _ = handle.call(request("tune", json!({ "duration_s": 0.0 })));
-            true
+            Applied::Done
         }
         HostAction::Tune(seconds) => {
             // the modem bounds a tone at ten seconds; a host asking for more gets ten, and
             // the reply already said OK because the command was understood
             let bounded = seconds.min(10.0);
             let _ = handle.call(request("tune", json!({ "duration_s": bounded })));
-            true
+            Applied::Done
         }
         // the transmit level as decibels below full scale, the one scale a sine amplitude
         // has an honest reading on
@@ -643,6 +702,7 @@ fn apply(
                 ),
                 None => say(writer, "WRONG"),
             }
+            .into()
         }
     }
 }
@@ -952,6 +1012,219 @@ mod tests {
         assert_eq!(connected, "CONNECTED KK4XYZ W4ODA 2300");
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");
+    }
+
+    /// A stub modem the test scripts: `answer` gives each request's result, and publishes
+    /// what the request set in motion before that — the order the daemon keeps — and the test
+    /// publishes events of its own whenever it likes.
+    struct Modem {
+        control: Arc<Mutex<ControlChannel>>,
+        seen: Seen,
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Modem {
+        fn start(
+            answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
+        ) -> (Self, HostServer) {
+            let (handle, control) = channel();
+            let control = Arc::new(Mutex::new(control));
+            let stop = Arc::new(AtomicBool::new(false));
+            let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+            let worker = {
+                let (control, stop, seen) =
+                    (Arc::clone(&control), Arc::clone(&stop), Arc::clone(&seen));
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        if let Ok(control) = control.lock() {
+                            for command in control.drain() {
+                                let method = command.request.method.clone();
+                                if let Ok(mut seen) = seen.lock() {
+                                    seen.push((method.clone(), command.request.params.clone()));
+                                }
+                                let result = answer(&method, &control);
+                                let _ = command
+                                    .reply
+                                    .send(Response::ok(command.request.id.clone(), result));
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                })
+            };
+            let server = HostServer::start(
+                &HostConfig {
+                    enabled: true,
+                    bind: "127.0.0.1:0".to_owned(),
+                    trace: false,
+                },
+                handle,
+                crate::kiss::HostFlags::default(),
+            )
+            .expect("start");
+            let modem = Self {
+                control,
+                seen,
+                stop,
+                worker: Some(worker),
+            };
+            (modem, server)
+        }
+
+        /// An event, as the run loop publishes one.
+        fn publish(&self, name: &str, data: serde_json::Value) {
+            self.control
+                .lock()
+                .expect("control")
+                .publish(&Event::new(name, data));
+        }
+
+        /// The methods the adapter asked for, in order.
+        fn methods(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .expect("seen")
+                .iter()
+                .map(|(method, _)| method.clone())
+                .collect()
+        }
+    }
+
+    impl Drop for Modem {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    /// The `state` event the modem publishes when a call or a session ends.
+    fn ended(how: &str) -> serde_json::Value {
+        json!({"name": "disconnected", "detail": how, "state": "Idle",
+               "callsign": "W4ODA", "remote": "KK4XYZ"})
+    }
+
+    /// Whether the host hears `DISCONNECTED` before the answer to a `VERSION` asked now —
+    /// after a pause long enough for the adapter to have passed on anything already said.
+    fn told_disconnected_before_version(client: &mut Client) -> bool {
+        std::thread::sleep(Duration::from_millis(200));
+        client.send("VERSION");
+        client.expect(|l| l == "DISCONNECTED" || l.starts_with("VERSION")) == "DISCONNECTED"
+    }
+
+    #[test]
+    fn a_call_nobody_answers_ends_in_disconnected() {
+        // A host waits for CONNECTED or DISCONNECTED after its CONNECT. A call the modem gave
+        // up on ("no answer") produced neither, and a host waiting on it waited for ever.
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        // a call this host did not place — the panel's — is none of its business
+        modem.publish("state", ended("no answer"));
+        assert!(!told_disconnected_before_version(&mut client));
+
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(!told_disconnected_before_version(&mut client));
+        modem.publish("state", ended("no answer"));
+        assert_eq!(client.expect(|l| l == "DISCONNECTED"), "DISCONNECTED");
+        // and told once
+        assert!(!told_disconnected_before_version(&mut client));
+    }
+
+    #[test]
+    fn a_call_the_host_aborts_ends_in_disconnected() {
+        let (_modem, server) = Modem::start(|method, control| {
+            if method == "abort" {
+                control.publish(&Event::new("state", ended("aborted")));
+            }
+            json!({})
+        });
+        let mut client = Client::connect(&server);
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("ABORT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(
+            client.expect(|l| l == "DISCONNECTED" || l.starts_with("CONNECTED")),
+            "DISCONNECTED"
+        );
+    }
+
+    #[test]
+    fn disconnect_while_calling_stops_the_call() {
+        // A VARA host's DISCONNECT during a call means "stop calling". The modem's own
+        // `disconnect` kept calling and closed the session once it came up, so a host that
+        // had given up on a call could find itself in a session it no longer expected.
+        let state = Arc::new(Mutex::new("idle"));
+        let shared = Arc::clone(&state);
+        let (modem, server) = Modem::start(move |method, control| {
+            let mut state = shared.lock().expect("state");
+            match method {
+                "connect" => *state = "connecting",
+                "abort" => {
+                    *state = "idle";
+                    control.publish(&Event::new("state", ended("aborted")));
+                }
+                _ => {}
+            }
+            json!({ "state": *state })
+        });
+        let mut client = Client::connect(&server);
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(client.expect(|l| l == "DISCONNECTED"), "DISCONNECTED");
+        let methods = modem.methods();
+        assert!(
+            methods.iter().any(|m| m == "abort") && !methods.iter().any(|m| m == "disconnect"),
+            "{methods:?}"
+        );
+
+        // in a session it is the orderly close it always was
+        *state.lock().expect("state") = "connected";
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !modem.methods().iter().any(|m| m == "disconnect") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                modem.methods()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            modem.methods().iter().filter(|m| *m == "abort").count(),
+            1,
+            "a session was aborted"
+        );
+    }
+
+    #[test]
+    fn a_call_aborted_and_placed_again_at_once_is_told_apart() {
+        // A host that does not wait for the DISCONNECTED of the call it aborted: the first
+        // call's end must not be taken for the second's, nor the second go unreported. The
+        // modem publishes what the abort set in motion before its answer, which is what
+        // lets the adapter tell the two apart.
+        let (modem, server) = Modem::start(|method, control| {
+            if method == "abort" {
+                control.publish(&Event::new("state", ended("aborted")));
+            }
+            json!({})
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CONNECT W4ODA KK4XYZ\rABORT\rCONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "DISCONNECTED"), "DISCONNECTED");
+        // the second call is still out, and nothing more is said of it
+        assert!(!told_disconnected_before_version(&mut client));
+        // until it ends
+        modem.publish("state", ended("no answer"));
+        assert_eq!(client.expect(|l| l == "DISCONNECTED"), "DISCONNECTED");
     }
 
     #[test]
