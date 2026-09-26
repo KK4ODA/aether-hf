@@ -918,3 +918,18 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
 21. **The documentation brought up to beta.68** (2026-09-26): README, user guides, the three
     specs, this roadmap, the contribution and maintenance guides; and the 21 on-air sessions
     since 2026-09-17 folded into `field/LOG.md` with the author's channel classes (P6-6).
+22. **Aether as a drop-in for VARA HF — Tier 1** (done 2026-09-26, beta.69; the author's first
+    VarAC tests and a review against VARA's published TNC commands): `DISCONNECTED` for every
+    call a host placed that ends without a session, and `DISCONNECT` while calling stops the
+    call; a heard beacon reaches the host as `CQFRAME <name> <bandwidth>`, and a beacon carries
+    the name the host gave it and its sender's bandwidth (ADR-0024); no beacon under automatic
+    control; `BW2750` on a 2300 Hz station; `LINK REGISTERED`, `MISSING SOUNDCARD`; the host
+    program can own the radio and key it on `PTT ON`, with the rules at None (ADR-0025,
+    configuration schema 8), saved as a profile of its own; one app window; the setup guide
+    `docs/user/host-programs.md`. **Tier 2, next:** the bandwidth follows the host's
+    `BW500`/`BW2300` and a call in either bandwidth is answered, as VARA's *Accept 500 Hz
+    connections* does (an ADR: the daemon switches its waveform at runtime while idle);
+    chat-mode turn-taking under `CHAT ON`, measured first. **Evidence first:** VarAC's
+    `DRIVELEVEL` scale, `CLEANTXBUFFER`, callsigns longer than nine characters (VarAC's `-T`
+    alias on an SSID), and reading the dial from a host program's Hamlib or FLRig server so the
+    rules can run with a host-owned radio.
