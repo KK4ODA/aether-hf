@@ -664,7 +664,9 @@ backoff so two stations calling each other simultaneously desynchronise instead 
 on every retry. The first request goes out on the tone floor and the tries alternate between
 the floor and the ordinary family's robust mode (ADR-0016); the acceptance goes back in the
 family the request arrived in, and a caller does not send a try over a frame it hears
-arriving. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
+arriving. A called station that hears the request again once it has accepted — its
+acceptance was lost — answers with the acceptance again and nothing else: the caller's first
+burst follows the acceptance at once. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
 the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
 burst. A station waiting for the answer to its `DISC` takes no data frame as a burst and does
 not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving station that wants
