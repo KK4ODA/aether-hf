@@ -829,8 +829,9 @@ fn note_pass(
     );
 }
 
-/// Hand the sound card everything the station has rendered, up to the backlog, and mark
-/// whether it is transmitting. A whole burst goes over at once so nothing the loop does
+/// Hand the sound card everything the station has rendered, up to the backlog, tell the
+/// station where the card will have played the last of it, and tell the card whether any
+/// of the burst is still to come. A whole burst goes over at once so nothing the loop does
 /// afterwards can put a hole in it; a keying failure is logged and the burst abandoned
 /// rather than taking the daemon down and stranding the key.
 fn fill_card(
@@ -855,7 +856,15 @@ fn fill_card(
         }
         audio.playback(&buffer[..count]);
     }
-    audio.set_playing(station.transmitting());
+    // The key is released, and the station's deafness ends, when the card's clock reaches
+    // this: not the clock read before the fill plus what was handed over, because the burst
+    // was rendered and the radio keyed in between while the card played silence and counted
+    // it (ADR-0010 §7).
+    station.device_drains_at(audio.drains_at());
+    // Silence played for want of samples the station still holds is a hole in the burst.
+    // Once it has handed over the last of them, a card that runs dry has reached the burst's
+    // end, and the silence until the next pass brings the key up is no hole.
+    audio.set_playing(station.handing_over());
 }
 
 /// The sound card stopped delivering audio while the radio was keyed. The key is released
@@ -982,7 +991,8 @@ fn serve(
         // Hand the card everything the station has rendered. A burst goes over whole, the
         // moment it is rendered, so nothing this loop does afterwards — a decode, a slow
         // disk, the scheduler — can put a hole in it; the station releases the key against
-        // the card's own clock, when the last sample has really left.
+        // the card's own clock, when the last sample has really left — where `fill_card`,
+        // having queued it, says the card drains.
         station.device_played(audio.played());
         fill_card(station, audio, backlog, block, daemon, &mut last_ptt_fault);
         let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
@@ -1558,6 +1568,141 @@ mod tests {
             a,
             seed_from_callsign("W4ODA"),
             "and the same call is stable"
+        );
+    }
+
+    /// A sound card as the run loop meets it: a queue, and a clock that counts every sample
+    /// it plays, silence included, with the callback's count of starvation. What is queued
+    /// onto an empty queue arrives `render` samples after the loop read the clock: the
+    /// station rendered the burst and keyed the radio in between, and the card played on.
+    #[derive(Default)]
+    struct Card {
+        played: u64,
+        queued: usize,
+        render: u64,
+        playing: bool,
+        starved: usize,
+    }
+
+    impl Card {
+        /// Play `samples`: what is queued, then silence.
+        fn play(&mut self, samples: u64) {
+            let from_queue = samples.min(self.queued as u64);
+            self.queued -= from_queue as usize;
+            if self.playing {
+                self.starved += (samples - from_queue) as usize;
+            }
+            self.played += samples;
+        }
+    }
+
+    impl AudioIo for Card {
+        fn capture(&mut self) -> Vec<f32> {
+            Vec::new()
+        }
+
+        fn playback(&mut self, samples: &[f32]) {
+            if self.queued == 0 {
+                let render = std::mem::take(&mut self.render);
+                self.play(render);
+            }
+            self.queued += samples.len();
+        }
+
+        fn queued(&self) -> usize {
+            self.queued
+        }
+
+        fn dropped(&self) -> usize {
+            0
+        }
+
+        fn played(&self) -> u64 {
+            self.played
+        }
+
+        fn set_playing(&mut self, playing: bool) {
+            self.playing = playing;
+        }
+
+        fn starved(&self) -> usize {
+            self.starved
+        }
+
+        fn clear(&mut self) {
+            self.queued = 0;
+        }
+    }
+
+    #[test]
+    fn the_run_loop_keeps_the_key_down_until_the_card_has_played_the_burst() {
+        // The burst is rendered and the radio keyed after the loop has read the card's clock
+        // and before the first block is queued, and the card plays on meanwhile: the key
+        // waits for where the card drains, as `fill_card` reads it once the burst is queued
+        // (ADR-0010 §7). And the card counts no hole for running dry after the last of the
+        // burst, while the key waits for the next pass: that is the burst's end.
+        let rate = 48_000u64;
+        let block = 960; // 20 ms
+        let mut station: Station<Box<dyn Ptt>> = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            Box::new(NullPtt::default()),
+            1,
+        );
+        let mut daemon = DaemonState::new(
+            Config::parse(EXAMPLE).expect("example"),
+            PathBuf::from("station.toml"),
+            Log::memory(10),
+        );
+        let mut fault = None;
+        let backlog = (31 * rate) as usize;
+        // the playback half of a pass of the run loop: the clock goes in, then the fill
+        let mut pass = |station: &mut Station<Box<dyn Ptt>>, card: &mut Card| {
+            station.device_played(card.played());
+            fill_card(station, card, backlog, block, &mut daemon, &mut fault);
+        };
+        let mut card = Card {
+            render: rate * 3 / 10, // 0.3 s to render the call and key the radio
+            ..Card::default()
+        };
+        card.play(10 * rate); // it has been running a while
+        station.connect("KK4XYZ").expect("idle");
+
+        // the pass that keys: the fill renders, keys and hands over
+        pass(&mut station, &mut card);
+        assert!(
+            station.transmitting() && card.queued > 0,
+            "the call is with the card"
+        );
+        let leaves = card.played + card.queued as u64;
+
+        // the passes after it: the card plays on between them
+        let mut released = None;
+        while released.is_none() && card.played < leaves + rate {
+            card.play(block as u64);
+            pass(&mut station, &mut card);
+            if !station.transmitting() {
+                released = Some(card.played);
+            }
+        }
+        let released = released.expect("the key was never released");
+        let ms = |samples: u64| samples as f64 * 1000.0 / rate as f64;
+        assert!(
+            released >= leaves,
+            "the key came up {:.0} ms before the last sample had left the card",
+            ms(leaves - released)
+        );
+        assert!(
+            released < leaves + block as u64,
+            "the key stayed down {:.0} ms after the burst had left",
+            ms(released - leaves)
+        );
+        assert_eq!(
+            card.starved, 0,
+            "the card's silence after the burst counted as a hole in it"
         );
     }
 

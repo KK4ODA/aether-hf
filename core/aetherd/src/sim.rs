@@ -364,6 +364,12 @@ impl AudioIo for SimLink {
         self.consumed_now()
     }
 
+    fn drains_at(&self) -> u64 {
+        // the clock runs out where what was played does: exact, where the clock read twice
+        // could move between the readings
+        self.played
+    }
+
     fn set_playing(&mut self, _playing: bool) {}
 
     fn starved(&self) -> usize {

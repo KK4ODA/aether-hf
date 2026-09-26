@@ -60,11 +60,21 @@ pub trait AudioIo {
     /// they came from the queue or were silence played for want of any. A sample queued
     /// when this reads `n` leaves the device when it reads `n + queued()`.
     fn played(&self) -> u64;
-    /// Whether a burst is in flight, so that silence played for an empty queue counts as
-    /// starvation rather than as the idle state of a station with nothing to say.
+    /// Where the playback clock will stand when everything queued now has left the device:
+    /// `played() + queued()`, by the contract above — what the key is released against.
+    /// Read here queue first, so a callback that runs between the two readings makes the
+    /// answer late, the key held a moment longer, never early; a backend that can read both
+    /// at once does so.
+    fn drains_at(&self) -> u64 {
+        let queued = self.queued() as u64;
+        self.played() + queued
+    }
+    /// Whether the modem still has samples of a burst to hand over, so that silence played
+    /// for an empty queue counts as starvation — a hole in the burst — rather than as the
+    /// burst's end, or the idle state of a station with nothing to say.
     fn set_playing(&mut self, playing: bool);
-    /// Samples of silence the device played while a burst was in flight, since it was
-    /// opened: every one of them is a hole in a transmission.
+    /// Samples of silence the device played while the modem still had samples of a burst
+    /// to hand it, since it was opened: every one of them is a hole in a transmission.
     fn starved(&self) -> usize;
     /// Drop whatever is queued for playback, for a transmission cut short.
     fn clear(&mut self);
@@ -119,9 +129,9 @@ struct Shared {
     dropped: usize,
     /// Frames the playback device has consumed, from the queue or as silence.
     played: u64,
-    /// Whether the modem says a burst is in flight.
+    /// Whether the modem says it still has samples of a burst to hand over.
     playing: bool,
-    /// Frames of silence played for an empty queue while a burst was in flight.
+    /// Frames of silence played for an empty queue while it did.
     starved: usize,
 }
 
@@ -414,6 +424,13 @@ impl AudioIo for SoundCard {
 
     fn played(&self) -> u64 {
         self.to_play.lock().map_or(0, |shared| shared.played)
+    }
+
+    fn drains_at(&self) -> u64 {
+        // under one lock: no callback runs between the clock and the queue
+        self.to_play
+            .lock()
+            .map_or(0, |shared| shared.played + shared.samples.len() as u64)
     }
 
     fn set_playing(&mut self, playing: bool) {

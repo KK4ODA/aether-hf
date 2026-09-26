@@ -424,9 +424,18 @@ is muted only up to where the card's clock says this station's transmission ende
 whole — a slow pass had muted the start of the peer's reply with the tail, which CI saw as
 the mode ladder losing the first frame of a burst at 25 dB — and the simulated channel now
 delivers a card's latency late (`DEVICE_LATENCY_S`, in `audio.rs`), as the keying tail
-assumes. A two-daemon test that fails in CI leaves its daemons' logs and sidecars as the
-`two-daemons-<os>` artifact. WSL with a user-prefix ALSA (`apt-get download libasound2-dev`,
-`dpkg-deb -x`, `PKG_CONFIG_PATH` at its `alsa.pc`) and `taskset -c 0` is how a Linux CI
+assumes. **Where the card drains** (2026-09-26, ADR-0010 §7): the key came up once the card's
+clock had moved, since the reading before `fill_card`, by what was handed over — but the burst
+is rendered and the radio keyed after that reading while a real card plays silence and counts
+it, so the key and the end of the deafness came early by the render and key time (passes of
+255–366 ms on the `[sim]` bench; the simulated clock counts no silence, so it never showed).
+`fill_card` now reports `AudioIo::drains_at` (`played() + queued()`) once it has handed over
+(`Station::device_drains_at`: the first report after a handover counts, and until it comes the
+key stays down, so a harness that reports the clock reports this too), and `set_playing`
+follows `Station::handing_over`, not the key — a card run dry after the last of a burst is at
+its end, not in a hole. A two-daemon test that fails in CI leaves its daemons' logs and
+sidecars as the `two-daemons-<os>` artifact. WSL with a user-prefix ALSA
+(`apt-get download libasound2-dev`, `dpkg-deb -x`, `PKG_CONFIG_PATH` at its `alsa.pc`) and `taskset -c 0` is how a Linux CI
 timing failure is reproduced on the author's machine.
 
 **Profiles (2026-09-19, ADR-0011):** `station.toml` stays what the daemon runs from; a
