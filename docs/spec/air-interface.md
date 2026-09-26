@@ -612,7 +612,8 @@ the floor and the ordinary family's robust mode (ADR-0016); the acceptance goes 
 family the request arrived in, and a caller does not send a try over a frame it hears
 arriving. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
 the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
-burst.
+burst. A station waiting for the answer to its `DISC` takes no data frame as a burst and does
+not repeat the `DISC` over a frame it hears arriving (ADR-0022).
 
 ### 7.3 Capability negotiation
 
