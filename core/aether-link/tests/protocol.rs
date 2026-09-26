@@ -1428,6 +1428,56 @@ fn a_burst_fits_the_transmitters_key_time() {
 }
 
 #[test]
+fn a_frame_re_encoded_and_left_out_of_its_burst_goes_in_the_next() {
+    // Six frames stranded at an OFDM rung are re-encoded on the tone floor together, and a
+    // burst held to the key time carries five tone frames (ADR-0017). The sixth, its count of
+    // transmissions reset with its new codeword, fell out of the unacknowledged frames: never
+    // sent again, never acknowledged — the other station waited for it for ever, the window
+    // filled behind it, and the sender went silent with data queued until the link timed out.
+    // Every session the chat bench dropped at 0 dB had left a frame so (ADR-0031). Here a path
+    // that never carries the rung: the message still arrives whole
+    let t = air_timing(NARROW_500, true);
+    let rung = 4; // QPSK 1/3 on the ordinary frame, the first OFDM rung at 500 Hz
+    assert!(
+        t.is_floor(rung - 1) && !t.is_floor(rung),
+        "not the case measured"
+    );
+    let tone = t.data_frame_s_for(0);
+    assert!(5.0 * tone <= 28.85 && 28.85 < 6.0 * tone);
+    let config = LinkConfig {
+        max_mode: rung,
+        max_burst_s: Some(28.85), // the daemon's limit at 30 s of key
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    let mut thresholds = NARROW_AWGN_THRESHOLD_DB;
+    thresholds[rung] = 99.0;
+    let length = 6 * aether_link::frames::data_capacity(t.data_capacity[rung]);
+    let message: Vec<u8> = (0..=u8::MAX).take(length).collect();
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&message);
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 0.0, 4).with_thresholds(&thresholds);
+    sim.run(900.0, 3.0);
+    let at_rung = sim
+        .frames_sent(0)
+        .iter()
+        .filter(|f| f.container == Container::Data && f.mode == rung)
+        .count();
+    let stranded = LinkConfig::default().max_combines;
+    assert_eq!(at_rung, 6 * stranded, "not the case measured");
+    assert_eq!(sim.engine(0).stats.frames_reencoded, 6);
+    assert_eq!(
+        sim.delivered(1),
+        message.as_slice(),
+        "{:?} {:?}",
+        sim.events(0),
+        sim.events(1)
+    );
+    assert!(sim.engine(0).all_acknowledged());
+}
+
+#[test]
 fn what_has_reached_the_other_station_is_counted_in_order() {
     // the panel's check mark on a sent message: every byte of it and every byte before it
     // acknowledged. A frame acknowledged past a hole still waits for the hole, which is
