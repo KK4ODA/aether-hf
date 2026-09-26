@@ -700,6 +700,20 @@ disconnect how it was heard. The panel's history says "none sent" / "not said" i
 direction had no traffic. Setup step 2's Interface list fills the fields in only when picked,
 shows Manual unless the fields are exactly an interface's, and never overrides them on Save.
 
+**The end of a session waits out the identifier (ADR-0022, ND1J chat, 2026-09-25).** KK4ODA-1's
+DISC retries went out over ND1J's DISC_ACK and Morse identifier: his `wait_for_clear` held the
+answer 2 s (the session had ended, so `channel_clear` no longer passed it, and the DISC it
+answered had marked the channel busy), and a false detection of the identifier as data armed an
+ACK, which for a leaving station is another DISC. Now (engine, model first) a disconnecting ISS
+takes no data frames and a heard preamble moves the DISC retry past the frame; (daemon,
+`held_for_busy`) a DISC_ACK is a response, never held by `wait_for_clear`, and the end of a
+session waits out the other station's identifier up to `OTHER_ID_WAIT_MAX_S` — a DISC or
+DISC_ACK for non-frame busy (the answer after listening `ANSWER_LISTEN_S`), the closing
+identifier for any; `append_cw_id` moves the engine's timers by the identifier plus the busy
+hangover. Open: the ten-minute identifier mid-session (needs a frame field). The author's
+station has `cw_id = false`; ND1J identifies and waits for clear — a recording's sidecar
+`session.wait_for_clear` says which.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
