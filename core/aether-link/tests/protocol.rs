@@ -1774,6 +1774,55 @@ fn a_called_sender_yields_to_the_callers_poll() {
     assert!(!sim.events(1).iter().any(|e| e.starts_with("disconnected")));
 }
 
+#[test]
+fn a_climbed_session_outlives_a_fade_that_carries_no_data() {
+    // ADR-0023's fade after the link has climbed: both stations' frames are OFDM, so silence
+    // ends the session after 45 s, not after four floor exchanges. The caller hears none of the
+    // called station's data for 90 s while control frames get through; what keeps the link
+    // alive is the poll of a caller that took the turn back after its TURNs went unanswered,
+    // which the called station answers by yielding. A caller that offered the turn for longer
+    // on silence — ADR-0029's rejected rule — heard nothing it could read for as long, and the
+    // session timed out, ten seeds in ten
+    let t = timing(false);
+    for seed in 0..3u64 {
+        let a = LinkEngine::new("W4ODA", t.clone(), LinkConfig::default(), seed);
+        let b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), seed + 1);
+        let fade = std::rc::Rc::new(std::cell::Cell::new(0.0f64));
+        let until = std::rc::Rc::clone(&fade);
+        let mut sim = TwoStationSim::new(a, b, 15.0, seed).with_unheard(Box::new(
+            move |rx, container, t0| rx == 0 && container == Container::Data && t0 < until.get(),
+        ));
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        sim.run(30.0, 3.0);
+        // an exchange on a clean path first: the link climbs to OFDM both ways
+        sim.engine_mut(1)
+            .send(&b"a first line, before the fade ".repeat(4));
+        let now = sim.t;
+        sim.run(now + 60.0, 3.0);
+        sim.engine_mut(0).send(&b"and its reply ".repeat(6));
+        let now = sim.t;
+        sim.run(now + 60.0, 3.0);
+        assert!(
+            sim.modes_sent().iter().any(|&m| !t.is_floor(m)),
+            "seed {seed}: the link never climbed"
+        );
+        fade.set(sim.t + 90.0);
+        let message = b"sent while the path would carry no data";
+        sim.engine_mut(1).send(message);
+        sim.run(fade.get() + 300.0, 3.0);
+        assert!(sim.delivered(0).ends_with(message), "seed {seed}");
+        for who in 0..2 {
+            assert!(
+                !sim.events(who)
+                    .iter()
+                    .any(|e| e.starts_with("disconnected")),
+                "seed {seed}: {:?}",
+                sim.events(who)
+            );
+        }
+    }
+}
+
 // ── chat: asking for the turn (ADR-0027) ──────────────────────────────
 
 /// A session up on a clean path with preambles reported, as the daemon runs it: the caller
@@ -2032,4 +2081,424 @@ fn a_burst_is_not_repeated_over_its_acknowledgement_arriving() {
     a.on_frame(&Wire::carry(&acks[0], t_start, &t), t_start + length + 0.01);
     assert!(a.all_acknowledged());
     assert_eq!(a.stats.ack_timeouts, 0);
+}
+
+// ── ADR-0029: a TURN whose answer is lost ─────────────────────────────
+
+/// Whether both stations of a session hold the turn.
+fn both_sending(sim: &TwoStationSim) -> bool {
+    let (a, b) = (sim.engine(0), sim.engine(1));
+    a.connected() && b.connected() && a.role() == Role::Iss && b.role() == Role::Iss
+}
+
+/// The kind of each control frame among `frames`.
+fn control_kinds(frames: &[aether_link::TxFrame]) -> Vec<aether_link::ControlKind> {
+    frames
+        .iter()
+        .filter(|f| f.container == Container::Control)
+        .map(|f| {
+            aether_link::ControlFrame::decode(&f.payload)
+                .expect("a control frame")
+                .kind
+        })
+        .collect()
+}
+
+#[test]
+fn a_turn_whose_answer_was_lost_is_answered_again() {
+    // ADR-0029 (found by the chat bench, ADR-0027 §7): the caller hands the turn over and hears
+    // nothing of the called station until its TURN has gone out three times — not the burst
+    // that answered it, not what followed. The called station, holding the turn, ignored the
+    // TURN repeated, and the caller took the turn back when its tries ran out: two senders,
+    // each sending into the other. The called station answers a TURN heard again now, and the
+    // caller hears the answer to its third
+    let t = timing(false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let offered = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let seen = std::rc::Rc::clone(&offered);
+    // the caller hears nothing of the called station, preamble or frame, from its first TURN
+    // until its third has gone out: the answer to the TURN and everything after it
+    let mut sim = TwoStationSim::new(a, b, 15.0, 0).with_unheard(Box::new(move |rx, _, _| {
+        rx == 0 && (1..3).contains(&seen.get())
+    }));
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.run(30.0, 3.0);
+    assert!(sim.engine(0).connected() && sim.engine(1).connected());
+    let before = sim.engine(0).stats.turns;
+    let message = b"typed at the station that does not hold the turn";
+    sim.engine_mut(1).send(message);
+    let mut clock = sim.t;
+    let end = clock + 300.0;
+    let mut both = None;
+    while clock < end {
+        clock += 0.01;
+        sim.run(clock, 3.0);
+        offered.set(sim.engine(0).stats.turns - before);
+        if both.is_none() && both_sending(&sim) {
+            both = Some(clock);
+        }
+    }
+    assert_eq!(sim.delivered(0), message.as_slice(), "{:?}", sim.events(0));
+    assert!(offered.get() >= 3, "{} TURNs", offered.get());
+    assert_eq!(both, None, "both held the turn");
+}
+
+#[test]
+fn a_turn_answered_by_a_poll_the_sender_cannot_read() {
+    // ADR-0029, the chat bench's trace: a station takes the turn with nothing of its own to
+    // send and polls; the station that handed it over cannot read the poll, answers its
+    // preamble with an acknowledgement — which tells the new sender all is well — and offers
+    // the turn again. The new sender ignored the TURN, the old one could not read its next poll
+    // either, and took the turn back after three TURNs: two senders. The new sender answers
+    // each TURN now, and the old one, having heard frames it could not read, offers until it
+    // reads an answer — here the answer to its fourth TURN
+    let t = timing(true);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    // the first three polls after the TURN arrive far too weak to read — each the answer to a
+    // TURN, or the one after it; their preambles are still heard, a preamble being far below
+    // any frame's threshold
+    let spoiled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(f64, f64)>::new()));
+    let windows = std::rc::Rc::clone(&spoiled);
+    let mut sim = TwoStationSim::new(a, b, 15.0, 0).with_snr_schedule(Box::new(move |at| {
+        if windows
+            .borrow()
+            .iter()
+            .any(|&(t0, t1)| t0 <= at && at <= t1)
+        {
+            -60.0
+        } else {
+            15.0
+        }
+    }));
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.run(30.0, 3.0);
+    assert!(sim.engine(0).connected() && sim.engine(1).connected());
+    let turns = sim.engine(0).stats.turns;
+    // the turn, with nothing to send yet: it is answered with a poll
+    sim.engine_mut(1).request_break();
+    let mut watched: Option<usize> = None;
+    let mut clock = sim.t;
+    let end = clock + 60.0;
+    let mut both = None;
+    while clock < end {
+        let from = clock;
+        clock += 0.01;
+        sim.run(clock, 3.0);
+        let sent = sim.frames_sent(1).len();
+        match watched {
+            None if sim.engine(0).stats.turns > turns => watched = Some(sent),
+            Some(seen) if sent > seen => {
+                // a control frame the called station keyed after the TURN: a poll
+                let polled = sim.frames_sent(1)[seen..]
+                    .iter()
+                    .any(|f| f.container == Container::Control);
+                if polled && spoiled.borrow().len() < 3 {
+                    let window = (from - 0.01, clock + t.control_frame_s + 0.05);
+                    spoiled.borrow_mut().push(window);
+                }
+                watched = Some(sent);
+            }
+            _ => {}
+        }
+        if both.is_none() && both_sending(&sim) {
+            both = Some(clock);
+        }
+    }
+    assert_eq!(spoiled.borrow().len(), 3);
+    assert_eq!(sim.engine(1).role(), Role::Iss);
+    assert_eq!(sim.engine(0).role(), Role::Irs);
+    assert_eq!(both, None, "both held the turn");
+    // and the session carries on the other way
+    let message = b"sent by the station that took the turn";
+    sim.engine_mut(1).send(message);
+    sim.run(clock + 60.0, 3.0);
+    assert_eq!(sim.delivered(0), message.as_slice());
+}
+
+/// A frame whose preamble was heard and whose bits could not be read.
+struct Unreadable {
+    t_start: f64,
+    t_end: f64,
+}
+
+impl aether_link::SoftFrame for Unreadable {
+    fn container(&self) -> Container {
+        Container::Control
+    }
+    fn mode(&self) -> usize {
+        0
+    }
+    fn floor(&self) -> bool {
+        false
+    }
+    fn rv(&self) -> u8 {
+        0
+    }
+    fn snr_db(&self) -> f64 {
+        -20.0
+    }
+    fn t_start(&self) -> f64 {
+        self.t_start
+    }
+    fn t_end(&self) -> f64 {
+        self.t_end
+    }
+    fn decode(
+        &self,
+        _buffer: Option<&aether_link::HarqBuffer>,
+    ) -> (Option<Vec<u8>>, aether_link::HarqBuffer) {
+        (None, aether_link::HarqBuffer::default())
+    }
+}
+
+/// A readable control frame of the session, as the other station would send it.
+fn control_frame(kind: aether_link::ControlKind, session: u8, t_end: f64, t: &PhyTiming) -> Wire {
+    let payload = aether_link::ControlFrame {
+        kind,
+        session,
+        flags: 0,
+        base: 0,
+        bitmap: 0,
+        snr_db: None,
+        recommended_mode: 0,
+        counter: 0,
+    }
+    .encode()
+    .to_vec();
+    Wire {
+        container: Container::Control,
+        mode: 0,
+        rv: 0,
+        t_start: t_end - t.control_frame_s,
+        t_end,
+        payload,
+        floor: false,
+    }
+}
+
+/// Carry a transmission from `from` to `to` over a perfect wire, keyed at `at`: the receiver
+/// reads each frame as it ends, and the transmission ends with the last. Returns when.
+fn relay(
+    from: &mut LinkEngine,
+    to: &mut LinkEngine,
+    frames: &[aether_link::TxFrame],
+    at: f64,
+) -> f64 {
+    let t = from.timing().clone();
+    let mut end = at;
+    for frame in frames {
+        let wire = Wire::carry(frame, end, &t);
+        end = wire.t_end;
+        to.on_frame(&wire, end);
+    }
+    from.on_tx_done(end);
+    end
+}
+
+/// Let a transmission go out and nobody hear it. Returns when it ended.
+fn lose(from: &mut LinkEngine, frames: &[aether_link::TxFrame], at: f64) -> f64 {
+    let t = from.timing().clone();
+    let end = at + frames.iter().map(|f| t.frame_s(f)).sum::<f64>();
+    from.on_tx_done(end);
+    end
+}
+
+/// Run a station's clock to its next timer. Returns when, and what it sends then.
+fn at_next_deadline(engine: &mut LinkEngine) -> (f64, Vec<aether_link::TxFrame>) {
+    let at = engine.next_deadline().expect("a timer is armed");
+    engine.tick(at);
+    (at, transmitted(engine))
+}
+
+/// Two stations in a session over a perfect wire, by hand, the called one with something to
+/// send (`work`) or asking for the turn with nothing (a break): the caller's poll has fetched
+/// the wish, and the caller has just keyed its TURN, which nobody has heard yet. Returns them,
+/// the TURN and when it was keyed.
+fn handing_over(
+    t: &PhyTiming,
+    work: bool,
+) -> (LinkEngine, LinkEngine, Vec<aether_link::TxFrame>, f64) {
+    let (mut a, mut b) = pair(t, &LinkConfig::default());
+    a.connect("KK4XYZ").expect("idle");
+    let request = transmitted(&mut a);
+    let now = relay(&mut a, &mut b, &request, 0.0);
+    let accept = transmitted(&mut b);
+    let mut now = relay(&mut b, &mut a, &accept, now);
+    assert!(a.connected() && b.connected());
+    // the caller confirms the call with a poll, and polls again when the link is idle
+    let mut poll = transmitted(&mut a);
+    for asked in [false, true] {
+        if asked {
+            if work {
+                b.send(b"a line for the other station");
+            } else {
+                b.request_break();
+            }
+            let (at, next) = at_next_deadline(&mut a);
+            now = at.max(now);
+            poll = next;
+        }
+        assert_eq!(control_kinds(&poll), [aether_link::ControlKind::Poll]);
+        now = relay(&mut a, &mut b, &poll, now);
+        let (at, ack) = at_next_deadline(&mut b);
+        now = relay(&mut b, &mut a, &ack, at.max(now));
+    }
+    let turn = transmitted(&mut a);
+    assert_eq!(control_kinds(&turn), [aether_link::ControlKind::Turn]);
+    (a, b, turn, now)
+}
+
+#[test]
+fn the_station_holding_the_turn_answers_a_turn_heard_again() {
+    // ADR-0029: a TURN heard by the station that already holds the turn says the other station
+    // heard nothing of it taking it. The answer goes again — the burst, which the other station
+    // heard none of, or the poll — and not while the station's own transmission is going out
+    let t = timing(false);
+    for work in [false, true] {
+        let (mut a, mut b, turn, now) = handing_over(&t, work);
+        let now = relay(&mut a, &mut b, &turn, now);
+        assert_eq!(b.role(), Role::Iss);
+        let answer = transmitted(&mut b);
+        let now = lose(&mut b, &answer, now);
+        let (at, again) = at_next_deadline(&mut a);
+        assert!(at >= now);
+        assert_eq!(control_kinds(&again), [aether_link::ControlKind::Turn]);
+        let end = relay(&mut a, &mut b, &again, at);
+        let second = transmitted(&mut b);
+        if work {
+            assert!(
+                !second.is_empty() && second.iter().all(|f| f.container == Container::Data),
+                "work {work}: {second:?}"
+            );
+        } else {
+            assert_eq!(
+                control_kinds(&second),
+                [aether_link::ControlKind::Poll],
+                "work {work}"
+            );
+        }
+        assert_eq!(b.role(), Role::Iss);
+        // one heard while the answer is still on the air needs none, and one of another
+        // session is nobody's business here
+        let session = b.session();
+        for other in [session, session.wrapping_add(1)] {
+            let turn = control_frame(aether_link::ControlKind::Turn, other, end + 0.2, &t);
+            b.on_frame(&turn, end + 0.2);
+        }
+        assert!(transmitted(&mut b).is_empty(), "work {work}");
+    }
+}
+
+#[test]
+fn a_station_offering_the_turn_does_not_take_it_back_over_what_it_cannot_read() {
+    // ADR-0029: a frame heard after a TURN and not read may be the other station's answer from
+    // the turn it now holds — a poll too weak to read — and while the last frame heard was such
+    // a frame, the offering station offers again, up to max_retries TURNs, rather than take the
+    // turn back after turn_retries. An acknowledgement it can read says the other station is
+    // still receiving, and silence says nothing either way: after those it takes the turn back
+    // as before — a path that carries control frames and no data is kept alive by the poll
+    // that follows (ADR-0023)
+    let t = timing(false);
+    let config = LinkConfig::default();
+    let offering = || {
+        let (mut a, _, turn, now) = handing_over(&t, true);
+        lose(&mut a, &turn, now);
+        a
+    };
+    let unreadable = |a: &mut LinkEngine| {
+        let at = a.next_deadline().expect("the TURN's wait") - 0.5;
+        let frame = Unreadable {
+            t_start: at - t.control_frame_s,
+            t_end: at,
+        };
+        a.on_frame(&frame, at);
+    };
+    // whether the station offers again: a TURN goes out when the wait runs out
+    let offers_again = |a: &mut LinkEngine| {
+        let (at, sent) = at_next_deadline(a);
+        let turn = control_kinds(&sent) == [aether_link::ControlKind::Turn];
+        if turn {
+            lose(a, &sent, at);
+        }
+        turn
+    };
+
+    // silence: the turn is taken back after turn_retries TURNs, as it always was
+    let mut a = offering();
+    for _ in 1..config.turn_retries {
+        assert!(offers_again(&mut a));
+    }
+    assert!(!offers_again(&mut a));
+    assert_eq!(a.role(), Role::Iss);
+
+    // a frame it could not read: it offers on, to max_retries, and then takes the turn back
+    let mut a = offering();
+    unreadable(&mut a);
+    for tries in 1..config.max_retries {
+        assert!(offers_again(&mut a), "try {}", tries + 1);
+    }
+    assert!(!offers_again(&mut a));
+    assert_eq!(a.role(), Role::Iss);
+
+    // its preamble alone counts: the frame may never arrive whole
+    let mut a = offering();
+    for _ in 1..config.turn_retries {
+        assert!(offers_again(&mut a));
+    }
+    let at = a.next_deadline().expect("the TURN's wait") - 0.5;
+    a.on_preamble(at, at + 0.2, Some(t.control_frame_s));
+    assert!(offers_again(&mut a));
+    assert_eq!(a.role(), Role::Irs);
+
+    // an acknowledgement read after it: the other station is receiving still
+    let mut a = offering();
+    unreadable(&mut a);
+    for _ in 1..config.turn_retries {
+        assert!(offers_again(&mut a));
+    }
+    let at = a.next_deadline().expect("the TURN's wait") - 0.5;
+    let session = a.session();
+    a.on_frame(
+        &control_frame(aether_link::ControlKind::Ack, session, at, &t),
+        at,
+    );
+    assert!(transmitted(&mut a).is_empty());
+    assert!(!offers_again(&mut a));
+    assert_eq!(a.role(), Role::Iss);
+}
+
+#[test]
+fn an_acknowledgement_is_not_acknowledged() {
+    // ADR-0029: a receiving station answers a frame it hears arriving as the end of a burst —
+    // it may be the last frame of one, or a poll it will not be able to read. When the frame
+    // turns out to be an acknowledgement, the other station is receiving too and waits for
+    // nothing: no acknowledgement goes back. One did, and was answered in turn; keyed by a
+    // station that had just offered the turn, it went out over the answer to its TURN
+    let t = timing(false);
+    let (_, mut b, _, now) = handing_over(&t, true);
+    assert_eq!(b.role(), Role::Irs);
+    let start = now + 1.0;
+    b.on_preamble(start, start + 0.2, Some(t.control_frame_s));
+    let end = start + t.control_frame_s;
+    let session = b.session();
+    b.on_frame(
+        &control_frame(aether_link::ControlKind::Ack, session, end, &t),
+        end,
+    );
+    b.tick(end + 20.0);
+    assert!(
+        transmitted(&mut b).is_empty(),
+        "an acknowledgement answered"
+    );
+    // a frame it cannot read is still answered: it may be a poll
+    let start = end + 25.0;
+    b.on_preamble(start, start + 0.2, Some(t.control_frame_s));
+    let end = start + t.control_frame_s;
+    let frame = Unreadable {
+        t_start: start,
+        t_end: end,
+    };
+    b.on_frame(&frame, end);
+    let (_, sent) = at_next_deadline(&mut b);
+    assert_eq!(control_kinds(&sent), [aether_link::ControlKind::Ack]);
 }
