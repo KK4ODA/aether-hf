@@ -2213,6 +2213,55 @@ details.fold-card > summary:hover .card-title {
   align-items: start;
 }
 
+/* ── unsaved Setup changes: said where they are, and on every other tab ── */
+
+.unsaved-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s3);
+}
+
+.unsaved-banner > span {
+  flex: 1 1 320px;
+}
+
+.tab[data-unsaved="true"]::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--status-warning);
+}
+
+.step[data-unsaved="true"] {
+  border-color: color-mix(in srgb, var(--status-warning) 60%, var(--border));
+  box-shadow: inset 3px 0 0 var(--status-warning);
+}
+
+.step-link[data-unsaved="true"] {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.step-link[data-unsaved="true"]::after {
+  content: "•";
+  font-weight: 700;
+}
+
+.save-step:has(#setup-unsaved:not([hidden])) {
+  border-color: var(--status-warning);
+}
+
+.setup-unsaved {
+  flex: 1 1 100%;
+  color: var(--status-warning);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 /* ── counters ───────────────────────────────────────────────────── */
 
 .pills {
