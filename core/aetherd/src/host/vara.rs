@@ -16,8 +16,9 @@
 //! Aether would strand every real-VARA client that called it. The compatibility is in the
 //! host interface, and saying so is the point rather than a limitation.
 //!
-//! Aether has one bandwidth (ADR-0002), so `BW2300` is accepted and the others are refused
-//! rather than silently ignored: a client that asked for 500 Hz and got 2300 would be
+//! The bandwidth is the station's configuration (`[radio] bandwidth`, 2300 or 500), so `BW2300`
+//! or `BW500` is accepted only when it names the one the station runs and the others are
+//! refused rather than silently ignored: a client that asked for 500 Hz and got 2300 would be
 //! transmitting outside what its operator chose.
 
 use std::fmt::Write as _;
@@ -36,7 +37,8 @@ pub fn version_string() -> String {
     format!("Aether HF {}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Bandwidth this physical layer offers, in hertz (ADR-0002).
+/// The bandwidth assumed, in hertz, until the modem's `capabilities` say which one the
+/// station runs.
 pub const BANDWIDTH_HZ: u32 = 2300;
 
 /// What the host asked the modem to do, once a command has been understood.
@@ -398,8 +400,8 @@ pub enum Notification {
     /// The station's callsign is usable; sent so a client does not warn about a speed limit
     /// it does not have. Aether is free software and has no registration.
     Registered(String),
-    /// The SNR a frame from the other station arrived at, in dB (3 kHz reference), during
-    /// a session. `VarAC` builds its signal reports from these — the report it sends on
+    /// The SNR a decoded frame arrived at, in dB (3 kHz reference) — any frame, in a session
+    /// or not. `VarAC` builds its signal reports from these — the report it sends on
     /// connecting, the one a ping exists to fetch — and without them a ping never ends.
     SignalToNoise(f64),
     /// The link speed, as the published interface states it: the mode in use and its

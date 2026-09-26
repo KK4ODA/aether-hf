@@ -1,8 +1,9 @@
 """Link-layer frame formats — the bytes inside a PHY DATA or CONTROL payload (P2-1).
 
-Two containers exist at the PHY: a DATA frame (LONG layout, mode signalled in the pilot
-chips, 26 … 732 payload bytes) and a CONTROL frame (SHORT layout, control mode, 7 bytes).
-The link layer puts its own header at the front of each:
+Two containers exist at the PHY: a DATA frame (a rung of the air's ladder — a tone-floor
+kind, or an OFDM mode on the LONG layout with the mode signalled in the pilot chips — 15 … 732
+payload bytes) and a CONTROL frame (7 bytes: the tone floor's control frame, or the SHORT
+layout at the control mode). The link layer puts its own header at the front of each:
 
 DATA container, 3-byte header (5 with an explicit length)::
 
@@ -11,12 +12,13 @@ DATA container, 3-byte header (5 with an explicit length)::
     2: session id
     3–4: data length (only when flags & PARTIAL)   otherwise the frame is full
 
-Nothing in the header may change between transmissions of the same sequence number: a
+Nothing in the header may change between transmissions of the same codeword: a
 retransmission is the *same codeword* under another redundancy version, and the receiver
 soft-combines them. That is why the header carries no burst position — the receiver takes
 the slot of a frame from its air time (frames of a burst are contiguous) and the end of a
 burst from the silence after it. Kinds carried in the DATA container: DATA (user bytes),
-CONNECT_REQ and CONNECT_ACK (callsigns do not fit a control frame).
+CONNECT_REQ and CONNECT_ACK (callsigns do not fit a control frame), and — outside sessions —
+BEACON, PROBE, PROBE_ACK and DATAGRAM.
 
 CONTROL container, 7 bytes::
 
@@ -24,8 +26,10 @@ CONTROL container, 7 bytes::
     1: session id
     2: base seq      ACK: next sequence number the receiver needs
     3–4: bitmap      ACK: bit i set ⇔ seq base + i has been received (16-frame window)
-    5: SNR           ACK/POLL: signed dB, 3 kHz reference (−40 … +40), 0x7f = unknown
-    6: recommended mode (4 bits) | counter (4 bits, wraps; distinguishes repeated ACKs)
+    5: SNR           signed dB, 3 kHz reference (−40 … +40), 0x7f = unknown: in an ACK the
+                     burst's (ADR-0020), in any other kind the last frame decoded from the
+                     other station (ADR-0021)
+    6: recommended mode (5 bits) | counter (3 bits, wraps; distinguishes repeated ACKs)
 
 Kinds: ACK, POLL (ISS keep-alive, answered by an ACK), TURN (ISS hands the sending role
 to the peer), DISC / DISC_ACK. Everything is big-endian; nothing here depends on the PHY.
