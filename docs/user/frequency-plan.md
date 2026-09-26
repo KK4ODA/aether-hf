@@ -69,6 +69,7 @@ segments of the Region 2 band plan; check your own national plan, which may diff
 | 15 m | 21.090–21.100 MHz | **21.094 MHz** | 21.0943–21.0966 | |
 | 12 m | 24.925–24.930 MHz | **24.926 MHz** | 24.9263–24.9286 | JS8 (24.922) ends just below the segment. |
 | 10 m | 28.120–28.189 MHz | **28.126 MHz** | 28.1263–28.1286 | Wide open when the band is open at all. Keep clear of FT4 at 28.180. |
+| 6 m | all of 6 m where data goes, 50.1–54.0 MHz | **50.690 MHz** | 50.6902–50.6928 | Inside the band plan's non-voice area (50.6–50.8 MHz), clear of the 50.62 MHz digital (packet) calling frequency and below the radio-control channels at 50.8–51.0. FM packet channel plans vary by area: listen first. Every class from Technician up holds 6 m. |
 
 Segments from the ARRL's summary of §97.221 ([arrl.org/link-remote-control](http://www.arrl.org/link-remote-control));
 verify against the current text of the rule before relying on it.

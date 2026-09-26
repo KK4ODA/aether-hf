@@ -27,3 +27,4 @@ context → decision → alternatives considered → consequences.
 | [0020](0020-what-a-failure-says.md) | What a failure says — the receiver learns only from frames that could tell it something: trusted SNRs, self-decodable or combined failures, not the sender's own choices | accepted |
 | [0021](0021-every-control-frame-says-how-it-hears.md) | Every control frame says how its sender hears the other station — a disconnect tells a station that only received how it was heard | accepted |
 | [0022](0022-the-end-of-a-session-waits-out-the-identifier.md) | The end of a session waits out the other station's identifier — no repeated DISC, answer or closing identifier over a Morse ID | accepted |
+| [0023](0023-leaving-and-handing-over.md) | Leaving and handing over — a receiver's Disconnect leaves between bursts, the TURN waits for the longest first frame, and the caller keeps the turn | accepted |

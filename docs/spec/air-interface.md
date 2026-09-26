@@ -613,7 +613,11 @@ family the request arrived in, and a caller does not send a try over a frame it 
 arriving. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
 the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
 burst. A station waiting for the answer to its `DISC` takes no data frame as a burst and does
-not repeat the `DISC` over a frame it hears arriving (ADR-0022).
+not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving station that wants
+to close sends its `DISC` between bursts; the sender of a `TURN` waits for the peer's first burst
+as long as the longest data frame there is, and past any frame it hears arriving; and a sending
+station that hears the other poll — both believe they hold the turn — yields if it was called,
+answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023).
 
 ### 7.3 Capability negotiation
 
