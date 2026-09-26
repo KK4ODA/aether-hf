@@ -1195,6 +1195,16 @@ impl LinkEngine {
         let duration_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
         self.tx_busy_until = self.now + self.timing.tx_latency_s + duration_s;
         self.actions.push(Action::Transmit { frames, duration_s });
+        // The link timeout spans four exchanges at the family the link runs in, and was
+        // reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered
+        // stepped down to the floor still holding the 45 s its last acknowledgement had
+        // armed, which ran out during its first tone burst with the answer to it on its way.
+        // Whenever this station sends, the deadline is the last frame heard plus the timeout
+        // for the family the link runs in now, never less than it was (ADR-0033).
+        if let Some(deadline) = self.deadline_of(Timer::Link) {
+            let reckoned = self.last_peer_frame + self.link_timeout();
+            self.set_deadline(Timer::Link, deadline.max(reckoned));
+        }
     }
 
     fn control(
@@ -3070,6 +3080,56 @@ mod tests {
         e.on_ack(&ack);
         assert!(e.all_acknowledged());
         assert!(e.unacked().is_empty());
+    }
+
+    #[test]
+    fn the_link_timeout_follows_the_sender_down_to_the_floor() {
+        // The timeout spans four exchanges at the family the link runs in, and was reckoned
+        // only when a frame was heard: a sender whose OFDM bursts went unanswered stepped down
+        // to the floor and kept the 45 s the last acknowledgement had armed, which ran out
+        // during its first tone burst (ADR-0033). The deadline is the last frame heard plus
+        // the timeout for the family the link runs in now, whenever the station sends
+        let config = LinkConfig {
+            max_mode: 4,
+            max_burst_s: Some(28.85),
+            ..LinkConfig::default()
+        };
+        let mut e = LinkEngine::new("W4ODA", narrow(), config, 1);
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.session = 7;
+        e.now = 100.0;
+        e.last_peer_frame = 100.0;
+        e.tx_busy_until = 100.0;
+        e.recommended = 4;
+        e.rate.seed(15.0, false);
+        e.arm(Timer::Link, e.link_timeout());
+        let deadline = |e: &LinkEngine| e.deadline_of(Timer::Link).expect("armed");
+        assert!(
+            (deadline(&e) - 145.0).abs() < 1e-9,
+            "the ordinary link's 45 s"
+        );
+        e.send(&[0u8; 72]);
+        let _ = e.drain();
+        assert!(
+            (deadline(&e) - 145.0).abs() < 1e-9,
+            "an OFDM burst changes nothing"
+        );
+        e.back_off(); // the burst went unanswered: the recommendation is the floor's now
+        assert!(e.timing.is_floor(e.recommended));
+        e.waiting_for = None;
+        e.disarm(Timer::Wait);
+        e.now = 110.0;
+        e.tx_busy_until = 110.0;
+        e.send_burst();
+        let _ = e.drain();
+        let floor = e.link_timeout();
+        assert!(
+            (deadline(&e) - (100.0 + floor)).abs() < 1e-9,
+            "{}",
+            deadline(&e)
+        );
+        assert!(floor > 100.0, "four floor exchanges");
     }
 
     #[test]
