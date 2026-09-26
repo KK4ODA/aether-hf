@@ -621,17 +621,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "callsigns.set" => set_callsigns(station, params, id),
         "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
-        "beacon" => match station.beacon() {
-            Ok(()) => Response::ok(id, json!({ "accepted": true })),
-            Err(reason) => Response::failed(
-                id,
-                ApiError::new(
-                    "not_idle",
-                    format!("Cannot beacon: {reason}. A beacon is sent outside a session."),
-                    true,
-                ),
-            ),
-        },
+        "beacon" => beacon(station, id),
         "beacon.every" => beacon_every(station, params, id),
         "ptt.test" => {
             let seconds = params
@@ -736,12 +726,44 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
             ApiError::new(
                 if reason.starts_with("not one of") {
                     "bad_params"
+                } else if answer_only(reason) {
+                    "refused"
                 } else {
                     "already_connected"
                 },
                 format!("Cannot call {remote}: {reason}."),
                 false,
             ),
+        ),
+    }
+}
+
+/// Whether a station's refusal is its `[radio] answer_only` setting: `refused`, and not to be
+/// tried again until the setting changes — not the `not_idle` or `already_connected` of a
+/// session or a probe that will be over in a while.
+fn answer_only(reason: &str) -> bool {
+    reason.contains("answer-only")
+}
+
+/// `beacon`: one frame with this station's callsign, outside any session.
+fn beacon<P: Ptt>(station: &mut Station<P>, id: Option<String>) -> Response {
+    match station.beacon() {
+        Ok(()) => Response::ok(id, json!({ "accepted": true })),
+        // a session ends, and the beacon can go then; answer-only, or a callsign that will
+        // not go into one, is not a matter of waiting
+        Err(reason) if !answer_only(reason) && station.state() != aether_link::State::Idle => {
+            Response::failed(
+                id,
+                ApiError::new(
+                    "not_idle",
+                    format!("Cannot beacon: {reason}. A beacon is sent outside a session."),
+                    true,
+                ),
+            )
+        }
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new("refused", format!("Cannot beacon: {reason}."), false),
         ),
     }
 }
@@ -794,8 +816,9 @@ fn frequencies_set(
     )
 }
 
-/// A Test session (P6-7): probe, call, a message, a file, the mode ladder, disconnect —
-/// recorded, and reported by `test.status` while it runs and after.
+/// A Test session (P6-7): probe, call, a message, the mode ladder, a file, disconnect —
+/// recorded, and reported by `test.status` while it runs and after. Whether the rules let this
+/// station start an exchange here was asked before this (`refused_before_transmitting`).
 fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
     let plan = match crate::station::TestPlan::from_params(params) {
         Ok(plan) => plan,
@@ -806,18 +829,24 @@ fn test_start<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Strin
     let remote = plan.remote.clone();
     match station.start_test(plan) {
         Ok(()) => Response::ok(id, json!({ "accepted": true })),
-        Err(reason) => Response::failed(
-            id,
-            ApiError::new(
-                if reason.contains("not one of") {
-                    "bad_params"
-                } else {
-                    "not_idle"
-                },
-                format!("Cannot start a test session with {remote}: {reason}."),
-                reason.contains("already"),
-            ),
-        ),
+        Err(reason) => {
+            // a session, a probe or another test is over in a while
+            let (code, retryable) = if reason.contains("not one of") {
+                ("bad_params", false)
+            } else if answer_only(&reason) {
+                ("refused", false)
+            } else {
+                ("not_idle", true)
+            };
+            Response::failed(
+                id,
+                ApiError::new(
+                    code,
+                    format!("Cannot start a test session with {remote}: {reason}."),
+                    retryable,
+                ),
+            )
+        }
     }
 }
 
@@ -884,20 +913,26 @@ fn probe<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -
     let as_call = params.get("callsign").and_then(Value::as_str);
     match station.probe(remote, as_call) {
         Ok(()) => Response::ok(id, json!({ "accepted": true })),
-        Err(reason) => Response::failed(
-            id,
-            ApiError::new(
-                if reason.starts_with("not one of") {
-                    "bad_params"
-                } else {
-                    "not_idle"
-                },
-                format!(
-                    "Cannot probe {remote}: {reason}. The answer, or its absence, is reported as a probe event."
+        // a probe already out, or a session: over in a while
+        Err(reason) => {
+            let (code, retryable) = if reason.starts_with("not one of") {
+                ("bad_params", false)
+            } else if answer_only(reason) {
+                ("refused", false)
+            } else {
+                ("not_idle", true)
+            };
+            Response::failed(
+                id,
+                ApiError::new(
+                    code,
+                    format!(
+                        "Cannot probe {remote}: {reason}. The answer, or its absence, is reported as a probe event."
+                    ),
+                    retryable,
                 ),
-                reason.contains("already out"),
-            ),
-        ),
+            )
+        }
     }
 }
 
@@ -981,6 +1016,8 @@ fn refused_before_transmitting<P: Ptt>(
         "probe" => ("probe", None),
         "connect" => ("call", None),
         "beacon" => ("beacon", None),
+        // a probe and a call, to begin with
+        "test.start" => ("start a test session", None),
         // zero is "stop", for a tune tone and for drive bursts: stopping is always allowed
         "tune" if params.get("duration_s").and_then(Value::as_f64) != Some(0.0) => {
             ("tune", Some(EmissionKind::Test))
@@ -1226,7 +1263,11 @@ fn beacon_every<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Str
         Err(reason) => Response::failed(
             id,
             ApiError::new(
-                "bad_params",
+                if answer_only(&reason) {
+                    "refused"
+                } else {
+                    "bad_params"
+                },
                 format!("Cannot beacon on a timer: {reason}."),
                 false,
             ),
@@ -1724,6 +1765,88 @@ mod tests {
             "the message does not say which call failed: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn an_answer_only_station_says_so_rather_than_that_it_is_busy() {
+        // `already_connected` for a call and a retryable `not_idle` for a beacon sent a client
+        // to wait for a session that was not there: the setting refuses, and waiting will not
+        // change it
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                answer_only: true,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        for (method, params) in [
+            ("connect", json!({"remote": "KK4XYZ"})),
+            ("beacon", json!({})),
+            ("beacon.every", json!({"minutes": 15})),
+            ("probe", json!({"remote": "KK4XYZ"})),
+            ("test.start", json!({"remote": "KK4XYZ"})),
+            ("datagram.send", json!({"data": to_base64(b"CQ")})),
+        ] {
+            let error = call(&mut station, method, params).error.expect("refused");
+            assert_eq!(error.code, "refused", "{method}: {error:?}");
+            assert!(!error.retryable, "{method}");
+            assert!(error.message.contains("answer-only"), "{method}: {error:?}");
+        }
+        assert_eq!(station.state(), aether_link::State::Idle);
+        assert!(!station.test_running());
+    }
+
+    #[test]
+    fn what_a_session_holds_up_is_worth_asking_again() {
+        let mut busy = crate::station::tests_support::connected_station();
+        for (method, params) in [
+            ("beacon", json!({})),
+            ("probe", json!({"remote": "M0ABC"})),
+            ("test.start", json!({"remote": "M0ABC"})),
+        ] {
+            let error = call(&mut busy, method, params).error.expect("refused");
+            assert_eq!(error.code, "not_idle", "{method}: {error:?}");
+            assert!(error.retryable, "{method}");
+        }
+        let error = call(&mut busy, "connect", json!({"remote": "M0ABC"}))
+            .error
+            .expect("refused");
+        assert_eq!(error.code, "already_connected");
+    }
+
+    #[test]
+    fn a_test_session_the_rules_refuse_says_so_with_the_decision() {
+        // as a call is refused: the decision whole, for a client that shows it — a Test
+        // session's refusal used to be `not_idle`, with only the decision's summary
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                // no profile chosen: nothing may go on the air
+                regulatory: crate::regulatory::Settings {
+                    profile: String::new(),
+                    ..crate::regulatory::Settings::unchecked()
+                },
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        for method in ["test.start", "connect"] {
+            let response = call(&mut station, method, json!({"remote": "KK4XYZ"}));
+            let error = response.error.expect("refused");
+            assert_eq!(error.code, "regulatory", "{method}: {error:?}");
+            assert!(error.message.starts_with("Cannot "), "{}", error.message);
+            let result = response.result.expect("the decision");
+            assert_eq!(
+                result["decision"]["code"], "no_profile",
+                "{method}: {result}"
+            );
+        }
+        assert!(!station.test_running());
     }
 
     #[test]
