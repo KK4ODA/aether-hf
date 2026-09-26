@@ -1897,6 +1897,71 @@ def test_a_disc_is_not_repeated_over_a_frame_heard_arriving(timing: PhyTiming) -
     assert b._deadlines["wait"] >= t_start + timing.data_frame_s_for(0)
 
 
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_a_poll_is_not_repeated_over_its_answer_arriving(bandwidth: int) -> None:
+    """ADR-0027 §7, found by the chat bench: a receiving station that detects a poll and
+    cannot decode it answers the preamble once its quiet after a frame has passed — 0.99 s
+    when the last frame it decoded was a floor one, and the answer goes on the floor, 3.2 s —
+    while the sender waited for an answer starting within a turnaround. The re-poll went out
+    0.2 s before the answer ended, the sender heard none of it, the next answer met the next
+    re-poll, and the sender gave up with the link up: "no response". A sender waits out a
+    frame it hears arriving, as a caller, a leaving station and one that handed over the turn
+    already did."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.rate import TONE_CONTROL_THRESHOLD_DB
+    from aether_model.waveform import NARROW_500, WIDE_2300
+
+    # preamble reports, as the daemon gives them: the receiving station answers what it
+    # detected and could not decode
+    timing = phy_timing(WIDE_2300 if bandwidth == 2300 else NARROW_500)
+    a, b = _pair(timing)
+    # a path the tone floor's frames cross and the ordinary control frame does not: the call
+    # goes on the floor and measures a strong path, so the sender polls in the ordinary family
+    # of the rung it would send at, and the receiving station, which decoded only the floor's
+    # call, answers every poll it detects on the floor
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_db=20.0,
+        seed=3,
+        control_thresholds={False: 99.0, True: TONE_CONTROL_THRESHOLD_DB},
+    )
+    a.connect("KK4XYZ")
+    sim.run(until=100)
+    assert a.state is State.CONNECTED, sim.events(0)
+    assert (a._control_floor(), b._control_floor()) == (False, True), "not the case measured"
+    assert a.stats.ack_timeouts == 0
+    assert a.stats.acks_received >= 5, "every poll's answer is heard"
+
+
+def test_a_burst_is_not_repeated_over_its_acknowledgement_arriving(timing: PhyTiming) -> None:
+    """A burst's acknowledgement can start late too — the receiving station's quiet stretched
+    by a frame it heard arriving, a receiver running behind — and a burst sent again over it
+    loses the acknowledgement and costs the burst's air time. The retry waits for the frame's
+    end, and the acknowledgement is taken when it arrives."""
+    from aether_model.link.sim import SimFrame
+
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.now, a.session = Role.ISS, State.CONNECTED, 100.0, 7
+    a.send(b"a line typed at the keyboard")
+    burst = [x for x in a.drain() if isinstance(x, Transmit)]
+    assert len(burst) == 1 and a._waiting_for == "ack"
+    a.on_tx_done(100.0 + burst[0].duration_s)
+    retry_at = a._deadlines["wait"]
+    control = timing.control_frame_s_for(a._control_floor())
+    t_start = retry_at - 0.2
+    a.on_preamble(t_start, t_start + 0.1, control)
+    assert a._deadlines["wait"] >= t_start + control
+    a.tick(t_start + control)
+    assert not [x for x in a.drain() if isinstance(x, Transmit)], "repeated over the frame"
+    sent = len(burst[0].frames)  # sequence numbers 0 … sent − 1, every one received
+    ack = ControlFrame(ControlKind.ACK, session=7, base=sent, recommended_mode=a._recommended)
+    frame = SimFrame(Container.CONTROL, 0, 0, 12.0, t_start, t_start + control, ack.encode(), 0.0)
+    a.on_frame(frame, t_start + control + 0.01)
+    assert a._waiting_for is None and a.all_acknowledged
+    assert a.stats.ack_timeouts == 0
+
+
 def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     """The three P9-7 changes together, on the fading pipe (P9-6): at −4 dB on ITU Good the
     500 Hz floor carries a 1 kB session that the fixed 45 s timeout dropped two times in
