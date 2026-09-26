@@ -126,9 +126,10 @@ pub struct SimLink {
     carry: f64,
     /// Samples played in total.
     played: u64,
-    /// How many of them the wall clock has consumed, and when that was last worked out.
+    /// Where the playback clock runs from: the moment it last started — samples queued with
+    /// none waiting — or, run dry, was last read, and how many had been consumed by then.
     /// A cell because the trait asks with `&self`, and the answer moves with the clock.
-    consumed: std::cell::Cell<(Instant, u64)>,
+    clock: std::cell::Cell<(Instant, u64)>,
     noise: Noise,
     /// Human-readable, for the log.
     pub description: String,
@@ -270,7 +271,7 @@ impl SimLink {
             last_capture: now,
             carry: 0.0,
             played: 0,
-            consumed: std::cell::Cell::new((now, 0)),
+            clock: std::cell::Cell::new((now, 0)),
             noise: Noise::new(0x9E37_79B9_7F4A_7C15),
             description,
         })
@@ -342,6 +343,11 @@ impl AudioIo for SimLink {
     }
 
     fn playback(&mut self, samples: &[f32]) {
+        // The clock is brought up to date first. Had it run dry and not been read since,
+        // the time in between would count as these samples playing: a tone queued by a test
+        // thread starved after opening was over the moment it was queued, and the time the
+        // run loop spends rendering a burst went to the burst's first block.
+        self.consumed_now();
         self.played += samples.len() as u64;
         let _ = self.to_peer.send(samples.to_vec());
     }
@@ -372,14 +378,23 @@ impl AudioIo for SimLink {
 }
 
 impl SimLink {
-    /// The playback clock: what has been consumed of what was played, at the sample rate
-    /// and no faster than it was played — an idle stretch does not build up a debt.
+    /// The playback clock: what has been consumed of what was played — at the sample rate
+    /// from when the queue last started playing, and never past what was played.
+    ///
+    /// It runs from that start, not from the last reading: rounded down at every reading,
+    /// it lost a part sample each time, and readings less than a sample apart — the run
+    /// loop handing a burst over block by block — never moved it at all. It stops where the
+    /// queue runs dry and starts again with the next sample queued (`playback` reads it
+    /// first), so an idle stretch is silence, never credited to what is queued after it.
     fn consumed_now(&self) -> u64 {
-        let (since, consumed) = self.consumed.get();
+        let (started, from) = self.clock.get();
         let now = Instant::now();
-        let due = (now.duration_since(since).as_secs_f64() * f64::from(self.sample_rate)) as u64;
-        let consumed = (consumed + due).min(self.played);
-        self.consumed.set((now, consumed));
+        let due = (now.duration_since(started).as_secs_f64() * f64::from(self.sample_rate)) as u64;
+        let consumed = (from + due).min(self.played);
+        if consumed == self.played {
+            // run dry: the clock waits here for the next sample queued
+            self.clock.set((now, consumed));
+        }
         consumed
     }
 }
@@ -487,10 +502,15 @@ mod tests {
         // a plays a tone; b captures it at the wall clock's pace, a card's latency later
         let latency = Duration::from_secs_f64(DEVICE_LATENCY_S);
         let tone: Vec<f32> = (0..9_600).map(|i| 0.25 * (i as f32 * 0.2).sin()).collect();
+        let queued_at = Instant::now();
         a.playback(&tone);
+        // all of it, less what the clock can have eaten since it was queued
+        let backlog = a.queued();
+        let eaten = queued_at.elapsed().as_secs_f64() * 48_000.0;
         assert!(
-            a.queued() > 0,
-            "the backlog should be visible until the clock eats it"
+            backlog as f64 >= tone.len() as f64 - eaten - 1.0,
+            "the backlog should be visible until the clock eats it: {backlog} samples left \
+             {eaten:.0} samples after queueing"
         );
         std::thread::sleep(Duration::from_millis(250) + latency);
         let mut heard = Vec::new();
@@ -539,5 +559,77 @@ mod tests {
             "nothing came back the other way"
         );
         assert!(!a.lost() && !b.lost());
+    }
+
+    /// One end on its own: what it plays goes into the void, which is all a test of its
+    /// playback clock needs.
+    fn lone_end() -> SimLink {
+        SimLink::open(&SimConfig {
+            peer: Peer::Listen("127.0.0.1:0".into()),
+            snr_db: 60.0,
+            signal_rms: 0.25,
+            sample_rate: 48_000,
+        })
+        .expect("listen")
+    }
+
+    #[test]
+    fn an_idle_stretch_is_not_credited_to_what_is_queued_after_it() {
+        // Nothing reads the clock between opening and the first tone, nor between a tone
+        // running out and the next, and each wait is longer than the tone. Were the idle
+        // time counted, a tone would be over the moment it was queued: a test thread
+        // starved between opening and playing saw exactly that on a loaded machine
+        // (2026-09-26). The backlog is held against the clock from just before the tone
+        // was queued, so a thread starved here instead cannot fail it.
+        let mut link = lone_end();
+        let tone = vec![0.1f32; 9_600]; // 0.2 s
+        for round in 0..2 {
+            std::thread::sleep(Duration::from_millis(300));
+            let queued_at = Instant::now();
+            link.playback(&tone);
+            let backlog = link.queued();
+            let eaten = queued_at.elapsed().as_secs_f64() * 48_000.0;
+            assert!(
+                backlog as f64 >= tone.len() as f64 - eaten - 1.0,
+                "round {round}: {backlog} of {} samples left {eaten:.0} samples after queueing",
+                tone.len()
+            );
+            // the tone plays out, the clock read as the run loop reads it
+            while link.queued() > 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn the_playback_clock_keeps_time_however_often_it_is_read() {
+        // The run loop reads the clock a few times a pass, and before every block while it
+        // hands a burst over. Worked out from the previous reading, each reading rounded a
+        // part sample away, and readings less than a sample apart never moved it at all.
+        let mut link = lone_end();
+        let total = 480_000; // ten seconds, far more than the test waits
+        let started = Instant::now();
+        link.playback(&vec![0.0; total]);
+        let queued_at = Instant::now();
+        // read it as often as a loop can, for a tenth of a second
+        let (mut readings, mut last) = (0u64, 0u64);
+        while started.elapsed() < Duration::from_millis(100) {
+            last = link.played();
+            readings += 1;
+        }
+        let before = Instant::now();
+        let played = link.played();
+        let after = Instant::now();
+        assert!(
+            played >= last,
+            "the clock ran backwards: {last} then {played}"
+        );
+        let low =
+            (before.duration_since(queued_at).as_secs_f64() * 48_000.0 - 1.0).min(total as f64);
+        let high = after.duration_since(started).as_secs_f64() * 48_000.0 + 1.0;
+        assert!(
+            (low..=high).contains(&(played as f64)),
+            "{played} samples consumed after {readings} readings, expected {low:.0}–{high:.0}"
+        );
     }
 }
