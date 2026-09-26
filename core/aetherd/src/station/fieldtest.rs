@@ -777,7 +777,7 @@ impl<P: Ptt> Station<P> {
                         self.note(
                             "test",
                             &format!(
-                                "rung mode {}: {}/{} decoded at {}",
+                                "rung {}: {}/{} decoded at {}",
                                 rung.mode,
                                 rung.decoded,
                                 rung.frames,
@@ -806,8 +806,8 @@ impl<P: Ptt> Station<P> {
                         run.enter(Step::Ladder, now);
                     } else if since > RUNG_TIMEOUT_S {
                         let _ = self.engine.pin_mode(None, None);
-                        self.note("test", &format!("rung mode {mode}: timed out"));
-                        let why = format!("aborted: the rung at mode {mode} timed out");
+                        self.note("test", &format!("rung {mode}: timed out"));
+                        let why = format!("aborted: rung {mode} timed out");
                         self.abort();
                         self.finish_test(run, &why);
                         return;
@@ -1048,6 +1048,17 @@ mod tests {
         assert!(
             short.is_empty(),
             "rungs short of frames: {short:?}\nall: {ladder:?}"
+        );
+        // the log names each by its rung, as the ladder and the panel do: "rung mode 3" read
+        // as a mode numbered on some other table
+        let events = air.a.take_events();
+        assert!(
+            events.iter().any(|e| e.starts_with("test:rung 0: ")),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.contains("rung mode")),
+            "{events:?}"
         );
         assert_eq!(results["path"]["my_grid"], "EM73");
         assert!(
