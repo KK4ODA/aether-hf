@@ -123,7 +123,7 @@ class** (ADR-0018, [fcc-regulatory-controls.md](fcc-regulatory-controls.md)). Un
 §97.221(b), or on 6 m where data is allowed — every Aether signal measures more than the
 500 Hz that §97.221(c) allows elsewhere — and near a sub-band's edge it holds the link to the
 rungs that fit. It refuses a repeating beacon (§97.203(d)). A radio keyed over a serial line
-or a CM108 interface cannot report its dial, so give it `dial_hz = …`; over CAT or `rigctld`
+or a CM108 interface cannot report its dial, so give it `dial_hz = …`; over CAT, `rigctld` or FLRig
 the dial is read before every transmission. `[radio] answer_only = true` makes the station
 take calls and make none, and send no beacon, probe or datagram.
 

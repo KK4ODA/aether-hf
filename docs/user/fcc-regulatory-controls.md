@@ -88,7 +88,7 @@ segment where the rules allow it:
 A dial that looks right can still put the top of the signal past the segment's edge. Aether says
 by how much: *TX BLOCKED: signal extends 260 Hz beyond the FCC data segment*, with the RF range.
 
-**The dial.** Keyed over CAT or `rigctld`, Aether reads the dial from the radio before each
+**The dial.** Keyed over CAT, `rigctld` or FLRig, Aether reads the dial from the radio before each
 transmission. Keyed over a serial line, a CM108 interface or VOX, the radio cannot say, so the
 Session tab asks you: *Dial is at …* — set it whenever you move the dial. With no dial known,
 nothing is transmitted.

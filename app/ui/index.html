@@ -42,7 +42,7 @@
         </button>
         <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
         <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
-        <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT or rigctld" hidden></span>
+        <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
         <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
       </div>
@@ -237,7 +237,7 @@
         <!-- 1. where the station is: the dial, what the rules say of it, the remembered dials -->
         <section class="card console-card op-card" id="op-card" aria-labelledby="dial-title" title="The radio's dial, what the rules say of transmitting there, and the dials you keep">
           <div class="op-head">
-            <div class="dial-readout" title="The radio's dial right now, read over CAT or rigctld every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
+            <div class="dial-readout" title="The radio's dial right now, read over CAT, rigctld or FLRig every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
               <h2 class="card-title" id="dial-title" title="The radio's dial">Radio dial</h2>
               <span class="numerals dial-hero-hz" id="dial-hero" role="status" aria-live="polite" title="The radio's dial, as it reports it or as you declared it">—</span>
             </div>
@@ -253,18 +253,18 @@
           <div class="tool-row" id="memory-row">
             <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
             <div class="btn-group" role="group" aria-label="Dial list" title="Tune to the chosen dial, or edit the list">
-              <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT or rigctld">Tune</button>
+              <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT, rigctld or FLRig">Tune</button>
               <button id="btn-memory-add" class="quiet" title="Add a frequency to the list, or rename one already there">Add</button>
               <button id="btn-memory-remove" class="quiet" title="Take the chosen frequency off the list">Remove</button>
             </div>
-            <span class="sub numerals" id="dial-reading" title="What the radio reads now, over CAT or rigctld" role="status" aria-live="polite"></span>
+            <span class="sub numerals" id="dial-reading" title="What the radio reads now, over CAT, rigctld or FLRig" role="status" aria-live="polite"></span>
             <details class="help-pop push-right" id="dial-note" title="How the dial list works">
               <summary title="How the dial list works" aria-label="How the dial list works">?</summary>
               <p>
                 The list starts as the frequency plan's proposals and is yours to edit: <strong>Add</strong>
                 keeps a dial with a name (the same dial again renames it), <strong>Remove</strong> drops the
                 chosen one, and it is saved beside the modem's configuration. <strong>Tune</strong> sets the
-                radio to the chosen dial when it is keyed over CAT or <code>rigctld</code>; a serial line or
+                radio to the chosen dial when it is keyed over CAT, <code>rigctld</code> or FLRig; a serial line or
                 a CM108 interface cannot tune, and the list is still a list. When the radio's own dial
                 matches an entry, the list follows it. A radio that cannot report its dial shows a
                 <strong>Dial is at</strong> field instead: the rules need to know where you are.
@@ -884,15 +884,15 @@
                     <em>CAT command</em> on the CAT port — which needs no second port and also reads the
                     dial frequency, which the rules need. The rate is the one in the radio's menu; an Icom
                     also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed
-                    over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> is the other way
-                    to both. A radio's USB connection often shows two ports: Yaesu's <em>Enhanced</em>
+                    over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> and W1HKJ's FLRig are the
+                    other ways to both, and a host program can tune through either at the same time. A radio's USB connection often shows two ports: Yaesu's <em>Enhanced</em>
                     port carries CAT and its <em>Standard</em> port the RTS line; Icom's single port
                     carries both. A DRA, URI or other CM108-class interface keys through its codec's own
                     GPIO pin (3 on those boards) and is listed by name, with no serial port. Choose
                     <em>host program</em> when VarAC or Winlink Express owns the radio and keys it on
                     PTT ON, as it does VARA's. Choose
-                    <em>none</em> for a VOX interface such as a SignaLink, or to listen only. Without CAT
-                    or <code>rigctld</code> the radio cannot report its dial: say where it is on the
+                    <em>none</em> for a VOX interface such as a SignaLink, or to listen only. Without CAT,
+                    <code>rigctld</code> or FLRig the radio cannot report its dial: say where it is on the
                     Session tab before transmitting.
                   </p>
                 </details>
@@ -922,7 +922,7 @@
               <h4 class="sub-heading" title="How the radio is keyed, and how its dial is read">Keying</h4>
               <div class="row">
                 <label for="dev-ptt">Keying</label>
-                <select id="dev-ptt" title="The port, CM108 interface or rigctld that keys the radio; none for VOX or listening only"></select>
+                <select id="dev-ptt" title="The port, CM108 interface, rigctld or FLRig that keys the radio; none for VOX or listening only"></select>
                 <select id="ptt-line" title="How the port keys the radio: a serial line, or the radio's own CAT command" aria-label="How the port keys the radio">
                   <option value="rts">RTS line</option>
                   <option value="dtr">DTR line</option>

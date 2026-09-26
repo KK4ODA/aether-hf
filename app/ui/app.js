@@ -1329,9 +1329,9 @@ function applyDial(status) {
     hero.textContent = "—";
     heroSub.textContent = "no reading from the radio yet";
   } else {
-    reading.textContent = "tuning needs CAT or rigctld keying (Setup step 2)";
+    reading.textContent = "tuning needs CAT, rigctld or FLRig keying (Setup step 2)";
     hero.textContent = "—";
-    heroSub.textContent = "reading the dial needs CAT or rigctld keying (Setup step 2)";
+    heroSub.textContent = "reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)";
   }
   updateTuneButton();
 }
@@ -2192,6 +2192,9 @@ function fillDevices(devices) {
         label: `${i.name} — keys by GPIO`,
       })),
       { name: "rigctld", label: "rigctld — Hamlib rig control over the network" },
+      // FLRig holds the CAT port and serves several programs: a host program can tune through
+      // it while Aether keys and reads the dial there, so the rules check keeps working
+      { name: "flrig", label: "FLRig — keying and the dial through FLRig's XML-RPC server" },
     ],
     "none (VOX or receive only)",
   );
@@ -2276,7 +2279,7 @@ async function loadConfig() {
     select($("dev-ptt"), "host");
     $("ptt-lead").value = String(ptt.lead_ms ?? 150);
   } else {
-    select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
+    select($("dev-ptt"), ptt.kind === "rigctld" || ptt.kind === "flrig" ? ptt.kind : (ptt.port ?? ""));
   }
   select($("ptt-line"), ptt.kind === "cat" ? "cat" : (ptt.line ?? "rts"));
   if (ptt.address) $("ptt-address").value = ptt.address;
@@ -2538,10 +2541,21 @@ function showKeyingFields() {
   const chosen = $("dev-ptt").value;
   const gpio = chosen.startsWith("gpio:");
   const host = chosen === "host";
-  const onPort = chosen !== "" && chosen !== "rigctld" && !host && !gpio;
+  const network = chosen === "rigctld" || chosen === "flrig";
+  const onPort = chosen !== "" && !network && !host && !gpio;
   $("ptt-line").hidden = !onPort;
   $("ptt-gpio").hidden = !gpio;
-  $("ptt-address").hidden = chosen !== "rigctld";
+  const address = $("ptt-address");
+  address.hidden = !network;
+  if (network) {
+    // one field for both: the other's conventional address becomes this one's
+    const [mine, theirs] =
+      chosen === "flrig" ? ["127.0.0.1:12345", "127.0.0.1:4532"] : ["127.0.0.1:4532", "127.0.0.1:12345"];
+    if (address.value.trim() === "" || address.value.trim() === theirs) address.value = mine;
+    address.title =
+      chosen === "flrig" ? "Where FLRig's XML-RPC server listens, as host:port" : "Where rigctld listens, as host:port";
+    address.setAttribute("aria-label", chosen === "flrig" ? "FLRig address" : "rigctld address");
+  }
   $("host-lead-fields").hidden = !host;
   $("host-keyed-note").hidden = !host;
   const cat = onPort && $("ptt-line").value === "cat";
@@ -2560,6 +2574,12 @@ function keyingChanges() {
     return {
       "ptt.kind": "rigctld",
       "ptt.address": $("ptt-address").value.trim() || "127.0.0.1:4532",
+    };
+  }
+  if (chosen === "flrig") {
+    return {
+      "ptt.kind": "flrig",
+      "ptt.address": $("ptt-address").value.trim() || "127.0.0.1:12345",
     };
   }
   if (chosen.startsWith("gpio:")) {
@@ -3190,7 +3210,7 @@ function interfaceMatches(profile) {
   const keying = $("dev-ptt").value;
   if (profile.ptt === "none") return keying === "";
   if (profile.ptt === "gpio") return keying.startsWith("gpio:");
-  if (keying === "" || keying === "rigctld" || keying.startsWith("gpio:")) return false;
+  if (keying === "" || keying === "rigctld" || keying === "flrig" || keying.startsWith("gpio:")) return false;
   if (profile.line && $("ptt-line").value !== profile.line) return false;
   if (profile.cat) {
     if ($("ptt-protocol").value !== profile.cat.protocol) return false;
@@ -5314,6 +5334,8 @@ function asToml(changes) {
     lines.push(`kind = "host"`, `lead_ms = ${changes["ptt.lead_ms"] ?? 150}`);
   } else if (changes["ptt.kind"] === "rigctld") {
     lines.push(`kind = "rigctld"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:4532")}`);
+  } else if (changes["ptt.kind"] === "flrig") {
+    lines.push(`kind = "flrig"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:12345")}`);
   } else if (changes["ptt.kind"] === "cm108") {
     lines.push(
       `kind = "cm108"`,

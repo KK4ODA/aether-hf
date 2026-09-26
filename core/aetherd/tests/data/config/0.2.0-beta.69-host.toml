@@ -1,0 +1,27 @@
+# As beta.69 wrote a station keyed by its host program (ADR-0025): schema 8, the last before
+# keying through FLRig.
+schema_version = 8
+callsign = "KK4ODA"
+
+[operator]
+grid = "EM73tv"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "host"
+lead_ms = 150
+
+[radio]
+bandwidth = 500
+max_mode = 14
+
+[host]
+enabled = true
+bind = "127.0.0.1:8300"
+
+[kiss]
+enabled = true

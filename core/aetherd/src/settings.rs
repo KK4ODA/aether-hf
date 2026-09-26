@@ -117,7 +117,7 @@ pub const RULES: &[Rule] = &[
     },
     // ── keying ─────────────────────────────────────────────────────────────────────
     Rule {
-        options: &["none", "serial", "rigctld", "cat", "cm108", "host"],
+        options: &["none", "serial", "rigctld", "flrig", "cat", "cm108", "host"],
         why: "those are the ways this version can key a radio",
         ..rule("ptt.kind")
     },
@@ -490,6 +490,9 @@ fn keying_kinds() -> Vec<PttConfig> {
         PttConfig::Rigctld {
             address: "127.0.0.1:4532".into(),
         },
+        PttConfig::Flrig {
+            address: "127.0.0.1:12345".into(),
+        },
         PttConfig::Cat {
             port: "COM6".into(),
             protocol: CatProtocol::Icom,
@@ -758,7 +761,7 @@ mod tests {
     #[test]
     fn every_keying_kind_is_in_the_shapes() {
         // the list in `keying_kinds` is by hand; hold it to the kinds the file accepts
-        for kind in ["none", "serial", "rigctld", "cat", "cm108"] {
+        for kind in ["none", "serial", "rigctld", "flrig", "cat", "cm108", "host"] {
             assert!(
                 keying_kinds()
                     .iter()

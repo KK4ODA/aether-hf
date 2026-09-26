@@ -38,6 +38,15 @@ pub enum PttConfig {
         #[serde(default = "default_rigctld")]
         address: String,
     },
+    /// `FLRig`'s XML-RPC server (W1HKJ): keying, the dial and tuning through the program that
+    /// holds the radio's CAT port, which a host program such as `VarAC` can tune through at
+    /// the same time — the rules check keeps its dial while the host program has the
+    /// frequency.
+    Flrig {
+        /// Where it is listening; conventionally `127.0.0.1:12345`.
+        #[serde(default = "default_flrig")]
+        address: String,
+    },
     /// The radio's own command set — CAT — over its serial port.
     ///
     /// The port that carries CAT is usually the one a rig-control program would want too,
@@ -96,6 +105,10 @@ fn default_host_lead() -> u32 {
 
 fn default_rigctld() -> String {
     "127.0.0.1:4532".to_owned()
+}
+
+fn default_flrig() -> String {
+    "127.0.0.1:12345".to_owned()
 }
 
 fn default_cat_baud() -> u32 {
@@ -859,7 +872,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -879,6 +892,7 @@ pub const MIGRATIONS: &[Migration] = &[
     regulatory_settings,
     kiss_port,
     host_keying,
+    flrig_keying,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1003,6 +1017,10 @@ fn kiss_port(_table: &mut toml::Table) {}
 /// from before it cannot read a file keyed that way, and the new number sends it to the copy
 /// kept before this version brought the file forward (`<name>.bak-v7`).
 fn host_keying(_table: &mut toml::Table) {}
+
+/// Schema 8 → 9, keying through `FLRig`: nothing moves — `[ptt] kind = "flrig"` is a new
+/// choice, and the step is for going back, as the two before it (`<name>.bak-v8`).
+fn flrig_keying(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1603,7 +1621,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 8
+schema_version = 9
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1643,6 +1661,8 @@ tx_level = 0.25
 # kind = "host"                       # the host program keys the radio on PTT ON, as VarAC
 #                                     # keys VARA's: no port here (ADR-0025)
 # lead_ms = 150                       # PTT ON to the first audio: the host's time to key
+# kind = "flrig"                      # FLRig's XML-RPC server: keying, the dial and tuning
+# address = "127.0.0.1:12345"         # through the program a host program can tune by too
 kind = "rigctld"                      # Hamlib's rig control daemon
 address = "127.0.0.1:4532"
 
@@ -1815,6 +1835,26 @@ mod tests {
             rig.ptt,
             PttConfig::Rigctld {
                 address: "127.0.0.1:4532".into()
+            }
+        );
+
+        // FLRig's XML-RPC server, at its conventional address unless told otherwise
+        let flrig =
+            Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"flrig\"\n").expect("flrig");
+        assert_eq!(
+            flrig.ptt,
+            PttConfig::Flrig {
+                address: "127.0.0.1:12345".into()
+            }
+        );
+        let elsewhere = Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"flrig\"\naddress = \"192.168.1.20:12345\"\n",
+        )
+        .expect("flrig elsewhere");
+        assert_eq!(
+            elsewhere.ptt,
+            PttConfig::Flrig {
+                address: "192.168.1.20:12345".into()
             }
         );
 

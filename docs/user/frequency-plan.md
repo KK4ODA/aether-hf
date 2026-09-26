@@ -79,7 +79,7 @@ segments of the Region 2 band plan; check your own national plan, which may diff
 Segments from the ARRL's summary of §97.221 ([arrl.org/link-remote-control](http://www.arrl.org/link-remote-control)),
 checked against the e-CFR text of 2026-09-23; verify against the current text of the rule
 before relying on it. The panel offers every one of these dials in the Session tab's dial list
-(a radio keyed over CAT or `rigctld` is tuned to it with *Tune*).
+(a radio keyed over CAT, `rigctld` or FLRig is tuned to it with *Tune*).
 
 **Before you transmit on any of these, listen.** The busy detector will refuse to start a
 session on an occupied channel, but it cannot tell you that the frequency is somebody's net
@@ -161,7 +161,7 @@ A gateway transmits without anybody watching, and most jurisdictions regulate th
 "Unattended" includes the ordinary case of leaving the daemon listening so friends can try
 to reach you: it answers a call to its callsign whether or not you are in the room, and with
 `[record] auto = true` it records each session, from connect to disconnect, with the
-standing `[record] notes` and — under CAT or `rigctld` keying — the dial frequency written
+standing `[record] notes` and — under CAT, `rigctld` or FLRig keying — the dial frequency written
 into the sidecar. Park it on one of the frequencies in §3 and it is where the rules allow it
 to answer.
 
