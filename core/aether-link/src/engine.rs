@@ -1819,7 +1819,9 @@ impl LinkEngine {
             self.stats.frames_failed += 1;
             return;
         }
-        // part of the current burst: record it, decode what decodes, acknowledge after the gap
+        // part of the current burst: record it, decode what decodes, acknowledge after the gap —
+        // unless it was the caller's request again, which is answered by the acceptance again
+        // and by nothing else (`accept`)
         let slot = self.slot_of(frame.t_start(), frame.mode());
         let mut record = RxRecord {
             slot,
@@ -1831,17 +1833,20 @@ impl LinkEngine {
             trusted: frame.trusted(),
             combined: false,
         };
-        self.decode_record(frame, &mut record);
-        self.burst.push(record);
-        let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
-        self.arm(Timer::Ack, delay);
+        if self.decode_record(frame, &mut record) {
+            self.burst.push(record);
+            let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
+            self.arm(Timer::Ack, delay);
+        }
     }
 
-    fn decode_record<F: SoftFrame>(&mut self, frame: &F, record: &mut RxRecord) {
+    /// Decode a frame of the burst, alone or combined with an earlier transmission of its
+    /// block. `false` when it was no frame of a burst: the caller's request again
+    /// ([`accept`](Self::accept)).
+    fn decode_record<F: SoftFrame>(&mut self, frame: &F, record: &mut RxRecord) -> bool {
         let (payload, buffer) = frame.decode(None);
         if let Some(payload) = payload {
-            self.accept(record, &payload);
-            return;
+            return self.accept(record, &payload);
         }
         // Inference: which sequence number is this slot? Then combine with any earlier
         // transmission of that block and, either way, keep this transmission's soft
@@ -1851,7 +1856,7 @@ impl LinkEngine {
         record.seq = guess;
         let Some(guess) = guess.filter(|&g| in_window(g, self.rx_base, WINDOW)) else {
             self.stats.frames_failed += 1;
-            return;
+            return true;
         };
         // re-encoded at another mode: another codeword, start over
         self.harq
@@ -1863,8 +1868,7 @@ impl LinkEngine {
             let (combined, merged) = frame.decode(Some(&previous));
             if let Some(combined) = combined {
                 self.stats.harq_rescues += 1;
-                self.accept(record, &combined);
-                return;
+                return self.accept(record, &combined);
             }
             self.harq[index] = if combines + 1 >= self.config.max_combines {
                 (guess, buffer, 0, frame.mode())
@@ -1875,6 +1879,7 @@ impl LinkEngine {
             self.harq.push((guess, buffer, 0, frame.mode()));
         }
         self.stats.frames_failed += 1;
+        true
     }
 
     /// Map a burst slot to a sequence number. Decoded frames in this burst anchor the mapping
@@ -1932,15 +1937,17 @@ impl LinkEngine {
         out
     }
 
-    fn accept(&mut self, record: &mut RxRecord, payload: &[u8]) {
+    /// Take a decoded frame. `false` when it was the caller's request again, which the
+    /// acceptance answers again: no frame of a burst, and nothing to acknowledge.
+    fn accept(&mut self, record: &mut RxRecord, payload: &[u8]) -> bool {
         let Ok((header, body)) = decode_data(payload) else {
-            return;
+            return true;
         };
         // a frame of nobody's session — a beacon, a probe or its answer, a datagram — is never
         // session data, whatever its session byte says: a datagram's holds its own number
         // (ADR-0019), which can equal this session's
         if header.kind.outside_sessions() || header.session != self.session {
-            return;
+            return true;
         }
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
@@ -1956,10 +1963,12 @@ impl LinkEngine {
                 // repeat starts its first burst from it (P9-2). Without it the caller started
                 // on the ladder's first rung whatever the path.
                 self.send_connect_with(DataKind::ConnectAck, Some(record.snr_db));
+                // and by nothing else: an acknowledgement a burst's quiet after the request
+                // went out over the caller's first burst, which follows the acceptance at once
                 self.burst.clear();
                 self.burst_t0 = None;
                 self.disarm(Timer::Ack);
-                return;
+                return false;
             }
             // an acceptance repeated: ours is on its way; nobody's frames never get this far
             DataKind::ConnectAck
@@ -1967,13 +1976,13 @@ impl LinkEngine {
             | DataKind::Probe
             | DataKind::ProbeAck
             | DataKind::Datagram => {
-                return;
+                return true;
             }
             DataKind::Data => {}
         }
 
         if !in_window(header.seq, self.rx_base, WINDOW) {
-            return; // an old duplicate (our acknowledgement was lost); the next one covers it
+            return true; // an old duplicate (our acknowledgement was lost); the next one covers it
         }
         let advanced = self.max_seen.is_none_or(|seen| {
             seq_distance(header.seq, self.rx_base) > seq_distance(seen, self.rx_base)
@@ -2004,6 +2013,7 @@ impl LinkEngine {
         {
             self.max_seen = None;
         }
+        true
     }
 
     fn send_ack(&mut self) {

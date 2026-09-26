@@ -1268,6 +1268,27 @@ fn a_repeated_acceptance_says_how_its_request_arrived() {
 }
 
 #[test]
+fn a_request_heard_again_is_answered_and_nothing_else() {
+    // The acceptance again is the whole answer to a request heard again. The request had also
+    // armed an acknowledgement, which went out a burst's quiet after it — over the caller's
+    // first burst, which follows the acceptance at once — and here the request's own record,
+    // left in the burst, made that acknowledgement a clean burst to the rate controller
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    let message = vec![0u8; 600];
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&message);
+    a.disconnect();
+    let mut sim = TwoStationSim::new(a, b, 15.0, 31).with_unheard(first_acceptance_unheard());
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    // one burst, one acknowledgement, and nothing of the burst sent twice
+    let (caller, called) = (&sim.engine(0).stats, &sim.engine(1).stats);
+    assert_eq!(called.acks_sent, 1, "{called:?}");
+    assert_eq!(caller.frames_resent, 0, "{caller:?}");
+}
+
+#[test]
 fn a_burst_fits_the_transmitters_key_time() {
     // ADR-0017: six tone frames are 32 s, and the daemon's 30 s key watchdog cut the last one
     // of every full tone burst on the air; the receiver acquired the cut frame and could not
