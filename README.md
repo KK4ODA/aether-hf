@@ -69,7 +69,9 @@ spectrum and the waterfall, and the receiver's readings:
 * **Host programs:** Winlink Express (Vara HF session, TNC at `127.0.0.1:8300`, auto-launch
   off) and Pat (`varahf`) talk to the daemon's VARA-compatible port. What each client sends,
   what is verified and what is not is in
-  [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md). The modem runs at
+  [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md); how to set each one up,
+  with the host program owning the radio as it does VARA's or with Aether owning it, is
+  [`docs/user/host-programs.md`](docs/user/host-programs.md). The modem runs at
   2300 Hz or, for peer-to-peer contacts and VarAC, at **500 Hz** (`[radio]
   bandwidth`; `docs/spec/air-interface.md` §2.3) — both stations of a session use the same
   one. VarAC pings and connects to it at 500 Hz on the bench.
@@ -135,7 +137,7 @@ Diagrams and rationale: [`docs/ROADMAP.md` §4](docs/ROADMAP.md#4-recommended-ta
 docs/          AUDIT.md · ROADMAP.md · COMMUNITY-CONCERNS.md · MAINTAINING.md ·
                VARA-UX-BENCHMARK.md · adr/ (decisions) · spec/ (public air interface, control
                API, host interfaces) · user/ (install, gateway kit, frequency plan, FCC
-               regulatory controls, KISS programs, field-test protocol)
+               regulatory controls, host programs, KISS programs, field-test protocol)
 model/         Python reference model: aether_model/{channel,waveform,fec,phy,frame,link,hal} + tests/
 core/          the shipped Rust workspace: aether-fec · aether-phy · aether-link · aetherd
                (aetherd/data/: the regulatory profiles and the measured occupancy)
