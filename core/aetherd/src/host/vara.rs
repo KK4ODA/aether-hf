@@ -412,6 +412,15 @@ pub enum Notification {
         /// Net payload bits per second at that mode.
         bps: u64,
     },
+    /// A beacon was heard: to a VARA host a CQ frame, `CQFRAME <call> <bandwidth>`, which is
+    /// how a chat program lists who is on (`VarAC`'s beacons and CQs).
+    CqFrame {
+        /// The station that sent it.
+        source: String,
+        /// The bandwidth, in hertz. A beacon does not say which its sender runs, so this is
+        /// the receiving station's.
+        bandwidth_hz: u32,
+    },
 }
 
 impl Notification {
@@ -448,6 +457,12 @@ impl Notification {
             }
             Self::BitRate { mode, bps } => {
                 let _ = write!(out, "BITRATE ({mode}) {bps} BPS");
+            }
+            Self::CqFrame {
+                source,
+                bandwidth_hz,
+            } => {
+                let _ = write!(out, "CQFRAME {source} {bandwidth_hz}");
             }
         }
         out

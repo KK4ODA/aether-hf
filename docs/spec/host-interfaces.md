@@ -108,6 +108,7 @@ Unsolicited, at any time.
 | `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |
 | `REGISTERED <call>` | Sent before `CONNECTED` |
 | `SN <dB>` | A frame decoded — any frame, as a modem that reports what it hears: the SNR it arrived at, whole decibels, 3 kHz reference. The call that brings a session up is reported before `PENDING`/`CONNECTED`, which is when VarAC builds its opening signal report. VarAC builds its signal reports from these — the report it sends on connecting, and the one a ping exists to fetch — so without them a ping never ends (found on the bench) |
+| `CQFRAME <call> <bandwidth>` | A beacon was heard: to a VARA host a CQ frame, which is how a chat program lists who is on (VarAC's beacons and CQs). It follows the `SN` line that gives the beacon's strength. An Aether beacon does not say which bandwidth its sender runs, so the line carries this station's |
 | `IAMALIVE` | Every 10 s, so a quiet host knows the modem is there |
 
 `REGISTERED` exists because some clients warn their user about a speed limit unless the modem

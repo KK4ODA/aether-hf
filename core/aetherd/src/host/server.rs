@@ -477,6 +477,24 @@ fn serve_commands(
                     {
                         return;
                     }
+                    // A beacon heard is a CQ frame to a VARA host, which lists who is on from
+                    // these lines — VarAC's heard list of beacons and CQs — after the SN line
+                    // that gives its strength. The beacon does not say which bandwidth its
+                    // sender runs, so the line carries this station's.
+                    if event.data["decoded"].as_bool() == Some(true)
+                        && event.data["kind"] == "beacon"
+                        && let Some(source) = event.data["from"].as_str()
+                        && !say(
+                            &mut writer,
+                            &Notification::CqFrame {
+                                source: source.to_owned(),
+                                bandwidth_hz: host.bandwidth_hz,
+                            }
+                            .line(),
+                        )
+                    {
+                        return;
+                    }
                 }
                 "metrics" => {
                     // the link speed, as a host displays it: the mode the sender is using
@@ -932,6 +950,12 @@ mod tests {
         // one does not: VarAC's signal reports, and its ping, are built from them
         assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 12");
         assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 3");
+        // the third station's beacon is a CQ frame to a VARA host, after the SN line that
+        // gives its strength — how VarAC lists the beacons and CQs it hears
+        assert_eq!(
+            client.expect(|l| l.starts_with("CQFRAME")),
+            "CQFRAME N0CALL 2300"
+        );
         std::thread::sleep(Duration::from_millis(100));
         client.send("BUFFER");
         let next = client
