@@ -359,6 +359,172 @@ impl Ptt for RigctldPtt {
     }
 }
 
+/// Keying and tuning through `FLRig`'s XML-RPC server, conventionally at `127.0.0.1:12345`.
+///
+/// `FLRig` (W1HKJ) holds the radio's CAT port and serves several programs at once — fldigi,
+/// WSJT-X, `VarAC` — so a host program can tune the radio through `FLRig` while Aether keys it
+/// there and reads the dial, which keeps the rules check working with the host program in
+/// charge of the frequency. The methods are `FLRig`'s published ones: `rig.set_ptt` (an int,
+/// 1 or 0), `rig.get_vfo` (the dial in hertz, as a string) and `rig.set_vfo` (a double, in
+/// hertz). Each call is one HTTP POST on its own connection: `FLRig` answers in milliseconds
+/// on the same machine, and a connection that is never kept cannot go stale.
+#[derive(Debug)]
+pub struct FlrigPtt {
+    address: String,
+    timeout: std::time::Duration,
+}
+
+impl FlrigPtt {
+    /// Point at a running `FLRig`'s XML-RPC server.
+    #[must_use]
+    pub fn new(address: &str, timeout: std::time::Duration) -> Self {
+        Self {
+            address: address.to_owned(),
+            timeout,
+        }
+    }
+
+    /// One XML-RPC call with at most one parameter, given as the inside of its `<value>`;
+    /// the text of the value returned, its type tag taken off.
+    fn call(&self, method: &str, param: Option<&str>) -> Result<String, PttError> {
+        use std::io::Write;
+
+        let address: std::net::SocketAddr = self
+            .address
+            .parse()
+            .map_err(|e| PttError::Backend(format!("bad address {}: {e}", self.address)))?;
+        let mut stream =
+            std::net::TcpStream::connect_timeout(&address, self.timeout).map_err(|e| {
+                PttError::Backend(format!(
+                    "cannot reach FLRig at {} ({e}). Is it running, and is [ptt] address the \
+                     address its XML-RPC server listens on?",
+                    self.address
+                ))
+            })?;
+        stream
+            .set_read_timeout(Some(self.timeout))
+            .and_then(|()| stream.set_write_timeout(Some(self.timeout)))
+            .map_err(|e| PttError::Backend(format!("timeouts: {e}")))?;
+        let params = param.map_or_else(String::new, |value| {
+            format!("<params><param><value>{value}</value></param></params>")
+        });
+        let body = format!(
+            "<?xml version=\"1.0\"?><methodCall><methodName>{method}</methodName>{params}\
+             </methodCall>"
+        );
+        let request = format!(
+            "POST /RPC2 HTTP/1.1\r\nHost: {}\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            self.address,
+            body.len()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| PttError::Backend(format!("write: {e}")))?;
+        let reply = read_http_body(&mut stream)
+            .map_err(|e| PttError::Backend(format!("FLRig's answer to {method}: {e}")))?;
+        if reply.contains("<fault>") {
+            let said = xml_text(&reply, "string").unwrap_or_else(|| reply.trim().to_owned());
+            return Err(PttError::Backend(format!("FLRig refused {method}: {said}")));
+        }
+        Ok(xml_value(&reply).unwrap_or_default())
+    }
+}
+
+/// The body of an HTTP response, by its `Content-Length`, or to the end of the connection
+/// when it has none.
+fn read_http_body(stream: &mut std::net::TcpStream) -> Result<String, String> {
+    use std::io::Read;
+
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        if let Some(end) = find(&raw, b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&raw[..end]).to_string();
+            let status = head.lines().next().unwrap_or_default();
+            if status.split_whitespace().nth(1) != Some("200") {
+                return Err(format!("HTTP {status}"));
+            }
+            let length = head.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            });
+            let body_start = end + 4;
+            while length.is_none_or(|n| raw.len() - body_start < n) {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => raw.extend_from_slice(&chunk[..n]),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            let body_end = length.map_or(raw.len(), |n| (body_start + n).min(raw.len()));
+            return Ok(String::from_utf8_lossy(&raw[body_start..body_end]).to_string());
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err("the connection closed before an answer".into()),
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The text inside the first `<tag>…</tag>`.
+fn xml_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = start + xml[start..].find(&close)?;
+    Some(xml[start..end].trim().to_owned())
+}
+
+/// The first `<value>` of an XML-RPC answer, its type tag — `<string>`, `<i4>`, `<int>`,
+/// `<double>` — taken off; an untyped value is a string.
+fn xml_value(xml: &str) -> Option<String> {
+    let value = xml_text(xml, "value")?;
+    for tag in ["string", "i4", "int", "double", "boolean"] {
+        if let Some(inner) = xml_text(&value, tag) {
+            return Some(inner);
+        }
+    }
+    Some(value)
+}
+
+impl Ptt for FlrigPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.call("rig.set_ptt", Some("<i4>1</i4>")).map(|_| ())
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.call("rig.set_ptt", Some("<i4>0</i4>")).map(|_| ())
+    }
+
+    fn describe(&self) -> String {
+        format!("FLRig at {}", self.address)
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        // the dial in hertz, as a string; best effort, as rigctld's is
+        let hz: f64 = self.call("rig.get_vfo", None).ok()?.trim().parse().ok()?;
+        (hz.is_finite() && hz > 0.0).then(|| hz.round() as u64)
+    }
+
+    fn can_tune(&self) -> bool {
+        true
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
+        self.call("rig.set_vfo", Some(&format!("<double>{hz}</double>")))
+            .map(|_| ())
+    }
+}
+
 /// What a watchdog poll found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchdogState {
@@ -797,6 +963,152 @@ mod tests {
             }
         });
         (address, received)
+    }
+
+    /// A stand-in for `FLRig`'s XML-RPC server: every request's body is kept, and each is
+    /// answered from `reply`, given the method's name — an XML-RPC `methodResponse` body, or
+    /// `None` for an HTTP error.
+    fn fake_flrig(
+        reply: impl Fn(&str) -> Option<String> + Send + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address").to_string();
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::clone(&received);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                // the whole request: headers, then the body by its Content-Length
+                let mut raw = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let body = loop {
+                    let Ok(n) = stream.read(&mut chunk) else {
+                        break None;
+                    };
+                    if n == 0 {
+                        break None;
+                    }
+                    raw.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&raw).to_string();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length: usize = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("Content-Length: "))
+                            .and_then(|n| n.trim().parse().ok())
+                            .unwrap_or(0);
+                        if body.len() >= length {
+                            break Some((head.to_owned(), body.to_owned()));
+                        }
+                    }
+                };
+                let Some((head, body)) = body else { continue };
+                assert!(head.starts_with("POST /RPC2 HTTP/1.1"), "{head}");
+                assert!(head.contains("Content-Type: text/xml"), "{head}");
+                let method = body
+                    .split_once("<methodName>")
+                    .and_then(|(_, rest)| rest.split_once("</methodName>"))
+                    .map(|(name, _)| name.to_owned())
+                    .unwrap_or_default();
+                log.lock().expect("log").push(body.clone());
+                let answer = match reply(&method) {
+                    Some(xml) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\r\n{xml}",
+                        xml.len()
+                    ),
+                    None => {
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into()
+                    }
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (address, received)
+    }
+
+    fn flrig_value(value: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?><methodResponse><params><param><value>{value}</value>\
+             </param></params></methodResponse>"
+        )
+    }
+
+    #[test]
+    fn flrig_keys_the_radio_and_is_asked_for_the_dial_and_told_a_new_one() {
+        // FLRig's published methods: rig.set_ptt (an int), rig.get_vfo (the dial in hertz, a
+        // string — untyped, or typed), rig.set_vfo (a double, in hertz)
+        let (address, received) = fake_flrig(|method| match method {
+            "rig.get_vfo" => Some(flrig_value("14070000")),
+            "rig.set_vfo" => Some(flrig_value("<double>7078000</double>")),
+            _ => Some(flrig_value("<i4>0</i4>")),
+        });
+        let mut flrig = FlrigPtt::new(&address, std::time::Duration::from_secs(2));
+        assert_eq!(flrig.describe(), format!("FLRig at {address}"));
+        assert!(flrig.can_tune());
+        flrig.key().expect("keyed");
+        flrig.unkey().expect("released");
+        assert_eq!(flrig.frequency_hz(), Some(14_070_000));
+        flrig.set_frequency_hz(7_078_000).expect("tuned");
+        let bodies = received.lock().expect("log").clone();
+        assert_eq!(bodies.len(), 4, "{bodies:?}");
+        assert!(bodies[0].contains("<methodName>rig.set_ptt</methodName>"));
+        assert!(
+            bodies[0].contains("<value><i4>1</i4></value>"),
+            "{}",
+            bodies[0]
+        );
+        assert!(
+            bodies[1].contains("<value><i4>0</i4></value>"),
+            "{}",
+            bodies[1]
+        );
+        assert!(bodies[2].contains("<methodName>rig.get_vfo</methodName>"));
+        assert!(
+            !bodies[2].contains("<params>"),
+            "a getter takes no parameter"
+        );
+        assert!(bodies[3].contains("<methodName>rig.set_vfo</methodName>"));
+        assert!(
+            bodies[3].contains("<value><double>7078000</double></value>"),
+            "{}",
+            bodies[3]
+        );
+        // a typed answer reads as well as an untyped one
+        let (typed, _) = fake_flrig(|_| Some(flrig_value("<string>7078000</string>")));
+        assert_eq!(
+            FlrigPtt::new(&typed, std::time::Duration::from_secs(2)).frequency_hz(),
+            Some(7_078_000)
+        );
+    }
+
+    #[test]
+    fn flrig_saying_no_is_an_error_that_says_why() {
+        let (address, _) = fake_flrig(|method| match method {
+            "rig.set_ptt" => Some(
+                "<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member>\
+                 <name>faultCode</name><value><i4>-1</i4></value></member><member>\
+                 <name>faultString</name><value><string>no transceiver</string></value>\
+                 </member></struct></value></fault></methodResponse>"
+                    .to_owned(),
+            ),
+            _ => None,
+        });
+        let mut flrig = FlrigPtt::new(&address, std::time::Duration::from_secs(2));
+        let refused = flrig.key().expect_err("a fault");
+        assert!(refused.to_string().contains("no transceiver"), "{refused}");
+        // an HTTP error is an error, and no dial is a dial unknown, not a zero
+        assert!(flrig.set_frequency_hz(7_078_000).is_err());
+        assert_eq!(flrig.frequency_hz(), None);
+        // nobody there: the error names FLRig and the setting to check
+        let nobody = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let gone = nobody.local_addr().expect("address").to_string();
+        drop(nobody);
+        let mut absent = FlrigPtt::new(&gone, std::time::Duration::from_millis(300));
+        let unreachable = absent.key().expect_err("nobody listening");
+        assert!(
+            unreachable.to_string().contains("cannot reach FLRig"),
+            "{unreachable}"
+        );
     }
 
     #[test]

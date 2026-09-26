@@ -352,6 +352,7 @@ impl Profile {
             }
             PttConfig::None
             | PttConfig::Rigctld { .. }
+            | PttConfig::Flrig { .. }
             | PttConfig::Host { .. }
             | PttConfig::Cm108 { device: None, .. } => {}
         }

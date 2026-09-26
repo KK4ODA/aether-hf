@@ -1501,6 +1501,10 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
         PttConfig::Rigctld { address } => {
             Box::new(RigctldPtt::new(address, Duration::from_millis(500)))
         }
+        PttConfig::Flrig { address } => Box::new(aetherd::ptt::FlrigPtt::new(
+            address,
+            Duration::from_millis(500),
+        )),
         PttConfig::Cat {
             port,
             protocol,
