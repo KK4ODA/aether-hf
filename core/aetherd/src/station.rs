@@ -33,8 +33,8 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use aether_link::{
     Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
     frames::{
-        ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
-        unpack_callsign, with_bandwidth,
+        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, ProbeBody, decode_data,
+        encode_data, pack_callsign, unpack_callsign, with_bandwidth,
     },
 };
 use aether_phy::{
@@ -43,7 +43,7 @@ use aether_phy::{
 };
 
 use crate::{
-    busy::{BusyConfig, BusyDetector},
+    busy::{BusyConfig, BusyDetector, BusyReason},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
@@ -308,6 +308,18 @@ const DRIVE_GAP_S: f64 = 5.0;
 /// data waveform's peak, because it is an identifier and not the signal, and scaled with
 /// the drive so an operator who sets the level by the tone has set the identifier too.
 const CW_ID_RELATIVE_LEVEL: f64 = 0.8;
+
+/// The longest a DISC, or the identifier that ends a session, waits out the other station's
+/// Morse identifier, which follows its answer to a DISC and which no frame announces — ten
+/// characters at 10 wpm take about thirteen seconds. Longer, and what holds the channel is
+/// not an identifier, and the session is closed and identified rather than held open.
+const OTHER_ID_WAIT_MAX_S: f64 = 15.0;
+
+/// How long the answer to a DISC listens before it goes: an identifier the DISC carried
+/// starts a tenth of a second after it, the DISC is decoded before that identifier has been
+/// on long enough for the busy detector's attack (200 ms of energy in 400), and the answer
+/// went out over it.
+const ANSWER_LISTEN_S: f64 = 0.5;
 
 /// What the sound card is delivering, over the last few seconds.
 ///
@@ -744,6 +756,8 @@ pub struct Station<P: Ptt> {
     /// The audio clock when a held-back burst was last reported to the engine, while one
     /// is held.
     held_since: Option<f64>,
+    /// When the burst held back now was first held.
+    held_from: Option<f64>,
     /// Until when the busy detector ignores what the sound card delivers: the card's
     /// capture runs a lead behind its playback, so the end of this station's own burst
     /// arrives after the key is released, and read as channel it would hold the next burst
@@ -906,6 +920,7 @@ impl<P: Ptt> Station<P> {
             tx_peak_running: 0.0,
             tx_peak_last: None,
             held_since: None,
+            held_from: None,
             deaf_until: f64::NEG_INFINITY,
             clock: PlaybackClock::default(),
             tx_capture: None,
@@ -2621,15 +2636,40 @@ impl<P: Ptt> Station<P> {
         // that meant every probe to a station with `wait_for_clear` on reported "no answer".
         // A connect answer never reaches here held: the station is Connected by then and
         // `channel_clear` lets a session's frames through.
-        let responding = matches!(next, Outgoing::Frames(frames) if is_probe_answer(frames));
+        // So is the answer to a disconnect, and it is queued as the session ends, when
+        // `channel_clear` no longer lets a session's frames through: the DISC it answers had
+        // just marked the channel busy, the answer waited two seconds for it, and the caller's
+        // retry was keyed over it (ND1J, 2026-09-25).
+        let responding = matches!(next, Outgoing::Frames(frames)
+            if is_probe_answer(frames) || is_control(frames, ControlKind::DiscAck));
         // a datagram has had its own channel access already: the client's DCD and persistence
         let own_access = matches!(next, Outgoing::Datagram { .. });
-        if radiates
-            && !responding
-            && !own_access
-            && self.config.wait_for_clear
-            && !self.channel_clear(now)
-        {
+        // The end of a session waits out the other station's Morse identifier, which follows
+        // a DISC or its answer and which no frame announces, whatever `wait_for_clear` says:
+        // a repeated DISC went out over it when the answer was lost (ND1J, 2026-09-25), an
+        // answer over the identifier its DISC carried, and this station's own closing
+        // identifier followed the answer straight onto it. A DISC and its answer wait for a
+        // channel something other than a decoded frame holds — the frame each follows marked
+        // the channel itself —, the identifier for any: the answer it follows is decoded
+        // before the identifier behind it has been on long enough to be heard.
+        let busy = self.busy.busy(now);
+        let busy_but_for_a_frame =
+            busy && !matches!(self.busy.reason(), Some(BusyReason::Frame { .. }));
+        let held_for = self.held_from.map_or(0.0, |from| now - from);
+        let waits_out = held_for < OTHER_ID_WAIT_MAX_S
+            && match next {
+                Outgoing::Frames(frames) if is_control(frames, ControlKind::Disc) => {
+                    self.engine.state() == State::Disconnecting && busy_but_for_a_frame
+                }
+                Outgoing::Frames(frames) if is_control(frames, ControlKind::DiscAck) => {
+                    held_for < ANSWER_LISTEN_S || busy_but_for_a_frame
+                }
+                Outgoing::Identifier => busy,
+                _ => false,
+            };
+        let polite =
+            !responding && !own_access && self.config.wait_for_clear && !self.channel_clear(now);
+        if radiates && (waits_out || polite) {
             self.stats.deferred_for_busy += 1;
             // the engine's timers move with the burst, or a retry fires against a burst
             // that has not left yet and the two go out back to back when the channel clears
@@ -2637,9 +2677,11 @@ impl<P: Ptt> Station<P> {
                 self.engine.on_tx_delayed(now - since);
             }
             self.held_since = Some(now);
+            self.held_from.get_or_insert(now);
             return true;
         }
         self.held_since = None;
+        self.held_from = None;
         false
     }
 
@@ -2968,6 +3010,12 @@ impl<P: Ptt> Station<P> {
             self.identifier.transmitted_since = true;
             return;
         }
+        // The engine timed its wait for an answer from the end of the frames: the answer
+        // comes after the identifier — and after the other station's busy detector has let
+        // it go, which holds a channel for its hangover past the last of the energy — and a
+        // wait that ran out inside it put a repeat straight behind it, over the answer
+        self.engine
+            .on_tx_delayed((gap + audio.len()) as f64 / audio_rate + self.busy.config().hang_s);
         self.playback.extend(std::iter::repeat_n(0.0f32, gap));
         self.playback.extend(audio);
         self.identifier.last = Some(now);
@@ -3532,6 +3580,13 @@ impl<P: Ptt> Station<P> {
         }
         self.busy.settled() && !self.busy.busy(now)
     }
+}
+
+/// Whether a queued burst is one control frame of this kind.
+fn is_control(frames: &[aether_link::TxFrame], kind: ControlKind) -> bool {
+    frames.len() == 1
+        && frames[0].container == Container::Control
+        && ControlFrame::decode(&frames[0].payload).is_ok_and(|frame| frame.kind == kind)
 }
 
 /// Whether a queued burst is a probe answer: one data frame carrying a `ProbeAck`. Such a
@@ -5270,6 +5325,75 @@ mod tests {
         );
         assert_eq!(air.a.stats.cw_ids, before + 1);
         assert_eq!(air.a.stats.watchdog_trips, 0);
+    }
+
+    /// Two identifying stations, the called one waiting for a clear channel, and `a` closes
+    /// the session; whether `a`'s DISC carries its identifier is `a_identifies_on_disc`. How
+    /// many times `a` keyed from its DISC on, and in how many blocks both were keyed at once.
+    fn close_between_identifying_stations(
+        a_identifies_on_disc: bool,
+    ) -> (Vec<String>, usize, usize) {
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            cw_id: Some(CwId::default()),
+            wait_for_clear: config.callsign == "KK4XYZ",
+            ..config
+        });
+        air.run(4.0, |_, _| false);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(b"73");
+        air.run(60.0, |_, b| b.received_len() >= 2);
+        air.run(3.0, |a, _| !a.transmitting() && a.pending.is_empty());
+        air.a.take_events();
+        if a_identifies_on_disc {
+            // the interval has run out: the DISC carries the identifier
+            air.a.identifier.last = Some(-1.0e6);
+        }
+        air.a.disconnect();
+        let (mut overlap, mut a_keyings, mut was_keyed) = (0usize, 0usize, false);
+        air.run(60.0, |a, b| {
+            if a.transmitting() && b.transmitting() {
+                overlap += 1;
+            }
+            if a.transmitting() && !was_keyed {
+                a_keyings += 1;
+            }
+            was_keyed = a.transmitting();
+            a.quiescent() && b.quiescent()
+        });
+        (air.a.take_events(), a_keyings, overlap)
+    }
+
+    #[test]
+    fn a_disconnect_is_answered_at_once_and_nobody_keys_over_the_answer_or_an_identifier() {
+        // ND1J, 2026-09-25 (`20260925-225955_KK4ODA-1_ND1J`): KK4ODA-1 disconnected, and
+        // its retries went out over ND1J's DISC_ACK and then over his Morse identifier. His
+        // station waits for a clear channel, and by the time its DISC_ACK was queued its
+        // session was over — so the DISC it answered, which marks the channel busy for two
+        // seconds, held the answer past the caller's retry.
+        let (events, keyings, overlap) = close_between_identifying_stations(false);
+        assert!(
+            events.iter().any(|e| e == "disconnected:closed"),
+            "the DISC_ACK was not heard: {events:?}"
+        );
+        assert_eq!(
+            keyings, 2,
+            "the DISC and the closing identifier, and nothing repeated"
+        );
+        assert_eq!(overlap, 0, "the two stations were keyed at once");
+
+        // the DISC carries the caller's identifier: the answer waits for it to end, and the
+        // caller's wait for the answer runs from the end of its identifier
+        let (events, keyings, overlap) = close_between_identifying_stations(true);
+        assert!(
+            events.iter().any(|e| e == "disconnected:closed"),
+            "the DISC_ACK was not heard: {events:?}"
+        );
+        assert_eq!(
+            keyings, 1,
+            "the DISC carried the identifier, and nothing was repeated"
+        );
+        assert_eq!(overlap, 0, "the two stations were keyed at once");
     }
 
     #[test]
