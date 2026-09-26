@@ -2086,7 +2086,7 @@ fn the_polls_step_down_to_the_floor_through_a_fade() {
     // "no response" — while the tone floor, 14 dB lower, was never tried: an unanswered poll
     // stepped nothing down. Here a minute and a half below the ordinary control frame and above
     // the floor's, after a strong start: the polls step down to the floor, the session stays up
-    // through the fade, and what is sent after it arrives (ADR-0031)
+    // through the fade, and what is sent after it arrives (ADR-0032)
     const FADE: (f64, f64) = (60.0, 150.0);
     const DEEP: f64 = -12.0;
     for params in [WIDE_2300, NARROW_500] {
