@@ -391,6 +391,16 @@ fn serve_commands(
     if !say(&mut writer, &Notification::Buffer(0).line()) {
         return;
     }
+    // A modem whose sound card would not open runs on silence and can neither hear nor
+    // transmit; VARA tells its host MISSING SOUNDCARD, and a gateway's host acts on it
+    let audio_fault = handle
+        .call(request("status", json!({})))
+        .ok()
+        .and_then(|reply| reply.result)
+        .is_some_and(|status| !status["audio_fault"].is_null());
+    if audio_fault && !say(&mut writer, &Notification::MissingSoundcard.line()) {
+        return;
+    }
 
     while running.load(Ordering::Relaxed) {
         // ── commands from the host ────────────────────────────────────
@@ -602,6 +612,8 @@ fn report_state(
                 )
                 // what VARA says of a link once it is up, and true here
                 && say(writer, &Notification::EncryptionDisabled.line())
+                // and that the station at the other end is not speed-limited: nobody is
+                && say(writer, &Notification::LinkRegistered.line())
         }
         // A session the host was told about, or a call it placed that ended without one: no
         // answer, `ABORT`, `DISCONNECT` while calling, the rules. Anything else — a call the
@@ -946,6 +958,8 @@ mod tests {
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         let connected = client.expect(|l| l.starts_with("CONNECTED"));
         assert_eq!(connected, "CONNECTED W4ODA KK4XYZ 2300");
+        // and, as VARA says of a registered peer, that the other end is not speed-limited
+        assert_eq!(client.expect(|l| l.starts_with("LINK")), "LINK REGISTERED");
         // every decoded frame arrives as an SN line — whole decibels — and an undecoded
         // one does not: VarAC's signal reports, and its ping, are built from them
         assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 12");
@@ -1359,6 +1373,44 @@ mod tests {
         assert!(
             message.contains(&data_port.to_string()),
             "the message does not say which port is in the way: {message}"
+        );
+    }
+
+    #[test]
+    fn a_host_attaching_to_a_modem_without_its_sound_card_hears_missing_soundcard() {
+        // VARA's word for a sound card that has gone; a gateway's host acts on it
+        let (_modem, server) = Modem::start(|method, _| {
+            if method == "status" {
+                json!({"state": "idle", "audio_fault": "the device is not there"})
+            } else {
+                json!({})
+            }
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        assert_eq!(
+            client.expect(|l| l.starts_with("MISSING")),
+            "MISSING SOUNDCARD"
+        );
+    }
+
+    #[test]
+    fn a_host_attaching_to_a_healthy_modem_hears_no_missing_soundcard() {
+        let (_modem, server) = Modem::start(|method, _| {
+            if method == "status" {
+                json!({"state": "idle", "audio_fault": null})
+            } else {
+                json!({})
+            }
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("VERSION");
+        assert!(
+            client
+                .expect(|l| l.starts_with("VERSION") || l.starts_with("MISSING"))
+                .starts_with("VERSION"),
+            "a healthy modem was reported without its sound card"
         );
     }
 

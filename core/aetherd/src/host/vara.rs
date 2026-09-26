@@ -333,10 +333,14 @@ impl HostState {
             // A host asking for that one is answered `OK`; one asking for another is refused,
             // because accepting and then transmitting the configured bandwidth anyway would
             // put the station outside what its operator asked for — VarAC at 500 Hz on a
-            // calling frequency most of all. `BW2750` is not a waveform this version has.
+            // calling frequency most of all.
             ("BW2300" | "BW500", []) if Self::bandwidth_of(verb) == Some(self.bandwidth_hz) => {
                 HostOutcome::ok()
             }
+            // Winlink Express sends its widest setting, 2750 Hz unless changed. A 2300 Hz
+            // station is inside what that asks for — a narrower signal always is — so it
+            // answers OK and runs 2300; a 500 Hz station is not what was asked, and refuses.
+            ("BW2750", []) if self.bandwidth_hz == 2300 => HostOutcome::ok(),
             // the KISS port's channel access, as VARA has it (ADR-0019)
             ("IGNOREKISSDCD", [on @ ("ON" | "OFF")]) => {
                 self.recorded.ignore_kiss_dcd = *on == "ON";
@@ -412,6 +416,12 @@ pub enum Notification {
         /// Net payload bits per second at that mode.
         bps: u64,
     },
+    /// The station at the other end of the session is not speed-limited either: sent after
+    /// `CONNECTED`, as VARA says it of a registered peer. Aether has no registration.
+    LinkRegistered,
+    /// The sound card would not open, and the modem runs on silence: VARA's word for a
+    /// sound card that has gone, so a host (a gateway above all) knows to act.
+    MissingSoundcard,
     /// A beacon was heard: to a VARA host a CQ frame, `CQFRAME <call> <bandwidth>`, which is
     /// how a chat program lists who is on (`VarAC`'s beacons and CQs).
     CqFrame {
@@ -458,6 +468,8 @@ impl Notification {
             Self::BitRate { mode, bps } => {
                 let _ = write!(out, "BITRATE ({mode}) {bps} BPS");
             }
+            Self::LinkRegistered => out.push_str("LINK REGISTERED"),
+            Self::MissingSoundcard => out.push_str("MISSING SOUNDCARD"),
             Self::CqFrame {
                 source,
                 bandwidth_hz,
@@ -599,7 +611,9 @@ mod tests {
         let mut host = state();
         assert_eq!(host.command("BW2300").replies, vec!["OK"]);
         assert_eq!(host.command("BW500").replies, vec!["WRONG"]);
-        assert_eq!(host.command("BW2750").replies, vec!["WRONG"]);
+        // Winlink Express asks for its widest setting: 2300 Hz is inside 2750, so the wide
+        // station accepts it and runs 2300
+        assert_eq!(host.command("BW2750").replies, vec!["OK"]);
         // a station running the narrow waveform accepts BW500 and refuses BW2300
         let mut narrow = HostState {
             bandwidth_hz: 500,
