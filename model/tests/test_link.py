@@ -1579,6 +1579,88 @@ def test_a_stranded_frame_is_re_encoded_at_a_mode_that_carries_it(timing: PhyTim
     assert a._reencode_target(full, top, 0) is None
 
 
+def test_a_frame_re_encoded_and_left_out_of_its_burst_goes_in_the_next() -> None:
+    """Six frames stranded at an OFDM rung are re-encoded on the tone floor together, and a
+    burst held to the key time carries five tone frames (ADR-0017). The sixth, its count of
+    transmissions reset with its new codeword, fell out of the unacknowledged frames: never
+    sent again, never acknowledged — the other station waited for it for ever, the window
+    filled behind it, and the sender went silent with data queued until the link timed out.
+    Every session the chat bench dropped at 0 dB had left a frame so (ADR-0031). Here a path
+    that never carries the rung: the message still arrives whole."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.frames import data_capacity
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.rate import NARROW_AWGN_THRESHOLD_DB
+
+    timing = phy_timing(NARROW.params)
+    rung = 4  # QPSK ⅓ on the ordinary frame, the first OFDM rung at 500 Hz
+    cfg = LinkConfig(max_mode=rung, max_burst_s=28.85)  # the daemon's limit at 30 s of key
+    assert timing.is_floor(rung - 1) and not timing.is_floor(rung), "not the case measured"
+    tone = timing.data_frame_s_for(0)
+    assert 5 * tone <= 28.85 < 6 * tone
+    a = LinkEngine("W4ODA", timing, cfg, seed=1)
+    b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+    thresholds = dict(NARROW_AWGN_THRESHOLD_DB)
+    thresholds[rung] = 99.0
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=4, thresholds=thresholds)
+    bursts: list[list[TxFrame]] = []
+    original = a._transmit
+
+    def record(frames: list[TxFrame]) -> None:
+        if frames[0].container is Container.DATA and a.state is State.CONNECTED:
+            bursts.append(frames)
+        original(frames)
+
+    a._transmit = record  # type: ignore[method-assign]
+    message = bytes(range(6 * data_capacity(timing.capacity(rung))))  # one burst of six
+    a.connect("KK4XYZ")
+    a.send(message)
+    a.disconnect()
+    sim.run(until=900)
+    assert len(bursts[0]) == 6 and bursts[0][0].mode == rung, "not the case measured"
+    assert a.stats.frames_reencoded == 6
+    assert max(len(f) for f in bursts if timing.is_floor(f[0].mode)) == 5
+    assert sim.delivered(1) == message, (sim.events(0), sim.events(1))
+    assert a.all_acknowledged()
+
+
+def test_a_frame_sent_under_an_earlier_codeword_is_still_unacknowledged() -> None:
+    """The bookkeeping under ADR-0031: a frame given a new codeword counts as sent — it went
+    on the air under the old one — so it is unacknowledged until acknowledged, goes out in
+    the next burst that has room for its family, keeps the sender from closing, and an
+    acknowledgement covers it whichever codeword the other station decoded."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.frames import data_capacity
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("W4ODA", timing, LinkConfig(max_mode=4, max_burst_s=28.85))
+    a.role, a.state, a.now, a.session = Role.ISS, State.CONNECTED, 100.0, 7
+    a._recommended = 4
+    a.send(bytes(6 * data_capacity(timing.capacity(4))))
+    first = [x for x in a.drain() if isinstance(x, Transmit)]
+    assert [f.mode for f in first[0].frames] == [4] * 6
+    for record in a._records.values():
+        record.tx_count = a.cfg.max_combines  # stranded at the rung
+    a._recommended = 0
+    a._waiting_for = None
+    a._disarm("wait")
+    a.now = a._tx_busy_until = 200.0
+    a._send_burst()
+    second = [x for x in a.drain() if isinstance(x, Transmit)]
+    assert [f.mode for f in second[0].frames] == [0] * 5, "five tone frames fit the key"
+    left = [s for s, r in a._records.items() if r.tx_count == 0]
+    assert len(left) == 1 and a._records[left[0]].reencoded == a.cfg.max_combines
+    assert a._unacked()[-1] == left[0], "left out of its burst, and still unacknowledged"
+    a.disconnect()
+    assert a.state is State.CONNECTED and a.disconnect_requested, "closed with a frame missing"
+    # the other station decoded the sixth under its old codeword: the acknowledgement covers it
+    ack = ControlFrame(ControlKind.ACK, session=7, base=6, recommended_mode=0)
+    a._on_ack(ack)
+    assert a.all_acknowledged()
+    assert not a._unacked()
+
+
 # ── rate control on a real path (ADR-0020) ────────────────────────────
 
 
