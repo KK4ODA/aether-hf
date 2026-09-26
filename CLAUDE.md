@@ -897,8 +897,9 @@ Aether keys there and the rules check keeps reading the dial — the FLRig count
 radio through `rigctld` (`docs/user/host-programs.md`). Configuration **schema 9** (`flrig_keying`,
 a step that changes nothing; fixture `0.2.0-beta.69-host.toml`), with the shell's `SCHEMA_HISTORY`
 line `("0.2.0-beta.70", 9)`. beta.70 carries it with the evening's fixes (the host told only of its
-own sessions, the devices listed off the run loop, the transmit level in Setup), the sim clock and
-ADR-0028/0029/0030.
+own sessions, the devices listed off the run loop, the transmit level in Setup), the sim clock,
+ADR-0028…0033 and ADR-0010 §7 (the key comes up where the sound card drains, not early by the
+time the burst took to render and key — the cloud session's fix).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
