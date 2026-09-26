@@ -1045,6 +1045,67 @@ def test_a_call_stating_another_bandwidth_is_not_answered(timing: PhyTiming) -> 
     assert sim.delivered(1) == b"at five hundred hertz"
 
 
+def test_a_station_moved_to_another_air_answers_calls_in_it(timing: PhyTiming) -> None:
+    # ADR-0026: the daemon moves the engine between sessions — to the bandwidth a host
+    # program asked for, or to the narrower one a call to it came in — and the engine keeps
+    # its callsigns, its counters and its session numbering across the move
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    narrow = phy_timing(NARROW_500, start_of_frame=False)
+    assert narrow.mode_threshold_db is not None and timing.mode_threshold_db is not None
+    a = LinkEngine("W4ODA", narrow, LinkConfig(capabilities=with_bandwidth(0, 500)), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=with_bandwidth(0, 2300)), seed=2)
+    b.set_callsigns(["KK4XYZ", "KK4XYZ-1"])
+    b.stats.probes_sent = 3
+    top = len(narrow.mode_threshold_db) - 1
+    b.set_air(narrow, with_bandwidth(0, 500), max_mode=top)
+    assert b.timing is narrow and bandwidth_code(b.cfg.capabilities) == 1
+    assert b.cfg.max_mode == top
+    assert b.rate.thresholds == dict(narrow.mode_threshold_db)
+    assert b.callsigns == ["KK4XYZ", "KK4XYZ-1"] and b.stats.probes_sent == 3
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=6)
+    a.connect("KK4XYZ-1")
+    a.send(b"a narrow call answered")
+    sim.run(until=40)
+    assert a.connected and b.connected
+    assert b.my_call == "KK4XYZ-1"
+    assert bandwidth_code(a.peer_capabilities) == 1 and bandwidth_code(b.peer_capabilities) == 1
+    # nothing moves while the session runs: it ends on the air it started on
+    with pytest.raises(RuntimeError):
+        b.set_air(timing, with_bandwidth(0, 2300))
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == b"a narrow call answered"
+    assert a.state is State.IDLE and b.state is State.IDLE
+    # and back, once it is over
+    b.set_air(timing, with_bandwidth(0, 2300), max_mode=len(timing.mode_threshold_db) - 1)
+    assert b.timing is timing and bandwidth_code(b.cfg.capabilities) == 0
+    assert b.rate.thresholds == dict(timing.mode_threshold_db)
+    # a call or a probe under way holds the air too
+    c, _ = _pair(timing)
+    c.connect("KK4ABC")
+    with pytest.raises(RuntimeError):
+        c.set_air(narrow, with_bandwidth(0, 500))
+    p, _ = _pair(timing)
+    p.probe("KK4ABC")
+    with pytest.raises(RuntimeError):
+        p.set_air(narrow, with_bandwidth(0, 500))
+
+
+def test_a_new_fastest_rung_reaches_the_link(timing: PhyTiming) -> None:
+    # `max_mode` is a live setting of the station's: a change reaches the link's
+    # recommendations from the next burst on, under the rules' ceiling as before
+    a, _ = _pair(timing)
+    assert a._cap() == LinkConfig().max_mode
+    a.set_max_mode(8)
+    assert a._cap() == 8
+    a.set_ceiling(5)
+    assert a._cap() == 5
+    a.set_max_mode(3)
+    assert a._cap() == 3
+
+
 def test_a_call_to_somebody_else_is_not_answered(timing: PhyTiming) -> None:
     a, b = _pair(timing)
     b.set_callsigns(["KK4XYZ"])

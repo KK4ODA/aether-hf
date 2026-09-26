@@ -1002,6 +1002,39 @@ class LinkEngine:
         allow."""
         self.cfg.ceiling = rung
 
+    def set_max_mode(self, rung: int) -> None:
+        """A new fastest rung (:attr:`LinkConfig.max_mode`), from the next burst on: the
+        operator's ``max_mode`` is a live setting of the station's, and one set while the
+        daemon ran used to reach the gate and the Test's ladder but not the link, which
+        kept recommending up to the value it started with."""
+        self.cfg.max_mode = rung
+
+    def set_air(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
+        """Run on another air interface from the next session on (ADR-0026).
+
+        The engine knows one air at a time — its frame lengths, its ladder, the thresholds its
+        rate controller steps by — and the daemon moves it between sessions: to the bandwidth
+        a host program's ``BW500``/``BW2300`` asked for, as VARA does, or to the narrower one
+        a call to this station came in. ``capabilities`` is what the connect handshake offers
+        from then on, its bandwidth bits (:func:`~aether_model.link.frames.with_bandwidth`)
+        included, and ``max_mode`` the fastest rung on the new ladder. The callsigns, the
+        counters, the session numbering and the last probe stay: the station is the same one.
+
+        Refused while anything is under way — a session, a call, a probe: each runs to its end
+        on the air it started on, and the other station is on that one."""
+        if self.state is not State.IDLE or self._probing is not None:
+            raise RuntimeError("a session, a call or a probe is running")
+        self.timing = timing
+        self.cfg.capabilities = capabilities
+        if max_mode is not None:
+            self.cfg.max_mode = max_mode
+        # the controller steps by the new ladder's thresholds; a fresh one is what a new
+        # session starts from anyway (every session seeds it from its connect frame)
+        self.rate = self._rate_controller()
+        self._recommended = self.cfg.initial_mode
+        self._peer_floor = False
+        self._peer_mode = None
+
     def _cap(self) -> int:
         """The fastest rung this station may send at: the operator's ceiling, and the
         rules' when they set one."""
