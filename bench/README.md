@@ -493,6 +493,18 @@ with a frame left out, and all six complete: drops and stalls 18 → 12 of 5 400
 157 → 119, latency and keyed time unchanged. `reencoded_link.csv` is `bench_link.py --fading
 --floor-cap`, 2 kB, 20 sessions a point: identical in all 600. ADR-0031 has the table.
 
+## An unanswered poll steps down (`poll_step_chat.csv`, `poll_step_link.csv`, ADR-0032)
+
+The engine with ADR-0031 (`engine` `before`) and with an unanswered poll stepping the
+recommendation down from the second in a row (`after`), the same runs as ADR-0031's: today's
+turn-taking and ADR-0027's request, the grid (`first_trial` 0) and the drop run (`first_trial`
+100). Beside them, on the drop run's −6 and 0 dB points, the two rules not taken:
+`every-silence` (`poll_silences = 1`) and `floor-retry` (a repeated poll on the floor, the
+recommendation untouched). "No response" drops 6 → 0 of 5 400, lines lost 119 → 75, a line's
+time and the keyed time within 0.97–1.05; the rules not taken cost half a second a line at
+0 dB. `poll_step_link.csv` is `bench_link.py --fading --floor-cap`: identical in all 600
+sessions. ADR-0032 has the tables.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
