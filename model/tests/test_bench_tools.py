@@ -35,3 +35,33 @@ def test_a_bench_point_runs_on_every_ofdm_mode_the_gate_and_the_curves_use(param
         assert row["throughput_bps"] == round(
             8 * modem.payload_bytes(air.modes[mode]) / air.long.duration_s
         )
+
+
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_the_chat_bench_runs_a_conversation_on_each_air(bandwidth: int) -> None:
+    """``tools/bench_chat.py`` (ADR-0027) against the model as it stands: one conversation on a
+    clean path under today's turn-taking, in a chat, and with the handover it measured and did
+    not adopt — every line arrives, and a reply arrives sooner in a chat than when it has to
+    wait to be polled."""
+    import statistics
+
+    import bench_chat
+
+    rows = {}
+    for policy in ("base", "request", "handover+request"):
+        point = bench_chat.Point(
+            policy,
+            tuple(sorted(bench_chat.POLICIES[policy].items())),
+            bandwidth,
+            "awgn",
+            12.0,
+            1,
+            fading=True,
+            floor_cap=True,
+            max_burst_s=bench_chat.MAX_BURST_S,
+        )
+        rows[policy] = bench_chat.run_session(point, 0)
+        assert rows[policy]["connected"] == 1 and rows[policy]["lost"] == 0, rows[policy]
+    base, chat = (rows[p]["replies"] for p in ("base", "request"))
+    assert statistics.median(chat) < statistics.median(base)  # type: ignore[arg-type]
+    assert rows["request"]["requests"], "the chat asked for the turn"
