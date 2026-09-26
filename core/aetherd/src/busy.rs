@@ -366,6 +366,19 @@ impl BusyDetector {
         self.history.len() >= SETTLE_BLOCKS
     }
 
+    /// The longest a signal can have been on the channel before this detector calls it
+    /// busy, in seconds. The shape path is the slower: it attacks on two peaked windows in a
+    /// row, and a signal that starts inside a window may leave that one reading flat, so three
+    /// windows; the level path needs half its attack window for a signal that stays on and
+    /// all of it for one keyed half the time. One block more for the one still being
+    /// gathered. Audio further back than this, with the channel still reading clear, held
+    /// nothing either path could see — what a caller measuring the noise *between* signals
+    /// has to wait for before it trusts a window (`Station::sample_passband`).
+    #[must_use]
+    pub fn attack_s(&self) -> f64 {
+        ((3 * SHAPE_BLOCKS).max(ATTACK_WINDOW) + 1) as f64 * self.config.block_s
+    }
+
     /// Mark the channel busy because a frame was **decoded**.
     ///
     /// A decoded frame is there whatever the power measurement says, and it works below the
@@ -1223,6 +1236,55 @@ mod tests {
         assert!(detector.busy(now), "one flat window must not drop it");
         feed(&mut detector, &mut now, SHAPE_BLOCKS * 2, 8.0, 4000);
         assert!(detector.busy(now), "and the signal carries on");
+    }
+
+    #[test]
+    fn a_signal_is_called_busy_within_the_attack_time_wherever_it_starts() {
+        // `attack_s` is how long the station waits past a window of audio before it takes
+        // that window for noise: a signal that could outlast it unseen would put the start
+        // of a burst into the receiver's noise profile, and a tone frame's 400 Hz there
+        // reads as a narrow filter. So it has to bound both paths from every phase of
+        // the detector's blocks and shape windows: a flat signal 12 dB up, caught by level
+        // as an OFDM burst is, and a tone under the level margin, caught by shape.
+        let mut settled = BusyDetector::new(BusyConfig::default());
+        let fs = settled.config().fs;
+        let block = (settled.config().block_s * fs) as usize;
+        let quiet_until = feed(&mut settled, 10.0, 0.01, 40, 0.0);
+        assert!(settled.settled() && !settled.busy(quiet_until));
+        let attack = settled.attack_s();
+        for lead in (0..SHAPE_BLOCKS * block).step_by(block / 2) {
+            for flat in [true, false] {
+                let mut detector = settled.clone();
+                // noise up to where the signal starts, `lead` samples into the next window
+                let mut now = quiet_until + lead as f64 / fs;
+                detector.push(&noise(lead, 0.01, 7_000 + lead as u64), now);
+                let start = now;
+                let mut phase = 0.0;
+                let mut n = 0u64;
+                while !detector.busy(now) {
+                    assert!(
+                        now - start < 2.0,
+                        "never called busy (flat {flat}, lead {lead})"
+                    );
+                    let samples = if flat {
+                        noise(block, 0.01 * 10f64.powf(12.0 / 20.0), 8_000 + n)
+                    } else {
+                        tone_over_noise(block, 0.01, 4.0, 60.0, 8_000 + n, phase)
+                    };
+                    phase += 2.0 * std::f64::consts::PI * 60.0 * block as f64 / fs;
+                    n += 1;
+                    now += block as f64 / fs;
+                    detector.push(&samples, now);
+                }
+                assert!(
+                    now - start <= attack + 1e-9,
+                    "a {} signal starting {lead} samples into a window was called busy \
+                     {:.3} s after it began, past the {attack:.3} s the detector promises",
+                    if flat { "flat" } else { "narrowband" },
+                    now - start
+                );
+            }
+        }
     }
 
     #[test]

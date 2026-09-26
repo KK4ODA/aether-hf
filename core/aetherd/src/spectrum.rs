@@ -79,6 +79,14 @@ impl SpectrumAnalyser {
         self.ring.len() == WINDOW
     }
 
+    /// How much audio one transform covers, in seconds — about 85 ms at 48 kHz. A spectrum
+    /// describes exactly this much of the past, so a caller that wants one of a quiet
+    /// channel needs the channel quiet for this long first.
+    #[must_use]
+    pub fn window_s(&self) -> f64 {
+        WINDOW as f64 / self.sample_rate
+    }
+
     /// Transform what is held. `None` until a whole window has been heard.
     #[must_use]
     pub fn compute(&self) -> Option<Spectrum> {
@@ -222,6 +230,13 @@ impl PassbandMonitor {
             return None;
         }
         passband_width_hz(&self.profile, self.bin_hz, center_hz)
+    }
+
+    /// How many spectra have been folded in, for a test that must tell a monitor kept away
+    /// from signals from one that stopped listening altogether.
+    #[cfg(test)]
+    pub(crate) fn observations(&self) -> usize {
+        self.seen
     }
 }
 
