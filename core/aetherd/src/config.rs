@@ -1365,6 +1365,10 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.max_mode",
     "radio.answer_only",
     "radio.busy_threshold_db",
+    // the identifier is rendered at each transmission, so its settings apply to the next
+    "radio.cw_id",
+    "radio.cw_id_wpm",
+    "radio.cw_id_interval_s",
     "record.auto",
     "record.notes",
     "operator.grid",

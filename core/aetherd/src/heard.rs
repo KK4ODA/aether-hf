@@ -61,6 +61,13 @@ pub struct HeardStation {
     pub detail: Option<String>,
     /// Whether a session with it has ever been up from here.
     pub connected: bool,
+    /// Beacons heard from it. A station that beaconed and then called is one line whose
+    /// activity says `calling`; this is where its beacons still show.
+    #[serde(default)]
+    pub beacons: u32,
+    /// When its last beacon was heard, milliseconds since the Unix epoch.
+    #[serde(default)]
+    pub last_beacon_ms: Option<u64>,
 }
 
 /// One frame with a callsign in it.
@@ -136,6 +143,10 @@ impl HeardList {
             entry.activity = sighting.activity;
             entry.detail = sighting.detail;
             entry.connected |= sighting.activity == Activity::Connected;
+            if sighting.activity == Activity::Beacon {
+                entry.beacons = entry.beacons.saturating_add(1);
+                entry.last_beacon_ms = Some(sighting.at_ms);
+            }
             entry.clone()
         } else {
             let entry = HeardStation {
@@ -150,6 +161,8 @@ impl HeardList {
                 activity: sighting.activity,
                 detail: sighting.detail,
                 connected: sighting.activity == Activity::Connected,
+                beacons: u32::from(sighting.activity == Activity::Beacon),
+                last_beacon_ms: (sighting.activity == Activity::Beacon).then_some(sighting.at_ms),
             };
             self.stations.push(entry.clone());
             entry
@@ -262,11 +275,34 @@ mod tests {
         assert_eq!(entry.activity, Activity::Calling);
         assert_eq!(entry.detail.as_deref(), Some("KK4ODA"));
         assert!(!entry.connected);
+        // the beacon it was first heard by still shows, under the call that followed it
+        assert_eq!(entry.beacons, 1);
+        assert_eq!(entry.last_beacon_ms, Some(1_000));
         list.note(Sighting {
             activity: Activity::Connected,
             ..sighting("W4TGA", 6_000, 4.0)
         });
         assert!(list.stations()[0].connected);
+        let entry = list.note(sighting("W4TGA", 9_000, 6.0));
+        assert_eq!(entry.beacons, 2);
+        assert_eq!(entry.last_beacon_ms, Some(9_000));
+    }
+
+    #[test]
+    fn a_list_written_before_beacons_were_counted_still_reads() {
+        // beta.66 and earlier wrote no `beacons` or `last_beacon_ms`
+        let text = r#"{"schema":1,"stations":[{"callsign":"W4TGA","first_heard_ms":1,
+            "last_heard_ms":2,"count":1,"snr_db":3.0,"best_snr_db":3.0,"frequency_hz":null,
+            "mode":0,"activity":"beacon","detail":null,"connected":false}]}"#;
+        let dir = std::env::temp_dir().join(format!("aether-heard-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("heard.json");
+        std::fs::write(&path, text).expect("written");
+        let list = HeardList::open(Some(path));
+        assert_eq!(list.stations().len(), 1);
+        assert_eq!(list.stations()[0].beacons, 0);
+        assert_eq!(list.stations()[0].last_beacon_ms, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -74,6 +74,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "listen"
             | "callsigns.set"
             | "beacon"
+            | "beacon.every"
             | "probe"
             | "test.start"
             | "test.abort"
@@ -631,6 +632,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
                 ),
             ),
         },
+        "beacon.every" => beacon_every(station, params, id),
         "ptt.test" => {
             let seconds = params
                 .get("duration_s")
@@ -1215,6 +1217,23 @@ fn devices(id: Option<String>) -> Response {
     }
 }
 
+/// `beacon.every {minutes}`: beacon on a timer, the first now; `null` or `0` stops it.
+fn beacon_every<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let minutes = params.get("minutes").and_then(Value::as_f64);
+    let seconds = minutes.filter(|m| *m > 0.0).map(|m| m * 60.0);
+    match station.beacon_every(seconds) {
+        Ok(()) => Response::ok(id, station.beacon_status()),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                format!("Cannot beacon on a timer: {reason}."),
+                false,
+            ),
+        ),
+    }
+}
+
 /// Everything a client needs to render the station's current state.
 fn status<P: Ptt>(station: &mut Station<P>) -> Value {
     let frequency_hz = station.frequency_hz();
@@ -1256,6 +1275,10 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             "seconds": seconds,
         })),
         "test": station.test_brief(),
+        // the repeating beacon and the beacons sent (ND1J's questions, 2026-09-25)
+        "beacon": station.beacon_status(),
+        // the Morse identifier: the speed set and the speed the rules let it be sent at
+        "identifier": station.identifier_status(),
         // where the station stands with the rules (ADR-0018): the indicator, the ceiling on
         // the link's rungs, the gate's last decision and the dials where its waveforms fit
         "regulatory": station.regulatory_status(),
@@ -1323,6 +1346,7 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "frames_detected": station.stats.frames_detected,
         "deferred_for_busy": station.stats.deferred_for_busy,
         "watchdog_trips": station.stats.watchdog_trips,
+        "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
         "probes_sent": stats.probes_sent,
         "probes_answered": stats.probes_answered,
@@ -1782,6 +1806,41 @@ mod tests {
             !is_mutating("spectrum") && !is_mutating("constellation") && !is_mutating("heard.list")
         );
         assert!(is_mutating("heard.clear"));
+    }
+
+    #[test]
+    fn a_beacon_repeats_when_asked_and_status_says_so() {
+        let mut station = station();
+        let request = |method: &str, params: Value| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params,
+            token: None,
+        };
+        assert!(is_mutating("beacon.every"));
+        let response = dispatch_with(
+            &mut station,
+            None,
+            &request("beacon.every", json!({"minutes": 1})),
+        );
+        let error = response.error.expect("a minute is refused");
+        assert_eq!(error.code, "bad_params");
+        let response = dispatch_with(
+            &mut station,
+            None,
+            &request("beacon.every", json!({"minutes": 15})),
+        );
+        assert_eq!(response.result.expect("accepted")["every_s"], 900.0);
+        let response = dispatch_with(&mut station, None, &request("status", json!({})));
+        let result = response.result.expect("status");
+        assert_eq!(result["beacon"]["every_s"], 900.0);
+        assert!(result["identifier"]["enabled"].is_boolean());
+        let response = dispatch_with(
+            &mut station,
+            None,
+            &request("beacon.every", json!({"minutes": 0})),
+        );
+        assert!(response.result.expect("stopped")["every_s"].is_null());
     }
 
     #[test]
