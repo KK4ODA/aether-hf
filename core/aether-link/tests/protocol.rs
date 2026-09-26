@@ -1215,6 +1215,58 @@ fn a_strong_path_called_on_the_floor_climbs_from_its_first_ordinary_burst() {
     );
 }
 
+/// A pipe's `unheard`: the caller (station 0) never detects the first DATA frame sent to it —
+/// the called station's first acceptance.
+fn first_acceptance_unheard() -> aether_link::sim::Unheard {
+    let lost = std::cell::Cell::new(None::<f64>);
+    Box::new(move |rx, container, t0| {
+        if rx != 0 || container != Container::Data {
+            return false;
+        }
+        let first = lost.get().unwrap_or(t0);
+        lost.set(Some(first));
+        (t0 - first).abs() < 1e-9
+    })
+}
+
+#[test]
+fn a_repeated_acceptance_says_how_its_request_arrived() {
+    // A called station whose acceptance was lost answers the caller's next try with the
+    // acceptance again, carrying the SNR that try arrived at, as the first carried the first's:
+    // a caller that hears only the repeat starts its first burst where that measurement puts
+    // it (P9-2). The repeat said "not measured", and the session started on the ladder's first
+    // rung, the tone floor, whatever the path
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    let frame_s: Vec<f64> = (0..t.mode_threshold_db.len())
+        .map(|m| t.data_frame_s_for(m))
+        .collect();
+    let fresh = RateController::for_table_timed(
+        RateConfig::default(),
+        &t.mode_threshold_db,
+        &t.data_capacity,
+        &frame_s,
+    )
+    .with_floor(t.floor_modes, t.floor_margin_db);
+    assert!(fresh.first_mode(18.0) > fresh.first_mode(3.0));
+    let message = vec![0u8; 600];
+    a.connect("KK4XYZ").expect("idle");
+    a.send(&message);
+    a.disconnect();
+    // the first try arrives in a fade, the second on a strong path
+    let mut sim = TwoStationSim::new(a, b, 18.0, 31)
+        .with_snr_schedule(Box::new(|t| if t < 10.0 { 3.0 } else { 18.0 }))
+        .with_unheard(first_acceptance_unheard());
+    sim.run(300.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    // a call on the floor and its acceptance, lost; the ordinary try and the acceptance again;
+    // then the caller's first burst
+    let robust = air_interface(WIDE_2300).control_rung();
+    let modes = sim.modes_sent();
+    assert_eq!(&modes[..4], &[0, 0, robust, robust], "{modes:?}");
+    assert_eq!(modes[4], fresh.first_mode(18.0), "{modes:?}");
+}
+
 #[test]
 fn a_burst_fits_the_transmitters_key_time() {
     // ADR-0017: six tone frames are 32 s, and the daemon's 30 s key watchdog cut the last one
