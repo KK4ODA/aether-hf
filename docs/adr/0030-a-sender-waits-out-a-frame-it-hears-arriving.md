@@ -36,8 +36,7 @@ link timeout bound the session as before.
 The rule holds a retry only when the frame announces itself before the retry falls due. A
 retry that falls due first — an ordinary poll waiting for an ordinary answer is repeated
 1.23 s after its end, and a floor answer to a poll the other station could not decode is
-announced 1.53 s after it — needs a longer wait, which is ADR-0027 §7 (1) and a change of its
-own.
+announced 1.53 s after it — needs a longer wait, which ADR-0028 gives it.
 
 ## 3. Measured
 
@@ -59,7 +58,11 @@ median over the points, and their range.
 Good, Moderate and Poor, both airs. The "before" rows are ADR-0027's own: 15 drops and 126 lines
 for today's turn-taking, 13 and 104 for the request. Where the spiral ran, the polls fall: at
 −12 dB on Good, 1.71–1.76 polls a line → 1.27–1.30 today, 0.98–1.02 → 0.75–0.77 with the
-request.
+request. ADR-0028 ran the same points with 200 more sessions each (`first_trial` 200;
+`bench/baselines/poll_wait.csv`, `engine` `adr-0030`, `run` `drops200`): pooled with the
+100-a-point run, 5 400 sessions a policy, the hold takes today's drops from 49 to 28 and the
+request's from 47 to 15 — the request's 13 → 1 above was the fortunate end of 1 800 sessions
+(14 of the 3 600 more were lost).
 
 The fault itself, counted on the 100-a-point run's 1 800 sessions — a retry keyed while a frame
 the station had heard arriving was on the air: today 1 484 polls → none; with the request 1 099
