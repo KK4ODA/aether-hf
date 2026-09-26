@@ -117,9 +117,16 @@ pub const RULES: &[Rule] = &[
     },
     // ── keying ─────────────────────────────────────────────────────────────────────
     Rule {
-        options: &["none", "serial", "rigctld", "cat", "cm108"],
+        options: &["none", "serial", "rigctld", "cat", "cm108", "host"],
         why: "those are the ways this version can key a radio",
         ..rule("ptt.kind")
+    },
+    Rule {
+        min: Some(50.0),
+        max: Some(1000.0),
+        why: "the host program needs some time to key the radio, and a second of dead air \
+              before every burst would be waste",
+        ..rule("ptt.lead_ms")
     },
     Rule {
         scope: Scope::Hardware,
@@ -494,6 +501,7 @@ fn keying_kinds() -> Vec<PttConfig> {
             device: Some("hid#vid_0d8c&pid_000c".into()),
             gpio: 3,
         },
+        PttConfig::Host { lead_ms: 150 },
     ]
 }
 

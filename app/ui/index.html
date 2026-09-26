@@ -248,7 +248,8 @@
               <span class="sub op-note" id="dial-hero-sub" title="Where the dial reading comes from, when it is not the radio"></span>
             </div>
           </div>
-          <div class="tool-row">
+          <p class="note" id="host-owns-radio" title="Who tunes and keys the radio" hidden>The host program tunes and keys the radio (Setup, step 2): choose the frequency there.</p>
+          <div class="tool-row" id="memory-row">
             <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
             <div class="btn-group" role="group" aria-label="Dial list" title="Tune to the chosen dial, or edit the list">
               <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT or rigctld">Tune</button>
@@ -887,6 +888,8 @@
                     port carries CAT and its <em>Standard</em> port the RTS line; Icom's single port
                     carries both. A DRA, URI or other CM108-class interface keys through its codec's own
                     GPIO pin (3 on those boards) and is listed by name, with no serial port. Choose
+                    <em>host program</em> when VarAC or Winlink Express owns the radio and keys it on
+                    PTT ON, as it does VARA's. Choose
                     <em>none</em> for a VOX interface such as a SignaLink, or to listen only. Without CAT
                     or <code>rigctld</code> the radio cannot report its dial: say where it is on the
                     Session tab before transmitting.
@@ -931,6 +934,10 @@
                   <option value="8">GPIO 8</option>
                 </select>
                 <input id="ptt-address" title="Where rigctld listens, as host:port" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
+                <span id="host-lead-fields" title="How long the audio waits after PTT ON, for the host program to key the radio" hidden>
+                  <input id="ptt-lead" title="Milliseconds from PTT ON to the first audio: the host program's time to key the radio (VARA allows 100)" type="text" inputmode="numeric" class="port" value="150" aria-label="Milliseconds before the audio" />
+                  <span class="sub">ms before the audio</span>
+                </span>
               </div>
               <div class="row" id="cat-row" hidden>
                 <label for="ptt-protocol">CAT</label>
@@ -950,6 +957,13 @@
               </div>
               <p class="note warn" id="rate-note" title="Something to check about the CAT rate" role="alert" hidden></p>
               <p class="note warn" id="hardware-note" title="A device the configuration names that this computer does not have" role="alert" hidden></p>
+              <p class="note" id="host-keyed-note" title="What keying by the host program means" hidden>
+                The host program owns the radio, as with VARA: it tunes it and keys it when Aether says
+                PTT ON — in VarAC, the RIG tab's PTT and Frequency Control on CAT. Aether opens no port
+                on the radio and cannot read its dial, so choosing this sets the rules in step 1 to
+                <strong>None</strong>: you check every transmission. Save it as a profile of its own to
+                switch between this and Aether keying the radio.
+              </p>
             </li>
 
             <!-- 3 -->

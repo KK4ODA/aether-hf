@@ -98,7 +98,7 @@ Unsolicited, at any time.
 
 | Line | When |
 |---|---|
-| `PTT ON` / `PTT OFF` | The transmitter was keyed or released |
+| `PTT ON` / `PTT OFF` | The transmitter was keyed or released — and, on a station keyed by the host program (`[ptt] kind = "host"`, ADR-0025), the host's cue to key the radio: VarAC keys it over CAT, as it does for VARA, and the first audio follows `PTT ON` by `lead_ms` (150 ms unless set) |
 | `BUSY ON` / `BUSY OFF` | The busy detector changed its mind about the channel — outside a session. While a session is up the channel is the session's and reads `BUSY OFF`: the detector marks it busy at every frame of the other station, and a host that honours DCD (VarAC with *Ignore DCD* off holds "busy" for ten seconds after each) would never find a moment to hand its data over; the modem does the turn-taking |
 | `PENDING` | The called side, just before its `CONNECTED`: the order every client expects, from a modem that answers a call in one step |
 | `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |

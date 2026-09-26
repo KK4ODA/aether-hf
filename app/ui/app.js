@@ -1304,6 +1304,10 @@ function applyDial(status) {
       const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
       if (match) $("memory").value = String(match.hz);
     }
+  } else if (hostOwnsTheDial(status)) {
+    reading.textContent = "";
+    hero.textContent = "—";
+    heroSub.textContent = "the host program tunes the radio";
   } else if (!canTune && liveConfig?.regulatory?.dial_hz) {
     const hz = liveConfig.regulatory.dial_hz;
     reading.textContent = `declared: ${formatHz(hz)} Hz`;
@@ -2157,6 +2161,9 @@ async function loadDevices() {
   fill(
     $("dev-ptt"),
     [
+      // VARA's way with VarAC and Winlink Express: the host program owns the radio and keys
+      // it on PTT ON (ADR-0025)
+      { name: "host", label: "host program — VarAC or Winlink Express keys the radio on PTT ON" },
       ...devicesSeen.serial_ports.map((p) => ({
         name: p.name,
         label: p.description ? `${p.name} — ${p.description}` : p.name,
@@ -2171,6 +2178,12 @@ async function loadDevices() {
     "none (VOX or receive only)",
   );
   $("dev-ptt").addEventListener("change", showKeyingFields);
+  $("dev-ptt").addEventListener("change", () => {
+    if ($("dev-ptt").value !== "host") return;
+    select($("reg-profile"), "none");
+    $("reg-profile").dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  $("ptt-lead").addEventListener("input", writeConfig);
   $("ptt-line").addEventListener("change", showKeyingFields);
   $("ptt-gpio").addEventListener("change", writeConfig);
   $("ptt-protocol").addEventListener("change", showKeyingFields);
@@ -2234,6 +2247,9 @@ async function loadConfig() {
     const wanted = `gpio:${ptt.device ?? ""}`;
     select($("dev-ptt"), listed.includes(wanted) ? wanted : (listed[0] ?? ""));
     select($("ptt-gpio"), String(ptt.gpio ?? 3));
+  } else if (ptt.kind === "host") {
+    select($("dev-ptt"), "host");
+    $("ptt-lead").value = String(ptt.lead_ms ?? 150);
   } else {
     select($("dev-ptt"), ptt.kind === "rigctld" ? "rigctld" : (ptt.port ?? ""));
   }
@@ -2474,16 +2490,35 @@ function writeConfig() {
     ? JSON.stringify(liveConfig, null, 2)
     : "The daemon has no configuration file to change.";
   $("footer-config").textContent = configPath;
+  applyHostOwnsRadio();
+}
+
+/// Whether the dial is the host program's alone: it keys the radio (ADR-0025) and no rules
+/// here need to know where the dial is. With rules chosen anyway, the dial is declared as for
+/// any radio that cannot report it.
+function hostOwnsTheDial(status) {
+  return liveConfig?.ptt?.kind === "host" && status.regulatory?.policy !== "rules";
+}
+
+/// When the host program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
+/// nothing to drive, and the card says where the frequency is chosen.
+function applyHostOwnsRadio() {
+  const hostKeyed = liveConfig?.ptt?.kind === "host";
+  $("host-owns-radio").hidden = !hostKeyed;
+  $("memory-row").hidden = hostKeyed;
 }
 
 /// The line, address and CAT fields belong to one keying method each; show what applies.
 function showKeyingFields() {
   const chosen = $("dev-ptt").value;
   const gpio = chosen.startsWith("gpio:");
-  const onPort = chosen !== "" && chosen !== "rigctld" && !gpio;
+  const host = chosen === "host";
+  const onPort = chosen !== "" && chosen !== "rigctld" && !host && !gpio;
   $("ptt-line").hidden = !onPort;
   $("ptt-gpio").hidden = !gpio;
   $("ptt-address").hidden = chosen !== "rigctld";
+  $("host-lead-fields").hidden = !host;
+  $("host-keyed-note").hidden = !host;
   const cat = onPort && $("ptt-line").value === "cat";
   $("cat-row").hidden = !cat;
   $("civ-fields").hidden = !cat || $("ptt-protocol").value !== "icom";
@@ -2493,6 +2528,9 @@ function showKeyingFields() {
 function keyingChanges() {
   const chosen = $("dev-ptt").value;
   if (chosen === "") return { "ptt.kind": "none" };
+  if (chosen === "host") {
+    return { "ptt.kind": "host", "ptt.lead_ms": Math.round(numberIn("ptt-lead") ?? 150) };
+  }
   if (chosen === "rigctld") {
     return {
       "ptt.kind": "rigctld",
@@ -3905,7 +3943,7 @@ function applyDeclaredDial(status) {
   // a radio that reports its dial is always taken at its word: a declared one is only for
   // a radio that cannot (serial-line, CM108 or VOX keying)
   const row = $("declared-row");
-  row.hidden = status.can_tune === true || !(reg?.policy === "rules" || declared);
+  row.hidden = status.can_tune === true || hostOwnsTheDial(status) || !(reg?.policy === "rules" || declared);
   if (row.hidden) return;
   const input = $("declared-dial");
   if (document.activeElement !== input && declared && !input.value) {
@@ -5172,7 +5210,9 @@ function asToml(changes) {
     );
   }
   lines.push(`tx_level = ${changes["audio.tx_level"] ?? 0.25}`, "", "[ptt]");
-  if (changes["ptt.kind"] === "rigctld") {
+  if (changes["ptt.kind"] === "host") {
+    lines.push(`kind = "host"`, `lead_ms = ${changes["ptt.lead_ms"] ?? 150}`);
+  } else if (changes["ptt.kind"] === "rigctld") {
     lines.push(`kind = "rigctld"`, `address = ${quote(changes["ptt.address"] ?? "127.0.0.1:4532")}`);
   } else if (changes["ptt.kind"] === "cm108") {
     lines.push(
