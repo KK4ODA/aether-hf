@@ -32,3 +32,4 @@ context → decision → alternatives considered → consequences.
 | [0025](0025-the-host-program-can-own-the-radio.md) | The host program can own the radio — keying on PTT ON, as VARA is keyed | accepted |
 | [0026](0026-the-bandwidth-follows-the-host-and-the-caller.md) | The bandwidth follows the host program and the caller; LISTEN decides whether calls are answered | accepted |
 | [0027](0027-chat-handover.md) | In a chat the receiving station asks for the turn — and the sender does not hand it over unasked | accepted |
+| [0030](0030-a-sender-waits-out-a-frame-it-hears-arriving.md) | A sender waits out a frame it hears arriving — no burst or poll repeated over its late answer | accepted |
