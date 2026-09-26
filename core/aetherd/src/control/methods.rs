@@ -508,7 +508,9 @@ fn diagnostics<P: Ptt>(
             "arch": std::env::consts::ARCH,
         },
         "generated": crate::log::rfc3339(unix_ms(std::time::SystemTime::now())),
-        "status": status(station),
+        // what `status` answers, the daemon's own part with it: whether a host program or a
+        // KISS program was attached is often the first question a report raises
+        "status": daemon_status(station, daemon.as_deref()),
         "capabilities": capabilities(station.params()),
         "devices": devices,
         "config": Value::Null,
@@ -2229,6 +2231,23 @@ mod tests {
         assert_eq!(bundle["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(bundle["platform"]["os"], std::env::consts::OS);
         assert_eq!(bundle["status"]["state"], "idle");
+        // the status as `status` answers it, the daemon's part included: a report about a
+        // host program or a KISS program starts from whether one was attached
+        for key in [
+            "host",
+            "kiss",
+            "supervised",
+            "audio_fault",
+            "config_note",
+            "binary",
+        ] {
+            assert!(
+                bundle["status"].get(key).is_some(),
+                "the bundle's status has no {key}"
+            );
+        }
+        assert_eq!(bundle["status"]["host"]["enabled"], false);
+        assert_eq!(bundle["status"]["kiss"]["enabled"], false);
         assert_eq!(bundle["config"]["callsign"], "N0CALL");
         assert_eq!(bundle["audio"]["dropped_samples"], 7);
         assert_eq!(bundle["devices"]["serial_ports"][0]["name"], "COM3");
