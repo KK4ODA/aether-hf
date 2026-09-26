@@ -1919,6 +1919,70 @@ def test_the_link_timeout_spans_whole_exchanges_at_the_floor() -> None:
         assert engine._link_timeout() == 45.0
 
 
+def test_the_link_timeout_follows_the_sender_down_to_the_floor() -> None:
+    """The timeout spans four exchanges at the family the link runs in, and was reckoned only
+    when a frame was heard: a sender whose OFDM bursts went unanswered stepped down to the
+    floor and kept the 45 s the last acknowledgement had armed, which ran out during its first
+    tone burst — every chat-bench session left at 0 dB that ADR-0031 and ADR-0032 had not
+    carried (ADR-0033). The deadline is the last frame heard plus the timeout for the family
+    the link runs in now, whenever the station sends."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("W4ODA", timing, LinkConfig(max_mode=4, max_burst_s=28.85))
+    a.role, a.state, a.session = Role.ISS, State.CONNECTED, 7
+    a.now = a._last_peer_frame = 100.0
+    a._recommended = 4
+    a.rate.seed(15.0)
+    a._arm("link", a._link_timeout())
+    assert a._deadlines["link"] == pytest.approx(145.0), "the ordinary link's 45 s"
+    a.send(bytes(72))
+    a.drain()
+    assert a._deadlines["link"] == pytest.approx(145.0), "an OFDM burst changes nothing"
+    a._back_off()  # the burst went unanswered: the recommendation is the floor's now
+    assert timing.is_floor(a._recommended)
+    a._waiting_for = None
+    a._disarm("wait")
+    a.now = a._tx_busy_until = 110.0
+    a._send_burst()
+    a.drain()
+    assert a._deadlines["link"] == pytest.approx(100.0 + a._link_timeout())
+    assert a._link_timeout() > 100.0, "four floor exchanges"
+
+
+def test_a_session_whose_link_falls_to_the_floor_is_not_cut_off_on_the_way() -> None:
+    """ADR-0033 end to end, as the chat bench found it at 500 Hz: the called station holds the
+    turn, sending at the first OFDM rung, when the path falls below that rung and below the
+    ordinary control frame. Its bursts and the answers to them are lost; it steps down, and its
+    frames go to the floor after their four tries, half a minute after the last answer it
+    heard — whose 45 s ran out 12 s into the first tone burst. Before, it ended the session
+    there, with the answer to that burst on its way."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    cfg = LinkConfig(max_mode=4, max_burst_s=28.85)
+    a = LinkEngine("W4ODA", timing, cfg, seed=1)
+    b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+    fade = 25.0
+    sim = TwoStationSim(
+        a, b, snr_db=10.0, seed=5, snr_schedule=lambda t: -16.0 if t >= fade else 10.0
+    )
+    message = bytes(range(240)) * 2
+    a.connect("KK4XYZ")
+    a.send(b"hello")
+    b.send(message)
+    sim.run(until=fade)
+    assert b.role is Role.ISS and 0 < len(sim.delivered(0)) < len(message), "not the case"
+    t = fade
+    while t < 1500 and len(sim.delivered(0)) < len(message):
+        t += 10.0
+        sim.run(until=t)
+    assert sim.delivered(0) == message, (sim.events(0), sim.events(1))
+    assert not any(e.startswith("disconnected") for e in sim.events(0) + sim.events(1))
+
+
 def test_an_unanswered_burst_steps_the_recommendation_down(timing: PhyTiming) -> None:
     """A burst and its acknowledgement fade together, so a silence is evidence: the ISS steps
     down two usable modes a time, and the next acknowledgement puts the peer's own

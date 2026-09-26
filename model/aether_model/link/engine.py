@@ -785,6 +785,16 @@ class LinkEngine:
         dur = sum(self.timing.frame_s(f) for f in frames)
         self._tx_busy_until = self.now + self.timing.tx_latency_s + dur
         self.actions.append(Transmit(frames, dur))
+        if "link" in self._deadlines:
+            # The link timeout spans four exchanges at the family the link runs in, and was
+            # reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered
+            # stepped down to the floor still holding the 45 s its last acknowledgement had
+            # armed, which ran out during its first tone burst with the answer to it on its
+            # way. Whenever this station sends, the deadline is the last frame heard plus the
+            # timeout for the family the link runs in now, never less than it was (ADR-0033).
+            self._deadlines["link"] = max(
+                self._deadlines["link"], self._last_peer_frame + self._link_timeout()
+            )
 
     def _control(self, kind: ControlKind, **kw: object) -> TxFrame:
         if kind is not ControlKind.ACK:
