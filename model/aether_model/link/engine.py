@@ -30,6 +30,7 @@ combine — the CRC decides, and a standalone decode is always tried as well.
 
 from __future__ import annotations
 
+import contextlib
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -76,9 +77,17 @@ class LinkConfig:
     channel, and each burst that failed so stepped the link further down the tone floor,
     where every burst was full again (ADR-0017)."""
     max_retries: int = 8
-    """Consecutive unanswered bursts / polls before the link is declared dead."""
+    """Consecutive unanswered bursts / polls before the link is declared dead — and the most
+    TURNs a station offering the turn sends while the other station may have taken it (see
+    :attr:`turn_retries`)."""
     connect_retries: int = 8
     turn_retries: int = 3
+    """TURNs a station sends, unanswered, before it takes the turn back — unless the last thing
+    it heard from the other station meanwhile was a frame it could not read: that may be the
+    other station's answer from the turn it now holds, a poll too weak to read, and taking the
+    turn back then made two senders; it offers again, up to :attr:`max_retries` TURNs
+    (ADR-0029). An acknowledgement it can read says the other station is still receiving, and
+    silence says nothing either way: after those the turn is taken back as it always was."""
     disc_retries: int = 3
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
@@ -334,6 +343,11 @@ class LinkEngine:
         """The SNR of the last frame of this session decoded from the other station: what this
         station's control frames other than acknowledgements say of how it hears it."""
         self._turn_tries = 0
+        self._turn_unread = False
+        """While this station offers the turn: the last frame it heard from the other station
+        since the first TURN was one it could not read — which may be the other station's
+        answer from the turn it now holds (ADR-0029). An acknowledgement it can read clears it:
+        the other station is still receiving."""
         self._disc_requested = False
         self._disc_tries = 0
         self._connect_tries = 0
@@ -670,6 +684,9 @@ class LinkEngine:
             length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
             clear = t_start + length + self._response_wait(0.0)
             self._deadlines["keepalive"] = max(self._deadlines["keepalive"], clear)
+        if self._waiting_for == "turn":
+            # until it is read, a frame heard after a TURN may be the answer to it (ADR-0029)
+            self._turn_unread = True
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
@@ -943,6 +960,8 @@ class LinkEngine:
 
     def _send_turn(self) -> None:
         self._turn_tries += 1
+        if self._turn_tries == 1:
+            self._turn_unread = False
         self.stats.turns += 1
         self._transmit([self._control(ControlKind.TURN)])
         self.role = Role.IRS
@@ -961,6 +980,28 @@ class LinkEngine:
         )
         self._wait_for("turn", longest)
         self.actions.append(Event("role", "irs"))
+
+    def _turn_offers(self) -> int:
+        """How many TURNs go out before this station takes the turn back (ADR-0029).
+
+        A TURN is answered by the other station's first burst or its poll, and a TURN heard
+        again by a station that already holds the turn is answered again. When no answer is
+        read, either the other station never read a TURN, or its answers are what is being
+        lost — and then it holds the turn, and taking it back makes two senders: on the chat
+        bench (ADR-0027) such a sender sent a 27 s burst over the other station's polls until
+        one of the two gave up. A frame this station heard and could not read may be that
+        answer — a poll too weak to read — and while the last one heard was such a frame the
+        station offers again, up to :attr:`LinkConfig.max_retries` TURNs. An acknowledgement it
+        can read says the other station is still receiving (it answered a TURN's preamble as
+        the end of a burst), and silence says nothing either way: after either the turn is
+        taken back at :attr:`LinkConfig.turn_retries`, as before. Silence has to stay that way:
+        on a path that lets control frames through and no data, the station holding the turn
+        answers every TURN with a burst nobody hears, and the poll a station that took the turn
+        back sends — which the other answers by yielding (ADR-0023) — is what keeps the link
+        alive; offered for as long, a link that had climbed timed out."""
+        if self._turn_unread:
+            return max(self.cfg.turn_retries, self.cfg.max_retries)
+        return self.cfg.turn_retries
 
     def _send_disc(self) -> None:
         self._disc_tries += 1
@@ -987,7 +1028,7 @@ class LinkEngine:
                 self._send_disc()
             return
         if what == "turn":
-            if self._turn_tries >= self.cfg.turn_retries:
+            if self._turn_tries >= self._turn_offers():
                 # the peer never took the turn: carry on as ISS
                 self.role = Role.ISS
                 self._turn_tries = 0
@@ -1557,11 +1598,13 @@ class LinkEngine:
 
     def _on_control(self, frame: SoftFrame) -> None:
         payload, _ = frame.decode(None)
-        if payload is None:
-            return
-        try:
-            ctl = ControlFrame.decode(payload)
-        except ValueError:
+        ctl = None
+        if payload is not None:
+            with contextlib.suppress(ValueError):
+                ctl = ControlFrame.decode(payload)
+        if ctl is None:
+            if self._waiting_for == "turn":
+                self._turn_unread = True  # it may be the answer to the TURN (ADR-0029)
             return
         self._note_peer_frame(frame)
         if (
@@ -1596,6 +1639,16 @@ class LinkEngine:
                 )
             ):
                 self._on_ack(ctl)
+            elif self.role is Role.IRS and self.state is State.CONNECTED:
+                # The other station is receiving too: it has not taken a turn this one offered,
+                # and it answered a preamble of this one's as the end of a burst. That needs no
+                # answer, and the acknowledgement the frame's own preamble armed is withdrawn:
+                # sent, it was answered in turn, and keyed after a TURN it went out over the
+                # answer to the TURN (ADR-0029).
+                if self._waiting_for == "turn":
+                    self._turn_unread = False
+                if not self._burst:
+                    self._disarm("ack")
         elif ctl.kind is ControlKind.POLL:
             if self.role is Role.IRS or self._waiting_for == "turn":
                 self._take_irs()
@@ -1612,6 +1665,17 @@ class LinkEngine:
         elif ctl.kind is ControlKind.TURN:
             if self.role is Role.IRS or self._waiting_for == "turn":
                 self._take_iss()
+            elif self.state is State.CONNECTED and not self._tx_busy():
+                # The turn is this station's already, and the other station offers it again: it
+                # has heard nothing of this one taking it — the burst or the poll that answered
+                # its TURN was lost — and it would take the turn back when its tries ran out,
+                # making two senders. The answer goes again (ADR-0029). A station whose own
+                # transmission is still going out has its answer on the way.
+                self._retries = 0
+                self._waiting_for = None
+                self._disarm("wait")
+                self._disarm("keepalive")
+                self._answer_turn()
 
     def _take_irs(self) -> None:
         if self.role is not Role.IRS:
@@ -1642,6 +1706,11 @@ class LinkEngine:
         self._bursts_since_turn = 0
         self._retries = 0
         self.actions.append(Event("role", "iss"))
+        self._answer_turn()
+
+    def _answer_turn(self) -> None:
+        """What tells the station that sent a TURN that this one has taken the turn: the first
+        burst of the turn, or a poll when there is nothing to send."""
         if self._has_work():
             self._send_burst()
         else:
@@ -1812,6 +1881,7 @@ class LinkEngine:
         self.peer_snr_db = None
         self._heard_peer_db = None
         self._turn_tries = self._disc_tries = 0
+        self._turn_unread = False
         self._disc_requested = False
         self._waiting_for = None
         self._rx_base = 0
