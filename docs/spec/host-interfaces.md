@@ -76,7 +76,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `ABORT` | Ends it now: the rest of a burst on the air is cut and one disconnect follows; during a call, stops calling | Not orderly |
 | `LISTEN ON` / `LISTEN OFF` | Whether calls to this station are answered while this program is attached | Acted on (ADR-0026): off until the program says `LISTEN ON`, `LISTEN CQ` or `CHAT ON` — VARA's default, in its published command list — and a call or a probe to the station is then not answered; the daemon's log says so once a minute a caller, and `status.answering` is false. With no program attached the station answers every call to its callsigns. The published note that `LISTEN` received mid-connection disconnects is not copied: a session runs to its end |
 | `LISTEN CQ` | VarAC: hear only CQ frames | As `LISTEN ON`: calls are answered. This station hears everything, beacons included, either way |
-| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | `CHAT ON` includes `LISTEN ON`, as the published command list says. While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never |
+| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | `CHAT ON` includes `LISTEN ON`, as the published command list says, and makes the session keyboard-to-keyboard: the station that does not hold the turn asks for it as soon as the channel is quiet once its operator has typed a line, rather than waiting for the sender's next poll (ADR-0027; off again with `CHAT OFF` or when the program goes). While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never |
 | `IGNOREKISSDCD ON` / `OFF` | The KISS port's channel access | `ON`: frames from KISS programs go without waiting for a clear channel while this host is attached (§8.4). VarAC says it when its *Ignore DCD* box is ticked |
 | `BW500`, `BW2300`, `BW2750` | Sets the bandwidth the station runs, as VARA's published commands set its mode (ADR-0026) | The station moves between sessions (the control API's `bandwidth.set`) and the answer is `OK` once it runs what was asked. `BW2750` is 2300 Hz: a narrower signal is always inside what was asked, and Winlink Express sends its widest setting, 2750 unless changed. With a session, a call, a probe or a transmission under way the station stays, and the answer is `WRONG` unless it already runs what was asked. The request holds while the program is attached; when it goes, the station goes back to its own (`[radio] bandwidth`) once idle (§5) |
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
@@ -137,8 +137,8 @@ follow now is refused (`WRONG`) rather than accepted and not honoured: a client 
 on a 500 Hz calling frequency most of all.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `DRIVELEVEL` (`CHAT` and `IGNOREKISSDCD` govern the KISS port, §8.4; `LISTEN`
-and `BW<n>` are acted on, above). The setting is remembered and reported back, and the
+`P2P SESSION`, `DRIVELEVEL` (`CHAT` also governs the KISS port, §8.4, and so does
+`IGNOREKISSDCD`; `LISTEN`, `BW<n>` and `CHAT` are acted on, above). The setting is remembered and reported back, and the
 modem answers `OK` because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not

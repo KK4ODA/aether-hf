@@ -942,8 +942,8 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     way); `[radio] bandwidth` is live; `LISTEN` decides whether calls are answered while a
     program is attached; recordings replay across a move. A program that tunes through
     `rigctld` shares the radio with Aether keying there, so the rules check keeps its dial
-    (`docs/user/host-programs.md`). **Measured — ADR-0027, in the model on branch
-    `chat-handover`, to merge and port:** in a chat the receiving station asks for the turn
+    (`docs/user/host-programs.md`). **Measured, then built — ADR-0027:** under the host's
+    `CHAT ON` the receiving station asks for the turn
     (`tools/bench_chat.py`: −36 % median, −28 % p90 latency per line on the fading classes, 7 %
     less keying, no more drops; handing the turn over after each burst was faster still and lost
     four times the sessions). **Built on branch `flrig-keying`, for the next release (schema 9):**
