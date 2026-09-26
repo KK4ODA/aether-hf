@@ -1635,6 +1635,53 @@ def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
     assert b._deadlines["ack"] < 100.0 + floor_frame  # the old guess, for a PHY that cannot say
 
 
+def _disconnecting(timing: PhyTiming) -> LinkEngine:
+    """A sender that has just keyed its DISC and is waiting for the answer."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.now = Role.ISS, State.CONNECTED, 100.0
+    a.disconnect()
+    assert a.state is State.DISCONNECTING
+    a.actions.clear()
+    a.on_tx_done(101.0)
+    return a
+
+
+def test_a_station_waiting_for_the_answer_to_its_disc_acknowledges_nothing(
+    timing: PhyTiming,
+) -> None:
+    """ND1J, 2026-09-25: waiting for the answer to its DISC, KK4ODA-1 took the other
+    station's Morse identifier — a detection whose chips named data mode 12, undecodable — for
+    a burst and armed an acknowledgement; a leaving station's acknowledgement is another DISC,
+    and two went out in one keying, over the identifier."""
+    from aether_model.link.sim import SimFrame
+
+    a = _disconnecting(timing)
+    retry_at = a._deadlines["wait"]
+    junk = SimFrame(Container.DATA, 12, 0, -11.0, 100.9, 101.9, b"", 0.9999, trusted=False)
+    a.on_frame(junk, 101.95)
+    assert "ack" not in a._deadlines
+    a.tick(retry_at + 5.0)
+    discs = [x for x in a.actions if isinstance(x, Transmit)]
+    assert len(discs) == 1, "one retry, and only one"
+    assert a._disc_tries == 2
+
+
+def test_a_disc_is_not_repeated_over_a_frame_heard_arriving(timing: PhyTiming) -> None:
+    """The answer to a DISC can be late — the other station's own queue, a busy hold — and a
+    repeat keyed over it is heard by neither station. The retry waits for the frame's end."""
+    a = _disconnecting(timing)
+    retry_at = a._deadlines["wait"]
+    t_start = retry_at - 0.2
+    a.on_preamble(t_start, t_start + 0.2, timing.control_frame_s)
+    assert a._deadlines["wait"] >= t_start + timing.control_frame_s
+    a.tick(t_start + timing.control_frame_s)
+    assert not a.actions, "repeated over the frame"
+    # a PHY that cannot name the frame: the longest there is
+    b = _disconnecting(timing)
+    b.on_preamble(t_start, t_start + 0.2)
+    assert b._deadlines["wait"] >= t_start + timing.data_frame_s_for(0)
+
+
 def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
     """The three P9-7 changes together, on the fading pipe (P9-6): at −4 dB on ITU Good the
     500 Hz floor carries a 1 kB session that the fixed 45 s timeout dropped two times in

@@ -913,6 +913,13 @@ impl LinkEngine {
         self.now = self.now.max(now);
         match frame.container() {
             Container::Control => self.on_control(frame),
+            // A sender waiting for the answer to its DISC has no burst to acknowledge. What it
+            // hears is the answer's company — the other station's Morse identifier, which a
+            // detector can take for a data frame — or a burst from a peer that missed the
+            // DISC and will hear the next one. Taken as a burst, it armed an acknowledgement,
+            // and a leaving station's acknowledgement is another DISC: ND1J, 2026-09-25, two
+            // in one keying, the second over his identifier.
+            Container::Data if self.state == State::Disconnecting && self.role == Role::Iss => {}
             Container::Data => self.on_data(frame),
         }
     }
@@ -950,6 +957,15 @@ impl LinkEngine {
                 }
             }
             return;
+        }
+        if self.state == State::Disconnecting
+            && let Some(due) = self.deadline_of(Timer::Wait)
+        {
+            // Nor does a leaving station repeat its DISC over a frame it hears arriving: it
+            // may be the answer, late, and a repeat keyed over it is heard by nobody.
+            let length = frame_s.unwrap_or_else(|| self.timing.data_frame_s_for(0));
+            let clear = t_start + length + self.response_wait(0.0, 0.0);
+            self.set_deadline(Timer::Wait, due.max(clear));
         }
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
@@ -2684,5 +2700,104 @@ mod tests {
         e.on_preamble(100.0, 100.3, None);
         let guessed = e.deadline_of(Timer::Ack).expect("armed");
         assert!(guessed < 100.0 + floor_frame, "{guessed}");
+    }
+    /// A detection that decodes to nothing: noise, or a Morse identifier, whose chips named
+    /// a data mode.
+    struct Junk {
+        t_start: f64,
+        t_end: f64,
+    }
+
+    impl SoftFrame for Junk {
+        fn container(&self) -> Container {
+            Container::Data
+        }
+        fn mode(&self) -> usize {
+            12
+        }
+        fn floor(&self) -> bool {
+            false
+        }
+        fn rv(&self) -> u8 {
+            0
+        }
+        fn snr_db(&self) -> f64 {
+            -11.0
+        }
+        fn trusted(&self) -> bool {
+            false
+        }
+        fn t_start(&self) -> f64 {
+            self.t_start
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            (None, vec![0.0])
+        }
+    }
+
+    /// A sender that has just keyed its DISC and is waiting for the answer.
+    fn disconnecting() -> LinkEngine {
+        let mut e = engine(wide());
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.disconnect();
+        assert_eq!(e.state, State::Disconnecting);
+        e.actions.clear();
+        e.on_tx_done(101.0);
+        e
+    }
+
+    fn transmissions(e: &LinkEngine) -> usize {
+        e.actions
+            .iter()
+            .filter(|a| matches!(a, Action::Transmit { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_station_waiting_for_the_answer_to_its_disc_acknowledges_nothing() {
+        // ND1J, 2026-09-25: waiting for the answer to its DISC, KK4ODA-1 took the other
+        // station's Morse identifier — a detection whose chips named data mode 12 — for a
+        // burst and armed an acknowledgement; a leaving station's acknowledgement is another
+        // DISC, and two went out in one keying, over the identifier
+        let mut e = disconnecting();
+        let retry_at = e.deadline_of(Timer::Wait).expect("armed");
+        e.on_frame(
+            &Junk {
+                t_start: 100.9,
+                t_end: 101.9,
+            },
+            101.95,
+        );
+        assert!(
+            e.deadline_of(Timer::Ack).is_none(),
+            "an acknowledgement was armed"
+        );
+        e.tick(retry_at + 5.0);
+        assert_eq!(transmissions(&e), 1, "one retry, and only one");
+        assert_eq!(e.disc_tries, 2);
+    }
+
+    #[test]
+    fn a_disc_is_not_repeated_over_a_frame_heard_arriving() {
+        // the answer to a DISC can be late — the other station's own queue, a busy hold —
+        // and a repeat keyed over it is heard by neither station
+        let mut e = disconnecting();
+        let retry_at = e.deadline_of(Timer::Wait).expect("armed");
+        let t_start = retry_at - 0.2;
+        let control = e.timing.control_frame_s;
+        e.on_preamble(t_start, t_start + 0.2, Some(control));
+        assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + control);
+        e.tick(t_start + control);
+        assert_eq!(transmissions(&e), 0, "repeated over the frame");
+        // a physical layer that cannot name the frame: the longest there is
+        let mut e = disconnecting();
+        e.on_preamble(t_start, t_start + 0.2, None);
+        let longest = e.timing.data_frame_s_for(0);
+        assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + longest);
     }
 }
