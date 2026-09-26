@@ -679,7 +679,9 @@ the other's request, and the other answers it.
 
 A station whose rules admit only tone-floor rungs where it is (the regulatory ceiling,
 ADR-0018) sends every frame on the floor: every try of a call, its answers to calls and
-probes, and its control frames.
+probes, and its control frames. The ceiling is the station's own: the rung it recommends to
+the other station is not capped by it, and each station caps the recommendation it follows by
+its own.
 
 Data frames carry no callsign. A station that identifies in Morse (the reference daemon: a
 1 500 Hz tone, at most 20 wpm under US rules) appends its identifier to a transmission — its

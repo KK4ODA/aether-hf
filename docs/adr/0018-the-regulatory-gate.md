@@ -118,9 +118,10 @@ to a modem, and the one §97.221(c) was written for.
 
 ### 2.7 The rules cap the link
 
-`LinkEngine::set_ceiling(rung)` (model first) caps every rung the engine chooses — its bursts, a
-backed-off mode, the recommendation it sends, the mode it expects back — and a ceiling inside the
-tone floor makes its control frames floor frames too. The station computes the ceiling
+`LinkEngine::set_ceiling(rung)` (model first) caps every rung the engine chooses — its bursts,
+a backed-off mode, the recommendation it follows, the mode it expects back — and a ceiling
+inside the tone floor makes its control frames floor frames too. The recommendation it *sends*
+the other station is not capped (corrected 2026-09-26, §6). The station computes the ceiling
 (`Policy::ceiling`: each rung judged with its control frame and every slower rung) at session
 start, twice a second while the dial or settings may move, and whenever they change; negotiation
 never raises it, and an automatic station outside the (b) segments is never upgraded to the
@@ -229,3 +230,31 @@ session, or send an identifier was traced:
 `every_way_to_the_transmitter_passes_the_gate` holds the paths to it: with no profile chosen, a
 call, a beacon, a probe, the tune tone, a keying test, drive bursts and a Morse identifier are
 each judged, and none keys the radio.
+
+## 6. Amendment (2026-09-26): the recommendation a station sends is not capped
+
+**What was wrong.** §2.7 listed "the recommendation it sends" among the rungs the ceiling caps.
+Neither engine caps it, and neither ever did: the commit that built the ceiling in the model
+says the peer is not capped, each station answering for its own emissions, and
+`test_a_regulatory_ceiling_holds_every_frame_the_station_sends` (the port's
+`a_regulatory_ceiling_holds_every_frame_the_station_sends`) holds it — a station whose ceiling
+admits only the floor receives the other station's data at the OFDM rungs its acknowledgements
+recommend. The 2026-09-26 audit of the air-interface specification found the discrepancy; the
+words were wrong, not the code. §2.7 now says *the recommendation it follows*.
+
+**Why the code is right.** The ceiling is the fastest rung the rules allow *this* station to send
+at where it is (`LinkConfig.ceiling`). A recommendation is advice about the *other* station's
+transmissions, which that station's own situation decides — its control, license class,
+sideband, edge margin and profile — and which its own ceiling caps as the advice arrives
+(`_on_ack`, `on_ack`), as it caps a backed-off rung and the first burst of a turn. What a
+receiving station keys is its acknowledgements, and a ceiling inside the floor already puts those
+on the floor. Capping the advice too would slow the other station for rules that are not its own
+— a station near a segment edge, or under automatic control, would hold a locally controlled
+station inside the segment to the tone floor — and make none of the capped station's own
+emissions more lawful. Two stations on one dial under the same rules have the same ceiling, and
+each caps itself.
+
+**The link holds together.** A station whose ceiling admits only the floor answers every burst on
+the floor, whatever the burst's family, and a sender waits for an answer in the longer of its
+burst's family and the one the receiver last answered in (ADR-0016; `_reply_control_s` for polls
+and disconnects), so an ordinary burst answered on the floor is waited for.
