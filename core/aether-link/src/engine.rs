@@ -55,11 +55,19 @@ pub struct LinkConfig {
     /// channel's loss, and the link stepped down the tone floor, where every burst was full
     /// again (ND1J, 2026-09-25; ADR-0017).
     pub max_burst_s: Option<f64>,
-    /// Consecutive unanswered bursts or polls before the link is declared dead.
+    /// Consecutive unanswered bursts or polls before the link is declared dead — and the most
+    /// TURNs a station offering the turn sends while the other station may have taken it (see
+    /// [`LinkConfig::turn_retries`]).
     pub max_retries: usize,
     /// Connection attempts before giving up.
     pub connect_retries: usize,
-    /// Turn attempts before carrying on as the sender.
+    /// TURNs a station sends, unanswered, before it takes the turn back — unless the last
+    /// thing it heard from the other station meanwhile was a frame it could not read: that
+    /// may be the other station's answer from the turn it now holds, a poll too weak to read,
+    /// and taking the turn back then made two senders; it offers again, up to
+    /// [`LinkConfig::max_retries`] TURNs (ADR-0029). An acknowledgement it can read says the
+    /// other station is still receiving, and silence says nothing either way: after those the
+    /// turn is taken back as it always was.
     pub turn_retries: usize,
     /// Disconnect attempts before closing anyway.
     pub disc_retries: usize,
@@ -410,6 +418,11 @@ pub struct LinkEngine {
     /// station's control frames other than acknowledgements say of how it hears it.
     heard_peer_db: Option<f64>,
     turn_tries: usize,
+    /// While this station offers the turn: the last frame it heard from the other station
+    /// since the first TURN was one it could not read — which may be the other station's
+    /// answer from the turn it now holds (ADR-0029). An acknowledgement it can read clears it:
+    /// the other station is still receiving.
+    turn_unread: bool,
     disc_requested: bool,
     disc_tries: usize,
     /// This station placed the call: when both stations believe they hold the turn, the
@@ -528,6 +541,7 @@ impl LinkEngine {
             ended_peer_snr_db: None,
             heard_peer_db: None,
             turn_tries: 0,
+            turn_unread: false,
             disc_requested: false,
             caller: false,
             disc_tries: 0,
@@ -1053,6 +1067,10 @@ impl LinkEngine {
             let clear = t_start + length + self.response_wait(0.0, 0.0);
             self.set_deadline(Timer::Keepalive, due.max(clear));
         }
+        if self.waiting_for == Some(Waiting::Turn) {
+            // until it is read, a frame heard after a TURN may be the answer to it (ADR-0029)
+            self.turn_unread = true;
+        }
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
             return;
@@ -1564,6 +1582,9 @@ impl LinkEngine {
 
     fn send_turn(&mut self) {
         self.turn_tries += 1;
+        if self.turn_tries == 1 {
+            self.turn_unread = false;
+        }
         self.stats.turns += 1;
         let frame = self.control(ControlKind::Turn, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
@@ -1588,6 +1609,31 @@ impl LinkEngine {
         });
     }
 
+    /// How many TURNs go out before this station takes the turn back (ADR-0029).
+    ///
+    /// A TURN is answered by the other station's first burst or its poll, and a TURN heard
+    /// again by a station that already holds the turn is answered again. When no answer is
+    /// read, either the other station never read a TURN, or its answers are what is being lost
+    /// — and then it holds the turn, and taking it back makes two senders: on the chat bench
+    /// (ADR-0027) such a sender sent a 27 s burst over the other station's polls until one of
+    /// the two gave up. A frame this station heard and could not read may be that answer — a
+    /// poll too weak to read — and while the last one heard was such a frame the station
+    /// offers again, up to [`LinkConfig::max_retries`] TURNs. An acknowledgement it can read
+    /// says the other station is still receiving (it answered a TURN's preamble as the end of a
+    /// burst), and silence says nothing either way: after either the turn is taken back at
+    /// [`LinkConfig::turn_retries`], as before. Silence has to stay that way: on a path that
+    /// lets control frames through and no data, the station holding the turn answers every
+    /// TURN with a burst nobody hears, and the poll a station that took the turn back sends —
+    /// which the other answers by yielding (ADR-0023) — is what keeps the link alive; offered
+    /// for as long, a link that had climbed timed out.
+    fn turn_offers(&self) -> usize {
+        if self.turn_unread {
+            self.config.turn_retries.max(self.config.max_retries)
+        } else {
+            self.config.turn_retries
+        }
+    }
+
     fn send_disc(&mut self) {
         self.disc_tries += 1;
         self.state = State::Disconnecting;
@@ -1607,7 +1653,7 @@ impl LinkEngine {
             return;
         }
         if what == Some(Waiting::Turn) {
-            if self.turn_tries >= self.config.turn_retries {
+            if self.turn_tries >= self.turn_offers() {
                 // the peer never took the turn: carry on as the sender
                 self.role = Role::Iss;
                 self.turn_tries = 0;
@@ -2340,8 +2386,10 @@ impl LinkEngine {
 
     fn on_control<F: SoftFrame>(&mut self, frame: &F) {
         let (payload, _) = frame.decode(None);
-        let Some(payload) = payload else { return };
-        let Ok(control) = ControlFrame::decode(&payload) else {
+        let Some(control) = payload.and_then(|payload| ControlFrame::decode(&payload).ok()) else {
+            if self.waiting_for == Some(Waiting::Turn) {
+                self.turn_unread = true; // it may be the answer to the TURN (ADR-0029)
+            }
             return;
         };
         if matches!(self.state, State::Idle | State::Connecting) || control.session != self.session
@@ -2381,6 +2429,18 @@ impl LinkEngine {
                             && control.flags & control_flags::WANT_TX != 0))
                 {
                     self.on_ack(&control);
+                } else if self.role == Role::Irs && self.state == State::Connected {
+                    // The other station is receiving too: it has not taken a turn this one
+                    // offered, and it answered a preamble of this one's as the end of a burst.
+                    // That needs no answer, and the acknowledgement the frame's own preamble
+                    // armed is withdrawn: sent, it was answered in turn, and keyed after a TURN
+                    // it went out over the answer to the TURN (ADR-0029).
+                    if self.waiting_for == Some(Waiting::Turn) {
+                        self.turn_unread = false;
+                    }
+                    if self.burst.is_empty() {
+                        self.disarm(Timer::Ack);
+                    }
                 }
             }
             ControlKind::Poll => {
@@ -2403,6 +2463,18 @@ impl LinkEngine {
             ControlKind::Turn => {
                 if self.role == Role::Irs || self.waiting_for == Some(Waiting::Turn) {
                     self.take_iss();
+                } else if self.state == State::Connected && !self.tx_busy() {
+                    // The turn is this station's already, and the other station offers it
+                    // again: it has heard nothing of this one taking it — the burst or the poll
+                    // that answered its TURN was lost — and it would take the turn back when its
+                    // tries ran out, making two senders. The answer goes again (ADR-0029). A
+                    // station whose own transmission is still going out has its answer on the
+                    // way.
+                    self.retries = 0;
+                    self.waiting_for = None;
+                    self.disarm(Timer::Wait);
+                    self.disarm(Timer::Keepalive);
+                    self.answer_turn();
                 }
             }
         }
@@ -2446,6 +2518,12 @@ impl LinkEngine {
             name: "role",
             detail: "iss".into(),
         });
+        self.answer_turn();
+    }
+
+    /// What tells the station that sent a TURN that this one has taken the turn: the first
+    /// burst of the turn, or a poll when there is nothing to send.
+    fn answer_turn(&mut self) {
         if self.has_work() {
             self.send_burst();
         } else {
@@ -2656,6 +2734,7 @@ impl LinkEngine {
         self.peer_snr_db = None;
         self.heard_peer_db = None;
         self.turn_tries = 0;
+        self.turn_unread = false;
         self.disc_tries = 0;
         self.disc_requested = false;
         self.caller = false;
