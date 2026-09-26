@@ -97,6 +97,16 @@ struct Launch {
 /// Why the daemon could not be started, if it could not.
 struct StartupError(Option<String>);
 
+/// A second start — `VarAC` or Winlink Express launching the modem path while the station runs
+/// — brings up the window already there, rather than a second one on the same modem.
+fn bring_up_the_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: String) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     let context = tauri::generate_context!();
     // Where the bundler put the panel: beside the binary on Windows, under /usr/lib on a
@@ -127,6 +137,8 @@ fn main() {
     );
 
     tauri::Builder::default()
+        // first, as the plugin requires
+        .plugin(tauri_plugin_single_instance::init(bring_up_the_window))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

@@ -29,6 +29,9 @@ tauri-plugin-dialog = "2"
 # signed updates from the release channels, and the browser for the releases page
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
+# one window: a host program that launches the modem path (VarAC, Winlink Express) while the
+# station runs brings up the window already there instead of a second one on the same modem
+tauri-plugin-single-instance = "2"
 # the `[update]` section of the station's configuration, and version ordering
 toml = "1"
 semver = "1"
