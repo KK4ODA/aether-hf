@@ -311,9 +311,12 @@ fn spawn_command_loop(
                     .name("aetherd-host-conn".to_owned())
                     .spawn(move || {
                         serve_commands(&stream, &handle, &pipe, &busy, &running, &flags, trace);
-                        // what this host said about the KISS port goes with it
+                        // what this host said about the KISS port and about answering calls
+                        // goes with it; the station takes back its bandwidth too, on the run
+                        // loop's next pass (ADR-0026)
                         flags.chat.store(false, Ordering::SeqCst);
                         flags.ignore_dcd.store(false, Ordering::SeqCst);
+                        flags.listening.store(false, Ordering::SeqCst);
                         flags.attached.store(false, Ordering::SeqCst);
                     });
                 if spawned.is_err() {
@@ -359,15 +362,7 @@ fn serve_commands(
         host.bandwidth_hz = hz;
     }
     // the net bit rate of each mode, for the BITRATE line a host shows as the link speed
-    let bit_rates: Vec<u64> = capabilities["modes"]
-        .as_array()
-        .map(|modes| {
-            modes
-                .iter()
-                .map(|mode| mode["net_bit_rate"].as_f64().unwrap_or(0.0).round() as u64)
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut bit_rates = bit_rates_of(&capabilities);
     let mut last_mode: Option<usize> = None;
     let events = handle.subscribe();
     let mut last_keepalive = std::time::Instant::now();
@@ -414,17 +409,19 @@ fn serve_commands(
                     eprintln!("host <- {}", text.trim());
                 }
                 let outcome = host.command(&text);
-                // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here
+                // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here,
+                // and `LISTEN` whether the station answers calls
                 flags.chat.store(host.recorded.chat, Ordering::SeqCst);
                 flags
                     .ignore_dcd
                     .store(host.recorded.ignore_kiss_dcd, Ordering::SeqCst);
+                flags.listening.store(host.listening, Ordering::SeqCst);
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
                         return;
                     }
                 }
-                match apply(&outcome.action, handle, &host, &mut writer, &say) {
+                match apply(&outcome.action, handle, &mut host, &mut writer, &say) {
                     Applied::Done => {}
                     // Armed as soon as the modem has taken the call. What the modem said
                     // before then — the `disconnected` of a call just aborted — was sent
@@ -510,6 +507,23 @@ fn serve_commands(
                         return;
                     }
                 }
+                // the station moved to the other bandwidth (ADR-0026): CONNECTED says the one
+                // it runs, and BITRATE reads the new ladder's rates
+                "bandwidth" => {
+                    if let Some(hz) = event.data["bandwidth_hz"]
+                        .as_u64()
+                        .and_then(|hz| u32::try_from(hz).ok())
+                    {
+                        host.bandwidth_hz = hz;
+                    }
+                    if let Some(capabilities) = handle
+                        .call(request("capabilities", json!({})))
+                        .ok()
+                        .and_then(|response| response.result)
+                    {
+                        bit_rates = bit_rates_of(&capabilities);
+                    }
+                }
                 "metrics" => {
                     // the link speed, as a host displays it: the mode the sender is using
                     if let Some(mode) = event.data["mode"].as_u64().map(|m| m as usize)
@@ -556,6 +570,20 @@ fn serve_commands(
             }
         }
     }
+}
+
+/// The net bit rate of each rung of the ladder the modem runs, from its `capabilities`: what
+/// the BITRATE line a host shows as the link speed says.
+fn bit_rates_of(capabilities: &serde_json::Value) -> Vec<u64> {
+    capabilities["modes"]
+        .as_array()
+        .map(|modes| {
+            modes
+                .iter()
+                .map(|mode| mode["net_bit_rate"].as_f64().unwrap_or(0.0).round() as u64)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Turn a state event into the lines the published interface uses.
@@ -657,11 +685,30 @@ impl From<bool> for Applied {
 fn apply(
     action: &HostAction,
     handle: &ControlHandle,
-    host: &HostState,
+    host: &mut HostState,
     writer: &mut &TcpStream,
     say: &impl Fn(&mut &TcpStream, &str) -> bool,
 ) -> Applied {
     match action {
+        // VARA's BW commands set the modem's mode: the station moves between sessions and
+        // this is OK once it runs what was asked — 2750 is 2300 here, a narrower signal being
+        // inside what was asked — or WRONG when it could not move and runs something else
+        // (ADR-0026)
+        HostAction::Bandwidth(hz) => {
+            let running = handle
+                .call(request("bandwidth.set", json!({ "hz": hz })))
+                .ok()
+                .filter(|reply| reply.ok)
+                .and_then(|reply| reply.result)
+                .and_then(|result| result["bandwidth_hz"].as_u64())
+                .and_then(|running| u32::try_from(running).ok());
+            if let Some(running) = running {
+                host.bandwidth_hz = running;
+            }
+            let satisfied = |running: u32| running == *hz || (*hz == 2750 && running == 2300);
+            let ok = running.map_or(satisfied(host.bandwidth_hz), satisfied);
+            say(writer, if ok { "OK" } else { "WRONG" }).into()
+        }
         HostAction::None | HostAction::Listen(_) => Applied::Done,
         HostAction::Callsigns(calls) => {
             // the reply already said OK, which is the truth: the modem takes the list, and
@@ -1077,6 +1124,8 @@ mod tests {
         seen: Seen,
         stop: Arc<AtomicBool>,
         worker: Option<std::thread::JoinHandle<()>>,
+        /// What the host said that the run loop reads: attached, `LISTEN`, `CHAT`.
+        flags: crate::kiss::HostFlags,
     }
 
     impl Modem {
@@ -1118,6 +1167,7 @@ mod tests {
                     }
                 })
             };
+            let flags = crate::kiss::HostFlags::default();
             let server = HostServer::start(
                 &HostConfig {
                     enabled: true,
@@ -1125,7 +1175,7 @@ mod tests {
                     trace: false,
                 },
                 handle,
-                crate::kiss::HostFlags::default(),
+                flags.clone(),
             )
             .expect("start");
             let modem = Self {
@@ -1133,6 +1183,7 @@ mod tests {
                 seen,
                 stop,
                 worker: Some(worker),
+                flags,
             };
             (modem, server)
         }
@@ -1520,6 +1571,81 @@ mod tests {
                 .starts_with("VERSION"),
             "a healthy modem was reported without its sound card"
         );
+    }
+
+    #[test]
+    fn a_bandwidth_command_moves_the_station_and_connected_says_the_new_one() {
+        // VARA's BW commands set the modem's mode (ADR-0026): OK once the station runs what
+        // was asked; the move is news, and CONNECTED says the bandwidth the station runs
+        let (modem, server) = Modem::start(|method, control| match method {
+            "capabilities" => json!({"bandwidth_hz": 2300, "modes": []}),
+            "bandwidth.set" => {
+                control.publish(&Event::new(
+                    "bandwidth",
+                    json!({"bandwidth_hz": 500, "home_hz": 2300, "why": "host"}),
+                ));
+                json!({"bandwidth_hz": 500, "home_hz": 2300, "why": "host"})
+            }
+            _ => json!({}),
+        });
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("BW500");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(params_of(&modem, "bandwidth.set"), vec![json!({"hz": 500})]);
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (irs)", "callsign": "W4ODA"}),
+        );
+        assert_eq!(
+            client.expect(|l| l.starts_with("CONNECTED")),
+            "CONNECTED KK4XYZ W4ODA 500"
+        );
+    }
+
+    #[test]
+    fn a_bandwidth_the_station_cannot_move_to_now_is_wrong_unless_it_runs_it_already() {
+        // in a session, or with a call going out, the station stays: a host told OK for 500 Hz
+        // that went on transmitting 2300 would be outside what its operator chose — but a
+        // request the station already satisfies is OK, 2750 on a 2300 Hz station included
+        let (_modem, server) = Modem::start(|method, _| match method {
+            "capabilities" => json!({"bandwidth_hz": 2300, "modes": []}),
+            "bandwidth.set" => json!({"error": "refused"}),
+            _ => json!({}),
+        });
+        let mut client = Client::connect(&server);
+        for (line, said) in [("BW500", "WRONG"), ("BW2300", "OK"), ("BW2750", "OK")] {
+            client.send(line);
+            assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), said, "{line}");
+        }
+    }
+
+    #[test]
+    fn what_a_host_says_about_answering_calls_reaches_the_station_and_goes_with_it() {
+        // VARA's LISTEN is off until the program says otherwise; CHAT ON includes LISTEN ON
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let listening = || modem.flags.listening.load(Ordering::SeqCst);
+        let attached = || modem.flags.attached.load(Ordering::SeqCst);
+        let mut client = Client::connect(&server);
+        client.send("VERSION");
+        client.expect(|l| l.starts_with("VERSION"));
+        assert!(attached() && !listening());
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(listening());
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(!listening());
+        client.send("CHAT ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(listening());
+        drop(client);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while attached() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!attached() && !listening());
     }
 
     #[test]

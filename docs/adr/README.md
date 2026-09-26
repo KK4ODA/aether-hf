@@ -30,3 +30,4 @@ context → decision → alternatives considered → consequences.
 | [0023](0023-leaving-and-handing-over.md) | Leaving and handing over — a receiver's Disconnect leaves between bursts, the TURN waits for the longest first frame, and the caller keeps the turn | accepted |
 | [0024](0024-beacons-for-host-programs.md) | A beacon carries the name a host program gave it and its sender's bandwidth; no beacon under automatic control | accepted |
 | [0025](0025-the-host-program-can-own-the-radio.md) | The host program can own the radio — keying on PTT ON, as VARA is keyed | accepted |
+| [0026](0026-the-bandwidth-follows-the-host-and-the-caller.md) | The bandwidth follows the host program and the caller; LISTEN decides whether calls are answered | accepted |

@@ -335,9 +335,12 @@ fn replay(wav: &Path, expect: Option<&Path>, block_s: f64) -> Result<(), String>
         None if beside.is_file() => Some(Expectation::from_sidecar(&beside)?),
         None => None,
     };
-    let muted = expectation.as_ref().map_or(&[][..], |e| e.muted.as_slice());
-    let bandwidth_hz = expectation.as_ref().map_or(2300, |e| e.bandwidth_hz);
-    let (found, timing) = aetherd::replay::replay_timed(wav, muted, bandwidth_hz, block_s)?;
+    // as the sidecar says the station ran: its waveform, its keyed spans, its moves between
+    // bandwidths (ADR-0026) — or the wide waveform throughout, with no sidecar to say
+    let (found, timing) = match &expectation {
+        Some(expectation) => aetherd::replay::replay_expecting(wav, expectation, block_s)?,
+        None => aetherd::replay::replay_timed(wav, &[], 2300, block_s)?,
+    };
     for frame in &found {
         println!("{}", describe(frame));
     }
@@ -468,6 +471,8 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
             max_mode: config.radio.fastest_mode(),
             ..LinkConfig::default()
         },
+        // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)
+        max_mode_setting: Some(config.radio.max_mode),
         busy: config.busy_config(),
         tx_level: config.audio.tx_level,
         max_key_s: config.radio.max_key_s,
@@ -936,6 +941,9 @@ fn serve(
         let pass_began = std::time::Instant::now();
         answer_commands(station, control, daemon, stopping, restarting);
         sync_kiss(station, daemon);
+        // what the host program attached says about answering calls; one that has gone takes
+        // its bandwidth with it (ADR-0026)
+        station.set_host(host_presence(daemon));
         let commands_ms = pass_began.elapsed().as_secs_f64() * 1000.0;
 
         // the card's clock goes in ahead of the block, so a block that outlasts this
@@ -1012,6 +1020,16 @@ fn serve(
         if idle {
             std::thread::sleep(IDLE_SLEEP);
         }
+    }
+}
+
+/// What the host program attached now said, as the host interface's own thread left it in
+/// the flags it shares with the run loop.
+fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
+    let flags = &daemon.host_flags;
+    aetherd::station::HostPresence {
+        attached: flags.attached.load(std::sync::atomic::Ordering::SeqCst),
+        listening: flags.listening.load(std::sync::atomic::Ordering::SeqCst),
     }
 }
 
@@ -1103,6 +1121,11 @@ fn publish_station(
         daemon
             .log
             .record(level_of(name), name, detail, &state_name(station));
+        // a move to the other bandwidth (ADR-0026) is news of its own too: a host program
+        // says the bandwidth in CONNECTED, and a panel shows it
+        if name == "bandwidth" {
+            control.publish(&Event::new("bandwidth", station.bandwidth_status()));
+        }
         control.publish(&Event::new(
             if name == "connected" || name == "disconnected" || name == "role" {
                 "state"

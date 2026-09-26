@@ -92,9 +92,10 @@ impl Default for KissConfig {
     }
 }
 
-/// What the VARA-compatible host interface knows that the KISS port obeys: whether a host
-/// program holds the command port, whether it said `CHAT ON`, and whether it said
-/// `IGNOREKISSDCD ON`. Shared with the host server; all false without one.
+/// What the VARA-compatible host interface knows that the KISS port and the station obey:
+/// whether a host program holds the command port, whether it said `CHAT ON`, whether it said
+/// `IGNOREKISSDCD ON`, and whether it said `LISTEN ON`. Shared with the host server and the
+/// run loop; all false without one.
 #[derive(Debug, Clone, Default)]
 pub struct HostFlags {
     /// A host program holds the command port.
@@ -103,6 +104,9 @@ pub struct HostFlags {
     pub chat: Arc<AtomicBool>,
     /// It said `IGNOREKISSDCD ON`: datagrams do not wait for a clear channel.
     pub ignore_dcd: Arc<AtomicBool>,
+    /// It said `LISTEN ON` (or `LISTEN CQ`, or `CHAT ON`, which includes it): calls to the
+    /// station are answered. VARA's default is off, and so is a program's here until it says.
+    pub listening: Arc<AtomicBool>,
 }
 
 /// One client, as the status shows it.
