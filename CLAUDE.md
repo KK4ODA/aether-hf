@@ -779,6 +779,41 @@ note per path naming the ADR that analysed it) with the author's classes: W4TGA 
 ND1J's Tests 40 m/2300 Good, 80 m/2300 Poor, 80 m/500 Moderate; ND1J 40 m/500 Moderate; both
 KE4QCM paths Moderate. Recording names are UTC. Sessions with no frames are left out.
 
+**Aether as a drop-in for VARA HF (2026-09-26, beta.69; the author's direction).** The
+author's first VarAC tests (VarAC's *Log VARA commands* file, `C:\VarAC Cluster\` on his
+machine) and a review against VARA's published TNC commands. Three parallel sessions fixed:
+the host adapter says `DISCONNECTED` for every call it placed that ends without a session, and
+`DISCONNECT` while calling stops the call (the daemon now publishes what a request set in
+motion before its reply); answer-only refusals are `refused`, a rules-refused Test is
+`regulatory`; `datagram.send` refuses an empty frame; the diagnostic bundle carries the
+daemon's status; a repeated connect acceptance carries its request's SNR, and a request heard
+again no longer re-arms a stray ACK (model first; ADR-0018 §2.7 reworded: the ceiling caps what
+a station follows, not what it recommends); the passband monitor samples only a whole window
+of quiet (`BusyDetector::attack_s`), so a tone frame's start is no longer taken for a ~650 Hz
+receive filter. Then: a heard beacon reaches the host as `CQFRAME <name> <bandwidth>`;
+`BW2750` is OK on a 2300 Hz station; `LINK REGISTERED` after `CONNECTED`; `MISSING SOUNDCARD`
+to a host attaching to a daemon whose card would not open. **ADR-0024:** VarAC's CQs and
+beacons are `CQFRAME KK4ODA-9 500` (the suffix is VarAC's); `beacon {callsign?}` sends the name
+when one of the station's callsigns is its base (`BEACON_NOT_OURS` otherwise, and the adapter
+falls back to the plain beacon), the BEACON body gains a capability byte with the sender's
+bandwidth (additive: `unpack_callsign` reads seven bytes), the `frame` event of a beacon carries
+`bandwidth_hz`, and no beacon goes under automatic control at all
+(`BEACON_UNDER_AUTOMATIC_CONTROL`). **ADR-0025, the host program can own the radio** — the
+author chose VARA's model over Aether serving the radio on a Hamlib port: `[ptt] kind = "host"`
+(`lead_ms`, 150, 50–1000; `ptt::HostKeyed`; `key_lead_s` from it), keying is the host
+interface's `PTT ON`/`PTT OFF` (VarAC: RIG tab PTT and Frequency Control on CAT), the panel's
+Setup step 2 choice *host program* sets the rules to None (the author's option 1: Aether can
+read no dial; the daemon does not force it), a host-keyed station with no host attached refuses
+the panel's and KISS programs' transmissions (`NO_HOST_TO_KEY`), and the Session tab hides the
+dial list and the declared dial (`hostOwnsTheDial`). Keying and rules are profile settings, so
+"Standalone" and "VarAC" profiles switch the two. Configuration **schema 8** (`host_keying`, a
+no-op step; fixture `0.2.0-beta.68-cat.toml`; `SCHEMA_HISTORY` gains beta.69 — the shell's test
+compares the package version, so the schema line ships in the release push). The shell runs one
+instance (`tauri-plugin-single-instance`: a host program launching `aether-hf.exe` while it
+runs brings up the window). `docs/user/host-programs.md` is the setup guide for both ways.
+Winlink Express leaves keying to the modem, so it runs with Aether owning the radio. Still
+owed: the bandwidth following the host's `BW` command, and chat-mode turn-taking (Tier 2).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
