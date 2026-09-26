@@ -35,3 +35,4 @@ context → decision → alternatives considered → consequences.
 | [0028](0028-a-polls-wait-covers-a-late-answer.md) | A poll's wait covers the answer to a poll heard and not decoded | accepted |
 | [0029](0029-a-turn-heard-again.md) | A TURN heard again is answered, the turn is taken back only on evidence, and an acknowledgement is not acknowledged | accepted |
 | [0030](0030-a-sender-waits-out-a-frame-it-hears-arriving.md) | A sender waits out a frame it hears arriving — no burst or poll repeated over its late answer | accepted |
+| [0031](0031-a-re-encoded-frame-stays-unacknowledged.md) | A frame re-encoded and left out of its burst stays unacknowledged — no frame lost, no sender silenced, no session closed with a frame missing | accepted |
