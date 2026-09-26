@@ -135,6 +135,17 @@ class LinkConfig:
     compression (deflate, RFC 1951); bits 1–2 state the bandwidth this station transmits in
     (:func:`~aether_model.link.frames.with_bandwidth`), and a request or answer stating
     another is ignored — see ``docs/spec/air-interface.md`` §7.3."""
+    chat: bool = False
+    """The session is keyboard-to-keyboard: the host program said ``CHAT ON`` (VARA's published
+    command). A line typed at the station that does not hold the turn otherwise waits for the
+    sender's next poll — up to :attr:`keepalive_s` on an idle link — and then for the poll's
+    answer and a TURN before its own burst can go. In a chat that station asks for the turn as
+    soon as the channel is quiet instead: an acknowledgement nobody asked for, with WANT_TX,
+    which an idle sender in a chat answers with a TURN; and an idle sender does not poll over a
+    frame it hears arriving, since in a chat that frame may be such a request (ADR-0027). On
+    the link bench it halves the typical line's delay, from −12 dB up, and keys less than
+    polling does. Off, the engine is as it always was; :meth:`LinkEngine.set_chat` switches it
+    during a session."""
 
 
 OUTSIDE_SESSIONS = frozenset(
@@ -240,6 +251,9 @@ class LinkStats:
     frames_reencoded: int = 0
     """Frames given another codeword at a slower mode after going unacknowledged at their
     own for :attr:`LinkConfig.max_combines` transmissions."""
+    turn_requests: int = 0
+    """Acknowledgements this station sent unasked, to ask for the turn in a chat
+    (:attr:`LinkConfig.chat`)."""
 
 
 @dataclass(frozen=True)
@@ -361,6 +375,10 @@ class LinkEngine:
         """The fastest rung this station has recommended to the sender in this session: a
         burst faster than any of them is the sender's choice (ADR-0020)."""
         self._break_requested = False
+        self._stated_want = False
+        """This station's last acknowledgement asked for the turn (WANT_TX): the other station
+        knows it has something to send, and a request in a chat (:attr:`LinkConfig.chat`)
+        would tell it nothing new."""
         self._confirmed = False
         self._caller = False
         """This station placed the call: when both stations believe they hold the turn, the
@@ -481,6 +499,15 @@ class LinkEngine:
         self._tx_queue += data
         if self.state is State.CONNECTED and self.role is Role.ISS:
             self._maybe_start_burst()
+        else:
+            self._maybe_request_turn()
+
+    def set_chat(self, on: bool) -> None:
+        """Keyboard-to-keyboard or not, from now on (:attr:`LinkConfig.chat`): the host
+        program's ``CHAT ON`` / ``CHAT OFF``, which may come in the middle of a session."""
+        self.cfg.chat = on
+        if not on:
+            self._disarm("request")
 
     def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
         """Send every new burst at ``mode`` until unpinned (``None``), whatever the peer
@@ -556,6 +583,8 @@ class LinkEngine:
         self._tx_busy_until = min(self._tx_busy_until, now)
         if self.state is State.CONNECTED and self.role is Role.ISS and self._waiting_for is None:
             self._maybe_start_burst()
+        else:
+            self._maybe_request_turn()
 
     def on_tx_delayed(self, seconds: float) -> None:
         """The physical layer is holding the last transmission back — the channel is busy —
@@ -630,6 +659,13 @@ class LinkEngine:
             length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
             clear = t_start + length + self._response_wait(0.0)
             self._deadlines["wait"] = max(self._deadlines["wait"], clear)
+        if self.cfg.chat and self.role is Role.ISS and "keepalive" in self._deadlines:
+            # Nor does an idle sender in a chat poll over a frame it hears arriving: there the
+            # receiving station speaks unasked, and a poll keyed over its request loses both —
+            # at −6 dB on the tone floor that cost a typical line 2–3 s (ADR-0027).
+            length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
+            clear = t_start + length + self._response_wait(0.0)
+            self._deadlines["keepalive"] = max(self._deadlines["keepalive"], clear)
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
@@ -699,6 +735,8 @@ class LinkEngine:
             self._on_response_timeout()
         elif name == "keepalive" and self.role is Role.ISS and self._waiting_for is None:
             self._send_poll()
+        elif name == "request":
+            self._maybe_request_turn()
 
     def _tx_busy(self) -> bool:
         return self.now < self._tx_busy_until
@@ -889,6 +927,7 @@ class LinkEngine:
         self.role = Role.IRS
         self._bursts_since_turn = 0
         self._peer_wants_tx = self._peer_break = False
+        self._stated_want = False
         self._disarm("keepalive")
         # The peer answers with its first burst (or a POLL), at a rung of its own choosing —
         # after a fade the tone floor's, a frame five seconds long. Waiting one frame of the
@@ -982,6 +1021,71 @@ class LinkEngine:
 
     def _has_work(self) -> bool:
         return bool(self._unacked()) or bool(self._tx_queue)
+
+    # ── chat: asking for the turn (ADR-0027) ──────────────────────────
+
+    def _reaction_s(self) -> float:
+        """How long after this station's last transmission the other station's answer to it
+        may take to announce itself: a sender answers an acknowledgement at once — with its
+        next burst, a TURN or a DISC — and until that much quiet has passed the channel is not
+        known to be idle. The floor's frames announce themselves last; a PHY that reports no
+        preambles is heard only at a frame's end, so the longest frame decides."""
+        announce = [self.timing.preamble_detect_s_for(floor) for floor in (False, True)]
+        if any(a is None for a in announce):
+            first = self.timing.data_frame_s_for(0)
+        else:
+            first = max(a for a in announce if a is not None)
+        return self._response_wait(first)
+
+    def _maybe_request_turn(self) -> None:
+        """In a chat: a receiving station with something to send asks for the turn once the
+        channel is quiet — now, or when the other station's answer to its last transmission
+        has had time to begin (the ``request`` timer). Not while a burst is arriving or its
+        acknowledgement is due (that acknowledgement asks), and not twice: once asked, the
+        next acknowledgement asks again if the first was missed."""
+        if (
+            not self.cfg.chat
+            or self.state is not State.CONNECTED
+            or self.role is not Role.IRS
+            or self._waiting_for is not None
+            or self._stated_want
+            or not self._has_work()
+            or self._burst
+            or "ack" in self._deadlines
+            or self._tx_busy()
+        ):
+            return
+        quiet_at = max(self._tx_busy_until, self._last_peer_frame) + self._reaction_s()
+        if self.now < quiet_at - 1e-9:
+            self._arm("request", quiet_at - self.now)
+            return
+        self._send_request()
+
+    def _send_request(self) -> None:
+        """An acknowledgement nobody asked for, with WANT_TX: what this station has received
+        (unchanged since its last one, so it is a true acknowledgement too) and that it has
+        something to send. A sender with nothing of its own hands over at once; a sender that
+        misses it polls in its own time, and the answer to the poll asks again."""
+        bitmap, _, _ = self._receive_window()
+        self._stated_want = True
+        self.stats.turn_requests += 1
+        self._ack_counter = (self._ack_counter + 1) % 8
+        recommended = self.rate.recommend()
+        self._asked = recommended if self._asked is None else max(self._asked, recommended)
+        self._disarm("request")
+        self._transmit(
+            [
+                self._control(
+                    ControlKind.ACK,
+                    flags=ControlFlags.WANT_TX,
+                    base=self._rx_base,
+                    bitmap=bitmap,
+                    snr_db=self._heard_peer_db,
+                    recommended_mode=recommended,
+                    counter=self._ack_counter,
+                )
+            ]
+        )
 
     def _burst_capacity(self, frame_s: float) -> int:
         """Frames of ``frame_s`` seconds one burst may carry: the configured count, and no
@@ -1385,16 +1489,7 @@ class LinkEngine:
         if self._disc_requested:
             self._send_disc()
             return
-        bitmap = 0
-        missing: list[int] = []
-        limit = 0 if self._max_seen is None else seq_distance(self._max_seen, self._rx_base) + 1
-        for i in range(WINDOW):
-            s = seq_after(self._rx_base, i)
-            if s in self._rx_buf:
-                bitmap |= 1 << i
-            elif i < limit:
-                missing.append(s)
-        next_new = seq_after(self._rx_base, limit)
+        bitmap, missing, next_new = self._receive_window()
         self._ack_history = [_AckSnapshot(self._rx_base, missing, next_new), *self._ack_history][:2]
         flags = ControlFlags.NONE
         # frames sent and not yet acknowledged are work as much as the queue is: a station
@@ -1404,6 +1499,7 @@ class LinkEngine:
             flags |= ControlFlags.WANT_TX
         if self._break_requested:
             flags |= ControlFlags.BREAK | ControlFlags.WANT_TX
+        self._stated_want = bool(flags & ControlFlags.WANT_TX)
         self._ack_counter = (self._ack_counter + 1) % 8
         self.stats.acks_sent += 1
         recommended = self.rate.recommend()
@@ -1421,6 +1517,20 @@ class LinkEngine:
                 )
             ]
         )
+
+    def _receive_window(self) -> tuple[int, list[int], int]:
+        """What an acknowledgement says has arrived: the bitmap of the window from the base,
+        the sequence numbers missing below the highest seen, and the first one never seen."""
+        bitmap = 0
+        missing: list[int] = []
+        limit = 0 if self._max_seen is None else seq_distance(self._max_seen, self._rx_base) + 1
+        for i in range(WINDOW):
+            s = seq_after(self._rx_base, i)
+            if s in self._rx_buf:
+                bitmap |= 1 << i
+            elif i < limit:
+                missing.append(s)
+        return bitmap, missing, seq_after(self._rx_base, limit)
 
     # ── control frames ────────────────────────────────────────────────
 
@@ -1454,7 +1564,16 @@ class LinkEngine:
             if self.state is State.DISCONNECTING:
                 self._end_session("closed")
         elif ctl.kind is ControlKind.ACK:
-            if self.role is Role.ISS and self._waiting_for in ("ack", "poll"):
+            if self.role is Role.ISS and (
+                self._waiting_for in ("ack", "poll")
+                or (
+                    # an idle sender in a chat takes the other station's request for the turn
+                    # (ADR-0027) — and, with nothing of its own to finish, hands over at once
+                    self._waiting_for is None
+                    and self.cfg.chat
+                    and bool(ctl.flags & ControlFlags.WANT_TX)
+                )
+            ):
                 self._on_ack(ctl)
         elif ctl.kind is ControlKind.POLL:
             if self.role is Role.IRS or self._waiting_for == "turn":
@@ -1494,9 +1613,11 @@ class LinkEngine:
         self._waiting_for = None
         self._disarm("wait")
         self._disarm("ack")
+        self._disarm("request")
         self._burst.clear()
         self._burst_t0 = None
         self._break_requested = False
+        self._stated_want = False
         self._bursts_since_turn = 0
         self._retries = 0
         self.actions.append(Event("role", "iss"))
@@ -1682,11 +1803,12 @@ class LinkEngine:
         self._ack_counter = 0
         self._asked = None
         self._break_requested = False
+        self._stated_want = False
         self._confirmed = False
         self._caller = False
         self.peer_capabilities = 0
         self.rate = self._rate_controller()
-        for name in ("ack", "wait", "keepalive", "link"):
+        for name in ("ack", "wait", "keepalive", "link", "request"):
             self._disarm(name)
 
     def _end_session(self, reason: str) -> None:

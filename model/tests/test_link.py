@@ -1946,3 +1946,226 @@ def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
         sim.run(until=900)
         done += sim.delivered(1) == message
     assert done >= 5, done
+
+
+# ── chat: asking for the turn (ADR-0027) ──────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def live() -> PhyTiming:
+    """The wide air as the daemon runs it: preambles reported, as the chat rules expect."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import WIDE_2300
+
+    return phy_timing(WIDE_2300)
+
+
+def _chat_session(
+    timing: PhyTiming, chat: tuple[bool, bool] = (True, True), seed: int = 5
+) -> tuple[LinkEngine, LinkEngine, TwoStationSim]:
+    """A session up on a clean path, the caller holding the turn with nothing to send, each
+    station in chat or not."""
+    a = LinkEngine("W4ODA", timing, LinkConfig(chat=chat[0]), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(chat=chat[1]), seed=2)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=seed)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.connected and b.connected and a.role is Role.ISS and b.role is Role.IRS
+    return a, b, sim
+
+
+def _between_polls(sim: TwoStationSim, iss: LinkEngine) -> float:
+    """A quiet moment on an idle link: two seconds after the sender's last poll was answered,
+    its next one still six or more away."""
+    t = sim.t
+    while t < sim.t + 120.0:
+        t += 0.25
+        sim.run(until=t)
+        due = iss._deadlines.get("keepalive")
+        if due is not None and due - t >= iss.cfg.keepalive_s - 2.0:
+            return t + 2.0
+    raise AssertionError("the sender never went idle")
+
+
+def _type(sim: TwoStationSim, who: int, line: bytes, at: float) -> None:
+    """``line`` handed to station ``who`` at ``at``, as a host program does when its operator
+    presses Enter."""
+    sim.run(until=at)
+    engine = sim.st[who].engine
+    engine.tick(at)
+    engine.send(line)
+    sim._pump(who, at)
+
+
+def _arrival(sim: TwoStationSim, who: int, length: int, since: float) -> float | None:
+    """When station ``who`` has ``length`` bytes delivered, to a tenth of a second."""
+    t = since
+    while t < since + 180.0:
+        t += 0.1
+        sim.run(until=t)
+        if len(sim.delivered(who)) >= length:
+            return t
+    return None
+
+
+def test_chat_is_off_unless_asked_for() -> None:
+    assert LinkConfig().chat is False
+
+
+def test_in_a_chat_the_receiving_station_asks_for_the_turn(live: PhyTiming) -> None:
+    """A line typed at the station that does not hold the turn waited for the sender's next
+    poll — up to ten seconds on an idle link, then a poll, its answer and a TURN before the
+    line could go. In a chat (the host's CHAT ON) the station asks at once: an acknowledgement
+    nobody asked for, with WANT_TX, and the idle sender hands over."""
+    line = b"QSL on the report, 5 by 7 here in Atlanta"
+    took = {}
+    for chat in (False, True):
+        a, b, sim = _chat_session(live, chat=(chat, chat))
+        t = _between_polls(sim, a)
+        _type(sim, 1, line, t)
+        arrived = _arrival(sim, 0, len(line), t)
+        assert arrived is not None, chat
+        took[chat] = arrived - t
+        assert b.stats.turn_requests == int(chat)
+        assert a.stats.turns == 1, "one handover either way"
+    assert took[False] > 6.0, took  # it waited for the poll
+    assert took[True] < 4.0, took
+
+
+def test_a_request_waits_until_an_answer_to_the_last_frame_could_have_begun(
+    live: PhyTiming,
+) -> None:
+    """A sender answers an acknowledgement at once — its next burst, a TURN, a DISC — and a
+    request keyed before that answer could be heard would be keyed over it. A line typed just
+    after this station's acknowledgement waits out that reaction time; if a frame arrives in
+    it, the request is not needed (the acknowledgement of that frame says WANT_TX)."""
+    for arrives in (False, True):
+        b = LinkEngine("KK4XYZ", live, LinkConfig(chat=True))
+        b.role, b.state, b.now = Role.IRS, State.CONNECTED, 100.0
+        b._tx_busy_until = 100.0  # its acknowledgement has just ended
+        b.send(b"hello")
+        assert not [x for x in b.actions if isinstance(x, Transmit)]
+        due = b._deadlines["request"]
+        assert due == pytest.approx(100.0 + b._reaction_s())
+        if arrives:
+            b.on_preamble(100.3, 100.3 + live.preamble_detect_s_for(False), live.data_frame_s)
+        b.tick(due)
+        sent = [f for x in b.actions if isinstance(x, Transmit) for f in x.frames]
+        if arrives:
+            assert not sent and b.stats.turn_requests == 0
+            b.tick(b._deadlines["ack"])  # the frame's end: the acknowledgement asks
+            sent = [f for x in b.actions if isinstance(x, Transmit) for f in x.frames]
+        assert len(sent) == 1
+        ack = ControlFrame.decode(sent[0].payload)
+        assert ack.kind is ControlKind.ACK and ack.flags & ControlFlags.WANT_TX
+        assert b.stats.turn_requests == int(not arrives)
+        # asked once, and not again for more of the same
+        b.send(b" and more")
+        b.on_tx_done(b.now + 1.0)
+        b.tick(b.now + 60.0)
+        again = [f for x in b.actions if isinstance(x, Transmit) for f in x.frames]
+        assert len(again) == 1, "asked twice"
+
+
+def _request(session: int, t_end: float) -> SoftFrame:
+    from aether_model.link.sim import SimFrame
+
+    payload = ControlFrame(ControlKind.ACK, session, flags=ControlFlags.WANT_TX).encode()
+    return SimFrame(Container.CONTROL, 0, 0, 10.0, t_end - SHORT.duration_s, t_end, payload, 0.0)
+
+
+def test_an_idle_chat_sender_hands_over_on_a_request_and_does_not_poll_over_one(
+    live: PhyTiming,
+) -> None:
+    """The sender's side: with nothing to send it answers a request with a TURN, and a frame it
+    hears arriving just before its poll is due holds the poll back past the frame — a poll
+    keyed over a request loses both. Without chat, neither: the request is no answer to
+    anything, and it is ignored as before."""
+    for chat in (False, True):
+        a = LinkEngine("W4ODA", live, LinkConfig(chat=chat))
+        a.role, a.state, a.now, a.session = Role.ISS, State.CONNECTED, 100.0, 7
+        a._maybe_start_burst()  # nothing to send: the keepalive is armed
+        due = a._deadlines["keepalive"]
+        start = due - 0.1
+        a.on_preamble(start, start + live.preamble_detect_s_for(False), SHORT.duration_s)
+        held = a._deadlines["keepalive"]
+        assert (held >= start + SHORT.duration_s) is chat
+        a.on_frame(_request(7, start + SHORT.duration_s), start + SHORT.duration_s)
+        kinds = [
+            ControlFrame.decode(f.payload).kind
+            for x in a.actions
+            if isinstance(x, Transmit)
+            for f in x.frames
+        ]
+        assert kinds == ([ControlKind.TURN] if chat else []), (chat, kinds)
+        assert (a.role is Role.IRS) is chat
+
+
+def test_chat_lines_typed_at_both_stations_at_once_both_arrive(live: PhyTiming) -> None:
+    """The one risk in speaking unasked: the other station keys at the same moment — its
+    operator typed too — and the two collide. Each side's usual recovery handles it: the burst
+    is repeated when no acknowledgement comes, and its acknowledgement asks for the turn."""
+    a, b, sim = _chat_session(live)
+    t = _between_polls(sim, a)
+    mine, theirs = b"going QRT for dinner shortly", b"same here, 73"
+    _type(sim, 0, mine, t)
+    _type(sim, 1, theirs, t)
+    assert b.stats.turn_requests == 1
+    sim.run(until=t + 120.0)
+    assert sim.delivered(1) == mine and sim.delivered(0) == theirs
+    assert not any(e.startswith("disconnected") for e in sim.events(0) + sim.events(1))
+
+
+@pytest.mark.parametrize("chat", [(True, False), (False, True)], ids=["caller", "called"])
+def test_a_chat_station_and_one_without_chat_still_talk(
+    live: PhyTiming, chat: tuple[bool, bool]
+) -> None:
+    """Chat is each station's own setting, and a station that has it talks to one that has
+    not — an older one included: a request nobody takes costs one control frame, and the line
+    goes when the sender polls, as it always did."""
+    a, b, sim = _chat_session(live, chat=chat)
+    # the called station first, while the caller holds the turn; then the caller, while the
+    # called station does — it took the turn to send its line
+    for who, line, iss in ((1, b"first from the called station", a), (0, b"and an answer", b)):
+        t = _between_polls(sim, iss)
+        _type(sim, who, line, t)
+        assert _arrival(sim, 1 - who, len(line), t) is not None, (chat, who)
+    assert not any(e.startswith("disconnected") for e in sim.events(0) + sim.events(1))
+
+
+def test_chat_can_be_switched_off_during_a_session(live: PhyTiming) -> None:
+    """The host's CHAT OFF takes effect at once: a request waiting for its moment is not sent,
+    and a line waits for the poll again."""
+    b = LinkEngine("KK4XYZ", live, LinkConfig(chat=True))
+    b.role, b.state, b.now = Role.IRS, State.CONNECTED, 100.0
+    b._tx_busy_until = 100.0
+    b.send(b"hello")
+    assert "request" in b._deadlines
+    b.set_chat(False)
+    assert "request" not in b._deadlines
+    b.tick(130.0)
+    assert not [x for x in b.actions if isinstance(x, Transmit)]
+    assert b.stats.turn_requests == 0
+    b.set_chat(True)
+    b.send(b" again")  # the next line asks
+    assert b.stats.turn_requests == 1
+
+
+def test_chat_leaves_a_transfer_alone(live: PhyTiming) -> None:
+    """A file inside a chat session: the receiving station types a line while the file is
+    arriving. Its acknowledgements ask for the turn as they always did — a request is never
+    sent into a transfer — so the file and the line arrive exactly as without chat."""
+    arrivals = {}
+    for chat in (False, True):
+        a, b, sim = _chat_session(live, chat=(chat, chat))
+        t = _between_polls(sim, a)
+        document = bytes((i * 37) % 256 for i in range(3000))
+        _type(sim, 0, document, t)
+        line = b"got the first part, looks good"
+        _type(sim, 1, line, t + 4.0)
+        got_file = _arrival(sim, 1, len(document), t)
+        got_line = _arrival(sim, 0, len(line), t)
+        assert sim.delivered(1) == document and sim.delivered(0) == line
+        assert b.stats.turn_requests == 0
+        arrivals[chat] = (got_file, got_line)
+    assert arrivals[True] == arrivals[False]
