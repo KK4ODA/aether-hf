@@ -5664,10 +5664,10 @@ mod tests {
     fn a_repeating_beacon_needs_a_control_operator() {
         use crate::regulatory::ControlMode;
         // a beacon may be automatically controlled only on 28.20-28.30 MHz and above
-        // (§97.203(g)); an answer-only station sends none at all
+        // (§97.203(d)); an answer-only station sends none at all
         let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Automatic));
         let refusal = station.beacon_every(Some(900.0)).expect_err("automatic");
-        assert!(refusal.contains("§97.203(g)"), "{refusal}");
+        assert!(refusal.contains("§97.203(d)"), "{refusal}");
         let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Local));
         station.beacon_every(Some(900.0)).expect("local control");
         // the rules changing under it stop it at the next one due

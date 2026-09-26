@@ -657,3 +657,103 @@ fn the_safe_dial_range_is_the_segment_less_the_signal() {
     );
     assert!(auto_dials.iter().all(|d| d.band != "60 m"));
 }
+
+// ── 6 m ──────────────────────────────────────────────────────────────
+
+#[test]
+fn six_metres_carries_data_above_50_1_mhz_for_technicians_and_up() {
+    // §97.305(c)(4)(i)-(ii): RTTY and data on 50.1-54.0 MHz; §97.301(a): Technician,
+    // General, Advanced and Amateur Extra hold 50-54 MHz, the Novice none of it
+    let policy = us();
+    let widest = rung(2300, 19, Direction::Originate);
+    for class in [
+        LicenseClass::Technician,
+        LicenseClass::General,
+        LicenseClass::Advanced,
+        LicenseClass::Extra,
+    ] {
+        let s = station(50_690_000.0, ControlMode::Local, class, Sideband::Usb);
+        let d = policy.evaluate(&s, &widest);
+        assert_eq!((d.verdict, d.code), LEGAL, "{class:?}: {}", d.detail);
+        assert!(d.summary.contains("6 m"), "{}", d.summary);
+    }
+    let novice = station(
+        50_690_000.0,
+        ControlMode::Local,
+        LicenseClass::Novice,
+        Sideband::Usb,
+    );
+    assert_eq!(policy.evaluate(&novice, &widest).verdict, Verdict::Blocked);
+    // 50.0-50.1 MHz is CW only: a data signal must be all of it above 50.1 MHz
+    let below = policy.evaluate(&local(50_050_000.0), &widest);
+    assert_eq!(below.verdict, Verdict::Blocked, "{}", below.detail);
+    let straddling = policy.evaluate(&local(50_098_500.0), &widest);
+    assert_eq!(
+        straddling.verdict,
+        Verdict::Blocked,
+        "{}",
+        straddling.detail
+    );
+    assert_eq!(verdict(&policy, &local(50_100_000.0), &widest), LEGAL);
+    // and all of it below 54 MHz
+    let top = policy.evaluate(&local(53_998_500.0), &widest);
+    assert_eq!(top.verdict, Verdict::Blocked, "{}", top.detail);
+    assert_eq!(verdict(&policy, &local(53_997_000.0), &widest), LEGAL);
+}
+
+#[test]
+fn an_automatic_station_may_send_data_anywhere_data_goes_on_six_metres() {
+    // §97.221(b): "on the 6 m or shorter wavelength bands" — the whole of the data segment,
+    // either waveform, calling as well as answering
+    let policy = us();
+    for dial in [50_690_000.0, 52_100_000.0, 53_500_000.0] {
+        for (bandwidth, r) in [(500, 14), (2300, 19)] {
+            let d = policy.evaluate(&automatic(dial), &rung(bandwidth, r, Direction::Originate));
+            assert_eq!(
+                (d.verdict, d.code),
+                (Verdict::Legal, "automatic_segment"),
+                "{dial} {bandwidth}: {}",
+                d.detail
+            );
+        }
+    }
+}
+
+#[test]
+fn six_metres_judges_bandwidth_by_its_own_rule() {
+    // §97.307(f)(5) authorizes 20 kHz on 6 m and (f)(2) a communications-quality SSB
+    // channel's width: the narrower decides, and the refusal cites 6 m's rule, not HF's
+    let policy = us();
+    let too_wide = data(200.0, 3300.0, Direction::Originate);
+    let d = policy.evaluate(&local(50_690_000.0), &too_wide);
+    assert_eq!(d.code, "too_wide", "{}", d.detail);
+    assert_eq!(d.rule, "§97.307(f)(2), (5)");
+    let d = policy.evaluate(&local(14_100_000.0), &too_wide);
+    assert_eq!(d.code, "too_wide", "{}", d.detail);
+    assert_eq!(d.rule, "§97.307(f)(3)");
+}
+
+#[test]
+fn the_six_metre_band_plan_puts_data_in_its_non_voice_area() {
+    let policy = us();
+    let widest = rung(2300, 19, Direction::Originate);
+    let mut s = local(50_690_000.0);
+    s.band_plan = true;
+    let inside = policy.evaluate(&s, &widest);
+    assert_eq!(inside.verdict, Verdict::Legal, "{}", inside.summary);
+    // legal elsewhere in the band, and said to be outside the plan's data area
+    s.dial_hz = Some(50_900_000.0);
+    let control_channels = policy.evaluate(&s, &widest);
+    assert!(control_channels.allowed());
+    assert_eq!(control_channels.verdict, Verdict::Warning);
+    // the safe dials include 6 m's
+    let dials = policy.safe_dials(
+        &local(50_690_000.0),
+        occupancy::air(2300)
+            .expect("measured")
+            .rung(19)
+            .expect("a rung"),
+        Direction::Originate,
+    );
+    assert!(dials.iter().any(|d| d.band == "6 m"), "{dials:?}");
+}

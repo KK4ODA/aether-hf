@@ -627,10 +627,10 @@ impl Policy {
         });
         let privileges = privileges_of(profile, license);
         let mut out = Vec::new();
-        if width > profile.data.max_bandwidth_hz {
-            return out;
-        }
         for segment in &profile.data_segments {
+            if width > segment.data_limit(&profile.data).0 {
+                continue;
+            }
             let excluded = automatic
                 && profile
                     .automatic
@@ -670,6 +670,7 @@ impl Policy {
         }
         if let Some(channels) = &profile.channels
             && !automatic
+            && width <= profile.data.max_bandwidth_hz
             && sideband == Sideband::Usb
             && privileges.iter().any(|p| {
                 channels
@@ -987,23 +988,28 @@ fn judge_data(c: &Case, band: &str, mut d: Draft) -> Decision {
     let profile = c.profile;
     let rf_text = &c.rf_text;
     let width = d.width();
-    if width > profile.data.max_bandwidth_hz {
-        let detail = format!(
-            "{rf_text}: {width:.0} Hz is wider than the {:.0} Hz a RTTY or data emission may occupy.",
-            profile.data.max_bandwidth_hz
-        );
-        return d.blocked(
-            "too_wide",
-            &profile.data.rule,
-            "TX BLOCKED: the signal is wider than 2.8 kHz",
-            &detail,
-        );
-    }
-    let Some(segment) = profile
+    let segment = profile
         .data_segments
         .iter()
-        .find(|seg| seg.range.holds(c.glo, c.ghi))
-    else {
+        .find(|seg| seg.range.holds(c.glo, c.ghi));
+    // the segment's own limit where it has one (6 m: §97.307(f)(2), (5)), the profile's
+    // general one elsewhere — and outside every segment, the general one decides the wording
+    let (limit, limit_rule) = segment.map_or(
+        (profile.data.max_bandwidth_hz, profile.data.rule.as_str()),
+        |seg| seg.data_limit(&profile.data),
+    );
+    if width > limit {
+        let detail = format!(
+            "{rf_text}: {width:.0} Hz is wider than the {limit:.0} Hz a RTTY or data emission may occupy."
+        );
+        let summary = format!(
+            "TX BLOCKED: the signal is wider than {:.1} kHz",
+            limit / 1000.0
+        );
+        let rule = limit_rule.to_owned();
+        return d.blocked("too_wide", &rule, &summary, &detail);
+    }
+    let Some(segment) = segment else {
         return outside_segment(profile, d, c.lo, c.hi, c.s.margin_hz, rf_text);
     };
     d.segment = Some((segment.range, segment.rule.clone()));

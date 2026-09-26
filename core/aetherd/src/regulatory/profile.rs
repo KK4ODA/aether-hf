@@ -74,6 +74,25 @@ pub struct Segment {
     pub range: Range,
     /// The rule it comes from.
     pub rule: String,
+    /// The widest RTTY or data emission allowed here, when it is not the profile's general
+    /// limit ([`DataLimit`]): on 6 m, §97.307(f)(2) and (5) rather than the HF rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bandwidth_hz: Option<f64>,
+    /// The rule that limit comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth_rule: Option<String>,
+}
+
+impl Segment {
+    /// The widest RTTY or data emission allowed in this segment, and the rule for it: its
+    /// own when it has one, the profile's general limit otherwise.
+    #[must_use]
+    pub fn data_limit<'a>(&'a self, general: &'a DataLimit) -> (f64, &'a str) {
+        match self.max_bandwidth_hz {
+            Some(max) => (max, self.bandwidth_rule.as_deref().unwrap_or(&general.rule)),
+            None => (general.max_bandwidth_hz, &general.rule),
+        }
+    }
 }
 
 /// A privilege of a license class (§97.301), with the emissions it allows when they are
@@ -382,6 +401,17 @@ impl Profile {
                 ));
             }
         }
+        if self
+            .data_segments
+            .iter()
+            .filter_map(|s| s.max_bandwidth_hz)
+            .any(|max| !max.is_finite() || max <= 0.0)
+        {
+            return Err(format!(
+                "the {} profile has a data segment with no bandwidth limit",
+                self.id
+            ));
+        }
         if !self.data.max_bandwidth_hz.is_finite() || self.data.max_bandwidth_hz <= 0.0 {
             return Err(format!(
                 "the {} profile has no data bandwidth limit",
@@ -427,8 +457,21 @@ mod tests {
         let us = load("us-fcc-part97").expect("loads");
         assert_eq!(us.itu_region, 2);
         assert!((us.data.max_bandwidth_hz - 2800.0).abs() < 1e-9);
-        assert_eq!(us.data_segments.len(), 10);
-        assert_eq!(us.automatic.segments.len(), 9);
+        assert_eq!(us.data_segments.len(), 11);
+        assert_eq!(us.automatic.segments.len(), 10);
+        // 6 m: its own bandwidth rule, the HF bands the general one
+        let six = us
+            .data_segments
+            .iter()
+            .find(|s| s.band == "6 m")
+            .expect("6 m");
+        assert_eq!(six.data_limit(&us.data), (2800.0, "§97.307(f)(2), (5)"));
+        let twenty = us
+            .data_segments
+            .iter()
+            .find(|s| s.band == "20 m")
+            .expect("20 m");
+        assert_eq!(twenty.data_limit(&us.data), (2800.0, "§97.307(f)(3)"));
         assert!(load("uk-ofcom").is_err());
         assert_eq!(khz(7_125_000.0), "7125");
         assert_eq!(khz(14_099_500.0), "14099.5");
@@ -445,5 +488,8 @@ mod tests {
         let mut us = load("us-fcc-part97").expect("loads");
         us.data.max_bandwidth_hz = 0.0;
         assert!(us.check().is_err());
+        let mut us = load("us-fcc-part97").expect("loads");
+        us.data_segments.last_mut().expect("6 m").max_bandwidth_hz = Some(f64::NAN);
+        assert!(us.check().is_err(), "a segment limit that is no number");
     }
 }

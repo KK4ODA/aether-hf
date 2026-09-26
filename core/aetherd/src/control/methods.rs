@@ -1259,6 +1259,9 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "mode": engine.current_mode(),
         "transmitting": station.transmitting(),
         "probing": engine.probing(),
+        // a disconnect was asked for and the DISC has not gone yet: the sender finishing
+        // what is queued, the receiver waiting for a burst to end (ADR-0023)
+        "closing": engine.disconnect_requested(),
         "channel_busy": station.channel_busy(),
         "compressing": station.compressing(),
         "compression_saving": station.compression_saving(),

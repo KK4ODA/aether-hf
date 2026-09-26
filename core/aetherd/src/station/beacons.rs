@@ -10,9 +10,10 @@
 //! same queue and regulatory gate as a single beacon.
 //!
 //! It needs a control operator: a station under automatic control may not start one. A
-//! beacon (§97.3(a)(9)) may be automatically controlled only in the segments of §97.203(g) —
-//! 28.20–28.30 MHz and above — and an unattended station has no business announcing itself
-//! anywhere else. It lasts until it is stopped or the modem restarts: nothing on the disk sets
+//! beacon (§97.3(a)(9)) may be automatically controlled only in the segments of §97.203(d) —
+//! 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so never for
+//! Aether's data), 144.275–144.300 MHz and a few above — and an unattended station has no
+//! business announcing itself anywhere else. It lasts until it is stopped or the modem restarts: nothing on the disk sets
 //! a station beaconing on its own the next time it starts.
 
 use serde_json::{Value, json};
@@ -81,8 +82,9 @@ impl<P: Ptt> Station<P> {
         if self.config.regulatory.control == Some(ControlMode::Automatic) {
             return Err(
                 "a station under automatic control may not beacon on a timer: a beacon \
-                        may be automatically controlled only on 28.20–28.30 MHz and above \
-                        (§97.203(g))"
+                        may be automatically controlled only on 28.20–28.30, 50.06–50.08, \
+                        144.275–144.300, 222.05–222.06 or 432.300–432.400 MHz, or on 33 cm \
+                        and up (§97.203(d))"
                     .into(),
             );
         }
