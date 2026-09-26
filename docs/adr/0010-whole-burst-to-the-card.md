@@ -119,3 +119,74 @@ What remains of the cost is per candidate, not per position: the fine offset, th
 check and a decode attempt for every acquisition, and on the narrow air the floor detector
 false-alarms often enough on a real band (OTA-2 finding 2) to keep that bill high. That is
 the floor detector's threshold, a separate matter (ADR-0009).
+
+## 7. Amendment (2026-09-26): the key comes up where the card drains
+
+§2.2 released the key when the card's clock had advanced, since keying, by as many samples as
+the station had handed over since keying, and took the clock at keying from the run loop's
+last reading of it — the one just before `fill_card`. But the burst is rendered (modulation,
+the conversion to audio, the Morse identifier, the record of what was sent, the start of the
+transmit capture) and the radio keyed inside the fill's first `playback`, after that reading
+and before the first sample reaches the card, and a real card plays silence meanwhile and
+counts it (`fill_playback`, and the contract of `AudioIo::played`). Every sample of the burst
+left that much later than the station reckoned, the last one too: the key came up, and the
+deafness at the end of the transmission (§5) ended, early by the time it took to render the
+burst and key the radio.
+
+The keying tail — `key_tail_s` 0.05 s and the playback lead, `DEVICE_LATENCY_S` 0.25 s — was
+paying for that time as well as for the card's own latency, which is all it is sized for. A
+`[sim]` bench daemon on a loaded four-core machine (2026-09-25/26) logged passes of 255–366 ms
+in the playback phase while transmitting; on a sound card the 366 ms one would have released
+the key 66 ms before the burst's last sample had even left the queue, with the card's own
+latency still to come after that — the end of the last frame cut on the air. The installed
+station has logged no playback pass over the 250 ms threshold, so there it may be latent;
+shorter renders still ate into the tail, and CI-V keying, which waits for the radio's answer,
+and `rigctld`, a round trip, spend their time in the same place. Nothing saw it: the simulated
+channel's clock counts no silence and, since it was fixed the same day to start when samples
+are queued, the old reckoning was exact for it; and the station tests read the clock before
+the fill and handed the burst over at that reading.
+
+Two changes:
+
+1. **The run loop says where the card drains.** `AudioIo::drains_at` is `played() + queued()`,
+   where the clock will stand once everything queued now has left, by the trait's own
+   contract. The default reads the queue first, so a callback between the two readings makes
+   it late, never early; the sound card reads both under one lock, and the simulated channel
+   answers with what it was handed in all. `fill_card` reports it once it has handed the
+   burst over (`Station::device_drains_at`), and the station releases the key, and measures
+   how much of a captured block came in after the transmission, against it. The first report
+   after a handover counts — a later one reads the same while the card still holds the burst,
+   and more once it has run dry — and the next handover forgets it, so between a handover and
+   its report the end is not known and has not come. A harness that reports no clock still
+   releases on drain, and a transmission cut short still flushes the card and releases at
+   once; one that reports the clock must report this too, or its key stays down until the
+   watchdog trips. The station tests' harnesses (`Air`, `run_alone`, the tests of §2 and §5)
+   now report it as the run loop does.
+2. **A card that runs dry after the last of a burst is not starving.** `set_playing` now says
+   whether the station still has samples of the burst to hand over (`Station::handing_over`),
+   not whether the radio is keyed. The early release had hidden this: once the key waits for
+   the card to drain, the silence the card plays between draining and the next pass counted as
+   starvation, and `audio: the sound card ran dry …` would have followed every burst. A burst
+   is handed over whole, so what the count holds now is holes only.
+
+`the_key_waits_for_the_last_sample_though_the_card_played_on_while_the_burst_was_rendered`
+models a card that plays 0.3 s of silence between the loop's reading and the first block; on
+the old code the key came up 290 ms before the last sample had left.
+`the_run_loop_keeps_the_key_down_until_the_card_has_played_the_burst` runs `fill_card` itself
+against such a card: a report that leaves the queue out releases 5.5 s early, and
+`set_playing` following the key counts 474 samples of the card's silence after the burst as a
+hole.
+
+Not taken: reading the clock again between the render and the first block. It fixes the render
+time, but the loop would have to know which call keyed, and it misses whatever is still queued
+ahead of the burst; `played() + queued()` after the handover is the trait's own contract and
+needs neither. Nor a fallback to the old reckoning for a harness that reports only the clock:
+it is wrong for any card whose clock runs on, and the station tests would have gone on testing
+a rule the daemon no longer uses.
+
+The key now stays down past the drain point by up to one pass (≈20 ms), where it used to come
+up the render time before it. The engine's timers do not move: they are armed from
+`tx_latency_s` when the engine asks for the burst, and `on_tx_done` only ever brings the end of
+a transmission earlier. The silent card a daemon runs on when its sound card would not open
+discards what it is handed — nothing is queued — so it drains at once: a station with no card
+keys for a pass rather than for a burst's length of silence.
