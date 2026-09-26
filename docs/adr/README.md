@@ -33,4 +33,5 @@ context → decision → alternatives considered → consequences.
 | [0026](0026-the-bandwidth-follows-the-host-and-the-caller.md) | The bandwidth follows the host program and the caller; LISTEN decides whether calls are answered | accepted |
 | [0027](0027-chat-handover.md) | In a chat the receiving station asks for the turn — and the sender does not hand it over unasked | accepted |
 | [0028](0028-a-polls-wait-covers-a-late-answer.md) | A poll's wait covers the answer to a poll heard and not decoded | accepted |
+| [0029](0029-a-turn-heard-again.md) | A TURN heard again is answered, the turn is taken back only on evidence, and an acknowledgement is not acknowledged | accepted |
 | [0030](0030-a-sender-waits-out-a-frame-it-hears-arriving.md) | A sender waits out a frame it hears arriving — no burst or poll repeated over its late answer | accepted |

@@ -946,6 +946,12 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     `CHAT ON` the receiving station asks for the turn
     (`tools/bench_chat.py`: −36 % median, −28 % p90 latency per line on the fading classes, 7 %
     less keying, no more drops; handing the turn over after each burst was faster still and lost
-    four times the sessions). **Built on branch `flrig-keying`, for the next release (schema 9):**
+    four times the sessions). **Measured, proposed — ADR-0029 (its §7(2)):** a station holding
+    the turn answers a TURN heard again, the turn is taken back only on evidence, and an
+    acknowledgement is not acknowledged — on ADR-0027's engine the handover candidates' lost
+    sessions 72 → 17 and 66 → 18 of 1 800; with ADR-0030 on master the drop run's "no response"
+    10 → 2, none of the six two-sender sessions left; latency and keying unchanged. The handover
+    candidates now lose about what today's policy does and may be measured again for adoption.
+    **Built on branch `flrig-keying`, for the next release (schema 9):**
     keying, the dial and tuning through FLRig. **Needs the author:** `DRIVELEVEL`'s scale and
     whether VarAC sends `CLEANTXBUFFER` (a VarAC command log), gateways (BPQ32 on the bench).

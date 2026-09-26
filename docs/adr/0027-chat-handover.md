@@ -263,7 +263,7 @@ spread of the fades it happened to meet (at 2 300 Hz −6 dB, 197.8 s both ways)
    that took the turn ignores the TURN repeated (a TURN is taken only by an IRS or a station
    waiting for one), the one that sent it "carries on as ISS" after `turn_retries`, and
    ADR-0023's yield needs the called station to hear the caller's poll, which it cannot while it
-   sends a long burst.
+   sends a long burst. (Mended by ADR-0029.)
 3. **A sender repeats a poll or a burst over a frame it hears arriving.** Calls, probes, DISCs
    and TURNs wait for such a frame to end (ADR-0016, ADR-0022, ADR-0023); `_on_response_timeout`
    does not.
