@@ -1951,8 +1951,11 @@ impl LinkEngine {
 
         match header.kind {
             DataKind::ConnectReq => {
-                // our acceptance was lost: answer again
-                self.send_connect(DataKind::ConnectAck);
+                // our acceptance was lost: answer again, with the SNR this request arrived at,
+                // as the first answer carried the first's — a caller that hears only the
+                // repeat starts its first burst from it (P9-2). Without it the caller started
+                // on the ladder's first rung whatever the path.
+                self.send_connect_with(DataKind::ConnectAck, Some(record.snr_db));
                 self.burst.clear();
                 self.burst_t0 = None;
                 self.disarm(Timer::Ack);
