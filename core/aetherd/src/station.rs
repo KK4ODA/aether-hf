@@ -650,7 +650,7 @@ const THROUGHPUT_WINDOW_S: f64 = 30.0;
 /// of the occupied width around it, and the passband monitor measures the width at this
 /// centre.
 const AUDIO_CENTER_HZ: f64 = 1500.0;
-/// The receiver's passband is folded into the monitor no more often than this, in seconds of
+/// A spectrum is taken for the passband monitor no more often than this, in seconds of
 /// station time: a couple of times a second, not every block.
 const PASSBAND_SAMPLE_S: f64 = 0.5;
 /// Below this block level there is no real noise to read a passband from — a muted card, a
@@ -816,9 +816,16 @@ pub struct Station<P: Ptt> {
     /// The receiver's passband, learned from the noise it delivers between signals, so a
     /// radio filter set narrower than the modem's bandwidth is caught without asking the rig.
     passband: PassbandMonitor,
-    /// Station time the passband was last sampled: it is folded in about twice a second, not
-    /// every block, and only when the channel is quiet.
+    /// Station time the passband may next be looked at: a spectrum is taken about twice a
+    /// second, not every block, and only when the channel is quiet.
     passband_next_s: f64,
+    /// Station time the channel was last anything but quiet — occupied, a frame arriving,
+    /// this station transmitting or deaf to its own tail: a spectrum is taken only once a
+    /// whole window of audio has been heard since.
+    passband_quiet_since: f64,
+    /// Spectra taken and not yet folded in, oldest first, each with when it was taken: they
+    /// wait out the busy detector's attack, and are dropped if the quiet breaks first.
+    passband_pending: VecDeque<(f64, Spectrum)>,
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
@@ -960,6 +967,8 @@ impl<P: Ptt> Station<P> {
             spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
             passband: PassbandMonitor::new(),
             passband_next_s: 0.0,
+            passband_quiet_since: f64::NEG_INFINITY,
+            passband_pending: VecDeque::new(),
             rx_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
@@ -2975,34 +2984,63 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// Fold the receiver's noise spectrum into the passband monitor, a couple of times a
+    /// second and only from audio heard while the channel was quiet: the detector has learned
+    /// the floor, nothing is on the channel or arriving, this station is neither transmitting
+    /// nor hearing its own tail, and there is real noise to measure. So what it learns is the
+    /// receiver's own passband, not a signal that is on.
+    ///
+    /// Quiet at the moment of a look is not enough, on either side of the window. A spectrum
+    /// is of the last [`SpectrumAnalyser::window_s`] of audio, so the channel must have been
+    /// quiet that long already; and the busy detector calls a signal only up to
+    /// [`BusyDetector::attack_s`] after it starts, so a spectrum waits that much longer and
+    /// is folded in only if the quiet held. Without the wait the bench pair read a 650 Hz
+    /// "filter" over flat noise (2026-09-26): a station stops being deaf to its own tail
+    /// with the other's answer already arriving, and the one look a session left it between
+    /// two bursts was the start of that answer — the tone floor's 400 Hz, turnaround after
+    /// turnaround.
+    fn sample_passband(&mut self, now: f64) {
+        let quiet = self.busy.settled()
+            && !self.busy.busy(now)
+            && !self.transmitting
+            && !self.receiving()
+            && now >= self.deaf_until
+            && self.busy.level_db > PASSBAND_MIN_LEVEL_DBFS;
+        if !quiet {
+            // the recent audio, and every spectrum still waiting, may hold whatever has just
+            // been noticed
+            self.passband_quiet_since = now;
+            self.passband_pending.clear();
+            return;
+        }
+        let attack = self.busy.attack_s();
+        while self
+            .passband_pending
+            .front()
+            .is_some_and(|&(taken, _)| now - taken >= attack)
+        {
+            if let Some((_, spectrum)) = self.passband_pending.pop_front() {
+                self.passband.observe(&spectrum);
+            }
+        }
+        // the window has to lie wholly in the quiet, and a block can straddle the end of the
+        // deafness
+        let quiet_s = now - self.passband_quiet_since.max(self.deaf_until);
+        if now >= self.passband_next_s
+            && quiet_s >= self.spectrum.window_s()
+            && let Some(spectrum) = self.spectrum.compute()
+        {
+            self.passband_pending.push_back((now, spectrum));
+            self.passband_next_s = now + PASSBAND_SAMPLE_S;
+        }
+    }
+
     /// Log a change of the busy state with the numbers that decided it.
     ///
     /// `busy_until` is one number extended by several paths, and when the indicator lights
     /// with nothing above the threshold the only useful question is which path did it. So
     /// every transition says: the level and floor at that moment, the threshold, and the
     /// reason the hold was last extended.
-    /// Fold the receiver's noise spectrum into the passband monitor, at most a couple of
-    /// times a second and only when the channel is quiet: the detector has learned the floor,
-    /// nothing is on the channel, we are not hearing our own tail, and there is real noise to
-    /// measure. So what it learns is the receiver's own passband, not a signal that is on.
-    fn sample_passband(&mut self, now: f64) {
-        if now < self.passband_next_s {
-            return;
-        }
-        let quiet = self.busy.settled()
-            && !self.busy.busy(now)
-            && !self.transmitting
-            && now >= self.deaf_until
-            && self.busy.level_db > PASSBAND_MIN_LEVEL_DBFS;
-        if !quiet {
-            return;
-        }
-        if let Some(spectrum) = self.spectrum.compute() {
-            self.passband.observe(&spectrum);
-            self.passband_next_s = now + PASSBAND_SAMPLE_S;
-        }
-    }
-
     fn note_busy_transition(&mut self, now: f64) {
         let busy = self.busy.busy(now);
         if busy == self.was_busy {
@@ -6012,6 +6050,141 @@ mod tests {
         assert!(
             (peak - 1500.0).abs() < 2.0 * spectrum.bin_hz,
             "peak at {peak} Hz"
+        );
+    }
+
+    /// Another station's tone-floor beacon as it goes on the air, from keying to release, at
+    /// the level it was sent: a real frame of the tone floor, for a station to hear.
+    fn tone_beacon_as_sent(callsign: &str, block: usize) -> Vec<f32> {
+        let mut other = Station::new(
+            StationConfig {
+                callsign: callsign.to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            2,
+        );
+        other.beacon(None).expect("an idle station beacons");
+        let mut audio = Vec::new();
+        let mut out = vec![0.0f32; block];
+        let silence = vec![0.0f32; block];
+        let mut keyed = false;
+        while !keyed || other.transmitting() {
+            assert!(audio.len() < 20 * 48_000, "the beacon never ended");
+            other.playback(&mut out).expect("playback");
+            other.capture(&silence).expect("capture");
+            keyed |= other.transmitting();
+            audio.extend_from_slice(&out);
+        }
+        audio
+    }
+
+    #[test]
+    fn a_frame_heard_as_the_station_listens_again_is_not_taken_for_its_passband() {
+        // The bench pair at 12 dB (2026-09-26): over a channel whose noise is flat to 4 kHz,
+        // the panel said the radio's receive filter looked about 650 Hz wide while tone-floor
+        // frames went back and forth. The passband monitor had been sampling the other
+        // station's frames. A station's deafness to its own tail ends with the answer
+        // already arriving, the busy detector takes 200 ms to call even a strong signal, and
+        // the one look the monitor got between two bursts of a session was the answer's
+        // 400 Hz of tones — turnaround after turnaround, with no quiet look in between to
+        // dilute them. A frame that starts just before a look while the station listens got
+        // in the same way. So a real tone frame answers every burst here, and one arrives
+        // while the station listens, over flat noise: the reading has to stay the whole
+        // band's, and the monitor has to go on learning when the channel is quiet.
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate as f64;
+        let occupied = station.occupied_bandwidth_hz();
+        let block = 960; // a sound card's period, 20 ms
+        let answer = tone_beacon_as_sent("KK4XYZ", block);
+        // the silence it opens with, the keying's lead
+        let lead_s = answer.iter().position(|&x| x != 0.0).expect("a frame") as f64 / rate;
+        // noise flat to 24 kHz, 12 dB under the OFDM average in 3 kHz, as `[sim]` adds it
+        let sigma = (station.config.tx_level / 2f64.sqrt() * (8.0 / 10f64.powf(1.2)).sqrt()) as f32;
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut hiss = move || {
+            let mut uniform = || {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let (u1, u2) = (uniform().max(1e-12), uniform());
+            ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32 * sigma
+        };
+        // one period: the station plays what it has, and hears the noise and `signal`
+        let mut out = vec![0.0f32; block];
+        let mut step = |station: &mut Station<NullPtt>, signal: &[f32]| {
+            station.playback(&mut out).expect("playback");
+            let heard: Vec<f32> = (0..block)
+                .map(|i| signal.get(i).copied().unwrap_or(0.0) + hiss())
+                .collect();
+            station.capture(&heard).expect("capture");
+        };
+        let blocks = |seconds: f64| (seconds * rate) as usize / block;
+
+        for _ in 0..blocks(10.0) {
+            step(&mut station, &[]);
+        }
+        let learned = station
+            .rx_passband_hz()
+            .expect("ten seconds of noise is enough");
+        assert!(learned > occupied, "flat noise read as {learned:.0} Hz");
+        let looks_before = station.passband.observations();
+        let mut narrowest = f64::INFINITY;
+        let mut hear = |station: &mut Station<NullPtt>, signal: &[f32]| {
+            step(station, signal);
+            if let Some(width) = station.rx_passband_hz() {
+                narrowest = narrowest.min(width);
+            }
+        };
+        // a session's turnarounds: this station transmits — a tune tone will do, the deafness
+        // after it is the same whatever was sent — and the answer comes at once: it starts
+        // while the station is still deaf to its own tail, and is on the air when that ends.
+        // The next transmission follows it straight away, as a sender's follows an
+        // acknowledgement, inside the two seconds a decoded frame holds the channel busy:
+        // the monitor has no quiet moment between turnarounds to dilute what it takes in
+        for _ in 0..3 {
+            station.tune(0.5).expect("an idle station tunes");
+            let mut keyed = false;
+            while !keyed || station.transmitting() {
+                hear(&mut station, &[]);
+                keyed |= station.transmitting();
+            }
+            for chunk in answer.chunks(block) {
+                hear(&mut station, chunk);
+            }
+        }
+        // then frames that start while the station listens, each on the air for 150 ms —
+        // under the 200 ms the busy detector takes — when the monitor next looks, with one
+        // quiet look before each
+        for _ in 0..3 {
+            let (last, since) = (station.passband_next_s, station.now());
+            while station.passband_next_s <= last {
+                assert!(station.now() - since < 20.0, "the monitor stopped looking");
+                hear(&mut station, &[]);
+            }
+            while station.passband_next_s - station.now() > lead_s + 0.15 {
+                hear(&mut station, &[]);
+            }
+            for chunk in answer.chunks(block) {
+                hear(&mut station, chunk);
+            }
+        }
+        // and the quiet after them, which the monitor must still learn from
+        for _ in 0..blocks(8.0) {
+            hear(&mut station, &[]);
+        }
+        assert!(
+            narrowest > occupied,
+            "the monitor learned a {narrowest:.0} Hz passband from frames over flat noise, \
+             where the modem needs {occupied:.0} Hz"
+        );
+        let looks = station.passband.observations() - looks_before;
+        assert!(
+            looks >= 6,
+            "only {looks} looks at the noise between the frames: the monitor stopped listening"
         );
     }
 
