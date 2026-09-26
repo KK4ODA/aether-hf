@@ -684,7 +684,13 @@ not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving sta
 to close sends its `DISC` between bursts; the sender of a `TURN` waits for the peer's first burst
 as long as the longest data frame there is, and past any frame it hears arriving; and a sending
 station that hears the other poll — both believe they hold the turn — yields if it was called,
-answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023). When two
+answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023). A station that
+holds the turn and hears the `TURN` again answers it as it answered the first — its burst again,
+or a `POLL`: the other station heard nothing of it taking the turn. The sender of a `TURN` repeats
+it when no answer comes, and takes the turn back after three tries in the reference engine —
+unless the last frame it heard from the other station since the first was one it could not read,
+which may be the answer; then it offers again, up to eight. A receiving station does not
+acknowledge an acknowledgement it reads: the other station is receiving too (ADR-0029). When two
 stations call each other at once, the one whose callsign sorts higher keeps calling and ignores
 the other's request, and the other answers it.
 

@@ -839,7 +839,15 @@ station answers calls and probes only after `LISTEN ON`/`CQ`/`CHAT ON` (`HostFla
 with an unasked ACK carrying WANT_TX once the channel is quiet (`reaction_s`, the `Request`
 timer, `stated_want`), an idle chat ISS takes it and hands over, and holds its keepalive past
 a frame heard arriving; −36 % median latency a line, no more drops. `TwoStationSim::send_at`
-types a line at a moment. The panel's own Send box does not turn it on (the author's call). No config key and no schema bump:
+types a line at a moment. The panel's own Send box does not turn it on (the author's call).
+**ADR-0029** (ADR-0027 §7(2), model first): a station holding the turn answers a TURN heard
+again (`_answer_turn`); the TURN's sender keeps offering, up to `max_retries`, while the last
+frame it heard since its first TURN was one it could not read, and otherwise takes the turn back
+after `turn_retries` as before (`_turn_unread`, `_turn_offers`) — offering on silence too timed
+a climbed link out in a fade that carries no data (ADR-0023's case; a test says so); an IRS that
+reads an ACK withdraws the ACK its preamble armed. Chat bench drop run: on ADR-0027's engine the
+handover candidates' drops 72 → 17, 66 → 18 of 1 800; with ADR-0030 "no response" 10 → 2
+(`bench/baselines/turn_offer.csv`, ablations included); latency unchanged. No config key and no schema bump:
 **a new config key has to ship with a release** (the shell's `SCHEMA_HISTORY` test ties the
 schema to the package version), so work that adds one waits on a branch for the release.
 
