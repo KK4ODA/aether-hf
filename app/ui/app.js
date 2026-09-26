@@ -458,6 +458,9 @@ async function refreshStatus() {
   applyDeclaredDial(status);
   keyingSummary();
   applyAboutFromStatus(status);
+  applyBeacon(status.beacon ?? null);
+  identifierMax = status.identifier?.max_wpm ?? null;
+  showCwidCap();
   $("btn-connect").disabled = status.state !== "idle";
   $("btn-beacon").disabled = status.state !== "idle";
   $("btn-probe").disabled = status.state !== "idle";
@@ -488,6 +491,50 @@ async function refreshStatus() {
 }
 
 let modeTable = [];
+
+// The beacon's line under the call buttons: the repeat and when the next is due, and when the
+// last one went — ND1J asked where a beacon sent could be seen.
+function applyBeacon(beacon) {
+  const select = $("beacon-every");
+  const every = beacon?.every_s ? Math.round(beacon.every_s / 60) : 0;
+  if (document.activeElement !== select) {
+    if (![...select.options].some((o) => Number(o.value) === every)) {
+      const option = document.createElement("option");
+      option.value = String(every);
+      option.textContent = `every ${every} min`;
+      select.append(option);
+    }
+    select.value = String(every);
+  }
+  const parts = [];
+  if (every) {
+    const next = beacon.next_in_s ?? 0;
+    parts.push(
+      next < 5
+        ? `Beaconing every ${every} min: the next as soon as the channel is clear`
+        : `Beaconing every ${every} min: the next in ${formatDuration(next)}`,
+    );
+  }
+  if (beacon?.last_sent_ms) {
+    parts.push(`last beacon sent ${clock(beacon.last_sent_ms)} (${relative(beacon.last_sent_ms)})`);
+  }
+  if (beacon?.skipped) parts.push(`${beacon.skipped} skipped for a busy channel or station`);
+  $("beacon-note").textContent = parts.join(" · ");
+}
+
+// The Morse identifier's speed, against what the rules allow an automatically keyed one:
+// ND1J set a faster speed and heard 20 wpm whatever he set, and nothing said why.
+let identifierMax = null;
+
+function showCwidCap() {
+  const note = $("cwid-sent");
+  const wpm = Number($("radio-cwid-wpm").value);
+  const capped = $("radio-cwid").checked && identifierMax !== null && Number.isFinite(wpm) && wpm > identifierMax;
+  note.hidden = !capped;
+  note.textContent = capped
+    ? `sent at ${identifierMax} wpm: the rules' limit on an automatic identifier (§97.119(b)(1))`
+    : "";
+}
 
 let currentMode = null;
 
@@ -814,6 +861,12 @@ function withAlpha(colour, alpha) {
   return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
 }
 
+/// A chart's height: what its box gives it — on the Status tab the charts take the room the
+/// window has to spare — and never less than a chart can be read at.
+function chartHeight(id) {
+  return Math.max(120, Math.round($(id).clientHeight || 180));
+}
+
 /// The frame both charts draw in: the surface, the tokens, and the y scale.
 function chartFrame(id, fallbackWidth, height, low, high, legend = null) {
   const s = surface(id, fallbackWidth, height);
@@ -968,7 +1021,7 @@ function drawSpeedChart() {
   }
   const step = high > 4000 ? 1000 : high > 1500 ? 500 : 100;
   high = Math.ceil(high / step) * step;
-  const f = chartFrame("chart-speed", 450, 180, 0, high);
+  const f = chartFrame("chart-speed", 450, chartHeight("chart-speed"), 0, high);
   const { ctx, c } = f;
   drawValueAxis(f, 0, high, step);
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
@@ -1021,7 +1074,7 @@ function drawSnrChart() {
   }
   low = Math.floor(low / 5) * 5;
   high = Math.ceil(high / 5) * 5;
-  const f = chartFrame("chart-snr", 450, 180, low, high);
+  const f = chartFrame("chart-snr", 450, chartHeight("chart-snr"), low, high);
   const { ctx, c } = f;
   drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
@@ -1115,6 +1168,13 @@ function drawSnrChart() {
 
 let heardList = [];
 let heardSort = { key: "last_heard_ms", direction: -1 };
+// which stations the list shows: all, those whose beacons were heard, those worked
+let heardFilter = "all";
+const HEARD_EMPTY = {
+  all: "Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.",
+  beacons: "No beacon heard yet. A station's beacons are counted here as soon as one is heard.",
+  sessions: "No session yet with a station on this list.",
+};
 const ACTIVITY_TEXT = {
   beacon: "beacon",
   calling: "calling",
@@ -1308,15 +1368,33 @@ function noteHeard(entry) {
   renderHeard();
 }
 
+function heardShown(station) {
+  if (heardFilter === "beacons") return (station.beacons ?? 0) > 0;
+  if (heardFilter === "sessions") return station.connected === true;
+  return true;
+}
+
+function setHeardFilter(filter) {
+  heardFilter = filter;
+  for (const chip of document.querySelectorAll("#heard-filters .chip")) {
+    chip.setAttribute("aria-pressed", String(chip.dataset.filter === filter));
+  }
+  // the beacons, the latest first: what "who has been beaconing" asks
+  if (filter === "beacons" && heardSort.key !== "last_beacon_ms") sortHeard("last_beacon_ms");
+  else renderHeard();
+}
+
 function renderHeard() {
   const count = $("heard-count");
   count.textContent = String(heardList.length);
   count.hidden = heardList.length === 0;
-  $("heard-empty").hidden = heardList.length > 0;
-  $("heard-table").parentElement.hidden = heardList.length === 0;
+  const shown = heardList.filter(heardShown);
+  $("heard-empty").textContent = HEARD_EMPTY[heardFilter] ?? HEARD_EMPTY.all;
+  $("heard-empty").hidden = shown.length > 0;
+  $("heard-table").parentElement.hidden = shown.length === 0;
   $("btn-heard-clear").disabled = heardList.length === 0;
   const { key, direction } = heardSort;
-  const rows = [...heardList].sort((a, b) => {
+  const rows = shown.sort((a, b) => {
     const p = a[key] ?? (typeof b[key] === "number" ? -Infinity : "");
     const q = b[key] ?? (typeof a[key] === "number" ? -Infinity : "");
     if (p === q) return b.last_heard_ms - a.last_heard_ms;
@@ -1355,6 +1433,14 @@ function renderHeard() {
     if (station.connected && station.activity !== "connected") {
       activityCell.title = "a session with this station has been up from here";
     }
+    const beacons = station.beacons ?? 0;
+    cell(
+      beacons > 0 ? `${beacons} · ${relative(station.last_beacon_ms, now)}` : "—",
+      beacons > 0 ? "num beacons" : "num muted",
+      beacons > 0
+        ? `${beacons} beacon${beacons === 1 ? "" : "s"} heard; the last at ${stamp(station.last_beacon_ms)}`
+        : "No beacon heard from this station",
+    );
     cell(String(station.count), "num");
     const button = document.createElement("button");
     button.className = "small";
@@ -1801,6 +1887,8 @@ const COUNTER_LABELS = {
   probes_sent: ["Probes sent", "Probes this station sent"],
   probe_replies: ["Probes answered", "Of the probes sent, how many drew an answer"],
   probes_answered: ["Probes taken", "Probes from other stations this one answered"],
+  beacons_sent: ["Beacons sent", "Beacons this station put on the air"],
+  beacons_heard: ["Beacons heard", "Beacons heard from other stations"],
 };
 
 function renderCounters(counters) {
@@ -1846,7 +1934,7 @@ const BUSY_BAND = 4;
 function drawChart() {
   const now = Date.now();
   if (history.length < 2) {
-    surface("chart", 450, 180).ctx.clearRect(0, 0, 4096, 4096);
+    surface("chart", 450, chartHeight("chart")).ctx.clearRect(0, 0, 4096, 4096);
     return;
   }
   let low = Infinity;
@@ -1868,7 +1956,7 @@ function drawChart() {
     [null, "▬ busy: shape"],
     [null, "▬ busy: frame"],
   ];
-  const f = chartFrame("chart", 450, 180, low, high, legend);
+  const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend);
   const { ctx, c } = f;
   drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
   const x = drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
@@ -2935,6 +3023,17 @@ function updateMeter(reading) {
 function markStep(number, done) {
   const step = document.querySelector(`.step[data-step="${number}"]`);
   if (step) step.dataset.done = String(done);
+  const link = document.querySelector(`.step-link[data-step="${number}"]`);
+  if (link) link.dataset.done = String(done);
+}
+
+function wireStepper() {
+  for (const link of document.querySelectorAll(".step-link")) {
+    link.addEventListener("click", () => {
+      const step = document.querySelector(`.step[data-step="${link.dataset.step}"]`);
+      step?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 }
 
 function numberWithin(id, low, high) {
@@ -3688,6 +3787,8 @@ function checkRulesStep() {
   const chosen = rulesChosen();
   markStep(1, plausible && chosen);
   $("step-1").dataset.needs = String(!chosen);
+  const link = document.querySelector('.step-link[data-step="1"]');
+  if (link) link.dataset.needs = String(!chosen);
 }
 
 function wireRules() {
@@ -3784,6 +3885,8 @@ function logShows(entry) {
       return entry.dataset.tag === "rules";
     case "session":
       return SESSION_TAGS.has(entry.dataset.tag);
+    case "beacons":
+      return entry.dataset.tag === "beacon";
     default:
       return true;
   }
@@ -3975,9 +4078,26 @@ function selectTab(tab, focus = false) {
     drawStatusChart();
   }
   if (tab.dataset.panel === "stations") renderHeard();
-  if (tab.dataset.panel === "diagnostics") renderRegCard();
+  if (tab.dataset.panel === "diagnostics") {
+    renderRegCard();
+    // the frames heard while another tab was open: they were kept, not drawn
+    renderFrames();
+  }
   scopesWanted();
 }
+
+// A chart drawn for one height is redrawn for the next when the window changes size: on the
+// Status tab the charts take the room the window has.
+let resizeRedraw = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeRedraw);
+  resizeRedraw = setTimeout(() => {
+    if (panelShown("status")) {
+      drawChart();
+      drawStatusChart();
+    }
+  }, 120);
+});
 
 function wire() {
   const tabs = [...document.querySelectorAll(".tab")];
@@ -4010,6 +4130,20 @@ function wire() {
   $("btn-beacon").addEventListener("click", () =>
     act(() => call("beacon"), "beaconing"),
   );
+  $("beacon-every").addEventListener("change", async () => {
+    const minutes = Number($("beacon-every").value);
+    const done = await act(
+      () => call("beacon.every", { minutes }),
+      minutes ? `beaconing every ${minutes} min, the first now` : "beacon repeat off",
+    );
+    if (!done) $("beacon-every").value = "0";
+  });
+  for (const chip of document.querySelectorAll("#heard-filters .chip")) {
+    chip.addEventListener("click", () => setHeardFilter(chip.dataset.filter));
+  }
+  wireStepper();
+  $("radio-cwid-wpm").addEventListener("input", showCwidCap);
+  $("radio-cwid").addEventListener("change", showCwidCap);
   $("btn-probe").addEventListener("click", async () => {
     const remote = $("remote").value.trim().toUpperCase();
     if (!remote) {

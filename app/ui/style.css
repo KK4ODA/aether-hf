@@ -1177,12 +1177,10 @@ details.hint > p {
 
 .chart {
   margin: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 10px var(--s3) var(--s3);
-  overflow-x: auto;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chart figcaption,
@@ -1210,11 +1208,10 @@ details.hint > p {
   min-width: 0;
 }
 
-/* the Speed/SNR switch above the first chart, styled like the figcaption it replaces */
+/* the Speed/SNR switch, in the History card's head */
 .chart-tabs {
   display: flex;
   gap: 4px;
-  margin-bottom: var(--s2);
 }
 
 .chart-tab {
@@ -1254,7 +1251,7 @@ canvas {
 .charts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 10px;
+  gap: var(--s3);
 }
 
 /* ── the signal-analysis card: constellation, spectrum, waterfall ── */
@@ -1551,7 +1548,9 @@ button.sort:focus-visible {
 }
 
 .heard td,
-.frames td {
+.heard th,
+.frames td,
+.frames th {
   white-space: nowrap;
 }
 
@@ -1603,10 +1602,6 @@ button.sort:focus-visible {
   color: var(--text-3);
 }
 
-.sessions-head {
-  margin-top: var(--s5);
-}
-
 .frames tr[data-decoded="false"] td {
   color: var(--text-3);
 }
@@ -1626,13 +1621,15 @@ button.sort:focus-visible {
    it. The conversation is the largest thing on the tab and the first to grow: the tab fills
    the window, and the room left over goes to Send and Received. */
 
-body:not(.compact) main:has(> #panel-session:not([hidden])) {
+/* Status, Session, Stations and Log each have one thing that is the tab — the charts, the
+   conversation, the tables, the log — and the window's spare height goes to it. */
+body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   display: flex;
   flex-direction: column;
   flex: 1 0 auto;
 }
 
-#panel-session {
+.panel.fills {
   flex: 1 0 auto;
 }
 
@@ -1945,6 +1942,277 @@ body:not(.compact) main:has(> #panel-session:not([hidden])) {
   -webkit-user-select: text;
 }
 
+/* ── the other tabs, as consoles ─────────────────────────────────── */
+
+/* Every tab is built the Session tab's way: boxes, each named at its top left inside it, the
+   explanations behind a small ?, and the one thing that is the tab given the room. */
+
+/* readings as tiles inside a named box: the number large, its name above, the rest below */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: var(--bg-2);
+  border-color: var(--border);
+  border-radius: var(--r-sm);
+}
+
+/* a window of rows: a table with its name and tools in a head strip, scrolling inside */
+.table-pane {
+  background: var(--surface);
+  min-height: 11rem;
+}
+
+.table-pane .table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.table-pane .table-scroll table {
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+/* the column names stay in view while the rows scroll under them */
+.table-pane thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.table-pane .empty {
+  margin: var(--s3);
+}
+
+/* a head strip with filters as well as a name: it wraps, and its tools keep to the right */
+.table-pane .pane-head,
+.log-pane .pane-head {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding: 6px var(--s2) 6px var(--s3);
+}
+
+.table-pane .pane-head .head-actions,
+.log-pane .pane-head .toolbar-end {
+  margin-left: auto;
+}
+
+.pane-head .sub:empty {
+  display: none;
+}
+
+/* 1 · Status: the readings on the left, the last minutes on the right, taking the room */
+.status-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: var(--s3);
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+.status-readings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+}
+
+.status-readings > .card {
+  flex: 1 1 auto;
+}
+
+.status-readings .tiles {
+  flex: 1 1 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+}
+
+.history-card .charts {
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.history-card canvas {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 150px;
+}
+
+.history-card .chart figcaption {
+  margin-bottom: 4px;
+}
+
+/* 2 · Stations: the stations heard first and largest, the sessions under them */
+#panel-stations .heard-pane {
+  flex: 3 1 0;
+}
+
+#panel-stations .sessions-pane {
+  flex: 2 1 0;
+}
+
+.heard td.beacons {
+  color: var(--status-rx);
+}
+
+/* 3 · Diagnostics: the frames scroll in a window of their own */
+.frames-pane {
+  height: clamp(16rem, 55vh, 36rem);
+}
+
+/* nothing heard yet: the pane is only as tall as the sentence that says so */
+.frames-pane:has(> .empty:not([hidden])) {
+  height: auto;
+}
+
+/* 4 · Setup: labels in one column, the steps at a glance, the save in reach */
+.setup .steps .row > label:not(.check):not(.label-inline) {
+  flex: 0 0 8.5rem;
+  min-width: 0;
+}
+
+.setup .field-note {
+  margin: 0 0 0 calc(8.5rem + 10px);
+}
+
+.setup .sub-heading {
+  margin-top: var(--s2);
+}
+
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+}
+
+.step-link {
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
+  gap: 5px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.step-link:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.step-link[data-done="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--status-link) 45%, var(--border));
+}
+
+.step-link[data-done="true"]::before {
+  content: "✓";
+  color: var(--status-link);
+  font-weight: 700;
+}
+
+.step-link[data-needs="true"] {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+#profile-note:empty {
+  display: none;
+}
+
+.level-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+}
+
+.level-row .meter {
+  flex: 1 1 320px;
+}
+
+.cwid-sent {
+  color: var(--status-warning);
+}
+
+/* step 6 stays at the foot of the window while the steps scroll past it */
+.save-step {
+  position: sticky;
+  bottom: 30px;
+  z-index: 4;
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.save-rest {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+/* reference, folded: the running configuration and the mode table */
+details.fold-card > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+details.fold-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.fold-card .chevron {
+  color: var(--text-2);
+  transform: rotate(-90deg);
+  transition: transform var(--t-fast);
+}
+
+details.fold-card[open] .chevron {
+  transform: none;
+}
+
+details.fold-card > summary:hover .card-title {
+  color: var(--text);
+}
+
+/* 5 · Log: the log is the tab */
+.log-pane {
+  flex: 1 1 0;
+  min-height: 20rem;
+}
+
+.log-pane .log {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* 6 · Help / About: About across the top, the rest in two columns */
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s3);
+  align-items: start;
+}
+
 /* ── counters ───────────────────────────────────────────────────── */
 
 .pills {
@@ -1988,23 +2256,6 @@ body:not(.compact) main:has(> #panel-session:not([hidden])) {
   color: var(--status-error);
 }
 
-/* a section heading with a small action to its right (Counters reset, Received copy) */
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s3);
-  min-height: var(--control-h-sm);
-}
-
-.section-head h2 {
-  margin: 0;
-}
-
-.counters .section-head {
-  margin-bottom: var(--s2);
-}
-
 .head-actions {
   display: flex;
   align-items: center;
@@ -2023,30 +2274,37 @@ body:not(.compact) main:has(> #panel-session:not([hidden])) {
   counter-reset: step;
 }
 
-.step h3 {
-  margin: 0 0 2px;
+/* a step's number, in a circle; a done step's turns green and says so with a tick too */
+.step-title {
   display: flex;
   align-items: center;
   gap: var(--s2);
 }
 
-/* a done step is ticked, in the link colour, and the tick is a glyph as well as a colour */
-.step h3::after {
-  content: "";
-  width: 14px;
-  height: 14px;
+.step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
   border-radius: 50%;
   border: 1px solid var(--border-strong);
-  flex: none;
-  font: 600 10px/13px var(--numerals);
-  text-align: center;
+  background: var(--surface-3);
+  color: var(--text);
+  font: 600 var(--fs-xs) / 1 var(--numerals);
+  letter-spacing: 0;
+}
+
+.step[data-done="true"] .step-num {
+  background: var(--status-link);
+  border-color: transparent;
   color: var(--on-status);
 }
 
-.step[data-done="true"] h3::after {
+.step[data-done="true"] .step-title::after {
   content: "✓";
-  background: var(--status-link);
-  border-color: transparent;
+  color: var(--status-link);
+  font-weight: 700;
 }
 
 /* a step that still needs something before the station may transmit */
@@ -2711,6 +2969,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border-radius: var(--r-md);
   height: clamp(320px, calc(100vh - 300px), 1000px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   font: 12.5px/1.5 var(--numerals);
   user-select: text;
   -webkit-user-select: text;
@@ -2784,6 +3043,26 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
 
 .log-entry[data-tag="state"] .log-tag {
   color: var(--status-link);
+}
+
+/* the kinds of entry an operator looks for, each in the colour of what it is about */
+.log-entry[data-tag="beacon"] .log-tag {
+  color: var(--status-rx);
+  background: color-mix(in srgb, var(--status-rx) 14%, transparent);
+}
+
+.log-entry:is([data-tag="probe"], [data-tag="probed"], [data-tag="test"], [data-tag="ladder"]) .log-tag {
+  color: var(--status-tx);
+  background: color-mix(in srgb, var(--status-tx) 14%, transparent);
+}
+
+.log-entry:is([data-tag="connect"], [data-tag="session"], [data-tag="sent"], [data-tag="role"]) .log-tag {
+  color: var(--status-link);
+  background: color-mix(in srgb, var(--status-link) 12%, transparent);
+}
+
+.log-entry[data-tag="identifier"] .log-tag {
+  color: var(--text);
 }
 
 /* ── definition lists: a name and its value ──────────────────────── */
@@ -2990,9 +3269,10 @@ body.compact {
 
 body.compact .tabs,
 body.compact footer.bar,
-body.compact #readings-channel,
-body.compact .charts,
-body.compact .counters,
+body.compact #channel-card,
+body.compact #history-card,
+body.compact #counters-card,
+body.compact #link-card > .card-head,
 body.compact .panel:not(#panel-status),
 body.compact .brand-name,
 body.compact .brand-wave,
@@ -3054,6 +3334,17 @@ body.compact .state-detail {
   font-size: var(--fs-sm);
 }
 
+body.compact .status-body {
+  display: block;
+}
+
+body.compact #link-card {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
 body.compact #readings-link {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
@@ -3079,8 +3370,33 @@ body.compact .reading .sub {
 
 /* ── narrower windows ───────────────────────────────────────────── */
 
+@media (max-width: 1000px) {
+  .status-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .status-readings .tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-rows: auto;
+  }
+
+  .history-card .charts {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-rows: none;
+  }
+
+  .history-card canvas {
+    flex: none;
+    height: 180px;
+  }
+}
+
 @media (max-width: 900px) {
   .rec-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .help-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -3136,9 +3452,25 @@ body.compact .reading .sub {
     display: none;
   }
 
-  .row > label {
+  .row > label,
+  .setup .steps .row > label:not(.check):not(.label-inline) {
     min-width: 0;
     flex-basis: 100%;
+  }
+
+  .setup .field-note {
+    margin-left: 0;
+  }
+
+  .tiles,
+  .status-readings .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* on a phone the save is the last card, not a bar over the form */
+  .save-step {
+    position: static;
+    box-shadow: none;
   }
 
   .row > label.check,

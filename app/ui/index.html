@@ -88,84 +88,145 @@
       </div>
 
       <!-- ── status ─────────────────────────────────────────────── -->
-      <section id="panel-status" class="panel" role="tabpanel" aria-labelledby="tab-status">
+      <section id="panel-status" class="panel status fills" role="tabpanel" aria-labelledby="tab-status">
         <div class="state-strip" id="state-strip" title="What the modem is doing now, and why" role="status">
           <div class="state-name" id="state-name">disconnected</div>
           <div class="state-detail" id="state-detail">Not connected to a modem.</div>
         </div>
         <p class="note warn" id="rx-passband-note" title="The receiver's passband, measured from the noise between signals, is narrower than the modem's signal — the radio's filter is set too narrow" role="alert" hidden></p>
 
-        <div class="grid readings" id="readings-link">
-          <div class="reading" title="The mode the sender is using now: its number, name and rate">
-            <div class="label">Mode</div>
-            <div class="value" id="v-mode">—</div>
-            <div class="sub" id="v-mode-name"></div>
-          </div>
-          <div class="reading" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz">
-            <div class="label">SNR</div>
-            <div class="value" id="v-snr">—</div>
-            <div class="sub" id="v-snr-sub">no frame heard yet</div>
-          </div>
-          <div class="reading" title="Application bytes both ways over the last thirty seconds, and the session's total">
-            <div class="label">Throughput</div>
-            <div class="value" id="v-throughput">—</div>
-            <div class="sub" id="v-bytes">no session</div>
-          </div>
-          <div class="reading" title="The other station, and how long the session has run">
-            <div class="label">Session</div>
-            <div class="value" id="v-session">—</div>
-            <div class="sub" id="v-session-sub">no session</div>
-          </div>
-        </div>
-        <div class="grid readings" id="readings-channel">
-          <div class="reading" title="The busy detector's reading: the received level above its noise floor">
-            <div class="label">Signal above noise</div>
-            <div class="value" id="v-excess">—</div>
-            <div class="sub" id="v-floor"></div>
-          </div>
-          <div class="reading" title="Carrier offset the receiver removed from the last frame; positive means the other station is above your dial">
-            <div class="label">Tuning</div>
-            <div class="value" id="v-cfo">—</div>
-            <div class="sub" id="v-cfo-sub">offset of the last frame</div>
-          </div>
-          <div class="reading" title="The sound card's input level; Setup step 3 helps you set it">
-            <div class="label">Receive level</div>
-            <div class="value" id="v-rx-level">—</div>
-            <div class="sub" id="v-rx-level-sub"></div>
-          </div>
-          <div class="reading" title="Bytes waiting to be sent, and how much compression saved">
-            <div class="label">Queued</div>
-            <div class="value" id="v-queued">—</div>
-            <div class="sub" id="v-compress-sub">bytes still to send</div>
-          </div>
-        </div>
+        <!-- the readings on the left, the last ten minutes on the right; the charts take the room left over -->
+        <div class="status-body">
+          <div class="status-readings">
+            <!-- 1. the link: what the session is doing -->
+            <section class="card console-card tiles-card" id="link-card" aria-labelledby="link-title" title="The session: the mode, the signal, the speed and the other station">
+              <div class="card-head">
+                <h2 class="card-title" id="link-title" title="The session: the mode, the signal, the speed and the other station">Link</h2>
+                <details class="help-pop push-right" id="link-help" title="What the link readings mean">
+                  <summary title="What the link readings mean" aria-label="What the link readings mean">?</summary>
+                  <p>
+                    <strong>Mode</strong> is the rung the sender is using: its number, name and rate.
+                    <strong>SNR</strong> is what this receiver measured on the last frame it found,
+                    referenced to 3 kHz. <strong>Throughput</strong> counts application bytes both
+                    ways over the last thirty seconds, with the session's total under it.
+                    <strong>Session</strong> is the other station and how long the session has run.
+                  </p>
+                </details>
+              </div>
+              <div class="tiles" id="readings-link">
+                <div class="reading tile" title="The mode the sender is using now: its number, name and rate">
+                  <div class="label">Mode</div>
+                  <div class="value" id="v-mode">—</div>
+                  <div class="sub" id="v-mode-name"></div>
+                </div>
+                <div class="reading tile" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz">
+                  <div class="label">SNR</div>
+                  <div class="value" id="v-snr">—</div>
+                  <div class="sub" id="v-snr-sub">no frame heard yet</div>
+                </div>
+                <div class="reading tile" title="Application bytes both ways over the last thirty seconds, and the session's total">
+                  <div class="label">Throughput</div>
+                  <div class="value" id="v-throughput">—</div>
+                  <div class="sub" id="v-bytes">no session</div>
+                </div>
+                <div class="reading tile" title="The other station, and how long the session has run">
+                  <div class="label">Session</div>
+                  <div class="value" id="v-session">—</div>
+                  <div class="sub" id="v-session-sub">no session</div>
+                </div>
+              </div>
+            </section>
 
-        <div class="charts">
-          <figure class="chart">
-            <div class="chart-tabs" role="tablist" aria-label="Status chart, last ten minutes">
-              <button class="chart-tab" id="chart-tab-speed" role="tab" aria-selected="true" title="Connection speed: application bytes both ways per second, against the current mode's on-air rate">Speed</button>
-              <button class="chart-tab" id="chart-tab-snr" role="tab" aria-selected="false" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold">SNR by frame</button>
+            <!-- 2. the channel: what the receiver hears between frames -->
+            <section class="card console-card tiles-card" id="channel-card" aria-labelledby="channel-title" title="The channel: the level over the noise, the tuning, the sound card and what is waiting to go">
+              <div class="card-head">
+                <h2 class="card-title" id="channel-title" title="The channel: the level over the noise, the tuning, the sound card and what is waiting to go">Channel</h2>
+                <details class="help-pop push-right" id="channel-help" title="What the channel readings mean">
+                  <summary title="What the channel readings mean" aria-label="What the channel readings mean">?</summary>
+                  <p>
+                    <strong>Signal above noise</strong> is the busy detector's reading: the received
+                    level over its learned noise floor. <strong>Tuning</strong> is the carrier offset the
+                    receiver removed from the last frame — positive means the other station is above
+                    your dial; a few hertz is nothing, a hundred is a dial to check. <strong>Receive
+                    level</strong> is the sound card's input, which Setup step 3 helps you set.
+                    <strong>Queued</strong> is what is still waiting to be sent.
+                  </p>
+                </details>
+              </div>
+              <div class="tiles" id="readings-channel">
+                <div class="reading tile" title="The busy detector's reading: the received level above its noise floor">
+                  <div class="label">Signal above noise</div>
+                  <div class="value" id="v-excess">—</div>
+                  <div class="sub" id="v-floor"></div>
+                </div>
+                <div class="reading tile" title="Carrier offset the receiver removed from the last frame; positive means the other station is above your dial">
+                  <div class="label">Tuning</div>
+                  <div class="value" id="v-cfo">—</div>
+                  <div class="sub" id="v-cfo-sub">offset of the last frame</div>
+                </div>
+                <div class="reading tile" title="The sound card's input level; Setup step 3 helps you set it">
+                  <div class="label">Receive level</div>
+                  <div class="value" id="v-rx-level">—</div>
+                  <div class="sub" id="v-rx-level-sub"></div>
+                </div>
+                <div class="reading tile" title="Bytes waiting to be sent, and how much compression saved">
+                  <div class="label">Queued</div>
+                  <div class="value" id="v-queued">—</div>
+                  <div class="sub" id="v-compress-sub">bytes still to send</div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 3. the last minutes: the largest thing on the tab, and the first to grow -->
+          <section class="card console-card history-card" id="history-card" aria-labelledby="history-title" title="The link's speed or SNR over the last ten minutes, and the channel over the last two">
+            <div class="card-head">
+              <h2 class="card-title" id="history-title" title="The last minutes of the link and the channel">History</h2>
+              <div class="chart-tabs" role="tablist" aria-label="Status chart, last ten minutes">
+                <button class="chart-tab" id="chart-tab-speed" role="tab" aria-selected="true" title="Connection speed: application bytes both ways per second, against the current mode's on-air rate">Speed</button>
+                <button class="chart-tab" id="chart-tab-snr" role="tab" aria-selected="false" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold">SNR by frame</button>
+              </div>
+              <details class="help-pop push-right" id="history-help" title="How to read the charts">
+                <summary title="How to read the charts" aria-label="How to read the charts">?</summary>
+                <p>
+                  <strong>Speed</strong> is the session's application bytes both ways per second, against
+                  the on-air rate of the mode in use: a curve well under the mode line means the link is
+                  the limit, near it means the mode is working as fast as it can. <strong>SNR by
+                  frame</strong> is every frame heard, what the other station reports hearing you at,
+                  and the current mode's threshold. <strong>Channel and activity</strong> is the
+                  received level every half second — bright while a burst arrives, ticks where this
+                  station transmitted, the noise floor dashed and the busy threshold dotted, and a band
+                  along the top while the channel was busy, coloured by what marked it.
+                </p>
+              </details>
             </div>
-            <canvas id="chart-speed" title="Connection speed: application bytes both ways per second, and the current mode's on-air rate, over the last ten minutes" width="450" height="180" role="img" aria-label="Connection throughput and the current mode's on-air rate over the last ten minutes"></canvas>
-            <canvas id="chart-snr" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold" width="450" height="180" role="img" aria-label="SNR in dB of every frame heard over the last ten minutes, with what the other station reports and the current mode's threshold" hidden></canvas>
-          </figure>
-          <figure class="chart">
-            <figcaption>Channel and activity, last two minutes</figcaption>
-            <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — the level, the passband's shape or a decoded frame — and a peak drawn red only where it crossed the line" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
-          </figure>
+            <div class="charts">
+              <figure class="chart">
+                <figcaption title="The chart chosen above, over the last ten minutes">Last ten minutes</figcaption>
+                <canvas id="chart-speed" title="Connection speed: application bytes both ways per second, and the current mode's on-air rate, over the last ten minutes" width="450" height="180" role="img" aria-label="Connection throughput and the current mode's on-air rate over the last ten minutes"></canvas>
+                <canvas id="chart-snr" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold" width="450" height="180" role="img" aria-label="SNR in dB of every frame heard over the last ten minutes, with what the other station reports and the current mode's threshold" hidden></canvas>
+              </figure>
+              <figure class="chart">
+                <figcaption title="The received level and the busy detector's decisions, over the last two minutes">Channel and activity, last two minutes</figcaption>
+                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — the level, the passband's shape or a decoded frame — and a peak drawn red only where it crossed the line" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
+              </figure>
+            </div>
+          </section>
         </div>
 
-        <section class="counters" aria-labelledby="counters-title">
-          <div class="section-head">
-            <h2 id="counters-title">Counters</h2>
-            <button id="btn-reset-counters" class="small ghost" title="Set the counters back to zero without restarting the modem; the session and settings are untouched">Reset counters</button>
+        <!-- 4. the modem's counters since it started -->
+        <section class="card console-card counters" id="counters-card" aria-labelledby="counters-title" title="The modem's counters since it started">
+          <div class="card-head">
+            <h2 class="card-title" id="counters-title" title="The modem's counters since it started">Counters</h2>
+            <span class="sub" title="Counted since the modem started, or since the last reset">since the modem started</span>
+            <button id="btn-reset-counters" class="small quiet push-right" title="Set the counters back to zero without restarting the modem; the session and settings are untouched">Reset counters</button>
           </div>
           <div class="pills" id="counters" title="The modem's counters since it started; each pill says what it counts"></div>
         </section>
       </section>
 
       <!-- ── session ────────────────────────────────────────────── -->
-      <section id="panel-session" class="panel session" role="tabpanel" aria-labelledby="tab-session" hidden>
+      <section id="panel-session" class="panel session fills" role="tabpanel" aria-labelledby="tab-session" hidden>
         <!-- 1. where the station is: the dial, what the rules say of it, the remembered dials -->
         <section class="card console-card op-card" id="op-card" aria-labelledby="dial-title" title="The radio's dial, what the rules say of transmitting there, and the dials you keep">
           <div class="op-head">
@@ -235,6 +296,14 @@
             <div class="btn-group" role="group" aria-label="Without a session" title="Test the path without a session, or run the field test">
               <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
               <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
+              <select id="beacon-every" class="compact" title="Repeat the beacon every so many minutes while you are at the station, the first one now; once is the Beacon button alone" aria-label="Repeat the beacon">
+                <option value="0">once</option>
+                <option value="10">every 10 min</option>
+                <option value="15">every 15 min</option>
+                <option value="20">every 20 min</option>
+                <option value="30">every 30 min</option>
+                <option value="60">every 60 min</option>
+              </select>
               <button id="btn-test" title="Run the field test with the station in Call: probe, message, a burst at every mode, file, recorded; the same button stops it">Test session</button>
             </div>
             <label class="check push-right" for="chime-enabled" title="Play a chime when a session comes up or ends"><input type="checkbox" id="chime-enabled" title="Play a chime when a session comes up or ends" /> Chime</label>
@@ -246,7 +315,10 @@
                 Call whether it hears you, and how well, without a session: one frame, one
                 answer, both directions of the path. <strong>Beacon</strong> puts this station's
                 callsign on the air once, addressed to nobody, so anyone listening can report
-                hearing you. <strong>Test session</strong> runs the field test with the station in
+                hearing you; the list beside it repeats it every 10 to 60 minutes while you are at
+                the station, waiting for a clear channel, until set back to <em>once</em> — the line
+                under the buttons says when the last went and the next is due, and the Log's
+                <em>Beacons</em> filter lists every beacon sent and heard. <strong>Test session</strong> runs the field test with the station in
                 Call: a probe, a message, a short burst at every mode and a file, all recorded —
                 about five minutes of transmitting, sized to what the path can do, and a sidecar the
                 project can learn from. The same button stops it. The other station only has to be
@@ -255,6 +327,7 @@
             </details>
           </div>
           <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
+          <p class="note" id="beacon-note" title="The beacons: the last one sent, and the next when repeating" role="status" aria-live="polite"></p>
           <p class="note" id="test-result" title="What the test session did last, and how it ended" role="status" aria-live="polite"></p>
           <div class="test-progress" id="test-progress" title="How far the running test session has got" hidden>
             <p class="test-step" id="test-step" title="The step the test is at, out of the six it runs, and the time: elapsed, and the most the budget leaves"></p>
@@ -397,83 +470,107 @@
       </section>
 
       <!-- ── stations heard ─────────────────────────────────────── -->
-      <section id="panel-stations" class="panel" role="tabpanel" aria-labelledby="tab-stations" hidden>
-        <div class="row">
-          <h2 class="inline">Stations heard</h2>
-          <span class="sub" id="heard-note" title="The list's state" role="status" aria-live="polite"></span>
-          <button id="btn-heard-clear" title="Empty the list of stations heard" class="push-right">Forget all</button>
-        </div>
-        <p class="sub">
-          Every station whose frame carried a callsign — a beacon, a call, a probe, an answer, or the
-          other end of a session — with when it was heard, how strong, and what it was doing.
-          Click a heading to sort; <strong>Call</strong> puts the callsign on the Session
-          tab, and <strong>Sessions</strong> shows the sessions with that station below. One
-          line per station; the list is the modem's, kept beside its configuration, so it
-          survives a restart; it holds the 200 most recent.
-        </p>
-        <div class="table-scroll">
-          <table class="heard" id="heard-table" title="Every station whose frame carried a callsign; click a heading to sort" aria-describedby="heard-note">
-            <thead>
-              <tr>
-                <th scope="col"><button class="sort" data-sort="callsign" title="Sort by callsign">Callsign</button></th>
-                <th scope="col"><button class="sort" data-sort="last_heard_ms" aria-sort="descending" title="Sort by when the station was last heard">Last heard</button></th>
-                <th scope="col"><button class="sort" data-sort="first_heard_ms" title="Sort by when the station was first heard">First heard</button></th>
-                <th scope="col" class="num"><button class="sort" data-sort="snr_db" title="Sort by the SNR of the last frame">SNR</button></th>
-                <th scope="col" class="num"><button class="sort" data-sort="best_snr_db" title="Sort by the best SNR heard from the station">Best</button></th>
-                <th scope="col" class="num"><button class="sort" data-sort="frequency_hz" title="Sort by the dial frequency it was heard on">Dial</button></th>
-                <th scope="col" class="num"><button class="sort" data-sort="mode" title="Sort by the mode of its last frame">Mode</button></th>
-                <th scope="col"><button class="sort" data-sort="activity" title="Sort by what the station was doing">Activity</button></th>
-                <th scope="col" class="num"><button class="sort" data-sort="count" title="Sort by how many frames were heard">Frames</button></th>
-                <th scope="col"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="heard"></tbody>
-          </table>
-        </div>
-        <p class="empty" id="heard-empty">Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.</p>
+      <section id="panel-stations" class="panel stations fills" role="tabpanel" aria-labelledby="tab-stations" hidden>
+        <!-- 1. everyone heard: the largest thing on the tab -->
+        <section class="pane table-pane heard-pane" id="heard-pane" aria-labelledby="heard-title" title="Every station whose frame carried a callsign">
+          <div class="pane-head">
+            <h2 class="card-title" id="heard-title" title="Every station whose frame carried a callsign">Stations heard</h2>
+            <span class="sub" id="heard-note" title="The list's state" role="status" aria-live="polite"></span>
+            <div class="chips" id="heard-filters" role="group" aria-label="Which stations the list shows" title="Which stations the list shows">
+              <button class="chip" data-filter="all" aria-pressed="true" title="Every station heard">All</button>
+              <button class="chip" data-filter="beacons" aria-pressed="false" title="Stations whose beacons were heard, the latest beacon first">Beacons</button>
+              <button class="chip" data-filter="sessions" aria-pressed="false" title="Stations a session has been up with">Worked</button>
+            </div>
+            <div class="head-actions">
+              <button id="btn-heard-clear" class="small quiet" title="Empty the list of stations heard">Forget all</button>
+              <details class="help-pop" id="heard-help" title="What the list keeps">
+                <summary title="What the list keeps" aria-label="What the list keeps">?</summary>
+                <p>
+                  Every station whose frame carried a callsign — a beacon, a call, a probe, an answer,
+                  a KISS frame or the other end of a session — with when it was heard, how strong, and
+                  what it was doing. <strong>Beacons</strong> counts the beacons heard from it and says
+                  when the last one was; the <em>Beacons</em> filter lists only those stations, the
+                  latest first. Click a heading to sort; <strong>Call</strong> puts the callsign on the
+                  Session tab, and <strong>Sessions</strong> shows the sessions with that station below.
+                  One line per station; the list is the modem's, kept beside its configuration so it
+                  survives a restart, and holds the 200 most recent.
+                </p>
+              </details>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table class="heard" id="heard-table" title="Every station whose frame carried a callsign; click a heading to sort" aria-describedby="heard-note">
+              <thead>
+                <tr>
+                  <th scope="col"><button class="sort" data-sort="callsign" title="Sort by callsign">Callsign</button></th>
+                  <th scope="col"><button class="sort" data-sort="last_heard_ms" aria-sort="descending" title="Sort by when the station was last heard">Last heard</button></th>
+                  <th scope="col"><button class="sort" data-sort="first_heard_ms" title="Sort by when the station was first heard">First heard</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="snr_db" title="Sort by the SNR of the last frame">SNR</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="best_snr_db" title="Sort by the best SNR heard from the station">Best</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="frequency_hz" title="Sort by the dial frequency it was heard on">Dial</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="mode" title="Sort by the mode of its last frame">Mode</button></th>
+                  <th scope="col"><button class="sort" data-sort="activity" title="Sort by what the station was doing">Activity</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="last_beacon_ms" title="Sort by when its last beacon was heard: how many beacons, and when the last one was">Beacons</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="count" title="Sort by how many frames were heard">Frames</button></th>
+                  <th scope="col"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="heard"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="heard-empty" title="Why the list is empty">Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.</p>
+        </section>
 
-        <div class="row sessions-head" id="sessions-head">
-          <h2 class="inline">Sessions</h2>
-          <span class="sub" id="sessions-note" title="Which sessions the list shows" role="status" aria-live="polite"></span>
-          <button id="btn-sessions-all" class="small ghost" title="Show the sessions with every station, not only one" hidden>Show all</button>
-          <button id="btn-sessions-clear" title="Empty the session history the modem keeps; the recordings and the stations heard are not touched" class="push-right">Forget sessions</button>
-        </div>
-        <p class="sub">
-          One line per session, newest first, added when it ends: when it came up and how long
-          it lasted, who called, what crossed each way, the fastest rung each way, how the other
-          station heard this one and how it ended. Kept by the modem beside its configuration;
-          the 500 most recent.
-        </p>
-        <div class="table-scroll">
-          <table class="heard sessions" id="sessions-table" title="Every session this station has had, newest first" aria-describedby="sessions-note">
-            <thead>
-              <tr>
-                <th scope="col" title="When the session came up">Started</th>
-                <th scope="col" title="The other station">Station</th>
-                <th scope="col" class="num" title="How long the session was up">Length</th>
-                <th scope="col" title="Who placed the call: out, this station called; in, it was called">Call</th>
-                <th scope="col" class="num" title="The dial frequency, when the radio could say, and the bandwidth the session ran on">Dial</th>
-                <th scope="col" class="num" title="Bytes the other station acknowledged, and bytes received from it">Sent / received</th>
-                <th scope="col" class="num" title="The fastest rung this station sent data at, and the fastest it decoded from the other station">Top rung out / in</th>
-                <th scope="col" class="num" title="How the other station last said it heard this one, and the SNR of the last frame decoded from it">Heard there / here</th>
-                <th scope="col" title="How the session ended, in the link's words; TEST marks a Test session">Ended</th>
-              </tr>
-            </thead>
-            <tbody id="sessions"></tbody>
-          </table>
-        </div>
-        <p class="empty" id="sessions-empty">No session yet. Each one is added here when it ends.</p>
+        <!-- 2. the sessions this station has had -->
+        <section class="pane table-pane sessions-pane" id="sessions-pane" aria-labelledby="sessions-title" title="Every session this station has had, newest first">
+          <div class="pane-head" id="sessions-head" title="The session history: which sessions it shows, and its tools">
+            <h2 class="card-title" id="sessions-title" title="Every session this station has had, newest first">Sessions</h2>
+            <span class="sub" id="sessions-note" title="Which sessions the list shows" role="status" aria-live="polite"></span>
+            <button id="btn-sessions-all" class="small ghost" title="Show the sessions with every station, not only one" hidden>Show all</button>
+            <div class="head-actions">
+              <button id="btn-sessions-clear" class="small quiet" title="Empty the session history the modem keeps; the recordings and the stations heard are not touched">Forget sessions</button>
+              <details class="help-pop" id="sessions-help" title="What the history keeps">
+                <summary title="What the history keeps" aria-label="What the history keeps">?</summary>
+                <p>
+                  One line per session, newest first, added when it ends: when it came up and how long
+                  it lasted, who called, what crossed each way, the fastest rung each way, how the other
+                  station heard this one and how this one heard it, and how it ended. Kept by the modem
+                  beside its configuration; the 500 most recent.
+                </p>
+              </details>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table class="heard sessions" id="sessions-table" title="Every session this station has had, newest first" aria-describedby="sessions-note">
+              <thead>
+                <tr>
+                  <th scope="col" title="When the session came up">Started</th>
+                  <th scope="col" title="The other station">Station</th>
+                  <th scope="col" class="num" title="How long the session was up">Length</th>
+                  <th scope="col" title="Who placed the call: out, this station called; in, it was called">Call</th>
+                  <th scope="col" class="num" title="The dial frequency, when the radio could say, and the bandwidth the session ran on">Dial</th>
+                  <th scope="col" class="num" title="Bytes the other station acknowledged, and bytes received from it">Sent / received</th>
+                  <th scope="col" class="num" title="The fastest rung this station sent data at, and the fastest it decoded from the other station">Top rung out / in</th>
+                  <th scope="col" class="num" title="How the other station last said it heard this one, and the SNR of the last frame decoded from it">Heard there / here</th>
+                  <th scope="col" title="How the session ended, in the link's words; TEST marks a Test session">Ended</th>
+                </tr>
+              </thead>
+              <tbody id="sessions"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="sessions-empty" title="Why the history is empty">No session yet. Each one is added here when it ends.</p>
+        </section>
       </section>
 
       <!-- ── diagnostics ────────────────────────────────────────── -->
-      <section id="panel-diagnostics" class="panel" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
-        <!-- the signal-analysis card: constellation, spectrum and waterfall in one, undockable -->
-        <section class="card signal-card" id="signal-card" aria-labelledby="signal-title">
+      <section id="panel-diagnostics" class="panel diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+        <!-- 1. what the receiver sees: constellation, spectrum and waterfall in one, undockable -->
+        <section class="card console-card signal-card" id="signal-card" aria-labelledby="signal-title" title="The constellation, spectrum and waterfall of what the receiver hears">
           <div class="card-head">
-            <h3 id="signal-title">Signal analysis</h3>
+            <h2 class="card-title" id="signal-title" title="The constellation, spectrum and waterfall of what the receiver hears">Signal analysis</h2>
             <span class="live" id="signal-live" data-live="false" title="Whether the scopes are drawing: they run while this tab is shown, and in their own window when undocked">paused</span>
             <div class="card-actions">
-              <button class="small" id="btn-undock" title="Open the constellation, spectrum and waterfall in a window of their own, to keep them in view on any tab">
+              <button class="small quiet" id="btn-undock" title="Open the constellation, spectrum and waterfall in a window of their own, to keep them in view on any tab">
                 <svg class="icon" aria-hidden="true"><use href="#i-undock" /></svg>
                 <span id="btn-undock-text">Undock</span>
               </button>
@@ -490,51 +587,120 @@
           <p class="sub" id="signal-note" title="Why the card could not be undocked" role="status" aria-live="polite" hidden></p>
         </section>
 
-        <div class="grid readings" id="readings-receiver">
-          <div class="reading" title="The rate controller's smoothed SNR, and the margin it keeps above the mode's threshold">
-            <div class="label">Rate control</div>
-            <div class="value" id="d-rate">—</div>
-            <div class="sub" id="d-rate-sub">smoothed SNR · margin</div>
-          </div>
-          <div class="reading" title="What the other station measured on your last burst, carried back in its acknowledgement">
-            <div class="label">They hear you at</div>
-            <div class="value" id="d-peer">—</div>
-            <div class="sub">from the last acknowledgement</div>
-          </div>
-          <div class="reading" title="How clearly the last frame's mode was read from its chips; below 1.3 is a guess">
-            <div class="label">Mode confidence</div>
-            <div class="value" id="d-confidence">—</div>
-            <div class="sub">of the last frame; below 1.3 is a guess</div>
-          </div>
-          <div class="reading" title="The busy detector's decision and every number behind it: the level of the latest 25 ms block, the noise floor (the typical level of the last minute's blocks that were not under a signal), the margin between them, the configured threshold, the largest margin seen since the last reading, the passband's shape (its highest spectral bin over its median: flat noise reads about 6 dB, a narrowband signal 15 and up, and the receiver's AGC cannot change it), and which path last marked the channel busy">
-            <div class="label">Busy detector</div>
-            <div class="value" id="d-busy">—</div>
-            <div class="sub" id="d-busy-sub">level · floor</div>
-            <div class="sub numerals" id="d-busy-why"></div>
-          </div>
-          <div class="reading" title="Whether a host program such as Winlink Express or Pat is attached">
-            <div class="label">Host program</div>
-            <div class="value" id="d-host">—</div>
-            <div class="sub" id="d-host-sub"></div>
-          </div>
-          <div class="reading" title="The KISS port: whether it listens, the programs connected, and the datagrams sent and heard">
-            <div class="label">KISS</div>
-            <div class="value" id="d-kiss" title="off, listening, or how many programs are connected">—</div>
-            <div class="sub" id="d-kiss-sub" title="Frames from programs and to them, and datagrams waiting"></div>
-          </div>
-          <div class="reading" title="The sound card's input: RMS, peak and whether it clipped">
-            <div class="label">Audio</div>
-            <div class="value" id="d-audio">—</div>
-            <div class="sub" id="d-audio-sub">RMS · peak · clipping</div>
-          </div>
-        </div>
-
-        <!-- the regulatory policy's view of this station: what it knows, what it decided -->
-        <section class="card reg-card" id="reg-card" aria-labelledby="reg-card-title">
+        <!-- 2. the receiver's own numbers, and the programs attached -->
+        <section class="card console-card tiles-card" id="receiver-card" aria-labelledby="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached">
           <div class="card-head">
-            <h3 id="reg-card-title">Rules</h3>
+            <h2 class="card-title" id="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached">Receiver</h2>
+            <details class="help-pop push-right" id="receiver-help" title="What the receiver readings mean">
+              <summary title="What the receiver readings mean" aria-label="What the receiver readings mean">?</summary>
+              <p>
+                <strong>Rate control</strong> is the rate controller's smoothed SNR and the margin it keeps
+                above the mode's threshold. <strong>They hear you at</strong> is what the other station
+                measured on your last burst, carried back in its acknowledgement. <strong>Mode
+                confidence</strong> is how clearly the last frame's mode was read from its chips; below
+                1.3 is a guess. The <strong>busy detector</strong> line gives every number behind its
+                decision: the level of the latest 25 ms block, the noise floor, the margin between
+                them, the threshold, the largest margin since the last reading, the passband's shape
+                (flat noise reads about 6 dB, a narrowband signal 15 and up) and which path last marked
+                the channel busy. <strong>Host program</strong> and <strong>KISS</strong> say what is
+                attached; <strong>Audio</strong> is the sound card's input.
+              </p>
+            </details>
+          </div>
+          <div class="tiles" id="readings-receiver">
+            <div class="reading tile" title="The rate controller's smoothed SNR, and the margin it keeps above the mode's threshold">
+              <div class="label">Rate control</div>
+              <div class="value" id="d-rate">—</div>
+              <div class="sub" id="d-rate-sub">smoothed SNR · margin</div>
+            </div>
+            <div class="reading tile" title="What the other station measured on your last burst, carried back in its acknowledgement">
+              <div class="label">They hear you at</div>
+              <div class="value" id="d-peer">—</div>
+              <div class="sub">from the last acknowledgement</div>
+            </div>
+            <div class="reading tile" title="How clearly the last frame's mode was read from its chips; below 1.3 is a guess">
+              <div class="label">Mode confidence</div>
+              <div class="value" id="d-confidence">—</div>
+              <div class="sub">of the last frame; below 1.3 is a guess</div>
+            </div>
+            <div class="reading tile" title="The busy detector's decision and every number behind it: the level of the latest 25 ms block, the noise floor (the typical level of the last minute's blocks that were not under a signal), the margin between them, the configured threshold, the largest margin seen since the last reading, the passband's shape (its highest spectral bin over its median: flat noise reads about 6 dB, a narrowband signal 15 and up, and the receiver's AGC cannot change it), and which path last marked the channel busy">
+              <div class="label">Busy detector</div>
+              <div class="value" id="d-busy">—</div>
+              <div class="sub" id="d-busy-sub">level · floor</div>
+              <div class="sub numerals" id="d-busy-why"></div>
+            </div>
+            <div class="reading tile" title="Whether a host program such as Winlink Express or Pat is attached">
+              <div class="label">Host program</div>
+              <div class="value" id="d-host">—</div>
+              <div class="sub" id="d-host-sub"></div>
+            </div>
+            <div class="reading tile" title="The KISS port: whether it listens, the programs connected, and the datagrams sent and heard">
+              <div class="label">KISS</div>
+              <div class="value" id="d-kiss" title="off, listening, or how many programs are connected">—</div>
+              <div class="sub" id="d-kiss-sub" title="Frames from programs and to them, and datagrams waiting"></div>
+            </div>
+            <div class="reading tile" title="The sound card's input: RMS, peak and whether it clipped">
+              <div class="label">Audio</div>
+              <div class="value" id="d-audio">—</div>
+              <div class="sub" id="d-audio-sub">RMS · peak · clipping</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. every frame heard: a window of its own that scrolls -->
+        <section class="pane table-pane frames-pane" id="frames-pane" aria-labelledby="frames-title" title="Every frame heard, newest first">
+          <div class="pane-head">
+            <h2 class="card-title" id="frames-title" title="Every frame heard, newest first">Frames</h2>
+            <span class="sub" title="The newest frame is at the top">newest first</span>
+            <details class="help-pop push-right" id="frames-help" title="What the columns say">
+              <summary title="What the columns say" aria-label="What the columns say">?</summary>
+              <p>
+                Every frame the receiver found, decoded or not: its kind, the callsigns it carried or
+                the session implies, the mode, the redundancy version (which retransmission of the
+                codeword it was), the SNR measured on it, the carrier offset, how clearly its mode was
+                read (below 1.3 is a guess), whether it decoded, its payload and, for a control frame,
+                what it said. A frame that did not decode is greyed, its <em>no</em> in red.
+              </p>
+            </details>
+          </div>
+          <div class="table-scroll">
+            <table class="frames" title="Every frame heard, newest first">
+              <thead>
+                <tr>
+                  <th scope="col" title="When the frame was heard">Time</th>
+                  <th scope="col" title="What the frame was: data, control, connect, beacon, probe">Kind</th>
+                  <th scope="col" title="The callsigns the frame carried, or the session implies">From → to</th>
+                  <th scope="col" class="num" title="The mode the frame was sent at">Mode</th>
+                  <th scope="col" class="num" title="Redundancy version: which retransmission of the codeword this was">RV</th>
+                  <th scope="col" class="num" title="Signal-to-noise ratio measured on the frame">SNR</th>
+                  <th scope="col" class="num" title="Carrier offset in Hz">Offset</th>
+                  <th scope="col" class="num" title="Mode confidence; below 1.3 is a guess">Conf.</th>
+                  <th scope="col" title="Whether the frame decoded">Decoded</th>
+                  <th scope="col" class="num" title="Payload bytes">Bytes</th>
+                  <th scope="col" title="What a control frame said">Control</th>
+                </tr>
+              </thead>
+              <tbody id="frames" title="Every frame heard, newest first"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="frames-empty" title="Why no frame is listed">No frame heard yet.</p>
+        </section>
+
+        <!-- 4. the regulatory policy's view of this station: what it knows, what it decided -->
+        <section class="card console-card reg-card" id="reg-card" aria-labelledby="reg-card-title" title="What the rules know about this station, and what they decided">
+          <div class="card-head">
+            <h2 class="card-title" id="reg-card-title" title="What the rules know about this station, and what they decided">Rules</h2>
             <span class="badge" id="reg-card-verdict" data-verdict="unknown" title="The verdict on this station's widest transmission, here and now">—</span>
             <span class="sub card-meta" id="reg-card-source" title="The rules in force and when they were last checked against the e-CFR"></span>
+            <details class="help-pop push-right" id="reg-card-help" title="How Aether uses the rules">
+              <summary title="How Aether uses the rules" aria-label="How Aether uses the rules">?</summary>
+              <p>
+                Aether judges every transmission against the rules before the radio is keyed, from the
+                spectrum the waveform actually occupies; it does not replace the control operator's
+                responsibility for the station (§97.103, §97.105). The profile's rules and their
+                sources are in <a href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="How Aether reads Part 97, with links to the e-CFR">FCC regulatory controls</a>.
+              </p>
+            </details>
           </div>
           <p class="reg-card-summary" id="reg-card-summary" title="The verdict in a sentence, and its reasoning"></p>
           <div class="reg-grid">
@@ -555,51 +721,25 @@
               <tbody id="reg-safe" title="Safe dial ranges"></tbody>
             </table>
           </div>
-          <p class="sub">
-            Aether judges every transmission against the rules before the radio is keyed, from the
-            spectrum the waveform actually occupies; it does not replace the control operator's
-            responsibility for the station (§97.103, §97.105). The profile's rules and their
-            sources: <a href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="How Aether reads Part 97, with links to the e-CFR">FCC regulatory controls</a>.
-          </p>
-        </section>
-
-        <section aria-labelledby="frames-title">
-          <h2 id="frames-title">Frames, newest first</h2>
-          <div class="table-scroll">
-            <table class="frames">
-              <thead>
-                <tr>
-                  <th scope="col" title="When the frame was heard">Time</th>
-                  <th scope="col" title="What the frame was: data, control, connect, beacon, probe">Kind</th>
-                  <th scope="col" title="The callsigns the frame carried, or the session implies">From → to</th>
-                  <th scope="col" class="num" title="The mode the frame was sent at">Mode</th>
-                  <th scope="col" class="num" title="Redundancy version: which retransmission of the codeword this was">RV</th>
-                  <th scope="col" class="num" title="Signal-to-noise ratio measured on the frame">SNR</th>
-                  <th scope="col" class="num" title="Carrier offset in Hz">Offset</th>
-                  <th scope="col" class="num" title="Mode confidence; below 1.3 is a guess">Conf.</th>
-                  <th scope="col" title="Whether the frame decoded">Decoded</th>
-                  <th scope="col" class="num" title="Payload bytes">Bytes</th>
-                  <th scope="col" title="What a control frame said">Control</th>
-                </tr>
-              </thead>
-              <tbody id="frames" title="Every frame heard, newest first"></tbody>
-            </table>
-          </div>
-          <p class="empty" id="frames-empty">No frame heard yet.</p>
         </section>
       </section>
 
       <!-- ── setup ──────────────────────────────────────────────── -->
-      <section id="panel-setup" class="panel" role="tabpanel" aria-labelledby="tab-setup" hidden>
+      <section id="panel-setup" class="panel setup" role="tabpanel" aria-labelledby="tab-setup" hidden>
         <div class="wizard" id="wizard">
-          <div class="card profile-bar" id="profile-bar" title="Profiles: every setting on this tab, the transmit level and the waterfall, saved under a name. One per radio or per place; a file you can back up or carry to another computer.">
-            <div class="row">
-              <label for="profile-select" id="profile-label" title="The profile the running settings came from; a * means they have changed since it was saved">Profile</label>
-              <select id="profile-select" title="The saved profile these settings come from; pick another to switch the station to it" aria-label="Active profile"></select>
-              <button id="profile-save" class="primary" title="Write the current settings to this profile">Save</button>
-              <button id="profile-save-as" title="Keep the current settings as a new profile, and switch to it">Save as…</button>
-              <button id="profile-import" title="Bring in a profile from an .aetherprofile file; it is checked and listed, and loaded only when you say">Import…</button>
-              <button id="profile-export" title="Save this profile as an .aetherprofile file to back up or carry to another computer">Export…</button>
+          <!-- the profile these settings belong to, and the steps at a glance -->
+          <section class="card console-card profile-bar" id="profile-bar" aria-labelledby="profile-label" title="Profiles: every setting on this tab, the transmit level and the waterfall, saved under a name. One per radio or per place; a file you can back up or carry to another computer.">
+            <div class="tool-row">
+              <label for="profile-select" id="profile-label" class="card-title" title="The profile the running settings came from; a * means they have changed since it was saved">Profile</label>
+              <select id="profile-select" title="The saved profile these settings come from; pick another to switch the station to it; a * means the running settings have changed since it was saved" aria-label="Active profile"></select>
+              <div class="btn-group" role="group" aria-label="Save the profile" title="Save the running settings to a profile">
+                <button id="profile-save" class="primary" title="Write the current settings to this profile">Save</button>
+                <button id="profile-save-as" class="quiet" title="Keep the current settings as a new profile, and switch to it">Save as…</button>
+              </div>
+              <div class="btn-group" role="group" aria-label="Profile files" title="Carry a profile to or from a file">
+                <button id="profile-import" class="quiet" title="Bring in a profile from an .aetherprofile file; it is checked and listed, and loaded only when you say">Import…</button>
+                <button id="profile-export" class="quiet" title="Save this profile as an .aetherprofile file to back up or carry to another computer">Export…</button>
+              </div>
               <details class="menu" id="profile-more" title="New, rename, duplicate, delete">
                 <summary id="profile-more-summary" title="More: new, rename, duplicate, delete">More ▾</summary>
                 <div class="menu-list" id="profile-menu" title="The less-used profile actions">
@@ -609,36 +749,70 @@
                   <button id="profile-delete" class="danger" title="Delete a profile other than the active one">Delete…</button>
                 </div>
               </details>
+              <details class="help-pop push-right" id="profile-help" title="What a profile is">
+                <summary title="What a profile is" aria-label="What a profile is">?</summary>
+                <p>
+                  Every setting on this tab, the transmit level and the waterfall are saved under the
+                  profile's name. Switch profiles to change radios or places — a <code>*</code> means the
+                  running settings have changed since the profile was saved, and switching asks first.
+                  <strong>Export…</strong> writes an <code>.aetherprofile</code> file you can back up or
+                  carry to another computer, and <strong>Import…</strong> brings one in; a device the
+                  other computer does not have is shown as <em>not on this computer</em> until you
+                  choose one.
+                </p>
+              </details>
               <input id="profile-file" type="file" accept=".aetherprofile,application/json" title="The profile file to import" aria-label="Profile file to import" hidden />
             </div>
-            <div class="row" id="profile-name-form" title="Name the profile" hidden>
+            <div class="tool-row inset-row" id="profile-name-form" title="Name the profile" hidden>
               <label for="profile-name" id="profile-name-label" title="What the profile is called">Name</label>
               <input id="profile-name" type="text" class="prose" maxlength="60" placeholder="Home FTDX10" autocomplete="off" title="The profile's name; the file is named after it" aria-label="Profile name" />
               <select id="profile-pick" title="Which profile" aria-label="Which profile" hidden></select>
               <button id="profile-name-ok" class="primary" title="Go ahead">OK</button>
-              <button id="profile-name-cancel" title="Close without changing anything">Cancel</button>
+              <button id="profile-name-cancel" class="quiet" title="Close without changing anything">Cancel</button>
             </div>
-            <div class="row" id="profile-prompt" title="The current profile has changes that are not saved to it" hidden>
+            <div class="tool-row inset-row" id="profile-prompt" title="The current profile has changes that are not saved to it" hidden>
               <span class="sub" id="profile-prompt-text" title="What is about to happen"></span>
               <button id="profile-prompt-save" class="primary" title="Save the changes to the current profile first, then go on">Save and continue</button>
               <button id="profile-prompt-discard" title="Leave the current profile as it was last saved and go on">Discard changes</button>
-              <button id="profile-prompt-cancel" title="Stay where you are, changes and all">Cancel</button>
+              <button id="profile-prompt-cancel" class="quiet" title="Stay where you are, changes and all">Cancel</button>
             </div>
-            <p class="sub" id="profile-note" title="What the last profile action did" role="status" aria-live="polite">
-              Every setting below, the transmit level and the waterfall are saved under the
-              profile's name. Switch profiles to change radios or places; Export writes a file
-              you can back up or carry to another computer.
-            </p>
-          </div>
+            <p class="sub" id="profile-note" title="What the last profile action did" role="status" aria-live="polite"></p>
+            <nav class="stepper" id="setup-stepper" aria-label="Setup steps" title="The six steps: a tick means nothing in the step is wrong; click one to go to it">
+              <button class="step-link" data-step="1" title="Step 1: your callsign, the rules the station operates under, and the field log">1 · Callsign and rules</button>
+              <button class="step-link" data-step="2" title="Step 2: the sound card and how the radio is keyed">2 · Radio interface</button>
+              <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card">3 · Receive level</button>
+              <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges">4 · Modem</button>
+              <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port">5 · Application</button>
+              <button class="step-link" data-step="6" title="Step 6: write the settings to the modem's configuration">6 · Save</button>
+            </nav>
+          </section>
+
           <ol class="steps">
-            <li class="step" data-step="1" id="step-1">
-              <h3>1. Callsign and rules</h3>
+            <!-- 1 -->
+            <li class="step card console-card" data-step="1" id="step-1">
+              <div class="card-head step-head">
+                <h3 class="card-title step-title" title="Your callsign, the rules the station operates under, and the field log"><span class="step-num">1</span>Callsign and rules</h3>
+                <details class="help-pop push-right" id="step-1-help" title="Why the rules need these">
+                  <summary title="Why the rules need these" aria-label="Why the rules need these">?</summary>
+                  <p>
+                    <strong>Local</strong> and <strong>remote</strong> control follow the same rules: the
+                    data segments of your class, a signal no wider than 2.8 kHz, all of it inside the
+                    segment. <strong>Automatic</strong> is a station with nobody at the control point —
+                    an unattended mailbox or gateway: it may transmit freely only inside the automatic
+                    sub-bands of §97.221(b), and elsewhere only answer a station under local or remote
+                    control, at 500 Hz or less (§97.221(c)). Aether judges every transmission before
+                    keying and refuses what the rules do not allow; you remain the control operator.
+                    The field log's grid, rig, power and antenna go into every recording, so a report
+                    needs no follow-up; six grid characters let the log work out the path length.
+                  </p>
+                </details>
+              </div>
               <div class="row">
                 <label for="wz-call">Callsign</label>
                 <input id="wz-call" title="Your callsign, with an SSID (KK4ODA-1) or a suffix (KK4ODA/P) if you use one" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" aria-describedby="wz-call-note" />
-                <span class="sub" id="wz-call-note">Letters, digits, <code>-</code> and <code>/</code>; up to nine characters. An SSID (<code>KK4ODA-1</code>) or a suffix (<code>KK4ODA/P</code>) is fine. A host program that names its own callsign is answered to as well.</span>
+                <span class="sub" id="wz-call-note" title="What makes a callsign acceptable">Letters, digits, <code>-</code> and <code>/</code>; up to nine characters. An SSID (<code>KK4ODA-1</code>) or a suffix (<code>KK4ODA/P</code>) is fine, and a host program's own callsign is answered to as well.</span>
               </div>
-              <h4 class="sub-heading">The rules this station operates under</h4>
+              <h4 class="sub-heading" title="The rules Aether judges every transmission against">The rules this station operates under</h4>
               <div class="row">
                 <label for="reg-profile">Rules</label>
                 <select id="reg-profile" title="The regulations Aether judges every transmission against before the radio is keyed">
@@ -672,56 +846,63 @@
                   <option value="lsb">LSB</option>
                 </select>
               </div>
-              <p class="sub" id="reg-note">
-                <strong>Local</strong> and <strong>remote</strong> control follow the same rules: the
-                data segments of your class, a signal no wider than 2.8 kHz, all of it inside the
-                segment. <strong>Automatic</strong> is a station with nobody at the control point —
-                an unattended mailbox or gateway: it may transmit freely only inside the automatic
-                sub-bands of §97.221(b), and elsewhere only answer a station under local or remote
-                control, at 500 Hz or less (§97.221(c)). Aether judges every transmission before
-                keying and refuses what the rules do not allow; you remain the control operator.
-              </p>
-              <h4 class="sub-heading">For the field log</h4>
+              <h4 class="sub-heading" title="Details that go into every recording">For the field log</h4>
               <div class="row">
                 <label for="op-grid">Grid</label>
-                <input id="op-grid" title="Maidenhead locator, four or six characters, for the field log" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
-                <span class="sub">Maidenhead locator, <strong>four or six characters</strong> — <code>EM73</code> places you within a square of about 100 × 200 km, <code>EM73tv</code> within about 5 × 8 km. Six is worth typing: the field log uses it to work out the path length between stations. Optional, like the rest of this.</span>
+                <input id="op-grid" title="Maidenhead locator, four or six characters, for the field log: EM73 places you within about 100 × 200 km, EM73tv within about 5 × 8 km" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
+                <span class="sub">four or six characters — six lets the log work out the path length</span>
               </div>
               <div class="row">
                 <label for="op-rig">Rig</label>
                 <input id="op-rig" title="The radio, for the field log" type="text" placeholder="FTDX10" autocomplete="off" />
-              </div>
-              <div class="row">
-                <label for="op-power">Power</label>
+                <label for="op-power" class="label-inline">Power</label>
                 <input id="op-power" title="Transmit power in watts, for the field log and the power limits the rules set on some bands" type="text" inputmode="decimal" class="port" placeholder="30" autocomplete="off" />
-                <span class="sub">watts — also checked against the power limits the rules set on some bands</span>
-              </div>
-              <div class="row">
-                <label for="op-antenna">Antenna</label>
+                <span class="sub">watts</span>
+                <label for="op-antenna" class="label-inline">Antenna</label>
                 <input id="op-antenna" title="The antenna, for the field log" type="text" placeholder="EFHW at 10 m" autocomplete="off" />
               </div>
             </li>
-            <li class="step" data-step="2">
-              <h3>2. Radio interface</h3>
+
+            <!-- 2 -->
+            <li class="step card console-card" data-step="2">
+              <div class="card-head step-head">
+                <h3 class="card-title step-title" title="The sound card and how the radio is keyed"><span class="step-num">2</span>Radio interface</h3>
+                <details class="help-pop push-right" id="step-2-help" title="How keying and CAT work">
+                  <summary title="How keying and CAT work" aria-label="How keying and CAT work">?</summary>
+                  <p>
+                    A serial port keys the radio through its RTS or DTR line, or by the radio's own
+                    <em>CAT command</em> on the CAT port — which needs no second port and also reads the
+                    dial frequency, which the rules need. The rate is the one in the radio's menu; an Icom
+                    also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed
+                    over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> is the other way
+                    to both. A radio's USB connection often shows two ports: Yaesu's <em>Enhanced</em>
+                    port carries CAT and its <em>Standard</em> port the RTS line; Icom's single port
+                    carries both. A DRA, URI or other CM108-class interface keys through its codec's own
+                    GPIO pin (3 on those boards) and is listed by name, with no serial port. Choose
+                    <em>none</em> for a VOX interface such as a SignaLink, or to listen only. Without CAT
+                    or <code>rigctld</code> the radio cannot report its dial: say where it is on the
+                    Session tab before transmitting.
+                  </p>
+                </details>
+              </div>
               <div class="row">
                 <label for="wz-profile">Interface</label>
                 <select id="wz-profile" title="Fill in the devices and keying below for a known interface — picking one fills them in once; the fields below are what the modem uses, and changing them by hand shows Manual here"></select>
               </div>
-              <p class="sub" id="wz-profile-note" title="What picking this interface fills in">
+              <p class="sub field-note" id="wz-profile-note" title="What picking this interface fills in">
                 The fields below are what the modem uses. Pick a known interface above to have
                 them filled in for it — you can change any of them afterwards.
               </p>
-              <h4 class="sub-heading">Modem devices</h4>
+              <h4 class="sub-heading" title="The sound card's input and output">Modem devices</h4>
               <div class="row">
                 <label for="dev-in">Capture</label>
                 <select id="dev-in" title="Sound card input carrying the radio's receive audio"></select>
               </div>
-              <p class="sub">Sound card input carrying the radio's receive audio.</p>
               <div class="row">
                 <label for="dev-out">Playback</label>
                 <select id="dev-out" title="Sound card output feeding the radio's transmit audio"></select>
               </div>
-              <p class="sub">Sound card output feeding the radio's transmit audio.</p>
+              <h4 class="sub-heading" title="How the radio is keyed, and how its dial is read">Keying</h4>
               <div class="row">
                 <label for="dev-ptt">Keying</label>
                 <select id="dev-ptt" title="The port, CM108 interface or rigctld that keys the radio; none for VOX or listening only"></select>
@@ -759,41 +940,54 @@
                   <span class="sub">hex</span>
                 </span>
               </div>
-              <p class="sub">
-                A serial port keys the radio through its RTS or DTR line, or by the radio's own
-                <em>CAT command</em> on the CAT port — which needs no second port and also
-                reads the dial frequency, which the rules need. The rate is the one in the radio's menu; an Icom
-                also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios
-                keyed over CAT transmit from the DATA input. Hamlib's <code>rigctld</code> is the
-                other way to both. A radio's USB connection often shows two ports: Yaesu's
-                <em>Enhanced</em> port carries CAT and its <em>Standard</em> port the RTS line;
-                Icom's single port carries both. A DRA, URI or other CM108-class interface
-                keys through its codec's own GPIO pin (3 on those boards) and is listed here
-                by name, with no serial port. Choose <em>none</em> for a VOX interface such
-                as a SignaLink, or to listen only. Without CAT or <code>rigctld</code> the radio
-                cannot report its dial: say where it is on the Session tab before transmitting.
-              </p>
               <p class="note warn" id="rate-note" title="Something to check about the CAT rate" role="alert" hidden></p>
               <p class="note warn" id="hardware-note" title="A device the configuration names that this computer does not have" role="alert" hidden></p>
             </li>
-            <li class="step" data-step="3">
-              <h3>3. Receive level</h3>
-              <div class="meter" id="wz-meter" title="Receive level from the sound card; aim for Good" role="meter" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60" aria-label="Receive level">
-                <div class="meter-fill" id="wz-meter-fill"></div>
-                <div class="meter-peak" id="wz-meter-peak"></div>
+
+            <!-- 3 -->
+            <li class="step card console-card" data-step="3">
+              <div class="card-head step-head">
+                <h3 class="card-title step-title" title="The receive level from the sound card"><span class="step-num">3</span>Receive level</h3>
+                <details class="help-pop push-right" id="step-3-help" title="How to set the receive level">
+                  <summary title="How to set the receive level" aria-label="How to set the receive level">?</summary>
+                  <p>
+                    With the radio on a quiet frequency, adjust its audio output or the sound card's
+                    input until this says <strong>Good</strong>. Clipping is never acceptable; too quiet
+                    leaves the signal inside the sound card's own noise. Keying and the tune tone are on
+                    the Session tab.
+                  </p>
+                </details>
               </div>
-              <div class="row">
+              <div class="level-row">
+                <div class="meter" id="wz-meter" title="Receive level from the sound card; aim for Good" role="meter" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60" aria-label="Receive level">
+                  <div class="meter-fill" id="wz-meter-fill"></div>
+                  <div class="meter-peak" id="wz-meter-peak"></div>
+                </div>
                 <span class="sub" id="wz-level-reading" title="What the receive level is: too quiet, good, too loud, clipping" aria-live="polite">Still listening.</span>
               </div>
-              <p class="sub">
-                With the radio on a quiet frequency, adjust its audio output or the sound
-                card's input until this says <strong>Good</strong>. Clipping is never
-                acceptable; too quiet leaves the signal inside the sound card's own noise.
-                Keying and the tune tone are on the Session tab.
-              </p>
             </li>
-            <li class="step" data-step="4">
-              <h3>4. Misc modem settings</h3>
+
+            <!-- 4 -->
+            <li class="step card console-card" data-step="4">
+              <div class="card-head step-head">
+                <h3 class="card-title step-title" title="Bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges"><span class="step-num">4</span>Modem settings</h3>
+                <details class="help-pop push-right" id="step-4-help" title="What these settings do">
+                  <summary title="What these settings do" aria-label="What these settings do">?</summary>
+                  <p>
+                    Both stations of a session use the same <strong>bandwidth</strong>; a call in the
+                    other one is not heard, and changing it restarts the modem. <strong>Answer
+                    only</strong> makes no call and sends no beacon; an unattended station is also
+                    <em>Automatic</em> under Control in step 1, and the rules then decide where it may
+                    answer (§97.221). <strong>Compression</strong> is deflate over the whole session, so
+                    on a weak path one lost frame can spoil the rest. The <strong>Morse ID</strong> is off
+                    by default — Aether's frames carry both callsigns, and whether that satisfies your
+                    licence is your call; under the US rules an automatically keyed identifier goes no
+                    faster than 20 wpm (§97.119(b)(1)), whatever is set here. <strong>Band edges</strong>
+                    keeps a margin between your signal and a segment's edge for dial error and the
+                    radio's own transmit chain.
+                  </p>
+                </details>
+              </div>
               <div class="row">
                 <label for="radio-bandwidth">Bandwidth</label>
                 <select id="radio-bandwidth" title="The waveform's width; both stations must run the same one, and changing it restarts the modem">
@@ -802,17 +996,10 @@
                 </select>
                 <label class="check"><input id="radio-answer-only" title="Take calls and answer probes; make no call and send no beacon" type="checkbox" /> answer only: take calls, make none, send no beacon</label>
               </div>
-              <p class="sub">
-                Both stations of a session use the same bandwidth; a call in the other one is
-                not heard. <strong>Answer only</strong> makes no call and sends no beacon; an
-                unattended station is also <em>Automatic</em> under Control in step 1, and the
-                rules then decide where it may answer (§97.221). Changing the bandwidth restarts
-                the modem.
-              </p>
               <div class="row">
                 <label for="radio-max-mode">Fastest mode</label>
                 <select id="radio-max-mode" title="The fastest mode the rate controller may climb to; the rules may hold it lower on some frequencies"></select>
-                <label class="check"><input id="radio-compress" title="Off by default. Compression is deflate over the whole session, so on a weak path one lost frame can spoil the rest — turn it on only on a solid link the other station also supports." type="checkbox" /> enable compression when the link is solid and the other station supports it</label>
+                <label class="check"><input id="radio-compress" title="Off by default. Compression is deflate over the whole session, so on a weak path one lost frame can spoil the rest — turn it on only on a solid link the other station also supports." type="checkbox" /> compress when the link is solid and the other station can</label>
               </div>
               <div class="row">
                 <label for="radio-wait">Busy channel</label>
@@ -822,28 +1009,48 @@
               </div>
               <div class="row">
                 <label for="radio-max-key">Longest key</label>
-                <input id="radio-max-key" title="The watchdog's limit on a single transmission, in seconds" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
-                <span class="sub">seconds; the watchdog releases the key past this and stays released until asked again</span>
+                <input id="radio-max-key" title="The watchdog's limit on a single transmission, in seconds; past it the key is released and stays released until asked again" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
+                <span class="sub">seconds; the watchdog releases the key past this</span>
               </div>
               <div class="row">
                 <label for="radio-cwid">Morse ID</label>
-                <label class="check"><input id="radio-cwid" title="Send this station's callsign in Morse after a transmission" type="checkbox" /> identify in Morse after a transmission, every</label>
+                <label class="check"><input id="radio-cwid" title="Send this station's callsign in Morse after a transmission" type="checkbox" /> identify in Morse, every</label>
                 <input id="radio-cwid-interval" title="Seconds between Morse identifications" type="text" inputmode="decimal" class="port" value="600" aria-label="Seconds between Morse identifications" />
                 <span class="sub">s at</span>
-                <input id="radio-cwid-wpm" title="Morse speed in words per minute; the rules cap an automatic identifier at 20 wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
-                <span class="sub">wpm — off by default; Aether's frames carry both callsigns, and whether that satisfies your licence is your call</span>
+                <input id="radio-cwid-wpm" title="Morse speed in words per minute; under the US rules an automatically keyed identifier goes no faster than 20 wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
+                <span class="sub">wpm</span>
+                <span class="sub cwid-sent" id="cwid-sent" title="The speed the identifier is actually sent at, when the rules hold it below the speed set" role="status" aria-live="polite" hidden></span>
               </div>
               <div class="row">
                 <label for="reg-margin">Band edges</label>
                 <span class="sub">keep</span>
                 <input id="reg-margin" title="Hertz kept between your signal's edges and a segment's edges, for dial error and the radio's own transmit chain" type="text" inputmode="decimal" class="port" value="50" aria-label="Margin at segment edges in hertz" />
-                <span class="sub">Hz between the signal's edges and a segment's</span>
+                <span class="sub">Hz from a segment's edges</span>
                 <label class="check"><input id="reg-band-plan" title="Say when a transmission the rules allow is outside the voluntary band plan's digital areas" type="checkbox" checked /> band-plan guidance</label>
                 <label class="check"><input id="reg-log-permitted" title="Log the reasoning for every transmission an automatic station makes, not only the refused ones" type="checkbox" /> log every automatic transmission</label>
               </div>
             </li>
-            <li class="step" data-step="5">
-              <h3>5. Application settings</h3>
+
+            <!-- 5 -->
+            <li class="step card console-card" data-step="5">
+              <div class="card-head step-head">
+                <h3 class="card-title step-title" title="Updates, recording, host programs and the KISS port"><span class="step-num">5</span>Application settings</h3>
+                <details class="help-pop push-right" id="step-5-help" title="Host programs, KISS programs and recordings">
+                  <summary title="Host programs, KISS programs and recordings" aria-label="Host programs, KISS programs and recordings">?</summary>
+                  <p>
+                    <strong>Host programs</strong> use the VARA-compatible interface: point the program's
+                    TNC settings at <code>127.0.0.1</code> and the port (the data port is the next number
+                    up); the modem restarts when you change it. <strong>KISS programs</strong> connect to
+                    a KISS over TCP port, <code>8100</code> by default — VARA HF's, so a program set up for
+                    VARA needs no change. Each KISS frame goes out as its own transmission with no
+                    acknowledgement, and only while no session is up; the program repeats what needs
+                    repeating. Winlink Express and VarAC <em>sessions</em> use Host programs, not the
+                    KISS port, which takes effect when saved, without a restart. <strong>Recording
+                    notes</strong> are written into every recording that starts on its own, for the day
+                    you leave the station listening and a friend calls in.
+                  </p>
+                </details>
+              </div>
               <div class="row">
                 <label for="update-channel">Updates</label>
                 <select id="update-channel" title="Which releases the updater offers: stable, betas or nightlies">
@@ -851,7 +1058,7 @@
                   <option value="beta">betas too</option>
                   <option value="nightly">nightlies too</option>
                 </select>
-                <label class="check"><input id="update-check" title="Look for a newer version when the desktop application starts" type="checkbox" checked /> look for a newer version when the desktop application starts</label>
+                <label class="check"><input id="update-check" title="Look for a newer version when the desktop application starts" type="checkbox" checked /> check when the application starts</label>
               </div>
               <div class="row">
                 <label for="record-auto">Recording</label>
@@ -859,26 +1066,17 @@
               </div>
               <div class="row">
                 <label for="record-standing">Recording notes</label>
-                <input id="record-standing" title="Notes written into every recording that starts on its own" type="text" class="prose" placeholder="What every automatic recording should say: band, antenna, dial frequency" aria-describedby="record-standing-note" />
+                <input id="record-standing" title="Notes written into every recording that starts on its own: band, antenna, dial frequency" type="text" class="prose" placeholder="What every automatic recording should say: band, antenna, dial frequency" />
               </div>
-              <p class="sub" id="record-standing-note">
-                Written into every recording that starts on its own, for the day you leave the
-                station listening and a friend calls in. With <code>rigctld</code> keying the dial
-                frequency is recorded as well.
-              </p>
+              <h4 class="sub-heading" title="Programs that use this station">Programs</h4>
               <div class="row">
                 <label for="host-enabled">Host programs</label>
-                <label class="check"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> let Winlink Express, Pat, VarAC or BPQ32 use this station, on port</label>
+                <label class="check"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> Winlink Express, Pat, VarAC or BPQ32, on port</label>
                 <input id="host-port" title="The command port a host program connects to; the data port is the next number up" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
               </div>
-              <p class="sub">
-                The VARA-compatible interface: point the program's TNC settings at
-                <code>127.0.0.1</code> and this port (the data port is the next number up). Off
-                until you turn it on; the modem restarts when you change it.
-              </p>
               <div class="row">
                 <label for="kiss-enabled">KISS programs</label>
-                <label class="check"><input id="kiss-enabled" title="Open a KISS port: APRS and packet programs hand this station frames to send, and get every frame it hears" type="checkbox" /> let APRS and packet programs send and receive frames, on</label>
+                <label class="check"><input id="kiss-enabled" title="Open a KISS port: APRS and packet programs hand this station frames to send, and get every frame it hears" type="checkbox" /> APRS and packet programs, on</label>
                 <input id="kiss-host" title="The address the KISS port listens on: 127.0.0.1 lets only programs on this computer in" type="text" class="address" value="127.0.0.1" spellcheck="false" aria-label="KISS listen address" />
                 <input id="kiss-port" title="The KISS port: 8100 is VARA HF's, so a program set up for VARA needs no change" type="text" inputmode="numeric" class="port" value="8100" aria-label="KISS port" />
               </div>
@@ -897,87 +1095,105 @@
               <div class="row">
                 <label for="btn-kiss-disconnect">KISS port</label>
                 <span class="kiss-state" id="kiss-state" title="Whether the KISS port is listening, and where" role="status">off</span>
-                <button class="small" id="btn-kiss-disconnect" title="Close every KISS program's connection; a program may connect again" disabled>Disconnect</button>
+                <button class="small quiet" id="btn-kiss-disconnect" title="Close every KISS program's connection; a program may connect again" disabled>Disconnect</button>
               </div>
               <ul class="kiss-clients" id="kiss-clients" title="The programs connected to the KISS port: what they seem to be, where from, and their frames" hidden></ul>
-              <p class="sub">
-                Point the program's KISS over TCP settings at <code>127.0.0.1</code> and
-                <code>8100</code>, VARA HF's KISS port, so a program set up for VARA needs no
-                change. Each frame goes out as its own transmission with no acknowledgement, and
-                only while no session is up; the program repeats what needs repeating. Winlink
-                Express and VarAC <em>sessions</em> use Host programs above, not this port. Takes
-                effect when saved, without a restart.
-              </p>
             </li>
-            <li class="step" data-step="6">
-              <h3>6. Save</h3>
-              <div class="row">
+
+            <!-- 6: in reach from anywhere on the tab -->
+            <li class="step card console-card save-step" data-step="6">
+              <div class="tool-row">
+                <h3 class="card-title step-title" title="Write the settings to the modem's configuration"><span class="step-num">6</span>Save</h3>
                 <button id="wz-save" title="Write these settings to the modem's configuration file" class="primary">Save these settings</button>
-                <button id="btn-copy" title="Copy the settings as TOML for a configuration file">Copy as TOML</button>
+                <button id="btn-copy" class="quiet" title="Copy the settings as TOML for a configuration file">Copy as TOML</button>
                 <span class="sub" id="copy-note" title="What the last copy did"></span>
                 <span class="sub" id="wz-save-note" title="What the last save did" role="status" aria-live="polite"></span>
+                <span class="sub save-rest" id="setup-note" title="What saving does">Most settings take effect at once; a sound card, a port or the callsign restarts the modem — a few seconds, and the panel comes back by itself.</span>
               </div>
-              <p class="sub" id="setup-note">
-                Settings are written to the modem's configuration file. Most take effect at
-                once; a sound card, a serial port or the callsign is taken on when the modem
-                starts, so changing one restarts it — a few seconds, and the panel comes back
-                by itself.
-              </p>
             </li>
           </ol>
         </div>
 
-        <h2>Running configuration</h2>
-        <pre id="config-out" title="The modem's running configuration" class="config"></pre>
-
-        <h2>Mode table</h2>
-        <table class="modes">
-          <caption class="sr-only">Modes, slowest first</caption>
-          <thead>
-            <tr>
-              <th title="The mode's number, slowest first">Mode</th>
-              <th title="Constellation and code rate">Name</th>
-              <th class="num" title="Payload bytes one frame carries">Bytes per frame</th>
-              <th class="num" title="Bits per second on the air">Rate</th>
-              <th class="num" title="The SNR the mode needs, referenced to 3 kHz">Needs</th>
-            </tr>
-          </thead>
-          <tbody id="modes" title="Every mode of the running bandwidth: bytes per frame, rate and the SNR it needs"></tbody>
-        </table>
+        <!-- what the modem is running now, and the modes it has: reference, folded away -->
+        <details class="card console-card fold-card" id="config-card" title="The modem's running configuration">
+          <summary class="card-head" title="Show or hide the modem's running configuration">
+            <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron" /></svg>
+            <h2 class="card-title" title="The modem's running configuration">Running configuration</h2>
+            <span class="sub" title="What the modem is running now, as its file says">as the modem runs it now</span>
+          </summary>
+          <pre id="config-out" title="The modem's running configuration" class="config"></pre>
+        </details>
+        <details class="card console-card fold-card" id="modes-card" title="Every mode of the running bandwidth">
+          <summary class="card-head" title="Show or hide the mode table">
+            <svg class="icon chevron" aria-hidden="true"><use href="#i-chevron" /></svg>
+            <h2 class="card-title" title="Every mode of the running bandwidth">Mode table</h2>
+            <span class="sub" title="Bytes per frame, rate and the SNR each mode needs">bytes per frame, rate and the SNR each needs</span>
+          </summary>
+          <table class="modes" title="Every mode of the running bandwidth: bytes per frame, rate and the SNR it needs">
+            <caption class="sr-only">Modes, slowest first</caption>
+            <thead>
+              <tr>
+                <th title="The mode's number, slowest first">Mode</th>
+                <th title="Constellation and code rate">Name</th>
+                <th class="num" title="Payload bytes one frame carries">Bytes per frame</th>
+                <th class="num" title="Bits per second on the air">Rate</th>
+                <th class="num" title="The SNR the mode needs, referenced to 3 kHz">Needs</th>
+              </tr>
+            </thead>
+            <tbody id="modes" title="Every mode of the running bandwidth: bytes per frame, rate and the SNR it needs"></tbody>
+          </table>
+        </details>
       </section>
 
       <!-- ── log ────────────────────────────────────────────────── -->
-      <section id="panel-log" class="panel" role="tabpanel" aria-labelledby="tab-log" hidden>
-        <div class="toolbar log-toolbar">
-          <div class="chips" role="group" aria-label="Show in the log" title="Which entries the log shows">
-            <button class="chip" id="log-filter-all" data-filter="all" aria-pressed="true" title="Every entry">All</button>
-            <button class="chip" id="log-filter-problems" data-filter="problems" aria-pressed="false" title="Errors and refusals only">Problems</button>
-            <button class="chip" id="log-filter-rules" data-filter="rules" aria-pressed="false" title="What the regulatory gate decided">Rules</button>
-            <button class="chip" id="log-filter-session" data-filter="session" aria-pressed="false" title="Sessions, calls, probes and tests">Sessions</button>
+      <section id="panel-log" class="panel log-panel fills" role="tabpanel" aria-labelledby="tab-log" hidden>
+        <!-- the log is the tab: it takes the window, its filters and tools in its head -->
+        <section class="pane log-pane" id="log-pane" aria-labelledby="log-title" title="What the modem and the panel reported, newest last">
+          <div class="pane-head toolbar log-toolbar">
+            <h2 class="card-title" id="log-title" title="What the modem and the panel reported, newest last">Log</h2>
+            <span class="live" id="log-live" data-live="true" title="New entries arrive at the bottom; scroll up to hold the view still, and back down to follow again">following</span>
+            <span class="sub numerals" id="log-count" title="Entries shown, of those kept (the newest 500)">0 entries</span>
+            <div class="chips" role="group" aria-label="Show in the log" title="Which entries the log shows">
+              <button class="chip" id="log-filter-all" data-filter="all" aria-pressed="true" title="Every entry">All</button>
+              <button class="chip" id="log-filter-problems" data-filter="problems" aria-pressed="false" title="Errors and refusals only">Problems</button>
+              <button class="chip" id="log-filter-rules" data-filter="rules" aria-pressed="false" title="What the regulatory gate decided">Rules</button>
+              <button class="chip" id="log-filter-session" data-filter="session" aria-pressed="false" title="Sessions, calls, probes and tests">Sessions</button>
+              <button class="chip" id="log-filter-beacons" data-filter="beacons" aria-pressed="false" title="Beacons sent and heard, and the repeating beacon's timer">Beacons</button>
+            </div>
+            <div class="toolbar-end">
+              <button id="btn-clear-log" class="small quiet" title="Clear the panel's log; the modem's own file is untouched">Clear</button>
+              <button id="btn-diagnostics" class="small" title="Copy the diagnostic bundle for a bug report: version, settings without the token, the link, the devices and the last log lines">Copy diagnostic bundle</button>
+              <details class="help-pop" id="log-help" title="What the log and the bundle hold">
+                <summary title="What the log and the bundle hold" aria-label="What the log and the bundle hold">?</summary>
+                <p>
+                  The log is what the modem and this panel reported since the panel opened, newest
+                  last: sessions, beacons sent and heard, probes and tests, what the rules decided, and
+                  anything that went wrong, in its colour. The <strong>diagnostic bundle</strong> is
+                  what to paste into a bug report: version, platform, settings with the token taken out,
+                  the state of the link, the devices this machine reports, and the daemon's last few
+                  hundred log lines. It never contains your traffic.
+                </p>
+              </details>
+            </div>
           </div>
-          <span class="live" id="log-live" data-live="true" title="New entries arrive at the bottom; scroll up to hold the view still, and back down to follow again">following</span>
-          <span class="sub numerals" id="log-count" title="Entries shown, of those kept (the newest 500)">0 entries</span>
-          <div class="toolbar-end">
-            <button id="btn-clear-log" class="small" title="Clear the panel's log; the modem's own file is untouched">Clear</button>
-            <button id="btn-diagnostics" class="small" title="Copy the diagnostic bundle for a bug report: version, settings without the token, the link, the devices and the last log lines">Copy diagnostic bundle</button>
+          <div id="log" title="What the modem reported, newest last" class="log" role="log" aria-label="Log" tabindex="0"></div>
+          <div class="pane-foot">
+            <span class="sub" id="diagnostics-note" title="What the last copy did" role="status" aria-live="polite">Newest last.</span>
           </div>
-        </div>
-        <span class="sub" id="diagnostics-note" title="What the last copy did" role="status" aria-live="polite">Newest last.</span>
-        <div id="log" title="What the modem reported, newest last" class="log" role="log" aria-label="Log" tabindex="0"></div>
-        <p class="sub">
-          The bundle is what to paste into a bug report: version, platform, settings with the
-          token taken out, the state of the link, the devices this machine reports, and the
-          daemon's last few hundred log lines. It never contains your traffic.
-        </p>
+        </section>
       </section>
 
       <!-- ── help / about ───────────────────────────────────────── -->
-      <section id="panel-help" class="panel" role="tabpanel" aria-labelledby="tab-help" hidden>
-        <section class="card about" id="about" aria-labelledby="about-title">
+      <section id="panel-help" class="panel help" role="tabpanel" aria-labelledby="tab-help" hidden>
+        <!-- 1. what is running, and its updates -->
+        <section class="card console-card about" id="about" aria-labelledby="about-title" title="The version running, its updates, and where this station keeps its files">
+          <div class="card-head">
+            <h2 class="card-title" title="The version running, its updates, and where this station keeps its files">About</h2>
+          </div>
           <div class="about-head">
             <img class="about-mark" src="mark.png" alt="" width="44" height="44" />
             <div>
-              <h3 class="about-title" id="about-title">Aether HF</h3>
+              <h3 class="about-title" id="about-title" title="Aether HF">Aether HF</h3>
               <p class="sub about-tagline">An open-source HF data modem for amateur radio: ARQ sessions from a tone floor at −14 dB to 64-QAM, a public air-interface specification, and a VARA-compatible host interface.</p>
             </div>
           </div>
@@ -1008,69 +1224,81 @@
           </dl>
         </section>
 
-        <section class="card" aria-labelledby="help-air-title">
-          <div class="card-head"><h3 id="help-air-title">Getting on the air</h3></div>
-          <ol class="help-steps">
-            <li><strong>Setup</strong>: callsign, the rules you operate under, the control and your license class, the radio interface and its three devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
-            <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in. A device the other computer does not have is shown as <em>not on this computer</em> until you choose one.</li>
-            <li><strong>The rules</strong>: the badge beside the dial says <em>LEGAL</em>, <em>WARNING</em> or <em>TX BLOCKED</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
-            <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider. The <em>How to set your drive</em> guide in that card walks through it.</li>
-            <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter (Shift+Enter for a new line; untick <em>Enter sends</em> to make Enter a new line): what you send stays in the box above the line you type on, with its time and a ✓ once the other station has all of it (… while it is on its way, ✗ if the session ended first). Each message arrives on a line of its own with its time, <em>Sound</em> plays a note when one does, and <em>Clear</em> empties the window.</li>
-            <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
-            <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change. Each frame goes out as its own transmission, heard by stations of either bandwidth.</li>
-          </ol>
-        </section>
+        <div class="help-grid">
+          <!-- 2. from nothing to a session -->
+          <section class="card console-card" id="help-air" aria-labelledby="help-air-title" title="From a new installation to a session">
+            <div class="card-head"><h2 class="card-title" id="help-air-title" title="From a new installation to a session">Getting on the air</h2></div>
+            <ol class="help-steps">
+              <li><strong>Setup</strong>: callsign, the rules you operate under, the control and your license class, the radio interface and its devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
+              <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in.</li>
+              <li><strong>The rules</strong>: the badge beside the dial says <em>LEGAL</em>, <em>WARNING</em> or <em>TX BLOCKED</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
+              <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
+              <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>
+              <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
+              <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change.</li>
+            </ol>
+          </section>
 
-        <section class="card" aria-labelledby="help-test-title">
-          <div class="card-head"><h3 id="help-test-title">Running a test session</h3></div>
-          <p class="sub">
-            A test session is how a contact becomes a measurement the project can use: a
-            probe, a message, a file and a burst at every mode, recorded, in about five
-            minutes. The other station only has to be listening — a person at the panel or
-            an unattended station set to answer only.
-          </p>
-          <ol class="help-steps">
-            <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one).</li>
-            <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
-            <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The message and the file are sized to what the path can do, and the whole run stops at ten minutes on its own. <em>Stop test</em> ends it earlier, keeping what was learned.</li>
-            <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder (Help menu › <em>Open the configuration folder</em>), two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
-            <li><strong>Contribute it</strong>: the <em>Contribute the last test session</em> button on the Session tab copies a link to a pre-filled report. Paste it into your browser (a GitHub account is needed, free), drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
-          </ol>
-          <p class="sub">
-            The <strong>Session</strong> tab has the <em>Contribute the last test session</em> button, the
-            recordings folder, and an <em>Open folder</em> control — everything for the
-            run-test-then-share workflow is there.
-          </p>
-        </section>
+          <!-- 3. beacons: sent, heard and repeated -->
+          <section class="card console-card" id="help-beacons" aria-labelledby="help-beacons-title" title="Where beacons show, and how to repeat one">
+            <div class="card-head"><h2 class="card-title" id="help-beacons-title" title="Where beacons show, and how to repeat one">Beacons</h2></div>
+            <ul class="help-steps">
+              <li><strong>Sending one</strong>: <em>Beacon</em> on the Session tab puts this station's callsign on the air once, on the tone floor, addressed to nobody — so anyone listening, on either bandwidth, can say they heard you.</li>
+              <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. It needs you at the station — local or remote control: under automatic control a beacon may go only on 28.20–28.30 MHz and above (§97.203(g)).</li>
+              <li><strong>What you sent</strong>: every beacon that goes on the air is in the <em>Log</em> (the <em>Beacons</em> filter), counted under <em>Beacons sent</em> on the Status tab, and the line under the Session tab's buttons says when the last went and when the next is due.</li>
+              <li><strong>What you heard</strong>: a beacon heard is in the Log with its callsign and SNR, in <em>Stations</em> — the <em>Beacons</em> column counts them per station and says when the last one was, and the <em>Beacons</em> filter lists only those stations — and among the Diagnostics tab's frames. A beacon is never answered: a channel where every beacon drew a reply would be unusable.</li>
+            </ul>
+          </section>
 
-        <section class="card" aria-labelledby="help-read-title">
-          <div class="card-head"><h3 id="help-read-title">Reading the panel</h3></div>
-          <ul class="help-steps">
-            <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
-            <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
-            <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps above the mode's threshold.</li>
-            <li><strong>Signal above noise</strong> and the level chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
-            <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own, to keep it in view on any tab. <strong>Stations</strong> lists everyone whose frame carried a callsign; <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window.</li>
-          </ul>
-        </section>
+          <!-- 4. a contact made into a measurement -->
+          <section class="card console-card" id="help-test" aria-labelledby="help-test-title" title="Running a test session and contributing it">
+            <div class="card-head"><h2 class="card-title" id="help-test-title" title="Running a test session and contributing it">Running a test session</h2></div>
+            <p class="sub">
+              A test session is how a contact becomes a measurement the project can use: a probe, a
+              message, a file and a burst at every mode, recorded, in about five minutes. The other
+              station only has to be listening — a person at the panel or an unattended station set to
+              answer only.
+            </p>
+            <ol class="help-steps">
+              <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one).</li>
+              <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
+              <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The whole run stops at ten minutes on its own; <em>Stop test</em> ends it earlier, keeping what was learned.</li>
+              <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder — the Session tab's <em>Open folder</em> — as two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
+              <li><strong>Contribute it</strong>: <em>Contribute the last test session</em> on the Session tab opens a pre-filled report. A GitHub account is needed (free); drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
+            </ol>
+          </section>
 
-        <section class="card" aria-labelledby="help-more-title">
-          <div class="card-head"><h3 id="help-more-title">Where to read more</h3></div>
-          <dl class="kv">
-            <dt>Releases and installers</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/releases" target="_blank" rel="noopener" title="Every release, with its installers and notes">github.com/KK4ODA/aether-hf/releases</a></dd>
-            <dt>Installing and setting up</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/install.md" target="_blank" rel="noopener" title="Installing Aether HF and setting it up">docs/user/install.md</a></dd>
-            <dt>Where to operate</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener" title="The frequency plan">docs/user/frequency-plan.md</a></dd>
-            <dt>The rules Aether checks</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="FCC regulatory controls: how Aether reads Part 97, with links to the e-CFR">docs/user/fcc-regulatory-controls.md</a></dd>
-            <dt>The field-test protocol</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener" title="How a field test is run and reported">docs/user/field-test.md</a></dd>
-            <dt>Host programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener" title="The VARA-compatible host interface">docs/spec/host-interfaces.md</a></dd>
-            <dt>A gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener" title="Running Aether HF as an unattended gateway">docs/user/gateway-kit.md</a></dd>
-            <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
-          </dl>
-          <p class="sub">
-            A bug report about the air should carry the diagnostic bundle from the Log tab and,
-            if there is one, the session's recording.
-          </p>
-        </section>
+          <!-- 5. what the numbers mean -->
+          <section class="card console-card" id="help-read" aria-labelledby="help-read-title" title="What the panel's readings mean">
+            <div class="card-head"><h2 class="card-title" id="help-read-title" title="What the panel's readings mean">Reading the panel</h2></div>
+            <ul class="help-steps">
+              <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
+              <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
+              <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
+              <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
+              <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Every <strong>?</strong> opens the explanation for the box it sits in.</li>
+            </ul>
+          </section>
+
+          <!-- 6. the documents -->
+          <section class="card console-card" id="help-more" aria-labelledby="help-more-title" title="The documents, the releases and where to report a bug">
+            <div class="card-head"><h2 class="card-title" id="help-more-title" title="The documents, the releases and where to report a bug">Where to read more</h2></div>
+            <dl class="kv">
+              <dt>Releases and installers</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/releases" target="_blank" rel="noopener" title="Every release, with its installers and notes">github.com/KK4ODA/aether-hf/releases</a></dd>
+              <dt>Installing and setting up</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/install.md" target="_blank" rel="noopener" title="Installing Aether HF and setting it up">docs/user/install.md</a></dd>
+              <dt>Where to operate</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener" title="The frequency plan">docs/user/frequency-plan.md</a></dd>
+              <dt>The rules Aether checks</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="FCC regulatory controls: how Aether reads Part 97, with links to the e-CFR">docs/user/fcc-regulatory-controls.md</a></dd>
+              <dt>The field-test protocol</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener" title="How a field test is run and reported">docs/user/field-test.md</a></dd>
+              <dt>Host programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener" title="The VARA-compatible host interface">docs/spec/host-interfaces.md</a></dd>
+              <dt>A gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener" title="Running Aether HF as an unattended gateway">docs/user/gateway-kit.md</a></dd>
+              <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
+            </dl>
+            <p class="sub">
+              A bug report about the air should carry the diagnostic bundle from the Log tab and, if
+              there is one, the session's recording.
+            </p>
+          </section>
+        </div>
       </section>
     </main>
 
