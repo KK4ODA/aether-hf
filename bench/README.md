@@ -481,6 +481,18 @@ the drop run's "no response" goes from 10 to 2 and none of the six that were two
 A line's delay and the keyed time are unchanged for every policy. `bench_link.py`'s transfers are
 identical in every column. ADR-0029 has the tables.
 
+## A frame re-encoded and left out of its burst (`reencoded_chat.csv`, `reencoded_link.csv`, ADR-0031)
+
+The engine at `f17fec5` and with a frame that went on the air under an earlier codeword counted
+as sent, on the fading pipe with the floor's reading cap, bursts held to the key time, the same
+seeds. `reencoded_chat.csv` is `tools/bench_chat.py` on Good, Moderate and Poor, both airs:
+today's turn-taking (`policy` `base`) and ADR-0027's request (`request`), 30 sessions a point
+from −12 to +12 dB (`first_trial` 0) and 100 a point at −12, −6 and 0 dB (`first_trial` 100);
+`engine` says which. Six sessions change, all of them 500 Hz sessions that dropped or stalled
+with a frame left out, and all six complete: drops and stalls 18 → 12 of 5 400, lines lost
+157 → 119, latency and keyed time unchanged. `reencoded_link.csv` is `bench_link.py --fading
+--floor-cap`, 2 kB, 20 sessions a point: identical in all 600. ADR-0031 has the table.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
