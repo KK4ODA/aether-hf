@@ -71,7 +71,7 @@ pub enum PttConfig {
         #[serde(default = "default_gpio")]
         gpio: u8,
     },
-    /// The host program keys the radio: VARA's way with VarAC and similar programs, which own
+    /// The host program keys the radio: VARA's way with `VarAC` and similar programs, which own
     /// the radio's CAT port and key it when the modem says `PTT ON` (ADR-0025). Aether opens
     /// no port on the radio and sends `PTT ON`/`PTT OFF` on the host interface; it can read
     /// no dial, so a station keyed this way usually runs with no regulatory profile, as VARA
