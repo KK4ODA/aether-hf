@@ -1709,3 +1709,155 @@ fn a_called_sender_yields_to_the_callers_poll() {
     assert_eq!(sim.delivered(0), message.as_slice(), "{:?}", sim.events(1));
     assert!(!sim.events(1).iter().any(|e| e.starts_with("disconnected")));
 }
+
+// ── chat: asking for the turn (ADR-0027) ──────────────────────────────
+
+/// A session up on a clean path with preambles reported, as the daemon runs it: the caller
+/// holding the turn with nothing to send, each station in chat or not.
+fn chat_session(chat: (bool, bool), seed: u64) -> TwoStationSim {
+    let t = timing(true);
+    let config = |on: bool| LinkConfig {
+        chat: on,
+        ..LinkConfig::default()
+    };
+    let mut a = LinkEngine::new("W4ODA", t.clone(), config(chat.0), 1);
+    let b = LinkEngine::new("KK4XYZ", t, config(chat.1), 2);
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, seed);
+    sim.run(30.0, f64::INFINITY);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    assert_eq!(sim.engine(0).role(), Role::Iss);
+    assert_eq!(sim.engine(1).role(), Role::Irs);
+    sim
+}
+
+/// A quiet moment on an idle link: two seconds after the sender `iss`'s last poll was
+/// answered, its next one still six or more away.
+fn between_polls(sim: &mut TwoStationSim, iss: usize) -> f64 {
+    let keepalive = sim.engine(iss).config().keepalive_s;
+    let start = sim.t;
+    let mut t = start;
+    while t < start + 120.0 {
+        t += 0.25;
+        sim.run(t, f64::INFINITY);
+        if sim
+            .engine(iss)
+            .next_deadline()
+            .is_some_and(|due| due - t >= keepalive - 2.0)
+        {
+            return t + 2.0;
+        }
+    }
+    panic!("the sender never went idle");
+}
+
+/// When each station of `expected` — `(who, bytes)` — has that many bytes delivered, to a
+/// tenth of a second, running the simulation on from `since`.
+fn arrivals(sim: &mut TwoStationSim, expected: &[(usize, usize)], since: f64) -> Vec<Option<f64>> {
+    let mut got = vec![None; expected.len()];
+    let mut t = since;
+    while got.iter().any(Option::is_none) && t < since + 300.0 {
+        t += 0.1;
+        sim.run(t, f64::INFINITY);
+        for (slot, &(who, length)) in got.iter_mut().zip(expected) {
+            if slot.is_none() && sim.delivered(who).len() >= length {
+                *slot = Some(t);
+            }
+        }
+    }
+    got
+}
+
+#[test]
+fn in_a_chat_the_receiving_station_asks_for_the_turn() {
+    // a line typed at the station that does not hold the turn waited for the sender's next
+    // poll; in a chat the station asks at once, and the idle sender hands over
+    let line = b"QSL on the report, 5 by 7 here in Atlanta";
+    let mut took = [0.0; 2];
+    for chat in [false, true] {
+        let mut sim = chat_session((chat, chat), 5);
+        let t = between_polls(&mut sim, 0);
+        sim.send_at(1, line, t);
+        let arrived = arrivals(&mut sim, &[(0, line.len())], t)[0].expect("the line arrives");
+        took[usize::from(chat)] = arrived - t;
+        assert_eq!(sim.engine(1).stats.turn_requests, usize::from(chat));
+        assert_eq!(sim.engine(0).stats.turns, 1, "one handover either way");
+    }
+    assert!(took[0] > 6.0, "{took:?}"); // it waited for the poll
+    assert!(took[1] < 4.0, "{took:?}");
+}
+
+#[test]
+fn chat_lines_typed_at_both_stations_at_once_both_arrive() {
+    // the one risk in speaking unasked: the other station keys at the same moment; each
+    // side's usual recovery handles it
+    let mut sim = chat_session((true, true), 5);
+    let t = between_polls(&mut sim, 0);
+    let (mine, theirs) = (b"going QRT for dinner shortly", b"same here, 73");
+    sim.send_at(0, mine, t);
+    sim.send_at(1, theirs, t);
+    assert_eq!(sim.engine(1).stats.turn_requests, 1);
+    sim.run(t + 120.0, f64::INFINITY);
+    assert_eq!(sim.delivered(1), mine.as_slice());
+    assert_eq!(sim.delivered(0), theirs.as_slice());
+    for who in 0..2 {
+        assert!(
+            !sim.events(who)
+                .iter()
+                .any(|e| e.starts_with("disconnected")),
+            "{:?}",
+            sim.events(who)
+        );
+    }
+}
+
+#[test]
+fn a_chat_station_and_one_without_chat_still_talk() {
+    // chat is each station's own setting: a request nobody takes costs one control frame,
+    // and the line goes when the sender polls, as it always did
+    for chat in [(true, false), (false, true)] {
+        let mut sim = chat_session(chat, 5);
+        // the called station first, while the caller holds the turn; then the caller, while
+        // the called station does — it took the turn to send its line
+        let lines: [(usize, &[u8], usize); 2] = [
+            (1, b"first from the called station", 0),
+            (0, b"and an answer", 1),
+        ];
+        for (who, line, iss) in lines {
+            let t = between_polls(&mut sim, iss);
+            sim.send_at(who, line, t);
+            let arrived = arrivals(&mut sim, &[(1 - who, line.len())], t)[0];
+            assert!(arrived.is_some(), "{chat:?}, station {who}");
+            sim.run(sim.t + 1.0, f64::INFINITY);
+        }
+        for who in 0..2 {
+            assert!(
+                !sim.events(who)
+                    .iter()
+                    .any(|e| e.starts_with("disconnected"))
+            );
+        }
+    }
+}
+
+#[test]
+fn chat_leaves_a_transfer_alone() {
+    // a file inside a chat session, the receiving station typing a line while it arrives:
+    // its acknowledgements ask for the turn as they always did — a request is never sent
+    // into a transfer — so the file and the line arrive exactly as without chat
+    let document: Vec<u8> = (0..3000).map(|i| (i * 37 % 256) as u8).collect();
+    let line = b"got the first part, looks good";
+    let mut times = Vec::new();
+    for chat in [false, true] {
+        let mut sim = chat_session((chat, chat), 5);
+        let t = between_polls(&mut sim, 0);
+        sim.send_at(0, &document, t);
+        sim.send_at(1, line, t + 4.0);
+        let got = arrivals(&mut sim, &[(1, document.len()), (0, line.len())], t + 4.0);
+        assert_eq!(sim.delivered(1), document.as_slice());
+        assert_eq!(sim.delivered(0), line.as_slice());
+        assert_eq!(sim.engine(1).stats.turn_requests, 0);
+        times.push(got);
+    }
+    assert_eq!(times[0], times[1]);
+}

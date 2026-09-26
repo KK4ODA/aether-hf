@@ -103,6 +103,18 @@ pub struct LinkConfig {
     /// Capability bits offered in the connect handshake. What they mean is the caller's
     /// business; the link layer carries them and reports what the peer offered.
     pub capabilities: u8,
+    /// The session is keyboard-to-keyboard: the host program said `CHAT ON` (VARA's published
+    /// command). A line typed at the station that does not hold the turn otherwise waits for
+    /// the sender's next poll — up to `keepalive_s` on an idle link — and then for the poll's
+    /// answer and a TURN before its own burst can go. In a chat that station asks for the turn
+    /// as soon as the channel is quiet instead: an acknowledgement nobody asked for, with
+    /// `WANT_TX`, which an idle sender in a chat answers with a TURN; and an idle sender does not
+    /// poll over a frame it hears arriving, since in a chat that frame may be such a request
+    /// (ADR-0027). On the link bench's fading classes, −12 to +12 dB, it cuts a line's median
+    /// delay by 17–70 % with about the keyed time the polls took and no more sessions lost.
+    /// Off, the engine is as it always was; [`LinkEngine::set_chat`] switches it during a
+    /// session.
+    pub chat: bool,
 }
 
 impl Default for LinkConfig {
@@ -126,6 +138,7 @@ impl Default for LinkConfig {
             bursts_before_turn: 3,
             max_combines: 4,
             capabilities: 0,
+            chat: false,
         }
     }
 }
@@ -211,6 +224,9 @@ pub struct LinkStats {
     /// Frames given another codeword at a slower mode after going unacknowledged at
     /// their own for `max_combines` transmissions.
     pub frames_reencoded: usize,
+    /// Acknowledgements this station sent unasked, to ask for the turn in a chat
+    /// ([`LinkConfig::chat`]).
+    pub turn_requests: usize,
 }
 
 /// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
@@ -291,6 +307,8 @@ enum Timer {
     Wait,
     Keepalive,
     Probe,
+    /// A chat's request for the turn, waiting for the channel to be quiet (ADR-0027).
+    Request,
 }
 
 /// What the receiving station has asked for in its last acknowledgement.
@@ -434,6 +452,13 @@ pub struct LinkEngine {
     /// faster than any of them is the sender's choice (ADR-0020).
     asked: Option<usize>,
     break_requested: bool,
+    /// This station's last acknowledgement asked for the turn (`WANT_TX`): the other station
+    /// knows it has something to send, and a request in a chat ([`LinkConfig::chat`]) would
+    /// tell it nothing new.
+    stated_want: bool,
+    /// When a frame of this session from the other station was last taken: a chat's request
+    /// waits for the answer to it to have had time to begin.
+    last_peer_frame: f64,
     peer_capabilities: u8,
 }
 
@@ -526,6 +551,8 @@ impl LinkEngine {
             ack_counter: 0,
             asked: None,
             break_requested: false,
+            stated_want: false,
+            last_peer_frame: 0.0,
             peer_capabilities: 0,
         }
     }
@@ -872,6 +899,17 @@ impl LinkEngine {
         self.tx_queue.extend_from_slice(data);
         if self.state == State::Connected && self.role == Role::Iss {
             self.maybe_start_burst();
+        } else {
+            self.maybe_request_turn();
+        }
+    }
+
+    /// Keyboard-to-keyboard or not, from now on ([`LinkConfig::chat`]): the host program's
+    /// `CHAT ON` / `CHAT OFF`, which may come in the middle of a session.
+    pub fn set_chat(&mut self, on: bool) {
+        self.config.chat = on;
+        if !on {
+            self.disarm(Timer::Request);
         }
     }
 
@@ -892,6 +930,8 @@ impl LinkEngine {
         self.tx_busy_until = self.tx_busy_until.min(now);
         if self.state == State::Connected && self.role == Role::Iss && self.waiting_for.is_none() {
             self.maybe_start_burst();
+        } else {
+            self.maybe_request_turn();
         }
     }
 
@@ -994,6 +1034,17 @@ impl LinkEngine {
             let clear = t_start + length + self.response_wait(0.0, 0.0);
             self.set_deadline(Timer::Wait, due.max(clear));
         }
+        if self.config.chat
+            && self.role == Role::Iss
+            && let Some(due) = self.deadline_of(Timer::Keepalive)
+        {
+            // Nor does an idle sender in a chat poll over a frame it hears arriving: there the
+            // receiving station speaks unasked, and a poll keyed over its request loses both —
+            // at −6 dB on the tone floor that cost a typical line 2–3 s (ADR-0027).
+            let length = frame_s.unwrap_or_else(|| self.timing.data_frame_s_for(0));
+            let clear = t_start + length + self.response_wait(0.0, 0.0);
+            self.set_deadline(Timer::Keepalive, due.max(clear));
+        }
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
             return;
@@ -1086,6 +1137,7 @@ impl LinkEngine {
                     });
                 }
             }
+            Timer::Request => self.maybe_request_turn(),
         }
     }
 
@@ -1484,6 +1536,7 @@ impl LinkEngine {
         self.role = Role::Irs;
         self.bursts_since_turn = 0;
         self.peer_request = PeerRequest::None;
+        self.stated_want = false;
         self.disarm(Timer::Keepalive);
         // The peer answers with its first burst (or a poll), at a rung of its own choosing —
         // after a fade the tone floor's, a frame five seconds long. Waiting one frame of the
@@ -1573,6 +1626,75 @@ impl LinkEngine {
 
     fn has_work(&self) -> bool {
         !self.unacked().is_empty() || !self.tx_queue.is_empty()
+    }
+
+    // ── chat: asking for the turn (ADR-0027) ──────────────────────────
+
+    /// How long after this station's last transmission the other station's answer to it may
+    /// take to announce itself: a sender answers an acknowledgement at once — with its next
+    /// burst, a TURN or a DISC — and until that much quiet has passed the channel is not known
+    /// to be idle. The floor's frames announce themselves last; a PHY that reports no
+    /// preambles is heard only at a frame's end, so the longest frame decides.
+    fn reaction_s(&self) -> f64 {
+        let announce = [false, true].map(|floor| self.timing.preamble_detect_s_for(floor));
+        let first = if announce.iter().any(Option::is_none) {
+            self.timing.data_frame_s_for(0)
+        } else {
+            announce.into_iter().flatten().fold(0.0, f64::max)
+        };
+        self.response_wait(first, 0.0)
+    }
+
+    /// In a chat: a receiving station with something to send asks for the turn once the
+    /// channel is quiet — now, or when the other station's answer to its last transmission has
+    /// had time to begin (the `Request` timer). Not while a burst is arriving or its
+    /// acknowledgement is due (that acknowledgement asks), and not twice: once asked, the next
+    /// acknowledgement asks again if the first was missed.
+    fn maybe_request_turn(&mut self) {
+        if !self.config.chat
+            || self.state != State::Connected
+            || self.role != Role::Irs
+            || self.waiting_for.is_some()
+            || self.stated_want
+            || !self.has_work()
+            || !self.burst.is_empty()
+            || self.deadline_of(Timer::Ack).is_some()
+            || self.tx_busy()
+        {
+            return;
+        }
+        let quiet_at = self.tx_busy_until.max(self.last_peer_frame) + self.reaction_s();
+        if self.now < quiet_at - 1e-9 {
+            self.arm(Timer::Request, quiet_at - self.now);
+            return;
+        }
+        self.send_request();
+    }
+
+    /// An acknowledgement nobody asked for, with `WANT_TX`: what this station has received
+    /// (unchanged since its last one, so it is a true acknowledgement too) and that it has
+    /// something to send. A sender with nothing of its own hands over at once; a sender that
+    /// misses it polls in its own time, and the answer to the poll asks again.
+    fn send_request(&mut self) {
+        let (bitmap, _, _) = self.receive_window();
+        self.stated_want = true;
+        self.stats.turn_requests += 1;
+        self.ack_counter = (self.ack_counter + 1) % 8;
+        let recommended = self.rate.recommend();
+        self.asked = Some(
+            self.asked
+                .map_or(recommended, |asked| asked.max(recommended)),
+        );
+        self.disarm(Timer::Request);
+        let frame = self.control(
+            ControlKind::Ack,
+            control_flags::WANT_TX,
+            self.rx_base,
+            bitmap,
+            self.heard_peer_db,
+            recommended as u8,
+        );
+        self.transmit(vec![frame]);
     }
 
     fn maybe_start_burst(&mut self) {
@@ -1997,6 +2119,7 @@ impl LinkEngine {
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
         self.note_peer_data(record.mode);
+        self.last_peer_frame = self.now;
         self.heard_peer_db = Some(record.snr_db);
         self.arm(Timer::Link, self.link_timeout());
         self.stats.frames_received += 1;
@@ -2125,20 +2248,7 @@ impl LinkEngine {
             return;
         }
 
-        let mut bitmap = 0u16;
-        let mut missing = Vec::new();
-        let limit = self
-            .max_seen
-            .map_or(0, |seen| seq_distance(seen, self.rx_base) + 1);
-        for offset in 0..WINDOW {
-            let seq = seq_after(self.rx_base, offset as u8);
-            if self.rx_buffer.iter().any(|(s, _)| *s == seq) {
-                bitmap |= 1 << offset;
-            } else if offset < limit {
-                missing.push(seq);
-            }
-        }
-        let next_new = seq_after(self.rx_base, limit as u8);
+        let (bitmap, missing, next_new) = self.receive_window();
         self.ack_history
             .insert(0, AckSnapshot { missing, next_new });
         self.ack_history.truncate(2);
@@ -2153,6 +2263,7 @@ impl LinkEngine {
         if self.break_requested {
             flags |= control_flags::BREAK | control_flags::WANT_TX;
         }
+        self.stated_want = flags & control_flags::WANT_TX != 0;
         self.ack_counter = (self.ack_counter + 1) % 8;
         self.stats.acks_sent += 1;
         let base = self.rx_base;
@@ -2172,6 +2283,25 @@ impl LinkEngine {
         self.transmit(vec![frame]);
     }
 
+    /// What an acknowledgement says has arrived: the bitmap of the window from the base, the
+    /// sequence numbers missing below the highest seen, and the first one never seen.
+    fn receive_window(&self) -> (u16, Vec<u8>, u8) {
+        let mut bitmap = 0u16;
+        let mut missing = Vec::new();
+        let limit = self
+            .max_seen
+            .map_or(0, |seen| seq_distance(seen, self.rx_base) + 1);
+        for offset in 0..WINDOW {
+            let seq = seq_after(self.rx_base, offset as u8);
+            if self.rx_buffer.iter().any(|(s, _)| *s == seq) {
+                bitmap |= 1 << offset;
+            } else if offset < limit {
+                missing.push(seq);
+            }
+        }
+        (bitmap, missing, seq_after(self.rx_base, limit as u8))
+    }
+
     // ── control frames ────────────────────────────────────────────────
 
     fn on_control<F: SoftFrame>(&mut self, frame: &F) {
@@ -2184,6 +2314,7 @@ impl LinkEngine {
         {
             return;
         }
+        self.last_peer_frame = self.now;
         self.peer_floor = frame.floor();
         self.heard_peer_db = Some(frame.snr_db());
         if control.kind != ControlKind::Ack
@@ -2208,7 +2339,12 @@ impl LinkEngine {
             }
             ControlKind::Ack => {
                 if self.role == Role::Iss
-                    && matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
+                    && (matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
+                        // an idle sender in a chat takes the other station's request for the
+                        // turn (ADR-0027) — and, with nothing of its own to finish, hands over
+                        || (self.waiting_for.is_none()
+                            && self.config.chat
+                            && control.flags & control_flags::WANT_TX != 0))
                 {
                     self.on_ack(&control);
                 }
@@ -2265,9 +2401,11 @@ impl LinkEngine {
         self.waiting_for = None;
         self.disarm(Timer::Wait);
         self.disarm(Timer::Ack);
+        self.disarm(Timer::Request);
         self.burst.clear();
         self.burst_t0 = None;
         self.break_requested = false;
+        self.stated_want = false;
         self.bursts_since_turn = 0;
         self.retries = 0;
         self.actions.push(Action::Event {
@@ -2396,6 +2534,7 @@ impl LinkEngine {
         self.peer_capabilities = request.caps;
         self.state = State::Connected;
         self.role = Role::Irs;
+        self.last_peer_frame = self.now;
         self.heard_peer_db = Some(snr_db);
         self.arm(Timer::Link, self.link_timeout());
         // the request is the first measurement of how the caller is heard: the
@@ -2442,6 +2581,7 @@ impl LinkEngine {
         self.state = State::Connected;
         self.role = Role::Iss;
         self.caller = true;
+        self.last_peer_frame = self.now;
         self.heard_peer_db = Some(snr_db);
         self.arm(Timer::Link, self.link_timeout());
         let detail = format!("{} (iss)", self.remote_call);
@@ -2496,9 +2636,16 @@ impl LinkEngine {
         self.ack_counter = 0;
         self.asked = None;
         self.break_requested = false;
+        self.stated_want = false;
         self.peer_capabilities = 0;
         self.rate = rate_controller_for(&self.timing);
-        for timer in [Timer::Ack, Timer::Wait, Timer::Keepalive, Timer::Link] {
+        for timer in [
+            Timer::Ack,
+            Timer::Wait,
+            Timer::Keepalive,
+            Timer::Link,
+            Timer::Request,
+        ] {
             self.disarm(timer);
         }
     }
@@ -2930,5 +3077,147 @@ mod tests {
         e.on_preamble(t_start, t_start + 0.2, None);
         let longest = e.timing.data_frame_s_for(0);
         assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + longest);
+    }
+
+    // ── chat: asking for the turn (ADR-0027) ──────────────────────────
+
+    /// The frames an engine has put on the air since it was last asked.
+    fn transmitted(engine: &mut LinkEngine) -> Vec<TxFrame> {
+        engine
+            .drain()
+            .into_iter()
+            .flat_map(|action| match action {
+                Action::Transmit { frames, .. } => frames,
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// A station in a chat, in a session, holding `role`, at 100 s — its last transmission
+    /// just over.
+    fn chatting(role: Role) -> LinkEngine {
+        let config = LinkConfig {
+            chat: true,
+            ..LinkConfig::default()
+        };
+        let mut e = LinkEngine::new("KK4XYZ", wide(), config, 2);
+        e.role = role;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.tx_busy_until = 100.0;
+        e.session = 7;
+        e
+    }
+
+    #[test]
+    fn chat_is_off_unless_asked_for() {
+        assert!(!LinkConfig::default().chat);
+    }
+
+    #[test]
+    fn a_request_waits_until_an_answer_to_the_last_frame_could_have_begun() {
+        // a sender answers an acknowledgement at once — its next burst, a TURN, a DISC — and a
+        // request keyed before that answer could be heard would be keyed over it; if a frame
+        // arrives in the wait, the request is not needed: its acknowledgement says WANT_TX
+        for arrives in [false, true] {
+            let mut b = chatting(Role::Irs);
+            b.send(b"hello");
+            assert!(transmitted(&mut b).is_empty());
+            let due = b.deadline_of(Timer::Request).expect("a request waiting");
+            assert!((due - (100.0 + b.reaction_s())).abs() < 1e-9);
+            if arrives {
+                let announce = b.timing.preamble_detect_s_for(false).expect("preambles");
+                let frame_s = b.timing.data_frame_s;
+                b.on_preamble(100.3, 100.3 + announce, Some(frame_s));
+            }
+            b.tick(due);
+            let mut sent = transmitted(&mut b);
+            if arrives {
+                assert!(sent.is_empty());
+                assert_eq!(b.stats.turn_requests, 0);
+                let ack_due = b.deadline_of(Timer::Ack).expect("an acknowledgement due");
+                b.tick(ack_due); // the frame's end: the acknowledgement asks
+                sent = transmitted(&mut b);
+            }
+            assert_eq!(sent.len(), 1);
+            let ack = ControlFrame::decode(&sent[0].payload).expect("a control frame");
+            assert_eq!(ack.kind, ControlKind::Ack);
+            assert_ne!(ack.flags & control_flags::WANT_TX, 0);
+            assert_eq!(b.stats.turn_requests, usize::from(!arrives));
+            // asked once, and not again for more of the same
+            b.send(b" and more");
+            let later = b.now + 1.0;
+            b.on_tx_done(later);
+            b.tick(later + 60.0);
+            assert!(transmitted(&mut b).is_empty(), "asked twice");
+        }
+    }
+
+    #[test]
+    fn an_idle_chat_sender_hands_over_on_a_request_and_does_not_poll_over_one() {
+        // with nothing to send it answers a request with a TURN, and a frame it hears arriving
+        // just before its poll is due holds the poll past the frame — a poll keyed over a
+        // request loses both; without chat, neither
+        for chat in [false, true] {
+            let mut a = chatting(Role::Iss);
+            a.set_chat(chat);
+            a.maybe_start_burst(); // nothing to send: the keepalive is armed
+            let due = a.deadline_of(Timer::Keepalive).expect("a keepalive");
+            let start = due - 0.1;
+            let control = a.timing.control_frame_s;
+            let announce = a.timing.preamble_detect_s_for(false).expect("preambles");
+            a.on_preamble(start, start + announce, Some(control));
+            let held = a.deadline_of(Timer::Keepalive).expect("a keepalive");
+            assert_eq!(held >= start + control, chat, "held: {held}");
+            let request = ControlFrame {
+                kind: ControlKind::Ack,
+                session: 7,
+                flags: control_flags::WANT_TX,
+                base: 0,
+                bitmap: 0,
+                snr_db: None,
+                recommended_mode: 0,
+                counter: 0,
+            };
+            let end = start + control;
+            let frame = crate::sim::SimFrame::decoded(
+                Container::Control,
+                0,
+                10.0,
+                start,
+                end,
+                request.encode().to_vec(),
+            );
+            a.on_frame(&frame, end);
+            let kinds: Vec<ControlKind> = transmitted(&mut a)
+                .iter()
+                .filter_map(|f| ControlFrame::decode(&f.payload).ok())
+                .map(|c| c.kind)
+                .collect();
+            let expected = if chat {
+                vec![ControlKind::Turn]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(kinds, expected, "chat {chat}");
+            assert_eq!(a.role == Role::Irs, chat);
+        }
+    }
+
+    #[test]
+    fn chat_can_be_switched_off_during_a_session() {
+        // the host's CHAT OFF takes effect at once: a request waiting for its moment is not
+        // sent, and a line waits for the poll again
+        let mut b = chatting(Role::Irs);
+        b.send(b"hello");
+        assert!(b.deadline_of(Timer::Request).is_some());
+        b.set_chat(false);
+        assert!(b.deadline_of(Timer::Request).is_none());
+        b.tick(130.0);
+        assert!(transmitted(&mut b).is_empty());
+        assert_eq!(b.stats.turn_requests, 0);
+        b.set_chat(true);
+        b.send(b" again"); // the next line asks
+        assert_eq!(b.stats.turn_requests, 1);
     }
 }
