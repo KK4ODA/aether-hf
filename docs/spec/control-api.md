@@ -453,7 +453,7 @@ operator can paste the result into an issue from wherever they are:
 | `version`, `platform` | the daemon's version; `os` and `arch` |
 | `generated`, `started` | RFC 3339 UTC timestamps for the bundle and for the daemon's start |
 | `config`, `path` | the running configuration (secrets redacted) and the file it came from |
-| `status`, `capabilities` | the station's `status` — without the daemon's own fields (`host`, `kiss`, `supervised`, `audio_fault`, `config_note`, `binary`) — and `capabilities` as the method returns it |
+| `status`, `capabilities` | `status` and `capabilities` as the methods return them — the daemon's own fields (`host`, `kiss`, `supervised`, `audio_fault`, `config_note`, `binary`) included, since whether a host program or a KISS program was attached is often the first question a report raises |
 | `devices` | the audio devices and serial ports the machine reports |
 | `audio` | how the sound card described itself; `dropped_samples`, captured samples the modem has dropped for falling behind; `starved_samples`, samples of silence the card had to play *inside a transmission* because the modem had not handed it the next ones — holes on the air, which the log also reports as they happen |
 | `loop` | the run loop's slowest pass so far (`slowest_ms`), which phase it spent the time in (`slowest_phase`: `commands`, `capture` — the receiver — or `playback`), and `stalls`, how many passes exceeded a quarter second. A whole burst is queued at the sound card the moment it is rendered (ADR-0010), so a slow pass no longer puts a hole in a transmission; it still says the modem is slow, which is the receiver's cost per block |
