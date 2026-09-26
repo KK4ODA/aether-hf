@@ -1260,6 +1260,51 @@ impl LinkEngine {
         self.config.ceiling
     }
 
+    /// A new fastest rung (`LinkConfig::max_mode`), from the next burst on: the operator's
+    /// `max_mode` is a live setting of the station's, and one set while the daemon ran used
+    /// to reach the gate and the Test's ladder but not the link, which kept recommending up
+    /// to the value it started with.
+    pub fn set_max_mode(&mut self, rung: usize) {
+        self.config.max_mode = rung;
+    }
+
+    /// Run on another air interface from the next session on (ADR-0026).
+    ///
+    /// The engine knows one air at a time — its frame lengths, its ladder, the thresholds
+    /// its rate controller steps by — and the daemon moves it between sessions: to the
+    /// bandwidth a host program's `BW500`/`BW2300` asked for, as VARA does, or to the
+    /// narrower one a call to this station came in. `capabilities` is what the connect
+    /// handshake offers from then on, its bandwidth bits
+    /// ([`with_bandwidth`](crate::frames::with_bandwidth)) included, and `max_mode` the
+    /// fastest rung on the new ladder. The callsigns, the counters, the session numbering
+    /// and the last probe stay: the station is the same one.
+    ///
+    /// # Errors
+    /// While anything is under way — a session, a call, a probe: each runs to its end on
+    /// the air it started on, and the other station is on that one.
+    pub fn set_air(
+        &mut self,
+        timing: PhyTiming,
+        capabilities: u8,
+        max_mode: Option<usize>,
+    ) -> Result<(), &'static str> {
+        if self.state != State::Idle || self.probing.is_some() {
+            return Err("a session, a call or a probe is running");
+        }
+        self.timing = timing;
+        self.config.capabilities = capabilities;
+        if let Some(rung) = max_mode {
+            self.config.max_mode = rung;
+        }
+        // the controller steps by the new ladder's thresholds; a fresh one is what a new
+        // session starts from anyway (every session seeds it from its connect frame)
+        self.rate = rate_controller_for(&self.timing);
+        self.recommended = self.config.initial_mode;
+        self.peer_floor = false;
+        self.peer_mode = None;
+        Ok(())
+    }
+
     /// The longest DATA frame the peer may send next: the family of what we recommended
     /// or of what it last sent, whichever is longer.
     fn peer_data_frame_s(&self) -> f64 {
