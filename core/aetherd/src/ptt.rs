@@ -150,7 +150,7 @@ impl Ptt for NullPtt {
     }
 }
 
-/// The host program keys the radio (ADR-0025): VARA's way with VarAC and similar programs,
+/// The host program keys the radio (ADR-0025): VARA's way with `VarAC` and similar programs,
 /// which own the radio's CAT port and key it on the `PTT ON` the host interface sends when
 /// this station keys. Nothing is opened here; the key's state is the station's own record.
 #[derive(Debug, Default, Clone, Copy)]
