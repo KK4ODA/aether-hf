@@ -922,7 +922,24 @@ class LinkEngine:
 
     def _send_poll(self) -> None:
         self._transmit([self._control(ControlKind.POLL)])
-        self._wait_for("poll", self._reply_control_s())
+        self._wait_for("poll", self._reply_control_s(), self._unread_poll_delay())
+
+    def _unread_poll_delay(self) -> float:
+        """How late after the poll's end its answer may begin. A receiving station that
+        decodes the poll answers a turnaround after it; one that hears the poll's preamble
+        and cannot decode the poll answers all the same, once its quiet after the frame has
+        run out (:meth:`on_preamble`'s acknowledgement deadline) — the quiet of the family
+        it last heard us in, which is ours or the one its last answer came in. Waiting as if
+        every answer began a turnaround after the poll, an ordinary poll answered on the
+        floor — 0.99 s of quiet, then 3.2 s — was repeated into the answer's end, every
+        repeat into the next answer, until the sender gave up (ADR-0028). A poll no preamble
+        report announces is never answered undecoded, and waits as it always did."""
+        if self.timing.preamble_detect_s_for(self._control_floor()) is None:
+            return 0.0
+        # the longest frame there is, for a family whose frames the PHY does not announce
+        longest = self.timing.data_frame_s_for(0)
+        families = {self._control_floor(), self._peer_floor}
+        return max(self._irs_reply_delay(f, longest) for f in families)
 
     def _send_turn(self) -> None:
         self._turn_tries += 1
