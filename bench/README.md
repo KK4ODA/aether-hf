@@ -424,6 +424,23 @@ floor handshake (11 s against 3) and a first burst started from the floor's ceil
 re-seed takes back where the ceiling is lowest (2 300 Hz Poor +24 dB: 36 → 23 s; beta.54 8 s).
 ADR-0016 §5 has the table.
 
+## Keyboard-to-keyboard chat (`chat_handover.csv`, ADR-0027)
+
+`tools/bench_chat.py`: a conversation on the fading pipe with the floor's reading cap — a call,
+then 10–20 lines of 20–120 bytes, each typed 5–30 s after the one before arrived, by the other
+station or (one time in five) the same one — under each turn-taking policy; the script is the
+trial's, the same for every policy, class and SNR. A row per point: the median and
+90th-percentile time from `send()` to delivery (all lines, replies, follow-ups), keyed seconds
+per line for both stations, polls, turns and requests per line, lines lost, drops. Three runs:
+every policy at −12 to +12 dB on the four classes and both airs, 30 sessions a point
+(`first_trial` 0, `file_bytes` 0); the adopted policy without its poll hold on the same grid;
+six policies at −12, −6 and 0 dB on the fading classes, 100 fresh sessions a point
+(`first_trial` 100), for the drops; and a 3 kB file sent as the middle line (`file_bytes`
+3000) on Moderate. `LinkConfig.chat` — the receiving station asks for the turn — cuts a line's
+median time by 17–70 % on the fading classes with 12 % less to 3 % more keyed time and no more
+drops; handing the turn over unasked is faster still and loses sessions. ADR-0027 has the
+tables.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
