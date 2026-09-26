@@ -4,8 +4,10 @@ Aether answers on VARA HF's published host interface, so a program set up for VA
 with it: point the program at Aether's port instead of VARA's. On the air, Aether talks only
 to other Aether stations — the compatibility is in the software, not the signal.
 
-There are two ways to set up the radio. Pick one per program, and save each as its own
-**profile** (Setup's Profile bar, *Save as…*) so switching is one click.
+There are two ways to set up the radio — and a third, [sharing it through
+`rigctld`](#sharing-the-radio-through-rigctld), for a program that tunes through Hamlib. Pick one
+per program, and save each as its own **profile** (Setup's Profile bar, *Save as…*) so switching
+is one click.
 
 | | The host program owns the radio | Aether owns the radio |
 |---|---|---|
@@ -55,6 +57,24 @@ In the **host program**, turn its radio control off: VarAC's *RIG* tab *PTT* and
 Control* **None**; Winlink Express's radio setup to none. Only one program can hold the radio's
 CAT port. Tune from the Session tab's dial list (*Tune*) or by hand.
 
+## Sharing the radio through rigctld
+
+A program that tunes through Hamlib's `rigctld` can share the radio with Aether, and the rules
+check keeps working: Aether keys through `rigctld` and reads the dial there, and the program
+changes the frequency through the same `rigctld`. Aether reads the dial again before it judges a
+transmission whenever its last reading is more than two seconds old, so a frequency change by the
+program is seen before the next transmission.
+
+1. Start `rigctld` for your radio (`rigctld -m <model> -r <CAT port> -s <baud>`); it listens on
+   `127.0.0.1:4532`.
+2. In **Aether**, Setup step 2, *Keying*: **rigctld**, address `127.0.0.1:4532`; step 1 has your
+   rules, control and licence class.
+3. In the **host program**, rig control through Hamlib's network `rigctld` at the same address, with
+   its own PTT **off** — Aether keys the radio when it transmits.
+
+`rigctld` serves several programs at once. A program that can only reach the radio over its own
+CAT connection cannot share it this way; for it, choose one of the two ways above.
+
 ## Winlink Express
 
 * A **Vara HF P2P** session, with another Aether station. Aether cannot reach a VARA RMS
@@ -96,4 +116,4 @@ Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune thr
 * VarAC's *Remember VARA audio level per band* is ignored: set the level with Aether's *Set
   drive* (Session tab, Keying and drive).
 * The rules check needs Aether to know the dial; with the host program owning the radio it is
-  off. Keep the second way if you want Aether's safety net.
+  off. Keep the second way, or share the radio through `rigctld`, if you want Aether's safety net.
