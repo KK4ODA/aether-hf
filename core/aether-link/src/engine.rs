@@ -1533,7 +1533,33 @@ impl LinkEngine {
     fn send_poll(&mut self) {
         let frame = self.control(ControlKind::Poll, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        self.wait_for(Waiting::Poll, self.reply_control_s(), 0.0);
+        self.wait_for(
+            Waiting::Poll,
+            self.reply_control_s(),
+            self.unread_poll_delay(),
+        );
+    }
+
+    /// How late after the poll's end its answer may begin. A receiving station that decodes
+    /// the poll answers a turnaround after it; one that hears the poll's preamble and cannot
+    /// decode the poll answers all the same, once its quiet after the frame has run out
+    /// (`on_preamble`'s acknowledgement deadline) — the quiet of the family it last heard us
+    /// in, which is ours or the one its last answer came in. Waiting as if every answer
+    /// began a turnaround after the poll, an ordinary poll answered on the floor — 0.99 s of
+    /// quiet, then 3.2 s — was repeated into the answer's end, every repeat into the next
+    /// answer, until the sender gave up (ADR-0028). A poll no preamble report announces is
+    /// never answered undecoded, and waits as it always did.
+    fn unread_poll_delay(&self) -> f64 {
+        let ours = self.control_floor();
+        if self.timing.preamble_detect_s_for(ours).is_none() {
+            return 0.0;
+        }
+        // the longest frame there is, for a family whose frames the PHY does not announce
+        let longest = self.timing.data_frame_s_for(0);
+        [ours, self.peer_floor]
+            .iter()
+            .map(|&f| self.irs_reply_delay(Some(f), Some(longest)))
+            .fold(0.0, f64::max)
     }
 
     fn send_turn(&mut self) {
@@ -2909,6 +2935,53 @@ mod tests {
             after_floor >= ordinary + longer - 1e-9,
             "{ordinary} {after_floor}"
         );
+    }
+
+    /// A sender on the ordinary layouts whose last acknowledgement came on the tone floor, at
+    /// 100 s: the other station still hears the floor, and answers there.
+    fn polling(timing: PhyTiming) -> LinkEngine {
+        let mut e = engine(timing);
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.rate.seed(24.0, false);
+        e.recommended = e.rate.recommend();
+        e.peer_floor = true;
+        assert!(!e.control_floor());
+        e
+    }
+
+    #[test]
+    fn a_polls_wait_covers_an_answer_to_a_poll_heard_and_not_decoded() {
+        // ADR-0027 §7 (1), ADR-0028: a receiving station that hears a poll's preamble and
+        // cannot decode the poll answers it all the same once its quiet after the frame has
+        // run out — 0.99 s after the poll's end when it last heard the floor, and then a floor
+        // acknowledgement of 3.2 s. The sender re-polled 0.2 s before the answer ended, and
+        // every round collided until the session ended with "no response" (the chat bench,
+        // 500 Hz, ITU Good, −6 dB)
+        let t = narrow();
+        let mut e = polling(t.clone());
+        e.send_poll();
+        let floor_quiet = t.floor_preamble_detect_s.expect("announced");
+        let answer_end = e.tx_busy_until
+            + floor_quiet
+            + e.config.burst_gap_s
+            + t.turnaround_s
+            + t.control_frame_s_for(true);
+        let due = e.deadline_of(Timer::Wait).expect("armed");
+        assert!(due >= answer_end + t.detect_latency_s, "{due} {answer_end}");
+        // a physical layer that reports no preambles gives the receiving station nothing to
+        // answer: the poll's wait is what it always was
+        let blind = PhyTiming {
+            preamble_detect_s: None,
+            floor_preamble_detect_s: None,
+            ..narrow()
+        };
+        let mut e = polling(blind.clone());
+        e.send_poll();
+        let due = e.deadline_of(Timer::Wait).expect("armed");
+        let expected = e.tx_busy_until + e.response_wait(blind.control_frame_s_for(true), 0.0);
+        assert!((due - expected).abs() < 1e-9, "{due} {expected}");
     }
 
     #[test]
