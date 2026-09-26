@@ -207,6 +207,14 @@ class _TxRecord:
     reencoded: int = 0
     """Transmissions made under an earlier codeword, before a re-encoding."""
 
+    @property
+    def sent(self) -> bool:
+        """It has gone on the air, under this codeword or an earlier one. A re-encoding starts
+        :attr:`tx_count` again, and a frame re-encoded into a burst with no room left for it —
+        six stranded OFDM frames given tone codewords, five of which fit the key time — has
+        not gone under its new one; it is unacknowledged all the same (ADR-0031)."""
+        return self.tx_count > 0 or self.reencoded > 0
+
 
 @dataclass
 class _RxRecord:
@@ -1052,7 +1060,7 @@ class LinkEngine:
     # ── ISS: bursts ───────────────────────────────────────────────────
 
     def _unacked(self) -> list[int]:
-        seqs = [s for s, r in self._records.items() if not r.acked and r.tx_count > 0]
+        seqs = [s for s, r in self._records.items() if not r.acked and r.sent]
         return sorted(seqs, key=lambda s: seq_distance(s, self._tx_base))
 
     def _outstanding(self) -> int:
@@ -1266,15 +1274,13 @@ class LinkEngine:
         if not seqs:
             return
         if self._pinned is not None:
-            fresh = [
-                s for s in seqs if not (self._records[s].tx_count or self._records[s].reencoded)
-            ]
+            fresh = [s for s in seqs if not self._records[s].sent]
             if fresh:
                 self._ladder_pending = (mode, fresh)
         frames = []
         for s in seqs:
             rec = self._records[s]
-            if rec.tx_count or rec.reencoded:
+            if rec.sent:
                 self.stats.frames_resent += 1
             frames.append(self._data_frame(rec))
         self.stats.frames_sent += len(frames)
@@ -1311,7 +1317,7 @@ class LinkEngine:
             decoded = sum(1 for s in fresh if ack.received(s))
             self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, ack.snr_db))
         for s, rec in list(self._records.items()):
-            if not rec.acked and rec.tx_count and ack.received(s):
+            if not rec.acked and rec.sent and ack.received(s):
                 rec.acked = True
                 self.stats.bytes_acked += len(rec.body)
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
