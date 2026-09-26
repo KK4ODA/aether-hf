@@ -1263,8 +1263,11 @@ class LinkEngine:
         rec.seq = header.seq
         self.stats.frames_received += 1
         if header.kind is DataKind.CONNECT_REQ:
-            # our CONNECT_ACK was lost: answer again
-            self._send_connect(DataKind.CONNECT_ACK)
+            # our CONNECT_ACK was lost: answer again, with the SNR this request arrived at, as
+            # the first answer carried the first's — a caller that hears only the repeat
+            # starts its first burst from it (P9-2). Without it the caller started on the
+            # ladder's first rung whatever the path.
+            self._send_connect(DataKind.CONNECT_ACK, rec.frame.snr_db)
             self._burst.clear()
             self._burst_t0 = None
             self._disarm("ack")

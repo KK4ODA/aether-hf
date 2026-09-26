@@ -524,7 +524,7 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
 | 15 | link protocol version: 4 |
-| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — 0x7F in an acceptance repeated for a request that arrives again after the session is up; in a request, 0x7F |
+| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
 
 A station ignores a request or an acceptance whose version is not its own, and says so.
 Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the control frame's

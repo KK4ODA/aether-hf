@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from itertools import pairwise
 
 import pytest
@@ -133,6 +134,70 @@ def test_a_session_starts_at_the_mode_the_connect_frames_measured(timing: PhyTim
     assert first[0] == expected, first
     # and the climb is still allowed from there
     assert max(first) >= expected
+
+
+def _first_acceptance_unheard() -> Callable[[int, Container, float], bool]:
+    """A pipe's ``unheard``: the caller (station 0) never detects the first DATA frame sent to
+    it — the called station's first acceptance."""
+    lost: list[float] = []
+
+    def unheard(rx: int, container: Container, t0: float) -> bool:
+        if rx != 0 or container is not Container.DATA:
+            return False
+        if not lost:
+            lost.append(t0)
+        return t0 == lost[0]
+
+    return unheard
+
+
+def test_a_repeated_acceptance_says_how_its_request_arrived(timing: PhyTiming) -> None:
+    """A called station whose acceptance was lost is connected, and answers the caller's next
+    try with the acceptance again — carrying the SNR that try arrived at, as the first carried
+    the first's. A caller that hears only the repeat starts its first burst where that
+    measurement puts it (P9-2). The repeat said "not measured", and such a session started on
+    the ladder's first rung, the tone floor, whatever the path: on the link bench's fading
+    pipe, a 2 kB session at +24 dB whose first acceptance was lost took 73 s, against 21 s
+    for one whose acceptance arrived."""
+    a, b = _pair(timing)
+    answers: list[float | None] = []
+    transmit = b._transmit
+
+    def record(frames: list[TxFrame]) -> None:
+        for f in frames:
+            if f.container is Container.DATA:
+                header, body = decode_data(f.payload)
+                if header.kind is DataKind.CONNECT_ACK:
+                    answers.append(ConnectBody.decode(body).snr_db)
+        transmit(frames)
+
+    b._transmit = record  # type: ignore[method-assign]
+    first: list[int] = []
+    send_burst = a._send_burst
+
+    def wrapped() -> None:
+        first.append(min(a._recommended, a.cfg.max_mode))
+        send_burst()
+
+    a._send_burst = wrapped  # type: ignore[method-assign]
+    # the first try arrives in a fade, the second on a strong path
+    sim = TwoStationSim(
+        a,
+        b,
+        seed=31,
+        snr_schedule=lambda t: 3.0 if t < 10.0 else 18.0,
+        unheard=_first_acceptance_unheard(),
+    )
+    a.connect("KK4XYZ")
+    a.send(bytes(600))
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(600)
+    assert a._connect_tries == 2
+    assert answers == [3.0, 18.0], answers
+    fresh = LinkEngine("N0CALL", timing, None, seed=3).rate
+    assert fresh.first_mode(18.0) > fresh.first_mode(3.0)
+    assert first[0] == fresh.first_mode(18.0), first
 
 
 def test_the_first_mode_keeps_a_step_in_hand() -> None:
