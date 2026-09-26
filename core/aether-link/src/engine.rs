@@ -1024,12 +1024,20 @@ impl LinkEngine {
             }
             return;
         }
-        if (self.state == State::Disconnecting || self.waiting_for == Some(Waiting::Turn))
+        if (self.state == State::Disconnecting
+            || matches!(
+                self.waiting_for,
+                Some(Waiting::Turn | Waiting::Ack | Waiting::Poll)
+            ))
             && let Some(due) = self.deadline_of(Timer::Wait)
         {
-            // Nor does a leaving station repeat its DISC, or a station that handed over the
-            // turn its TURN, over a frame it hears arriving: it may be the answer, late, and a
-            // repeat keyed over it is heard by nobody (ADR-0022, ADR-0023).
+            // Nor does a leaving station repeat its DISC, a station that handed over the turn
+            // its TURN, or a sender its burst or its poll, over a frame it hears arriving: it
+            // may be the answer, late, and a repeat keyed over it is heard by nobody. A
+            // receiving station that cannot decode a poll answers its preamble once its quiet
+            // after a frame has passed — 0.99 s on the floor — and a 3.2 s acknowledgement
+            // ended 0.2 s into the sender's re-poll, every time, until the sender gave up with
+            // the link up (ADR-0022, ADR-0023, ADR-0030).
             let length = frame_s.unwrap_or_else(|| self.timing.data_frame_s_for(0));
             let clear = t_start + length + self.response_wait(0.0, 0.0);
             self.set_deadline(Timer::Wait, due.max(clear));
