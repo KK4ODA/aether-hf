@@ -1171,17 +1171,21 @@ class LinkEngine:
             # bits; it is not part of any burst
             self.stats.frames_failed += 1
             return
-        # part of the current burst: record it, decode what decodes, ACK after the gap
+        # part of the current burst: record it, decode what decodes, ACK after the gap —
+        # unless it was the caller's request again, which is answered by the acceptance
+        # again and by nothing else (_accept)
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
-        self._decode_record(rec)
-        self._arm("ack", max(0.0, frame.t_end - self.now) + self._irs_reply_delay())
+        if self._decode_record(rec):
+            self._arm("ack", max(0.0, frame.t_end - self.now) + self._irs_reply_delay())
 
-    def _decode_record(self, rec: _RxRecord) -> None:
+    def _decode_record(self, rec: _RxRecord) -> bool:
+        """Decode a frame of the burst, alone or combined with an earlier transmission of its
+        block. ``False`` when it was no frame of a burst: the caller's request again
+        (:meth:`_accept`)."""
         payload, buffer = rec.frame.decode(None)
         if payload is not None:
-            self._accept(rec, payload)
-            return
+            return self._accept(rec, payload)
         # inference: which sequence number is this slot? Then combine with any earlier
         # transmission of that block (HARQ-IR) and, either way, keep this transmission's
         # soft information for the next retransmission. A wrong guess only wastes a combine
@@ -1191,7 +1195,7 @@ class LinkEngine:
         rec.buffer = buffer
         if guess is None or not in_window(guess, self._rx_base):
             self.stats.frames_failed += 1
-            return
+            return True
         if guess in self._harq and self._harq[guess][2] != rec.frame.mode:
             del self._harq[guess]  # re-encoded at another mode: start over
         if guess in self._harq:
@@ -1200,8 +1204,7 @@ class LinkEngine:
             combined, merged = rec.frame.decode(prev)
             if combined is not None:
                 self.stats.harq_rescues += 1
-                self._accept(rec, combined)
-                return
+                return self._accept(rec, combined)
             self._harq[guess] = (
                 (buffer, 0, rec.frame.mode)
                 if combines + 1 >= self.cfg.max_combines
@@ -1210,6 +1213,7 @@ class LinkEngine:
         else:
             self._harq[guess] = (buffer, 0, rec.frame.mode)
         self.stats.frames_failed += 1
+        return True
 
     def _infer_seq(self, slot: int) -> int | None:
         """Map a burst slot to a sequence number. Decoded frames in this burst anchor the
@@ -1243,19 +1247,21 @@ class LinkEngine:
             s = seq_after(s)
         return out
 
-    def _accept(self, rec: _RxRecord, payload: bytes) -> None:
+    def _accept(self, rec: _RxRecord, payload: bytes) -> bool:
+        """Take a decoded frame. ``False`` when it was the caller's request again, which the
+        acceptance answers again: no frame of a burst, and nothing to acknowledge."""
         rec.payload = payload
         try:
             header, body = decode_data(payload)
         except ValueError:
             rec.payload = None
-            return
+            return True
         # a frame of nobody's session — a beacon, a probe or its answer, a datagram — is never
         # session data, whatever its session byte says: a datagram's holds its own number
         # (ADR-0019), which can equal this session's
         if header.kind in OUTSIDE_SESSIONS or header.session != self.session:
             rec.payload = None
-            return
+            return True
         self._note_peer_frame(rec.frame)
         self._last_peer_frame = self.now
         self._heard_peer_db = rec.frame.snr_db
@@ -1268,12 +1274,14 @@ class LinkEngine:
             # starts its first burst from it (P9-2). Without it the caller started on the
             # ladder's first rung whatever the path.
             self._send_connect(DataKind.CONNECT_ACK, rec.frame.snr_db)
+            # and by nothing else: an acknowledgement a burst's quiet after the request went
+            # out over the caller's first burst, which follows the acceptance at once
             self._burst.clear()
             self._burst_t0 = None
             self._disarm("ack")
-            return
+            return False
         if header.kind is DataKind.CONNECT_ACK:
-            return
+            return True
         if self.state is State.CONNECTED and self.role is Role.IRS and not self._confirmed:
             self._confirmed = True
         if in_window(header.seq, self._rx_base):
@@ -1294,6 +1302,7 @@ class LinkEngine:
             if self._max_seen is not None and seq_distance(self._max_seen, self._rx_base) >= WINDOW:
                 self._max_seen = None
         # else: an old duplicate (our ACK was lost); the next ACK covers it
+        return True
 
     def _finish_burst(self) -> None:
         """End of a burst: HARQ buffers were already stored per frame in

@@ -200,6 +200,25 @@ def test_a_repeated_acceptance_says_how_its_request_arrived(timing: PhyTiming) -
     assert first[0] == fresh.first_mode(18.0), first
 
 
+def test_a_request_heard_again_is_answered_and_nothing_else(timing: PhyTiming) -> None:
+    """The acceptance again is the whole answer to a request heard again. The request had also
+    armed an acknowledgement, which went out a burst's quiet after it — over the caller's first
+    burst, which follows the acceptance at once. On a weak path the repeat and that
+    acknowledgement are floor frames, and the first five-second frame of the burst was lost
+    under them and sent again."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=31, unheard=_first_acceptance_unheard())
+    a.connect("KK4XYZ")
+    a.send(bytes(600))
+    a.disconnect()
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(600)
+    assert a._connect_tries == 2
+    # one burst, one acknowledgement, and nothing of the burst sent twice
+    assert b.stats.acks_sent == 1, b.stats
+    assert a.stats.frames_resent == 0, a.stats
+
+
 def test_the_first_mode_keeps_a_step_in_hand() -> None:
     rc = RateController()
     # far below every mode but the slowest: the slowest
