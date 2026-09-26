@@ -8,7 +8,8 @@
 //! the model is in `model_vectors.rs`.
 
 use aether_link::{
-    LinkConfig, LinkEngine, PhyTiming, RateConfig, RateController, Role, State, TwoStationSim,
+    Container, LinkConfig, LinkEngine, PhyTiming, RateConfig, RateController, Role, State,
+    TwoStationSim,
     rate::{
         AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB, NARROW_AWGN_THRESHOLD_DB,
         NARROW_CONTROL_THRESHOLD_DB, WIDE_FLOOR_MARGIN_DB,
@@ -1485,4 +1486,70 @@ fn the_iss_waits_out_the_irs_quiet_after_a_floor_burst() {
             "reports {reports}"
         );
     }
+}
+
+#[test]
+fn a_receiving_station_leaves_at_once_when_asked() {
+    // KE4QCM, 2026-09-25: five sessions ended with Abort. On the receiving side Disconnect
+    // only put the DISC in place of the next acknowledgement, and on a path where nothing
+    // decodable came there never was one. A receiving station leaves between bursts now
+    // (ADR-0023); the sender here stays quiet, polling nobody for five minutes
+    let t = timing(false);
+    let config = LinkConfig {
+        keepalive_s: 300.0,
+        ..LinkConfig::default()
+    };
+    let (a, b) = pair(&t, &config);
+    let mut sim = TwoStationSim::new(a, b, 15.0, 6);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.run(30.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    assert_eq!(sim.engine(1).state(), State::Connected);
+    assert_eq!(sim.engine(1).role(), Role::Irs);
+    let start = sim.t;
+    sim.engine_mut(1).disconnect();
+    sim.run(start + 30.0, 3.0);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert!(
+        sim.events(1).iter().any(|e| e == "disconnected:closed"),
+        "{:?}",
+        sim.events(1)
+    );
+    assert!(
+        sim.events(0)
+            .iter()
+            .any(|e| e == "disconnected:peer disconnected")
+    );
+}
+
+#[test]
+fn a_called_sender_yields_to_the_callers_poll() {
+    // KE4QCM, 2026-09-25 (23:30:58): the caller handed the turn over, heard none of the
+    // called station's data, took the turn back when its TURN tries ran out and polled; the
+    // called station, sure it held the turn, ignored the polls and gave up: "no response".
+    // It yields to the caller's poll now and asks for the turn back, so the session outlives
+    // a fade that lets control frames through and no data (ADR-0023)
+    let t = timing(false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let fade = std::rc::Rc::new(std::cell::Cell::new(0.0f64));
+    let until = std::rc::Rc::clone(&fade);
+    // the caller detects nothing of the called station's data, not a preamble, not a frame;
+    // no data flows the other way here, so every DATA frame after the connect is the
+    // called one's
+    let mut sim =
+        TwoStationSim::new(a, b, 15.0, 5).with_unheard(Box::new(move |rx, container, t0| {
+            rx == 0 && container == Container::Data && t0 < until.get()
+        }));
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.run(30.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    assert_eq!(sim.engine(1).state(), State::Connected);
+    let fade_until = sim.t + 150.0;
+    fade.set(fade_until);
+    let message = b"sent while the path would carry no data";
+    sim.engine_mut(1).send(message);
+    sim.run(fade_until + 300.0, 3.0);
+    assert_eq!(sim.delivered(0), message.as_slice(), "{:?}", sim.events(1));
+    assert!(!sim.events(1).iter().any(|e| e.starts_with("disconnected")));
 }

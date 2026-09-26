@@ -345,6 +345,10 @@ impl Backoff {
 // ── the engine ────────────────────────────────────────────────────────
 
 /// One station's ARQ engine.
+///
+/// Its flags are independent facts of a session — a disconnect asked for, a break asked for,
+/// who called, which family the peer last used — not states of one machine, so they stay bools.
+#[allow(clippy::struct_excessive_bools)]
 pub struct LinkEngine {
     /// The callsigns this station answers to. The first is the one it calls as unless a
     /// call says otherwise; see [`set_callsigns`](Self::set_callsigns).
@@ -390,6 +394,9 @@ pub struct LinkEngine {
     turn_tries: usize,
     disc_requested: bool,
     disc_tries: usize,
+    /// This station placed the call: when both stations believe they hold the turn, the
+    /// caller keeps it and the called station yields (ADR-0023).
+    caller: bool,
     connect_tries: usize,
     /// Whether the last frame decoded from the peer came on a floor layout (ADR-0009): the
     /// family our control frames answer in, and the layout a connect answer goes back on.
@@ -497,6 +504,7 @@ impl LinkEngine {
             heard_peer_db: None,
             turn_tries: 0,
             disc_requested: false,
+            caller: false,
             disc_tries: 0,
             connect_tries: 0,
             peer_floor: false,
@@ -826,7 +834,25 @@ impl LinkEngine {
         }
         if self.role == Role::Iss && self.waiting_for.is_none() && !self.tx_busy() {
             self.maybe_start_burst();
+        } else if self.role == Role::Irs
+            && self.state == State::Connected
+            && self.burst.is_empty()
+            && self.deadline_of(Timer::Ack).is_none()
+            && !self.tx_busy()
+        {
+            // A receiving station has nothing of its own to finish, and leaves between the
+            // other station's bursts: waiting to put the DISC in place of the next
+            // acknowledgement waited for ever on a path where nothing decodable came — five
+            // sessions with KE4QCM on 2026-09-25 ended with Abort (ADR-0023).
+            self.send_disc();
         }
+    }
+
+    /// A disconnect was asked for and the DISC has not gone yet: the sender is finishing
+    /// what it has queued, or the receiver is waiting for a burst to end.
+    #[must_use]
+    pub fn disconnect_requested(&self) -> bool {
+        self.disc_requested && self.state == State::Connected
     }
 
     /// Drop the session now, with one disconnect on the way out.
@@ -958,11 +984,12 @@ impl LinkEngine {
             }
             return;
         }
-        if self.state == State::Disconnecting
+        if (self.state == State::Disconnecting || self.waiting_for == Some(Waiting::Turn))
             && let Some(due) = self.deadline_of(Timer::Wait)
         {
-            // Nor does a leaving station repeat its DISC over a frame it hears arriving: it
-            // may be the answer, late, and a repeat keyed over it is heard by nobody.
+            // Nor does a leaving station repeat its DISC, or a station that handed over the
+            // turn its TURN, over a frame it hears arriving: it may be the answer, late, and a
+            // repeat keyed over it is heard by nobody (ADR-0022, ADR-0023).
             let length = frame_s.unwrap_or_else(|| self.timing.data_frame_s_for(0));
             let clear = t_start + length + self.response_wait(0.0, 0.0);
             self.set_deadline(Timer::Wait, due.max(clear));
@@ -1413,8 +1440,15 @@ impl LinkEngine {
         self.bursts_since_turn = 0;
         self.peer_request = PeerRequest::None;
         self.disarm(Timer::Keepalive);
-        // the peer answers with its first burst (or a poll); we wait a full data frame
-        let frame_s = self.timing.data_frame_s_for(self.rate.recommend());
+        // The peer answers with its first burst (or a poll), at a rung of its own choosing —
+        // after a fade the tone floor's, a frame five seconds long. Waiting one frame of the
+        // rung this station recommends, a second of OFDM, repeated the TURN over the answer
+        // until the tries ran out and both stations held the turn (KE4QCM, 2026-09-25,
+        // ADR-0023): the wait covers the longest first frame there is.
+        let frame_s = self
+            .timing
+            .data_frame_s_for(0)
+            .max(self.timing.data_frame_s_for(self.rate.recommend()));
         self.wait_for(Waiting::Turn, frame_s, 0.0);
         self.actions.push(Action::Event {
             name: "role",
@@ -2052,7 +2086,10 @@ impl LinkEngine {
         self.ack_history.truncate(2);
 
         let mut flags = 0u8;
-        if !self.tx_queue.is_empty() {
+        // frames sent and not yet acknowledged are work as much as the queue is: a station
+        // that gave up the turn with some in flight — a BREAK, or yielding to a poll — asked
+        // for nothing back, and they waited for the other station to run out of its own
+        if self.has_work() {
             flags |= control_flags::WANT_TX;
         }
         if self.break_requested {
@@ -2119,7 +2156,17 @@ impl LinkEngine {
                 }
             }
             ControlKind::Poll => {
-                if self.role == Role::Irs || self.waiting_for == Some(Waiting::Turn) {
+                // Both stations hold the turn when a sender hears a poll: the other missed
+                // this one's answer to its TURN, took the turn back when its tries ran out,
+                // and polls — and a sender that ignores a poll leaves both sending into a
+                // path the other cannot hear until the session dies (KE4QCM, 2026-09-25:
+                // "no response"). The called station yields: it answers the poll and asks
+                // for the turn back (WANT_TX), and the caller keeps the turn, so the two can
+                // never both yield (ADR-0023).
+                if self.role == Role::Irs
+                    || self.waiting_for == Some(Waiting::Turn)
+                    || (self.role == Role::Iss && !self.caller)
+                {
                     self.take_irs();
                     let delay = self.timing.turnaround_s + (frame.t_end() - self.now).max(0.0);
                     self.arm(Timer::Ack, delay);
@@ -2336,6 +2383,7 @@ impl LinkEngine {
         self.peer_capabilities = accept.caps;
         self.state = State::Connected;
         self.role = Role::Iss;
+        self.caller = true;
         self.heard_peer_db = Some(snr_db);
         self.arm(Timer::Link, self.link_timeout());
         let detail = format!("{} (iss)", self.remote_call);
@@ -2378,6 +2426,7 @@ impl LinkEngine {
         self.turn_tries = 0;
         self.disc_tries = 0;
         self.disc_requested = false;
+        self.caller = false;
         self.waiting_for = None;
         self.rx_base = 0;
         self.rx_buffer.clear();
@@ -2756,6 +2805,30 @@ mod tests {
             .iter()
             .filter(|a| matches!(a, Action::Transmit { .. }))
             .count()
+    }
+
+    #[test]
+    fn a_turn_waits_for_the_longest_first_frame() {
+        // KE4QCM, 2026-09-25 (23:30:58): the caller waited for the answer to its TURN as
+        // long as one OFDM frame, and the called station's first burst was a tone-floor frame
+        // five seconds long — the TURN went out again over it, three times, and the caller
+        // took the turn back. The wait covers the longest first frame there is, and a frame
+        // heard arriving (ADR-0023)
+        let mut e = engine(wide());
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.rate.seed(24.0, false);
+        let longest = e.timing.data_frame_s_for(0);
+        assert!(e.timing.data_frame_s_for(e.rate.recommend()) < longest);
+        e.peer_request = PeerRequest::WantsTx;
+        e.maybe_start_burst();
+        assert_eq!(e.waiting_for, Some(Waiting::Turn));
+        let due = e.deadline_of(Timer::Wait).expect("armed");
+        assert!(due >= 100.0 + longest, "{due}");
+        let t_start = due - 0.5;
+        e.on_preamble(t_start, t_start + 0.2, Some(longest));
+        assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + longest);
     }
 
     #[test]

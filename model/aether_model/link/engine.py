@@ -362,6 +362,9 @@ class LinkEngine:
         burst faster than any of them is the sender's choice (ADR-0020)."""
         self._break_requested = False
         self._confirmed = False
+        self._caller = False
+        """This station placed the call: when both stations believe they hold the turn, the
+        caller keeps it and the called station yields (ADR-0023)."""
         self.peer_capabilities = 0
         """Capability bits the peer offered. Zero until a session is up, which is the safe
         reading: a station that has not said it can do something cannot be assumed to."""
@@ -437,7 +440,13 @@ class LinkEngine:
     def disconnect(self) -> None:
         """Orderly close: finish sending every queued byte, get it acknowledged, then
         DISC / DISC_ACK. Requesting this while still connecting just means "disconnect once
-        the transfer is done"; only :meth:`abort` tears down a half-open session."""
+        the transfer is done"; only :meth:`abort` tears down a half-open session.
+
+        A receiving station has nothing of its own to finish, and leaves between the other
+        station's bursts: its DISC goes at once unless a burst is arriving, whose
+        acknowledgement it then replaces. Waiting to put it in place of the next
+        acknowledgement waited for ever on a path where nothing decodable came — five
+        sessions with KE4QCM on 2026-09-25 ended with Abort (ADR-0023)."""
         if self.state is State.IDLE:
             return
         self._disc_requested = True
@@ -445,6 +454,20 @@ class LinkEngine:
             return
         if self.role is Role.ISS and self._waiting_for is None and not self._tx_busy():
             self._maybe_start_burst()
+        elif (
+            self.role is Role.IRS
+            and self.state is State.CONNECTED
+            and not self._burst
+            and "ack" not in self._deadlines
+            and not self._tx_busy()
+        ):
+            self._send_disc()
+
+    @property
+    def disconnect_requested(self) -> bool:
+        """A disconnect was asked for and the DISC has not gone yet: the sender is finishing
+        what it has queued, or the receiver is waiting for a burst to end."""
+        return self._disc_requested and self.state is State.CONNECTED
 
     def abort(self) -> None:
         """Drop the session now (one DISC on the way out)."""
@@ -598,9 +621,12 @@ class LinkEngine:
                 if timer in self._deadlines:
                     self._deadlines[timer] = max(self._deadlines[timer], clear)
             return
-        if self.state is State.DISCONNECTING and "wait" in self._deadlines:
-            # Nor does a leaving station repeat its DISC over a frame it hears arriving: it
-            # may be the answer, late, and a repeat keyed over it is heard by nobody.
+        if (
+            self.state is State.DISCONNECTING or self._waiting_for == "turn"
+        ) and "wait" in self._deadlines:
+            # Nor does a leaving station repeat its DISC, or a station that handed over the
+            # turn its TURN, over a frame it hears arriving: it may be the answer, late, and a
+            # repeat keyed over it is heard by nobody (ADR-0022, ADR-0023).
             length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
             clear = t_start + length + self._response_wait(0.0)
             self._deadlines["wait"] = max(self._deadlines["wait"], clear)
@@ -864,8 +890,16 @@ class LinkEngine:
         self._bursts_since_turn = 0
         self._peer_wants_tx = self._peer_break = False
         self._disarm("keepalive")
-        # the peer answers with its first burst (or a POLL); we wait a full data frame
-        self._wait_for("turn", self.timing.data_frame_s_for(self.rate.recommend()))
+        # The peer answers with its first burst (or a POLL), at a rung of its own choosing —
+        # after a fade the tone floor's, a frame five seconds long. Waiting one frame of the
+        # rung this station recommends, a second of OFDM, repeated the TURN over the answer
+        # until the tries ran out and both stations held the turn (KE4QCM, 2026-09-25,
+        # ADR-0023): the wait covers the longest first frame there is.
+        longest = max(
+            self.timing.data_frame_s_for(0),
+            self.timing.data_frame_s_for(self.rate.recommend()),
+        )
+        self._wait_for("turn", longest)
         self.actions.append(Event("role", "irs"))
 
     def _send_disc(self) -> None:
@@ -1318,7 +1352,10 @@ class LinkEngine:
         next_new = seq_after(self._rx_base, limit)
         self._ack_history = [_AckSnapshot(self._rx_base, missing, next_new), *self._ack_history][:2]
         flags = ControlFlags.NONE
-        if self._tx_queue:
+        # frames sent and not yet acknowledged are work as much as the queue is: a station
+        # that gave up the turn with some in flight — a BREAK, or yielding to a poll — asked
+        # for nothing back, and they waited for the other station to run out of its own
+        if self._has_work():
             flags |= ControlFlags.WANT_TX
         if self._break_requested:
             flags |= ControlFlags.BREAK | ControlFlags.WANT_TX
@@ -1376,6 +1413,15 @@ class LinkEngine:
                 self._on_ack(ctl)
         elif ctl.kind is ControlKind.POLL:
             if self.role is Role.IRS or self._waiting_for == "turn":
+                self._take_irs()
+                self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
+            elif self.role is Role.ISS and not self._caller:
+                # Both stations hold the turn: the other missed this one's answer to its TURN,
+                # took the turn back when its tries ran out, and polls — and a sender that
+                # ignores a poll leaves both sending into a path the other cannot hear until
+                # the session dies (KE4QCM, 2026-09-25: "no response"). The called station
+                # yields: it answers the poll and asks for the turn back (WANT_TX), and the
+                # caller keeps the turn, so the two can never both yield (ADR-0023).
                 self._take_irs()
                 self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
         elif ctl.kind is ControlKind.TURN:
@@ -1530,6 +1576,7 @@ class LinkEngine:
         self.peer_capabilities = ack.caps
         self.state = State.CONNECTED
         self.role = Role.ISS
+        self._caller = True
         self._confirmed = True
         self._last_peer_frame = self.now
         self._heard_peer_db = snr_db
@@ -1591,6 +1638,7 @@ class LinkEngine:
         self._asked = None
         self._break_requested = False
         self._confirmed = False
+        self._caller = False
         self.peer_capabilities = 0
         self.rate = self._rate_controller()
         for name in ("ack", "wait", "keepalive", "link"):

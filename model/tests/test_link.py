@@ -1635,6 +1635,76 @@ def test_the_ack_waits_for_the_frame_the_preamble_announced() -> None:
     assert b._deadlines["ack"] < 100.0 + floor_frame  # the old guess, for a PHY that cannot say
 
 
+def test_a_receiving_station_leaves_at_once_when_asked(timing: PhyTiming) -> None:
+    """KE4QCM, 2026-09-25: five sessions ended with Abort. On the receiving side Disconnect
+    only put the DISC in place of the next acknowledgement, and on a path where nothing
+    decodable came there never was one. A receiving station leaves between bursts now
+    (ADR-0023); the sender here stays quiet, polling nobody for five minutes."""
+    a, b = _pair(timing, LinkConfig(keepalive_s=300.0))
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=6)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED
+    assert b.role is Role.IRS
+    start = sim.t
+    b.disconnect()
+    sim.run(until=start + 30)
+    assert b.state is State.IDLE and a.state is State.IDLE
+    assert "disconnected:closed" in sim.events(1)
+    assert "disconnected:peer disconnected" in sim.events(0)
+
+
+def test_a_called_sender_yields_to_the_callers_poll(timing: PhyTiming) -> None:
+    """KE4QCM, 2026-09-25 (23:30:58): the caller handed the turn over, heard none of the
+    called station's data, took the turn back when its TURN tries ran out and polled; the
+    called station, sure it held the turn, ignored the polls and gave up — "no response".
+    The called station yields to the caller's poll now and asks for the turn back, so the
+    session outlives a fade that lets control frames through and no data (ADR-0023)."""
+    a, b = _pair(timing)
+    fade: dict[str, float] = {"until": 0.0}
+    # the caller detects nothing of the called station's data — not a preamble, not a frame —
+    # while control frames get through both ways: no data flows the other way here, so every
+    # DATA frame after the connect is the called one's
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_db=15.0,
+        seed=5,
+        unheard=lambda rx, container, t0: (
+            rx == 0 and container is Container.DATA and t0 < fade["until"]
+        ),
+    )
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED
+    fade_until = sim.t + 150.0
+    fade["until"] = fade_until
+    message = b"sent while the path would carry no data"
+    b.send(message)
+    sim.run(until=fade_until + 300.0)
+    assert sim.delivered(0) == message, sim.events(1)
+    assert not any(e.startswith("disconnected") for e in sim.events(1))
+
+
+def test_a_turn_waits_for_the_longest_first_frame(timing: PhyTiming) -> None:
+    """KE4QCM, 2026-09-25 (23:30:58): the caller waited for the answer to its TURN as long as
+    one OFDM frame, and the called station's first burst was a tone-floor frame five seconds
+    long — the TURN went out again over it, three times, and the caller took the turn back.
+    The wait covers the longest first frame there is, and a frame heard arriving (ADR-0023)."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.now = Role.ISS, State.CONNECTED, 100.0
+    a.rate.seed(24.0)  # a strong path: the recommendation is a fast OFDM rung
+    assert timing.data_frame_s_for(a.rate.recommend()) < timing.data_frame_s_for(0)
+    a._peer_wants_tx = True
+    a._maybe_start_burst()  # nothing of its own to send: it hands over
+    assert a._waiting_for == "turn"
+    assert a._deadlines["wait"] >= 100.0 + timing.data_frame_s_for(0)
+    # a frame heard arriving late moves the next TURN past it
+    t_start = a._deadlines["wait"] - 0.5
+    a.on_preamble(t_start, t_start + 0.2, timing.data_frame_s_for(0))
+    assert a._deadlines["wait"] >= t_start + timing.data_frame_s_for(0)
+
+
 def _disconnecting(timing: PhyTiming) -> LinkEngine:
     """A sender that has just keyed its DISC and is waiting for the answer."""
     a = LinkEngine("W4ODA", timing, LinkConfig())
