@@ -314,7 +314,7 @@ Three independently versioned documents, each with its own conformance vectors:
 |---|---|---|
 | `docs/spec/air-interface.md` | PHY (waveform, preamble, pilots, modes), frame formats, FEC/rate matching, ARQ state machines, timers. **Public** (FCC §97.309(a)(4)). | other implementers, regulators |
 | `docs/spec/control-api.md` | Aether-native JSON over WebSocket (+ REST for one-shots): `status`, `config get/set`, `connect`, `disconnect`, `send`, `metrics` stream (SNR, CFO, constellation, spectrum), `devices list`, `ptt test`, `audio calibrate`, auth token for non-loopback binds. PHY-agnostic; HF/FM differ only in the mode table. | GUI, remote web UI, third-party tools, tests |
-| `docs/spec/host-interfaces.md` | Adapters: **VARA-compatible TCP** (command + data ports; full public command set: `MYCALL`, `LISTEN`, `CONNECT src dst [via]`, `DISCONNECT`, `ABORT`, `COMPRESSION`, `BW500/2300/2750`, `VERSION`, `PUBLIC`, `CWID`, `CHAT`, `CQFRAME`, `TUNE`, `CLEANTXBUFFER`, `WINLINK SESSION`, `P2P SESSION`; events `OK/WRONG/BUFFER n/CONNECTED/DISCONNECTED/PENDING/CANCELPENDING/PTT ON|OFF/BUSY ON|OFF/IAMALIVE/REGISTERED`), the **KISS** port (§8; ADR-0019, beta.61), and later **AGWPE** for the FM/packet use-case
+| `docs/spec/host-interfaces.md` | Adapters: **VARA-compatible TCP** (command + data ports; full public command set: `MYCALL`, `LISTEN`, `CONNECT src dst [via]`, `DISCONNECT`, `ABORT`, `COMPRESSION`, `BW500/2300/2750`, `VERSION`, `PUBLIC`, `CWID`, `CHAT`, `CQFRAME`, `TUNE`, `WINLINK SESSION`, `P2P SESSION`; events `OK/WRONG/BUFFER n/CONNECTED/DISCONNECTED/PENDING/CANCELPENDING/PTT ON|OFF/BUSY ON|OFF/IAMALIVE/REGISTERED`), the **KISS** port (§8; ADR-0019, beta.61), and later **AGWPE** for the FM/packet use-case
 (no `PING`: VARA publishes none — P7-1; `BW2750` refused until P9-3). | Winlink Express, RMS Trimode, Pat, VarAC, BPQ32 |
 
 Rig control is *not* an application-facing API; it is a HAL backend (Hamlib `rigctld`
@@ -933,3 +933,19 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     `DRIVELEVEL` scale, `CLEANTXBUFFER`, callsigns longer than nine characters (VarAC's `-T`
     alias on an SSID), and reading the dial from a host program's Hamlib or FLRig server so the
     rules can run with a host-owned radio.
+23. **The drop-in, Tier 2** (2026-09-26, after beta.69). VARA's published command list (EA5HVK,
+    13 Feb 2022) read in full: `BW<n>` sets the modem's mode, `LISTEN OFF` is the default,
+    `CHAT ON` includes `LISTEN ON`; `CLEANTXBUFFER`, `DRIVELEVEL` and `CWID` are not in it, and its
+    callsign grammar excludes VarAC's `KK4ODA-1-T` as well — the SSID ping is VarAC's limit, not
+    Aether's. **Done — ADR-0026:** the bandwidth follows a host program's `BW` commands between
+    sessions; a 2300 Hz station answers a 500 Hz call at 500 Hz and goes back (never the other
+    way); `[radio] bandwidth` is live; `LISTEN` decides whether calls are answered while a
+    program is attached; recordings replay across a move. A program that tunes through
+    `rigctld` shares the radio with Aether keying there, so the rules check keeps its dial
+    (`docs/user/host-programs.md`). **Measured — ADR-0027, in the model on branch
+    `chat-handover`, to merge and port:** in a chat the receiving station asks for the turn
+    (`tools/bench_chat.py`: −36 % median, −28 % p90 latency per line on the fading classes, 7 %
+    less keying, no more drops; handing the turn over after each burst was faster still and lost
+    four times the sessions). **Built on branch `flrig-keying`, for the next release (schema 9):**
+    keying, the dial and tuning through FLRig. **Needs the author:** `DRIVELEVEL`'s scale and
+    whether VarAC sends `CLEANTXBUFFER` (a VarAC command log), gateways (BPQ32 on the bench).
