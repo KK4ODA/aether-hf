@@ -1554,7 +1554,8 @@ impl<P: Ptt> Station<P> {
             self.note(
                 "identifier",
                 &format!(
-                    "set to {} wpm, sent at {sent} wpm: the rules limit an automatically keyed                      identifier to {sent} wpm (§97.119(b)(1))",
+                    "set to {} wpm, sent at {sent} wpm: the rules limit an automatically keyed \
+                     identifier to {sent} wpm (§97.119(b)(1))",
                     cw.wpm
                 ),
             );
@@ -2973,7 +2974,8 @@ impl<P: Ptt> Station<P> {
             "hangover ran out with the energy under the threshold".to_owned()
         };
         let detail = format!(
-            "{level:.1} dBFS | floor {floor:.1} | delta {:+.1} dB | margin {margin:.1} |              threshold {:.1} dBFS | {} | {why}",
+            "{level:.1} dBFS | floor {floor:.1} | delta {:+.1} dB | margin {margin:.1} | \
+             threshold {:.1} dBFS | {} | {why}",
             level - floor,
             floor + margin,
             if busy { "OFF -> ON" } else { "ON -> OFF" },
@@ -3884,7 +3886,8 @@ mod tests {
         let gap_db = 20.0 * (burst_peak / tone_peak).log10();
         assert!(
             gap_db > 2.0,
-            "the waveform should peak well above the tone that sets the drive, not level              with it: {gap_db:.1} dB"
+            "the waveform should peak well above the tone that sets the drive, not level \
+             with it: {gap_db:.1} dB"
         );
     }
 
