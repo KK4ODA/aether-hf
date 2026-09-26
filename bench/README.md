@@ -505,6 +505,16 @@ time and the keyed time within 0.97–1.05; the rules not taken cost half a seco
 0 dB. `poll_step_link.csv` is `bench_link.py --fading --floor-cap`: identical in all 600
 sessions. ADR-0032 has the tables.
 
+## The link timeout follows the link down (`link_deadline_chat.csv`, `link_deadline_link.csv`, ADR-0033)
+
+The engine with ADR-0031 and ADR-0032 (`engine` `before`) and with the link deadline reckoned
+again whenever a station sends (`after`), the same runs as ADR-0031's. Six chat sessions
+change, the six that dropped at 0 dB on the 500 Hz air, and all six complete: drops 10 → 4 of
+5 400, lines lost 75 → 41, latency and keyed time unchanged; the four left are the slow fade
+at −12 dB on ITU Good. `link_deadline_link.csv` is `bench_link.py --fading --floor-cap`:
+identical in all 600 sessions. ADR-0033 has the table, and the three changes against
+`f17fec5`: 17 drops and a stall → 4 drops, lines lost 157 → 41.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
