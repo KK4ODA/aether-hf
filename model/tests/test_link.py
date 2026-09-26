@@ -1997,15 +1997,23 @@ def _type(sim: TwoStationSim, who: int, line: bytes, at: float) -> None:
     sim._pump(who, at)
 
 
-def _arrival(sim: TwoStationSim, who: int, length: int, since: float) -> float | None:
-    """When station ``who`` has ``length`` bytes delivered, to a tenth of a second."""
+def _arrivals(sim: TwoStationSim, expected: dict[int, int], since: float) -> dict[int, float]:
+    """When each station ``who`` of ``expected`` has that many bytes delivered, to a tenth of a
+    second, running the simulation on from ``since`` (where it stands)."""
+    got: dict[int, float] = {}
     t = since
-    while t < since + 180.0:
+    while len(got) < len(expected) and t < since + 300.0:
         t += 0.1
         sim.run(until=t)
-        if len(sim.delivered(who)) >= length:
-            return t
-    return None
+        for who, length in expected.items():
+            if who not in got and len(sim.delivered(who)) >= length:
+                got[who] = t
+    return got
+
+
+def _arrival(sim: TwoStationSim, who: int, length: int, since: float) -> float | None:
+    """When station ``who`` has ``length`` bytes delivered (:func:`_arrivals`)."""
+    return _arrivals(sim, {who: length}, since).get(who)
 
 
 def test_chat_is_off_unless_asked_for() -> None:
@@ -2163,9 +2171,8 @@ def test_chat_leaves_a_transfer_alone(live: PhyTiming) -> None:
         _type(sim, 0, document, t)
         line = b"got the first part, looks good"
         _type(sim, 1, line, t + 4.0)
-        got_file = _arrival(sim, 1, len(document), t)
-        got_line = _arrival(sim, 0, len(line), t)
+        got = _arrivals(sim, {1: len(document), 0: len(line)}, t + 4.0)
         assert sim.delivered(1) == document and sim.delivered(0) == line
         assert b.stats.turn_requests == 0
-        arrivals[chat] = (got_file, got_line)
-    assert arrivals[True] == arrivals[False]
+        arrivals[chat] = (got[1] - t, got[0] - t)
+    assert arrivals[True] == arrivals[False], arrivals
