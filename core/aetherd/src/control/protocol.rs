@@ -119,7 +119,7 @@ impl Response {
 /// Something that happened, sent to every subscriber without being asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
-    /// What happened: `state`, `metrics`, `data`, `ptt`, `busy`, `log`.
+    /// What happened: `state`, `metrics`, `frame`, `data`, `ptt`, `log`, … (`control-api.md` §5).
     pub event: String,
     /// The detail.
     pub data: serde_json::Value,

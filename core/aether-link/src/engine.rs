@@ -2392,9 +2392,9 @@ impl LinkEngine {
             detail,
         });
         // the acceptance says how the request was heard: the first burst starts at what
-        // that supports, less a step, instead of at the slowest mode; the acceptance's
-        // own SNR is how the other station is heard here, which this station's
-        // controller starts from for the day it receives (P9-2)
+        // that supports, less `first_mode_back` steps, instead of at the slowest mode;
+        // the acceptance's own SNR is how the other station is heard here, which this
+        // station's controller starts from for the day it receives (P9-2)
         self.rate.seed(snr_db, self.peer_floor);
         self.recommended = match accept.snr_db {
             Some(heard) => self.config.initial_mode.max(self.rate.first_mode(heard)),

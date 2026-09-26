@@ -1,11 +1,12 @@
 # Aether control API — specification v0.1
 
-Status: **draft**. This specifies an interface that Phase 3 will implement; it is published
-now so the daemon, the GUI and third-party tools can be built against the same contract
+Status: **draft**, and implemented in `core/aetherd/src/control/`. It is the contract the
+daemon, the panel, the host adapter, the KISS port and third-party tools are built against,
 rather than against each other.
 
 Companion documents: `air-interface.md` (what goes over the air), `host-interfaces.md`
-(Winlink/Pat compatibility adapters), `../adr/0001-language-and-stack.md`.
+(the VARA-compatible host interface and the KISS port, both clients of this one),
+`../adr/0001-language-and-stack.md`.
 
 ---
 
@@ -21,7 +22,9 @@ testing, which is what makes a modem debuggable by its operator rather than opaq
 Two design rules follow from the audit and from `COMMUNITY-CONCERNS.md`:
 
 * **PHY-agnostic.** HF and the future FM physical layer differ only in the mode table and a
-  handful of capability fields. Nothing in this document names a modulation.
+  handful of capability fields. Nothing in the shape of a method or an event names a
+  modulation; where this document names one it is describing today's HF ladder, which a
+  client reads from `capabilities`.
 * **Nothing hidden.** Every quantity the modem uses to make a decision — measured SNR, the
   mode the rate controller chose and why, buffer occupancy, PTT state — is observable. A
   mode whose behaviour an operator cannot see is one they cannot trust or report a bug
@@ -37,11 +40,16 @@ Two design rules follow from the audit and from `COMMUNITY-CONCERNS.md`:
 | One-shots | HTTP REST on the same port, `POST /v1/<method>` with the same body |
 | Encoding | UTF-8 JSON, one object per WebSocket message |
 | Default bind | loopback only |
+| Panel | `GET /` and the files under it, from `[control] ui_dir` when it is set |
+| HTTP status | 200 for `ok: true`, 400 for a refused request (the same error object), 401 without a token that is needed, 404 for anything but `POST /v1/<method>` or a panel file |
 
-**Authentication.** No token is required on a loopback bind. Binding to any other interface
-requires a bearer token (`Authorization: Bearer <token>`, or `{"token": …}` in the first
-WebSocket message); the daemon refuses a non-loopback bind that has no token configured
-rather than starting an open one. The token is generated on first run and shown in the GUI.
+**Authentication.** No token is needed on a loopback bind, and a connection from the
+loopback address never needs one. Binding to any other interface requires `[control] token`
+in the configuration — the daemon refuses a non-loopback bind without one rather than
+starting an open one — and a connection from another address must present it as
+`Authorization: Bearer <token>`, on the WebSocket upgrade request or on each `POST`; without
+it the answer is HTTP 401, code `unauthorised`. The operator chooses the token, and
+`config.get` shows it only as `<set>`.
 
 **Versioning.** The path carries the major version. Fields may be added within a version;
 existing fields do not change meaning. A client must ignore fields it does not recognise.
@@ -65,22 +73,25 @@ Response, one per request, correlated by `id`:
 Error:
 
 ```json
-{ "id": "7", "ok": false, "error": { "code": "busy_channel",
-  "message": "The channel is busy. Waiting for it to clear.", "retryable": true } }
+{ "id": "7", "ok": false, "error": { "code": "not_idle",
+  "message": "Cannot probe KK4XYZ: a probe is already out. The answer, or its absence, is reported as a probe event.",
+  "retryable": true } }
 ```
 
 Events are unsolicited and carry no `id`:
 
 ```json
-{ "event": "state", "data": { "state": "connected", "role": "iss", "remote": "KK4XYZ" } }
+{ "event": "state", "data": { "name": "connected", "detail": "KK4XYZ (iss)",
+  "state": "Connected", "callsign": "W4ODA", "remote": "KK4XYZ" } }
 ```
 
 A request the regulatory policy refuses — a `connect`, `probe`, `beacon`, `tune`, `drive.set` or
 `ptt.test` the rules do not allow here — fails with code `regulatory`, a message that says why in a
-sentence, and the whole decision in `result.decision` (§4.10).
+sentence, and the whole decision in `result.decision` (§4.10). A `test.start` the rules refuse
+fails with code `not_idle` and the decision's summary as its message.
 
 **Error messages are written for operators, not developers.** `"The sound device 'USB Audio
-CODEC' was unplugged. Reconnect it or choose another in Settings → Audio."` — not a stack
+CODEC' was unplugged. Reconnect it or choose another in Setup, step 2."` — not a stack
 trace, and not `ENODEV`. The `code` is the stable machine-readable field; `message` is
 human-facing and may be localised.
 
@@ -92,13 +103,14 @@ human-facing and may be localised.
 
 | Method | Params | Result |
 |---|---|---|
-| `status` | — | state, role, callsign and callsigns, remote callsign, uptime, versions, capabilities, `transmitting`, `probing` (a probe is out and its answer awaited — the state stays `idle`), `closing` (a `disconnect` was asked for and the DISC has not gone yet: the sender is finishing what is queued, or a receiver waits for the burst arriving to end — it sends its DISC at once otherwise; `abort` closes now), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, `connected`: whether a host program holds the port right now, and `chat`: whether it said `CHAT ON`), `kiss` (the KISS port, §4.11), `datagrams` (`queued` of `limit`, `sent`, `heard`, `incomplete_dropped`: §4.11), `regulatory` (where the station stands with the rules, §4.10), `beacon` (`every_s`: the repeating beacon's interval, null when none runs; `next_in_s`; `last_sent_ms`: when the last beacon went on the air, repeating or not; `sent` and `skipped` since the daemon started), `identifier` (the Morse identifier: `enabled`, `wpm` as set, `sent_wpm` — the speed it goes at, the rules' limit on an automatically keyed identifier when that is lower, 20 wpm under §97.119(b)(1) — `max_wpm` (the rules' limit, null when they set none) and `interval_s`), and `metrics` and `counters` as the event and the sidecar carry them. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
+| `status` | — | `state`, `role` (`iss`, `irs`, `none`), `callsign` and `callsigns`, `remote`, `session` (its id), `mode` (the rung in use), `uptime_s`, `version`, `transmitting`, `channel_busy`, `queued_bytes`, `compressing` and `compression_saving` (whether this session compresses, and the fraction it saves), `ptt` (what the radio is keyed through) and `ptt_fault` (why it cannot key, when the keying interface would not open), `audio_fault` (why the sound card would not open; the station runs on silence meanwhile), `recording` (§4.4), `recordings_dir` (where recordings go, whether or not one runs), `test` (§4.2; null when none runs), `sent` (`pending`, `recent`: §5), `probing` (a probe is out and its answer awaited — the state stays `idle`), `closing` (a `disconnect` was asked for and the DISC has not gone yet: the sender is finishing what is queued, or a receiver waits for the burst arriving to end — it sends its DISC at once otherwise; `abort` closes now), `supervised` (whether somebody will start the daemon again if it asks), `binary` (the executable it runs from — how the desktop shell tells a daemon of its own installation from somebody else's), `config_note` (set when the configuration file was written by a newer version and this one started from the copy kept before that version brought it forward, saying which, and where the newer file is kept), `frequency_hz` (the dial, when the keying interface can ask the radio), `can_tune` (whether `frequency.set` has a way to: CAT or `rigctld`), `link` (the session's account, §4.8), `host` (`enabled`, the command and data addresses, `connected`: whether a host program holds the port right now, and `chat`: whether it said `CHAT ON`), `kiss` (the KISS port, §4.11), `datagrams` (`queued` of `limit`, `sent`, `heard`, `incomplete_dropped`: §4.11), `regulatory` (where the station stands with the rules, §4.10), `beacon` (`every_s`: the repeating beacon's interval, null when none runs; `next_in_s`; `last_sent_ms`: when the last beacon went on the air, repeating or not; `sent` and `skipped` since the daemon started), `identifier` (the Morse identifier: `enabled`, `wpm` as set, `sent_wpm` — the speed it goes at, the rules' limit on an automatically keyed identifier when that is lower, 20 wpm under §97.119(b)(1) — `max_wpm` (the rules' limit, null when they set none) and `interval_s`; a `log` event named `identifier` says so when the rules hold it below the speed set), and `metrics` and `counters` as the event and the sidecar carry them — `counters`: the link's `frames_sent`, `frames_resent`, `frames_received`, `frames_failed`, `harq_rescues`, `bytes_delivered`, `bursts`, `turns`, `ack_timeouts`, `probes_sent`, `probes_answered`, `probe_replies`, `frames_reencoded`, and the station's `transmissions`, `frames_detected`, `deferred_for_busy`, `watchdog_trips`, `beacons_sent` (beacons queued, by hand or on the timer) and `beacons_heard`, since the daemon started or the last `counters.reset`. `metrics.tx_peak_dbfs` is the largest sample the modem handed the sound card on its last transmission, after the transmit level: the headroom figure no ALC meter can show, because it is measured before the radio |
+| `counters.reset` | — | `counters`, every one at zero. Only the tallies are cleared: the session, its account and the settings are untouched |
 | `config.get` | — | the configuration, the file it came from, and which keys apply without a restart |
 | `config.set` | dotted key/value pairs | which keys changed, and which of them need a restart |
 | `config.schema` | — | the settings registry (§4.9): every setting with its `key`, `type`, `default`, `nullable`, `scope`, `live`, and its `min`/`max`/`options` and `why` where it has a bound; `live_keys`; the profile format's name and both schema numbers |
-| `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the ladder of the running waveform (`modes`, one entry a rung: index, name, payload bytes and net bit rate *of the frame the rung goes out on*, AWGN threshold, `floor` — whether the rung is the tone floor's (ADR-0013, its fast kinds included, ADR-0014), whose frames are five times as long as an ordinary one; `usable_modes`), whether the PHY reports preambles, the SNR reference |
+| `capabilities` | — | `bandwidth_hz` (the waveform the station runs: 2300 or 500), `bandwidths_hz` (what this version has), the ladder of the running waveform (`modes`, one entry a rung: index, name, payload bytes and net bit rate *of the frame the rung goes out on*, AWGN threshold, `floor` — whether the rung is the tone floor's (ADR-0013; its fast kinds, ADR-0014, and the 500 Hz four-tone kinds, ADR-0015, included), whose frames are five times as long as an ordinary one; `usable_modes`), whether the PHY reports preambles, the SNR reference |
 | `diagnostics` | — | everything a bug report needs, in one object (§4.6) |
-| `shutdown` | `restart?` | `stopping`; the transmitter is released on the way out. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know. The reply is written before the daemon exits, and so is every other reply already on its way (for up to two seconds); a request that reaches it while it stops is answered `modem_stopped` |
+| `shutdown` | `restart?` | `stopping`, `restart`, `supervised`. A session is ended on the air first — its DISC and, when the station identifies, the identifier — and the daemon waits until nothing is left to send or twelve seconds pass (ADR-0017); then the transmitter is released. With `restart: true` the daemon exits with status 75 (`EX_TEMPFAIL`), which the desktop shell and the systemd unit (`RestartForceExitStatus=75`) take as "start me again" — the way a setting that needs a restart is applied without the operator having to know. The reply is written before the daemon exits, and so is every other reply already on its way (for up to two seconds); a request that reaches it while it stops is answered `modem_stopped` |
 
 `capabilities` is how a client discovers the mode table rather than hard-coding it, and is
 what keeps this document PHY-agnostic. A mode number is a rung of the waveform's **ladder**
@@ -107,9 +119,12 @@ at 2 300 Hz (the floor's two and its four fast kinds at rungs 0–5, the fourtee
 from BPSK ⅕ at rungs 6–19), fifteen at 500 Hz (the floor's two and its two four-tone middle
 kinds at rungs 0–3, then QPSK ⅓ up at rungs 4–14) — and a
 mode number means nothing without the `bandwidth_hz` it came with. `[radio] bandwidth` chooses the waveform and needs a
-restart; `[radio] answer_only` (live) makes the station take calls and make none — what
-§97.221(c) allows an unattended station at 500 Hz outside the automatic sub-bands, and
-what `connect`, `beacon` and `probe` are refused with while it is set.
+restart; `[radio] answer_only` (live) makes the station take calls and make none: `connect`,
+`beacon`, `beacon.every`, `probe`, `test.start` and `datagram.send` are refused while it is set,
+and probes are still answered. It does not decide what the rules allow — `[regulatory] control`
+does (§4.10) — and under the US profile an automatically controlled station keeps to the
+§97.221(b) segments whatever its bandwidth, since no Aether emission is 500 Hz or less by the
+wider reading of §97.3(a)(8) (ADR-0018).
 
 `config.get` and `diagnostics` return the configuration **with the secrets taken out**:
 `control.token` comes back as the string `<set>` when one is configured. A loopback client
@@ -119,28 +134,29 @@ needs no token, so it must not be able to read the one that guards a network bin
 
 | Method | Params | Result |
 |---|---|---|
-| `connect` | `remote`, `callsign?`, `bandwidth?` | session id; then `state` events. `callsign` picks which of the station's callsigns to call as (the first, when absent) |
-| `callsigns.set` | `callsigns` (list) | the callsigns the station answers to from now on, the first being the one it calls as, and `applied`: `false` when a session is up, in which case they take effect as it ends. Replaces `[station] callsign` for the daemon's lifetime without touching the file: a host program's `MYCALL` is the operator's callsign, and the file is what the station answers to until one says otherwise |
-| `disconnect` | — | accepted; closes after the queue drains |
-| `abort` | — | accepted; drops the session immediately |
+| `connect` | `remote`, `callsign?` | `session` (the id); then `state` events. `callsign` picks which of the station's callsigns to call as (the first, when absent). The bandwidth is the station's (`[radio] bandwidth`), never a call's. Refused `bad_params` (no `remote`; a `callsign` not the station's), `already_connected` (a session is up — or the station is answer-only), `regulatory` |
+| `callsigns.set` | `callsigns` (list) | the callsigns the station answers to from now on, the first being the one it calls as, and `applied`: `false` when a session is up, in which case they take effect as it ends. Replaces the configuration's `callsign` for the daemon's lifetime without touching the file: a host program's `MYCALL` is the operator's callsign, and the file is what the station answers to until one says otherwise |
+| `disconnect` | — | accepted (`orderly: true`). A sending station sends what is queued, has it acknowledged, then its DISC; a receiving station sends its DISC at once, or — when a burst is arriving — in place of that burst's acknowledgement (ADR-0023). `status.closing` is true until the DISC is queued. The DISC and the other station's answer wait out a Morse identifier being sent (at most 15 s, ADR-0022). During a call it does not stop calling — a call that is answered is then closed at once; `abort` stops calling |
+| `abort` | — | accepted (`orderly: false`); ends the session now: the rest of a burst on the air is cut, the card flushed, and one DISC follows after a pause for the cut frame and the other station's answer to pass (ADR-0017). During a call it stops calling and sends nothing |
 | `beacon` | — | accepted; one frame with this station's callsign, addressed to nobody, on the tone floor — the most robust frame there is, heard by a station of either bandwidth (ADR-0016). Refused during a session and on an answer-only station. When it goes on the air a `log` event named `beacon` says `sent` (with the repeating beacon's next, when one runs); a beacon heard from another station is a `log` event named `beacon`, `heard <call> at <snr> dB` |
 | `beacon.every` | `minutes` (10–240; `0` or `null` stops it) | `status.beacon` as it now stands. A beacon now and another every `minutes` until stopped or the daemon restarts — nothing on the disk sets a station beaconing on its own. Each waits for the station to be idle (no session, probe or test) and the channel clear, whatever `wait_for_clear` says; one that could not go within two minutes of falling due is skipped and said so (`beacon` log event: `skipped: …`), the next kept to the interval. Refused (`bad_params`) outside the range, on an answer-only station, and under automatic control: a beacon may be automatically controlled only on 28.20–28.30, 50.06–50.08, 144.275–144.300, 222.05–222.06 or 432.300–432.400 MHz, or on 33 cm and up (§97.203(d)); a station that becomes either while one runs stops it at the next one due |
-| `probe` | `remote`, `callsign?` | accepted; one frame on the tone floor asking `remote` whether it hears this station, and how well (ADR-0006, ADR-0016). The answer, or its absence, arrives as a `log` event named `probe`: `<call> hears us at <x> dB, heard at <y> dB` — the SNR the other station measured on the probe, and the SNR this one measured on the answer; tone-floor readings, exact to about +10 dB and a lower bound above (at most 17.5 dB on a clean path, a few on a dispersive one) — or `<call>: no answer` after one frame's turnaround. One probe out at a time (`not_idle`, retryable); refused during a session and on an answer-only station, which answers probes and sends none. The other end reports a probe it answered as a `log` event named `probed` |
-| `test.start` | `remote`, `callsign?`, `remote_grid?`, `message_bytes?` (2048), `file_bytes?` (16384), `ladder?` (true), `rung_frames?` (4), `budget_s?` (600) | accepted; the **Test session** of P6-7 with `remote`: a probe, a call, the message (incompressible bytes, timed), the **mode ladder** — a burst pinned at each mode from the floor up, its frames small enough to be re-encoded at a slower mode if that mode fails, until three rungs in a row decode fewer than half their frames — then the file, and an orderly disconnect (ADR-0017: the ladder comes before the file, which used to take the whole budget on a slow path). The sizes are ceilings: the SNR the other station reports hearing this one at in the probe's answer (this station's own reading of it when the answer did not say) sizes the message under its ceiling — half a kilobyte below 0 dB, a kilobyte below 6 dB — and the message's measured rate sizes the file to about two minutes' worth of what the budget has left; the whole run keeps to `budget_s`, shortening or skipping what would not fit (`results.adjustments` says what), and a transfer or rung that stalls past its time ends the run with an abort, keeping what was learned. All of it is one recording named `…_test`, with the report under the sidecar's `session.test` and the operator's `[operator]` grid, rig, power and antenna beside it. Progress arrives as `log` events named `test`, and while it runs `status.test` gives `remote`, `step` (`probe`, `connect`, `message`, `ladder`, `file`, `disconnect`), `elapsed_s`, `budget_s` and `remaining_s` (the most the budget leaves — not a forecast), `rungs` (tried so far), `transfer` during the message and the file (`bytes`, `acked`), `ladder` (`total` rungs, `done`, `testing` and `testing_name` — the rung under test — `frames` per rung, `highest_passed` and `highest_passed_name`, `failures_in_row` of `failures_allowed`, and `last`, the last rung as `results.ladder` has it) and `link` (the `rung` in use and its `rung_name`, and `heard_there_db`, how the other station last said it heard this one). The other station only listens; an answer-only station is a fine partner. Refused (`not_idle`) during a session, a probe or another test, and on an answer-only station |
+| `probe` | `remote`, `callsign?` | accepted; one frame on the tone floor asking `remote` whether it hears this station, and how well (ADR-0006, ADR-0016). The answer, or its absence, arrives as a `log` event named `probe`: `<call> hears us at <x> dB, heard at <y> dB` — the SNR the other station measured on the probe, and the SNR this one measured on the answer; tone-floor readings, exact to about +10 dB and a lower bound above (at most 17.5 dB on a clean path, and lower on a dispersive one: 15.5, 12 and 5 dB on ITU Good, Moderate and Poor) — or `<call>: no answer` after one frame's turnaround. One probe out at a time (`not_idle`, retryable); refused during a session and on an answer-only station, which answers probes and sends none. The other end reports a probe it answered as a `log` event named `probed` |
+| `test.start` | `remote`, `callsign?`, `remote_grid?`, `message_bytes?` (2048), `file_bytes?` (16384), `ladder?` (true), `rung_frames?` (4), `budget_s?` (600) | accepted; the **Test session** of P6-7 with `remote`: a probe, a call, the message (incompressible bytes, timed), the **mode ladder** — a burst pinned at each mode from the floor up, its frames small enough to be re-encoded at a slower mode if that mode fails, until three rungs in a row decode fewer than half their frames — then the file, and an orderly disconnect (ADR-0017: the ladder comes before the file, which used to take the whole budget on a slow path). The sizes are ceilings: the SNR the other station reports hearing this one at in the probe's answer (this station's own reading of it when the answer did not say) sizes the message under its ceiling — half a kilobyte below 0 dB, a kilobyte below 6 dB — and the message's measured rate sizes the file to about two minutes' worth of what the budget has left; the whole run keeps to `budget_s`, shortening or skipping what would not fit (`results.adjustments` says what), and a transfer or rung that stalls past its time ends the run with an abort, keeping what was learned. All of it is one recording named `…_test`, with the report under the sidecar's `session.test` and the operator's `[operator]` grid, rig, power and antenna beside it. Progress arrives as `log` events named `test`, and while it runs `status.test` gives `remote`, `step` (`probe`, `connect`, `message`, `ladder`, `file`, `disconnect`), `elapsed_s`, `budget_s` and `remaining_s` (the most the budget leaves — not a forecast), `rungs` (tried so far), `transfer` during the message and the file (`bytes`, `acked`), `ladder` (`total` rungs, `done`, `testing` and `testing_name` — the rung under test — `frames` per rung, `highest_passed` and `highest_passed_name`, `failures_in_row` of `failures_allowed`, and `last`, the last rung as `results.ladder` has it) and `link` (the `rung` in use and its `rung_name`, and `heard_there_db`, how the other station last said it heard this one). The other station only listens; an answer-only station is a fine partner. Refused (`not_idle`) during a session, a probe or another test, on an answer-only station, and with the decision's summary when the rules do not allow this station to start an exchange here |
 | `test.status` | — | `running`, and `results` — the running test's, or the last one's until the next starts: `remote`, `started`, `elapsed_s`, `step`, `outcome` (`complete`, or `aborted: <why>`), `bandwidth_hz`, `probe` (`heard_there_db`, `heard_here_db`; null when unanswered), `message` and `file` (`bytes`, `seconds`, `bps`), `ladder` (per rung: `mode`, `frames`, `decoded`, `snr_db` as the other station measured it — null when none of the rung's frames was one it trusted (ADR-0020) — `seconds`), `ladder_rungs` (how many the ladder had to climb), `highest_passed` (the fastest rung that decoded at least half its frames; null when none did, or the ladder never ran), `path` (`my_grid`, `their_grid`, `km` from the two grids) |
 | `test.abort` | — | `aborted`: whether one was running. The session is aborted at once (one DISC on the way out), the outcome is `stopped by the operator`, and the report keeps every step that finished |
-| `listen` | `enabled` | accepted |
-| `send` | `data` (base64), `ref?` (1–64 printable ASCII characters) | `accepted`: bytes accepted into the queue, and `ref` when one was given. A message sent with a reference is followed: a `sent` event says when the other station has all of it, in order — from the link's acknowledgements, so after every byte before it too — or that the session ended first. Refused (`not_connected`) with no session up; a bad reference is `bad_params` |
+| `listen` | `enabled` | `{"enabled": true}` for true; `false` is refused `unsupported`: this version always answers a call to its callsigns |
+| `send` | `data` (base64), `ref?` (1–64 printable ASCII characters, no spaces) | `accepted`: bytes accepted into the queue, and `ref` when one was given. A message sent with a reference is followed: a `sent` event says when the other station has all of it, in order — from the link's acknowledgements, so after every byte before it too — or that the session ended first. Refused (`not_connected`) with no session up; a bad reference is `bad_params` |
 
-`disconnect` is orderly: queued data is sent and acknowledged first. `abort` is not. The
-distinction matters to an operator watching a transfer and is why both exist.
+`disconnect` is orderly: what this station has queued is sent and acknowledged first.
+`abort` is not. The distinction matters to an operator watching a transfer and is why both
+exist.
 
 ### 4.3 Devices and calibration
 
 | Method | Params | Result |
 |---|---|---|
-| `devices.list` | — | input/output devices with names and default flags, serial ports as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys — and `gpio_interfaces` as `{path, name}`: the CM108-class interfaces that key through their codec's GPIO pin (`[ptt] kind = "cm108"`) |
-| `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light |
+| `devices.list` | — | `devices`: each audio device's `name`, whether it can capture (`input`) and play (`output`), and the sample rates it runs at (`input_rates`, `output_rates`); `serial_ports` as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys — and `gpio_interfaces` as `{path, name}`: the CM108-class interfaces that key through their codec's GPIO pin (`[ptt] kind = "cm108"`). Refused `audio_unavailable` when the platform cannot list its audio devices |
+| `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light. Refused during a session |
 | `tune` | `duration_s` (0.5–10, or 0 to stop) | keys and plays a steady tone at the transmit level — what an antenna tuner needs, and **not** how to set drive (use `drive.set`). `audio.tx_level` is live and is applied as audio leaves, so the level can be moved while the tone plays; `0` cuts it short, and only an operator's own test transmission is ever cut |
 | `drive.set` | `bursts` (1–10, default 4, or 0 to stop) | keys and sends that many real bursts at the fastest mode the station is allowed, so the rig's ALC is shown the peaks traffic will actually present it with. A tune tone is a sine and the daemon scales the waveform to the tone's RMS, so the waveform's peaks land about 6 dB (floor mode) to 7 dB (fastest) above anything the tone reaches — drive set on the tone is that far into limiting on traffic. The bursts carry filler, not protocol: a station that decodes one finds a data frame for a session it does not have and ignores it. `0` stops them, as for `tune` |
 | `audio.level` | — | the last three seconds of received audio: RMS and peak in dBFS, clipping fraction, and a sentence of advice |
@@ -153,9 +169,10 @@ clipping can lead the operator through setup instead of leaving them to guess.
 
 `ptt.test` keys at once — an SSB transmitter keyed with no audio radiates nothing, and an
 operator watching a PTT light cannot be told "accepted" and kept waiting. `tune` and `drive.set` are
-transmissions: refused during a session and while the channel is busy (refused, not deferred,
-because a transmission that starts on its own a minute later would surprise the person
-holding the drive control). Neither can measure whether the *radio* keyed — only the operator can see
+transmissions: refused during a session, by the rules (`regulatory`), and — with
+`[radio] wait_for_clear`, the default — while the channel is busy or the busy detector is still
+learning the noise floor (refused, not deferred, because a transmission that starts on its own
+a minute later would surprise the person holding the drive control). Neither can measure whether the *radio* keyed — only the operator can see
 that — which is why they exist: to let the operator look. `audio.level` is always on; it
 reports `settled: false` and "Still listening." until it has heard enough to mean anything,
 rather than a number that does not. `devices.list` also reports the sample rates each device
@@ -179,13 +196,13 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
 (`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `detect_confidence`, `decoded`, `bytes`), every event with
-every frame the station **sent** (`sent`: `t_s`, `kind`, `mode`, `rv`, `floor`, `bytes`), every change of the busy state as a `busy` event whose detail names the path and the numbers that decided it (`on: level -19.8 dBFS is +7.4 dB over the floor -27.2 (threshold 6.0); …` or `on: a frame acquired at confidence 1.72; …`, and `off: …`),
+every frame the station **sent** (`sent`: `t_s`, `kind`, `mode`, `rv`, `floor`, `bytes`), every change of the busy state as a `busy` event whose detail gives, in a fixed order, the level, the floor, their difference, the margin, the threshold, the change and why (`-19.8 dBFS | floor -27.2 | delta +7.4 dB | margin 6.0 | threshold -21.2 dBFS | OFF -> ON | energy over the threshold for the attack`; the reason may also be `a frame decoded (acquired at 1.72)` or `the passband is peaked (18.3 dB over its median)`, and `ON -> OFF … | hangover ran out with the energy under the threshold`),
 every event with the modem's state, when the transmitter was keyed and released, a
 `tx_peak` event after each transmission carrying its peak in dBFS — so a burst nobody
 decoded can be read against how hard the transmitter was being driven for it — the counters
 at the end,
-the `notes`, and `frequency_hz` when the keying backend can ask the rig (`rigctld`; a
-keying line cannot, and the field is null rather than a guess). Times are seconds from the
+the `notes`, and `frequency_hz` when the keying backend can ask the rig (CAT or `rigctld`; a
+serial keying line or a CM108 codec cannot, and the field is null rather than a guess). Times are seconds from the
 start of the file by the station's audio clock.
 The sidecar's `format` is `aether-hf-session/4`. `status` carries `recording` — the path and
 length so far — while one runs. With `[record] auto = true` every session records itself
@@ -195,9 +212,9 @@ from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remo
 beside it, fails if fewer frames decode than did on the day; `field/` is where the ones worth
 keeping live, and `core/aetherd/tests/field.rs` replays them all on every test run.
 
-The stations heard are every frame that carried a callsign — a beacon, a connect request or
-its answer overheard between any two stations — and every frame of a session with the
-station at the other end. One entry per callsign, at most 200, the one heard longest ago
+The stations heard are every frame that carried a callsign — a beacon, a probe or its
+answer, a datagram, a connect request or its answer overheard between any two stations — and
+every frame of a session with the station at the other end. One entry per callsign, at most 200, the one heard longest ago
 making room for a new one; kept in `heard.json` beside the configuration and written a few
 seconds after it changed, so a station left listening overnight can say in the morning who
 was on. Each change goes out as a `heard` event.
@@ -208,9 +225,9 @@ was on. Each change goes out as a `heard` event.
 
 | Event | When | Key fields |
 |---|---|---|
-| `state` | session state changes | state, role, remote, callsign (the one this session runs under: a station that answers to several is addressed by whichever was called) |
-| `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `excess_peak_db` (the largest level-over-floor the detector tested since the last reading — the decision is made forty times a second on a 50 ms quantity, so the excursions that cross the threshold are the ones a sampled reading almost never lands on), `shape_db` (the passband's highest spectral bin over its median bin, per 200 ms: flat noise reads about 6 dB, a narrowband signal — FT8, CW, PSK — 15 and up, and a receiver's AGC cannot compress it), `channel_busy`, `busy_reason` (`level` when the threshold last marked it, `shape` when the passband's spectrum did, `frame` when a decoded frame did, null if never — an acquired preamble alone never marks the channel busy: on a real band acquisition confidence overlaps between a phantom and a weak real frame, and only a decode is evidence), `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at, from its acknowledgements), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (application bytes both ways over the last 30 s), `link` (§4.8) |
-| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`, `datagram`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only a DATA frame carries — a CONTROL frame always reports 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
+| `state` | a session came up, the turn changed hands, or a session ended | `name` (`connected`, `role`, `disconnected`); `detail` (for `connected` the other station and this one's role, `KK4XYZ (iss)`; for `role` the new role, `iss` or `irs`; for `disconnected` how it ended, in the link's words — `closed`, `peer disconnected`, `no answer`, `aborted`, …); `state` (the modem's state after it, as the log writes it: `Idle`, `Connecting`, `Connected`, `Disconnecting`); `remote`; `callsign` (the one this session runs under: a station that answers to several is addressed by whichever was called). A call being placed is not an event: `status.state` reads `connecting` |
+| `metrics` | every 500 ms while a client listens | `mode`, `queued_bytes`, `noise_floor_db` and `level_db` (the busy detector's readings, null until it has settled), `excess_peak_db` (the largest level-over-floor the detector tested since the last reading — the decision is made forty times a second on a 50 ms quantity, so the excursions that cross the threshold are the ones a sampled reading almost never lands on), `shape_db` (the passband's highest spectral bin over its median bin, per 200 ms: flat noise reads about 6 dB, a narrowband signal — FT8, CW, PSK — 15 and up, and a receiver's AGC cannot compress it), `channel_busy`, `busy_reason` (`level` when the threshold last marked it, `shape` when the passband's spectrum did, `frame` when a decoded frame did, null if never — an acquired preamble alone never marks the channel busy: on a real band acquisition confidence overlaps between a phantom and a weak real frame, and only a decode is evidence), `transmitting`, `receiving` (a burst is arriving), `audio` (as `audio.level`), `snr_db` and `cfo_hz` (null when the last frame was a low-confidence non-decode) and `last_frame_s` (the last frame the receiver found), `peer_snr_db` (what the other station reports hearing this one at: from its acknowledgements, and since ADR-0021 from its polls, turns and disconnects too), `rate_snr_db` and `margin_db` (the rate controller's smoothed reading and the margin it keeps), `throughput_bps` (payload bytes the other station acknowledged and payload bytes received from it, as the link carries them — after compression — over the last 30 s, or since the session began when that is shorter), `tx_peak_dbfs` (the last transmission's peak, as `status` describes it), `rx_passband_hz` (the receiver's passband, learned from the noise between signals; null until enough quiet audio has been heard), `occupied_hz` (the audio width the modem's signal needs: a passband materially narrower says the radio's filter is set too narrow), `link` (§4.8) |
+| `frame` | every frame the receiver finds, decoded or not | `t_s`, `kind` (`data`, `control`, `beacon`, `connect`, `answer`, `probe`, `probe-answer`, `datagram`), `mode`, `rv`, `snr_db`, `cfo_hz` (null for a low-confidence non-decode — the correlator on noise, not a real offset), `confidence` (the mode read off the pilot chips, which only an OFDM DATA frame carries — a CONTROL frame and a tone-floor frame always report 1.0), `detect_confidence` (how far above its acceptance threshold acquisition saw the preamble, 1.0 being exactly at it: defined for **every** frame type, so this is what tells a real connect, poll or acknowledgement from a noise trigger), `decoded`, `bytes`, `from` and `to` (the callsigns, when the frame carries them or the session implies them), `control` (a control frame's fields spelled out) |
 | `heard` | a station was heard | the entry as `heard.list` reports it |
 | `sent` | a message sent with a `ref` was settled | `ref`, `bytes`, `delivered` (the other station has all of it), `reason` (how the session ended, when it ended first). `status.sent` has the references still waiting (`pending`) and the last 32 settled (`recent`), for a client that missed the event |
 | `session` | a session ended | the entry as `sessions.list` reports it |
@@ -220,9 +237,11 @@ was on. Each change goes out as a `heard` event.
 | `profile` | the settings, the dials or the profiles changed | what `profile.list` answers: `active`, `name`, `dirty`, `profiles` — so a panel's mark by the profile's name is never stale, whichever client made the change |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |
-| `busy` | channel busy detector changes | busy |
-| `device` | a device appears or disappears | kind, name, present |
-| `log` | notable events | level, message. A Test session reports every step as a `log` event named `test`: the probe's answer, `connected`, each transfer's bytes and seconds, each rung as `rung mode <m>: <decoded>/<frames> decoded at <snr> dB`, and `complete` or `aborted: <why>` |
+| `log` | anything else the modem reports | `name` (what it is about: `beacon`, `probe`, `probed`, `test`, `identifier`, `busy`, `regulatory`, `recording`, `tune`, `tx`, `watchdog`, `ignored`, `error`, …), `detail` (the sentence), `state`, `callsign`, `remote`. The daemon's own log lines (`control`, `kiss`, `audio`, …) are not events: `diagnostics.log` has them. A Test session reports every step as a `log` event named `test`: the probe's answer, `connected`, each transfer's bytes and seconds, each rung as `rung mode <m>: <decoded>/<frames> decoded at <snr> dB`, and `complete` or `aborted: <why>` |
+
+There is no `busy` event: a change of the busy detector's mind is a `log` event named `busy`,
+with the detail §4.4 gives, and `metrics.channel_busy` carries the state. Devices are not
+watched; `devices.list` is polled.
 
 `metrics` is the operator's window into the link. `snr_db` is referenced to 3 kHz, like every
 SNR in this project; `mode` is the index into the table returned by `capabilities`. Every
@@ -264,7 +283,7 @@ why the modem is not currently transmitting the data it was given.
 `config.set` takes dotted keys — `{"radio.max_mode": 8, "audio.input": "USB Audio CODEC"}` —
 and answers with `changed` and `restart_required`.
 
-Three rules, because a settings interface that gets any of them wrong is worse than none:
+Four rules, because a settings interface that gets any of them wrong is worse than none:
 
 * **A refused change changes nothing.** The merge happens on a copy, the result is validated,
   and only then does it replace what is running. A half-applied configuration would leave a
@@ -310,7 +329,8 @@ Four rules, the ones `config.set` keeps and one more:
   (`core/aetherd/src/settings.rs`) is derived from the configuration's own structure —
   every leaf of it — and a short table of rules says which are *portable*, which name
   *hardware* (portable, but checked against the machine on load), which are this
-  *machine*'s (`control.*`, `log.file`, `record.dir`, `sim.*`) and which are *secret*
+  *machine*'s (`control.*`, `log.file`, `record.dir`, `sim.*`, `regulatory.dial_hz`,
+  `kiss.bind`) and which are *secret*
   (`control.token`). A setting added to the daemon is in the next profile saved without
   anyone listing it; only a setting that must *not* travel needs a rule.
 * **A load is transactional.** The profile is applied to a copy of the running
@@ -390,7 +410,7 @@ session ones.
 
 | Method | Params | Result |
 |---|---|---|
-| `datagram.send` | `data` (base64: the frame), `frame_type?` (0, 1 or 2; 0), `ref?` (reported back by `datagram-sent`), `rung?` (the rung to send at; tone-36, rung 1), `wait_for_clear?` (true), `persistence?` (0.25) and `slot_s?` (0.1): the client's channel access | `accepted`, `queued` (datagrams waiting, this one included) of `limit` (16), `fragments`, `bursts` (keyings: each fits the key limit), `air_s` and `rung`. Refused `queue_full` (retryable) when sixteen are waiting — the KISS port stops reading its client until there is room — `bad_params` when the frame is empty, of an unknown type or longer than sixteen fragments at the rung, and `refused` on an answer-only station |
+| `datagram.send` | `data` (base64: the frame), `frame_type?` (0, 1 or 2; 0), `ref?` (reported back by `datagram-sent`), `rung?` (the rung to send at; tone-36, rung 1), `wait_for_clear?` (true), `persistence?` (0.25) and `slot_s?` (0.1): the client's channel access | `accepted`, `queued` (datagrams waiting, this one included) of `limit` (16), `fragments`, `bursts` (keyings: each fits the key limit), `air_s` and `rung`. Refused `queue_full` (retryable) when sixteen are waiting — the KISS port stops reading its client until there is room — `bad_params` when the frame is of an unknown type or longer than sixteen fragments at the rung, and `refused` on an answer-only station |
 | `kiss.status` | — | the KISS port as `status.kiss` has it |
 | `kiss.disconnect` | `client?` (an `id` from `kiss.status`) | `disconnected`: how many connections were closed — that one, or every one. The programs may connect again; refused `not_listening` when the port is not open |
 
@@ -425,7 +445,7 @@ operator can paste the result into an issue from wherever they are:
 | `version`, `platform` | the daemon's version; `os` and `arch` |
 | `generated`, `started` | RFC 3339 UTC timestamps for the bundle and for the daemon's start |
 | `config`, `path` | the running configuration (secrets redacted) and the file it came from |
-| `status`, `capabilities` | as the methods of the same names return them |
+| `status`, `capabilities` | the station's `status` — without the daemon's own fields (`host`, `kiss`, `supervised`, `audio_fault`, `config_note`, `binary`) — and `capabilities` as the method returns it |
 | `devices` | the audio devices and serial ports the machine reports |
 | `audio` | how the sound card described itself; `dropped_samples`, captured samples the modem has dropped for falling behind; `starved_samples`, samples of silence the card had to play *inside a transmission* because the modem had not handed it the next ones — holes on the air, which the log also reports as they happen |
 | `loop` | the run loop's slowest pass so far (`slowest_ms`), which phase it spent the time in (`slowest_phase`: `commands`, `capture` — the receiver — or `playback`), and `stalls`, how many passes exceeded a quarter second. A whole burst is queued at the sound card the moment it is rendered (ADR-0010), so a slow pass no longer puts a hole in a transmission; it still says the modem is slow, which is the receiver's cost per block |
@@ -451,15 +471,15 @@ are held in memory for `diagnostics`.
 
 What is logged: the daemon's start and stop; what the audio and keying are running on; every
 *mutating* control request with its outcome (reads are not logged — a panel polls, and the
-ring would hold nothing else); every keying and release of the transmitter; every session
+ring would hold nothing else; `datagram.send` and `kiss.disconnect` are not either, the KISS
+port logging its own lines); every keying and release of the transmitter; every session
 event the modem reports; dropped audio; and anything that failed.
 
 ---
 
 ## 7. Open items for v1.0
 
-* `config.set` cannot yet reopen a sound card or rebind a socket; those keys are written and
-  reported as needing a restart.
-* Whether `metrics` should be pull as well as push for scripted use.
+* `config.set` cannot reopen a sound card or rebind the control or host sockets; those keys
+  are written and reported as needing a restart (the KISS port restarts in place).
 * A capability flag for the FM PHY's differences.
 * Rate limiting and back-pressure rules for `send` on a slow link.

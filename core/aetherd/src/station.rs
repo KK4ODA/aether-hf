@@ -67,8 +67,8 @@ pub struct StationConfig {
     pub callsign: String,
     /// Numerology.
     pub params: WaveformParams,
-    /// Answer calls but never make one, and never beacon (§97.221(c): an automatically
-    /// controlled station may use 500 Hz outside the automatic sub-bands only to respond).
+    /// Answer calls but never make one, and send no beacon, probe or datagram: a station
+    /// left listening with nobody at it (`[radio] answer_only`).
     pub answer_only: bool,
     /// Link-layer tuning.
     pub link: LinkConfig,
@@ -1381,7 +1381,8 @@ impl<P: Ptt> Station<P> {
         self.compressor.saving()
     }
 
-    /// Close the session once everything queued has been acknowledged.
+    /// Close the session in order: a sending station once everything queued has been
+    /// acknowledged, a receiving one between the other station's bursts (ADR-0023).
     pub fn disconnect(&mut self) {
         self.engine.disconnect();
         self.pump();

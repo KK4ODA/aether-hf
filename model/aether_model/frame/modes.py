@@ -171,7 +171,9 @@ MODES: tuple[Mode, ...] = (
 """Ordered from most robust to fastest; the rate controller steps along this list."""
 
 CONTROL_MODE = MODES[0]
-"""Every control frame (ACK, connect, ping) uses the most robust mode on the SHORT layout."""
+"""The 2 300 Hz air's OFDM control frames (ACK, POLL, TURN, DISC) use the most robust mode
+on the SHORT layout; connect requests, probes and beacons are DATA-container frames on LONG or
+the tone floor (ADR-0016)."""
 
 
 NARROW_LONG = FrameLayout("long", data_symbols=32, waveform=NARROW_500)

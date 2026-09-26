@@ -1,27 +1,32 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on branch `phase-2`. Numbering and constants
-are stable enough to implement against; anything still open is called out in §11.
+Status: **draft**, tracking the reference model on `master` (link protocol version 4,
+§7.1). Numbering and constants are stable enough to implement against; anything still open is
+called out in §11.
 
 This document is deliberately public. An amateur digital mode that cannot be decoded by a
 third party is bad practice and, in the United States, arguably bad law: FCC §97.309(a)(4)
 permits an unspecified digital code only when the technique is publicly documented. Every
-number here is generated from the reference implementation
-(`python tools/make_spec.py`), so the specification cannot quietly drift from the code.
+table between BEGIN/END markers is generated from the reference implementation
+(`python tools/make_spec.py`) and checked by the test suite; the numbers in the prose and in
+§10 are written by hand from the model and the committed baselines.
 
 Companion documents: `control-api.md` (how an application drives a modem),
-`host-interfaces.md` (Winlink/Pat compatibility), `../adr/` (why each choice was made),
+`host-interfaces.md` (the VARA-compatible host interface — Winlink Express, Pat, VarAC — and
+the KISS port), `../adr/` (why each choice was made),
 `../../bench/README.md` (the measurements every performance claim here rests on).
 
 ---
 
 ## 1. Scope
 
-Aether HF is an ARQ data mode for amateur HF: an OFDM physical layer in a 2.3 kHz SSB
-channel, a 3GPP-derived LDPC code, and a selective-repeat ARQ with hybrid retransmission.
-This version specifies two bandwidths on one numerology: **WIDE_2300** (§2–§4) and
-**NARROW_500** (§2.3, §4.1), which reuses everything here with twelve carriers instead of
-fifty-seven and its own mode table. A wider 2.75 kHz variant is reserved (§11).
+Aether HF is an ARQ data mode for amateur HF: an OFDM physical layer in a 2.3 kHz or a
+500 Hz SSB channel with a constant-envelope sixteen-tone FSK *tone floor* beneath it, a
+3GPP-derived LDPC code, and a selective-repeat ARQ with hybrid retransmission; beacons, probes
+and datagrams travel outside sessions. This version specifies two OFDM bandwidths on one
+numerology, **WIDE_2300** (§2–§4) and **NARROW_500** (§2.3, §4.1), which reuses everything
+here with twelve carriers instead of fifty-seven and its own mode table, and the tone floor
+(§2.4), whose frames are the same on either air. A wider 2.75 kHz variant is reserved (§11).
 
 It is an independent design. It is built from public standards (3GPP TS 38.212, ITU-R
 F.1487, IEEE literature) and its own measurements; it is not compatible with, and contains
@@ -76,6 +81,16 @@ from and including both edges, is a **comb pilot**; the rest carry data. Pilots 
 values from a fixed Zadoff–Chu sequence, chosen for its flat spectrum and low peak-to-average
 ratio.
 
+### 2.2 Peak reduction
+
+The transmitter clips and re-filters each OFDM frame to a target peak-to-average ratio
+(§ constants), iterating four times with the same band-limiting filter the receiver uses.
+This is transmitter-side only: a receiver needs no knowledge of it, and a transmitter may
+omit it at a cost of roughly 1 dB of delivered power. Constant-modulus modes take the more
+aggressive target; the QAM modes carry information in amplitude and take the gentler one. A
+tone-floor frame (§2.4) has a constant envelope and is not clipped.
+See `../adr/0004-papr-reduction.md`.
+
 ### 2.3 The 500 Hz waveform
 
 The narrow waveform is the same numerology — the same sample rates, FFT, subcarrier
@@ -83,8 +98,9 @@ spacing, cyclic prefix, window and symbol period — with **twelve** active carr
 on the same passband centre, so it occupies 480 Hz. It exists because a 500 Hz signal is
 what most HF peer-to-peer traffic is made with, and because it puts the transmitter's power
 into a fifth of the band: at the same 3 kHz-referenced SNR each carrier has ≈ 6.8 dB more
-signal-to-noise than a wide carrier, which is what lets its most robust mode be QPSK ½ and
-still reach the wide waveform's floor. The comb pilots follow the same rule (every 4th
+signal-to-noise than a wide carrier, which is what lets its control mode be QPSK ½ and
+still reach the SNR of the wide waveform's control mode, BPSK ⅕ (−5.2 against −5.1 dB on
+AWGN, §10). The comb pilots follow the same rule (every 4th
 carrier and both edges: carriers 0, 4, 8 and 11), leaving eight data carriers.
 
 <!-- BEGIN:waveform500 -->
@@ -124,7 +140,7 @@ The ordinary preamble uses the same PN seeds drawn to the six even carriers (the
 types come out orthogonal at that length). The mode and redundancy version ride on the 32
 data-carrier chips of the four full pilot symbols; with 52 (mode, RV) pairs to tell apart
 the sequences are held to a pairwise correlation of 0.25 rather than 0.2 — thirteen modes
-is what that set holds. The acquisition threshold is higher (§ constants) because
+is what that set holds. The acquisition threshold is higher (the table above) because
 band-limited noise has a fifth of the degrees of freedom in a preamble's span, and so are
 the signal peaks by about as much.
 
@@ -143,16 +159,20 @@ above an OFDM frame's average** at the same transmit level — at or under every
 peak. Every SNR a receiver reports from a tone-floor frame is taken back to the OFDM
 frames' reference by the same 5.5 dB, and every threshold in §4 is in that reference. The
 estimate is by energy, exact where the floor is used and a lower bound on a strong path: the
-glide between tones caps it near +17 dB on a clean channel, and on a dispersive one the echo's
-spill into the next symbol caps it at a few decibels (ADR-0016 §4). A rate controller seeded
-from a floor frame starts again from the first ordinary burst it measures.
+glide between tones caps it near +17.5 dB on a clean channel, and on a dispersive one the
+echo's spill into the next symbol, counted as noise, caps it lower — about +15.5 dB on ITU
+Good, +12 on Moderate and +5 on Poor (ADR-0016 §4, `bench/baselines/tone_snr_reading.csv`).
+A rate controller seeded from a floor frame seeds again, once and upward only, from the first
+clean burst it measures on an OFDM rung, when that reads more than 3 dB above the floor's
+reading.
 
 The tones are spaced at the symbol rate about the passband centre and span 400 Hz, inside
 a 500 Hz channel on either air. Between symbols the frequency glides on a raised cosine and
 the phase runs on, which keeps the spectrum inside the channel (99.9 % of the power within
 ±250 Hz, −56 dB beyond ±500 Hz) without touching the envelope. Each symbol carries four
 coded bits under a Gray label, so neighbouring tones — the ones a carrier offset or a
-Doppler smear confuses — differ in one bit.
+Doppler smear confuses — differ in one bit: tone *k* (lowest first) carries the
+binary-reflected Gray code of *k*, *k* XOR (*k* >> 1), most significant bit first.
 
 A frame is three **sync blocks** of eight symbols — at its start, after 45 % of its data,
 and at its end — with the data between them. Each block's tones are a *Costas sequence*:
@@ -268,17 +288,10 @@ only if at least half its sync tones are the strongest in their symbols — insi
 frame, data symbols line up with some pattern at some offset in a handful of positions,
 never in half. A receiver may announce a frame as arriving once its first block is in
 (§7.2). The codeword is the OFDM frames' — CRC, LDPC, rate matching and the golden-ratio
-interleaver of §5 — ending in four bits a tone; a redundancy version other than 0 is not
-decodable alone and combines with the ones before it (HARQ-IR) as an OFDM frame's does.
-
-### 2.2 Peak reduction
-
-The transmitter clips and re-filters each finished burst to a target peak-to-average ratio
-(§ constants), iterating four times with the same band-limiting filter the receiver uses.
-This is transmitter-side only: a receiver needs no knowledge of it, and a transmitter may
-omit it at a cost of roughly 1 dB of delivered power. Constant-modulus modes take the more
-aggressive target; the QAM modes carry information in amplitude and take the gentler one.
-See `../adr/0004-papr-reduction.md`.
+interleaver of §5 — ending in Gray-labelled bits a tone: four on sixteen tones, two on the
+middle kinds' four. Redundancy versions 0 and 3 begin at or wrap round to the systematic bits
+and can decode alone; 1 and 2 are mostly parity. Every version combines with the ones before
+it (HARQ-IR) as an OFDM frame's does.
 
 ---
 
@@ -295,10 +308,14 @@ receiver. (The tone floor's frames are §2.4's.)
 | SHORT | 2 + 12 = 14 | 434 ms | 3472 | 0, 8 | 420 |
 <!-- END:layouts -->
 
-LONG carries user data and the connection handshake. SHORT carries acknowledgements and
-other control frames, always at the control mode. While a link runs the tone floor its data
-and control frames are the tone floor's; a connection request starts on the floor, and probes
-and beacons go out on it (§7).
+LONG carries every DATA-container frame sent at an OFDM rung: user data, a connection
+request's ordinary tries and their answers, the answer to a probe that arrived in OFDM, and
+datagrams sent at an OFDM rung. SHORT carries acknowledgements and the other control frames at
+the air's **control mode** — BPSK ⅕ (OFDM mode 0) at 2 300 Hz, QPSK ½ (OFDM mode 3) at
+500 Hz. A frame's *family* is the tone floor's or the ordinary (OFDM) one. While a link runs
+any tone rung — the floor's own kinds, the fast kinds or the middle kinds — its data frames
+are tone frames and its control frames the tone floor's control frame. A connection request
+starts on the floor, and probes and beacons go out on it (§7).
 
 ### 3.1 Preamble, and what it signals
 
@@ -391,8 +408,9 @@ floor replaced, and are on no rung. Rung 5, QPSK ½, is the **control mode** —
 whose SHORT frame carries a seven-byte control frame and whose LONG frame carries a
 connection request; ordinary control frames go out at it, and so do a connection request's
 ordinary tries and the answers to requests and probes that arrived in the ordinary family
-(§7.2). Rung 4, QPSK ⅓ on the ordinary frame, is the step between the tone floor and the control
-mode.
+(§7.2). Rung 4, QPSK ⅓ on the ordinary frame, is the step between the middle kinds and the
+control mode. Rung 8 (8-PSK ⅔, OFDM mode 6) is never selected: rung 9 carries the same
+53 bytes 0.6 dB lower.
 
 <!-- BEGIN:modes500 -->
 | Rung | Name | Frame | bits/sym | Rate | Base graph | Z | K' | E | Payload B | Net bps | AWGN dB |
@@ -444,9 +462,11 @@ nominal threshold.
 
 A conforming receiver is not required to use any particular algorithm, but must handle:
 
-* **Acquisition** over a carrier offset of at least ±250 Hz, at the most robust mode's
-  threshold. The reference receiver uses a partial-matched-filter/FFT bank over both preamble
-  sequences and acquires 100 % of frames at −5 dB and 87 % at −7 dB.
+* **Acquisition** of an OFDM frame over a carrier offset of at least ±250 Hz at the most
+  robust OFDM mode's threshold — the reference receiver's partial-matched-filter/FFT bank
+  searches ±300 Hz over both preamble sequences and acquires 100 % of frames at −5 dB and
+  87 % at −7 dB — and of a tone frame at the tone floor's own threshold over at least
+  ±100 Hz, which is what the reference detector searches (§2.4).
 * **Sample-rate offset** of at least ±50 ppm between the two stations' clocks.
 * **Residual carrier offset** estimation from the comb pilots; 64-QAM needs the frame's
   residual well below 0.1 Hz.
@@ -476,7 +496,12 @@ DATA container:
 | 2 | session id |
 | 3–4 | data length, only when the PARTIAL flag is set |
 
-**Nothing in this header may differ between transmissions of the same sequence number.** A
+Flags: PARTIAL is bit 0 (0x01 of byte 0); the other four are zero. A body that fills the
+payload after the three header bytes is full; any shorter body is PARTIAL with its length in
+bytes 3–4, and the rest of the payload is zeros — so a body one byte short of full cannot be
+carried, and a sender leaves that byte for the next frame.
+
+**Nothing in this header may differ between transmissions of the same codeword.** A
 retransmission is the same codeword under another redundancy version, and the receiver
 soft-combines them; a header that changed would make the combination meaningless. That is why
 no burst length or position appears here — the receiver derives a frame's position in its
@@ -488,24 +513,35 @@ kind it does not know, which is what lets a kind be added. `BEACON`, `PROBE`, `P
 `DATAGRAM` are sent outside sessions, and a station in a session never takes one of them for
 session data, whatever its session id says.
 
-A `CONNECT_REQ` and a `CONNECT_ACK` carry this body, at the most robust mode:
+A `CONNECT_REQ` and a `CONNECT_ACK` carry this body with sequence number 0 and the session
+id the caller chose (at random, 1–255), at the slowest rung of their family that carries it:
+tone-24 on the tone floor; BPSK ⅕ (rung 6) at 2 300 Hz or QPSK ½ (rung 5, the control mode)
+at 500 Hz in OFDM (§7.2 says which family):
 
 | Offset | Field |
 |---|---|
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | protocol version, 1 |
-| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request arrived at; in a request, 0x7F |
+| 15 | link protocol version: 4 |
+| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — 0x7F in an acceptance repeated for a request that arrives again after the session is up; in a request, 0x7F |
+
+A station ignores a request or an acceptance whose version is not its own, and says so.
+Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the control frame's
+recommended mode to five bits (ADR-0014), and 4 added the 500 Hz middle kinds (ADR-0015). The
+same number names different frames in different versions, so a session between two versions
+cannot run.
 
 The SNR byte is the **faster start**: a session used to begin at the most robust mode
 and climb from there, a burst per step, proving what the connect frames had already
 measured. The called station starts its rate controller from the request's SNR and
-sends that SNR back; the caller starts its first burst one step below the fastest mode
-that SNR supports with the controller's margin and hysteresis, and starts its own
-controller from the SNR the acceptance arrived at, which is what it will recommend once
-it receives. A station of an earlier version sends a sixteen-byte body, and a receiver
-reads a body that stops at the version byte as "not measured" and starts as before.
+sends that SNR back; the caller starts its first burst two usable rungs below the fastest
+rung that SNR supports with the controller's margin and hysteresis — never falling from an
+OFDM rung onto the tone floor for that caution — and starts its own controller from the SNR
+the acceptance arrived at, which is what it will recommend once it receives. A station handed
+the turn later starts its first burst the same way, from the SNR it has measured the other
+station at. A body that stops at the version byte reads as "not measured"; only a version-1
+station sends one, and its call is ignored.
 
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
 id of zero and a body that is one packed callsign. It is how an operator answers "can anybody
@@ -532,7 +568,8 @@ be its own answers with one `PROBE_ACK`, in the family the probe arrived in — 
 with the callsigns swapped and the SNR it measured on the probe in the SNR byte. The prober
 then has the two numbers that describe a path, one from each end, and reports them (a reading
 from a floor frame is a lower bound on a strong path, §2.4); a probe that draws no answer
-within a floor frame's turnaround is reported as unanswered, and there are no retries — the
+within a floor frame's turnaround — moved past any frame the prober hears arriving, which may
+be the answer — is reported as unanswered, and there are no retries — the
 operator asks again, so a probe can never fill a channel by itself. A station in a
 session ignores probes (the session's frames matter more), and a station never answers a
 probe addressed to somebody else. Answering is a *response* in the sense of
@@ -557,8 +594,9 @@ The pieces, joined in index order, are this body:
 | 7 | frame type, as a VARA-style KISS client names it: 0 an AX.25 frame, 1 an AX.25 frame with eight-byte address fields, 2 unformatted data |
 | 8… | the frame, byte for byte |
 
-Every fragment but the last is a full frame; the last is partial, with the explicit length —
-and a remainder exactly one byte too long for a partial frame goes as two fragments. All the
+Every fragment but the last is a full frame; the last is partial, with the explicit length,
+unless it fills the frame — and a remainder exactly one byte too long for a partial frame goes
+as two fragments. All the
 fragments of a datagram go at the rung the sending station is configured to send datagrams
 at (tone-36 by default: the tone floor's frames are the same in both bandwidths, so a station
 of either hears them), in as few bursts as the transmitter's key limit allows, one after
@@ -578,10 +616,15 @@ CONTROL container:
 | 5 | measured SNR, signed dB, 3 kHz reference; 0x7F = unknown — in an acknowledgement, the mean over the burst's frames that decoded or that the receiver acquired with confidence, unknown when there was none (ADR-0020); in any other control frame, the SNR of the last frame of the session its sender decoded from the other station (ADR-0021) |
 | 6 | recommended mode (5 bits) \| counter (3 bits) |
 
-Kinds: `ACK`, `POLL`, `TURN`, `DISC`, `DISC_ACK`. The recommended mode is a rung of the
-air's ladder; the counter numbers a station's acknowledgements modulo 8, for logs. Protocol
-version 2 split the byte four and four; the fast kinds (ADR-0014) took the 2 300 Hz ladder to
-twenty rungs.
+Kinds: `ACK` (0), `POLL` (1), `TURN` (2), `DISC` (3), `DISC_ACK` (4). Flags, in an ACK:
+`WANT_TX` (0x1) and `BREAK` (0x2). The base, bitmap, recommended mode and counter are an
+ACK's; the other kinds send them as zero. The recommended mode is a rung of the air's ladder;
+the counter numbers a station's acknowledgements modulo 8, for logs. Protocol version 2 split
+the byte four and four; the fast kinds (ADR-0014) took the 2 300 Hz ladder to twenty rungs.
+
+A callsign is one to nine characters of `A–Z 0–9 - /`, coded 1–26 for A–Z, 27–36 for 0–9, 37
+for `-` and 38 for `/`, padded with 0 to nine; the nine six-bit codes, first character most
+significant, fill 54 bits, and two zero bits make seven bytes.
 
 The SNR byte is the measurement rounded to the nearest integer decibel and clamped to
 −40 … +40, with **ties rounded to even** (12.5 dB encodes as 12, 13.5 as 14). The tie rule
@@ -600,11 +643,22 @@ decoder fed a false detection converges to it. Every other frame carries a non-z
 One station is the information sending station (ISS), the other the information receiving
 station (IRS). The ISS sends a burst of data frames; the IRS answers each burst with one ACK
 carrying the selective-repeat bitmap, the SNR it measured, and the mode it recommends. The
-ISS retransmits what the bitmap reports missing — same codeword, next redundancy version —
-and fills the remainder of the burst with new frames at the recommended mode.
+ISS retransmits what the bitmap reports missing — same codeword, next redundancy version (0,
+1, 2, 3, then 0 again) — and fills the remainder of the burst with new frames at the
+recommended mode. A frame sent four times unacknowledged at a rung the recommendation has
+since left is re-encoded at the slowest rung, from the recommendation up, that carries its
+body: a new codeword under the same sequence number, which the receiver does not combine with
+the old one.
 
-`TURN` hands the sending role to the peer, and is sent when the peer has set `WANT_TX` or
-`BREAK` in an ACK. `POLL` keeps an idle link alive. `DISC`/`DISC_ACK` close it. Connection is
+An ACK sets `WANT_TX` when its sender has data of its own — queued, or sent and not yet
+acknowledged — and `BREAK`, with `WANT_TX`, when it demands the sending role now. `TURN` hands
+the sending role over: at once for `BREAK`, and for `WANT_TX` once the sender has nothing left
+to send or has sent a few bursts of its own in the turn (three in the reference engine). The
+station handed the turn answers with its first burst, or a `POLL` if it has nothing to send.
+`POLL` asks for an ACK: a sender with nothing to send polls to keep an idle link alive (every
+10 s in the reference engine), and a caller with nothing to send polls to confirm the
+handshake. A sending station that decodes a data frame of the session from the other station
+takes the receiving role: the other took the turn. `DISC`/`DISC_ACK` close the link. Connection is
 a two-way handshake in DATA-container frames carrying both callsigns, with randomised
 backoff so two stations calling each other simultaneously desynchronise instead of colliding
 on every retry. The first request goes out on the tone floor and the tries alternate between
@@ -617,7 +671,20 @@ not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving sta
 to close sends its `DISC` between bursts; the sender of a `TURN` waits for the peer's first burst
 as long as the longest data frame there is, and past any frame it hears arriving; and a sending
 station that hears the other poll — both believe they hold the turn — yields if it was called,
-answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023).
+answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023). When two
+stations call each other at once, the one whose callsign sorts higher keeps calling and ignores
+the other's request, and the other answers it.
+
+A station whose rules admit only tone-floor rungs where it is (the regulatory ceiling,
+ADR-0018) sends every frame on the floor: every try of a call, its answers to calls and
+probes, and its control frames.
+
+Data frames carry no callsign. A station that identifies in Morse (the reference daemon: a
+1 500 Hz tone, at most 20 wpm under US rules) appends its identifier to a transmission — its
+first, one each interval (ten minutes by default), and one when a session ends, exactly once
+however it ends — and sizes its bursts to leave room for it (ADR-0017). No frame announces an
+identifier: at the end of a session a station waits out the other's, for at most 15 s, before
+its `DISC` or `DISC_ACK` (ADR-0022).
 
 ### 7.3 Capability negotiation
 
@@ -633,14 +700,16 @@ earlier one.
 | 1–2 | Bandwidth of the waveform this frame was sent in: 0 = 2 300 Hz, 1 = 500 Hz, 2 = 2 750 Hz (reserved), 3 = reserved |
 | 3–7 | Reserved, must be zero |
 
-The bandwidth bits are not negotiated: a frame's waveform is a physical fact the receiver
-already knows from having decoded it, and the bits state it so a station can refuse a
-request whose stated bandwidth is not the one it arrived in, and so a station that listens
-in more than one bandwidth answers in the one it was called in. Both stations of a session
-use one bandwidth for its whole life.
+The bandwidth bits are not negotiated: they state the air the sender runs. An OFDM frame's
+air is a physical fact the receiver knows from having decoded it, but a tone-floor frame is the
+same on either air, and a call, an answer or a probe on the floor says which air its sender
+runs only here. A station ignores a request, an acceptance or a probe whose stated bandwidth
+is not its own, and says so; a station that listens in more than one bandwidth answers in the
+one it was called in. Both stations of a session use one bandwidth for its whole life.
 
 **Compression is applied to the payload byte stream, above the ARQ, not to individual
-frames.** A frame is 26 bytes on the slowest mode, and a compressor with no history makes a
+frames.** A frame carries 24 bytes on the slowest rung (tone-24), and a compressor with no
+history makes a
 block that size larger rather than smaller. The link layer already delivers bytes in order and
 exactly once, which is precisely what a stream decompressor needs; selective repeat, HARQ and
 retransmission all happen underneath and are invisible to it.
@@ -652,9 +721,14 @@ therefore never has to wait for more data to decode what it already has.
 ### 7.4 Ordering rule
 
 The ISS composes every burst as **unacknowledged frames in ascending sequence order, then new
-frames**. This is required, not advisory: it is what allows the IRS to infer the sequence
-number of a frame whose payload did not decode, and therefore to soft-combine it with the
-retransmission that follows.
+frames**, all of one family. This is required, not advisory: it is what allows the IRS to
+infer the sequence number of a frame whose payload did not decode, and therefore to
+soft-combine it with the retransmission that follows. A burst's frames must be one length for
+the IRS to place them by air time, so when the oldest unacknowledged frame is of the other
+family than the rung new frames would go at, the burst carries that family's retransmissions
+alone and new frames wait for the next burst. A burst carries at most sixteen frames (the
+selective-repeat window), and no more than fit in the transmitter's key time, one at least
+(ADR-0017).
 
 ---
 
@@ -687,8 +761,10 @@ A receiver establishes the end of a burst from silence. Two cases:
 * otherwise it must wait a full data-frame time, because a contiguous next frame would not
   otherwise have announced itself.
 
-The second costs roughly a quarter of the air time, so reporting preambles early is worth
-implementing. Turnaround guard, detection latency and acknowledgement air time are
+The second costs about 13 % of throughput on the OFDM ladder (`bench/README.md`, P2-2a), so
+reporting preambles early is worth implementing. A tone frame's preamble is its first sync
+block: the reference receiver announces it 0.54 s after the frame starts, against 0.12 s for
+an OFDM preamble. Turnaround guard, detection latency and acknowledgement air time are
 implementation parameters; the reference values are in `model/aether_model/link/harness.py`.
 
 ---
@@ -710,8 +786,8 @@ rate), and end-to-end link goodput with adaptive rate control:
 | Tone floor, control frame | −19.5 | −11.1 | −14.5 | −15.8 |
 | Most robust OFDM mode (rung 6, BPSK ⅕, 197 bit/s) | −5.1 dB | +2.0 | +1.2 | −0.3 |
 | QPSK 1/2 | +1.4 | +8.7 | +8.5 | +6.0 |
-| Goodput at +12 dB | 1696 bps | 859 | 819 | 1034 |
-| Goodput at +20 dB | 2106 bps | 1696 | 1565 | 1745 |
+| Goodput at +12 dB (16 kB sessions, lossy-pipe link bench, before the tone floor) | 1879 bps | 910 | 910 | 1140 |
+| Goodput at +20 dB (the same) | 3399 bps | 2222 | 2144 | 2547 |
 
 At 500 Hz (`bench/baselines/phy_fer_500.csv`), the same reference — the same transmitter
 power into the same noise:
@@ -743,7 +819,10 @@ fading channels a fifth of the frequency diversity costs it about 2 dB on ITU Go
 fading-channel crossings of the slowest rungs sit on shallow curves and move a decibel or
 two between runs of a hundred frames.
 
-These are simulator figures. No on-air measurements exist yet, and none should be inferred.
+These are simulator figures; the goodput rows come from `bench/baselines/link_throughput.csv`
+(2026-09-16), measured before the tone floor and the calibrated fading pipe. The on-air
+sessions logged so far (`field/LOG.md`) do not measure them, and none should be inferred from
+them.
 
 ---
 
@@ -752,7 +831,11 @@ These are simulator figures. No on-air measurements exist yet, and none should b
 * A call on the tone floor is heard by a station of either bandwidth; negotiating across
   the two is not specified.
 * The wide (2.75 kHz) bandwidth variant.
-* Compression negotiation, CW identification, beacon and ping datagrams.
-* Formal test vectors published alongside this document; the reference vectors in `vectors/`
-  serve that purpose today but are not yet a normative part of the specification.
+* Announcing a Morse identifier: no frame says that one follows, or for how long, so the
+  other station's next session frame is not held for one sent mid-session (ADR-0022 §3; the
+  DISC's unused base and bitmap could carry it).
+* Formal test vectors published alongside this document; the audio vectors in `vectors/` (the
+  2 300 Hz OFDM frames) and the cross-validation vectors under `core/*/tests/data/` (the
+  500 Hz and tone-floor frames and the link formats as well) serve that purpose today but are
+  not yet a normative part of the specification.
 * On-air validation of everything in §10.

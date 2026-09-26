@@ -67,12 +67,12 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | Command | Effect | Notes |
 |---|---|---|
 | `MYCALL <call>[ <call>…]` | Sets the callsigns this station answers to; the first is the one it calls as | Space- or comma-separated. Refused if any callsign is not one the link layer can carry (`A–Z 0–9 - /`, at most nine characters). Reaches the modem (`callsigns.set`), so the host's callsign replaces the one in the configuration file — the host owns the operator's callsign; VARA has none of its own. Given during a session it takes effect when the session ends |
-| `CONNECT <from> <to>` | Starts a session, as `<from>` when that is one of the `MYCALL` callsigns | A station that answers to a club or tactical call besides its own chooses between them here; the called station answers as whichever of its callsigns was called |
-| `DISCONNECT` | Closes it once the queue drains | Orderly |
-| `ABORT` | Drops it immediately | Not orderly |
-| `LISTEN ON` / `LISTEN OFF` | Answer incoming calls, or not | |
+| `CONNECT <from> <to>` | Starts a session, as `<from>` when that is one of the `MYCALL` callsigns | A station that answers to a club or tactical call besides its own chooses between them here; the called station answers as whichever of its callsigns was called. When the modem refuses the call — a session already up, an answer-only station, the rules (ADR-0018) — the `OK` is followed at once by `DISCONNECTED`; the reason is in the daemon's log |
+| `DISCONNECT` | Closes the session in order: a sending station sends what is queued first; a receiving station sends its disconnect between the other station's bursts (ADR-0023) | Orderly. During a call it does not stop calling (a call that is answered is closed at once); `ABORT` does |
+| `ABORT` | Ends it now: the rest of a burst on the air is cut and one disconnect follows; during a call, stops calling | Not orderly |
+| `LISTEN ON` / `LISTEN OFF` | Whether to answer incoming calls | Recorded: this station answers calls to its callsigns either way (§9) |
 | `LISTEN CQ` | VarAC: hear only CQ frames | Recorded as listening; this station hears everything and answers calls to its own callsigns either way |
-| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | While this host is attached, frames from KISS programs are sent only after `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never. It says nothing about sessions, which run as they always do |
+| `CHAT ON` / `CHAT OFF` | VarAC's chat mode | While this host is attached, frames from KISS programs are dropped until it says `CHAT ON` — VARA's "Winlink priority" (§8.4); VarAC says it on every start, Winlink Express never. It says nothing about sessions, which run as they always do |
 | `IGNOREKISSDCD ON` / `OFF` | The KISS port's channel access | `ON`: frames from KISS programs go without waiting for a clear channel while this host is attached (§8.4). VarAC says it when its *Ignore DCD* box is ticked |
 | `BW2300`, `BW500` | Names the bandwidth | `OK` when it is the one the station runs (`[radio] bandwidth`; a host learns it from `capabilities`), `WRONG` otherwise: the bandwidth is the modem's configuration, not a session setting, and both stations of a session run the same one |
 | `BW2750` | — | **Refused.** Not a waveform this version has; see §5 |
@@ -80,8 +80,8 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
 | `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
-| `CQFRAME` | Sends a `BEACON` frame: this station's callsign, unproto | Refused while a session is running |
-| `TUNE ON` / `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, so the operator can set drive by the rig's ALC | Bounded at 10 s, which is what `TUNE ON` (VarAC's TUNE button) gets. `TUNE OFF` cuts a tone short; the level follows `audio.tx_level` live, so the drive can be set while the tone plays |
+| `CQFRAME` | Sends a beacon: this station's callsign, addressed to nobody, on the tone floor (the control API's `beacon`) | `OK` once understood; a beacon the modem refuses — in a session, on an answer-only station, or by the rules (ADR-0018) — is not sent, and nothing more is said |
+| `TUNE ON` / `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, for an antenna tuner. Drive is set with real bursts (the panel's *Set drive*, the control API's `drive.set`): the waveform's peaks stand 6–7 dB above the tone's | `TUNE ON` (VarAC's TUNE button) is 10 s; `TUNE <seconds>` takes 0–30 and is held to 10; `TUNE OFF` cuts a tone short. `OK` once understood: a tone the modem refuses — in a session, on a busy channel, or by the rules — is not sent, and nothing more is said |
 | `TUNE ?` | → `TUNE <dB>`: the transmit level, in decibels below full scale (`20 log₁₀ audio.tx_level`) | VarAC asks after every connection, to keep a level per band. The scale VARA answers on is not published; decibels below full scale is the one a sine amplitude has an honest reading on |
 | `DRIVELEVEL <n>` | The transmit level a host would set | Recorded, not acted on: the scale is not published, and a wrong guess would change the operator's drive. Setting the drive is the operator's, in Setup |
 | `VERSION` | → `VERSION Aether HF <version>` | |
@@ -103,7 +103,7 @@ Unsolicited, at any time.
 | `PENDING` | The called side, just before its `CONNECTED`: the order every client expects, from a modem that answers a call in one step |
 | `CONNECTED <caller> <called> <bandwidth>` | A session came up. The caller first, whichever side this is: a host takes a `CONNECTED` whose second callsign is not its own as somebody else's business — Pat's listening side ignored the session until this was right |
 | `ENCRYPTION DISABLED` | After `CONNECTED`: the link carries no encryption, which VARA states of its links and is simply true of this modem |
-| `DISCONNECTED` | A session ended |
+| `DISCONNECTED` | A session ended — or, straight after the `OK` to a `CONNECT`, the modem refused the call |
 | `BUFFER <bytes>` | The number of payload bytes still to send changed — and `BUFFER 0` once, as the first line a host hears when it attaches. VarAC sends nothing on the data port until it has heard how full the modem's buffer is (found on the bench: a ping sat for ninety seconds with both ends waiting) |
 | `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |
 | `REGISTERED <call>` | Sent before `CONNECTED` |
@@ -128,7 +128,8 @@ in the station's configuration (`[radio] bandwidth`, 2300 or 500; the panel's Se
 `CONNECTED` reports it.
 
 **Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
-`P2P SESSION`, `LISTEN CQ` (`CHAT` and `IGNOREKISSDCD` govern the KISS port, §8.4). The setting is remembered and reported back, and the
+`P2P SESSION`, `LISTEN ON` / `LISTEN OFF` / `LISTEN CQ`, `DRIVELEVEL` (`CHAT` and
+`IGNOREKISSDCD` govern the KISS port, §8.4). The setting is remembered and reported back, and the
 modem answers `OK` because the command was understood.
 
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
@@ -148,9 +149,12 @@ API's `probe` and the panel's Probe button, not through this adapter.
 
 ## 6. How it is built
 
-The adapter is a *client of the modem's own control API*. It sends `connect`, `send`,
-`disconnect` and `abort`, and listens for `state`, `data`, `ptt` and `metrics` events. It has
-no privileged access to the station and can do nothing a scripted client could not do.
+The adapter is a *client of the modem's own control API*. It sends `capabilities` (once, on
+attach: the bandwidth and the bit rates `BITRATE` reports), `callsigns.set`, `connect`, `send`,
+`disconnect`, `abort`, `beacon`, `tune` and `config.get` (for `TUNE ?`), and listens for
+`state`, `data`, `ptt`, `frame` (for `SN`) and `metrics` (for `BUFFER`, `BITRATE`, `BUSY`)
+events. It has no privileged access to the station and can do nothing a scripted client could
+not do.
 
 That layering is deliberate: the compatibility surface is the part most likely to need
 changing as clients are tested against it, and it cannot destabilise the modem underneath.
@@ -241,7 +245,9 @@ each fit the key limit. A datagram waits while a session is up — the session's
 no room for a stranger's burst — and then for a clear channel, and draws p-persistence each
 slot, as a KISS TNC does. It reaches the air through the regulatory gate like every other
 transmission (ADR-0018), as a transmission this station originates: an automatically controlled
-station sends datagrams only where it may originate. A fragment carries its frame's payload less
+station sends datagrams only where it may originate, and an answer-only station
+(`[radio] answer_only`) sends none — the port takes the frame and drops it, with a log line. A
+fragment carries its frame's payload less
 the three-byte DATA header — 33 bytes at tone-36, one 5.4 s frame each — so a 60-byte APRS
 position (68 bytes with the callsign and type) is three fragments, 16 s on the air, and the
 longest frame a datagram carries at tone-36 is 520 bytes (sixteen fragments). A faster rung
@@ -284,10 +290,11 @@ belongs only on a network the operator controls.
 ## 9. Open items for v1.0
 
 * Pat and Winlink Express on the air (the bench is done for both; `docs/user/field-test.md`),
-  then BPQ32 (`COMMUNITY-CONCERNS.md` §13 adds VarAC to the matrix, and VarAC waits on the
-  500 Hz waveform below). All four can be tried with no radio over `[sim]`.
-* Compression negotiation (P3-6), which changes what `COMPRESSION` means from recorded to
-  acted on.
+  then BPQ32, not yet tried even on the bench; VarAC passes the bench at 500 Hz (§7) and waits
+  for the air (below). All four can be tried with no radio over `[sim]`.
+* Whether `COMPRESSION` should choose the station's compression, which the two stations
+  already negotiate in the connect handshake (P3-6): it would then be acted on rather than
+  recorded.
 * Whether `LISTEN OFF` should stop answering calls at the link layer. Today the station always
   answers; the setting is recorded, and the control API says so explicitly rather than
   pretending.
