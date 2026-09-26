@@ -28,3 +28,4 @@ context → decision → alternatives considered → consequences.
 | [0021](0021-every-control-frame-says-how-it-hears.md) | Every control frame says how its sender hears the other station — a disconnect tells a station that only received how it was heard | accepted |
 | [0022](0022-the-end-of-a-session-waits-out-the-identifier.md) | The end of a session waits out the other station's identifier — no repeated DISC, answer or closing identifier over a Morse ID | accepted |
 | [0023](0023-leaving-and-handing-over.md) | Leaving and handing over — a receiver's Disconnect leaves between bursts, the TURN waits for the longest first frame, and the caller keeps the turn | accepted |
+| [0024](0024-beacons-for-host-programs.md) | A beacon carries the name a host program gave it and its sender's bandwidth; no beacon under automatic control | accepted |

@@ -489,8 +489,9 @@ fn serve_commands(
                     }
                     // A beacon heard is a CQ frame to a VARA host, which lists who is on from
                     // these lines — VarAC's heard list of beacons and CQs — after the SN line
-                    // that gives its strength. The beacon does not say which bandwidth its
-                    // sender runs, so the line carries this station's.
+                    // that gives its strength: the name as the sender's host gave it, and the
+                    // bandwidth the beacon says its sender runs (ADR-0024), this station's for
+                    // a beacon from before that.
                     if event.data["decoded"].as_bool() == Some(true)
                         && event.data["kind"] == "beacon"
                         && let Some(source) = event.data["from"].as_str()
@@ -498,7 +499,10 @@ fn serve_commands(
                             &mut writer,
                             &Notification::CqFrame {
                                 source: source.to_owned(),
-                                bandwidth_hz: host.bandwidth_hz,
+                                bandwidth_hz: event.data["bandwidth_hz"]
+                                    .as_u64()
+                                    .and_then(|hz| u32::try_from(hz).ok())
+                                    .unwrap_or(host.bandwidth_hz),
                             }
                             .line(),
                         )
@@ -699,8 +703,22 @@ fn apply(
             let _ = handle.call(request("abort", json!({})));
             Applied::Done
         }
-        HostAction::CqFrame => {
-            let _ = handle.call(request("beacon", json!({})));
+        HostAction::CqFrame(source) => {
+            // the beacon goes under the name the host gave it when that is this station's
+            // (ADR-0024); a name the modem refuses as not its own leaves the plain beacon,
+            // which is what the published command asks for
+            let named = source
+                .as_ref()
+                .map_or_else(|| json!({}), |call| json!({ "callsign": call }));
+            let refused_name = handle.call(request("beacon", named)).is_ok_and(|reply| {
+                reply
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.code == "bad_params")
+            });
+            if refused_name {
+                let _ = handle.call(request("beacon", json!({})));
+            }
             Applied::Done
         }
         // `TUNE OFF`: cut the tone short, if one is playing or queued
@@ -1081,9 +1099,19 @@ mod tests {
                                     seen.push((method.clone(), command.request.params.clone()));
                                 }
                                 let result = answer(&method, &control);
-                                let _ = command
-                                    .reply
-                                    .send(Response::ok(command.request.id.clone(), result));
+                                // a script refuses a request by answering {"error": <code>}
+                                let reply = match result["error"].as_str() {
+                                    Some(code) => Response::failed(
+                                        command.request.id.clone(),
+                                        crate::control::protocol::ApiError::new(
+                                            code,
+                                            "refused by the script",
+                                            false,
+                                        ),
+                                    ),
+                                    None => Response::ok(command.request.id.clone(), result),
+                                };
+                                let _ = command.reply.send(reply);
                             }
                         }
                         std::thread::sleep(Duration::from_millis(2));
@@ -1373,6 +1401,86 @@ mod tests {
         assert!(
             message.contains(&data_port.to_string()),
             "the message does not say which port is in the way: {message}"
+        );
+    }
+
+    /// The params of the first request for `method` the adapter made, waiting up to two
+    /// seconds for it.
+    fn params_of(modem: &Modem, method: &str) -> Vec<serde_json::Value> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let found: Vec<serde_json::Value> = modem
+                .seen
+                .lock()
+                .expect("seen")
+                .iter()
+                .filter(|(m, _)| m == method)
+                .map(|(_, params)| params.clone())
+                .collect();
+            if !found.is_empty() || std::time::Instant::now() > deadline {
+                return found;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn cqframe_sends_the_beacon_under_the_name_the_host_gave_it() {
+        // VarAC's CQs and beacons are `CQFRAME KK4ODA-9 500`: the suffix means something to
+        // the program at the other end, so the beacon carries it (ADR-0024)
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CQFRAME KK4ODA-9 500");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let beacons = params_of(&modem, "beacon");
+        assert_eq!(beacons.len(), 1, "{beacons:?}");
+        assert_eq!(beacons[0]["callsign"], "KK4ODA-9");
+    }
+
+    #[test]
+    fn a_cq_name_the_modem_refuses_leaves_the_plain_beacon() {
+        // a name that is not this station's is refused as such, and the published command
+        // still asks for a beacon: the station's own callsign goes
+        let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&tries);
+        let (modem, server) = Modem::start(move |method, _| {
+            if method == "beacon" && counter.fetch_add(1, Ordering::Relaxed) == 0 {
+                json!({"error": "bad_params"})
+            } else {
+                json!({})
+            }
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CQFRAME K1ABC-9 500");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while params_of(&modem, "beacon").len() < 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let beacons = params_of(&modem, "beacon");
+        assert_eq!(beacons.len(), 2, "{beacons:?}");
+        assert_eq!(beacons[0]["callsign"], "K1ABC-9");
+        assert!(beacons[1].get("callsign").is_none(), "{beacons:?}");
+    }
+
+    #[test]
+    fn a_heard_beacon_reports_the_bandwidth_its_sender_runs() {
+        // a beacon says which bandwidth its sender runs (ADR-0024), and the CQ frame a VARA
+        // host is told of carries it — a 500 Hz station heard by a 2300 Hz one says 500
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        modem.publish(
+            "frame",
+            json!({"kind": "beacon", "decoded": true, "from": "N0CALL-9", "snr_db": 4.0,
+                   "bandwidth_hz": 500}),
+        );
+        assert_eq!(client.expect(|l| l.starts_with("SN")), "SN 4");
+        assert_eq!(
+            client.expect(|l| l.starts_with("CQFRAME")),
+            "CQFRAME N0CALL-9 500"
         );
     }
 

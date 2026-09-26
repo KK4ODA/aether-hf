@@ -623,7 +623,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "callsigns.set" => set_callsigns(station, params, id),
         "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
-        "beacon" => beacon(station, id),
+        "beacon" => beacon(station, params, id),
         "beacon.every" => beacon_every(station, params, id),
         "ptt.test" => {
             let seconds = params
@@ -748,9 +748,16 @@ fn answer_only(reason: &str) -> bool {
 }
 
 /// `beacon`: one frame with this station's callsign, outside any session.
-fn beacon<P: Ptt>(station: &mut Station<P>, id: Option<String>) -> Response {
-    match station.beacon() {
+fn beacon<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    // the name a host program gives its beacon (VarAC's `KK4ODA-9`): this station's
+    // callsign as its base, or it is refused (ADR-0024)
+    let name = params.get("callsign").and_then(Value::as_str);
+    match station.beacon(name) {
         Ok(()) => Response::ok(id, json!({ "accepted": true })),
+        Err(reason) if reason == crate::station::BEACON_NOT_OURS => Response::failed(
+            id,
+            ApiError::new("bad_params", format!("Cannot beacon: {reason}."), false),
+        ),
         // a session ends, and the beacon can go then; answer-only, or a callsign that will
         // not go into one, is not a matter of waiting
         Err(reason) if !answer_only(reason) && station.state() != aether_link::State::Idle => {
@@ -1510,6 +1517,7 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "from": frame.from,
         "to": frame.to,
         "control": frame.control,
+        "bandwidth_hz": frame.bandwidth_hz,
     })
 }
 

@@ -158,11 +158,12 @@ locally controlled station's: somebody is at the radio when they are pressed.
 ## Beacons and the Morse identifier
 
 * A **beacon** — one frame with your callsign, addressed to nobody, on the tone floor — is
-  judged like any other transmission. A **repeating** beacon (the Session tab's *Repeat* list,
-  or `beacon.every`) needs a control operator: Aether refuses one under automatic control,
-  because §97.203(d) lets a beacon be automatically controlled only on 28.20–28.30 MHz,
-  50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so never for Aether's data) and a few
-  segments above 6 m. An answer-only station sends no beacon at all.
+  judged like any other transmission. **A station under automatic control sends none** — not
+  the Session tab's, not a repeating one (the *Repeat* list, `beacon.every`), and not one a host
+  program asks for (VarAC's beacon timer) — because §97.203(d) lets a beacon be automatically
+  controlled only on 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so
+  never for Aether's data) and a few segments above 6 m (ADR-0024). An answer-only station sends
+  no beacon at all.
 * The **Morse identifier** (`cw_id`, off by default: Aether's frames carry both callsigns, and
   §97.119(b)(3) accepts a documented digital code) is judged as a CW emission at the dial it
   goes out on. It is sent at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent
