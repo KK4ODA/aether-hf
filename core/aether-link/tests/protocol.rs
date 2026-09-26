@@ -2165,6 +2165,57 @@ fn the_polls_step_down_to_the_floor_through_a_fade() {
 }
 
 #[test]
+fn a_session_whose_link_falls_to_the_floor_is_not_cut_off_on_the_way() {
+    // ADR-0033 end to end, as the chat bench found it at 500 Hz: the called station holds the
+    // turn, sending at the first OFDM rung, when the path falls below that rung and below the
+    // ordinary control frame. Its bursts and the answers to them are lost; it steps down, and
+    // its frames go to the floor after their four tries, half a minute after the last answer
+    // it heard — whose 45 s ran out 12 s into the first tone burst. Before, it ended the
+    // session there, with the answer to that burst on its way
+    const FADE: f64 = 25.0;
+    let t = air_timing(NARROW_500, true);
+    let config = LinkConfig {
+        max_mode: 4,
+        max_burst_s: Some(28.85),
+        ..LinkConfig::default()
+    };
+    let (mut a, mut b) = pair(&t, &config);
+    let message: Vec<u8> = (0..240u8).chain(0..240u8).collect();
+    a.connect("KK4XYZ").expect("idle");
+    a.send(b"hello");
+    b.send(&message);
+    let mut sim = TwoStationSim::new(a, b, 10.0, 5)
+        .with_snr_schedule(Box::new(|at| if at >= FADE { -16.0 } else { 10.0 }));
+    sim.run(FADE, 3.0);
+    let sent = sim.delivered(0).len();
+    assert!(
+        sim.engine(1).role() == Role::Iss && sent > 0 && sent < message.len(),
+        "not the case measured"
+    );
+    let mut until = FADE;
+    while until < 1500.0 && sim.delivered(0).len() < message.len() {
+        until += 10.0;
+        sim.run(until, 3.0);
+    }
+    assert_eq!(
+        sim.delivered(0),
+        message.as_slice(),
+        "{:?} {:?}",
+        sim.events(0),
+        sim.events(1)
+    );
+    assert!(
+        !sim.events(0)
+            .iter()
+            .chain(sim.events(1))
+            .any(|e| e.starts_with("disconnected")),
+        "{:?} {:?}",
+        sim.events(0),
+        sim.events(1)
+    );
+}
+
+#[test]
 fn a_burst_is_not_repeated_over_its_acknowledgement_arriving() {
     // A burst's acknowledgement can start late too — the receiving station's quiet stretched
     // by a frame it heard arriving, a receiver running behind — and a burst sent again over it
