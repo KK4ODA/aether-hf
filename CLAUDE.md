@@ -643,6 +643,31 @@ small `?` (`details.help-pop`, a popover closed by an outside click or Escape: `
 utility buttons are `button.quiet`. `#dial-reading` is kept for the script and not shown (the
 readout says it). Headless Chrome over the DevTools protocol (a Node script) is how the panel was
 screenshotted at chosen sizes when the browser pane was hidden.
+**The other tabs, the same way (2026-09-25, after beta.66):** every tab is boxes titled inside
+(`.card-title`), explanations behind `details.help-pop`, and the tab's one main thing given the
+window's spare height (`.panel.fills` on Status, Session, Stations and Log). Status: the Link
+and Channel readings as `.tiles` in two cards on the left, the History card (Speed/SNR tabs in
+its head, both charts) on the right growing — the charts are drawn at `chartHeight(id)`, the
+canvas's own height, and redrawn on resize — and Counters below; Compact hides all but the
+link tiles. Stations and Diagnostics' frames are `.table-pane`s (a `.pane` with a head strip,
+the table scrolling under a sticky header); Stations has All/Beacons/Worked filters and a
+Beacons column. Setup: each step a card with a numbered circle (`.step-num`, green when
+done), a step index (`.stepper`, `.step-link`, kept by `markStep`), the save as a sticky bar,
+the running configuration and mode table folded (`details.fold-card`). Log: one pane, filters
+(Beacons added) and tools in its head, tags coloured by kind. Help: About across the top, then
+two columns including a Beacons card.
+
+**ND1J's beacon and Morse questions (same day).** Beacons: a beacon going on the air is a
+`beacon` log event `sent` (`is_beacon` at render), one heard is `heard <call> at <x> dB`; the
+heard list counts `beacons` and `last_beacon_ms` per station (serde defaults: older files
+read); `beacons_sent` is a counter; `beacon.every {minutes}` (`station/beacons.rs`) repeats one
+every 10–240 min — idle station and clear channel whatever `wait_for_clear` says, skipped after
+`BEACON_WINDOW_S` without catching up, runtime only (a restart stops it), refused under
+automatic control (§97.203(g)) and on answer-only; `status.beacon`; the Session tab's Repeat
+list beside Beacon and the line under the buttons. Morse ID: his ID measured exactly 20 wpm —
+the US profile's cap on an automatic identifier (§97.119(b)(1)), applied silently; now
+`identifier_wpm`/`note_identifier_speed` (said at start and on change), `status.identifier`,
+Setup's note beside the speed, and `radio.cw_id*` are live keys.
 
 **The KISS port (ADR-0019, `docs/user/kiss.md`, `host-interfaces.md` §8).** Programs set up for
 VARA HF's KISS port work unchanged: `core/aetherd/src/kiss/` — `framing.rs` (FEND/FESC, partial
