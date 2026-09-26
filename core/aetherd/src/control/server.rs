@@ -335,7 +335,6 @@ fn serve_rest(
         id: None,
         method: name,
         params,
-        token: None,
     };
     // written before the request stops counting as unwritten: a daemon this request stops —
     // `shutdown` — waits for the write before it exits (`ControlChannel::settle`)
@@ -747,7 +746,6 @@ mod tests {
                 id: None,
                 method: "status".into(),
                 params: json!({}),
-                token: None,
             })
             .expect_err("it should fail");
         assert_eq!(error.code, "modem_stopped");

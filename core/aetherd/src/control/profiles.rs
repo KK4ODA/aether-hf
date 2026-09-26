@@ -458,7 +458,6 @@ mod tests {
                 id: Some("1".into()),
                 method: method.to_owned(),
                 params,
-                token: None,
             },
         )
     }
@@ -811,7 +810,6 @@ mod tests {
                 id: None,
                 method: "profile.list".into(),
                 params: json!({}),
-                token: None,
             },
         );
         assert_eq!(response.error.expect("refused").code, "unsupported");

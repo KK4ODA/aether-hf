@@ -1642,7 +1642,6 @@ mod tests {
                 id: Some("1".into()),
                 method: method.to_owned(),
                 params,
-                token: None,
             },
         )
     }
@@ -1968,7 +1967,6 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params,
-            token: None,
         };
         assert!(is_mutating("beacon.every"));
         let response = dispatch_with(
@@ -2004,7 +2002,6 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
-            token: None,
         };
         let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
         let result = response.result.expect("result");
@@ -2054,7 +2051,6 @@ mod tests {
             id: Some("1".into()),
             method: "send".to_owned(),
             params,
-            token: None,
         };
         let data = super::encode(b"hello\n");
         for bad in [
@@ -2075,7 +2071,6 @@ mod tests {
                 id: Some("2".into()),
                 method: "status".to_owned(),
                 params: json!({}),
-                token: None,
             },
         );
         let sent = &status.result.expect("status")["sent"];
@@ -2091,7 +2086,6 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params,
-            token: None,
         };
         let session = |remote: &str, ended_ms: u64| crate::sessions::Session {
             remote: remote.to_owned(),
@@ -2187,7 +2181,6 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
-            token: None,
         };
         for method in ["config.get", "diagnostics"] {
             let response = dispatch_with(&mut station, Some(&mut daemon), &request(method));
@@ -2223,7 +2216,6 @@ mod tests {
                 id: Some("1".into()),
                 method: "diagnostics".to_owned(),
                 params: json!({}),
-                token: None,
             },
         );
         assert!(response.ok);

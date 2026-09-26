@@ -394,7 +394,6 @@ fn request(method: &str, params: serde_json::Value) -> Request {
         id: None,
         method: method.to_owned(),
         params,
-        token: None,
     }
 }
 
