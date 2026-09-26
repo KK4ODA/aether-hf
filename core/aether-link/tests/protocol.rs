@@ -1861,3 +1861,111 @@ fn chat_leaves_a_transfer_alone() {
     }
     assert_eq!(times[0], times[1]);
 }
+
+#[test]
+fn a_poll_is_not_repeated_over_its_answer_arriving() {
+    // ADR-0027 §7, found by the chat bench: a receiving station that detects a poll and cannot
+    // decode it answers the preamble once its quiet after a frame has passed — 0.99 s when the
+    // last frame it decoded was a floor one, and the answer goes on the floor, 3.2 s — while
+    // the sender waited for an answer starting within a turnaround. The re-poll went out 0.2 s
+    // before the answer ended, the sender heard none of it, the next answer met the next
+    // re-poll, and the sender gave up with the link up: "no response". A sender waits out a
+    // frame it hears arriving, as a caller, a leaving station and one that handed over the
+    // turn already did
+    for (params, floor_control) in [
+        (WIDE_2300, CONTROL_THRESHOLD_DB[1]),
+        (NARROW_500, NARROW_CONTROL_THRESHOLD_DB[1]),
+    ] {
+        // preamble reports, as the daemon gives them: the receiving station answers what it
+        // detected and could not decode
+        let t = air_timing(params, true);
+        let (a, b) = pair(&t, &LinkConfig::default());
+        // a path the tone floor's frames cross and the ordinary control frame does not: the
+        // call goes on the floor and measures a strong path, so the sender polls in the
+        // ordinary family of the rung it would send at, and the receiving station, which
+        // decoded only the floor's call, answers every poll it detects on the floor
+        let mut sim =
+            TwoStationSim::new(a, b, 20.0, 3).with_control_thresholds([99.0, floor_control]);
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        sim.run(100.0, 3.0);
+        let a = sim.engine(0);
+        assert_eq!(
+            a.state(),
+            State::Connected,
+            "{:?}: {:?}",
+            params.bandwidth,
+            sim.events(0)
+        );
+        let controls = |who: usize| {
+            sim.frames_sent(who)
+                .iter()
+                .filter(|f| f.container == Container::Control)
+                .map(|f| f.floor)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            controls(0).iter().all(|&floor| !floor) && controls(1).iter().all(|&floor| floor),
+            "not the case measured"
+        );
+        assert_eq!(a.stats.ack_timeouts, 0, "{:?}", params.bandwidth);
+        assert!(
+            a.stats.acks_received >= 5,
+            "{:?}: every poll's answer is heard",
+            params.bandwidth
+        );
+    }
+}
+
+#[test]
+fn a_burst_is_not_repeated_over_its_acknowledgement_arriving() {
+    // A burst's acknowledgement can start late too — the receiving station's quiet stretched
+    // by a frame it heard arriving, a receiver running behind — and a burst sent again over it
+    // loses the acknowledgement and costs the burst's air time. The retry waits for the
+    // frame's end, and the acknowledgement is taken when it arrives
+    let t = timing(false);
+    let (mut a, mut b) = pair(&t, &LinkConfig::default());
+
+    // the handshake over a perfect wire, with a line waiting to go
+    a.connect("KK4XYZ").expect("idle");
+    a.send(b"a line typed at the keyboard");
+    let request = transmitted(&mut a);
+    assert_eq!(request.len(), 1);
+    let mut now = t.frame_s(&request[0]);
+    a.on_tx_done(now);
+    b.on_frame(&Wire::carry(&request[0], 0.0, &t), now);
+    let accept = transmitted(&mut b);
+    assert_eq!(accept.len(), 1);
+    let answered = now;
+    now += t.frame_s(&accept[0]);
+    a.on_frame(&Wire::carry(&accept[0], answered, &t), now);
+    assert!(a.connected());
+    let burst = transmitted(&mut a);
+    assert!(
+        !burst.is_empty() && burst.iter().all(|f| f.container == Container::Data),
+        "{burst:?}"
+    );
+    for frame in &burst {
+        b.on_frame(&Wire::carry(frame, now, &t), now + t.frame_s(frame));
+        now += t.frame_s(frame);
+    }
+    a.on_tx_done(now);
+    b.tick(now + 30.0);
+    let acks = transmitted(&mut b);
+    assert_eq!(
+        acks.len(),
+        1,
+        "the receiving station acknowledges the burst"
+    );
+
+    // the acknowledgement is heard arriving just before the sender would try again
+    let due = a.next_deadline().expect("waiting for the acknowledgement");
+    let length = t.frame_s(&acks[0]);
+    let t_start = due - 0.2;
+    a.on_preamble(t_start, t_start + 0.1, Some(length));
+    assert!(a.next_deadline().expect("armed") >= t_start + length);
+    a.tick(t_start + length);
+    assert!(transmitted(&mut a).is_empty(), "repeated over the frame");
+    a.on_frame(&Wire::carry(&acks[0], t_start, &t), t_start + length + 0.01);
+    assert!(a.all_acknowledged());
+    assert_eq!(a.stats.ack_timeouts, 0);
+}
