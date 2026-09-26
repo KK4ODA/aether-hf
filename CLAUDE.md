@@ -773,9 +773,11 @@ plan's tables: edit both. Every Aether signal measures over 500 Hz by the wider 
 either bandwidth, and the docs and the example file now say so. Found on the way: three Rust
 string literals whose `\` line continuation had been lost to a shell heredoc (the Morse-speed
 note, the busy transition's log line, a test message) — **write edit scripts to files, never
-through a heredoc, when they contain backslashes**; `field/LOG.md` has had no row since
-2026-09-17 — the sidecars are in the author's recordings folder, and folding them in
-(`field_ingest.py --class …`) needs the author's channel class for each path.
+through a heredoc, when they contain backslashes**. The same day the 21 on-air sessions
+since 2026-09-17 with W4TGA, KE4QCM and ND1J went into `field/LOG.md` (`field_ingest.py`, one
+note per path naming the ADR that analysed it) with the author's classes: W4TGA 40 m Good;
+ND1J's Tests 40 m/2300 Good, 80 m/2300 Poor, 80 m/500 Moderate; ND1J 40 m/500 Moderate; both
+KE4QCM paths Moderate. Recording names are UTC. Sessions with no frames are left out.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
