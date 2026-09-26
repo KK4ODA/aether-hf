@@ -85,6 +85,11 @@ Events are unsolicited and carry no `id`:
   "state": "Connected", "callsign": "W4ODA", "remote": "KK4XYZ" } }
 ```
 
+What a request sets in motion is sent before its response: a client holding the answer to an
+`abort` has already been sent the `disconnected` it caused, so it cannot take that for the end
+of whatever it asks for next. What happens later — a call given up on, a session closed in
+order — comes when it happens.
+
 A request the regulatory policy refuses — a `connect`, `probe`, `beacon`, `tune`, `drive.set` or
 `ptt.test` the rules do not allow here — fails with code `regulatory`, a message that says why in a
 sentence, and the whole decision in `result.decision` (§4.10). A `test.start` the rules refuse
