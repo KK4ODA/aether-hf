@@ -224,6 +224,42 @@ where
     rates
 }
 
+/// The sample rates a device runs at, capturing (`input`) or playing.
+///
+/// On Windows that is its default format's rate and no other: cpal opens a stream in shared
+/// mode, where the audio engine takes the default format's rate alone. Asking for the
+/// supported formats gets the same answer by trying some sixty rate-and-sample-format pairs
+/// through the audio engine one at a time — 0.1 s to 11 s a device, 16.6 s for the twelve on
+/// the author's machine, where the default takes a millisecond. The daemon lists devices at
+/// every profile switch, so that was a switch that took seconds (2026-09-26).
+fn rates(device: &cpal::Device, input: bool) -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        let default = if input {
+            device.default_input_config()
+        } else {
+            device.default_output_config()
+        };
+        default
+            .map(|config| vec![config.sample_rate().0])
+            .unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    {
+        if input {
+            device
+                .supported_input_configs()
+                .map(rates_of)
+                .unwrap_or_default()
+        } else {
+            device
+                .supported_output_configs()
+                .map(rates_of)
+                .unwrap_or_default()
+        }
+    }
+}
+
 /// Every audio device the system offers, for an operator choosing one.
 ///
 /// # Errors
@@ -240,14 +276,8 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, AudioError> {
                 name,
                 input: device.default_input_config().is_ok(),
                 output: device.default_output_config().is_ok(),
-                input_rates: device
-                    .supported_input_configs()
-                    .map(rates_of)
-                    .unwrap_or_default(),
-                output_rates: device
-                    .supported_output_configs()
-                    .map(rates_of)
-                    .unwrap_or_default(),
+                input_rates: rates(&device, true),
+                output_rates: rates(&device, false),
             }
         })
         .collect())

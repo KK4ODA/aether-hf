@@ -149,9 +149,10 @@ fn name_param(params: &Value) -> Result<&str, ApiError> {
         .ok_or_else(|| ApiError::new("bad_params", "A `name` for the profile is needed.", false))
 }
 
-/// This machine's devices, as the daemon's own inventory reports them.
+/// This machine's devices, as the daemon last listed them — off the run loop: listing
+/// here held a profile switch for seconds (2026-09-26).
 fn inventory(daemon: &DaemonState) -> Inventory {
-    Inventory::from_json(&(daemon.devices)())
+    Inventory::from_json(&daemon.inventory())
 }
 
 /// A profile of the running configuration under a name.

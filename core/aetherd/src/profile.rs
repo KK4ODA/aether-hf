@@ -811,6 +811,14 @@ impl Store {
         self.state_path.as_deref().is_some_and(Path::exists)
     }
 
+    /// Whether [`Store::adopt`] would adopt the running configuration: a store that has never
+    /// been touched. The daemon asks first, so that a start with profiles already in place
+    /// does not wait for the devices to be listed.
+    #[must_use]
+    pub fn will_adopt(&self) -> bool {
+        self.dir.is_some() && !self.has_state()
+    }
+
     /// Make a profile active, and remember it.
     ///
     /// # Errors
@@ -1029,7 +1037,7 @@ impl Store {
         inventory: Option<&Inventory>,
         now: &str,
     ) -> Result<Option<Entry>, ProfileError> {
-        if self.dir.is_none() || self.has_state() {
+        if !self.will_adopt() {
             return Ok(None);
         }
         let mut name = ADOPTED_NAME.to_owned();
