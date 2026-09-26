@@ -1919,6 +1919,44 @@ def test_a_called_sender_yields_to_the_callers_poll(timing: PhyTiming) -> None:
     assert not any(e.startswith("disconnected") for e in sim.events(1))
 
 
+def test_a_climbed_session_outlives_a_fade_that_carries_no_data(timing: PhyTiming) -> None:
+    """ADR-0023's fade after the link has climbed: both stations' frames are OFDM, so silence
+    ends the session after 45 s, not after four floor exchanges. The caller hears none of the
+    called station's data for 90 s while control frames get through; what keeps the link alive
+    is the poll of a caller that took the turn back after its TURNs went unanswered, which the
+    called station answers by yielding. A caller that offered the turn for longer on silence —
+    ADR-0029's rejected rule — heard nothing it could read for as long, and the session timed
+    out, ten seeds in ten."""
+    for seed in range(3):
+        a = LinkEngine("W4ODA", timing, LinkConfig(), seed=seed)
+        b = LinkEngine("KK4XYZ", timing, LinkConfig(), seed=seed + 1)
+        fade = {"until": 0.0}
+        sim = TwoStationSim(
+            a,
+            b,
+            snr_db=15.0,
+            seed=seed,
+            unheard=lambda rx, container, t0, fade=fade: (
+                rx == 0 and container is Container.DATA and t0 < fade["until"]
+            ),
+        )
+        a.connect("KK4XYZ")
+        sim.run(until=30)
+        # an exchange on a clean path first: the link climbs to OFDM both ways
+        b.send(b"a first line, before the fade " * 4)
+        sim.run(until=sim.t + 60)
+        a.send(b"and its reply " * 6)
+        sim.run(until=sim.t + 60)
+        assert a._peer_mode is not None and not timing.is_floor(a._peer_mode)
+        fade["until"] = sim.t + 90.0
+        message = b"sent while the path would carry no data"
+        b.send(message)
+        sim.run(until=fade["until"] + 300.0)
+        assert sim.delivered(0).endswith(message), seed
+        ended = [e for e in sim.events(0) + sim.events(1) if e.startswith("disconnected")]
+        assert not ended, (seed, ended)
+
+
 def test_a_turn_waits_for_the_longest_first_frame(timing: PhyTiming) -> None:
     """KE4QCM, 2026-09-25 (23:30:58): the caller waited for the answer to its TURN as long as
     one OFDM frame, and the called station's first burst was a tone-floor frame five seconds
@@ -1936,6 +1974,261 @@ def test_a_turn_waits_for_the_longest_first_frame(timing: PhyTiming) -> None:
     t_start = a._deadlines["wait"] - 0.5
     a.on_preamble(t_start, t_start + 0.2, timing.data_frame_s_for(0))
     assert a._deadlines["wait"] >= t_start + timing.data_frame_s_for(0)
+
+
+class _TurnWatch(TwoStationSim):
+    """The simulator, noting every moment both stations of a session held the turn."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.both_sending: list[float] = []
+
+    def _pump(self, who: int, at: float) -> None:
+        super()._pump(who, at)
+        a, b = (station.engine for station in self.st)
+        if a.connected and b.connected and a.role is Role.ISS and b.role is Role.ISS:
+            self.both_sending.append(at)
+
+
+def test_a_turn_whose_answer_was_lost_is_answered_again(timing: PhyTiming) -> None:
+    """ADR-0029 (found by the chat bench, ADR-0027 §7): the caller hands the turn over and hears
+    nothing of the called station until its TURN has gone out three times — not the burst that
+    answered it, not what followed. The called station, holding the turn, ignored the TURN
+    repeated, and the caller took the turn back when its tries ran out: two senders, each
+    sending into the other. The called station answers a TURN heard again now, and the caller
+    hears the answer to its third."""
+    a, b = _pair(timing)
+    offered = {"turns": 0}
+
+    # the caller hears nothing of the called station, preamble or frame, from its first TURN
+    # until its third has gone out: the answer to the TURN and everything after it
+    def unheard(rx: int, container: Container, t0: float) -> bool:
+        return rx == 0 and 1 <= offered["turns"] < 3
+
+    sim = _TurnWatch(a, b, snr_db=15.0, seed=0, unheard=unheard)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED
+    send_turn = a._send_turn
+
+    def counted() -> None:
+        offered["turns"] += 1
+        send_turn()
+
+    a._send_turn = counted  # type: ignore[method-assign]
+    message = b"typed at the station that does not hold the turn"
+    b.send(message)
+    sim.run(until=sim.t + 300)
+    assert sim.delivered(0) == message
+    assert offered["turns"] >= 3
+    assert not sim.both_sending, f"both held the turn from {sim.both_sending[0]:.1f} s"
+
+
+def test_a_turn_answered_by_a_poll_the_sender_cannot_read() -> None:
+    """ADR-0029, the chat bench's trace: a station takes the turn with nothing of its own to send
+    and polls; the station that handed it over cannot read the poll, answers its preamble with
+    an acknowledgement — which tells the new sender all is well — and offers the turn again.
+    The new sender ignored the TURN, the old one could not read its next poll either, and took
+    the turn back after three TURNs: two senders. The new sender answers each TURN now, and the
+    old one, having heard frames it could not read, offers until it reads an answer — here the
+    answer to its fourth TURN."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import WIDE_2300
+
+    timing = phy_timing(WIDE_2300)
+    a, b = _pair(timing)
+    unread = {"armed": 0, "polls": 0}
+    send_turn = a._send_turn
+
+    def arm() -> None:
+        unread["armed"] = 1
+        send_turn()
+
+    a._send_turn = arm  # type: ignore[method-assign]
+
+    # the first three polls after the TURN — the answer to it, and the next two — arrive far
+    # too weak to read; their preambles are still heard, a preamble being far below any
+    # frame's threshold
+    def offset(frame: TxFrame) -> float:
+        if (
+            unread["armed"]
+            and unread["polls"] < 3
+            and frame.container is Container.CONTROL
+            and ControlFrame.decode(frame.payload).kind is ControlKind.POLL
+        ):
+            unread["polls"] += 1
+            return -60.0
+        return 0.0
+
+    sim = _TurnWatch(a, b, snr_db=15.0, seed=0, frame_snr_offset=offset)
+    a.connect("KK4XYZ")
+    sim.run(until=30)
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED
+    b.request_break()  # the turn, with nothing to send yet: it is answered with a poll
+    sim.run(until=sim.t + 60)
+    assert unread["polls"] == 3
+    assert b.role is Role.ISS and a.role is Role.IRS
+    assert not sim.both_sending, f"both held the turn from {sim.both_sending[0]:.1f} s"
+    # and the session carries on the other way
+    message = b"sent by the station that took the turn"
+    b.send(message)
+    sim.run(until=sim.t + 60)
+    assert sim.delivered(0) == message
+
+
+def _control_frame(kind: ControlKind, session: int, t_end: float, **fields: object) -> SoftFrame:
+    """A control frame of ``session`` that arrived at ``t_end``, readable."""
+    from aether_model.link.sim import SimFrame
+
+    payload = ControlFrame(kind, session, **fields).encode()  # type: ignore[arg-type]
+    return SimFrame(Container.CONTROL, 0, 0, 20.0, t_end - 0.4, t_end, payload, 0.0)
+
+
+def _holding_the_turn(timing: PhyTiming, work: bool) -> LinkEngine:
+    """A station that took the turn on a TURN and answered it — with a burst when it has
+    something to send, a poll otherwise — and heard nothing back yet."""
+    b = LinkEngine("KK4XYZ", timing, LinkConfig())
+    b.state, b.role, b.session, b.now = State.CONNECTED, Role.IRS, 7, 100.0
+    if work:
+        b.send(b"a line for the other station")
+    b.on_frame(_control_frame(ControlKind.TURN, 7, 100.0), 100.0)
+    assert b.role is Role.ISS
+    answer = [x for x in b.drain() if isinstance(x, Transmit)]
+    assert len(answer) == 1
+    b.on_tx_done(100.0 + answer[0].duration_s)
+    return b
+
+
+@pytest.mark.parametrize("work", [False, True], ids=["poll", "burst"])
+def test_the_station_holding_the_turn_answers_a_turn_heard_again(
+    timing: PhyTiming, work: bool
+) -> None:
+    """ADR-0029: a TURN heard by the station that already holds the turn says the other station
+    heard nothing of it taking it. The answer goes again — the burst, which the other station
+    heard none of, or the poll — and not while the station's own transmission is going out."""
+    b = _holding_the_turn(timing, work)
+    waiting = b._waiting_for
+    assert waiting == ("ack" if work else "poll")
+    t = b.now + 1.0
+    b.on_frame(_control_frame(ControlKind.TURN, 7, t), t)
+    again = [x for x in b.drain() if isinstance(x, Transmit)]
+    assert len(again) == 1
+    frames = again[0].frames
+    if work:
+        assert frames and all(f.container is Container.DATA for f in frames)
+    else:
+        assert [ControlFrame.decode(f.payload).kind for f in frames] == [ControlKind.POLL]
+    assert b._waiting_for == waiting and b.role is Role.ISS
+    # a TURN of another session is nobody's business here, and one heard while the answer
+    # is still on the air needs none
+    b.on_frame(_control_frame(ControlKind.TURN, 8, t + 0.1), t + 0.1)
+    b.on_frame(_control_frame(ControlKind.TURN, 7, t + 0.2), t + 0.2)
+    assert not [x for x in b.drain() if isinstance(x, Transmit)]
+
+
+def _offering(timing: PhyTiming) -> LinkEngine:
+    """A sender that has just handed the turn over (its first TURN) with nothing to send."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.state, a.role, a.session, a.now = State.CONNECTED, Role.ISS, 7, 100.0
+    a._peer_wants_tx = True
+    a._maybe_start_burst()
+    assert a._waiting_for == "turn" and a._turn_tries == 1
+    a.drain()
+    return a
+
+
+def _let_the_turn_wait_run_out(a: LinkEngine) -> list[Transmit]:
+    """Advance past the TURN's wait (the transmission ended when it was keyed)."""
+    a.on_tx_done(a._tx_busy_until)
+    a.tick(a._deadlines["wait"] + 0.01)
+    return [x for x in a.drain() if isinstance(x, Transmit)]
+
+
+def test_a_station_offering_the_turn_does_not_take_it_back_over_what_it_cannot_read(
+    timing: PhyTiming,
+) -> None:
+    """ADR-0029: a frame heard after a TURN and not read may be the other station's answer from
+    the turn it now holds — a poll too weak to read — and while the last frame heard was such a
+    frame, the offering station offers again, up to ``max_retries`` TURNs, rather than take the
+    turn back after ``turn_retries``. An acknowledgement it can read says the other station is
+    still receiving, and silence says nothing either way: after those it takes the turn back as
+    before — a path that carries control frames and no data is kept alive by the poll that
+    follows (ADR-0023)."""
+    from aether_model.link.sim import SimFrame
+
+    cfg = LinkConfig()
+
+    def unreadable(t: float) -> SoftFrame:
+        return SimFrame(Container.CONTROL, 0, 0, -20.0, t - 0.4, t, b"", 2.0)
+
+    # silence: the turn is taken back after turn_retries TURNs, as it always was
+    a = _offering(timing)
+    for tries in range(2, cfg.turn_retries + 1):
+        sent = _let_the_turn_wait_run_out(a)
+        assert a._turn_tries == tries and a._waiting_for == "turn", tries
+        assert [ControlFrame.decode(f.payload).kind for x in sent for f in x.frames] == [
+            ControlKind.TURN
+        ]
+    _let_the_turn_wait_run_out(a)
+    assert a.role is Role.ISS and a._waiting_for != "turn"
+
+    # a frame it could not read: it offers on, to max_retries, and then takes the turn back
+    a = _offering(timing)
+    t = a._deadlines["wait"] - 0.5
+    a.on_frame(unreadable(t), t)
+    for tries in range(2, cfg.max_retries + 1):
+        _let_the_turn_wait_run_out(a)
+        assert a._turn_tries == tries and a._waiting_for == "turn", tries
+    _let_the_turn_wait_run_out(a)
+    assert a.role is Role.ISS and a._waiting_for != "turn"
+
+    # its preamble alone counts: the frame may never arrive whole
+    a = _offering(timing)
+    for _ in range(cfg.turn_retries - 1):
+        _let_the_turn_wait_run_out(a)
+    t = a._deadlines["wait"] - 0.5
+    a.on_preamble(t, t + 0.2, timing.control_frame_s)
+    _let_the_turn_wait_run_out(a)
+    assert a._waiting_for == "turn" and a._turn_tries == cfg.turn_retries + 1
+
+    # an acknowledgement read after it: the other station is receiving still
+    a = _offering(timing)
+    t = a._deadlines["wait"] - 0.5
+    a.on_frame(unreadable(t), t)
+    for _ in range(cfg.turn_retries - 1):
+        _let_the_turn_wait_run_out(a)
+    t = a._deadlines["wait"] - 0.5
+    a.on_frame(_control_frame(ControlKind.ACK, 7, t), t)
+    assert not [x for x in a.drain() if isinstance(x, Transmit)]
+    _let_the_turn_wait_run_out(a)
+    assert a.role is Role.ISS and a._waiting_for != "turn"
+
+
+def test_an_acknowledgement_is_not_acknowledged(timing: PhyTiming) -> None:
+    """ADR-0029: a receiving station answers a frame it hears arriving as the end of a burst —
+    it may be the last frame of one, or a poll it will not be able to read. When the frame
+    turns out to be an acknowledgement, the other station is receiving too and waits for
+    nothing: no acknowledgement goes back. One did, and was answered in turn; keyed by a
+    station that had just offered the turn, it went out over the answer to its TURN."""
+    b = LinkEngine("KK4XYZ", timing, LinkConfig())
+    b.state, b.role, b.session, b.now = State.CONNECTED, Role.IRS, 7, 100.0
+    b.on_preamble(100.0, 100.2, timing.control_frame_s)
+    assert "ack" in b._deadlines
+    t_end = 100.0 + timing.control_frame_s
+    b.on_frame(_control_frame(ControlKind.ACK, 7, t_end), t_end)
+    assert "ack" not in b._deadlines
+    b.tick(t_end + 20.0)
+    assert not [x for x in b.drain() if isinstance(x, Transmit)]
+    # a frame it cannot read is still answered: it may be a poll
+    b.on_preamble(130.0, 130.2, timing.control_frame_s)
+    from aether_model.link.sim import SimFrame
+
+    t_end = 130.0 + timing.control_frame_s
+    b.on_frame(SimFrame(Container.CONTROL, 0, 0, -20.0, 130.0, t_end, b"", 2.0), t_end)
+    b.tick(b._deadlines["ack"] + 0.01)
+    acks = [x for x in b.drain() if isinstance(x, Transmit)]
+    assert len(acks) == 1
+    assert ControlFrame.decode(acks[0].frames[0].payload).kind is ControlKind.ACK
 
 
 def _disconnecting(timing: PhyTiming) -> LinkEngine:
