@@ -1800,6 +1800,31 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_datagram_is_refused_rather_than_sent() {
+        // base64 of nothing was queued and keyed: a callsign and a type on the air, which
+        // every station that decoded them dropped
+        let mut station = station();
+        for data in ["", "===="] {
+            let response = call(&mut station, "datagram.send", json!({ "data": data }));
+            let error = response.error.expect("refused");
+            assert_eq!(error.code, "bad_params", "{data:?}: {error:?}");
+            assert!(!error.retryable);
+            assert!(error.message.contains("empty"), "{}", error.message);
+        }
+        let status = call(&mut station, "status", json!({}))
+            .result
+            .expect("status");
+        assert_eq!(status["datagrams"]["queued"], 0);
+        // one byte is a frame
+        let one = call(
+            &mut station,
+            "datagram.send",
+            json!({ "data": to_base64(b"x") }),
+        );
+        assert!(one.ok, "{:?}", one.error);
+    }
+
+    #[test]
     fn what_a_session_holds_up_is_worth_asking_again() {
         let mut busy = crate::station::tests_support::connected_station();
         for (method, params) in [
