@@ -323,6 +323,15 @@ const OTHER_ID_WAIT_MAX_S: f64 = 15.0;
 /// went out over it.
 const ANSWER_LISTEN_S: f64 = 0.5;
 
+/// Why a station under automatic control sends no beacon (ADR-0024).
+pub const BEACON_UNDER_AUTOMATIC_CONTROL: &str = "a station under automatic control sends no \
+    beacon: a beacon may be automatically controlled only on 28.20–28.30, 50.06–50.08, \
+    144.275–144.300, 222.05–222.06 or 432.300–432.400 MHz, or on 33 cm and up (§97.203(d))";
+
+/// Why a beacon named for another station is not sent: a beacon identifies this one.
+pub const BEACON_NOT_OURS: &str =
+    "a beacon carries this station's callsign, or a name with one of its callsigns as its base";
+
 /// What the sound card is delivering, over the last few seconds.
 ///
 /// Setup, not propagation, is what defeats most new users of an HF data mode
@@ -513,6 +522,9 @@ pub struct FrameReport {
     pub to: Option<String>,
     /// A control frame's fields, spelled out.
     pub control: Option<String>,
+    /// The bandwidth a beacon says its sender runs, hertz (ADR-0024); none for any other
+    /// frame, or for a beacon from before that.
+    pub bandwidth_hz: Option<u32>,
 }
 
 /// A session's account, kept from the moment it comes up to the moment it ends.
@@ -1614,7 +1626,9 @@ impl<P: Ptt> Station<P> {
         Ok(())
     }
 
-    /// Transmit one unproto beacon: this station's callsign, addressed to nobody.
+    /// Transmit one unproto beacon: this station's callsign, addressed to nobody — or `name`,
+    /// the name a host program gave it (`VarAC`'s `KK4ODA-9`), when one of the station's
+    /// callsigns is its base — with the bandwidth the station runs (ADR-0024).
     ///
     /// It is how an operator answers "can anybody hear me?" without arranging a contact
     /// first. Sent at the most robust mode, because the point is to be heard by somebody who
@@ -1622,15 +1636,41 @@ impl<P: Ptt> Station<P> {
     /// a frame into the middle of somebody's transfer.
     ///
     /// # Errors
-    /// If a session is up, or the callsign cannot be packed.
-    pub fn beacon(&mut self) -> Result<(), &'static str> {
+    /// On an answer-only station, under automatic control (§97.203(d)), if a session is up,
+    /// for a name that is not this station's ([`BEACON_NOT_OURS`]), or if the callsign cannot
+    /// be packed.
+    pub fn beacon(&mut self, name: Option<&str>) -> Result<(), &'static str> {
         if self.config.answer_only {
             return Err("this station is answer-only: it takes calls and sends no beacon");
+        }
+        // A beacon may be automatically controlled only in the segments of §97.203(d), and
+        // of those only 28.20–28.30 MHz is anywhere Aether's data may go. The repeating
+        // beacon was refused under automatic control already; a host program's beacon timer
+        // on an unattended station is the same thing by another road (ADR-0024).
+        if self.config.regulatory.control == Some(crate::regulatory::ControlMode::Automatic) {
+            return Err(BEACON_UNDER_AUTOMATIC_CONTROL);
         }
         if self.engine.state() != State::Idle {
             return Err("a session is running");
         }
-        let body = pack_callsign(&self.engine.my_call).map_err(|_| "the callsign will not pack")?;
+        // the name a host program gave the beacon — VarAC's CQs and beacons are `KK4ODA-9`
+        // and the like, meaning something to the program at the other end — is carried as
+        // given when this station's callsign is its base (ADR-0024)
+        let call = match name.map(|n| n.trim().to_ascii_uppercase()) {
+            Some(name) if self.names_this_station(&name) => name,
+            Some(_) => return Err(BEACON_NOT_OURS),
+            None => self.engine.my_call.clone(),
+        };
+        let mut body = pack_callsign(&call)
+            .map_err(|_| "the callsign will not pack")?
+            .to_vec();
+        // and the bandwidth this station runs, which a host program told of the beacon
+        // reports beside it (`CQFRAME <call> <bandwidth>`); a receiver of an earlier version
+        // reads the callsign and never looks further
+        body.push(aether_link::frames::with_bandwidth(
+            0,
+            self.config.params.bandwidth.hz(),
+        ));
         let header = DataHeader {
             kind: DataKind::Beacon,
             seq: 0,
@@ -1654,6 +1694,19 @@ impl<P: Ptt> Station<P> {
             }]));
         self.stats.beacons_sent += 1;
         Ok(())
+    }
+
+    /// Whether a name is this station's: one of its callsigns, or one with a suffix a host
+    /// program added (`KK4ODA-9` for `KK4ODA`) — the same base before any `-`.
+    fn names_this_station(&self, name: &str) -> bool {
+        let base = |call: &str| call.split('-').next().unwrap_or_default().to_owned();
+        let wanted = base(name);
+        !wanted.is_empty()
+            && self
+                .engine
+                .callsigns
+                .iter()
+                .any(|call| base(call).eq_ignore_ascii_case(&wanted))
     }
 
     /// Ask a station whether it hears this one, and how well, without a session
@@ -2364,6 +2417,7 @@ impl<P: Ptt> Station<P> {
             from: None,
             to: None,
             control: None,
+            bandwidth_hz: None,
         };
         // a frame that belongs to the session is the other station's; one with another
         // session id is somebody else's business and stays unattributed
@@ -2383,6 +2437,7 @@ impl<P: Ptt> Station<P> {
                 DataKind::Beacon => {
                     report.kind = "beacon";
                     report.from = unpack_callsign(&body).ok();
+                    report.bandwidth_hz = beacon_bandwidth_hz(&body);
                 }
                 DataKind::ConnectReq | DataKind::ConnectAck => {
                     report.kind = if header.kind == DataKind::ConnectReq {
@@ -3678,6 +3733,18 @@ fn is_probe_answer(frames: &[aether_link::TxFrame]) -> bool {
 }
 
 /// The callsign in a beacon frame, if that is what this is.
+/// The bandwidth a beacon says its sender runs: the capability byte after its callsign
+/// (ADR-0024). A beacon from before that carries none.
+fn beacon_bandwidth_hz(body: &[u8]) -> Option<u32> {
+    let caps = *body.get(aether_link::frames::CALL_BYTES)?;
+    match aether_link::frames::bandwidth_code(caps) {
+        0 => Some(2300),
+        1 => Some(500),
+        2 => Some(2750),
+        _ => None,
+    }
+}
+
 fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
     if decoded.frame.is_control() {
         return None;
@@ -3795,7 +3862,7 @@ mod tests {
         );
         // ask it for the one thing that would key the radio
         station
-            .beacon()
+            .beacon(None)
             .expect("a beacon is queued like any other burst");
         let mut out = vec![1.0f32; 4096];
         let refused = station
@@ -5030,7 +5097,7 @@ mod tests {
         });
         unset.connect("KK4XYZ").expect("the engine takes it");
         run_alone(&mut unset, 5.0, |_| false);
-        unset.beacon().expect("queued");
+        unset.beacon(None).expect("queued");
         run_alone(&mut unset, 5.0, |_| false);
         assert_eq!(unset.stats.transmissions, 0);
         assert!(
@@ -5071,7 +5138,7 @@ mod tests {
         });
         station.connect("KK4XYZ").expect("queued");
         run_alone(&mut station, 6.0, |_| false);
-        station.beacon().expect("queued");
+        station.beacon(None).expect("queued");
         run_alone(&mut station, 3.0, |_| false);
         station.probe("KK4XYZ", None).expect("queued");
         run_alone(&mut station, 3.0, |_| false);
@@ -5578,11 +5645,52 @@ mod tests {
     }
 
     #[test]
+    fn a_beacon_carries_the_name_a_host_program_gave_it_and_its_bandwidth() {
+        // VarAC's CQs and beacons are `CQFRAME KK4ODA-9 500`: the suffix means something to
+        // the program at the other end, and the bandwidth tells it how to call (ADR-0024)
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.beacon(Some("w4oda-9")).expect("its own name");
+        air.run(30.0, |_, b| b.stats.beacons_heard > 0);
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e.starts_with("beacon:heard W4ODA-9")),
+            "the name was not carried: {events:?}"
+        );
+        let report = air
+            .b
+            .take_frame_reports()
+            .into_iter()
+            .find(|frame| frame.kind == "beacon")
+            .expect("the beacon was reported");
+        assert_eq!(report.from.as_deref(), Some("W4ODA-9"));
+        assert_eq!(report.bandwidth_hz, Some(2300));
+        // a name whose base is another station's is not this one's to send
+        assert_eq!(air.a.beacon(Some("K1ABC-9")), Err(BEACON_NOT_OURS));
+    }
+
+    #[test]
+    fn a_station_under_automatic_control_sends_no_beacon() {
+        use crate::regulatory::ControlMode;
+        // §97.203(d): a beacon may be automatically controlled only on 28.20–28.30 MHz and
+        // above. The repeating beacon was refused already; a host program's beacon timer
+        // on an unattended station is the same thing (ADR-0024)
+        let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Automatic));
+        assert_eq!(station.beacon(None), Err(BEACON_UNDER_AUTOMATIC_CONTROL));
+        assert_eq!(
+            station.beacon(Some("W4ODA-9")),
+            Err(BEACON_UNDER_AUTOMATIC_CONTROL)
+        );
+        assert!(BEACON_UNDER_AUTOMATIC_CONTROL.contains("§97.203(d)"));
+        let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Local));
+        station.beacon(None).expect("local control");
+    }
+
+    #[test]
     fn a_beacon_crosses_the_air_and_is_reported_but_never_answered() {
         // "can anybody hear me?" without arranging a contact first, which on HF is most of
         // what a new station needs to know
         let mut air = Air::new(1.0, 0.0005);
-        air.a.beacon().expect("idle");
+        air.a.beacon(None).expect("idle");
         air.run(30.0, |_, b| b.stats.beacons_heard > 0);
 
         assert_eq!(air.b.stats.beacons_heard, 1, "the beacon was not heard");
@@ -5753,7 +5861,7 @@ mod tests {
         let mut air = Air::new(1.0, 0.0005);
         assert!(air.b.last_frame().is_none());
         assert!(air.b.constellation().is_none());
-        air.a.beacon().expect("idle");
+        air.a.beacon(None).expect("idle");
         air.run(30.0, |_, b| b.stats.beacons_heard > 0);
         let reports = air.b.take_frame_reports();
         let beacon = reports
@@ -5866,7 +5974,7 @@ mod tests {
     fn the_receiving_lamp_follows_a_burst() {
         let mut air = Air::new(1.0, 0.0005);
         assert!(!air.b.receiving());
-        air.a.beacon().expect("idle");
+        air.a.beacon(None).expect("idle");
         let mut lit = false;
         air.run(30.0, |_, b| {
             lit |= b.receiving();
@@ -6047,7 +6155,7 @@ mod tests {
             air.a.connect("KK4XYZ"),
             Err("this station is answer-only: it takes calls and makes none")
         );
-        assert!(air.a.beacon().is_err());
+        assert!(air.a.beacon(None).is_err());
         assert_eq!(air.a.state(), State::Idle);
         // the other end (also answer-only here) is still called by a station that may call
         let caller = StationConfig {
@@ -6149,7 +6257,7 @@ mod tests {
         air.a.connect("KK4XYZ").expect("idle");
         air.run(30.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected());
-        assert!(air.a.beacon().is_err(), "it beaconed during a session");
+        assert!(air.a.beacon(None).is_err(), "it beaconed during a session");
     }
 
     #[test]

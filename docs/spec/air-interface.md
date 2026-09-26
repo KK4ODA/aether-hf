@@ -544,9 +544,18 @@ station at. A body that stops at the version byte reads as "not measured"; only 
 station sends one, and its call is ignored.
 
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
-id of zero and a body that is one packed callsign. It is how an operator answers "can anybody
+id of zero and this body:
+
+| Offset | Field |
+|---|---|
+| 0–6 | the station's callsign, packed — or the name a host program gave the beacon when one of the station's callsigns is its base, the part before any `-` (VarAC's `KK4ODA-9` for `KK4ODA`) |
+| 7 | capability byte (§7.3): the bandwidth its sender runs — absent from a beacon of before ADR-0024, which a receiver reads as not said |
+
+A receiver of an earlier version reads the callsign and never looks further. It is how an
+operator answers "can anybody
 hear me?" without arranging a contact first, which on HF is most of what a new station needs
-to know. A receiver reports the callsign and the SNR it measured and does nothing else — a
+to know. A receiver reports the callsign (or name), the bandwidth and the SNR it measured and
+does nothing else — a
 beacon is never answered on the air, because a channel where every beacon drew a reply would
 be unusable. It is sent on the tone floor (tone-24), the most robust frame there is, because the
 whole point is to be heard by somebody who cannot yet hear anything else; the floor's frames are

@@ -122,7 +122,7 @@ impl<P: Ptt> Station<P> {
             && !self.transmitting;
         let clear = self.busy.settled() && !self.busy.busy(now);
         if idle && clear {
-            match self.beacon() {
+            match self.beacon(None) {
                 Ok(()) => self.beacons.next_s = now + every,
                 Err(reason) => {
                     self.beacons.every_s = None;

@@ -65,8 +65,10 @@ pub enum HostAction {
     Tune(f64),
     /// Report the transmit level (`TUNE ?`), which the modem answers with `TUNE <dB>`.
     TuneLevel,
-    /// Send an unproto identification frame.
-    CqFrame,
+    /// Send an unproto identification frame, under the name the host gave it: `VarAC`'s CQs
+    /// and beacons are `CQFRAME KK4ODA-9 500` and the like, and the suffix means something
+    /// to the program at the other end (ADR-0024).
+    CqFrame(Option<String>),
 }
 
 /// What the adapter should do with a command: what to say, and what to act on.
@@ -319,7 +321,7 @@ impl HostState {
                 self.cw_id = false;
                 HostOutcome::ok()
             }
-            ("CQFRAME", _) => HostOutcome::acting(HostAction::CqFrame),
+            ("CQFRAME", args) => Self::cq_frame(args),
             ("VERSION", []) => HostOutcome::just(&format!("VERSION {}", version_string())),
             ("BUFFER", []) => HostOutcome::just(&format!("BUFFER {}", self.buffer)),
             ("TUNE", [what]) => Self::tune(what),
@@ -348,6 +350,13 @@ impl HostState {
             }
             _ => HostOutcome::wrong(),
         }
+    }
+
+    /// `CQFRAME <source> <bandwidth>`: a beacon under the name the host gave it (ADR-0024).
+    fn cq_frame(args: &[&str]) -> HostOutcome {
+        HostOutcome::acting(HostAction::CqFrame(
+            args.first().map(|source| (*source).to_owned()),
+        ))
     }
 
     /// The bandwidth a `BW<n>` command names.
@@ -622,6 +631,19 @@ mod tests {
         assert_eq!(narrow.command("BW500").replies, vec!["OK"]);
         assert_eq!(narrow.command("BW2300").replies, vec!["WRONG"]);
         assert_eq!(narrow.command("BW2750").replies, vec!["WRONG"]);
+    }
+
+    #[test]
+    fn cqframe_keeps_the_name_the_host_gave_it() {
+        // VarAC's CQs and beacons are `CQFRAME KK4ODA-9 500`, the suffix its own (ADR-0024)
+        let mut host = state();
+        let outcome = host.command("CQFRAME KK4ODA-9 500");
+        assert_eq!(outcome.replies, vec!["OK"]);
+        assert_eq!(
+            outcome.action,
+            HostAction::CqFrame(Some("KK4ODA-9".to_owned()))
+        );
+        assert_eq!(host.command("CQFRAME").action, HostAction::CqFrame(None));
     }
 
     #[test]
