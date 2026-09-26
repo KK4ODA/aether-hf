@@ -677,7 +677,9 @@ arriving. A called station that hears the request again once it has accepted —
 acceptance was lost — answers with the acceptance again and nothing else: the caller's first
 burst follows the acceptance at once. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
 the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
-burst. A station waiting for the answer to its `DISC` takes no data frame as a burst and does
+burst. An IRS that hears a `POLL` announced and cannot decode it answers all the same, once its
+quiet after the frame has run out, and the poll's sender waits for an answer that late
+(ADR-0028). A station waiting for the answer to its `DISC` takes no data frame as a burst and does
 not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving station that wants
 to close sends its `DISC` between bursts; the sender of a `TURN` waits for the peer's first burst
 as long as the longest data frame there is, and past any frame it hears arriving; and a sending

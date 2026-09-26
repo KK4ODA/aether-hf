@@ -992,6 +992,94 @@ def test_the_iss_waits_for_an_answer_in_the_family_the_irs_last_heard(
     assert after_floor >= ordinary + longer - 1e-9, (ordinary, after_floor)
 
 
+def _polling(timing: PhyTiming) -> LinkEngine:
+    """A sender on the ordinary layouts whose last acknowledgement came on the tone floor,
+    at 100 s: the other station still hears the floor, and answers there."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.now = Role.ISS, State.CONNECTED, 100.0
+    a.rate.seed(24.0)
+    a._recommended = a.rate.recommend()
+    a._peer_floor = True
+    assert not a._control_floor()
+    return a
+
+
+def test_a_polls_wait_covers_an_answer_to_a_poll_heard_and_not_decoded() -> None:
+    """ADR-0027 §7 (1), ADR-0028: a receiving station that hears a poll's preamble and cannot
+    decode the poll answers it all the same, once its quiet after the frame has run out
+    (``on_preamble``'s acknowledgement deadline) — 0.99 s after the poll's end when it last
+    heard the floor, and then a floor acknowledgement of 3.2 s. The sender waited as if the
+    answer began a turnaround after its poll: it re-polled 0.2 s before the answer ended, and
+    every round collided until the session ended with "no response" (the chat bench, 500 Hz,
+    ITU Good, −6 dB). The wait now covers that quiet too, for either family the answer may
+    come in."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    timing = phy_timing(NARROW_500)
+    a = _polling(timing)
+    a._send_poll()
+    poll_end = a._tx_busy_until
+    floor_quiet = timing.floor_preamble_detect_s
+    assert floor_quiet is not None
+    answer_end = (
+        poll_end
+        + floor_quiet
+        + a.cfg.burst_gap_s
+        + timing.turnaround_s
+        + timing.control_frame_s_for(True)
+    )
+    assert a._deadlines["wait"] >= answer_end + timing.detect_latency_s
+    # a PHY that reports no preambles gives the receiving station nothing to answer: the
+    # poll's wait is what it always was
+    blind = phy_timing(NARROW_500, start_of_frame=False)
+    b = _polling(blind)
+    b._send_poll()
+    assert b._deadlines["wait"] == pytest.approx(
+        b._tx_busy_until + b._response_wait(blind.control_frame_s_for(True))
+    )
+
+
+def _polls_unreadable(frame: TxFrame) -> float:
+    """A pipe's ``frame_snr_offset``: every POLL arrives far below any threshold — its
+    preamble is heard, the frame never decodes; everything else as the channel gives."""
+    if frame.container is not Container.CONTROL:
+        return 0.0
+    return -80.0 if ControlFrame.decode(frame.payload).kind is ControlKind.POLL else 0.0
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_session_whose_polls_never_decode_lives_on_their_late_answers(air: str) -> None:
+    """The chat bench's trace (500 Hz, ITU Good, −6 dB, ADR-0027 §7 (1), ADR-0028), made
+    certain: the call and its acceptance go on the tone floor, the confirming poll on the
+    ordinary layouts the acceptance's SNR puts the sender on, and the called station, which
+    still hears the floor and cannot read the poll, answers it after the floor's quiet with a
+    floor acknowledgement. Waited for as if it began a turnaround after the poll, the answer
+    was run into by the repeat, every repeat by the next answer, and the sender gave up — "no
+    response" — on a path that carried everything else. Now the answer is heard, the
+    keepalive polls live the same way, and the message sent later arrives."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    modes = WIDE if air == "2300" else NARROW
+    timing = phy_timing(modes.params)
+    cfg = LinkConfig(max_mode=modes.n_rungs - 1)
+    a = LinkEngine("W4ODA", timing, cfg, seed=1)
+    b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=4, frame_snr_offset=_polls_unreadable)
+    a.connect("KK4XYZ")
+    sim.run(until=90)
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED, sim.events(0)
+    assert b._peer_floor, "the called station should still hear the floor"
+    assert a.stats.ack_timeouts == 0
+    message = b"sent after a minute of polls nobody could read"
+    a.send(message)
+    a.disconnect()
+    sim.run(until=sim.t + 120)
+    assert sim.delivered(1) == message
+    assert "disconnected:closed" in sim.events(0)
+
+
 def test_a_caller_does_not_call_over_a_frame_it_hears_arriving(timing: PhyTiming) -> None:
     """A called station whose acceptance was lost is connected, and answers the undecodable
     preamble of the caller's next try with an acknowledgement on the floor; the caller's try
