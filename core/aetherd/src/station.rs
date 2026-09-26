@@ -20,8 +20,10 @@
 //! occupancy, and letting it into the noise-floor estimate would blind the detector for
 //! several seconds afterwards.
 
+mod beacons;
 mod datagrams;
 mod fieldtest;
+pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
     ReceivedDatagram,
@@ -849,6 +851,8 @@ pub struct Station<P: Ptt> {
     last_gate: Option<(f64, Decision)>,
     /// KISS clients' datagrams: waiting, on the air, and heard (ADR-0019).
     datagrams: datagrams::Datagrams,
+    /// The repeating beacon's timer and what the beacons did.
+    beacons: beacons::Beacons,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -902,7 +906,7 @@ impl<P: Ptt> Station<P> {
             passband_hz: params.occupied_bandwidth_hz(),
             ..config.busy
         });
-        Self {
+        let mut station = Self {
             engine,
             receiver: StreamingReceiver::new(params, 6.0, true),
             decoder: Rc::new(RefCell::new(Modem::new(params, false))),
@@ -967,9 +971,13 @@ impl<P: Ptt> Station<P> {
             last_report: None,
             last_gate: None,
             datagrams: datagrams::Datagrams::new(seed),
+            beacons: beacons::Beacons::default(),
             stats: StationStats::default(),
             config,
-        }
+        };
+        // a speed set above what the rules allow is sent at their limit, and said so at start
+        station.note_identifier_speed();
+        station
     }
 
     // ── inspection ────────────────────────────────────────────────────
@@ -1508,6 +1516,62 @@ impl<P: Ptt> Station<P> {
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
         self.set_regulatory(config.regulatory.settings());
+        // the identifier: on, off, its speed and interval, from the next transmission on
+        let tone_hz = self
+            .config
+            .cw_id
+            .map_or(CwId::default().tone_hz, |cw| cw.tone_hz);
+        self.config.cw_id = config.radio.cw_id.then(|| CwId {
+            wpm: config.radio.cw_id_wpm,
+            tone_hz,
+            ..CwId::default()
+        });
+        self.config.cw_id_interval_s = config.radio.cw_id_interval_s;
+        self.refresh_burst_cap(self.now());
+        self.note_identifier_speed();
+    }
+
+    /// The speed the Morse identifier is sent at: the one set, or the rules' limit on an
+    /// automatic identifier when that is lower (§97.119(b)(1): 20 wpm).
+    #[must_use]
+    pub fn identifier_wpm(&self) -> Option<f64> {
+        let cw = self.config.cw_id?;
+        Some(
+            self.policy
+                .cw_id_max_wpm()
+                .map_or(cw.wpm, |max| cw.wpm.min(max)),
+        )
+    }
+
+    /// Say once, when it is so, that the identifier goes slower than set. ND1J set a faster
+    /// speed and heard the same 20 wpm every time: the rules' limit was applied and never
+    /// mentioned.
+    pub fn note_identifier_speed(&mut self) {
+        let (Some(cw), Some(sent)) = (self.config.cw_id, self.identifier_wpm()) else {
+            return;
+        };
+        if sent < cw.wpm {
+            self.note(
+                "identifier",
+                &format!(
+                    "set to {} wpm, sent at {sent} wpm: the rules limit an automatically keyed                      identifier to {sent} wpm (§97.119(b)(1))",
+                    cw.wpm
+                ),
+            );
+        }
+    }
+
+    /// The identifier's part of `status`: whether it is on, the speed set and the speed
+    /// sent, and the interval.
+    #[must_use]
+    pub fn identifier_status(&self) -> serde_json::Value {
+        serde_json::json!({
+            "enabled": self.config.cw_id.is_some(),
+            "wpm": self.config.cw_id.map(|cw| cw.wpm),
+            "sent_wpm": self.identifier_wpm(),
+            "max_wpm": self.policy.cw_id_max_wpm(),
+            "interval_s": self.config.cw_id_interval_s,
+        })
     }
 
     /// New regulatory settings, from the next transmission on: the policy is loaded again
@@ -2032,6 +2096,7 @@ impl<P: Ptt> Station<P> {
         }
         self.pump();
         self.advance_test();
+        self.advance_beacons(now);
         Ok(())
     }
 
@@ -2235,7 +2300,7 @@ impl<P: Ptt> Station<P> {
                 self.busy.mark_frame(now, detected);
                 self.note(
                     "beacon",
-                    &format!("{caller} at {:.1} dB", decoded.frame.snr_3k_db()),
+                    &format!("heard {caller} at {:.1} dB", decoded.frame.snr_3k_db()),
                 );
                 continue;
             }
@@ -2710,6 +2775,9 @@ impl<P: Ptt> Station<P> {
         };
 
         self.record_sent(&frames, now);
+        if is_beacon(&frames) {
+            self.beacon_sent();
+        }
         self.on_air_frames = frames.first().map(|frame| {
             let timing = self.engine.timing();
             let floor = match frame.container {
@@ -3580,6 +3648,13 @@ impl<P: Ptt> Station<P> {
         }
         self.busy.settled() && !self.busy.busy(now)
     }
+}
+
+/// Whether a queued burst is a beacon: one data frame of kind `Beacon`.
+fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
+    frames.len() == 1
+        && frames[0].container == Container::Data
+        && decode_data(&frames[0].payload).is_ok_and(|(header, _)| header.kind == DataKind::Beacon)
 }
 
 /// Whether a queued burst is one control frame of this kind.
@@ -5509,7 +5584,7 @@ mod tests {
         assert_eq!(air.b.stats.beacons_heard, 1, "the beacon was not heard");
         let events = air.b.take_events();
         assert!(
-            events.iter().any(|e| e.starts_with("beacon:W4ODA")),
+            events.iter().any(|e| e.starts_with("beacon:heard W4ODA")),
             "the callsign was not reported: {events:?}"
         );
         assert!(
@@ -5520,6 +5595,150 @@ mod tests {
         assert_eq!(air.b.stats.transmissions, 0, "it answered a beacon");
         assert_eq!(air.b.state(), State::Idle);
         assert_eq!(air.a.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_beacon_repeats_on_its_timer_and_says_what_it_did() {
+        // ND1J, 2026-09-25: where are beacons sent shown, and how does one make a beacon
+        // repeat every so many minutes?
+        let mut station = idle_station();
+        // a busy detector that has not listened yet holds a beacon back: let it settle
+        run_alone(&mut station, 4.0, |_| false);
+        station.take_events();
+        assert!(
+            station.beacon_every(Some(60.0)).is_err(),
+            "a minute is too often"
+        );
+        station.beacon_every(Some(600.0)).expect("ten minutes");
+        run_alone(&mut station, 10.0, |s| {
+            s.stats.beacons_sent > 0 && s.quiescent()
+        });
+        assert_eq!(station.stats.beacons_sent, 1, "the first goes at once");
+        let events = station.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e == "beacon:sent; the next in 10 min"),
+            "the beacon that went out was not said: {events:?}"
+        );
+        assert_eq!(station.beacon_status()["sent"], 1);
+        assert!(station.beacon_status()["last_sent_ms"].is_u64());
+        // not again until it falls due
+        run_alone(&mut station, 5.0, |_| false);
+        assert_eq!(station.stats.beacons_sent, 1);
+        station.beacons.next_s = station.now();
+        run_alone(&mut station, 10.0, |s| {
+            s.stats.beacons_sent > 1 && s.quiescent()
+        });
+        assert_eq!(station.stats.beacons_sent, 2);
+
+        // one the station could not send within the window is skipped, said so, and the next
+        // keeps to the interval rather than catching up
+        station.beacons.next_s = station.now() - beacons::BEACON_WINDOW_S - 1.0;
+        station.pending.push_back(Outgoing::Pause {
+            seconds: 30.0,
+            until_s: None,
+        });
+        station.take_events();
+        run_alone(&mut station, 1.0, |_| false);
+        assert_eq!(station.beacons.skipped, 1);
+        assert!(station.beacons.next_s > station.now());
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("beacon:skipped: the station was busy")),
+        );
+        assert_eq!(station.stats.beacons_sent, 2);
+
+        // stopped, it stops
+        station.pending.clear();
+        station.beacon_every(None).expect("stops");
+        station.beacons.next_s = station.now();
+        run_alone(&mut station, 5.0, |_| false);
+        assert_eq!(station.stats.beacons_sent, 2);
+        assert!(station.beacon_status()["every_s"].is_null());
+    }
+
+    #[test]
+    fn a_repeating_beacon_needs_a_control_operator() {
+        use crate::regulatory::ControlMode;
+        // a beacon may be automatically controlled only on 28.20-28.30 MHz and above
+        // (§97.203(g)); an answer-only station sends none at all
+        let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Automatic));
+        let refusal = station.beacon_every(Some(900.0)).expect_err("automatic");
+        assert!(refusal.contains("§97.203(g)"), "{refusal}");
+        let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Local));
+        station.beacon_every(Some(900.0)).expect("local control");
+        // the rules changing under it stop it at the next one due
+        station.config.regulatory.control = Some(ControlMode::Automatic);
+        run_alone(&mut station, 1.0, |_| false);
+        assert!(station.beacon_status()["every_s"].is_null());
+        assert_eq!(station.stats.beacons_sent, 0);
+        let mut station = idle_station();
+        station.config.answer_only = true;
+        assert!(station.beacon_every(Some(900.0)).is_err());
+    }
+
+    #[test]
+    fn the_identifier_says_when_the_rules_slow_it() {
+        use crate::regulatory::ControlMode;
+        // ND1J set a faster Morse speed and heard the same 20 wpm whatever he set: the US
+        // rules' limit on an automatically keyed identifier (§97.119(b)(1)), never mentioned
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId {
+                    wpm: 30.0,
+                    ..CwId::default()
+                }),
+                regulatory: under_us_rules(14_105_000, ControlMode::Local),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert_eq!(station.identifier_wpm(), Some(20.0));
+        let events = station.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("identifier:set to 30 wpm, sent at 20 wpm")),
+            "{events:?}"
+        );
+        let status = station.identifier_status();
+        assert_eq!(status["wpm"], 30.0);
+        assert_eq!(status["sent_wpm"], 20.0);
+        // slower than the limit is sent as set, and said nothing of
+        station.config.cw_id = Some(CwId {
+            wpm: 15.0,
+            ..CwId::default()
+        });
+        assert_eq!(station.identifier_wpm(), Some(15.0));
+        station.note_identifier_speed();
+        assert!(station.take_events().is_empty());
+    }
+
+    #[test]
+    fn the_identifier_follows_its_settings_without_a_restart() {
+        let mut station = idle_station();
+        assert!(station.config.cw_id.is_none());
+        let mut config = crate::config::Config::parse(
+            "callsign = \"W4ODA\"
+",
+        )
+        .expect("parses");
+        config.radio.cw_id = true;
+        config.radio.cw_id_wpm = 18.0;
+        config.radio.cw_id_interval_s = 300.0;
+        assert!(crate::config::LIVE_KEYS.contains(&"radio.cw_id_wpm"));
+        station.apply_live(&config);
+        assert_eq!(station.config.cw_id.map(|cw| cw.wpm), Some(18.0));
+        assert!((station.config.cw_id_interval_s - 300.0).abs() < 1e-9);
+        config.radio.cw_id = false;
+        station.apply_live(&config);
+        assert!(station.config.cw_id.is_none());
     }
 
     #[test]
