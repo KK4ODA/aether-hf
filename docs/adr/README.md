@@ -37,3 +37,4 @@ context → decision → alternatives considered → consequences.
 | [0030](0030-a-sender-waits-out-a-frame-it-hears-arriving.md) | A sender waits out a frame it hears arriving — no burst or poll repeated over its late answer | accepted |
 | [0031](0031-a-re-encoded-frame-stays-unacknowledged.md) | A frame re-encoded and left out of its burst stays unacknowledged — no frame lost, no sender silenced, no session closed with a frame missing | accepted |
 | [0032](0032-an-unanswered-poll-steps-down.md) | An unanswered poll steps the recommendation down, from the second in a row — the polls reach the tone floor within the retries | accepted |
+| [0033](0033-the-link-timeout-follows-the-link-down.md) | The link timeout follows the link down to the floor — reckoned again whenever a station sends | accepted |
