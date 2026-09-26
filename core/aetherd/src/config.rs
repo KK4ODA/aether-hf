@@ -71,10 +71,27 @@ pub enum PttConfig {
         #[serde(default = "default_gpio")]
         gpio: u8,
     },
+    /// The host program keys the radio: VARA's way with VarAC and similar programs, which own
+    /// the radio's CAT port and key it when the modem says `PTT ON` (ADR-0025). Aether opens
+    /// no port on the radio and sends `PTT ON`/`PTT OFF` on the host interface; it can read
+    /// no dial, so a station keyed this way usually runs with no regulatory profile, as VARA
+    /// does, the operator checking every transmission.
+    Host {
+        /// Milliseconds from `PTT ON` to the first audio: the time the host program takes to
+        /// key the radio. VARA allows for 100.
+        #[serde(default = "default_host_lead")]
+        lead_ms: u32,
+    },
 }
 
 fn default_gpio() -> u8 {
     3
+}
+
+/// A little over VARA's 100 ms: a host program keying over CAT answers `PTT ON` in tens of
+/// milliseconds, and the radio switches in about as many again.
+fn default_host_lead() -> u32 {
+    150
 }
 
 fn default_rigctld() -> String {
@@ -840,7 +857,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -859,6 +876,7 @@ pub const MIGRATIONS: &[Migration] = &[
     betas_follow_betas,
     regulatory_settings,
     kiss_port,
+    host_keying,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -977,6 +995,12 @@ fn regulatory_settings(table: &mut toml::Table) {
 /// copy kept before this version brought the file forward (`<name>.bak-v6`) instead of
 /// leaving the station unable to start.
 fn kiss_port(_table: &mut toml::Table) {}
+
+/// Schema 7 → 8, keying by the host program (ADR-0025): nothing moves — `[ptt] kind =
+/// "host"` is a new choice. The step exists for going back, as the KISS port's did: a version
+/// from before it cannot read a file keyed that way, and the new number sends it to the copy
+/// kept before this version brought the file forward (`<name>.bak-v7`).
+fn host_keying(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1574,7 +1598,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 7
+schema_version = 8
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1611,6 +1635,9 @@ tx_level = 0.25
 # kind = "cm108"                      # a DRA, URI or other CM108-class interface's GPIO pin
 # device = "..."                      # which one, when there are several: its path or name
 # gpio = 3                            # the pin wired to PTT (3 on the DRA and URI boards)
+# kind = "host"                       # the host program keys the radio on PTT ON, as VarAC
+#                                     # keys VARA's: no port here (ADR-0025)
+# lead_ms = 150                       # PTT ON to the first audio: the host's time to key
 kind = "rigctld"                      # Hamlib's rig control daemon
 address = "127.0.0.1:4532"
 
@@ -1782,6 +1809,18 @@ mod tests {
             PttConfig::Rigctld {
                 address: "127.0.0.1:4532".into()
             }
+        );
+
+        // the host program keys the radio (ADR-0025), a little over VARA's 100 ms after PTT ON
+        let host = Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"host\"\n").expect("host");
+        assert_eq!(host.ptt, PttConfig::Host { lead_ms: 150 });
+        let slower = Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"host\"\nlead_ms = 300\n")
+            .expect("host with a lead");
+        assert_eq!(slower.ptt, PttConfig::Host { lead_ms: 300 });
+        assert!(
+            Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"host\"\nlead_ms = 5000\n")
+                .is_err(),
+            "five seconds of dead air before every burst was accepted"
         );
 
         let gpio = Config::parse("callsign = \"W4ODA\"\n[ptt]\nkind = \"cm108\"\n").expect("cm108");

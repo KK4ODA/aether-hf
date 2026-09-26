@@ -480,6 +480,11 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         cw_id_interval_s: config.radio.cw_id_interval_s,
         operator: config.operator.clone(),
         regulatory: regulatory_settings(config),
+        // a host program keys the radio when it hears PTT ON, and the audio waits for it
+        key_lead_s: match config.ptt {
+            PttConfig::Host { lead_ms } => f64::from(lead_ms) / 1000.0,
+            _ => StationConfig::default().key_lead_s,
+        },
         ..StationConfig::default()
     }
 }
@@ -1483,6 +1488,8 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
         PttConfig::Cm108 { device, gpio } => {
             Box::new(aetherd::ptt::GpioPtt::open(device.as_deref(), *gpio)?)
         }
+        // the host program keys the radio when it hears PTT ON (ADR-0025): no port here
+        PttConfig::Host { .. } => Box::new(aetherd::ptt::HostKeyed::default()),
     })
 }
 

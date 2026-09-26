@@ -1,0 +1,32 @@
+# As beta.68 wrote a CAT-keyed station on 6 m: schema 7, the last before keying by the host
+# program (ADR-0025).
+schema_version = 7
+callsign = "W4ODA"
+
+[operator]
+grid = "EM73tv"
+power_w = 50.0
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "cat"
+port = "COM6"
+protocol = "yaesu"
+baud = 38400
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+cw_id = true
+cw_id_wpm = 20.0
+cw_id_interval_s = 600.0
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "technician"
+sideband = "usb"

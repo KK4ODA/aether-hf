@@ -350,8 +350,10 @@ impl Profile {
                     description,
                 });
             }
-            PttConfig::None | PttConfig::Rigctld { .. } | PttConfig::Cm108 { device: None, .. } => {
-            }
+            PttConfig::None
+            | PttConfig::Rigctld { .. }
+            | PttConfig::Host { .. }
+            | PttConfig::Cm108 { device: None, .. } => {}
         }
         Self {
             format: FORMAT.to_owned(),

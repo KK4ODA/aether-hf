@@ -90,6 +90,12 @@ What a request sets in motion is sent before its response: a client holding the 
 of whatever it asks for next. What happens later — a call given up on, a session closed in
 order — comes when it happens.
 
+A station keyed by its host program (`[ptt] kind = "host"`, ADR-0025) starts nothing while no
+host program is attached, since nobody would key the radio: `connect`, `beacon`, `beacon.every`,
+`probe`, `test.start`, `tune`, `drive.set`, `ptt.test` and `datagram.send` fail with code
+`refused` (retryable) and a message that says so. Stopping — a `0` for a tone, drive bursts or
+a repeating beacon — is always allowed.
+
 A request the regulatory policy refuses — a `connect`, `probe`, `beacon`, `test.start`, `tune`,
 `drive.set` or `ptt.test` the rules do not allow here — fails with code `regulatory`, a message
 that says why in a sentence, and the whole decision in `result.decision` (§4.10). One that an

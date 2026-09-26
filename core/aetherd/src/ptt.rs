@@ -150,6 +150,31 @@ impl Ptt for NullPtt {
     }
 }
 
+/// The host program keys the radio (ADR-0025): VARA's way with VarAC and similar programs,
+/// which own the radio's CAT port and key it on the `PTT ON` the host interface sends when
+/// this station keys. Nothing is opened here; the key's state is the station's own record.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostKeyed {
+    /// Whether `key` was the last thing called.
+    pub keyed: bool,
+}
+
+impl Ptt for HostKeyed {
+    fn key(&mut self) -> Result<(), PttError> {
+        self.keyed = true;
+        Ok(())
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        self.keyed = false;
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        "the host program (it keys the radio on PTT ON)".to_owned()
+    }
+}
+
 /// A keying interface that could not be opened, kept so the daemon can start anyway.
 ///
 /// Refusing to start over a serial port that is not there traps the operator: the Setup

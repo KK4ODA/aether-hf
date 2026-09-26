@@ -401,7 +401,48 @@ pub fn dispatch_with<P: Ptt>(
         }
         _ => {}
     }
+    if let Some(refusal) = daemon
+        .as_deref()
+        .and_then(|daemon| unkeyed_without_a_host(daemon, request))
+    {
+        return refusal;
+    }
     dispatch_station(station, request)
+}
+
+/// Why a station keyed by its host program starts nothing with no host program attached
+/// (ADR-0025).
+pub const NO_HOST_TO_KEY: &str = "This station is keyed by the host program, and none is \
+    attached: nothing would reach the air. Start the host program (VarAC, Winlink Express), \
+    or choose another way to key the radio in Setup, step 2.";
+
+/// A station keyed by its host program transmits only while one is attached: with none,
+/// the audio would go to a radio nobody keys. What the host program itself asks for comes
+/// while it is attached, so only the panel's and the KISS programs' requests meet this.
+fn unkeyed_without_a_host(daemon: &DaemonState, request: &Request) -> Option<Response> {
+    if !matches!(daemon.config.ptt, crate::config::PttConfig::Host { .. }) {
+        return None;
+    }
+    let attached = daemon
+        .host
+        .as_ref()
+        .is_some_and(|host| host.connected.load(std::sync::atomic::Ordering::Relaxed));
+    let params = &request.params;
+    // zero is "stop", for a tone, drive bursts and a repeating beacon: always allowed
+    let stopping = |key: &str| params.get(key).and_then(Value::as_f64) == Some(0.0);
+    let transmits = match request.method.as_str() {
+        "connect" | "beacon" | "probe" | "test.start" | "ptt.test" | "datagram.send" => true,
+        "tune" => !stopping("duration_s"),
+        "drive.set" => !stopping("bursts"),
+        "beacon.every" => !stopping("minutes") && !params["minutes"].is_null(),
+        _ => false,
+    };
+    (transmits && !attached).then(|| {
+        Response::failed(
+            request.id.clone(),
+            ApiError::new("refused", NO_HOST_TO_KEY, true),
+        )
+    })
 }
 
 /// The KISS server's state, or a disabled one's when there is no daemon.
@@ -2179,6 +2220,58 @@ mod tests {
             })
         };
         daemon
+    }
+
+    #[test]
+    fn a_station_keyed_by_its_host_starts_nothing_with_no_host_attached() {
+        // with nobody to key the radio, the audio would go to a radio nobody keys (ADR-0025)
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.config.ptt = crate::config::PttConfig::Host { lead_ms: 150 };
+        let request = |method: &str, params: Value| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params,
+        };
+        for (method, params) in [
+            ("connect", json!({"remote": "KK4XYZ"})),
+            ("beacon", json!({})),
+            ("probe", json!({"remote": "KK4XYZ"})),
+            ("tune", json!({"duration_s": 3.0})),
+            ("beacon.every", json!({"minutes": 30})),
+        ] {
+            let response = dispatch_with(&mut station, Some(&mut daemon), &request(method, params));
+            assert!(!response.ok, "{method} was accepted");
+            let error = response.error.expect("error");
+            assert_eq!(error.message, NO_HOST_TO_KEY, "{method}");
+        }
+        // stopping, and anything that does not transmit, is always allowed
+        for (method, params) in [
+            ("tune", json!({"duration_s": 0.0})),
+            ("beacon.every", json!({"minutes": 0})),
+            ("status", json!({})),
+        ] {
+            let response = dispatch_with(&mut station, Some(&mut daemon), &request(method, params));
+            assert!(
+                response
+                    .error
+                    .is_none_or(|error| error.message != NO_HOST_TO_KEY),
+                "{method} was refused for want of a host"
+            );
+        }
+        // a station that keys the radio itself is not asked for a host
+        daemon.config.ptt = crate::config::PttConfig::None;
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &request("beacon", json!({})),
+        );
+        assert!(
+            response
+                .error
+                .is_none_or(|error| error.message != NO_HOST_TO_KEY),
+            "a station keying the radio itself was asked for a host"
+        );
     }
 
     #[test]
