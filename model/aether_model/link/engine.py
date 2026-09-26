@@ -561,7 +561,13 @@ class LinkEngine:
         self.now = max(self.now, now)
         if frame.container is Container.CONTROL:
             self._on_control(frame)
-        else:
+        elif not (self.state is State.DISCONNECTING and self.role is Role.ISS):
+            # A sender waiting for the answer to its DISC has no burst to acknowledge. What it
+            # hears is the answer's company — the other station's Morse identifier, which a
+            # detector can take for a data frame — or a burst from a peer that missed the
+            # DISC and will hear the next one. Taken as a burst, it armed an acknowledgement,
+            # and a leaving station's acknowledgement is another DISC: ND1J, 2026-09-25, two
+            # in one keying, the second over his identifier.
             self._on_data(frame)
 
     def on_preamble(self, t_start: float, now: float, frame_s: float | None = None) -> None:
@@ -592,6 +598,12 @@ class LinkEngine:
                 if timer in self._deadlines:
                     self._deadlines[timer] = max(self._deadlines[timer], clear)
             return
+        if self.state is State.DISCONNECTING and "wait" in self._deadlines:
+            # Nor does a leaving station repeat its DISC over a frame it hears arriving: it
+            # may be the answer, late, and a repeat keyed over it is heard by nobody.
+            length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
+            clear = t_start + length + self._response_wait(0.0)
+            self._deadlines["wait"] = max(self._deadlines["wait"], clear)
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
             return
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
