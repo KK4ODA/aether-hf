@@ -247,6 +247,10 @@ impl Station {
 /// when it started ([`TwoStationSim::with_unheard`]).
 pub type Unheard = Box<dyn Fn(usize, Container, f64) -> bool>;
 
+/// Decibels added to the channel SNR for one frame
+/// ([`TwoStationSim::with_frame_snr_offset`]).
+pub type FrameSnrOffset = Box<dyn Fn(&TxFrame) -> f64>;
+
 /// Two engines driven to quiescence over a lossy half-duplex pipe.
 pub struct TwoStationSim {
     stations: [Station; 2],
@@ -272,6 +276,9 @@ pub struct TwoStationSim {
     key_limit_s: Option<f64>,
     /// Frames a receiver never detects ([`with_unheard`](Self::with_unheard)).
     unheard: Option<Unheard>,
+    /// Decibels added to the channel SNR for one frame
+    /// ([`with_frame_snr_offset`](Self::with_frame_snr_offset)).
+    frame_snr_offset: Option<FrameSnrOffset>,
 }
 
 impl TwoStationSim {
@@ -293,6 +300,7 @@ impl TwoStationSim {
             floor_reading_cap_db: None,
             key_limit_s: None,
             unheard: None,
+            frame_snr_offset: None,
         }
     }
 
@@ -303,6 +311,16 @@ impl TwoStationSim {
     #[must_use]
     pub fn with_unheard(mut self, unheard: Unheard) -> Self {
         self.unheard = Some(unheard);
+        self
+    }
+
+    /// Decibels added to the channel SNR for one frame, as the model's `frame_snr_offset`: the
+    /// frame is judged and reported at the channel's SNR plus the offset, and its preamble is
+    /// heard all the same — a frame the receiver acquires and cannot decode, when the offset
+    /// is deep enough.
+    #[must_use]
+    pub fn with_frame_snr_offset(mut self, offset: FrameSnrOffset) -> Self {
+        self.frame_snr_offset = Some(offset);
         self
     }
 
@@ -529,7 +547,11 @@ impl TwoStationSim {
                 table.get(frame.mode).copied().unwrap_or(0.0)
             }
         };
-        let snr_db = self.snr_at(f64::midpoint(t0, t1));
+        let offset_db = self
+            .frame_snr_offset
+            .as_ref()
+            .map_or(0.0, |offset| offset(frame));
+        let snr_db = self.snr_at(f64::midpoint(t0, t1)) + offset_db;
         let reported_db = match self.floor_reading_cap_db {
             Some(cap) if floor => snr_db.min(cap),
             _ => snr_db,

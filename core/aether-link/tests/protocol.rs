@@ -1644,6 +1644,70 @@ fn the_iss_waits_out_the_irs_quiet_after_a_floor_burst() {
     }
 }
 
+/// A pipe's frame SNR offset: every POLL arrives far below any threshold — its preamble is
+/// heard, the frame never decodes; everything else as the channel gives.
+fn polls_unreadable() -> aether_link::sim::FrameSnrOffset {
+    use aether_link::{ControlFrame, ControlKind, TxFrame};
+    Box::new(|frame: &TxFrame| {
+        let poll = frame.container == Container::Control
+            && ControlFrame::decode(&frame.payload).is_ok_and(|c| c.kind == ControlKind::Poll);
+        if poll { -80.0 } else { 0.0 }
+    })
+}
+
+#[test]
+fn a_session_whose_polls_never_decode_lives_on_their_late_answers() {
+    // The chat bench's trace (500 Hz, ITU Good, −6 dB, ADR-0027 §7 (1), ADR-0028), made
+    // certain: the call and its acceptance go on the tone floor, the confirming poll on the
+    // ordinary layouts the acceptance's SNR puts the sender on, and the called station, which
+    // still hears the floor and cannot read the poll, answers it after the floor's quiet with
+    // a floor acknowledgement. Waited for as if it began a turnaround after the poll, the
+    // answer was run into by the repeat, every repeat by the next answer, and the sender gave
+    // up — "no response" — on a path that carried everything else. Now the answer is heard,
+    // the keepalive polls live the same way, and the message sent later arrives
+    for params in [WIDE_2300, NARROW_500] {
+        let t = air_timing(params, true);
+        let config = LinkConfig {
+            max_mode: air_interface(params).n_rungs() - 1,
+            ..LinkConfig::default()
+        };
+        let (mut a, b) = pair(&t, &config);
+        a.connect("KK4XYZ").expect("idle");
+        let mut sim = TwoStationSim::new(a, b, 10.0, 4).with_frame_snr_offset(polls_unreadable());
+        sim.run(90.0, 3.0);
+        assert_eq!(
+            sim.engine(0).state(),
+            State::Connected,
+            "{:?}",
+            sim.events(0)
+        );
+        assert_eq!(
+            sim.engine(1).state(),
+            State::Connected,
+            "{:?}",
+            sim.events(1)
+        );
+        // the called station answered every poll on the floor, and the caller heard it
+        let answers = sim
+            .frames_sent(1)
+            .iter()
+            .filter(|f| f.container == Container::Control);
+        assert!(answers.clone().count() > 1 && answers.clone().all(|f| f.floor));
+        assert_eq!(sim.engine(0).stats.ack_timeouts, 0);
+        let message = b"sent after a minute of polls nobody could read";
+        sim.engine_mut(0).send(message);
+        sim.engine_mut(0).disconnect();
+        let until = sim.t + 120.0;
+        sim.run(until, 3.0);
+        assert_eq!(sim.delivered(1), message.as_slice(), "{:?}", sim.events(0));
+        assert!(
+            sim.events(0).iter().any(|e| e == "disconnected:closed"),
+            "{:?}",
+            sim.events(0)
+        );
+    }
+}
+
 #[test]
 fn a_receiving_station_leaves_at_once_when_asked() {
     // KE4QCM, 2026-09-25: five sessions ended with Abort. On the receiving side Disconnect
