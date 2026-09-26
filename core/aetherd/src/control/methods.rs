@@ -129,13 +129,22 @@ pub struct DaemonState {
     /// How the configuration had to be read to start: from the copy kept before a newer
     /// version brought it forward, when that version's file is one this cannot read.
     pub config_note: Option<String>,
-    /// What the machine reports as audio devices and serial ports, for the bundle.
+    /// How the machine's audio devices and serial ports are listed.
     ///
     /// A function rather than a call, because enumerating devices goes through the
     /// platform's audio API, and on a machine with no audio service at all — a CI runner —
     /// that has been seen to crash the process rather than return an error. The tests
-    /// substitute a list; the daemon uses [`device_inventory`].
+    /// substitute a list; the daemon uses [`device_inventory`], on a thread of its own
+    /// ([`Self::device_list`]).
     pub devices: fn() -> Value,
+    /// The last listing of the devices, made off the run loop: read by everything that
+    /// checks against them, refreshed at start and whenever a client asks for the list.
+    pub device_list: crate::devices::DeviceList,
+    /// How many listings had finished when the clients were last given one: the run loop
+    /// publishes a `devices` event when another finishes with a different list.
+    pub devices_told: u64,
+    /// The list the clients were last given.
+    pub devices_last_told: Option<Value>,
     /// Whether a supervisor — the desktop shell, systemd — will start this daemon again
     /// when it exits asking to be restarted. `AETHERD_SUPERVISED=1` in the environment says
     /// so; a daemon run from a terminal has nobody to do it, and the panel must not offer
@@ -202,6 +211,9 @@ impl DaemonState {
             audio_fault: None,
             config_note: None,
             devices: device_inventory,
+            device_list: crate::devices::DeviceList::default(),
+            devices_told: 0,
+            devices_last_told: None,
             supervised: std::env::var_os("AETHERD_SUPERVISED").is_some_and(|v| v == "1"),
             heard: crate::heard::HeardList::open(Some(path.with_file_name("heard.json"))),
             sessions: crate::sessions::SessionLog::open(Some(path.with_file_name("sessions.json"))),
@@ -219,6 +231,47 @@ impl DaemonState {
             profiles_changed: false,
             path,
         }
+    }
+
+    /// The machine's devices as last listed, for everything that checks against them.
+    ///
+    /// The daemon lists at start and whenever a client asks for the list, on a thread of its
+    /// own ([`crate::devices`]): listing on the run loop held the modem still for seconds at
+    /// every profile switch. Before the first listing has finished this waits for it, up to
+    /// [`crate::devices::FIRST_WAIT`] — at start only; a listing still not there reads as one
+    /// that could not be taken, which checks nothing. A daemon that began no listing — a
+    /// test's — lists here, with the substitute the test put in [`Self::devices`].
+    #[must_use]
+    pub fn inventory(&self) -> Value {
+        if !self.device_list.begun() {
+            return (self.devices)();
+        }
+        self.device_list
+            .last(crate::devices::FIRST_WAIT)
+            .unwrap_or_else(|| json!({ "error": "the devices are still being listed" }))
+    }
+
+    /// Begin listing the devices again in the background; the clients are given the new
+    /// list as a `devices` event when it finishes, if it differs.
+    pub fn refresh_devices(&self) {
+        self.device_list.refresh(self.devices);
+    }
+
+    /// A listing that finished since the clients were last given one and differs from it,
+    /// to publish as the `devices` event; `None` when there is nothing new.
+    pub fn take_new_devices(&mut self) -> Option<Value> {
+        let finished = self.device_list.finished();
+        if finished == self.devices_told {
+            return None;
+        }
+        self.devices_told = finished;
+        let listing = self.device_list.last(std::time::Duration::ZERO)?;
+        // a listing that failed is not a list: the clients keep the one they have
+        if listing.get("error").is_some() || self.devices_last_told.as_ref() == Some(&listing) {
+            return None;
+        }
+        self.devices_last_told = Some(listing.clone());
+        Some(listing)
     }
 
     /// The settings or the profiles changed: the clients are told on the loop's next pass.
@@ -392,6 +445,12 @@ pub fn dispatch_with<P: Ptt>(
         }
         "frequencies.set" => return frequencies_set(daemon, &request.params, request.id.clone()),
         "kiss.status" => return Response::ok(request.id.clone(), kiss_status(daemon.as_deref())),
+        "devices.list" => {
+            return match daemon {
+                Some(daemon) => devices_listed(daemon, request.id.clone()),
+                None => devices(request.id.clone()),
+            };
+        }
         "kiss.disconnect" => return kiss_disconnect(daemon, &request.params, request.id.clone()),
         "status" => {
             return Response::ok(
@@ -541,7 +600,7 @@ fn diagnostics<P: Ptt>(
     // bare station is a test fixture rather than a bug report
     let devices = daemon
         .as_ref()
-        .map_or(Value::Null, |daemon| (daemon.devices)());
+        .map_or(Value::Null, |daemon| daemon.inventory());
     let mut bundle = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "platform": {
@@ -1288,6 +1347,21 @@ fn send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) ->
     }
 }
 
+/// `devices.list` on the daemon: the last listing, made off the run loop, and a new one
+/// begun — a device plugged in since reaches the clients as a `devices` event when that
+/// listing finishes with a different list. The first listing, begun at start, is waited for.
+fn devices_listed(daemon: &mut DaemonState, id: Option<String>) -> Response {
+    let listing = daemon.inventory();
+    daemon.refresh_devices();
+    if let Some(error) = listing.get("error").and_then(Value::as_str) {
+        return Response::failed(id, ApiError::new("audio_unavailable", error, true));
+    }
+    // what the client now has: a new listing that finds the same is not news
+    daemon.devices_last_told = Some(listing.clone());
+    Response::ok(id, listing)
+}
+
+/// `devices.list` without the daemon (a bare station): listed now.
 fn devices(id: Option<String>) -> Response {
     match crate::audio::list_devices() {
         Ok(devices) => Response::ok(
@@ -2267,6 +2341,74 @@ mod tests {
             })
         };
         daemon
+    }
+
+    #[test]
+    fn the_devices_are_listed_off_the_loop_and_a_new_list_is_told_once() {
+        // listing on the run loop held a profile switch for seconds (2026-09-26): the daemon
+        // lists on a thread of its own, answers with the last listing, and tells the clients
+        // of a new one only when it differs
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static LISTINGS: AtomicUsize = AtomicUsize::new(0);
+        fn listing() -> Value {
+            let n = LISTINGS.fetch_add(1, Ordering::SeqCst);
+            let mut devices =
+                vec![json!({"name": "USB Audio CODEC", "input": true, "output": true})];
+            if n >= 2 {
+                // plugged in after the panel asked
+                devices.push(json!({"name": "FTDX10 CODEC", "input": true, "output": true}));
+            }
+            json!({ "devices": devices, "serial_ports": [] })
+        }
+        let finished = |daemon: &DaemonState, n: u64| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while daemon.device_list.finished() < n {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "listing {n} never finished"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.devices = listing;
+        // the start's listing, then a panel's `devices.list`: the first is waited for, and
+        // another is begun
+        daemon.refresh_devices();
+        let answer = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &Request {
+                id: Some("1".into()),
+                method: "devices.list".into(),
+                params: json!({}),
+            },
+        );
+        assert!(answer.ok, "{answer:?}");
+        let result = answer.result.expect("result");
+        assert_eq!(result["devices"].as_array().map(Vec::len), Some(1));
+        finished(&daemon, 2);
+        assert_eq!(
+            daemon.take_new_devices(),
+            None,
+            "the same list again is not news"
+        );
+        // a device plugged in: the next listing is news, once
+        daemon.refresh_devices();
+        finished(&daemon, 3);
+        let news = daemon.take_new_devices().expect("the new list");
+        assert_eq!(news["devices"][1]["name"], "FTDX10 CODEC");
+        assert_eq!(daemon.take_new_devices(), None, "told twice");
+        // and a profile check reads the listing without listing again
+        let before = LISTINGS.load(Ordering::SeqCst);
+        let inventory = crate::profile::Inventory::from_json(&daemon.inventory());
+        assert_eq!(inventory.inputs.len(), 2);
+        assert_eq!(
+            LISTINGS.load(Ordering::SeqCst),
+            before,
+            "listed on the caller's thread"
+        );
     }
 
     #[test]

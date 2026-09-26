@@ -171,7 +171,7 @@ exist.
 
 | Method | Params | Result |
 |---|---|---|
-| `devices.list` | — | `devices`: each audio device's `name`, whether it can capture (`input`) and play (`output`), and the sample rates it runs at (`input_rates`, `output_rates`); `serial_ports` as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys — and `gpio_interfaces` as `{path, name}`: the CM108-class interfaces that key through their codec's GPIO pin (`[ptt] kind = "cm108"`). Refused `audio_unavailable` when the platform cannot list its audio devices |
+| `devices.list` | — | `devices`: each audio device's `name`, whether it can capture (`input`) and play (`output`), and the sample rates it runs at (`input_rates`, `output_rates`); `serial_ports` as `{name, description}` — the description is what the driver says is behind the port, which is how an operator tells a radio's CAT port from the one that keys — and `gpio_interfaces` as `{path, name}`: the CM108-class interfaces that key through their codec's GPIO pin (`[ptt] kind = "cm108"`). The daemon lists on a thread of its own — at start, and again at each `devices.list` — and answers with the last listing, waiting only for the first; a new listing that differs from what the clients were given is a `devices` event. Refused `audio_unavailable` (retryable) when the platform cannot list its audio devices, or the first listing is not done |
 | `ptt.test` | `duration_s` (0.2–5) | keys the radio with no audio for that long, so the operator can watch the rig and the interface's PTT light. Refused during a session |
 | `tune` | `duration_s` (0.5–10, or 0 to stop) | keys and plays a steady tone at the transmit level — what an antenna tuner needs, and **not** how to set drive (use `drive.set`). `audio.tx_level` is live and is applied as audio leaves, so the level can be moved while the tone plays; `0` cuts it short, and only an operator's own test transmission is ever cut |
 | `drive.set` | `bursts` (1–10, default 4, or 0 to stop) | keys and sends that many real bursts at the fastest mode the station is allowed, so the rig's ALC is shown the peaks traffic will actually present it with. A tune tone is a sine and the daemon scales the waveform to the tone's RMS, so the waveform's peaks land about 6 dB (floor mode) to 7 dB (fastest) above anything the tone reaches — drive set on the tone is that far into limiting on traffic. The bursts carry filler, not protocol: a station that decodes one finds a data frame for a session it does not have and ignores it. `0` stops them, as for `tune` |
@@ -252,13 +252,17 @@ was on. Each change goes out as a `heard` event.
 | `regulatory` | the regulatory gate refused a transmission — or, with `log_permitted`, allowed one an automatically controlled station made (§4.10) | the decision as §4.10 describes it, with `callsign` and `session` (the state it was judged in) |
 | `bandwidth` | the station moved to its other bandwidth, or back (ADR-0026): a host program's `BW` command, a narrower call answered, the end of either, or `[radio] bandwidth` changed | `status.bandwidth` as it now stands. `capabilities` then describes the other ladder |
 | `profile` | the settings, the dials or the profiles changed | what `profile.list` answers: `active`, `name`, `dirty`, `profiles` — so a panel's mark by the profile's name is never stale, whichever client made the change |
+| `devices` | a listing of the devices, begun by `devices.list`, found something other than what the clients were given — a device plugged in or taken away | what `devices.list` answers |
 | `data` | payload received | data (base64) |
 | `ptt` | transmit starts or stops | on |
 | `log` | anything else the modem reports | `name` (what it is about: `beacon`, `probe`, `probed`, `test`, `identifier`, `busy`, `bandwidth`, `listen`, `regulatory`, `recording`, `tune`, `tx`, `watchdog`, `ignored`, `error`, …), `detail` (the sentence), `state`, `callsign`, `remote`. The daemon's own log lines (`control`, `kiss`, `audio`, …) are not events: `diagnostics.log` has them. A Test session reports every step as a `log` event named `test`: the probe's answer, `connected`, each transfer's bytes and seconds, each rung as `rung <m>: <decoded>/<frames> decoded at <snr> dB` (`? dB` when the other station measured none of its frames) or `rung <m>: timed out`, and `complete` or `aborted: <why>` |
 
 There is no `busy` event: a change of the busy detector's mind is a `log` event named `busy`,
 with the detail §4.4 gives, and `metrics.channel_busy` carries the state. Devices are not
-watched; `devices.list` is polled.
+watched: each `devices.list` begins a new listing, and a `devices` event carries it if it differs.
+Listing is slow — every device is opened through the platform's audio API — so it never runs on
+the daemon's loop: a profile switch, save or import checks against the last listing, and so does
+the diagnostic bundle.
 
 `metrics` is the operator's window into the link. `snr_db` is referenced to 3 kHz, like every
 SNR in this project; `mode` is the index into the table returned by `capabilities`. Every

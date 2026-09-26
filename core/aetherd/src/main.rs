@@ -248,6 +248,9 @@ fn run() -> Result<Exit, String> {
         daemon.log.record(Level::Warn, "config", &note, "Idle");
         daemon.config_note = Some(note);
     }
+    // the devices are listed off the run loop from the start, and kept: listing on it held the
+    // modem still for seconds at every profile switch (`aetherd::devices`)
+    daemon.refresh_devices();
     adopt_profile(&mut daemon);
 
     // A dry run keys nothing, whatever the file says. Somebody checking their configuration
@@ -389,7 +392,10 @@ fn replay(wav: &Path, expect: Option<&Path>, block_s: f64) -> Result<(), String>
 /// so an upgrade changes nothing the operator can see and the Setup tab has a name to show.
 /// Done once; a store that has been touched is left alone.
 fn adopt_profile(daemon: &mut DaemonState) {
-    let inventory = aetherd::profile::Inventory::from_json(&(daemon.devices)());
+    if !daemon.profiles.will_adopt() {
+        return;
+    }
+    let inventory = aetherd::profile::Inventory::from_json(&daemon.inventory());
     let adopted = daemon.profiles.adopt(
         &daemon.config,
         daemon.memories.entries(),
@@ -687,6 +693,11 @@ fn answer_commands(
             "profile",
             aetherd::control::profiles::status_json(daemon),
         ));
+    }
+    // a listing of the devices that finished off the loop with something new — a device
+    // plugged in or taken away since the panel last asked
+    if let Some(devices) = daemon.take_new_devices() {
+        control.publish(&Event::new("devices", devices));
     }
 }
 
