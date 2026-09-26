@@ -441,6 +441,17 @@ median time by 17–70 % on the fading classes with 12 % less to 3 % more keyed 
 drops; handing the turn over unasked is faster still and loses sessions. ADR-0027 has the
 tables.
 
+## A sender waits out a frame it hears arriving (`wait_out_chat.csv`, `wait_out_link.csv`, ADR-0030)
+
+The engine before and after its burst and poll retries wait for a frame heard arriving, on the
+fading pipe with the floor's reading cap, both airs, the same seeds. `wait_out_chat.csv` is
+`tools/bench_chat.py` on Good, Moderate and Poor: today's turn-taking (`policy` `base`, on the
+model at `7345694`, before ADR-0027 landed) and ADR-0027's request (`request`, on its branch at
+`fe13ca7`), 30 sessions a point from −12 to +12 dB (`first_trial` 0) and 100 a point at −12, −6
+and 0 dB (`first_trial` 100); `engine` says which. Drops 15 → 9 and 13 → 1 of 1 800, latency and
+keyed time unchanged. `wait_out_link.csv` is `bench_link.py --fading --floor-cap`, 2 kB, 20
+sessions a point: 546 of 600 identical, none slower by more than 0.4 %. ADR-0030 has the table.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
