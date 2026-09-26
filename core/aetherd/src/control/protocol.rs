@@ -35,6 +35,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 /// A request from a client.
+///
+/// It carries no credential: a connection from another address presents the token once, as
+/// `Authorization: Bearer` on its WebSocket upgrade or its `POST` (`server.rs`), before any
+/// request is read. A `token` field a client sends anyway is ignored, as any field this
+/// version does not know is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     /// Correlates the response. A client may use any string.
@@ -45,9 +50,6 @@ pub struct Request {
     /// Method arguments.
     #[serde(default)]
     pub params: serde_json::Value,
-    /// Bearer token, for the first message on a non-loopback connection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
 }
 
 /// A reply to one request.
@@ -302,7 +304,6 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
-            token: None,
         }
     }
 
@@ -313,6 +314,17 @@ mod tests {
         assert_eq!(parsed.id.as_deref(), Some("7"));
         assert_eq!(parsed.method, "connect");
         assert_eq!(parsed.params["remote"], "KK4XYZ");
+    }
+
+    #[test]
+    fn a_token_in_a_request_is_not_how_a_connection_authenticates() {
+        // the bearer token goes on the connection, never in a request: a request that carries
+        // one is read as if it did not, and one serialised never says it had one
+        let text = r#"{"id":"7","method":"status","token":"hunter2"}"#;
+        let parsed: Request = serde_json::from_str(text).expect("parse");
+        assert_eq!(parsed.method, "status");
+        let again = serde_json::to_string(&parsed).expect("serialise");
+        assert!(!again.contains("hunter2"), "{again}");
     }
 
     #[test]
