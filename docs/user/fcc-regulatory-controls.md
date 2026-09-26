@@ -11,18 +11,20 @@ one way, and what you need to tell it.
 > the rules disagree, the rules win; please report it.
 
 The rules were read from the Electronic Code of Federal Regulations, Title 47 current to
-2026-09-23 (Part 97 last amended 2026-02-13). The sections that matter:
+2026-09-23 (Part 97 last amended 2026-02-13); the 6 m entries on 2026-09-25, from the text current
+to 2026-09-24. The sections that matter:
 
 | Rule | What it says for a data modem | e-CFR |
 |---|---|---|
 | §97.3(a)(8) | what "bandwidth" means (26 dB) | [§97.3](https://www.ecfr.gov/current/title-47/section-97.3) |
 | §97.3(a)(6), §97.109 | automatic, local and remote control | [§97.109](https://www.ecfr.gov/current/title-47/section-97.109) |
 | §97.119(b)(1) | a CW identifier sent by an automatic device: 20 wpm at most | [§97.119](https://www.ecfr.gov/current/title-47/section-97.119) |
+| §97.203(d) | where a beacon may be automatically controlled | [§97.203](https://www.ecfr.gov/current/title-47/section-97.203) |
 | §97.221 | automatically controlled digital stations | [§97.221](https://www.ecfr.gov/current/title-47/section-97.221) |
 | §97.301 | which frequencies each license class may use | [§97.301](https://www.ecfr.gov/current/title-47/section-97.301) |
 | §97.303(h) | the 60 m channels and segment | [§97.303](https://www.ecfr.gov/current/title-47/section-97.303) |
 | §97.305(c) | where RTTY and data are authorized (the data segments) | [§97.305](https://www.ecfr.gov/current/title-47/section-97.305) |
-| §97.307(f) | 2.8 kHz for data; CW-only privileges; 60 m | [§97.307](https://www.ecfr.gov/current/title-47/section-97.307) |
+| §97.307(f) | 2.8 kHz for HF data; 6 m's 20 kHz and phone-width rule; CW-only privileges; 60 m | [§97.307](https://www.ecfr.gov/current/title-47/section-97.307) |
 | §97.313 | power limits | [§97.313](https://www.ecfr.gov/current/title-47/section-97.313) |
 
 The voluntary [ARRL band plan](https://www.arrl.org/band-plan) is kept separate: it can produce a
@@ -108,10 +110,16 @@ privileges (§97.301):
 | 15 m | 21.000–21.200 MHz | §97.305(c) |
 | 12 m | 24.890–24.930 MHz | §97.305(c) |
 | 10 m | 28.000–28.300 MHz | §97.305(c) |
+| 6 m | 50.100–54.000 MHz | §97.305(c)(4)(i), (ii) |
 
 General and Advanced privileges start 25 kHz into several of these (for example 14.025 MHz on
 20 m); Technicians have CW only on 80, 40 and 15 m (§97.307(f)(9)) and CW, RTTY and data on
-28.000–28.300 MHz. The Diagnostics tab lists, for your class, the exact dial ranges where the
+28.000–28.300 MHz. **6 m** is Technician, General, Advanced and Extra alike, all of 50–54 MHz
+(§97.301(a)), with no Novice privileges; 50.0–50.1 MHz is CW only, so a data signal must be all of
+it above 50.1 MHz. On 6 m §97.307(f)(5) authorizes 20 kHz and (f)(2) holds a non-phone emission to
+the width of a communications-quality phone emission of the same modulation type — a single-
+sideband voice channel, read as HF's 2.8 kHz — so the narrower decides; Aether's widest signal is
+2.52 kHz. §97.313(b)'s 1.5 kW is the only power limit there. The Diagnostics tab lists, for your class, the exact dial ranges where the
 widest waveform and the tone floor fit, on your sideband and with your margin.
 
 ## Local and remote control
@@ -126,7 +134,8 @@ An automatically controlled station may transmit data:
 
 * anywhere inside the **automatic-control sub-bands** of §97.221(b) — 3.585–3.600, 7.100–7.105,
   10.140–10.150, 14.0950–14.0995, 14.1005–14.112, 18.105–18.110, 21.090–21.100, 24.925–24.930 and
-  28.120–28.189 MHz — as long as the whole signal is inside one of them;
+  28.120–28.189 MHz, **and all of 6 m** ("the 6 m or shorter wavelength bands") — as long as the
+  whole signal is inside one of them;
 * elsewhere (inside a data segment) **only when responding to interrogation** by a station under
   local or remote control, and **only with a signal of 500 Hz or less** (§97.221(c)).
 

@@ -663,7 +663,7 @@ heard list counts `beacons` and `last_beacon_ms` per station (serde defaults: ol
 read); `beacons_sent` is a counter; `beacon.every {minutes}` (`station/beacons.rs`) repeats one
 every 10–240 min — idle station and clear channel whatever `wait_for_clear` says, skipped after
 `BEACON_WINDOW_S` without catching up, runtime only (a restart stops it), refused under
-automatic control (§97.203(g)) and on answer-only; `status.beacon`; the Session tab's Repeat
+automatic control (§97.203(d)) and on answer-only; `status.beacon`; the Session tab's Repeat
 list beside Beacon and the line under the buttons. Morse ID: his ID measured exactly 20 wpm —
 the US profile's cap on an automatic identifier (§97.119(b)(1)), applied silently; now
 `identifier_wpm`/`note_identifier_speed` (said at start and on change), `status.identifier`,
@@ -738,6 +738,28 @@ identifier for any; `append_cw_id` moves the engine's timers by the identifier p
 hangover. Open: the ten-minute identifier mid-session (needs a frame field). The author's
 station has `cw_id = false`; ND1J identifies and waits for clear — a recording's sidecar
 `session.wait_for_clear` says which.
+
+**6 m, leaving, handing over, and unsaved Setup (2026-09-25 night, the author's four items).**
+*6 m*: the US profile has the band (50–54 MHz), its data segment 50.1–54.0 (§97.305(c)(4)),
+Technician-and-up privileges (§97.301(a)), all of it an automatic-control segment (§97.221(b)),
+1.5 kW (§97.313(b)), and the band plan's non-voice area 50.6–50.8 with avoids (beacon sub-band,
+50.62 packet calling, 50.8–51.0 radio control); a data segment may carry its own
+`max_bandwidth_hz`/`bandwidth_rule` (6 m: 2.8 kHz under §97.307(f)(2), (5)), used by
+`judge_data`, `safe_dials` and `Segment::data_limit`. The dial list proposes 50.690 MHz; a list
+written before carries no `offered` field and gains the 6 m proposal once (`OFFERED_BEFORE_6M`),
+and one the operator removes stays removed. Every 6 m value was read from the e-CFR text; the
+beacon rule is §97.203(**d**) (it had been cited as (g)). *ADR-0023* (model first, both suites):
+a receiving station's Disconnect sends the DISC between bursts (it waited for a next burst that
+on the KE4QCM path never came — five sessions ended with Abort); the TURN's wait covers the
+longest first frame (the floor's) and moves past a frame heard arriving — a one-frame OFDM wait
+repeated the TURN over a 5.4 s tone-floor answer until both stations held the turn; a called
+sender that hears a poll yields and asks for the turn back, the caller keeps it; WANT_TX counts
+frames in flight. Simulators: `unheard` / `with_unheard` (a frame never detected). Daemon:
+`status.closing`. Panel: Disconnect reads *Stop calling* while calling and aborts; `#closing-note`.
+*Unsaved Setup*: a baseline of `formChanges()` (less the transmit level) is taken when
+`loadConfig` fills the form and re-settled by the late lists until the operator edits; any
+difference marks the Setup tab (dot), the step and its index link (amber), the save bar (names,
+Discard) and every other tab (`#unsaved-banner`, Review / Discard).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
