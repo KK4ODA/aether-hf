@@ -143,9 +143,9 @@ class LinkConfig:
     soon as the channel is quiet instead: an acknowledgement nobody asked for, with WANT_TX,
     which an idle sender in a chat answers with a TURN; and an idle sender does not poll over a
     frame it hears arriving, since in a chat that frame may be such a request (ADR-0027). On
-    the link bench it halves the typical line's delay, from −12 dB up, and keys less than
-    polling does. Off, the engine is as it always was; :meth:`LinkEngine.set_chat` switches it
-    during a session."""
+    the link bench's fading classes, −12 to +12 dB, it cuts a line's median delay by 17–70 %
+    with about the keyed time the polls took and no more sessions lost. Off, the engine is as
+    it always was; :meth:`LinkEngine.set_chat` switches it during a session."""
 
 
 OUTSIDE_SESSIONS = frozenset(
