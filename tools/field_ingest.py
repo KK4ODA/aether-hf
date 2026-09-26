@@ -212,7 +212,8 @@ def log_row(s: Session, klass: str, band: str | None, note: str) -> str:
     distance = "?" if s.km is None else f"{s.km:.0f} km"
     if s.my_grid or s.their_grid:
         distance += f" ({s.my_grid or '?'} → {s.their_grid or '?'})"
-    snr = "?" if s.snr_db is None else f"{s.snr_db:.1f}"
+    # + 0.0 turns a reading that rounds to -0.0 into 0.0
+    snr = "?" if s.snr_db is None else f"{round(s.snr_db, 1) + 0.0:.1f}"
     goodput = "?" if s.goodput_bps is None else f"{s.goodput_bps:.0f}"
     parts = [note.strip()] if note.strip() else []
     if s.outcome != "session":
@@ -384,7 +385,8 @@ def ingest(
             f.write(row + "\n")
         _append_csv(paths, PATH_COLUMNS, [paths_row(session, klass, session_band)])
         _append_csv(ladders, LADDER_COLUMNS, ladder_rows(session, klass, session_band))
-        print(f"{session.recording}: {session.callsign} → {session.remote}, {session.outcome}")
+        # ASCII: a Windows console's code page has no arrow, and the row is already written
+        print(f"{session.recording}: {session.callsign} -> {session.remote}, {session.outcome}")
         added += 1
     return added
 
