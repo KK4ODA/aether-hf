@@ -698,24 +698,25 @@ pub struct StationStats {
     pub calls_unanswered: usize,
 }
 
-/// The two playback clocks, and how the transmission now running stands against them.
+/// The sound card's playback clock, and where the transmission now running ends on it.
 ///
 /// A whole burst is handed to the sound card as soon as it is rendered (ADR-0010), so the
-/// station's own queue drains long before the audio has left; the key is released when
-/// the card has consumed as many samples since keying as the station handed it since
-/// keying. The card's clock runs through the idle time too and the station's does not, so
-/// only the spans since keying compare.
+/// station's own queue drains long before the audio has left; the key is released when the
+/// card's clock reaches the reading at which the last sample handed over leaves it. Only the
+/// run loop can say what that is, after it has queued the samples: the burst is rendered and
+/// the radio keyed between the loop's reading of the clock and the first sample queued, and
+/// the card plays silence meanwhile, which its clock counts — so the reading before the burst
+/// plus the burst's length comes short of the burst's end by that time (ADR-0010 §7).
 #[derive(Debug, Default, Clone, Copy)]
 struct PlaybackClock {
-    /// Samples handed to the sound card so far, silence included.
-    handed: u64,
     /// The sound card's own clock as last reported by the run loop — samples it has
     /// consumed since it opened. `None` for a harness that never reports one, whose key is
     /// released the moment the queue drains, as it always was.
     device_played: Option<u64>,
-    /// Where each clock stood when the transmission now running was keyed.
-    handed_at_key: u64,
-    played_at_key: Option<u64>,
+    /// Where that clock will stand once the last sample handed over so far has left the
+    /// card, as the run loop reported just after handing it over. `None` from every handover
+    /// until the report: until then the transmission's end is not known, so it has not come.
+    drains_at: Option<u64>,
     /// The transmission now running was cut short: what the card still held was dropped,
     /// so the key is released as soon as the station's own queue is empty.
     cut_short: bool,
@@ -726,25 +727,18 @@ struct PlaybackClock {
 impl PlaybackClock {
     /// How many samples the sound card has played past the last one handed to it for the
     /// transmission now running: `Some(0)` while that is still leaving, `None` for a
-    /// harness that reports no clock.
+    /// harness that reports no clock, or before the run loop has said where the card drains.
     fn played_past_transmission(&self) -> Option<u64> {
-        let (played, at_key) = (self.device_played?, self.played_at_key?);
-        Some(
-            played
-                .saturating_sub(at_key)
-                .saturating_sub(self.handed - self.handed_at_key),
-        )
+        Some(self.device_played?.saturating_sub(self.drains_at?))
     }
 
     /// Whether the card's clock has reached the last sample handed for this transmission.
     /// A harness that reports no clock is taken at its word the moment the queue drains,
     /// as it always was.
     fn caught_up(&self) -> bool {
-        match (self.device_played, self.played_at_key) {
-            (Some(played), Some(at_key)) => {
-                played.saturating_sub(at_key) >= self.handed - self.handed_at_key
-            }
-            _ => true,
+        match self.device_played {
+            Some(played) => self.drains_at.is_some_and(|end| played >= end),
+            None => true,
         }
     }
 }
@@ -1056,15 +1050,39 @@ impl<P: Ptt> Station<P> {
         self.transmitting
     }
 
-    /// The sound card's playback clock, as the run loop reads it before each top-up:
-    /// samples the card has consumed since it opened.
+    /// The sound card's playback clock, as the run loop reads it before each capture and
+    /// each top-up: samples the card has consumed since it opened.
     ///
     /// A whole burst is handed to the card as soon as it is rendered, so the station's own
     /// queue drains long before the audio has left; the key is released against this clock
-    /// instead, when the last sample has really played. A harness that never reports one
-    /// gets the old behaviour: release on drain.
+    /// instead, when it reaches where the card drains ([`Self::device_drains_at`]) and the
+    /// last sample has really played. A harness that never reports one gets the old
+    /// behaviour: release on drain.
     pub fn device_played(&mut self, played: u64) {
         self.clock.device_played = Some(played);
+    }
+
+    /// Where the sound card's playback clock will stand once everything handed to it so far
+    /// has left it — its clock plus what it holds queued ([`crate::audio::AudioIo::drains_at`])
+    /// — as the run loop reads it just after handing samples over.
+    ///
+    /// The key is released, and the deafness at the end of a transmission ends, when the
+    /// clock gets there. Not at the loop's reading before the burst plus the burst's length:
+    /// the burst is rendered and the radio keyed between that reading and the first sample
+    /// queued, and the card plays silence meanwhile, which its clock counts (ADR-0010 §7).
+    /// Only the first report after a handover counts; a later one reads the same while the
+    /// card still holds the burst, and more once it has run dry. A harness that reports the
+    /// clock must report this too, or the key stays down until the watchdog trips.
+    pub fn device_drains_at(&mut self, at: u64) {
+        self.clock.drains_at.get_or_insert(at);
+    }
+
+    /// Whether the transmission now running still has samples to hand the sound card. While
+    /// it does, silence the card plays for want of them is a hole in the burst; once the last
+    /// is handed over, a card that runs dry has reached the burst's end.
+    #[must_use]
+    pub fn handing_over(&self) -> bool {
+        self.transmitting && !self.playback.is_empty()
     }
 
     /// Whether the run loop should drop what the sound card still holds — set when a
@@ -2213,8 +2231,9 @@ impl<P: Ptt> Station<P> {
         //
         // The whole burst is handed over as soon as it is rendered, so the queue here
         // drains while the sound card still holds most of it; the key is released when
-        // the card's own clock has passed the last sample handed over. A harness that
-        // reports no clock releases on drain, as before.
+        // the card's own clock reaches where the run loop, having queued the last sample,
+        // said the card would drain. A harness that reports no clock releases on drain, as
+        // before.
         if self.playback.is_empty() && self.transmitting {
             if !self.clock.cut_short && !self.clock.caught_up() {
                 return Ok(0); // still leaving the sound card
@@ -2243,8 +2262,6 @@ impl<P: Ptt> Station<P> {
             }
             self.ptt.key(now)?;
             self.transmitting = true;
-            self.clock.handed_at_key = self.clock.handed;
-            self.clock.played_at_key = self.clock.device_played;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
             if let Some(recording) = &mut self.recording {
@@ -2264,7 +2281,11 @@ impl<P: Ptt> Station<P> {
             // being over-driven — measured after the level, which is where it is applied
             self.tx_peak_running = self.tx_peak_running.max(slot.abs());
         }
-        self.clock.handed += count as u64;
+        if count > 0 {
+            // these leave after everything already queued: where the card drains is not
+            // known again until the run loop, having queued them, says
+            self.clock.drains_at = None;
+        }
         if let Some(capture) = &mut self.tx_capture {
             capture.push(&out[..count]);
         }
@@ -4313,9 +4334,11 @@ mod tests {
             let mut out = vec![0.0f32; self.block];
             let silence = vec![0.0f32; self.block];
             for _ in 0..blocks {
-                self.a.device_played(self.played);
+                let start = self.played;
+                self.a.device_played(start);
                 self.played += self.block as u64;
-                self.a.playback(&mut out).expect("playback");
+                let handed = self.a.playback(&mut out).expect("playback");
+                self.a.device_drains_at(start + handed as u64);
                 self.a.capture(&silence).expect("capture");
                 if done(&self.a) {
                     return;
@@ -4335,12 +4358,16 @@ mod tests {
             let mut from_b = vec![0.0f32; self.block];
             for _ in 0..blocks {
                 // the harness is the sound card: every block it takes has played by the
-                // time it takes the next, which is the clock the key is released against
-                self.a.device_played(self.played);
-                self.b.device_played(self.played);
+                // time it takes the next, which is the clock the key is released against,
+                // and it plays what a station handed it from the start of the block
+                let start = self.played;
+                self.a.device_played(start);
+                self.b.device_played(start);
                 self.played += self.block as u64;
-                self.a.playback(&mut from_a).expect("playback");
-                self.b.playback(&mut from_b).expect("playback");
+                let handed_a = self.a.playback(&mut from_a).expect("playback");
+                let handed_b = self.b.playback(&mut from_b).expect("playback");
+                self.a.device_drains_at(start + handed_a as u64);
+                self.b.device_drains_at(start + handed_b as u64);
 
                 let mut to_b = vec![0.0f32; self.block];
                 let mut to_a = vec![0.0f32; self.block];
@@ -4463,6 +4490,8 @@ mod tests {
             station.transmitting(),
             "the queue drained but nothing has played yet"
         );
+        // the card, which held nothing, drains once it has played what it was handed
+        station.device_drains_at(1_000_000 + handed as u64);
         assert!(handed > 0);
         // the card has played half of it: still keyed
         station.device_played(1_000_000 + handed as u64 / 2);
@@ -4476,6 +4505,100 @@ mod tests {
         assert_eq!(station.playback(&mut out).expect("playback"), 0);
         assert!(!station.transmitting(), "the burst has left the card");
         assert!(!station.take_device_flush(), "nothing was cut short");
+    }
+
+    #[test]
+    fn the_key_waits_for_the_last_sample_though_the_card_played_on_while_the_burst_was_rendered() {
+        // The run loop reads the card's clock and then, in the fill's first `playback`,
+        // renders the burst and keys the radio before it queues the first block. A real card
+        // plays silence meanwhile and its clock counts it, so every sample of the burst
+        // leaves that much later than the reading plus its place in the burst — the last one
+        // too. Released, and deaf, by the reading, the station came up that much early:
+        // passes of 255–366 ms while transmitting on a loaded machine (a `[sim]` bench
+        // daemon, 2026-09-25/26) would drop the key before the end of the last frame had
+        // even left the queue. ADR-0010 §7.
+        struct Card {
+            /// The playback clock: every sample played, silence included.
+            played: u64,
+            /// Samples queued and not played yet.
+            queued: u64,
+        }
+        impl Card {
+            fn play(&mut self, samples: u64) {
+                self.queued -= samples.min(self.queued);
+                self.played += samples;
+            }
+        }
+        let rate = WIDE_2300.audio_rate as u64;
+        let pass = rate / 50; // the run loop's 20 ms blocks
+        let render = rate * 3 / 10; // rendering the burst and keying the radio: 0.3 s
+        let ms = |samples: u64| samples as f64 * 1000.0 / rate as f64;
+        let mut station = idle_station();
+        station.connect("KK4XYZ").expect("idle");
+        let mut card = Card {
+            played: 10 * rate, // it has been running a while
+            queued: 0,
+        };
+
+        // the pass that keys: the clock goes in, then the fill renders and keys ...
+        station.device_played(card.played);
+        let mut out = vec![0.0f32; pass as usize];
+        let mut count = station.playback(&mut out).expect("playback");
+        assert!(
+            count > 0 && station.transmitting(),
+            "the call was rendered and keyed"
+        );
+        // ... while the card plays silence, and only then is the first block queued
+        card.play(render);
+        while count > 0 {
+            card.queued += count as u64;
+            count = station.playback(&mut out).expect("playback");
+        }
+        assert!(
+            station.transmitting() && !station.handing_over(),
+            "the whole burst is with the card, and the key is down"
+        );
+        // the clock's reading once the last sample handed over has left the card — what the
+        // run loop, having queued it, now tells the station
+        let leaves = card.played + card.queued;
+        station.device_drains_at(leaves);
+
+        // the passes that follow: the card plays on, and the loop reads its clock and
+        // captures, then reads it again and asks for more
+        let silence = vec![0.0f32; pass as usize];
+        let (mut released, mut heard_early) = (None, 0u64);
+        while released.is_none() && card.played < leaves + rate {
+            card.play(pass);
+            station.device_played(card.played);
+            // what the station hears of the block it is about to take: only what came in
+            // after the last sample had left
+            let heard = station.captured_after_transmission(pass as usize, pass as usize);
+            heard_early =
+                heard_early.max((heard as u64).saturating_sub(card.played.saturating_sub(leaves)));
+            station.capture(&silence).expect("capture");
+            station.device_played(card.played);
+            station.playback(&mut out).expect("playback");
+            if !station.transmitting() {
+                released = Some(card.played);
+            }
+        }
+        let released = released.expect("the key was never released");
+        assert!(
+            released >= leaves,
+            "the key came up {:.0} ms before the last sample handed over had left the sound card",
+            ms(leaves - released)
+        );
+        assert!(
+            released < leaves + pass,
+            "the key stayed down {:.0} ms after the burst had left",
+            ms(released - leaves)
+        );
+        assert_eq!(
+            heard_early,
+            0,
+            "the station heard {:.0} ms of its own transmission",
+            ms(heard_early)
+        );
     }
 
     /// Everything a station hands to the sound card for its next transmission.
@@ -4523,6 +4646,7 @@ mod tests {
             station.key_test(0.2).expect("idle");
             station.device_played(0);
             let handed = handed_audio(&mut station).len();
+            station.device_drains_at(handed as u64);
             assert!(station.transmitting(), "the burst is still in the card");
             // the block: the transmission's last `arrives.len() - past_end` samples, and then
             // what came in after it
@@ -5011,8 +5135,9 @@ mod tests {
         let mut played = 0u64;
         for _ in 0..blocks {
             station.device_played(played);
+            let handed = station.playback(&mut out).expect("playback");
+            station.device_drains_at(played + handed as u64);
             played += 4096;
-            station.playback(&mut out).expect("playback");
             station.capture(&silence).expect("capture");
             if done(station) {
                 return;
