@@ -418,7 +418,7 @@ session ones.
 
 | Method | Params | Result |
 |---|---|---|
-| `datagram.send` | `data` (base64: the frame), `frame_type?` (0, 1 or 2; 0), `ref?` (reported back by `datagram-sent`), `rung?` (the rung to send at; tone-36, rung 1), `wait_for_clear?` (true), `persistence?` (0.25) and `slot_s?` (0.1): the client's channel access | `accepted`, `queued` (datagrams waiting, this one included) of `limit` (16), `fragments`, `bursts` (keyings: each fits the key limit), `air_s` and `rung`. Refused `queue_full` (retryable) when sixteen are waiting — the KISS port stops reading its client until there is room — `bad_params` when the frame is of an unknown type or longer than sixteen fragments at the rung, and `refused` on an answer-only station |
+| `datagram.send` | `data` (base64: the frame), `frame_type?` (0, 1 or 2; 0), `ref?` (reported back by `datagram-sent`), `rung?` (the rung to send at; tone-36, rung 1), `wait_for_clear?` (true), `persistence?` (0.25) and `slot_s?` (0.1): the client's channel access | `accepted`, `queued` (datagrams waiting, this one included) of `limit` (16), `fragments`, `bursts` (keyings: each fits the key limit), `air_s` and `rung`. Refused `queue_full` (retryable) when sixteen are waiting — the KISS port stops reading its client until there is room — `bad_params` when the frame is empty (it would carry nothing a receiver keeps), of an unknown type, or longer than sixteen fragments at the rung, and `refused` on an answer-only station |
 | `kiss.status` | — | the KISS port as `status.kiss` has it |
 | `kiss.disconnect` | `client?` (an `id` from `kiss.status`) | `disconnected`: how many connections were closed — that one, or every one. The programs may connect again; refused `not_listening` when the port is not open |
 

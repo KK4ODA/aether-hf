@@ -218,6 +218,14 @@ impl<P: Ptt> Station<P> {
                 "this station is answer-only: it starts no exchange, and a datagram is one",
             ));
         }
+        // Nothing but the callsign and the type would go on the air, and every station that
+        // decoded it would drop it (`parse_body` wants a frame after them). Refused before
+        // the queue is looked at: an empty frame is no better for waiting.
+        if request.frame.is_empty() {
+            return Err(DatagramRefusal::Invalid(
+                "an empty frame carries nothing".to_owned(),
+            ));
+        }
         if self.datagrams.queue.len() >= DATAGRAM_QUEUE {
             return Err(DatagramRefusal::QueueFull);
         }
