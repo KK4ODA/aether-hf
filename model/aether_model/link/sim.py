@@ -145,6 +145,7 @@ class TwoStationSim:
         fading: FadingPipe | None = None,
         floor_reading_cap_db: float | None = None,
         key_limit_s: float | None = None,
+        unheard: Callable[[int, Container, float], bool] | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -181,6 +182,11 @@ class TwoStationSim:
         SNR it decodes at come from its own stretch of the fade, and the per-mode
         thresholds are then the AWGN table's. Unset, every frame sees the channel SNR and
         the per-class averages of :attr:`thresholds`."""
+        self.unheard = unheard
+        """Frames a receiver never detects, preamble or frame: called with the receiver, the
+        frame's container and when it started. A fade that lets one kind of frame through and
+        not another — the called station's data lost while its control frames arrive — is
+        what turned KE4QCM's session of 2026-09-25 into two stations holding the turn."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
@@ -258,7 +264,7 @@ class TwoStationSim:
                 # control frame's too, as the daemon hands the engine every trusted one
                 # (ADR-0016), each once its family announces it — and the layout it names,
                 # so the frame's own length
-                self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur))
+                self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur, frame.container))
             self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur, cut))
             t += dur
         st.tx_end = t
@@ -268,6 +274,8 @@ class TwoStationSim:
         return any(a < t1 - 1e-9 and t0 + 1e-9 < b for a, b in self.st[who].busy)
 
     def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float, *, cut: bool = False) -> None:
+        if self.unheard is not None and self.unheard(rx, frame.container, t0):
+            return  # never detected
         if self._busy(rx, t0, t1):
             return  # half-duplex or collision: the receiver was transmitting
         arrival = t1 + self.prop_s
@@ -324,8 +332,11 @@ class TwoStationSim:
                     fr, t0, t1, cut = cast("tuple[TxFrame, float, float, bool]", ev.data)
                     self._deliver(ev.who, fr, t0, t1, cut=cut)
                 elif ev.kind == "preamble":
-                    t0, t1, frame_s = cast("tuple[float, float, float]", ev.data)
-                    self._announce(ev.who, t0, t1, frame_s)
+                    t0, t1, frame_s, container = cast(
+                        "tuple[float, float, float, Container]", ev.data
+                    )
+                    if self.unheard is None or not self.unheard(ev.who, container, t0):
+                        self._announce(ev.who, t0, t1, frame_s)
                 elif ev.kind == "tx_done":
                     self.st[ev.who].engine.on_tx_done(nt)
                     self._pump(ev.who, nt)

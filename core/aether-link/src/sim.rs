@@ -171,6 +171,7 @@ enum EvKind {
     Preamble {
         t0: f64,
         frame_s: f64,
+        container: Container,
     },
     TxDone,
 }
@@ -242,6 +243,10 @@ impl Station {
     }
 }
 
+/// Which frames a receiver never detects: called with the receiver, the frame's container and
+/// when it started ([`TwoStationSim::with_unheard`]).
+pub type Unheard = Box<dyn Fn(usize, Container, f64) -> bool>;
+
 /// Two engines driven to quiescence over a lossy half-duplex pipe.
 pub struct TwoStationSim {
     stations: [Station; 2],
@@ -265,6 +270,8 @@ pub struct TwoStationSim {
     floor_reading_cap_db: Option<f64>,
     /// The transmitter's key-time limit ([`with_key_limit`](Self::with_key_limit)).
     key_limit_s: Option<f64>,
+    /// Frames a receiver never detects ([`with_unheard`](Self::with_unheard)).
+    unheard: Option<Unheard>,
 }
 
 impl TwoStationSim {
@@ -285,7 +292,22 @@ impl TwoStationSim {
             snr_schedule: None,
             floor_reading_cap_db: None,
             key_limit_s: None,
+            unheard: None,
         }
+    }
+
+    /// Frames a receiver never detects, preamble or frame: called with the receiver, the
+    /// frame's container and when it started. A fade that lets one kind of frame through and
+    /// not another — the called station's data lost while its control frames arrive — is
+    /// what turned KE4QCM's session of 2026-09-25 into two stations holding the turn.
+    #[must_use]
+    pub fn with_unheard(mut self, unheard: Unheard) -> Self {
+        self.unheard = Some(unheard);
+        self
+    }
+
+    fn is_unheard(&self, rx: usize, container: Container, t0: f64) -> bool {
+        self.unheard.as_ref().is_some_and(|f| f(rx, container, t0))
     }
 
     /// Use per-mode thresholds other than the AWGN table — a fading channel, say.
@@ -439,6 +461,7 @@ impl TwoStationSim {
                     EvKind::Preamble {
                         t0: t,
                         frame_s: duration,
+                        container: frame.container,
                     },
                 );
             }
@@ -468,6 +491,9 @@ impl TwoStationSim {
     fn deliver(&mut self, rx: usize, frame: &TxFrame, t0: f64, t1: f64, cut: bool) {
         if frame.container == Container::Data {
             self.modes_sent.push(frame.mode);
+        }
+        if self.is_unheard(rx, frame.container, t0) {
+            return; // never detected
         }
         if self.busy(rx, t0, t1) {
             return; // half-duplex, or a collision: the receiver was transmitting
@@ -568,7 +594,15 @@ impl TwoStationSim {
                     EvKind::Arrive { frame, t0, t1, cut } => {
                         self.deliver(ev.who, &frame, t0, t1, cut);
                     }
-                    EvKind::Preamble { t0, frame_s } => self.announce(ev.who, t0, ev.t, frame_s),
+                    EvKind::Preamble {
+                        t0,
+                        frame_s,
+                        container,
+                    } => {
+                        if !self.is_unheard(ev.who, container, t0) {
+                            self.announce(ev.who, t0, ev.t, frame_s);
+                        }
+                    }
                     EvKind::TxDone => {
                         self.stations[ev.who].engine.on_tx_done(next);
                         self.pump(ev.who, next);
