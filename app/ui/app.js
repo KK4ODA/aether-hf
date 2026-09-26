@@ -190,6 +190,11 @@ function onEvent(frame) {
       renderBandwidth(data);
       loadCapabilities();
       break;
+    case "devices":
+      // the daemon listed the devices again, off its loop, and found one plugged in or taken
+      // away: the lists follow, keeping what is chosen
+      fillDevices(data);
+      break;
     default:
       log(JSON.stringify(data), false, frame.event);
   }
@@ -2140,6 +2145,14 @@ async function loadDevices() {
   } catch {
     return;
   }
+  fillDevices(devices);
+}
+
+/// The device lists, filled from a listing: the answer to `devices.list`, or a `devices` event
+/// when the daemon's own listing — made off its loop, so a profile switch no longer waits for
+/// it — finds a device plugged in or taken away. What is chosen stays chosen.
+function fillDevices(devices) {
+  const chosen = ["dev-in", "dev-out", "dev-ptt"].map((id) => [id, $(id).value]);
   const fill = (select, entries, placeholder) => {
     select.replaceChildren();
     const none = document.createElement("option");
@@ -2152,7 +2165,6 @@ async function loadDevices() {
       option.textContent = entry.label ?? entry.name;
       select.append(option);
     }
-    select.addEventListener("change", writeConfig);
   };
   devicesSeen = {
     devices: devices.devices ?? [],
@@ -2183,6 +2195,18 @@ async function loadDevices() {
     ],
     "none (VOX or receive only)",
   );
+  for (const [id, value] of chosen) if (value) select($(id), value);
+  showKeyingFields();
+  fillProfiles();
+  checkRates();
+  writeConfig();
+  settleSetup();
+}
+
+/// The device lists' own handlers, once: the lists are filled again whenever a new listing
+/// arrives, and a handler added at each fill would run once per fill.
+function wireDevices() {
+  for (const id of ["dev-in", "dev-out", "dev-ptt"]) $(id).addEventListener("change", writeConfig);
   $("dev-ptt").addEventListener("change", showKeyingFields);
   $("dev-ptt").addEventListener("change", () => {
     if ($("dev-ptt").value !== "host") return;
@@ -2193,13 +2217,8 @@ async function loadDevices() {
   $("ptt-line").addEventListener("change", showKeyingFields);
   $("ptt-gpio").addEventListener("change", writeConfig);
   $("ptt-protocol").addEventListener("change", showKeyingFields);
-  showKeyingFields();
   $("dev-in").addEventListener("change", checkRates);
   $("dev-out").addEventListener("change", checkRates);
-  fillProfiles();
-  checkRates();
-  writeConfig();
-  settleSetup();
 }
 
 // What the daemon is actually running, as `config.get` reported it.
@@ -2839,11 +2858,18 @@ async function profileFormOk() {
 /// Everything a load reported, in the operator's terms: what was left out, what could
 /// not be found, what needs a restart — and the restart itself, when there is somebody
 /// to do it.
-async function afterProfileLoad(answer, lead) {
+async function afterProfileLoad(answer, lead, before) {
   applyProfiles(answer);
   const report = answer.report ?? {};
   profileMissing = report.missing_hardware ?? [];
   const parts = [lead];
+  // what the switch changed that the operator would want to know at once, before and after:
+  // the transmit level went 16 dB down between two profiles without anyone noticing
+  // (ND1J, 2026-09-26)
+  // the configuration as the profile left it, read before any restart it needs
+  await loadConfig();
+  const changes = profileChanges(before, liveConfig, report.changed ?? []);
+  if (changes) parts.push(changes);
   if ((report.unknown ?? []).length) {
     parts.push(
       `Left out — this version has no setting called ${report.unknown.join(", ")}${answer.aether_version ? ` (the profile was written by Aether HF ${answer.aether_version})` : ""}.`,
@@ -2857,8 +2883,7 @@ async function afterProfileLoad(answer, lead) {
   }
   parts.push(await applied(report));
   noteProfile(parts.join(" "), profileMissing.length || (report.invalid ?? []).length ? "warn" : undefined);
-  log(`profile ${answer.loaded?.name ?? profiles.name ?? ""} loaded (${(report.changed ?? []).length} settings changed)`);
-  await loadConfig();
+  log(`profile ${answer.loaded?.name ?? profiles.name ?? ""} loaded (${(report.changed ?? []).length} settings changed)${changes ? `: ${changes}` : ""}`);
   loadMemories();
   refreshStatus();
 }
@@ -2879,11 +2904,49 @@ function describeMissing(missing) {
     .join(", ");
 }
 
+/// The changes a profile load made that matter on the air, said with their values: the
+/// transmit level (in dB), the keying, the bandwidth, the devices, the callsign and the rules.
+function profileChanges(before, after, changed) {
+  if (!before || !after) return "";
+  const get = (config, key) => key.split(".").reduce((node, part) => node?.[part], config);
+  const db = (level) => {
+    if (typeof level !== "number" || level <= 0) return "—";
+    const value = Math.round(20 * Math.log10(level));
+    return `${value < 0 ? "−" : ""}${Math.abs(value)} dB`;
+  };
+  const keying = (config) => {
+    const ptt = config.ptt ?? {};
+    if (ptt.kind === "host") return "the host program";
+    if (ptt.kind === "cat") return `CAT on ${ptt.port ?? "?"}`;
+    if (ptt.kind === "serial") return `${ptt.line ?? "rts"} on ${ptt.port ?? "?"}`;
+    if (ptt.kind === "rigctld" || ptt.kind === "flrig") return `${ptt.kind} at ${ptt.address ?? "?"}`;
+    if (ptt.kind === "cm108") return "a CM108 pin";
+    return "none";
+  };
+  const said = [];
+  const level = [get(before, "audio.tx_level"), get(after, "audio.tx_level")];
+  if (level[0] !== level[1]) said.push(`transmit level ${db(level[0])} → ${db(level[1])}`);
+  if (changed.some((key) => key.startsWith("ptt."))) said.push(`keying ${keying(before)} → ${keying(after)}`);
+  for (const [key, name] of [
+    ["radio.bandwidth", "bandwidth"],
+    ["audio.input", "capture"],
+    ["audio.output", "playback"],
+    ["callsign", "callsign"],
+    ["regulatory.profile", "rules"],
+  ]) {
+    const [was, now] = [get(before, key), get(after, key)];
+    if (was !== now) said.push(`${name} ${was || "none"} → ${now || "none"}`);
+  }
+  return said.length ? `Changed: ${said.join("; ")}.` : "";
+}
+
 async function loadProfile(id) {
   const entry = profiles.list.find((p) => p.id === id);
+  // the configuration as it stood, to say what the switch changed
+  const before = liveConfig ? structuredClone(liveConfig) : null;
   try {
     const answer = await call("profile.load", { id });
-    await afterProfileLoad(answer, `Switched to ${entry?.name ?? id}.`);
+    await afterProfileLoad(answer, `Switched to ${entry?.name ?? id}.`, before);
   } catch (error) {
     noteProfile(`${entry?.name ?? id} was not loaded: ${error.message} Nothing was changed.`, "error");
     log(error.message, true);
@@ -3510,6 +3573,9 @@ function showTxLevel(level) {
   txLevelShown = { level, db };
   $("tx-level").value = String(db);
   $("tx-level-reading").textContent = `${db === 0 ? "" : "−"}${Math.abs(db)} dB`;
+  // Setup shows it too: it is part of the profile, and a profile switch that changed it by
+  // 16 dB went unnoticed on the air (ND1J, 2026-09-26)
+  $("setup-tx-level").textContent = $("tx-level-reading").textContent;
   keyingSummary();
 }
 
@@ -4088,6 +4154,11 @@ function wireKeying() {
     // nothing kept
   }
   setKeyingOpen(open, false);
+  $("setup-tx-goto").addEventListener("click", () => {
+    selectTab($("tab-session"), true);
+    setKeyingOpen(true);
+    $("tx-level").focus();
+  });
   $("btn-keying-toggle").addEventListener("click", () => {
     setKeyingOpen($("btn-keying-toggle").getAttribute("aria-expanded") !== "true");
   });
@@ -4358,6 +4429,7 @@ function wire() {
       : act(() => call("disconnect"), "closing the session"),
   );
   wireUnsaved();
+  wireDevices();
   $("btn-abort").addEventListener("click", () =>
     act(() => call("abort"), "dropping the session"),
   );
