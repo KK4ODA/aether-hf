@@ -82,6 +82,12 @@
         <span id="reg-banner-text" title="What is missing"></span>
         <button class="small" id="btn-reg-banner-setup" title="Open Setup step 1 to say which rules apply, how the station is controlled and your license class">Open Setup</button>
       </div>
+      <!-- Setup changed and not saved: said on every other tab, since the modem is not using it -->
+      <div class="note warn unsaved-banner" id="unsaved-banner" title="Setup has changes that are not saved: the modem goes on using what it had until they are" role="status" hidden>
+        <span id="unsaved-banner-text" title="What was changed and not saved"></span>
+        <button class="small" id="btn-unsaved-review" title="Open Setup, where the changes are, to save them">Review in Setup</button>
+        <button class="small quiet" id="btn-unsaved-discard" title="Put Setup back to what the modem is using now; nothing is written">Discard changes</button>
+      </div>
       <!-- the session, in large type on every tab: up, being called, or how the last one ended -->
       <div class="session-banner" id="session-banner" title="The session: connected, calling, or how the last one ended" role="status" aria-live="assertive" hidden>
         <span id="session-banner-text"></span>
@@ -310,8 +316,9 @@
             <details class="help-pop" id="session-note" title="What each of the buttons does">
               <summary title="What the buttons do" aria-label="What the buttons do">?</summary>
               <p>
-                <strong>Disconnect</strong> finishes sending what is queued and then closes.
-                <strong>Abort</strong> does not. <strong>Probe</strong> asks the station in
+                <strong>Disconnect</strong> finishes sending what is queued and then closes; on the
+                receiving side it closes between the other station's bursts, and while calling the
+                same button stops the call. <strong>Abort</strong> closes at once. <strong>Probe</strong> asks the station in
                 Call whether it hears you, and how well, without a session: one frame, one
                 answer, both directions of the path. <strong>Beacon</strong> puts this station's
                 callsign on the air once, addressed to nobody, so anyone listening can report
@@ -328,6 +335,7 @@
           </div>
           <p class="note" id="probe-result" title="What the last probe found" role="status" aria-live="polite"></p>
           <p class="note" id="beacon-note" title="The beacons: the last one sent, and the next when repeating" role="status" aria-live="polite"></p>
+          <p class="note" id="closing-note" title="The session is closing: what it is waiting for, and how to close it at once" role="status" aria-live="polite"></p>
           <p class="note" id="test-result" title="What the test session did last, and how it ended" role="status" aria-live="polite"></p>
           <div class="test-progress" id="test-progress" title="How far the running test session has got" hidden>
             <p class="test-step" id="test-step" title="The step the test is at, out of the six it runs, and the time: elapsed, and the most the budget leaves"></p>
@@ -1106,7 +1114,9 @@
                 <h3 class="card-title step-title" title="Write the settings to the modem's configuration"><span class="step-num">6</span>Save</h3>
                 <button id="wz-save" title="Write these settings to the modem's configuration file" class="primary">Save these settings</button>
                 <button id="btn-copy" class="quiet" title="Copy the settings as TOML for a configuration file">Copy as TOML</button>
+                <button id="btn-setup-discard" class="quiet" title="Put every field back to what the modem is using now; nothing is written" hidden>Discard changes</button>
                 <span class="sub" id="copy-note" title="What the last copy did"></span>
+                <span class="setup-unsaved" id="setup-unsaved" title="Settings changed on this tab and not yet saved: the modem is not using them" role="status" aria-live="polite" hidden></span>
                 <span class="sub" id="wz-save-note" title="What the last save did" role="status" aria-live="polite"></span>
                 <span class="sub save-rest" id="setup-note" title="What saving does">Most settings take effect at once; a sound card, a port or the callsign restarts the modem — a few seconds, and the panel comes back by itself.</span>
               </div>
@@ -1244,7 +1254,7 @@
             <div class="card-head"><h2 class="card-title" id="help-beacons-title" title="Where beacons show, and how to repeat one">Beacons</h2></div>
             <ul class="help-steps">
               <li><strong>Sending one</strong>: <em>Beacon</em> on the Session tab puts this station's callsign on the air once, on the tone floor, addressed to nobody — so anyone listening, on either bandwidth, can say they heard you.</li>
-              <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. It needs you at the station — local or remote control: under automatic control a beacon may go only on 28.20–28.30 MHz and above (§97.203(g)).</li>
+              <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. It needs you at the station — local or remote control: a beacon may be automatically controlled only in the few segments of §97.203(d) (28.20–28.30 MHz and a handful above), and Aether does not beacon unattended.</li>
               <li><strong>What you sent</strong>: every beacon that goes on the air is in the <em>Log</em> (the <em>Beacons</em> filter), counted under <em>Beacons sent</em> on the Status tab, and the line under the Session tab's buttons says when the last went and when the next is due.</li>
               <li><strong>What you heard</strong>: a beacon heard is in the Log with its callsign and SNR, in <em>Stations</em> — the <em>Beacons</em> column counts them per station and says when the last one was, and the <em>Beacons</em> filter lists only those stations — and among the Diagnostics tab's frames. A beacon is never answered: a channel where every beacon drew a reply would be unusable.</li>
             </ul>

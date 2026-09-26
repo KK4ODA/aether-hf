@@ -485,12 +485,34 @@ async function refreshStatus() {
   }
   $("btn-disconnect").disabled = status.state === "idle";
   $("btn-abort").disabled = status.state === "idle";
+  applyClosing(status);
   $("btn-send").disabled = status.state !== "connected";
   $("send-note").textContent =
     status.state === "connected" ? "" : "Connect to a station first.";
 }
 
 let modeTable = [];
+
+// The Disconnect button says what it will do now, and the line under it what a close waits
+// for: in five sessions with KE4QCM (2026-09-25) Disconnect seemed to do nothing, and each
+// ended with Abort.
+function applyClosing(status) {
+  const calling = status.state === "connecting";
+  const button = $("btn-disconnect");
+  button.textContent = calling ? "Stop calling" : "Disconnect";
+  button.title = calling
+    ? "Stop calling: no session has come up, so there is nothing to close"
+    : "Close the session: what is queued is sent first; a receiving station closes between the other's bursts";
+  let note = "";
+  if (status.closing) {
+    note = status.role === "iss"
+      ? "Closing: sending what is still queued first, then the disconnect. Abort closes at once."
+      : "Closing as soon as the burst now arriving ends. Abort closes at once.";
+  } else if (status.state === "disconnecting") {
+    note = "Closing: waiting for the other station to answer the disconnect.";
+  }
+  $("closing-note").textContent = note;
+}
 
 // The beacon's line under the call buttons: the repeat and when the next is due, and when the
 // last one went — ND1J asked where a beacon sent could be seen.
@@ -2077,6 +2099,7 @@ async function loadCapabilities() {
   modeTable = caps.modes ?? [];
   fillModes();
   fillKissRungs();
+  settleSetup();
   const usable = new Set(caps.usable_modes ?? []);
   const body = $("modes");
   body.replaceChildren();
@@ -2157,6 +2180,7 @@ async function loadDevices() {
   fillProfiles();
   checkRates();
   writeConfig();
+  settleSetup();
 }
 
 // What the daemon is actually running, as `config.get` reported it.
@@ -2273,6 +2297,145 @@ async function loadConfig() {
   checkModemSettings();
   checkAppSettings();
   writeConfig();
+  rebaselineSetup();
+}
+
+// ── unsaved Setup changes ───────────────────────────────────────────
+//
+// Setup's fields are a form: a change there is nothing to the modem until Save, and an
+// operator who changed a field, went to another tab and found the station unchanged had no
+// way to know why (2026-09-25). The form's settings are taken as a baseline when it has been
+// filled from what the modem runs, and every edit is compared with it: the tab carries a dot,
+// the step its mark, the save bar the names, and every other tab a banner, until Save — or
+// Discard, which fills the form again from the modem.
+
+let setupBaseline = null;
+// the operator has changed a field since the baseline: lists that fill in late (devices,
+// modes, KISS rungs) settle the baseline only until then
+let setupTouched = false;
+
+const SETUP_STEP_OF = [
+  [/^(callsign$|operator\.|regulatory\.(profile|control|license_class|sideband)$)/, 1],
+  [/^(audio\.(input|output)$|ptt\.|panel\.interface$)/, 2],
+  [/^(radio\.|regulatory\.(edge_margin_hz|band_plan|log_permitted)$)/, 4],
+  [/^(update\.|record\.|host\.|kiss\.)/, 5],
+];
+
+const SETTING_NAMES = {
+  callsign: "callsign",
+  "operator.power_w": "power",
+  "regulatory.profile": "rules",
+  "regulatory.license_class": "license class",
+  "audio.input": "capture device",
+  "audio.output": "playback device",
+  "panel.interface": "interface",
+  "radio.max_mode": "fastest mode",
+  "radio.compress": "compression",
+  "radio.wait_for_clear": "busy channel",
+  "radio.busy_threshold_db": "busy threshold",
+  "radio.max_key_s": "longest key",
+  "radio.cw_id": "Morse ID",
+  "radio.cw_id_interval_s": "Morse ID interval",
+  "radio.cw_id_wpm": "Morse speed",
+  "regulatory.edge_margin_hz": "band edges",
+  "regulatory.band_plan": "band-plan guidance",
+  "regulatory.log_permitted": "automatic log",
+  "record.auto": "recording",
+  "record.notes": "recording notes",
+  "host.enabled": "host programs",
+  "host.bind": "host port",
+  "kiss.enabled": "KISS programs",
+  "kiss.bind": "KISS address",
+  "kiss.rung": "KISS rung",
+  "kiss.wait_for_clear": "KISS clear channel",
+  "update.channel": "update channel",
+  "update.check": "update check",
+};
+
+function settingName(key) {
+  if (key.startsWith("ptt.")) return "keying";
+  return SETTING_NAMES[key] ?? key.replace(/^.*\./, "").replaceAll("_", " ");
+}
+
+/// The form's settings, as compared: the transmit level is saved as the slider is released,
+/// not by Save, and is left out.
+function setupSnapshot() {
+  const settings = formChanges();
+  delete settings["audio.tx_level"];
+  return settings;
+}
+
+function unsavedSettings() {
+  if (!setupBaseline) return [];
+  const now = setupSnapshot();
+  const keys = new Set([...Object.keys(now), ...Object.keys(setupBaseline)]);
+  return [...keys].filter(
+    (key) => JSON.stringify(now[key] ?? null) !== JSON.stringify(setupBaseline[key] ?? null),
+  );
+}
+
+function rebaselineSetup() {
+  setupBaseline = setupSnapshot();
+  setupTouched = false;
+  showUnsaved();
+}
+
+function settleSetup() {
+  if (setupBaseline && !setupTouched) setupBaseline = setupSnapshot();
+  showUnsaved();
+}
+
+function showUnsaved() {
+  const keys = unsavedSettings();
+  const any = keys.length > 0;
+  const tab = $("tab-setup");
+  tab.dataset.unsaved = String(any);
+  tab.title = any
+    ? "Setup has changes that are not saved: the modem is not using them"
+    : "Callsign and rules, radio interface, receive level, modem and application settings";
+  const steps = new Set(
+    keys.map((key) => SETUP_STEP_OF.find(([pattern]) => pattern.test(key))?.[1]).filter(Boolean),
+  );
+  for (const el of document.querySelectorAll(".step[data-step], .step-link[data-step]")) {
+    el.dataset.unsaved = String(steps.has(Number(el.dataset.step)));
+  }
+  const names = [...new Set(keys.map(settingName))];
+  const listed = `${names.slice(0, 6).join(", ")}${names.length > 6 ? ` and ${names.length - 6} more` : ""}`;
+  const note = $("setup-unsaved");
+  note.hidden = !any;
+  note.textContent = any
+    ? `Not saved: ${listed}. The modem is not using ${keys.length === 1 ? "this change" : "these changes"} until you save.`
+    : "";
+  $("btn-setup-discard").hidden = !any;
+  $("unsaved-banner").hidden = !any || !$("panel-setup").hidden;
+  $("unsaved-banner-text").textContent = any
+    ? `Setup has changes that are not saved — ${listed} — so the modem is not using them.`
+    : "";
+}
+
+/// Put the form back to what the modem runs: nothing is written.
+async function discardSetup() {
+  $("wz-call").value = "";
+  await loadConfig();
+  const interfaceIndex = PROFILES.findIndex((p) => p.id === liveConfig?.panel?.interface);
+  if ($("wz-profile").options.length > 0) showInterface(interfaceIndex);
+  rebaselineSetup();
+  log("setup changes discarded");
+}
+
+function wireUnsaved() {
+  const setup = $("panel-setup");
+  const edited = (event) => {
+    // the profile bar's controls are not settings; everything else on the tab is
+    if (event.target instanceof Element && event.target.closest("#profile-bar")) return;
+    if (event.isTrusted) setupTouched = true;
+    showUnsaved();
+  };
+  setup.addEventListener("input", edited);
+  setup.addEventListener("change", edited);
+  $("btn-setup-discard").addEventListener("click", discardSetup);
+  $("btn-unsaved-discard").addEventListener("click", discardSetup);
+  $("btn-unsaved-review").addEventListener("click", () => selectTab($("tab-setup")));
 }
 
 function select(element, value) {
@@ -4078,6 +4241,7 @@ function selectTab(tab, focus = false) {
     drawStatusChart();
   }
   if (tab.dataset.panel === "stations") renderHeard();
+  showUnsaved();
   if (tab.dataset.panel === "diagnostics") {
     renderRegCard();
     // the frames heard while another tab was open: they were kept, not drawn
@@ -4121,9 +4285,13 @@ function wire() {
     if (!remote) return;
     await act(() => call("connect", { remote }), `calling ${remote}`);
   });
+  // while calling there is no session to close: the same button stops the call
   $("btn-disconnect").addEventListener("click", () =>
-    act(() => call("disconnect"), "closing the session"),
+    lastStatus?.state === "connecting"
+      ? act(() => call("abort"), "stopped calling")
+      : act(() => call("disconnect"), "closing the session"),
   );
+  wireUnsaved();
   $("btn-abort").addEventListener("click", () =>
     act(() => call("abort"), "dropping the session"),
   );
