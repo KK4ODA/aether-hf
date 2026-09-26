@@ -4559,7 +4559,7 @@ function contributeUrl(results, status, operator) {
     .filter(Boolean)
     .join(", ");
   const ladder = (results.ladder ?? [])
-    .map((r) => `mode ${r.mode}: ${r.decoded}/${r.frames} at ${r.snr_db ?? "?"} dB`)
+    .map((r) => `rung ${r.mode}: ${r.decoded}/${r.frames} at ${r.snr_db ?? "?"} dB`)
     .join("; ");
   const transfer = (name, t) =>
     t ? `${name}: ${t.bytes} bytes in ${t.seconds} s (${t.bps} bit/s)` : `${name}: not run`;
@@ -4574,7 +4574,7 @@ function contributeUrl(results, status, operator) {
     "",
     (results.adjustments ?? []).length ? `Adjusted: ${results.adjustments.join("; ")}` : "",
     "",
-    "Sidecar: attach the .json the test session wrote beside its .wav in the recordings folder (Help › Open the configuration folder). Attach the .wav too, zipped, if you are happy to share the audio.",
+    "Sidecar: attach the .json the test session wrote beside its .wav in the recordings folder (the Session tab's Open folder, in Recording and last session). Attach the .wav too, zipped, if you are happy to share the audio.",
   ].join("\n");
   const params = new URLSearchParams({
     template: "on_air_report.yml",
