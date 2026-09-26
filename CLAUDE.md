@@ -49,7 +49,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.69` on 2026-09-14…26, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.70` on 2026-09-14…26, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
 other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
@@ -879,6 +879,17 @@ listing took 2.9 s on a quiet machine, 16.6 s in the morning's measurement); the
 listings are identical, twelve devices at the same rates. The host adapter's BUSY reads ON for
 the whole of a session the panel started, so a program waiting for a clear channel waits for its
 end.
+
+**FLRig keying and beta.70 (2026-09-26 night).** `[ptt] kind = "flrig"` (`address`,
+`127.0.0.1:12345`) keys the radio and reads and sets the dial through FLRig's XML-RPC server with
+its published methods (`rig.set_ptt`, `rig.get_vfo`, `rig.set_vfo`; `FlrigPtt` in `ptt.rs`):
+FLRig holds the CAT port and serves several programs, so a host program tunes through it while
+Aether keys there and the rules check keeps reading the dial — the FLRig counterpart of sharing the
+radio through `rigctld` (`docs/user/host-programs.md`). Configuration **schema 9** (`flrig_keying`,
+a step that changes nothing; fixture `0.2.0-beta.69-host.toml`), with the shell's `SCHEMA_HISTORY`
+line `("0.2.0-beta.70", 9)`. beta.70 carries it with the evening's fixes (the host told only of its
+own sessions, the devices listed off the run loop, the transmit level in Setup), the sim clock and
+ADR-0028/0029/0030.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
