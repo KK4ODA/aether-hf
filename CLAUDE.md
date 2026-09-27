@@ -901,6 +901,22 @@ own sessions, the devices listed off the run loop, the transmit level in Setup),
 ADR-0028…0033 and ADR-0010 §7 (the key comes up where the sound card drains, not early by the
 time the burst took to render and key — the cloud session's fix).
 
+**ADR-0034 (after beta.70; model first, no wire change).** The chat bench's trial 184: a station
+answers any frame whose preamble it hears, in the family it last read the sender in, so after a
+floor poll every ordinary POLL and TURN was "answered" on the floor unread, the sender took that
+for an answer, and the other station read nothing for 45 s. The sender already has the evidence —
+any acknowledgement after a TURN (a TURN read is answered with a burst or a poll), or a floor
+acknowledgement to an ordinary poll (929 on the drop run, none read) — and now sends the frame again
+a turnaround later, on the floor; POLLs and TURNs stay there until a poll is answered in its own
+family or the turn changes hands. Data rungs are untouched. Chat drop run 7 → 5 (all five the
+−12 dB Good slow fade), lines lost 61 → 35, keyed time +1.4–2.1 % at 0 dB, `bench_link` identical.
+Rejected: treating it as ADR-0032's silence (lost 40/40 fades), the receiver recommending the floor
+(+11 % keyed), the answer's family alone (lost trial 120). A "not read" flag in the acknowledgement
+is the complete answer, for the same-family case too, but needs a protocol bump: look for that
+case in field recordings (an asymmetric path like ND1J's 0/+5 dB) before deciding. ADR-0030's
+`a_poll_is_not_repeated_over_its_answer_arriving` now expects the sender's polls to alternate
+ordinary and floor — its precondition, made exact; its assertions unchanged.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
