@@ -2046,7 +2046,9 @@ fn a_poll_is_not_repeated_over_its_answer_arriving() {
         // a path the tone floor's frames cross and the ordinary control frame does not: the
         // call goes on the floor and measures a strong path, so the sender polls in the
         // ordinary family of the rung it would send at, and the receiving station, which
-        // decoded only the floor's call, answers every poll it detects on the floor
+        // decoded only the floor's call, answers every poll it detects on the floor — and
+        // since that answer did not read its poll, the sender's next poll goes on the floor,
+        // and the one after it, answered in its own family, is ordinary again (ADR-0034)
         let mut sim =
             TwoStationSim::new(a, b, 20.0, 3).with_control_thresholds([99.0, floor_control]);
         sim.engine_mut(0).connect("KK4XYZ").expect("idle");
@@ -2066,9 +2068,13 @@ fn a_poll_is_not_repeated_over_its_answer_arriving() {
                 .map(|f| f.floor)
                 .collect::<Vec<_>>()
         };
+        let polls = controls(0);
         assert!(
-            controls(0).iter().all(|&floor| !floor) && controls(1).iter().all(|&floor| floor),
-            "not the case measured"
+            polls.len() >= 4
+                && !polls[0]
+                && polls.windows(2).all(|w| w[0] != w[1])
+                && controls(1).iter().all(|&floor| floor),
+            "not the case measured: {polls:?}"
         );
         assert_eq!(a.stats.ack_timeouts, 0, "{:?}", params.bandwidth);
         assert!(
@@ -2213,6 +2219,80 @@ fn a_session_whose_link_falls_to_the_floor_is_not_cut_off_on_the_way() {
         sim.events(0),
         sim.events(1)
     );
+}
+
+#[test]
+fn an_answer_that_did_not_read_its_frame_sends_the_next_on_the_floor() {
+    // ADR-0034 end to end, the chat bench's trial 184 (500 Hz, ITU Moderate, 0 dB) made
+    // certain: the path falls from 15 dB to −12 dB — below the ordinary control frame, above
+    // the floor's — while the called station holds the turn with nothing to send. Its ordinary
+    // polls and their answers are lost, and from the second silence its polls step down to the
+    // floor (ADR-0032); the other station reads one, and from then on answers on the floor
+    // every ordinary frame it hears and cannot read. The poller took each such answer for the
+    // answer and went back to ordinary polls — and to ordinary TURNs for the line waiting at
+    // the other station — and the other station, reading nothing, ended the session 45 s after
+    // the floor poll, idle or not. Now an answer that did not read its frame sends the next one
+    // on the floor: the line arrives, and an idle link stays up
+    use std::{cell::Cell, rc::Rc};
+    const DEEP: f64 = -12.0;
+    for params in [WIDE_2300, NARROW_500] {
+        let t = air_timing(params, true);
+        let controls = t.control_threshold_db.expect("the air's control frames");
+        assert!(
+            controls[1] + 6.0 < DEEP && DEEP < controls[0] - 6.0,
+            "not the case measured"
+        );
+        let config = LinkConfig {
+            max_mode: air_interface(params).n_rungs() - 1,
+            ..LinkConfig::default()
+        };
+        let bandwidth = params.bandwidth;
+        for waiting in [true, false] {
+            let (a, b) = pair(&t, &config);
+            let fade = Rc::new(Cell::new(f64::INFINITY));
+            let from = Rc::clone(&fade);
+            let mut sim =
+                TwoStationSim::new(a, b, 15.0, 3).with_snr_schedule(Box::new(move |at| {
+                    if at >= from.get() { DEEP } else { 15.0 }
+                }));
+            let reply: Vec<u8> = (0..60u8).collect();
+            sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+            sim.engine_mut(0).send(b"hello");
+            sim.engine_mut(1).send(&reply);
+            sim.run(60.0, 3.0);
+            assert!(
+                sim.delivered(0) == reply.as_slice()
+                    && sim.engine(1).role() == Role::Iss
+                    && !t.is_floor(sim.engine(1).current_mode()),
+                "{bandwidth:?}: not the case measured"
+            );
+            fade.set(sim.t);
+            let line = b"typed at the station that does not hold the turn";
+            if waiting {
+                sim.send_at(0, line, fade.get() + 20.0);
+            }
+            sim.run(fade.get() + 300.0, 3.0);
+            assert!(
+                !sim.events(0)
+                    .iter()
+                    .chain(sim.events(1))
+                    .any(|e| e.starts_with("disconnected")),
+                "{bandwidth:?} waiting {waiting}: {:?} {:?}",
+                sim.events(0),
+                sim.events(1)
+            );
+            if waiting {
+                let expected: Vec<u8> = b"hello".iter().chain(line).copied().collect();
+                assert_eq!(
+                    sim.delivered(1),
+                    expected.as_slice(),
+                    "{bandwidth:?}: {:?} {:?}",
+                    sim.events(0),
+                    sim.events(1)
+                );
+            }
+        }
+    }
 }
 
 #[test]
