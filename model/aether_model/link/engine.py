@@ -365,6 +365,16 @@ class LinkEngine:
         since the first TURN was one it could not read — which may be the other station's
         answer from the turn it now holds (ADR-0029). An acknowledgement it can read clears it:
         the other station is still receiving."""
+        self._unread_there = False
+        """The other station answered this station's last POLL or TURN without reading it: it
+        heard the frame's preamble, could not decode the frame, and answered all the same, as a
+        receiving station answers a burst that may be ending. The frame goes again at once, and
+        this station's POLLs and TURNs go out on the tone floor until one is read (ADR-0034). A
+        station that reads a TURN answers with a burst or a poll, never an acknowledgement; one
+        that reads a POLL answers in the POLL's family, since it answers in the family it last
+        read the sender in — so a floor answer to an ordinary POLL did not read it."""
+        self._poll_floor = False
+        """The family this station's last POLL went out in (ADR-0034)."""
         self._disc_requested = False
         self._disc_tries = 0
         self._connect_tries = 0
@@ -820,11 +830,12 @@ class LinkEngine:
         """The family our control frames go out in (ADR-0009): the ISS answers in the family
         of the bursts it sends, the IRS in the family of what it last heard — so an ACK
         comes back the way the burst went out, and either side can tell how long to wait
-        for it."""
+        for it. The ISS's go on the floor while the other station answers them unread
+        (ADR-0034)."""
         if self._floor_only():
             return True
         if self.role is Role.ISS and self.state is State.CONNECTED:
-            return self.timing.is_floor(self._burst_mode())
+            return self._unread_there or self.timing.is_floor(self._burst_mode())
         return self._peer_floor
 
     def _burst_mode(self) -> int:
@@ -965,7 +976,9 @@ class LinkEngine:
         )
 
     def _send_poll(self) -> None:
-        self._transmit([self._control(ControlKind.POLL)])
+        poll = self._control(ControlKind.POLL)
+        self._poll_floor = poll.floor
+        self._transmit([poll])
         self._wait_for("poll", self._reply_control_s(), self._unread_poll_delay())
 
     def _unread_poll_delay(self) -> float:
@@ -1392,12 +1405,15 @@ class LinkEngine:
                 return  # repeated accept: our confirmation is on its way
             self.role = Role.IRS
             self._waiting_for = None
+            self._unread_there = False
             self._disarm("wait")
             self._disarm("keepalive")
             self.actions.append(Event("role", "irs"))
         if self.role is Role.IRS and self._waiting_for == "turn":
+            # the other station took the turn: it read a TURN
             self._waiting_for = None
             self._turn_tries = 0
+            self._unread_there = False
             self._disarm("wait")
         if frame.floor != self.timing.is_floor(frame.mode):
             # a floor frame whose chips name an ordinary mode, or the reverse: the chips
@@ -1663,6 +1679,15 @@ class LinkEngine:
             if self.state is State.DISCONNECTING:
                 self._end_session("closed")
         elif ctl.kind is ControlKind.ACK:
+            unread_poll = False
+            if self._waiting_for == "poll":
+                # The other station answers in the family it last read this one in, and answers
+                # a poll it heard and could not read all the same (ADR-0028): a floor answer to
+                # an ordinary poll answered the poll's preamble alone. Taken for the answer, it
+                # told this station the link was up while the other read nothing of it until its
+                # link timed out (ADR-0034).
+                unread_poll = frame.floor and not self._poll_floor
+                self._unread_there = unread_poll
             if self.role is Role.ISS and (
                 self._waiting_for in ("ack", "poll")
                 or (
@@ -1674,6 +1699,10 @@ class LinkEngine:
                 )
             ):
                 self._on_ack(ctl)
+                if unread_poll and "keepalive" in self._deadlines:
+                    # the answer asked for nothing — no turn, no burst went — and the poll was
+                    # not read: it goes again now, on the floor, rather than a keepalive later
+                    self._arm("keepalive", self.timing.turnaround_s)
             elif self.role is Role.IRS and self.state is State.CONNECTED:
                 # The other station is receiving too: it has not taken a turn this one offered,
                 # and it answered a preamble of this one's as the end of a burst. That needs no
@@ -1682,6 +1711,13 @@ class LinkEngine:
                 # answer to the TURN (ADR-0029).
                 if self._waiting_for == "turn":
                     self._turn_unread = False
+                    # A station that reads a TURN takes the turn and answers with its burst or a
+                    # poll: this acknowledgement answered the TURN's preamble. Repeated in its
+                    # family when the wait ran out, an ordinary TURN answered on the floor went
+                    # unread three times and the other station timed out (ADR-0034). It goes
+                    # again now, on the floor.
+                    self._unread_there = True
+                    self._arm("wait", self.timing.turnaround_s)
                 if not self._burst:
                     self._disarm("ack")
         elif ctl.kind is ControlKind.POLL:
@@ -1718,11 +1754,13 @@ class LinkEngine:
         self.role = Role.IRS
         self._waiting_for = None
         self._turn_tries = 0
+        self._unread_there = False
         self._disarm("wait")
         self._disarm("keepalive")
 
     def _take_iss(self) -> None:
         self.role = Role.ISS
+        self._unread_there = False
         # the first burst of a turn goes out where this station's own measurements of the
         # peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
         # it (P9-2), not at the slowest rung of the ladder: that is the tone floor
@@ -1917,6 +1955,7 @@ class LinkEngine:
         self._heard_peer_db = None
         self._turn_tries = self._disc_tries = 0
         self._turn_unread = False
+        self._unread_there = self._poll_floor = False
         self._disc_requested = False
         self._waiting_for = None
         self._rx_base = 0

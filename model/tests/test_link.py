@@ -2268,12 +2268,15 @@ def test_a_turn_answered_by_a_poll_the_sender_cannot_read() -> None:
     assert sim.delivered(0) == message
 
 
-def _control_frame(kind: ControlKind, session: int, t_end: float, **fields: object) -> SoftFrame:
-    """A control frame of ``session`` that arrived at ``t_end``, readable."""
+def _control_frame(
+    kind: ControlKind, session: int, t_end: float, *, floor: bool = False, **fields: object
+) -> SoftFrame:
+    """A control frame of ``session`` that arrived at ``t_end``, readable, in the ordinary family
+    or on the ``floor``."""
     from aether_model.link.sim import SimFrame
 
     payload = ControlFrame(kind, session, **fields).encode()  # type: ignore[arg-type]
-    return SimFrame(Container.CONTROL, 0, 0, 20.0, t_end - 0.4, t_end, payload, 0.0)
+    return SimFrame(Container.CONTROL, 0, 0, 20.0, t_end - 0.4, t_end, payload, 0.0, floor=floor)
 
 
 def _holding_the_turn(timing: PhyTiming, work: bool) -> LinkEngine:
@@ -2491,7 +2494,9 @@ def test_a_poll_is_not_repeated_over_its_answer_arriving(bandwidth: int) -> None
     # a path the tone floor's frames cross and the ordinary control frame does not: the call
     # goes on the floor and measures a strong path, so the sender polls in the ordinary family
     # of the rung it would send at, and the receiving station, which decoded only the floor's
-    # call, answers every poll it detects on the floor
+    # call, answers every poll it detects on the floor — and since that answer did not read its
+    # poll, the sender's next poll goes on the floor, and the one after it, answered in its own
+    # family, is ordinary again (ADR-0034)
     sim = TwoStationSim(
         a,
         b,
@@ -2499,10 +2504,28 @@ def test_a_poll_is_not_repeated_over_its_answer_arriving(bandwidth: int) -> None
         seed=3,
         control_thresholds={False: 99.0, True: TONE_CONTROL_THRESHOLD_DB},
     )
+    families: dict[int, list[bool]] = {0: [], 1: []}
+    for who, engine in enumerate((a, b)):
+
+        def record(
+            frames: list[TxFrame],
+            who: int = who,
+            sent: Callable[[list[TxFrame]], None] = engine._transmit,
+        ) -> None:
+            families[who] += [f.floor for f in frames if f.container is Container.CONTROL]
+            sent(frames)
+
+        engine._transmit = record  # type: ignore[method-assign]
     a.connect("KK4XYZ")
     sim.run(until=100)
     assert a.state is State.CONNECTED, sim.events(0)
-    assert (a._control_floor(), b._control_floor()) == (False, True), "not the case measured"
+    polls = families[0]
+    assert (
+        len(polls) >= 4
+        and not polls[0]
+        and all(x != y for x, y in pairwise(polls))
+        and all(families[1])
+    ), f"not the case measured: {polls}"
     assert a.stats.ack_timeouts == 0
     assert a.stats.acks_received >= 5, "every poll's answer is heard"
 
@@ -2640,6 +2663,189 @@ def test_a_narrow_session_rides_a_slow_fade_at_minus_four_db() -> None:
         sim.run(until=900)
         done += sim.delivered(1) == message
     assert done >= 5, done
+
+
+# ── an answer to a frame that was not read (ADR-0034) ─────────────────
+
+
+def _transmitted(engine: LinkEngine) -> list[TxFrame]:
+    """The frames the engine has asked to send since the last look."""
+    return [f for x in engine.drain() if isinstance(x, Transmit) for f in x.frames]
+
+
+def _kinds(frames: list[TxFrame]) -> list[tuple[ControlKind, bool]]:
+    """Each control frame's kind and whether it went on the floor."""
+    return [
+        (ControlFrame.decode(f.payload).kind, f.floor)
+        for f in frames
+        if f.container is Container.CONTROL
+    ]
+
+
+def _first_ordinary(engine: LinkEngine) -> int:
+    """The slowest rung of the ordinary family the engine's controller recommends."""
+    return next(m for m in engine.rate.modes if not engine.timing.is_floor(m))
+
+
+def _polling_on_ordinary(timing: PhyTiming) -> LinkEngine:
+    """A sender with nothing to send, polling on the ordinary layouts, whose last answer came
+    on the tone floor: the other station last read it there, and answers there."""
+    b = LinkEngine("KK4XYZ", timing, LinkConfig())
+    b.role, b.state, b.session, b.now = Role.ISS, State.CONNECTED, 7, 100.0
+    b._recommended = _first_ordinary(b)
+    b._peer_floor = True
+    b._send_poll()
+    assert _kinds(_transmitted(b)) == [(ControlKind.POLL, False)]
+    b.on_tx_done(b._tx_busy_until)
+    return b
+
+
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_an_ordinary_poll_answered_on_the_floor_was_not_read(bandwidth: int) -> None:
+    """ADR-0034: a receiving station answers in the family it last read the sender in, and
+    answers a poll it heard and could not read all the same (ADR-0028), so an ordinary poll
+    answered on the floor was not read. The TURN it prompts goes on the floor; when it prompts
+    nothing, the poll goes again at once, on the floor; and once a poll is answered in its own
+    family the next is ordinary again. Taken for the poll's answer, a floor answer carrying the
+    other station's wish to send was followed by three ordinary TURNs, all unread, and the other
+    station, which had read nothing for 45 s, ended the session (the chat bench, 500 Hz, ITU
+    Moderate, 0 dB, trial 184)."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing((WIDE if bandwidth == 2300 else NARROW).params)
+    end = 100.0 + timing.control_frame_s + 1.0 + timing.control_frame_s_for(True)
+    ordinary = _first_ordinary(LinkEngine("KK4XYZ", timing, LinkConfig()))
+    want = {"flags": ControlFlags.WANT_TX, "recommended_mode": ordinary}
+
+    # answered on the floor, with the other station's wish to send: the TURN goes on the floor
+    b = _polling_on_ordinary(timing)
+    b.on_frame(_control_frame(ControlKind.ACK, 7, end, floor=True, **want), end)
+    assert _kinds(_transmitted(b)) == [(ControlKind.TURN, True)]
+
+    # answered in its own family, the poll was read, as far as anyone can tell: as before
+    b = _polling_on_ordinary(timing)
+    b.on_frame(_control_frame(ControlKind.ACK, 7, end, **want), end)
+    assert _kinds(_transmitted(b)) == [(ControlKind.TURN, False)]
+
+    # answered on the floor with nothing to send: the poll goes again a turnaround later, on the
+    # floor, and once one is answered in its own family the next is ordinary again, a keepalive
+    # later
+    b = _polling_on_ordinary(timing)
+    b.on_frame(_control_frame(ControlKind.ACK, 7, end, floor=True, recommended_mode=ordinary), end)
+    assert not _transmitted(b)
+    assert b._deadlines["keepalive"] == pytest.approx(end + timing.turnaround_s)
+    b.tick(b._deadlines["keepalive"])
+    assert _kinds(_transmitted(b)) == [(ControlKind.POLL, True)]
+    b.on_tx_done(b._tx_busy_until)
+    t = b._tx_busy_until + 5.0
+    b.on_frame(_control_frame(ControlKind.ACK, 7, t, floor=True, recommended_mode=ordinary), t)
+    assert b._deadlines["keepalive"] == pytest.approx(t + b.cfg.keepalive_s)
+    b.tick(b._deadlines["keepalive"])
+    assert _kinds(_transmitted(b)) == [(ControlKind.POLL, False)]
+
+    # a floor poll answered ordinary: the other station last read this one in the ordinary
+    # family, not on the floor — the floor is what it cannot read here, and nothing moves there
+    b = _polling_on_ordinary(timing)
+    b._unread_there = True
+    b.tick(b._deadlines["wait"] + 0.1)  # the poll's wait: silence, and the poll goes again
+    assert _kinds(_transmitted(b)) == [(ControlKind.POLL, True)]
+    b.on_tx_done(b._tx_busy_until)
+    t = b._tx_busy_until + 1.5
+    b.on_frame(_control_frame(ControlKind.ACK, 7, t, recommended_mode=ordinary), t)
+    assert not b._unread_there and not b._control_floor()
+
+
+@pytest.mark.parametrize("floor", [True, False], ids=["answered-on-the-floor", "in-its-family"])
+def test_a_turn_answered_by_an_acknowledgement_goes_again_at_once_on_the_floor(
+    floor: bool,
+) -> None:
+    """ADR-0034: a station that reads a TURN takes the turn and answers with its burst or a
+    poll, never with an acknowledgement — one that comes back answered the TURN's preamble, the
+    other station still receiving (ADR-0029). The TURN goes again a turnaround after it, on the
+    floor, not in its own family when the wait for the other station's first frame runs out: in
+    the chat bench's trace three ordinary TURNs went unread, 6.6 s apart, until the other
+    station, which had read nothing for 45 s, ended the session. Once the turn has changed hands
+    the station's control frames go in their own family again."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.state, a.role, a.session, a.now = State.CONNECTED, Role.ISS, 7, 100.0
+    a._recommended = _first_ordinary(a)
+    a._peer_wants_tx = True
+    a._maybe_start_burst()
+    assert _kinds(_transmitted(a)) == [(ControlKind.TURN, False)]
+    a.on_tx_done(a._tx_busy_until)
+    answered = a._tx_busy_until + 1.0 + timing.control_frame_s_for(floor)
+    a.on_frame(_control_frame(ControlKind.ACK, 7, answered, floor=floor), answered)
+    assert not _transmitted(a)
+    assert a._deadlines["wait"] == pytest.approx(answered + timing.turnaround_s)
+    a.tick(answered + timing.turnaround_s)
+    assert _kinds(_transmitted(a)) == [(ControlKind.TURN, True)]
+    assert a._waiting_for == "turn" and a._turn_tries == 2
+    # the other station reads it, and takes the turn with a poll; later it hands it back
+    a.on_tx_done(a._tx_busy_until)
+    t = a._tx_busy_until + 2.0
+    a.on_frame(_control_frame(ControlKind.POLL, 7, t, floor=True), t)
+    assert a.role is Role.IRS and a._waiting_for is None
+    a.tick(a._deadlines["ack"])
+    assert _kinds(_transmitted(a)) == [(ControlKind.ACK, True)]
+    a.on_tx_done(a._tx_busy_until)
+    t = a.now + 10.0
+    a.on_frame(_control_frame(ControlKind.TURN, 7, t), t)
+    assert a.role is Role.ISS
+    assert _kinds(_transmitted(a)) == [(ControlKind.POLL, False)]
+
+
+@pytest.mark.parametrize("waiting", [True, False], ids=["a-line-waits", "both-idle"])
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_an_answer_that_did_not_read_its_frame_sends_the_next_on_the_floor(
+    bandwidth: int, waiting: bool
+) -> None:
+    """ADR-0034 end to end, the chat bench's trial 184 (500 Hz, ITU Moderate, 0 dB) made certain:
+    the path falls from 15 dB to −12 dB — below the ordinary control frame, above the floor's —
+    while the called station holds the turn with nothing to send. Its ordinary polls and their
+    answers are lost, and from the second silence its polls step down to the floor (ADR-0032);
+    the other station reads one, and from then on answers on the floor every ordinary frame it
+    hears and cannot read. The poller took each such answer for the answer and went back to
+    ordinary polls — and to ordinary TURNs for the line waiting at the other station — and the
+    other station, reading nothing, ended the session 45 s after the floor poll, idle or not.
+    Now an answer that did not read its frame sends the next one on the floor: the line
+    arrives, and an idle link stays up."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.sim import control_thresholds_for
+
+    air = WIDE if bandwidth == 2300 else NARROW
+    timing = phy_timing(air.params)
+    config = LinkConfig(max_mode=air.n_rungs - 1)
+    a = LinkEngine("W4ODA", timing, config, seed=1)
+    b = LinkEngine("KK4XYZ", timing, config, seed=2)
+    deep = -12.0
+    controls = control_thresholds_for(timing)
+    assert controls[True] + 6.0 < deep < controls[False] - 6.0, "not the case measured"
+    fade = [math.inf]
+    sim = TwoStationSim(
+        a, b, snr_db=15.0, seed=3, snr_schedule=lambda t: deep if t >= fade[0] else 15.0
+    )
+    a.connect("KK4XYZ")
+    a.send(b"hello")
+    reply = bytes(range(60))
+    b.send(reply)
+    sim.run(until=60.0)
+    assert sim.delivered(0) == reply and b.role is Role.ISS, "not the case measured"
+    assert not b._control_floor(), "not the case measured"
+    fade[0] = sim.t
+    line = b"typed at the station that does not hold the turn"
+    if waiting:
+        _type(sim, 0, line, fade[0] + 20.0)
+    sim.run(until=fade[0] + 300.0)
+    ends = [e for e in sim.events(0) + sim.events(1) if e.startswith("disconnected")]
+    assert not ends, (sim.events(0), sim.events(1))
+    if waiting:
+        assert sim.delivered(1) == b"hello" + line, (sim.events(0), sim.events(1))
 
 
 # ── chat: asking for the turn (ADR-0027) ──────────────────────────────
