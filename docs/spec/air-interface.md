@@ -314,8 +314,9 @@ datagrams sent at an OFDM rung. SHORT carries acknowledgements and the other con
 the air's **control mode** — BPSK ⅕ (OFDM mode 0) at 2 300 Hz, QPSK ½ (OFDM mode 3) at
 500 Hz. A frame's *family* is the tone floor's or the ordinary (OFDM) one. While a link runs
 any tone rung — the floor's own kinds, the fast kinds or the middle kinds — its data frames
-are tone frames and its control frames the tone floor's control frame. A connection request
-starts on the floor, and probes and beacons go out on it (§7).
+are tone frames and its control frames the tone floor's control frame; a sending station's
+control frames go on the floor too while the other station answers them unread (§7.2). A
+connection request starts on the floor, and probes and beacons go out on it (§7).
 
 ### 3.1 Preamble, and what it signals
 
@@ -690,7 +691,14 @@ or a `POLL`: the other station heard nothing of it taking the turn. The sender o
 it when no answer comes, and takes the turn back after three tries in the reference engine —
 unless the last frame it heard from the other station since the first was one it could not read,
 which may be the answer; then it offers again, up to eight. A receiving station does not
-acknowledge an acknowledgement it reads: the other station is receiving too (ADR-0029). When two
+acknowledge an acknowledgement it reads: the other station is receiving too (ADR-0029). An
+acknowledgement that answers a `TURN` answered its preamble alone — a station that reads a
+`TURN` answers with a burst or a `POLL` — and so does a floor acknowledgement that answers an
+ordinary `POLL`, since a station answers in the family it last read the other in. The `TURN`
+goes again a turnaround after that answer, on the floor; the `POLL` does too, unless the answer
+prompts a `TURN` or a burst, and then that `TURN` goes on the floor. The station's `POLL`s and
+`TURN`s stay on the floor until a `POLL` is answered in its own family or the turn changes hands
+(ADR-0034). When two
 stations call each other at once, the one whose callsign sorts higher keeps calling and ignores
 the other's request, and the other answers it.
 

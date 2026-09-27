@@ -38,3 +38,4 @@ context → decision → alternatives considered → consequences.
 | [0031](0031-a-re-encoded-frame-stays-unacknowledged.md) | A frame re-encoded and left out of its burst stays unacknowledged — no frame lost, no sender silenced, no session closed with a frame missing | accepted |
 | [0032](0032-an-unanswered-poll-steps-down.md) | An unanswered poll steps the recommendation down, from the second in a row — the polls reach the tone floor within the retries | accepted |
 | [0033](0033-the-link-timeout-follows-the-link-down.md) | The link timeout follows the link down to the floor — reckoned again whenever a station sends | accepted |
+| [0034](0034-an-answer-that-did-not-read-its-frame.md) | A POLL or TURN answered without being read goes again at once, on the floor — an acknowledgement to a TURN, or a floor one to an ordinary POLL, answered the preamble alone | accepted |
