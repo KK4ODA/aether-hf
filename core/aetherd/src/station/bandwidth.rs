@@ -50,6 +50,18 @@ use crate::ptt::Ptt;
 /// and for the call that often follows a ping.
 pub const RETURN_QUIET_S: f64 = 20.0;
 
+/// A callsign without what an operator adds to it: the SSID and anything after it (`-9`,
+/// `VarAC`'s `-1-T`), and a portable prefix or suffix (`VE3/`, `/P`) — the longest part
+/// between slashes, which is the licensed call.
+#[must_use]
+pub fn base_callsign(callsign: &str) -> &str {
+    let call = callsign.trim();
+    let call = call.split('-').next().unwrap_or(call);
+    call.split('/')
+        .max_by_key(|part| part.len())
+        .unwrap_or(call)
+}
+
 /// How many other stations' bandwidths the station remembers — the stations-heard list's
 /// bound: the daemon seeds these from it at start, and the frames heard since keep them.
 pub const KNOWN_LIMIT: usize = crate::heard::LIMIT;
@@ -230,15 +242,27 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The bandwidth a station was last heard to run, if it has been.
+    ///
+    /// The callsign it was heard under first. Failing that, the other names of the same
+    /// operator: `VarAC` beacons as `KK4ODA-9` and pings `KK4ODA-1-T`, and a station may be
+    /// heard beaconing under one SSID and called under another — so every station heard under
+    /// the same base callsign ([`base_callsign`]) counts, but only when they all agree. One
+    /// operator running two stations in different bandwidths is not a guess to make: the
+    /// call then goes out in the station's own, as it would unknown.
     #[must_use]
     pub fn known_bandwidth(&self, callsign: &str) -> Option<usize> {
         let callsign = callsign.trim().to_ascii_uppercase();
-        self.bandwidth
-            .known
+        let known = &self.bandwidth.known;
+        if let Some(&(_, hz)) = known.iter().rev().find(|(call, _)| *call == callsign) {
+            return Some(hz);
+        }
+        let base = base_callsign(&callsign);
+        let mut kin = known
             .iter()
-            .rev()
-            .find(|(call, _)| *call == callsign)
-            .map(|&(_, hz)| hz)
+            .filter(|(call, _)| base_callsign(call) == base)
+            .map(|&(_, hz)| hz);
+        let first = kin.next()?;
+        kin.all(|hz| hz == first).then_some(first)
     }
 
     /// Before a call: a 2 300 Hz station calling one it knows runs 500 Hz moves to 500 Hz, so

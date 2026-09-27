@@ -800,6 +800,18 @@ function stamp(ms) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${clock(ms)}`;
 }
 
+// A stamp short enough for a table column: the time for today, the date otherwise — the
+// whole stamp goes in the cell's tooltip. The stations list's full "first heard" stamps were
+// what pushed it past the window's width.
+function shortStamp(ms, now = Date.now()) {
+  const d = new Date(ms);
+  const today = new Date(now);
+  if (d.toDateString() === today.toDateString()) return clock(ms).slice(0, 5);
+  const options = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== today.getFullYear()) options.year = "numeric";
+  return d.toLocaleDateString(undefined, options);
+}
+
 // ── frames: the receiver's own readings, one per frame ──────────────
 
 const SNR_SPAN_MS = 10 * 60 * 1000;
@@ -1460,7 +1472,7 @@ function renderHeard() {
     };
     cell(station.callsign, "call");
     cell(relative(station.last_heard_ms, now), "", stamp(station.last_heard_ms));
-    cell(stamp(station.first_heard_ms), "numerals");
+    cell(shortStamp(station.first_heard_ms, now), "numerals", stamp(station.first_heard_ms));
     cell(`${station.snr_db.toFixed(1)} dB`, "num");
     cell(`${station.best_snr_db.toFixed(1)} dB`, "num");
     cell(station.frequency_hz ? formatHz(station.frequency_hz) : "—", "num");
