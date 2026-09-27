@@ -190,6 +190,11 @@ function onEvent(frame) {
       renderBandwidth(data);
       loadCapabilities();
       break;
+    case "mismatch":
+      // a call or probe to this station in a bandwidth whose calls it does not answer
+      // (ADR-0035): said where the operator looks, not only in the log
+      renderMismatch(data);
+      break;
     case "devices":
       // the daemon listed the devices again, off its loop, and found one plugged in or taken
       // away: the lists follow, keeping what is chosen
@@ -1201,6 +1206,8 @@ function drawSnrChart() {
 
 let heardList = [];
 let heardSort = { key: "last_heard_ms", direction: -1 };
+// The bandwidth the station runs now, for the stations list's Bandwidth column (ADR-0035).
+let stationBandwidthHz = null;
 // which stations the list shows: all, those whose beacons were heard, those worked
 let heardFilter = "all";
 const HEARD_EMPTY = {
@@ -1457,6 +1464,19 @@ function renderHeard() {
     cell(`${station.snr_db.toFixed(1)} dB`, "num");
     cell(`${station.best_snr_db.toFixed(1)} dB`, "num");
     cell(station.frequency_hz ? formatHz(station.frequency_hz) : "—", "num");
+    const bw = station.bandwidth_hz;
+    const other = bw && stationBandwidthHz && bw !== stationBandwidthHz;
+    cell(
+      bw ? String(bw) : "—",
+      bw ? (other ? "num bw-other" : "num") : "num muted",
+      !bw
+        ? "No frame from this station has said its bandwidth yet: a beacon, a call or a probe does"
+        : other
+          ? stationBandwidthHz === 2300 && bw === 500
+            ? `Runs ${bw} Hz, this station ${stationBandwidthHz} Hz: a call to it goes out at ${bw} Hz, and its calls are answered`
+            : `Runs ${bw} Hz, this station ${stationBandwidthHz} Hz: its calls are not answered here until this station runs ${bw} Hz (Setup step 4); a call from here goes out at ${stationBandwidthHz} Hz, which a ${bw} Hz station of this version answers and an earlier one does not`
+          : `Runs ${bw} Hz, as this station does`,
+    );
     const mode = modeTable[station.mode];
     cell(String(station.mode), "num", mode ? mode.name : "");
     const act = document.createElement("span");
@@ -3463,6 +3483,11 @@ function applyKiss(kiss, host, datagrams) {
 // program's BW command moved it, or a call in the narrower one did.
 function renderBandwidth(bandwidth) {
   const chip = $("bw-chip");
+  if (bandwidth && bandwidth.bandwidth_hz !== stationBandwidthHz) {
+    stationBandwidthHz = bandwidth.bandwidth_hz;
+    renderHeard();
+  }
+  renderMismatch(bandwidth?.mismatch);
   if (!bandwidth || bandwidth.why === "configured" || bandwidth.bandwidth_hz === bandwidth.home_hz) {
     chip.hidden = true;
     return;
@@ -3472,10 +3497,55 @@ function renderBandwidth(bandwidth) {
   if (bandwidth.why === "call") {
     chip.textContent = `${hz} Hz · ${bandwidth.caller ?? "a call"}`;
     chip.title = `${bandwidth.caller ?? "A station"} called in ${hz} Hz, and the station answered in it; it goes back to its own ${bandwidth.home_hz} Hz after the session`;
+  } else if (bandwidth.why === "calling") {
+    chip.textContent = `${hz} Hz · calling ${bandwidth.callee ?? "a station"}`;
+    chip.title = `${bandwidth.callee ?? "The station called"} was last heard running ${hz} Hz, so the call went out in it; the station goes back to its own ${bandwidth.home_hz} Hz after the session`;
   } else {
     chip.textContent = `${hz} Hz · host program`;
     chip.title = `The host program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
   }
+}
+
+// A call or probe to this station in a bandwidth whose calls it does not answer (ADR-0035):
+// KK4ODA-1 at 500 Hz and WC4Y at 2300 Hz ignored each other for five hours with only a log
+// line to say why. The daemon's sentence names the station, both bandwidths and the fix; a
+// dismissed warning stays hidden until a newer one.
+const MISMATCH_DISMISSED_KEY = "aether.mismatchDismissed";
+
+function mismatchDismissedAt() {
+  try {
+    return Number(localStorage.getItem(MISMATCH_DISMISSED_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function renderMismatch(mismatch) {
+  const banner = $("mismatch-banner");
+  if (!mismatch || !mismatch.sentence || mismatch.at_ms <= mismatchDismissedAt()) {
+    banner.hidden = true;
+    return;
+  }
+  $("mismatch-banner-text").textContent = mismatch.sentence;
+  banner.dataset.at = String(mismatch.at_ms);
+  banner.hidden = false;
+}
+
+function wireMismatch() {
+  $("btn-mismatch-setup").addEventListener("click", () => {
+    selectTab($("tab-setup"));
+    document.querySelector('.step[data-step="4"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("radio-bandwidth").focus({ preventScroll: true });
+  });
+  $("btn-mismatch-dismiss").addEventListener("click", () => {
+    const banner = $("mismatch-banner");
+    try {
+      localStorage.setItem(MISMATCH_DISMISSED_KEY, banner.dataset.at ?? "0");
+    } catch {
+      // private window: dismissed for this page's life only
+    }
+    banner.hidden = true;
+  });
 }
 
 function renderKissClients(clients) {
@@ -4468,6 +4538,7 @@ function wire() {
     chip.addEventListener("click", () => setHeardFilter(chip.dataset.filter));
   }
   wireStepper();
+  wireMismatch();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
   $("radio-cwid").addEventListener("change", showCwidCap);
   $("btn-probe").addEventListener("click", async () => {

@@ -130,8 +130,10 @@ The three are deliberately distinguished, and a client can tell them apart.
 panel's Setup tab), and runs it unless something moves it, between sessions only: a host
 program's `BW<n>`, for as long as the program is attached, or a call to a 2300 Hz station in
 500 Hz, which it answers at 500 Hz — calls begin on the tone floor, whose frames are the same
-on both airs — going back 20 s after the session. `CONNECTED` reports the bandwidth of the
-session. A 500 Hz station never answers a 2300 Hz call, and a `BW<n>` the station cannot
+on both airs — going back 20 s after the session — or a call from a 2300 Hz station to one it
+last heard running 500 Hz, which goes out at 500 Hz and comes back the same way (ADR-0035;
+the host sees the `CONNECTED … 500` it would after its own `BW500`). `CONNECTED` reports the
+bandwidth of the session. A 500 Hz station never answers a 2300 Hz call, and a `BW<n>` the station cannot
 follow now is refused (`WRONG`) rather than accepted and not honoured: a client that asked for
 500 Hz and got 2300 would be transmitting outside what its operator chose — a 2300 Hz signal
 on a 500 Hz calling frequency most of all.
