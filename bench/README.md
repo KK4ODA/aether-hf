@@ -515,6 +515,20 @@ at −12 dB on ITU Good. `link_deadline_link.csv` is `bench_link.py --fading --f
 identical in all 600 sessions. ADR-0033 has the table, and the three changes against
 `f17fec5`: 17 drops and a stall → 4 drops, lines lost 157 → 41.
 
+## An answer that did not read its frame (`answer_unread_chat.csv`, `answer_unread_link.csv`, ADR-0034)
+
+The engine at `ea81ae7` (`engine` `before`, with ADR-0028…0033) and with a POLL or TURN the other
+station answered without reading sent again at once on the floor (`after`), the same runs as
+ADR-0031's: today's turn-taking and ADR-0027's request, the grid (`first_trial` 0) and the drop
+run (`first_trial` 100). Beside them, on the drop run's −6 and 0 dB points, the rules not taken:
+`silence` (a floor answer counted toward ADR-0032's step-down), `receiver` (the receiving station
+recommends the floor when it answers an ordinary control frame it could not read),
+`answer-family`, `floor-when-due` and `turn-at-once` (the adopted rule without the poll, and
+without either repeat at once). Drops 7 → 5 of 5 400 — trial 184 completes, and all five left are
+the −12 dB slow fade on ITU Good — lines lost 61 → 35, a line's time unchanged or shorter at every
+SNR, keyed time +1.4–2.1 % at 0 dB. `answer_unread_link.csv` is `bench_link.py --fading
+--floor-cap`: identical in all 600 sessions. ADR-0034 has the tables.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,
