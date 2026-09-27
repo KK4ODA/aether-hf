@@ -68,6 +68,11 @@ pub struct HeardStation {
     /// When its last beacon was heard, milliseconds since the Unix epoch.
     #[serde(default)]
     pub last_beacon_ms: Option<u64>,
+    /// The bandwidth it runs, hertz, as the last of its frames that states one said — a
+    /// beacon, a call, an answer, a probe or a probe's answer (ADR-0035). A list written
+    /// before that has none, and a station heard only in frames that state none has none.
+    #[serde(default)]
+    pub bandwidth_hz: Option<u32>,
 }
 
 /// One frame with a callsign in it.
@@ -88,6 +93,8 @@ pub struct Sighting {
     pub activity: Activity,
     /// Who it was doing it to.
     pub detail: Option<String>,
+    /// The bandwidth the frame says its sender runs, when it says.
+    pub bandwidth_hz: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -137,6 +144,10 @@ impl HeardList {
             if sighting.frequency_hz.is_some() {
                 entry.frequency_hz = sighting.frequency_hz;
             }
+            // a session's frames state no bandwidth, and do not erase what a call said
+            if sighting.bandwidth_hz.is_some() {
+                entry.bandwidth_hz = sighting.bandwidth_hz;
+            }
             if let Some(mode) = sighting.mode {
                 entry.mode = mode;
             }
@@ -163,6 +174,7 @@ impl HeardList {
                 connected: sighting.activity == Activity::Connected,
                 beacons: u32::from(sighting.activity == Activity::Beacon),
                 last_beacon_ms: (sighting.activity == Activity::Beacon).then_some(sighting.at_ms),
+                bandwidth_hz: sighting.bandwidth_hz,
             };
             self.stations.push(entry.clone());
             entry
@@ -247,6 +259,7 @@ mod tests {
             frequency_hz: Some(14_107_000),
             activity: Activity::Beacon,
             detail: None,
+            bandwidth_hz: Some(500),
         }
     }
 
@@ -274,15 +287,26 @@ mod tests {
         assert_eq!(entry.mode, 3);
         assert_eq!(entry.activity, Activity::Calling);
         assert_eq!(entry.detail.as_deref(), Some("KK4ODA"));
+        assert_eq!(entry.bandwidth_hz, Some(500));
         assert!(!entry.connected);
         // the beacon it was first heard by still shows, under the call that followed it
         assert_eq!(entry.beacons, 1);
         assert_eq!(entry.last_beacon_ms, Some(1_000));
+        // a session's frames state no bandwidth, and leave what a call said alone
         list.note(Sighting {
             activity: Activity::Connected,
+            bandwidth_hz: None,
             ..sighting("W4TGA", 6_000, 4.0)
         });
         assert!(list.stations()[0].connected);
+        assert_eq!(list.stations()[0].bandwidth_hz, Some(500));
+        // and a frame that states another replaces it (ADR-0035)
+        let entry = list.note(Sighting {
+            activity: Activity::Probing,
+            bandwidth_hz: Some(2300),
+            ..sighting("W4TGA", 7_000, 4.0)
+        });
+        assert_eq!(entry.bandwidth_hz, Some(2300));
         let entry = list.note(sighting("W4TGA", 9_000, 6.0));
         assert_eq!(entry.beacons, 2);
         assert_eq!(entry.last_beacon_ms, Some(9_000));
@@ -302,6 +326,8 @@ mod tests {
         assert_eq!(list.stations().len(), 1);
         assert_eq!(list.stations()[0].beacons, 0);
         assert_eq!(list.stations()[0].last_beacon_ms, None);
+        // and beta.70 and earlier wrote no `bandwidth_hz` (ADR-0035)
+        assert_eq!(list.stations()[0].bandwidth_hz, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

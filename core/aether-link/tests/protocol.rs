@@ -400,6 +400,78 @@ fn a_station_moved_to_another_air_answers_calls_in_it() {
 }
 
 #[test]
+fn a_probe_across_bandwidths_is_answered_and_names_the_mismatch() {
+    use aether_link::frames::with_bandwidth;
+    // ADR-0035, from the air: a 500 Hz station and a 2 300 Hz one each heard the other's
+    // probes and calls and ignored them "in another bandwidth", and each one's own probes
+    // went unanswered. Probes and their answers are the same tone-floor frames on both
+    // airs, so a probe is answered across bandwidths and the result names both; a call
+    // across them is still ignored (a session lives in one bandwidth), and says which
+    let narrow = LinkConfig {
+        capabilities: with_bandwidth(0, 500),
+        ..LinkConfig::default()
+    };
+    let wide = LinkConfig {
+        capabilities: with_bandwidth(0, 2300),
+        ..LinkConfig::default()
+    };
+    let a = LinkEngine::new("W4ODA", air_timing(NARROW_500, false), narrow, 1);
+    let b = LinkEngine::new("KK4XYZ", timing(false), wide, 2);
+    let mut sim = TwoStationSim::new(a, b, 3.0, 35);
+    sim.engine_mut(0).probe("KK4XYZ", None).expect("idle");
+    sim.run(60.0, 3.0);
+    assert_eq!(
+        sim.engine(1).stats.probes_answered,
+        1,
+        "{:?}",
+        sim.events(1)
+    );
+    assert_eq!(sim.engine(0).stats.probe_replies, 1, "{:?}", sim.events(0));
+    assert_eq!(
+        sim.engine(0).last_probe().and_then(|p| p.bandwidth_hz),
+        Some(2300)
+    );
+    assert!(
+        sim.events(0)
+            .iter()
+            .any(|e| e.starts_with("probe:KK4XYZ hears us at")
+                && e.ends_with("— runs 2300 Hz, this station 500 Hz")),
+        "{:?}",
+        sim.events(0)
+    );
+    assert!(
+        sim.events(1)
+            .iter()
+            .any(|e| e.starts_with("probed:W4ODA at")
+                && e.ends_with("— runs 500 Hz, this station 2300 Hz")),
+        "{:?}",
+        sim.events(1)
+    );
+    // and the other way round
+    sim.engine_mut(1).probe("W4ODA", None).expect("idle");
+    sim.run(120.0, 3.0);
+    assert_eq!(
+        sim.engine(1).last_probe().and_then(|p| p.bandwidth_hz),
+        Some(500),
+        "{:?}",
+        sim.events(1)
+    );
+    assert_eq!(sim.engine(0).stats.probes_answered, 1);
+    // a call across them is still not a session, and says which bandwidths
+    sim.engine_mut(1).connect("W4ODA").expect("idle");
+    sim.run(200.0, 3.0);
+    assert!(!sim.engine(0).connected() && !sim.engine(1).connected());
+    assert!(
+        sim.events(0).iter().any(
+            |e| e.starts_with("ignored:KK4XYZ calls in another bandwidth")
+                && e.ends_with("— runs 2300 Hz, this station 500 Hz")
+        ),
+        "{:?}",
+        sim.events(0)
+    );
+}
+
+#[test]
 fn a_new_fastest_rung_reaches_the_link() {
     // `max_mode` is a live setting of the station's: a change reaches the link from the
     // next burst on, under the rules' ceiling as before
@@ -439,6 +511,7 @@ fn a_probe_is_answered_with_the_snr_it_arrived_at() {
             remote: "KK4XYZ".to_owned(),
             heard_there_db: Some(15.0),
             heard_here_db: 15.0,
+            bandwidth_hz: Some(2300),
         })
     );
     assert!(!sim.engine(0).probing());
@@ -480,7 +553,7 @@ fn a_probe_to_nobody_reports_no_answer() {
 }
 
 #[test]
-fn a_probe_is_not_answered_during_a_session_or_in_another_bandwidth() {
+fn a_probe_is_not_answered_during_a_session_but_is_across_bandwidths() {
     use aether_link::frames::{DataHeader, DataKind, ProbeBody, encode_data, with_bandwidth};
     use aether_link::{Action, Container, SimFrame};
     let t = timing(false);
@@ -512,36 +585,61 @@ fn a_probe_is_not_answered_during_a_session_or_in_another_bandwidth() {
         .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
     assert_eq!(sim.engine(1).stats.probes_answered, 0);
     assert!(sim.engine_mut(1).drain().is_empty());
-    // idle, but the probe claims another bandwidth: ignored, and said so
+    // idle, and the probe states another bandwidth: answered all the same, on the tone
+    // floor both airs share, and the event names both bandwidths (ADR-0035)
     sim.engine_mut(0).disconnect();
     sim.run(300.0, 3.0);
     assert_eq!(sim.engine(1).state(), State::Idle);
     let now = sim.t;
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "KK4XYZ", with_bandwidth(0, 500)), now);
-    assert_eq!(sim.engine(1).stats.probes_answered, 0);
+    assert_eq!(sim.engine(1).stats.probes_answered, 1);
+    let floor = sim.engine(1).robust_mode(true);
+    assert!(t.is_floor(floor));
     let actions = sim.engine_mut(1).drain();
+    assert!(
+        !actions.iter().any(|action| matches!(
+            action,
+            Action::Event { name: "ignored", detail } if detail.contains("N0CALL")
+        )),
+        "{actions:?}"
+    );
     assert!(
         actions.iter().any(|action| matches!(
             action,
-            Action::Event { name: "ignored", detail } if detail.contains("N0CALL")
+            Action::Event { name: "probed", detail }
+                if detail.ends_with("— runs 500 Hz, this station 2300 Hz")
+        )),
+        "{actions:?}"
+    );
+    assert!(
+        actions.iter().any(|action| matches!(
+            action,
+            Action::Transmit { frames, .. } if frames.len() == 1 && frames[0].mode == floor
         )),
         "{actions:?}"
     );
     // and one for somebody else is nobody's business
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "W1AW", 0), now);
-    assert_eq!(sim.engine(1).stats.probes_answered, 0);
+    assert_eq!(sim.engine(1).stats.probes_answered, 1);
     assert!(sim.engine_mut(1).drain().is_empty());
-    // while one addressed to it, in its bandwidth, is answered
+    // while one addressed to it, in its bandwidth, is answered, with nothing to add
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
-    assert_eq!(sim.engine(1).stats.probes_answered, 1);
+    assert_eq!(sim.engine(1).stats.probes_answered, 2);
     let actions = sim.engine_mut(1).drain();
     assert!(
         actions
             .iter()
             .any(|action| matches!(action, Action::Transmit { .. }))
+    );
+    assert!(
+        actions.iter().any(|action| matches!(
+            action,
+            Action::Event { name: "probed", detail } if detail == "N0CALL at 12.0 dB"
+        )),
+        "{actions:?}"
     );
     // a station in a session may not probe
     sim.engine_mut(0).connect("KK4XYZ").expect("idle");

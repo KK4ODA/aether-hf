@@ -32,8 +32,9 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, control_flags,
-        data_capacity, decode_data, encode_data, in_window, pack_callsign, seq_after, seq_distance,
+        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
+        control_flags, data_capacity, decode_data, encode_data, in_window, pack_callsign,
+        seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{RateConfig, RateController},
@@ -259,6 +260,10 @@ pub struct ProbeResult {
     pub heard_there_db: Option<f64>,
     /// The SNR we measured on its answer.
     pub heard_here_db: f64,
+    /// The bandwidth the answering station runs, from its answer's capability byte — a
+    /// probe is answered across bandwidths (ADR-0035), and this is how the prober learns
+    /// that a call would not be; `None` for a reserved code.
+    pub bandwidth_hz: Option<usize>,
 }
 
 /// One burst sent at a pinned mode and what came back for it: a rung of the Test
@@ -2638,27 +2643,27 @@ impl LinkEngine {
         if !self.callsigns.contains(&request.dst) {
             return;
         }
-        if bandwidth_code(request.caps) != bandwidth_code(self.config.capabilities) {
-            self.actions.push(Action::Event {
-                name: "ignored",
-                detail: format!("{} probes in another bandwidth", request.src),
-            });
-            return;
-        }
         if self.state != State::Idle {
             return; // a session's frames matter more than a question from outside it
         }
+        // a probe in another bandwidth is answered too (ADR-0035): it and its answer are
+        // tone-floor frames, the same 400 Hz frames on both airs, and "you hear me, but we
+        // run different bandwidths" is exactly what a prober needs to hear — ignoring it left
+        // two stations each hearing the other and neither knowing why nothing came back
+        let across = bandwidth_code(request.caps) != bandwidth_code(self.config.capabilities);
         // answer as the callsign that was probed, with the SNR the probe arrived at — the
         // one number the prober cannot measure for itself
         self.my_call = request.dst;
         self.stats.probes_answered += 1;
+        let mismatch = self.mismatch(request.caps);
         self.actions.push(Action::Event {
             name: "probed",
-            detail: format!("{} at {snr_db:.1} dB", request.src),
+            detail: format!("{} at {snr_db:.1} dB{mismatch}", request.src),
         });
         // back in the family the probe came in (noted from it), as an acceptance goes back on
-        // the layout its request arrived on
-        let floor = self.peer_floor || self.floor_only();
+        // the layout its request arrived on — and across bandwidths always on the floor, the
+        // one family both airs share
+        let floor = across || self.peer_floor || self.floor_only();
         self.send_probe(DataKind::ProbeAck, &request.src, Some(snr_db), floor);
     }
 
@@ -2676,17 +2681,39 @@ impl LinkEngine {
             remote: answer.src.clone(),
             heard_there_db: answer.snr_db,
             heard_here_db: snr_db,
+            bandwidth_hz: bandwidth_hz_of(answer.caps),
         });
         let theirs = answer
             .snr_db
             .map_or_else(|| "?".to_owned(), |value| format!("{value:.0}"));
+        let mismatch = self.mismatch(answer.caps);
         self.actions.push(Action::Event {
             name: "probe",
             detail: format!(
-                "{} hears us at {theirs} dB, heard at {snr_db:.1} dB",
+                "{} hears us at {theirs} dB, heard at {snr_db:.1} dB{mismatch}",
                 answer.src
             ),
         });
+    }
+
+    /// ` — runs 2300 Hz, this station 500 Hz` when a frame's capability byte states another
+    /// bandwidth than this station's, empty otherwise: the words a probe's event adds so an
+    /// operator sees why a call between the two would be ignored (ADR-0035).
+    fn mismatch(&self, caps: u8) -> String {
+        if bandwidth_code(caps) == bandwidth_code(self.config.capabilities) {
+            return String::new();
+        }
+        let name = |hz: Option<usize>| {
+            hz.map_or_else(
+                || "an unknown bandwidth".to_owned(),
+                |hz| format!("{hz} Hz"),
+            )
+        };
+        format!(
+            " — runs {}, this station {}",
+            name(bandwidth_hz_of(caps)),
+            name(bandwidth_hz_of(self.config.capabilities))
+        )
     }
 
     fn handle_connect_req(&mut self, header: DataHeader, body: &[u8], snr_db: f64) {
@@ -2702,7 +2729,11 @@ impl LinkEngine {
             // bandwidth it was called in — either way not a session to start
             self.actions.push(Action::Event {
                 name: "ignored",
-                detail: format!("{} calls in another bandwidth", request.src),
+                detail: format!(
+                    "{} calls in another bandwidth{}",
+                    request.src,
+                    self.mismatch(request.caps)
+                ),
             });
             return;
         }

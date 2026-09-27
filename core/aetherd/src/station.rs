@@ -25,7 +25,7 @@ mod beacons;
 mod datagrams;
 mod fieldtest;
 mod host;
-pub use bandwidth::{RETURN_QUIET_S, Why as BandwidthWhy, params_for};
+pub use bandwidth::{KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, params_for};
 pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
@@ -531,8 +531,9 @@ pub struct FrameReport {
     pub to: Option<String>,
     /// A control frame's fields, spelled out.
     pub control: Option<String>,
-    /// The bandwidth a beacon says its sender runs, hertz (ADR-0024); none for any other
-    /// frame, or for a beacon from before that.
+    /// The bandwidth the frame says its sender runs, hertz: a beacon's (ADR-0024), a call's,
+    /// an answer's, a probe's or a probe answer's capability byte (ADR-0035); none for any
+    /// other frame, or for a beacon from before ADR-0024.
     pub bandwidth_hz: Option<u32>,
 }
 
@@ -1281,6 +1282,16 @@ impl<P: Ptt> Station<P> {
     pub fn connect_as(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
         if self.config.answer_only {
             return Err("this station is answer-only: it takes calls and makes none");
+        }
+        // a station known to run 500 Hz is called at 500 Hz (ADR-0035) — not for a call the
+        // engine is about to refuse
+        let ours = as_call.is_none_or(|call| {
+            self.engine
+                .callsigns
+                .contains(&call.trim().to_ascii_uppercase())
+        });
+        if ours && self.engine.state() == State::Idle {
+            self.move_for_call(remote);
         }
         self.engine.connect_as(remote, as_call)?;
         self.pump();
@@ -2449,7 +2460,12 @@ impl<P: Ptt> Station<P> {
             // the engine sees the call, which it then answers on the caller's air (ADR-0026).
             // The frame is the tone floor's, the same on both airs, and its rung is the same.
             let mut rung = rung;
-            if let Some(caller) = self.narrower_call(&decoded) {
+            let narrower = self.narrower_call(&decoded);
+            // a call or probe it will not answer as a call, for the panel to say (ADR-0035)
+            if narrower.is_none() {
+                self.note_mismatch(&decoded);
+            }
+            if let Some(caller) = narrower {
                 self.move_to(500, BandwidthWhy::Call(caller));
                 rung = decoded.frame.rung(&self.air()).unwrap_or(rung);
             }
@@ -2526,6 +2542,7 @@ impl<P: Ptt> Station<P> {
                     if let Ok(connect) = ConnectBody::decode(&body) {
                         report.from = Some(connect.src);
                         report.to = Some(connect.dst);
+                        report.bandwidth_hz = stated_bandwidth_hz(connect.caps);
                     }
                 }
                 DataKind::Probe | DataKind::ProbeAck => {
@@ -2537,11 +2554,17 @@ impl<P: Ptt> Station<P> {
                     if let Ok(probe) = ProbeBody::decode(&body) {
                         report.from = Some(probe.src);
                         report.to = Some(probe.dst);
+                        report.bandwidth_hz = stated_bandwidth_hz(probe.caps);
                     }
                 }
                 DataKind::Data => report.from = ours(header.session),
                 DataKind::Datagram => report.kind = "datagram",
             }
+        }
+        // what the frame says its sender runs is what a call to it should be made in
+        if let (Some(from), Some(hz)) = (&report.from, report.bandwidth_hz) {
+            let from = from.clone();
+            self.learn_bandwidth(&from, hz as usize);
         }
         // a piece of somebody's datagram: joined with the others, and named by the first
         if report.kind == "datagram"
@@ -3839,19 +3862,18 @@ fn is_probe_answer(frames: &[aether_link::TxFrame]) -> bool {
             .is_ok_and(|(header, _)| header.kind == DataKind::ProbeAck)
 }
 
-/// The callsign in a beacon frame, if that is what this is.
 /// The bandwidth a beacon says its sender runs: the capability byte after its callsign
 /// (ADR-0024). A beacon from before that carries none.
 fn beacon_bandwidth_hz(body: &[u8]) -> Option<u32> {
-    let caps = *body.get(aether_link::frames::CALL_BYTES)?;
-    match aether_link::frames::bandwidth_code(caps) {
-        0 => Some(2300),
-        1 => Some(500),
-        2 => Some(2750),
-        _ => None,
-    }
+    stated_bandwidth_hz(*body.get(aether_link::frames::CALL_BYTES)?)
 }
 
+/// The bandwidth a capability byte states, hertz.
+fn stated_bandwidth_hz(caps: u8) -> Option<u32> {
+    aether_link::frames::bandwidth_hz_of(caps).and_then(|hz| u32::try_from(hz).ok())
+}
+
+/// The callsign in a beacon frame, if that is what this is.
 fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
     if decoded.frame.is_control() {
         return None;
@@ -6556,6 +6578,26 @@ mod tests {
             "{events:?}"
         );
         assert_eq!(air.b.bandwidth_hz(), 500);
+        // and it says so where the operator looks, with both bandwidths and the fix
+        // (ADR-0035), in the log once a minute, not once a try
+        let mismatch = air
+            .b
+            .mismatch()
+            .expect("a wide call to a narrow station")
+            .clone();
+        assert_eq!(
+            (mismatch.callsign.as_str(), mismatch.what),
+            ("W4ODA", "call")
+        );
+        assert_eq!((mismatch.theirs_hz, mismatch.ours_hz), (2300, 500));
+        assert!(
+            mismatch.sentence.contains("Setup step 4"),
+            "{}",
+            mismatch.sentence
+        );
+        assert_eq!(air.b.bandwidth_status()["mismatch"]["what"], "call");
+        let warned = events.iter().filter(|e| e.starts_with("mismatch:")).count();
+        assert_eq!(warned, 1, "{events:?}");
         // and whatever the narrow station heard was the floor's, never the wide OFDM
         let floor = 2;
         let reports = air.b.take_frame_reports();
@@ -6564,6 +6606,66 @@ mod tests {
             reports.iter().all(|r| r.mode < floor && r.decoded),
             "{reports:?}"
         );
+    }
+
+    #[test]
+    fn a_wide_station_probes_a_narrow_one_and_calls_it_at_500_hz() {
+        // ADR-0035, from the air: KK4ODA-1 at 500 Hz and WC4Y at 2 300 Hz each ignored the
+        // other's probes and calls "in another bandwidth" for five hours. A probe is answered
+        // across bandwidths now, its answer says the other runs 500 Hz, and a 2 300 Hz station
+        // calling a station it knows runs 500 Hz moves to 500 Hz first — and back after
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
+        assert_eq!(air.a.known_bandwidth("KK4XYZ"), None);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(60.0, |a, _| a.engine().last_probe().is_some());
+        let probe = air.a.engine().last_probe().expect("answered").clone();
+        assert_eq!(probe.bandwidth_hz, Some(500));
+        assert_eq!(air.a.known_bandwidth("KK4XYZ"), Some(500));
+        let events = air.a.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("probe:KK4XYZ hears us at")
+                    && e.ends_with("— runs 500 Hz, this station 2300 Hz")),
+            "{events:?}"
+        );
+        // the narrow station answered, and warns that a call from the wide one would not be
+        assert_eq!(air.b.engine().stats.probes_answered, 1);
+        let mismatch = air.b.mismatch().expect("a wide probe").clone();
+        assert_eq!((mismatch.what, mismatch.theirs_hz), ("probe", 2300));
+        // the call goes out at 500 Hz, and is answered
+        air.a.connect("KK4XYZ").expect("idle");
+        assert_eq!(air.a.bandwidth_hz(), 500);
+        assert_eq!(air.a.bandwidth_status()["why"], "calling");
+        assert_eq!(air.a.bandwidth_status()["callee"], "KK4XYZ");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.a.take_events()
+        );
+        let message = b"called in the bandwidth it runs";
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received(), message);
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        assert_eq!(air.a.state(), State::Idle);
+        assert_eq!(air.a.bandwidth_hz(), 500);
+        air.run(RETURN_QUIET_S + 10.0, |a, _| a.bandwidth_hz() == 2300);
+        assert_eq!(air.a.bandwidth_hz(), 2300);
+        assert_eq!(air.a.bandwidth_status()["why"], "configured");
+        // a station known to run 2 300 Hz, or not known at all, is called as before
+        air.a.learn_bandwidth("N0CALL", 2300);
+        air.a.connect("N0CALL").expect("idle");
+        assert_eq!(air.a.bandwidth_hz(), 2300);
+        air.a.abort();
     }
 
     #[test]

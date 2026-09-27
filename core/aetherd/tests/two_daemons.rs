@@ -610,6 +610,99 @@ fn a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The bandwidth `daemon`'s stations-heard list gives `callsign`, once it gives one.
+fn heard_bandwidth(daemon: &Daemon, callsign: &str) -> Option<u64> {
+    let list = daemon.call("heard.list", &json!({}))["result"]["stations"].clone();
+    list.as_array()?
+        .iter()
+        .find(|s| s["callsign"] == callsign)?["bandwidth_hz"]
+        .as_u64()
+}
+
+/// Probe until `remote` answers, then what the stations-heard list says it runs: a probe is
+/// one frame with no retry, and on a loaded runner the first can go unanswered.
+fn probe_until_heard(from: &Daemon, remote: &str) -> Option<u64> {
+    let replies = || {
+        from.status()["counters"]["probe_replies"]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    let before = replies();
+    for _ in 0..4 {
+        let probed = from.call("probe", &json!({"remote": remote}));
+        assert_eq!(probed["ok"], true, "{probed}");
+        let deadline = Instant::now() + Duration::from_secs(25);
+        while Instant::now() < deadline {
+            if replies() > before {
+                return heard_bandwidth(from, remote);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    panic!("{remote} never answered a probe: {}", from.status());
+}
+
+#[test]
+fn a_narrow_and_a_wide_daemon_probe_each_other_and_connect() {
+    // ADR-0035, end to end, from the air: KK4ODA-1 ran 500 Hz and WC4Y 2 300 Hz, and each
+    // ignored the other's probes and calls "in another bandwidth" for five hours. A probe is
+    // answered across bandwidths now, both stations learn what the other runs, the narrow
+    // station warns that a wide call would not be answered, and the wide station, knowing,
+    // calls at 500 Hz
+    let dir = std::env::temp_dir().join(format!("aether-trap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let narrow = "bandwidth = 500\nmax_mode = 14\n";
+    let mut a = Daemon::start_with(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"", narrow);
+    let channel = a.sim_address();
+    let b = Daemon::start(&dir, "b", "KK4XYZ", &format!("connect = \"{channel}\""));
+    std::thread::sleep(Duration::from_secs(3));
+
+    // the narrow station probes the wide one: answered, and it learns the other runs 2 300 Hz
+    assert_eq!(probe_until_heard(&a, "KK4XYZ"), Some(2300));
+    // the wide station probes the narrow one: answered, and the narrow one warns
+    assert_eq!(probe_until_heard(&b, "W4ODA"), Some(500));
+    let mismatch = a.status()["bandwidth"]["mismatch"].clone();
+    assert_eq!(mismatch["callsign"], "KK4XYZ", "{mismatch}");
+    assert_eq!(mismatch["what"], "probe");
+    assert_eq!(mismatch["theirs_hz"], 2300);
+    assert_eq!(mismatch["ours_hz"], 500);
+    assert!(
+        mismatch["sentence"]
+            .as_str()
+            .is_some_and(|s| s.contains("Setup step 4")),
+        "{mismatch}"
+    );
+    // a wide station has nothing to warn of: it answers a narrow call by moving
+    assert_eq!(b.status()["bandwidth"]["mismatch"], Value::Null);
+
+    // the wide station calls the one it knows runs 500 Hz at 500 Hz, and is answered
+    let connected = b.call("connect", &json!({"remote": "W4ODA"}));
+    assert_eq!(connected["ok"], true, "{connected}");
+    let moved = b.status()["bandwidth"].clone();
+    assert_eq!(moved["bandwidth_hz"], 500, "{moved}");
+    assert_eq!(moved["why"], "calling");
+    assert_eq!(moved["callee"], "W4ODA");
+    b.wait_for_state(&a, "connected", "the call at 500 Hz was not answered");
+    let message = "Called at 500 Hz by a station set to 2300, which had heard it probe.";
+    let encoded = aetherd::control::methods::to_base64(message.as_bytes());
+    assert_eq!(b.call("send", &json!({"data": encoded}))["ok"], true);
+    let received = receive(a.control, message.len(), || a.status()["counters"].clone());
+    assert_eq!(String::from_utf8_lossy(&received), message);
+    assert_eq!(b.call("disconnect", &json!({}))["ok"], true);
+    b.wait_for_state(&a, "idle", "the session never closed");
+    // and the wide station goes back to its own after a quiet spell
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while b.status()["bandwidth"]["bandwidth_hz"] != 2300 {
+        assert!(Instant::now() < deadline, "{}", b.status()["bandwidth"]);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(b.status()["bandwidth"]["why"], "configured");
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn two_daemons_run_a_test_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));

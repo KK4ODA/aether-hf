@@ -263,6 +263,13 @@ fn run() -> Result<Exit, String> {
         ptt,
         seed_from_callsign(&config.callsign),
     );
+    // what the stations heard were last heard to run, so a call to one known to run 500 Hz
+    // is made at 500 Hz from the first minute (ADR-0035); oldest first, so the newest wins
+    for heard in daemon.heard.stations().iter().rev() {
+        if let Some(hz) = heard.bandwidth_hz {
+            station.learn_bandwidth(&heard.callsign, hz as usize);
+        }
+    }
     daemon.log.record(
         Level::Info,
         "ptt",
@@ -920,7 +927,7 @@ fn note_ptt_failure(
 fn level_of(name: &str) -> Level {
     match name {
         "error" => Level::Error,
-        "watchdog" | "timeout" | "failed" => Level::Warn,
+        "watchdog" | "timeout" | "failed" | "mismatch" => Level::Warn,
         _ => Level::Info,
     }
 }
@@ -1147,6 +1154,16 @@ fn publish_station(
         // says the bandwidth in CONNECTED, and a panel shows it
         if name == "bandwidth" {
             control.publish(&Event::new("bandwidth", station.bandwidth_status()));
+        }
+        // a call or probe to this station in a bandwidth whose calls it does not answer
+        // (ADR-0035): the panel puts it where the operator is looking, with the fix
+        if name == "mismatch"
+            && let Some(mismatch) = station.mismatch()
+        {
+            control.publish(&Event::new(
+                "mismatch",
+                serde_json::to_value(mismatch).unwrap_or(serde_json::Value::Null),
+            ));
         }
         control.publish(&Event::new(
             if name == "connected" || name == "disconnected" || name == "role" {
@@ -1423,6 +1440,7 @@ fn sighting_of(
         frequency_hz,
         activity,
         detail,
+        bandwidth_hz: frame.bandwidth_hz,
     })
 }
 
