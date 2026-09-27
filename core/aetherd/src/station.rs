@@ -1676,9 +1676,14 @@ impl<P: Ptt> Station<P> {
         if self.transmitting {
             return Err("the transmitter is keyed".into());
         }
-        if self.engine.state() != State::Idle {
+        if self.engine.state() == State::Connected || self.engine.state() == State::Disconnecting {
             return Err("a session is running".into());
         }
+        // nor with anything under way that expects this dial: a call or a probe whose answer
+        // would come back where the radio no longer listens, a Test, a beacon or a datagram
+        // queued to go — the panel tunes on a pick from the dial list now, and a pick is easy
+        // to make by accident
+        self.movable()?;
         self.ptt
             .inner_mut()
             .set_frequency_hz(hz)
@@ -6666,6 +6671,21 @@ mod tests {
         air.a.connect("N0CALL").expect("idle");
         assert_eq!(air.a.bandwidth_hz(), 2300);
         air.a.abort();
+    }
+
+    #[test]
+    fn the_dial_is_not_moved_under_a_probe_or_a_call() {
+        // the panel tunes the radio on a pick from the dial list, so the daemon refuses a
+        // move that would leave an answer arriving where the radio no longer listens
+        let mut station = idle_station();
+        station.probe("KK4XYZ", None).expect("idle");
+        let refused = station.tune_to(7_101_000).expect_err("probing");
+        assert!(refused.contains("probe"), "{refused}");
+        station.abort();
+        let mut station = idle_station();
+        station.connect("KK4XYZ").expect("idle");
+        let refused = station.tune_to(7_101_000).expect_err("calling");
+        assert!(refused.contains("call"), "{refused}");
     }
 
     #[test]

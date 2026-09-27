@@ -55,7 +55,7 @@ radio's port (which also reads the dial), a serial RTS/DTR line, a CM108 interfa
 
 In the **host program**, turn its radio control off: VarAC's *RIG* tab *PTT* and *Frequency
 Control* **None**; Winlink Express's radio setup to none. Only one program can hold the radio's
-CAT port. Tune from the Session tab's dial list (*Tune*) or by hand.
+CAT port. Tune by picking a dial from the Session tab's dial list, or by hand.
 
 ## Sharing the radio through rigctld or FLRig
 

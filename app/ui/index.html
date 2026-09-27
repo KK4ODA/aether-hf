@@ -258,9 +258,8 @@
           </div>
           <p class="note" id="host-owns-radio" title="Who tunes and keys the radio" hidden>The host program tunes and keys the radio (Setup, step 2): choose the frequency there.</p>
           <div class="tool-row" id="memory-row">
-            <select id="memory" title="Remembered dial frequencies: pick one and Tune, or Add your own" aria-label="Remembered dial frequencies"></select>
-            <div class="btn-group" role="group" aria-label="Dial list" title="Tune to the chosen dial, or edit the list">
-              <button id="btn-tune-to" title="Tune the radio to the chosen frequency over CAT, rigctld or FLRig">Tune</button>
+            <select id="memory" title="Remembered dial frequencies: picking one tunes the radio there (CAT, rigctld or FLRig); Add your own" aria-label="Remembered dial frequencies: picking one tunes the radio"></select>
+            <div class="btn-group" role="group" aria-label="Dial list" title="Edit the list of remembered dials">
               <button id="btn-memory-add" class="quiet" title="Add a frequency to the list, or rename one already there">Add</button>
               <button id="btn-memory-remove" class="quiet" title="Take the chosen frequency off the list">Remove</button>
             </div>
@@ -270,9 +269,10 @@
               <p>
                 The list starts as the frequency plan's proposals and is yours to edit: <strong>Add</strong>
                 keeps a dial with a name (the same dial again renames it), <strong>Remove</strong> drops the
-                chosen one, and it is saved beside the modem's configuration. <strong>Tune</strong> sets the
-                radio to the chosen dial when it is keyed over CAT, <code>rigctld</code> or FLRig; a serial line or
-                a CM108 interface cannot tune, and the list is still a list. When the radio's own dial
+                chosen one, and it is saved beside the modem's configuration. Picking a dial from the list tunes
+                the radio there when it is keyed over CAT, <code>rigctld</code> or FLRig — not during a session,
+                a call, a probe, a Test or a transmission, when the list is held still; a serial line or a CM108
+                interface cannot tune, and the list is still a list. When the radio's own dial
                 matches an entry, the list follows it. A radio that cannot report its dial shows a
                 <strong>Dial is at</strong> field instead: the rules need to know where you are.
               </p>
@@ -367,7 +367,7 @@
             <span class="sub numerals disclosure-summary" id="keying-summary" title="The transmit level, the last transmission's peak and how the radio is keyed">level — · peak —</span>
             <div class="disclosure-actions">
               <button class="small" id="wz-ptt" title="Key the radio for one second with no audio">Key 1 s</button>
-              <button class="small" id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop — for an antenna tuner, not for setting drive" aria-pressed="false">Tune tone, 10 s</button>
+              <button class="small" id="wz-tune" title="Key the radio with a steady tone at the transmit level for ten seconds; press again to stop — for an antenna tuner, not for setting drive" aria-pressed="false">Tuner tone, 10 s</button>
               <button class="small" id="wz-drive" title="Send four six-second bursts of the real waveform, five seconds apart, at the fastest mode this station uses — so the rig's ALC sees the peaks traffic actually presents, with time to adjust between them; press again to stop" aria-pressed="false">Set drive, 4 bursts</button>
             </div>
           </div>
@@ -396,12 +396,12 @@
             </details>
             <p class="sub">
               <strong>Key</strong> keys the radio with no audio, to check the PTT light.
-              <strong>Tune</strong> is a steady tone for an antenna tuner — <em>not</em> for
+              <strong>Tuner tone</strong> is a steady tone for an antenna tuner — <em>not</em> for
               setting drive: a tone is a sine, and the data waveform's peaks land 6 to 7 dB
               higher, so drive set on the tone runs that far into ALC limiting on real traffic.
               Two gains feed the rig's ALC — this <em>Transmit level</em> and the radio's own
               USB (rear) data input gain — while the rig's power control sets how many watts
-              the clean signal makes. All three keys are refused during a session, and Tune and
+              the clean signal makes. All three keys are refused during a session, and Tuner tone and
               Set drive while the channel is busy; every one of them is judged by the rules
               first. The level is saved when the slider is released.
             </p>
