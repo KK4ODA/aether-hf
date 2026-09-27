@@ -43,7 +43,12 @@ call, answer, probe and probe answer states its sender's bandwidth in its capabi
    (`Station::connect_as` → `move_for_call`, `Why::Calling`, `status.bandwidth.callee`). It
    knows from any frame that states a bandwidth — a beacon, a call, an answer, a probe or a
    probe's answer — and from the stations-heard list, which keeps each station's `bandwidth_hz`
-   (serde default: an older `heard.json` reads) and seeds the station at start. The move is
+   (serde default: an older `heard.json` reads) and seeds the station at start. A station is
+   known under the callsign its frames carried first; failing that, under its other names —
+   every callsign heard with the same base (`base_callsign`: no SSID, nothing after it, no
+   portable prefix or suffix), provided they all agree. `VarAC` beacons as `KK4ODA-9` and
+   pings `KK4ODA-1-T` while the operator calls `KK4ODA-1`; one operator running two stations
+   in two bandwidths disagrees, and the call then goes out in the station's own. The move is
    ADR-0026's `move_to`, and the move back is a call's: after the session or the call's end,
    once the channel has been quiet for `RETURN_QUIET_S`. A station of this version would have
    moved on its own on hearing the 500 Hz call; one of an earlier version would not, and this is
@@ -69,9 +74,8 @@ call, answer, probe and probe answer states its sender's bandwidth in its capabi
 * **A wire change.** None is needed. An earlier station still ignores a cross-bandwidth probe
   (and is still reached by a known-500 Hz call, item 2); a probe answered by an earlier station
   of the same bandwidth carries the same bits as before.
-* **Matching callsigns loosely** (a base callsign for its SSIDs). A station is known under the
-  callsign its frames carry; `VarAC`'s `-T` and beacon suffixes are other names, and guessing
-  across them could move a station for the wrong call.
+* **Matching a base callsign whose names disagree.** Item 2 matches the other names of a
+  callsign only when every one heard runs the same bandwidth; a guess between two is not made.
 
 ## 4. Consequences
 

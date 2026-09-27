@@ -6669,6 +6669,32 @@ mod tests {
     }
 
     #[test]
+    fn a_station_is_known_under_its_other_names_when_they_agree() {
+        // ADR-0035: VarAC beacons as KK4ODA-9 and pings KK4ODA-1-T; the operator calls
+        // KK4ODA-1. The base callsign carries what was heard, unless its names disagree
+        use super::bandwidth::base_callsign;
+        assert_eq!(base_callsign("KK4ODA-1-T"), "KK4ODA");
+        assert_eq!(base_callsign("VE3/KK4ODA/P"), "KK4ODA");
+        assert_eq!(base_callsign(" w4tga "), "w4tga");
+        let mut station = idle_station();
+        assert_eq!(station.known_bandwidth("KK4ODA-1"), None);
+        station.learn_bandwidth("kk4oda-9", 500);
+        assert_eq!(station.known_bandwidth("KK4ODA-1"), Some(500));
+        assert_eq!(station.known_bandwidth("KK4ODA-1-T"), Some(500));
+        assert_eq!(station.known_bandwidth("KK4ODB"), None);
+        // the operator's two stations in two bandwidths: no guess for a third name …
+        station.learn_bandwidth("KK4ODA-2", 2300);
+        assert_eq!(station.known_bandwidth("KK4ODA-1"), None);
+        // … while a name heard itself is known as it was heard
+        assert_eq!(station.known_bandwidth("KK4ODA-9"), Some(500));
+        assert_eq!(station.known_bandwidth("KK4ODA-2"), Some(2300));
+        // and a call to it goes out in the station's own
+        station.connect("KK4ODA-1").expect("idle");
+        assert_eq!(station.bandwidth_hz(), 2300);
+        station.abort();
+    }
+
+    #[test]
     fn a_host_program_moves_the_bandwidth_between_sessions_and_takes_it_back() {
         // VARA's BW commands set the modem's mode (ADR-0026): the station moves while idle,
         // holds the host's bandwidth while the host is attached, and goes back when it goes
