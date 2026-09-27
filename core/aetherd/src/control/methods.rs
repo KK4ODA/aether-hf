@@ -2185,6 +2185,7 @@ mod tests {
             frequency_hz: Some(7_101_000),
             activity: crate::heard::Activity::Beacon,
             detail: None,
+            bandwidth_hz: Some(500),
         });
         let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
         let result = response.result.expect("result");

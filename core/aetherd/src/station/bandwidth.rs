@@ -16,6 +16,17 @@
 //!   Never the other way: a 2 300 Hz call to a station running 500 Hz is not answered,
 //!   because a 2 300 Hz signal where the operator or the program chose 500 Hz — a 500 Hz
 //!   calling frequency, most of all — is nobody's choice.
+//! * **A call from this station to one it knows runs 500 Hz** (ADR-0035). A 2 300 Hz station
+//!   that has heard the other's bandwidth — from a beacon (ADR-0024), a call, a probe or a
+//!   probe's answer, each of which states it — moves to 500 Hz before it calls, and back as
+//!   after a call it answered. The station heard does the same the other way round on its own
+//!   (the first point), but a station of an earlier version does not.
+//!
+//! The one crossing that cannot be made is a 2 300 Hz call to a station running 500 Hz. A
+//! probe is answered across bandwidths (ADR-0035), so each side learns what the other runs,
+//! and a call or probe to this station that it could not answer as a call is kept
+//! ([`Mismatch`]) for the panel to say — with both bandwidths and the fix — instead of only a
+//! log line nobody reads while waiting for an answer.
 //!
 //! A move rebuilds what depends on the waveform — the receiver, the modems, the band filters,
 //! the busy detector, the occupancy the rules judge by, the link engine's air (its timing,
@@ -25,6 +36,9 @@
 //! runs on the air it would leave: no session, call or probe, no Test, nothing queued or on
 //! the air.
 
+use std::collections::VecDeque;
+
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{State, Station};
@@ -35,6 +49,28 @@ use crate::ptt::Ptt;
 /// disconnect repeated on the tone floor, three tries of 3.2 s each and their turnarounds —
 /// and for the call that often follows a ping.
 pub const RETURN_QUIET_S: f64 = 20.0;
+
+/// How many other stations' bandwidths the station remembers — the stations-heard list's
+/// bound: the daemon seeds these from it at start, and the frames heard since keep them.
+pub const KNOWN_LIMIT: usize = crate::heard::LIMIT;
+
+/// A call or probe to this station in a bandwidth whose calls it does not answer (ADR-0035):
+/// what the panel warns of, until the station runs the other's bandwidth.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Mismatch {
+    /// Who called or probed.
+    pub callsign: String,
+    /// `call` or `probe`.
+    pub what: &'static str,
+    /// The bandwidth the frame stated, hertz.
+    pub theirs_hz: usize,
+    /// The bandwidth this station ran when it heard it.
+    pub ours_hz: usize,
+    /// Milliseconds since the Unix epoch.
+    pub at_ms: u64,
+    /// The sentence the log and the panel give: who, both bandwidths, and what to do.
+    pub sentence: String,
+}
 
 /// The waveform of a bandwidth this version runs.
 #[must_use]
@@ -56,6 +92,8 @@ pub enum Why {
     Host,
     /// A call to this station came in it; the callsign that called.
     Call(String),
+    /// This station called one it knows runs it (ADR-0035); the callsign called.
+    Calling(String),
 }
 
 impl Why {
@@ -64,6 +102,7 @@ impl Why {
             Self::Configured => "configured",
             Self::Host => "host",
             Self::Call(_) => "call",
+            Self::Calling(_) => "calling",
         }
     }
 }
@@ -82,6 +121,10 @@ pub(super) struct Bandwidth {
     stirred_s: f64,
     /// Moves made since the modem started.
     moves: usize,
+    /// Other stations' bandwidths as their frames stated them, the most recently heard last.
+    known: VecDeque<(String, usize)>,
+    /// The last call or probe to this station in a bandwidth whose calls it does not answer.
+    mismatch: Option<Mismatch>,
 }
 
 impl Bandwidth {
@@ -92,6 +135,8 @@ impl Bandwidth {
             why: Why::Configured,
             stirred_s: f64::NEG_INFINITY,
             moves: 0,
+            known: VecDeque::new(),
+            mismatch: None,
         }
     }
 
@@ -152,8 +197,138 @@ impl<P: Ptt> Station<P> {
                 Why::Call(call) => Some(call.as_str()),
                 _ => None,
             },
+            "callee": match &self.bandwidth.why {
+                Why::Calling(call) => Some(call.as_str()),
+                _ => None,
+            },
             "moves": self.bandwidth.moves,
+            "mismatch": self.mismatch(),
         })
+    }
+
+    /// The last call or probe to this station in a bandwidth whose calls it does not answer,
+    /// while it still runs the bandwidth it heard it in: one the operator has since moved to
+    /// the other's bandwidth for is answered.
+    #[must_use]
+    pub fn mismatch(&self) -> Option<&Mismatch> {
+        self.bandwidth
+            .mismatch
+            .as_ref()
+            .filter(|m| m.ours_hz == self.bandwidth_hz())
+    }
+
+    /// Remember the bandwidth a station runs, as one of its frames stated it — or as the
+    /// stations-heard list kept it, which is how a restarted daemon still knows.
+    pub fn learn_bandwidth(&mut self, callsign: &str, hz: usize) {
+        let callsign = callsign.trim().to_ascii_uppercase();
+        let known = &mut self.bandwidth.known;
+        known.retain(|(call, _)| *call != callsign);
+        known.push_back((callsign, hz));
+        while known.len() > KNOWN_LIMIT {
+            known.pop_front();
+        }
+    }
+
+    /// The bandwidth a station was last heard to run, if it has been.
+    #[must_use]
+    pub fn known_bandwidth(&self, callsign: &str) -> Option<usize> {
+        let callsign = callsign.trim().to_ascii_uppercase();
+        self.bandwidth
+            .known
+            .iter()
+            .rev()
+            .find(|(call, _)| *call == callsign)
+            .map(|&(_, hz)| hz)
+    }
+
+    /// Before a call: a 2 300 Hz station calling one it knows runs 500 Hz moves to 500 Hz, so
+    /// the call is one the other answers whatever its version (ADR-0035). The move back is a
+    /// call's: after the session, or the call's end, and a quiet spell.
+    pub(super) fn move_for_call(&mut self, remote: &str) {
+        if self.bandwidth_hz() == 2300
+            && self.known_bandwidth(remote) == Some(500)
+            && self.movable().is_ok()
+        {
+            self.move_to(500, Why::Calling(remote.trim().to_ascii_uppercase()));
+        }
+    }
+
+    /// A call or a probe to this station, while idle, in a bandwidth whose calls it does not
+    /// answer: kept for the panel and said in the log, with both bandwidths and the fix. A
+    /// 2 300 Hz station answers 500 Hz calls by moving (the narrower call), so what is left is
+    /// a wider call — or probe, which is answered, but warns that a call would not be.
+    pub(super) fn note_mismatch(&mut self, decoded: &aether_phy::DecodedFrame) {
+        use aether_link::frames::{ConnectBody, DataKind, ProbeBody, bandwidth_hz_of, decode_data};
+        if self.engine.state() != State::Idle || decoded.frame.is_control() {
+            return;
+        }
+        let Some((header, body)) = decoded
+            .payload
+            .as_ref()
+            .and_then(|payload| decode_data(payload).ok())
+        else {
+            return;
+        };
+        let (what, src, dst, caps) = match header.kind {
+            DataKind::ConnectReq => match ConnectBody::decode(&body) {
+                Ok(call) => ("call", call.src, call.dst, call.caps),
+                Err(_) => return,
+            },
+            DataKind::Probe => match ProbeBody::decode(&body) {
+                Ok(probe) => ("probe", probe.src, probe.dst, probe.caps),
+                Err(_) => return,
+            },
+            _ => return,
+        };
+        let ours = self.bandwidth_hz();
+        let Some(theirs) = bandwidth_hz_of(caps) else {
+            return;
+        };
+        let theirs = if theirs == 2750 { 2300 } else { theirs };
+        if !self.engine.callsigns.contains(&dst)
+            || theirs == ours
+            || (ours == 2300 && theirs == 500)
+        {
+            return;
+        }
+        let now_ms = super::beacons::unix_ms();
+        // a caller tries again and again: one warning a minute per station and kind is plenty
+        if self.bandwidth.mismatch.as_ref().is_some_and(|m| {
+            m.callsign == src && m.what == what && now_ms.saturating_sub(m.at_ms) < 60_000
+        }) {
+            return;
+        }
+        let happened = if what == "call" {
+            format!(
+                "{src} called this station at {theirs} Hz and was not answered: it runs {ours} Hz."
+            )
+        } else {
+            format!(
+                "{src} probed this station at {theirs} Hz and was answered, but a call from {src} \
+                 would not be: this station runs {ours} Hz."
+            )
+        };
+        let fix = if self.bandwidth.why == Why::Host {
+            format!(
+                "The host program asked for {ours} Hz: have it ask for {theirs} Hz, or ask {src} \
+                 to call at {ours} Hz."
+            )
+        } else {
+            format!(
+                "To work {src}, set the bandwidth to {theirs} Hz in Setup step 4 (a {theirs} Hz \
+                 station still answers {ours} Hz calls), or ask {src} to call at {ours} Hz."
+            )
+        };
+        let sentence = format!("{happened} {fix}");
+        self.note("mismatch", &sentence);
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: src,
+            what,
+            theirs_hz: theirs,
+            ours_hz: ours,
+            at_ms: now_ms,
+            sentence,
+        });
     }
 
     /// Whether the station could move to another bandwidth now.
@@ -191,7 +366,7 @@ impl<P: Ptt> Station<P> {
             self.bandwidth.stirred_s = now;
             return;
         }
-        if matches!(self.bandwidth.why, Why::Call(_))
+        if matches!(self.bandwidth.why, Why::Call(_) | Why::Calling(_))
             && now - self.bandwidth.stirred_s < RETURN_QUIET_S
         {
             return;
@@ -268,6 +443,9 @@ impl<P: Ptt> Station<P> {
             Why::Configured => "the station's own".to_owned(),
             Why::Host => "the host program asked for it".to_owned(),
             Why::Call(call) => format!("{call} called in it; back to {from} Hz after the session"),
+            Why::Calling(call) => {
+                format!("calling {call}, which runs it; back to {from} Hz after the session")
+            }
         };
         self.bandwidth.why = why;
         self.note("bandwidth", &format!("{from} Hz → {hz} Hz: {reason}"));

@@ -380,6 +380,17 @@ pub const fn bandwidth_code_of(bandwidth_hz: usize) -> Option<u8> {
     }
 }
 
+/// The bandwidth in hertz a capability byte states; `None` for the reserved code.
+#[must_use]
+pub const fn bandwidth_hz_of(caps: u8) -> Option<usize> {
+    match bandwidth_code(caps) {
+        0 => Some(2300),
+        1 => Some(500),
+        2 => Some(2750),
+        _ => None,
+    }
+}
+
 /// A capability byte with its bandwidth bits set for `bandwidth_hz`.
 ///
 /// # Panics
