@@ -46,10 +46,15 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Conventional Commits; short-lived branches, **fast-forwarded** into `master` (no squash:
   the release notes are generated from the commits by git-cliff). Push after each commit.
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.
+- **The author's standing instruction (2026-09-27):** after every push to a working branch,
+  fast-forward it into `master` and push `master`; after significant changes to the app (the
+  daemon, the panel, the shell, the link or the PHY), cut a beta release — `tools/release.py bump`
+  to the next `-beta.N`, commit, tag, push `master` and the tag (see *Cutting a release* below).
+  Checks green first, always.
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.70` on 2026-09-14…26, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.71` on 2026-09-14…27, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
 other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
