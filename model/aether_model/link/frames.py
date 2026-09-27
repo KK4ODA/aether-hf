@@ -197,6 +197,12 @@ def bandwidth_code(caps: int) -> int:
     return (caps & CAP_BANDWIDTH_MASK) >> CAP_BANDWIDTH_SHIFT
 
 
+def bandwidth_hz_of(caps: int) -> int | None:
+    """The bandwidth in hertz a capability byte states; ``None`` for the reserved code."""
+    code = bandwidth_code(caps)
+    return next((hz for hz, c in BANDWIDTH_CODES.items() if c == code), None)
+
+
 def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
     """A capability byte with the bandwidth bits set for ``bandwidth_hz``."""
     code = BANDWIDTH_CODES[bandwidth_hz]

@@ -49,6 +49,7 @@ from aether_model.link.frames import (
     DataKind,
     ProbeBody,
     bandwidth_code,
+    bandwidth_hz_of,
     data_capacity,
     decode_data,
     encode_data,
@@ -304,6 +305,10 @@ class ProbeResult:
     remote: str
     heard_there_db: float | None
     heard_here_db: float
+    bandwidth_hz: int | None = None
+    """The bandwidth the answering station runs, from its answer's capability byte — a
+    probe is answered across bandwidths (ADR-0035), and this is how the prober learns that
+    a call would not be; ``None`` for a reserved code."""
 
 
 # ── the engine ────────────────────────────────────────────────────────
@@ -1813,21 +1818,41 @@ class LinkEngine:
             return
         if req.dst not in self.callsigns:
             return
-        if bandwidth_code(req.caps) != bandwidth_code(self.cfg.capabilities):
-            self.actions.append(Event("ignored", f"{req.src} probes in another bandwidth"))
-            return
         if self.state is not State.IDLE:
             return  # a session's frames matter more than a question from outside it
+        # a probe in another bandwidth is answered too (ADR-0035): it and its answer are
+        # tone-floor frames, the same 400 Hz frames on both airs, and "you hear me, but we
+        # run different bandwidths" is exactly what a prober needs to hear — ignoring it
+        # left two stations each hearing the other and neither knowing why nothing came back
+        across = bandwidth_code(req.caps) != bandwidth_code(self.cfg.capabilities)
         # answer as the callsign that was probed, with the SNR the probe arrived at —
         # the one number the prober cannot measure for itself
         self.my_call = req.dst
         self.stats.probes_answered += 1
-        self.actions.append(Event("probed", f"{req.src} at {frame.snr_db:.1f} dB"))
-        # back in the family the probe came in (noted from it), as an acceptance goes back on
-        # the layout its request arrived on
-        self._send_probe(
-            DataKind.PROBE_ACK, req.src, frame.snr_db, floor=self._peer_floor or self._floor_only()
+        self.actions.append(
+            Event("probed", f"{req.src} at {frame.snr_db:.1f} dB{self._mismatch(req.caps)}")
         )
+        # back in the family the probe came in (noted from it), as an acceptance goes back on
+        # the layout its request arrived on — and across bandwidths always on the floor, the
+        # one family both airs share
+        self._send_probe(
+            DataKind.PROBE_ACK,
+            req.src,
+            frame.snr_db,
+            floor=across or self._peer_floor or self._floor_only(),
+        )
+
+    def _mismatch(self, caps: int) -> str:
+        """`` — runs 2300 Hz, this station 500 Hz`` when a frame's capability byte states
+        another bandwidth than this station's, empty otherwise: the words a probe's event
+        adds so an operator sees why a call between the two would be ignored (ADR-0035)."""
+        if bandwidth_code(caps) == bandwidth_code(self.cfg.capabilities):
+            return ""
+        theirs = bandwidth_hz_of(caps)
+        ours = bandwidth_hz_of(self.cfg.capabilities)
+        there = "an unknown bandwidth" if theirs is None else f"{theirs} Hz"
+        here = "an unknown bandwidth" if ours is None else f"{ours} Hz"
+        return f" — runs {there}, this station {here}"
 
     def _handle_probe_ack(self, body: bytes, frame: SoftFrame) -> None:
         try:
@@ -1839,10 +1864,14 @@ class LinkEngine:
         self._disarm("probe")
         self._probing = None
         self.stats.probe_replies += 1
-        self.last_probe = ProbeResult(ack.src, ack.snr_db, frame.snr_db)
+        self.last_probe = ProbeResult(ack.src, ack.snr_db, frame.snr_db, bandwidth_hz_of(ack.caps))
         theirs = "?" if ack.snr_db is None else f"{ack.snr_db:.0f}"
         self.actions.append(
-            Event("probe", f"{ack.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB")
+            Event(
+                "probe",
+                f"{ack.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB"
+                f"{self._mismatch(ack.caps)}",
+            )
         )
 
     def _handle_connect_req(self, header: DataHeader, body: bytes, snr_db: float) -> None:
@@ -1856,7 +1885,12 @@ class LinkEngine:
             # a call that says it was made in another bandwidth than this station's: the
             # frame decoded, so the claim is wrong, or the station is not set up for the
             # bandwidth it was called in — either way not a session to start
-            self.actions.append(Event("ignored", f"{req.src} calls in another bandwidth"))
+            self.actions.append(
+                Event(
+                    "ignored",
+                    f"{req.src} calls in another bandwidth{self._mismatch(req.caps)}",
+                )
+            )
             return
         if req.version != PROTOCOL_VERSION:
             self.actions.append(

@@ -663,7 +663,7 @@ def test_a_probe_is_answered_with_the_snr_it_arrived_at(timing: PhyTiming) -> No
     assert "probed:W4ODA at 15.0 dB" in sim.events(1)
     assert "probe:KK4XYZ hears us at 15 dB, heard at 15.0 dB" in sim.events(0)
     assert (a.stats.probes_sent, a.stats.probe_replies, b.stats.probes_answered) == (1, 1, 1)
-    assert a.last_probe == ProbeResult("KK4XYZ", 15.0, 15.0) and not a.probing
+    assert a.last_probe == ProbeResult("KK4XYZ", 15.0, 15.0, 2300) and not a.probing
     # the question can be asked again, and a session can follow
     a.probe("KK4XYZ")
     sim.run(until=120)
@@ -693,7 +693,7 @@ def test_a_probe_to_nobody_reports_no_answer(timing: PhyTiming) -> None:
     assert a.stats.probe_replies == 1
 
 
-def test_a_probe_is_not_answered_during_a_session_or_in_another_bandwidth(
+def test_a_probe_is_not_answered_during_a_session_but_is_across_bandwidths(
     timing: PhyTiming,
 ) -> None:
     from aether_model.link.frames import DataHeader, encode_data
@@ -715,20 +715,32 @@ def test_a_probe_is_not_answered_during_a_session_or_in_another_bandwidth(
     b.on_frame(probe_from("N0CALL", "KK4XYZ"), b.now)
     assert b.stats.probes_answered == 0
     assert len(b.actions) == before
-    # idle, but the probe claims another bandwidth: ignored, and said so
+    # idle, and the probe states another bandwidth: answered all the same, on the tone
+    # floor both airs share, and the event names both bandwidths (ADR-0035)
     a.disconnect()
     sim.run(until=300)
     assert b.state is State.IDLE
+    sent = _modes_sent(b)
     b.on_frame(probe_from("N0CALL", "KK4XYZ", caps=with_bandwidth(0, 500)), b.now)
-    assert b.stats.probes_answered == 0
-    assert any(e.name == "ignored" and "N0CALL" in e.detail for e in b.actions)
+    assert b.stats.probes_answered == 1
+    assert sent == [b._robust_mode(True)] and timing.is_floor(sent[0]), sent
+    events = [e for e in b.actions if isinstance(e, Event)]
+    assert not any(e.name == "ignored" and "N0CALL" in e.detail for e in events)
+    assert any(
+        e.name == "probed" and e.detail.endswith("— runs 500 Hz, this station 2300 Hz")
+        for e in events
+    )
     # and one for somebody else is nobody's business
     b.on_frame(probe_from("N0CALL", "W1AW"), b.now)
-    assert b.stats.probes_answered == 0
-    # while one addressed to it, in its bandwidth, is answered
-    b.on_frame(probe_from("N0CALL", "KK4XYZ"), b.now)
     assert b.stats.probes_answered == 1
+    # while one addressed to it, in its bandwidth, is answered, with nothing to add
+    b.on_frame(probe_from("N0CALL", "KK4XYZ"), b.now)
+    assert b.stats.probes_answered == 2
     assert any(isinstance(x, Transmit) for x in b.actions)
+    assert any(
+        isinstance(e, Event) and e.name == "probed" and e.detail == "N0CALL at 12.0 dB"
+        for e in b.actions
+    )
     # a station in a session may not probe; one that is probing may not either
     with pytest.raises(RuntimeError):
         a.connect("KK4XYZ")
@@ -1187,6 +1199,52 @@ def test_a_station_moved_to_another_air_answers_calls_in_it(timing: PhyTiming) -
     p.probe("KK4ABC")
     with pytest.raises(RuntimeError):
         p.set_air(narrow, with_bandwidth(0, 500))
+
+
+def test_a_probe_across_bandwidths_is_answered_and_names_the_mismatch(
+    timing: PhyTiming,
+) -> None:
+    """ADR-0035, from the air: a 500 Hz station and a 2 300 Hz one each heard the other's
+    probes and calls and ignored them "in another bandwidth", and each one's own probes
+    went unanswered — neither operator could tell why. Probes and their answers are the
+    same tone-floor frames on both airs, so a probe is now answered across bandwidths, and
+    the prober's result names both bandwidths; a call across them is still ignored (a
+    session lives in one bandwidth), and its event now names them too."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    narrow = phy_timing(NARROW_500, start_of_frame=False)
+    a = LinkEngine("W4ODA", narrow, LinkConfig(capabilities=with_bandwidth(0, 500)), seed=1)
+    b = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=with_bandwidth(0, 2300)), seed=2)
+    sim = TwoStationSim(a, b, snr_db=3.0, seed=35)
+    a.probe("KK4XYZ")
+    sim.run(until=60)
+    assert b.stats.probes_answered == 1, sim.events(1)
+    assert a.stats.probe_replies == 1, sim.events(0)
+    assert a.last_probe is not None and a.last_probe.bandwidth_hz == 2300
+    assert any(
+        e.startswith("probe:KK4XYZ hears us at")
+        and e.endswith("— runs 2300 Hz, this station 500 Hz")
+        for e in sim.events(0)
+    ), sim.events(0)
+    assert any(
+        e.startswith("probed:W4ODA at") and e.endswith("— runs 500 Hz, this station 2300 Hz")
+        for e in sim.events(1)
+    ), sim.events(1)
+    # and the other way round
+    b.probe("W4ODA")
+    sim.run(until=120)
+    assert b.last_probe is not None and b.last_probe.bandwidth_hz == 500, sim.events(1)
+    assert a.stats.probes_answered == 1
+    # a call across them is still not a session, and says which bandwidths
+    b.connect("W4ODA")
+    sim.run(until=200)
+    assert not a.connected and not b.connected
+    assert any(
+        e.startswith("ignored:KK4XYZ calls in another bandwidth")
+        and e.endswith("— runs 2300 Hz, this station 500 Hz")
+        for e in sim.events(0)
+    ), sim.events(0)
 
 
 def test_a_new_fastest_rung_reaches_the_link(timing: PhyTiming) -> None:
