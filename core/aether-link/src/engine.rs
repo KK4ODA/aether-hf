@@ -445,6 +445,16 @@ pub struct LinkEngine {
     /// answer from the turn it now holds (ADR-0029). An acknowledgement it can read clears it:
     /// the other station is still receiving.
     turn_unread: bool,
+    /// The other station answered this station's last POLL or TURN without reading it: it
+    /// heard the frame's preamble, could not decode the frame, and answered all the same, as a
+    /// receiving station answers a burst that may be ending. The frame goes again at once, and
+    /// this station's POLLs and TURNs go out on the tone floor until one is read (ADR-0034). A
+    /// station that reads a TURN answers with a burst or a poll, never an acknowledgement; one
+    /// that reads a POLL answers in the POLL's family, since it answers in the family it last
+    /// read the sender in — so a floor answer to an ordinary POLL did not read it.
+    unread_there: bool,
+    /// The family this station's last POLL went out in (ADR-0034).
+    poll_floor: bool,
     disc_requested: bool,
     disc_tries: usize,
     /// This station placed the call: when both stations believe they hold the turn, the
@@ -564,6 +574,8 @@ impl LinkEngine {
             heard_peer_db: None,
             turn_tries: 0,
             turn_unread: false,
+            unread_there: false,
+            poll_floor: false,
             disc_requested: false,
             caller: false,
             disc_tries: 0,
@@ -1247,12 +1259,13 @@ impl LinkEngine {
     /// The family our control frames go out in (ADR-0009): the sending station answers in
     /// the family of the bursts it sends, the receiving one in the family of what it last
     /// decoded — so an acknowledgement comes back the way the burst went out, and either
-    /// side can tell how long to wait for it.
+    /// side can tell how long to wait for it. The sending station's go on the floor while
+    /// the other station answers them unread (ADR-0034).
     fn control_floor(&self) -> bool {
         if self.floor_only() {
             true
         } else if self.role == Role::Iss && self.state == State::Connected {
-            self.timing.is_floor(self.burst_mode())
+            self.unread_there || self.timing.is_floor(self.burst_mode())
         } else {
             self.peer_floor
         }
@@ -1582,6 +1595,7 @@ impl LinkEngine {
 
     fn send_poll(&mut self) {
         let frame = self.control(ControlKind::Poll, 0, 0, 0, None, 0);
+        self.poll_floor = frame.floor;
         self.transmit(vec![frame]);
         self.wait_for(
             Waiting::Poll,
@@ -2088,6 +2102,7 @@ impl LinkEngine {
             }
             self.role = Role::Irs;
             self.waiting_for = None;
+            self.unread_there = false;
             self.disarm(Timer::Wait);
             self.disarm(Timer::Keepalive);
             self.actions.push(Action::Event {
@@ -2096,8 +2111,10 @@ impl LinkEngine {
             });
         }
         if self.role == Role::Irs && self.waiting_for == Some(Waiting::Turn) {
+            // the other station took the turn: it read a TURN
             self.waiting_for = None;
             self.turn_tries = 0;
+            self.unread_there = false;
             self.disarm(Timer::Wait);
         }
         if frame.floor() != self.timing.is_floor(frame.mode()) {
@@ -2461,6 +2478,16 @@ impl LinkEngine {
                 }
             }
             ControlKind::Ack => {
+                let mut unread_poll = false;
+                if self.waiting_for == Some(Waiting::Poll) {
+                    // The other station answers in the family it last read this one in, and
+                    // answers a poll it heard and could not read all the same (ADR-0028): a
+                    // floor answer to an ordinary poll answered the poll's preamble alone.
+                    // Taken for the answer, it told this station the link was up while the
+                    // other read nothing of it until its link timed out (ADR-0034).
+                    unread_poll = frame.floor() && !self.poll_floor;
+                    self.unread_there = unread_poll;
+                }
                 if self.role == Role::Iss
                     && (matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
                         // an idle sender in a chat takes the other station's request for the
@@ -2470,6 +2497,12 @@ impl LinkEngine {
                             && control.flags & control_flags::WANT_TX != 0))
                 {
                     self.on_ack(&control);
+                    if unread_poll && self.deadline_of(Timer::Keepalive).is_some() {
+                        // the answer asked for nothing — no turn, no burst went — and the poll
+                        // was not read: it goes again now, on the floor, rather than a
+                        // keepalive later
+                        self.arm(Timer::Keepalive, self.timing.turnaround_s);
+                    }
                 } else if self.role == Role::Irs && self.state == State::Connected {
                     // The other station is receiving too: it has not taken a turn this one
                     // offered, and it answered a preamble of this one's as the end of a burst.
@@ -2478,6 +2511,13 @@ impl LinkEngine {
                     // it went out over the answer to the TURN (ADR-0029).
                     if self.waiting_for == Some(Waiting::Turn) {
                         self.turn_unread = false;
+                        // A station that reads a TURN takes the turn and answers with its burst
+                        // or a poll: this acknowledgement answered the TURN's preamble. Repeated
+                        // in its family when the wait ran out, an ordinary TURN answered on the
+                        // floor went unread three times and the other station timed out
+                        // (ADR-0034). It goes again now, on the floor.
+                        self.unread_there = true;
+                        self.arm(Timer::Wait, self.timing.turnaround_s);
                     }
                     if self.burst.is_empty() {
                         self.disarm(Timer::Ack);
@@ -2531,12 +2571,14 @@ impl LinkEngine {
         self.role = Role::Irs;
         self.waiting_for = None;
         self.turn_tries = 0;
+        self.unread_there = false;
         self.disarm(Timer::Wait);
         self.disarm(Timer::Keepalive);
     }
 
     fn take_iss(&mut self) {
         self.role = Role::Iss;
+        self.unread_there = false;
         // the first burst of a turn goes out where this station's own measurements of the
         // peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
         // it (P9-2), not at the slowest rung of the ladder: that is the tone floor
@@ -2776,6 +2818,8 @@ impl LinkEngine {
         self.heard_peer_db = None;
         self.turn_tries = 0;
         self.turn_unread = false;
+        self.unread_there = false;
+        self.poll_floor = false;
         self.disc_tries = 0;
         self.disc_requested = false;
         self.caller = false;
@@ -3466,6 +3510,258 @@ mod tests {
         e.on_preamble(t_start, t_start + 0.2, None);
         let longest = e.timing.data_frame_s_for(0);
         assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + longest);
+    }
+
+    // ── an answer to a frame that was not read (ADR-0034) ─────────────
+
+    /// A readable control frame of session 7 that arrived at `t_end`, in the ordinary family
+    /// or on the floor.
+    struct Readable {
+        payload: Vec<u8>,
+        floor: bool,
+        t_end: f64,
+    }
+
+    impl Readable {
+        fn new(
+            kind: ControlKind,
+            floor: bool,
+            flags: u8,
+            recommended_mode: usize,
+            t_end: f64,
+        ) -> Self {
+            let payload = ControlFrame {
+                kind,
+                session: 7,
+                flags,
+                base: 0,
+                bitmap: 0,
+                snr_db: None,
+                recommended_mode: u8::try_from(recommended_mode).expect("a rung"),
+                counter: 0,
+            }
+            .encode()
+            .to_vec();
+            Self {
+                payload,
+                floor,
+                t_end,
+            }
+        }
+    }
+
+    impl SoftFrame for Readable {
+        fn container(&self) -> Container {
+            Container::Control
+        }
+        fn mode(&self) -> usize {
+            0
+        }
+        fn floor(&self) -> bool {
+            self.floor
+        }
+        fn rv(&self) -> u8 {
+            0
+        }
+        fn snr_db(&self) -> f64 {
+            20.0
+        }
+        fn trusted(&self) -> bool {
+            true
+        }
+        fn t_start(&self) -> f64 {
+            self.t_end - 0.4
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            (Some(self.payload.clone()), vec![0.0])
+        }
+    }
+
+    /// Each control frame the engine has put on the air since it was last asked: its kind, and
+    /// whether it went on the floor.
+    fn sent_controls(e: &mut LinkEngine) -> Vec<(ControlKind, bool)> {
+        e.drain()
+            .into_iter()
+            .flat_map(|action| match action {
+                Action::Transmit { frames, .. } => frames,
+                _ => Vec::new(),
+            })
+            .filter(|f| f.container == Container::Control)
+            .map(|f| {
+                let kind = ControlFrame::decode(&f.payload)
+                    .expect("a control frame")
+                    .kind;
+                (kind, f.floor)
+            })
+            .collect()
+    }
+
+    /// The slowest rung of the ordinary family the engine's controller recommends.
+    fn first_ordinary(e: &LinkEngine) -> usize {
+        *e.rate
+            .modes()
+            .iter()
+            .find(|&&m| !e.timing.is_floor(m))
+            .expect("an OFDM rung")
+    }
+
+    /// A sender with nothing to send, polling on the ordinary layouts, whose last answer came
+    /// on the tone floor: the other station last read it there, and answers there.
+    fn polling_on_ordinary(timing: PhyTiming) -> LinkEngine {
+        let mut e = LinkEngine::new("KK4XYZ", timing, LinkConfig::default(), 1);
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.session = 7;
+        e.now = 100.0;
+        e.tx_busy_until = 100.0;
+        e.recommended = first_ordinary(&e);
+        e.peer_floor = true;
+        e.send_poll();
+        assert_eq!(sent_controls(&mut e), [(ControlKind::Poll, false)]);
+        let end = e.tx_busy_until;
+        e.on_tx_done(end);
+        e
+    }
+
+    #[test]
+    fn an_ordinary_poll_answered_on_the_floor_was_not_read() {
+        // ADR-0034: a receiving station answers in the family it last read the sender in, and
+        // answers a poll it heard and could not read all the same (ADR-0028), so an ordinary
+        // poll answered on the floor was not read. The TURN it prompts goes on the floor; when
+        // it prompts nothing, the poll goes again at once, on the floor; and once a poll is
+        // answered in its own family the next is ordinary again. Taken for the poll's answer, a
+        // floor answer carrying the other station's wish to send was followed by three ordinary
+        // TURNs, all unread, and the other station, which had read nothing for 45 s, ended the
+        // session (the chat bench, 500 Hz, ITU Moderate, 0 dB, trial 184)
+        for timing in [wide(), narrow()] {
+            let end = 100.0 + timing.control_frame_s + 1.0 + timing.control_frame_s_for(true);
+            let ordinary = first_ordinary(&polling_on_ordinary(timing.clone()));
+            let want = control_flags::WANT_TX;
+
+            // answered on the floor, with the other station's wish to send: the TURN goes on
+            // the floor
+            let mut e = polling_on_ordinary(timing.clone());
+            e.on_frame(
+                &Readable::new(ControlKind::Ack, true, want, ordinary, end),
+                end,
+            );
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Turn, true)]);
+
+            // answered in its own family, the poll was read, as far as anyone can tell: as
+            // before
+            let mut e = polling_on_ordinary(timing.clone());
+            e.on_frame(
+                &Readable::new(ControlKind::Ack, false, want, ordinary, end),
+                end,
+            );
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Turn, false)]);
+
+            // answered on the floor with nothing to send: the poll goes again a turnaround
+            // later, on the floor, and once one is answered in its own family the next is
+            // ordinary again, a keepalive later
+            let mut e = polling_on_ordinary(timing.clone());
+            e.on_frame(
+                &Readable::new(ControlKind::Ack, true, 0, ordinary, end),
+                end,
+            );
+            assert!(sent_controls(&mut e).is_empty());
+            let again = e.deadline_of(Timer::Keepalive).expect("idle");
+            assert!(
+                (again - (end + timing.turnaround_s)).abs() < 1e-9,
+                "{again}"
+            );
+            e.tick(again);
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Poll, true)]);
+            let sent = e.tx_busy_until;
+            e.on_tx_done(sent);
+            let t = sent + 5.0;
+            e.on_frame(&Readable::new(ControlKind::Ack, true, 0, ordinary, t), t);
+            let next = e.deadline_of(Timer::Keepalive).expect("idle");
+            assert!((next - (t + e.config.keepalive_s)).abs() < 1e-9, "{next}");
+            e.tick(next);
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Poll, false)]);
+
+            // a floor poll answered ordinary: the other station last read this one in the
+            // ordinary family, not on the floor — the floor is what it cannot read here, and
+            // nothing moves there
+            let mut e = polling_on_ordinary(timing.clone());
+            e.unread_there = true;
+            e.tick(e.deadline_of(Timer::Wait).expect("the poll's wait") + 0.1);
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Poll, true)]);
+            let sent = e.tx_busy_until;
+            e.on_tx_done(sent);
+            let t = sent + 1.5;
+            e.on_frame(&Readable::new(ControlKind::Ack, false, 0, ordinary, t), t);
+            assert!(!e.unread_there && !e.control_floor());
+        }
+    }
+
+    #[test]
+    fn a_turn_answered_by_an_acknowledgement_goes_again_at_once_on_the_floor() {
+        // ADR-0034: a station that reads a TURN takes the turn and answers with its burst or a
+        // poll, never with an acknowledgement — one that comes back answered the TURN's
+        // preamble, the other station still receiving (ADR-0029). The TURN goes again a
+        // turnaround after it, on the floor, not in its own family when the wait for the other
+        // station's first frame runs out: in the chat bench's trace three ordinary TURNs went
+        // unread, 6.6 s apart, until the other station, which had read nothing for 45 s, ended
+        // the session. Once the turn has changed hands the station's control frames go in
+        // their own family again
+        let timing = narrow();
+        for floor in [true, false] {
+            let mut e = LinkEngine::new("W4ODA", timing.clone(), LinkConfig::default(), 1);
+            e.role = Role::Iss;
+            e.state = State::Connected;
+            e.session = 7;
+            e.now = 100.0;
+            e.tx_busy_until = 100.0;
+            e.recommended = first_ordinary(&e);
+            e.peer_request = PeerRequest::WantsTx;
+            e.maybe_start_burst();
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Turn, false)]);
+            let sent = e.tx_busy_until;
+            e.on_tx_done(sent);
+            let answered = sent + 1.0 + timing.control_frame_s_for(floor);
+            e.on_frame(
+                &Readable::new(ControlKind::Ack, floor, 0, 0, answered),
+                answered,
+            );
+            assert!(sent_controls(&mut e).is_empty());
+            let again = e.deadline_of(Timer::Wait).expect("armed");
+            assert!(
+                (again - (answered + timing.turnaround_s)).abs() < 1e-9,
+                "floor {floor}: {again}"
+            );
+            e.tick(again);
+            assert_eq!(
+                sent_controls(&mut e),
+                [(ControlKind::Turn, true)],
+                "floor {floor}"
+            );
+            assert_eq!(e.waiting_for, Some(Waiting::Turn));
+            assert_eq!(e.turn_tries, 2);
+            // the other station reads it, and takes the turn with a poll; later it hands it back
+            let sent = e.tx_busy_until;
+            e.on_tx_done(sent);
+            let t = sent + 2.0;
+            e.on_frame(&Readable::new(ControlKind::Poll, true, 0, 0, t), t);
+            assert_eq!(e.role, Role::Irs);
+            assert_eq!(e.waiting_for, None);
+            e.tick(e.deadline_of(Timer::Ack).expect("the poll's answer"));
+            assert_eq!(sent_controls(&mut e), [(ControlKind::Ack, true)]);
+            let sent = e.tx_busy_until;
+            e.on_tx_done(sent);
+            let t = e.now + 10.0;
+            e.on_frame(&Readable::new(ControlKind::Turn, false, 0, 0, t), t);
+            assert_eq!(e.role, Role::Iss);
+            assert_eq!(
+                sent_controls(&mut e),
+                [(ControlKind::Poll, false)],
+                "floor {floor}"
+            );
+        }
     }
 
     // ── chat: asking for the turn (ADR-0027) ──────────────────────────
