@@ -927,7 +927,8 @@ daemon learns every station's bandwidth from any frame that states one (beacon, 
 probe, probe answer: `FrameReport.bandwidth_hz`; `learn_bandwidth`, seeded at start from
 `heard.json`'s new `bandwidth_hz`, serde default, no schema bump), and a 2300 Hz station calling
 one known to run 500 Hz moves there first (`move_for_call`, `Why::Calling`,
-`status.bandwidth.callee`, back after `RETURN_QUIET_S`). A wider call or probe to a narrower
+`status.bandwidth.callee`, back after `RETURN_QUIET_S`); a callsign not heard itself is known
+through its other names (`base_callsign`: SSID, `-T` and `/P` off) when they all agree. A wider call or probe to a narrower
 station is a `Mismatch` (`note_mismatch`: once a minute per station and kind;
 `status.bandwidth.mismatch`, the `mismatch` event and log line), shown as the panel's
 `#mismatch-banner` on every tab with *Setup step 4* and *Dismiss* (`aether.mismatchDismissed`);
@@ -935,6 +936,16 @@ the Stations list has an *Hz* column (`td.bw-other`, amber, when not this statio
 `…probe_across_bandwidths…` in both suites, `a_wide_station_probes_a_narrow_one_and_calls_it_at_500_hz`,
 `two_daemons.rs` `a_narrow_and_a_wide_daemon_probe_each_other_and_connect` (its probe helper waits
 for `counters.probe_replies`: the heard list already knows a prober from its own probe).
+
+**The dial list tunes on a pick (2026-09-27, ND1J: "you have to click TUNE to change freqs,
+which no other digital software requires").** The Session tab's `#memory` select calls
+`frequency.set` half a second after the last change (`pickDial`, `DIAL_PICK_DELAY_MS`: arrowing
+through a closed select changes it at every step on Windows), snaps back to the radio's dial on a
+refusal, and is held (`updateDialList`, `dialHeld`) while a session, call, probe, Test or
+transmission is under way; `Station::tune_to` refuses the same (`movable()`). The Tune button is
+gone, and the antenna tuner's tone is *Tuner tone*. A radio that cannot be tuned keeps a plain
+list. The Stations list's *First heard* is a short stamp (time today, "Sep 26" otherwise; the full
+one in the tooltip) and its cells have 10 px sides, so its twelve columns fit 1280 px.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

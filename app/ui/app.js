@@ -123,7 +123,7 @@ function setLink(up) {
     "btn-probe",
     "btn-send",
     "btn-record",
-    "btn-tune-to",
+    "memory",
     "btn-memory-add",
     "btn-memory-remove",
   ]) {
@@ -1282,12 +1282,27 @@ function renderMemories(selectHz = null) {
   }
   if (chosen && memories.some((m) => m.hz === chosen)) select.value = String(chosen);
   $("btn-memory-remove").disabled = memories.length === 0;
-  updateTuneButton();
+  updateDialList();
 }
 
-function updateTuneButton() {
+// Whether something under way expects the dial where it is — a session, a call, a probe, a
+// Test, a transmission — so a pick from the list would be refused (the daemon says so too).
+let dialHeld = false;
+// A pick waiting to be tuned (see pickDial), and how long it waits.
+const DIAL_PICK_DELAY_MS = 500;
+let dialPickTimer = null;
+
+// The list tunes the radio on a pick when the radio can be tuned from here; held still while
+// something expects the dial where it is. A radio that cannot be tuned keeps a plain list.
+function updateDialList() {
   const idle = lastState === null || lastState === "idle";
-  $("btn-tune-to").disabled = !canTune || !idle || memories.length === 0;
+  const select = $("memory");
+  select.disabled = memories.length === 0 || (canTune && (!idle || dialHeld));
+  select.title = !canTune
+    ? "Remembered dial frequencies. Tuning the radio from here needs CAT, rigctld or FLRig keying (Setup step 2); until then the list is a list"
+    : select.disabled && memories.length > 0
+      ? "Remembered dial frequencies: the radio is not retuned while a session, a call, a probe, a Test or a transmission is under way"
+      : "Remembered dial frequencies: picking one tunes the radio there (CAT, rigctld or FLRig); Add your own";
 }
 
 async function loadMemories() {
@@ -1331,8 +1346,9 @@ function applyDial(status) {
     heroSub.textContent = "";
     if (status.frequency_hz !== lastDialHz) {
       lastDialHz = status.frequency_hz;
+      // not over a pick waiting to be tuned: the pick is what the operator wants next
       const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
-      if (match) $("memory").value = String(match.hz);
+      if (match && dialPickTimer === null) $("memory").value = String(match.hz);
     }
   } else if (hostOwnsTheDial(status)) {
     reading.textContent = "";
@@ -1352,7 +1368,11 @@ function applyDial(status) {
     hero.textContent = "—";
     heroSub.textContent = "reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)";
   }
-  updateTuneButton();
+  dialHeld =
+    status.probing === true ||
+    (status.test !== null && status.test !== undefined) ||
+    status.transmitting === true;
+  updateDialList();
 }
 
 function parseMhz(text) {
@@ -1404,6 +1424,23 @@ async function removeMemory() {
   renderMemories();
 }
 
+// A pick from the dial list tunes the radio, as every other digital program's band list does
+// (ND1J, 2026-09-27: "you have to click TUNE to change freqs, which no other digital software
+// requires" — and a second button called Tune, the antenna tuner's tone, made it worse). Half
+// a second after the last change, so arrowing through the closed list — which is a change at
+// every step on Windows — tunes once, where it stops.
+function pickDial() {
+  clearTimeout(dialPickTimer);
+  if (!canTune) {
+    dialPickTimer = null;
+    return;
+  }
+  dialPickTimer = setTimeout(() => {
+    dialPickTimer = null;
+    tuneToMemory();
+  }, DIAL_PICK_DELAY_MS);
+}
+
 async function tuneToMemory() {
   const hz = Number($("memory").value);
   if (!hz) return;
@@ -1413,7 +1450,12 @@ async function tuneToMemory() {
     $("dial-reading").textContent = `radio: ${formatHz(hz)} Hz`;
     $("dial-hero").textContent = `${formatHz(hz)} Hz`;
     lastDialHz = hz;
+    return;
   }
+  // refused or failed: the list goes back to where the radio is, so it never shows a dial the
+  // radio is not on (the reason is in the log and the note)
+  const where = lastDialHz ? memories.find((m) => Math.abs(m.hz - lastDialHz) <= 10) : null;
+  if (where) $("memory").value = String(where.hz);
 }
 
 function noteHeard(entry) {
@@ -3692,7 +3734,7 @@ async function saveTxLevel() {
 }
 
 function tuneButton(playing) {
-  $("wz-tune").textContent = playing ? "Stop the tone" : `Tune tone, ${TUNE_SECONDS} s`;
+  $("wz-tune").textContent = playing ? "Stop the tone" : `Tuner tone, ${TUNE_SECONDS} s`;
   $("wz-tune").setAttribute("aria-pressed", String(playing));
   clearTimeout(tuneTimer);
   tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
@@ -3790,7 +3832,7 @@ async function toggleTune() {
     }
     return;
   }
-  const started = await transmitTest("tune", TUNE_SECONDS, `Tune tone for ${TUNE_SECONDS} s`);
+  const started = await transmitTest("tune", TUNE_SECONDS, `Tuner tone for ${TUNE_SECONDS} s`);
   if (started) tuneButton(true);
 }
 
@@ -4615,7 +4657,7 @@ function wire() {
     const ok = await act(() => call("test.start", { remote }), `test session with ${remote}`);
     if (!ok) $("test-result").textContent = "";
   });
-  $("btn-tune-to").addEventListener("click", tuneToMemory);
+  $("memory").addEventListener("change", pickDial);
   $("btn-memory-add").addEventListener("click", openMemoryForm);
   $("btn-memory-remove").addEventListener("click", removeMemory);
   $("btn-memory-save").addEventListener("click", saveMemoryForm);
