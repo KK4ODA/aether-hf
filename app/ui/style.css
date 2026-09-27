@@ -2227,6 +2227,12 @@ details.fold-card > summary:hover .card-title {
   flex: 1 1 320px;
 }
 
+/* a station in another bandwidth than this one's (ADR-0035) */
+td.bw-other {
+  color: var(--status-warning);
+  font-weight: 600;
+}
+
 .tab[data-unsaved="true"]::after {
   content: "";
   width: 7px;

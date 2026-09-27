@@ -108,6 +108,16 @@ Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune thr
   program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
   500 Hz connections* does, and comes back 20 s after the session; a 500 Hz station never answers
   a 2300 Hz call. The panel's header shows the bandwidth, and why, whenever it is not Aether's own.
+* **Two stations in different bandwidths** (ADR-0035). A probe is answered whatever the two
+  bandwidths — probes and their answers are the same tone-floor frames in both — and its result
+  says when the other station runs another bandwidth ("WC4Y hears us at 3 dB … — runs 2300 Hz,
+  this station 500 Hz"). A 2300 Hz station calling one it has heard run 500 Hz — from a beacon, a
+  call, a probe or a probe's answer — calls at 500 Hz and comes back 20 s after. The crossing that
+  cannot be made is a 2300 Hz call to a 500 Hz station: it is not answered, and the panel says so
+  in a warning across every tab, naming the station, both bandwidths and the fix — Setup step 4's
+  bandwidth (a 2300 Hz station still answers 500 Hz calls), the program's `BW` command when a
+  program chose 500 Hz, or asking the other station to call at 500 Hz. The Stations tab shows each
+  station's bandwidth, in amber when it is not this station's.
 * **Answering calls.** With a program attached, Aether answers calls only once the program has
   said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does. The header says
   *host program · not answering* until then, and the log names every call left unanswered.

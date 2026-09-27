@@ -917,6 +917,25 @@ case in field recordings (an asymmetric path like ND1J's 0/+5 dB) before decidin
 `a_poll_is_not_repeated_over_its_answer_arriving` now expects the sender's polls to alternate
 ordinary and floor — its precondition, made exact; its assertions unchanged.
 
+**ADR-0035, the bandwidth trap (after beta.70; model first, no wire change).** KK4ODA's log for
+2026-09-27 01:08–06:36Z: KK4ODA-1 at 500 Hz and WC4Y at 2300 Hz ignored each other's 9 probes and
+5 calls "in another bandwidth" for five hours, and KK4ODA's 3 probes went unanswered. A probe is
+now answered across bandwidths (PROBE/PROBE_ACK are tone-floor frames, the same on both airs; the
+answer always goes on the floor), `ProbeResult.bandwidth_hz` comes from the answer's capability
+byte, and the `probe`/`probed`/ignored-call events end `— runs 2300 Hz, this station 500 Hz`. The
+daemon learns every station's bandwidth from any frame that states one (beacon, call, answer,
+probe, probe answer: `FrameReport.bandwidth_hz`; `learn_bandwidth`, seeded at start from
+`heard.json`'s new `bandwidth_hz`, serde default, no schema bump), and a 2300 Hz station calling
+one known to run 500 Hz moves there first (`move_for_call`, `Why::Calling`,
+`status.bandwidth.callee`, back after `RETURN_QUIET_S`). A wider call or probe to a narrower
+station is a `Mismatch` (`note_mismatch`: once a minute per station and kind;
+`status.bandwidth.mismatch`, the `mismatch` event and log line), shown as the panel's
+`#mismatch-banner` on every tab with *Setup step 4* and *Dismiss* (`aether.mismatchDismissed`);
+the Stations list has an *Hz* column (`td.bw-other`, amber, when not this station's). Tests:
+`…probe_across_bandwidths…` in both suites, `a_wide_station_probes_a_narrow_one_and_calls_it_at_500_hz`,
+`two_daemons.rs` `a_narrow_and_a_wide_daemon_probe_each_other_and_connect` (its probe helper waits
+for `counters.probe_replies`: the heard list already knows a prober from its own probe).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

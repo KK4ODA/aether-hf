@@ -39,3 +39,4 @@ context → decision → alternatives considered → consequences.
 | [0032](0032-an-unanswered-poll-steps-down.md) | An unanswered poll steps the recommendation down, from the second in a row — the polls reach the tone floor within the retries | accepted |
 | [0033](0033-the-link-timeout-follows-the-link-down.md) | The link timeout follows the link down to the floor — reckoned again whenever a station sends | accepted |
 | [0034](0034-an-answer-that-did-not-read-its-frame.md) | A POLL or TURN answered without being read goes again at once, on the floor — an acknowledgement to a TURN, or a floor one to an ordinary POLL, answered the preamble alone | accepted |
+| [0035](0035-the-bandwidth-trap.md) | The bandwidth trap — probes are answered across bandwidths, a station known to run 500 Hz is called at 500 Hz, and a call that cannot be answered is said on the panel | accepted |

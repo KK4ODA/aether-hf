@@ -89,6 +89,13 @@
         <button class="small" id="btn-unsaved-review" title="Open Setup, where the changes are, to save them">Review in Setup</button>
         <button class="small quiet" id="btn-unsaved-discard" title="Put Setup back to what the modem is using now; nothing is written">Discard changes</button>
       </div>
+      <!-- a call or probe to this station in a bandwidth whose calls it does not answer
+           (ADR-0035): on every tab, with both bandwidths and the fix -->
+      <div class="note warn unsaved-banner mismatch-banner" id="mismatch-banner" title="A station called or probed this one in another bandwidth: a call between the two is not answered until one of them changes bandwidth" role="alert" hidden>
+        <span id="mismatch-banner-text" title="Who, in which bandwidth, and what to do"></span>
+        <button class="small" id="btn-mismatch-setup" title="Open Setup step 4, where the bandwidth is set">Setup step 4</button>
+        <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth again">Dismiss</button>
+      </div>
       <!-- the session, in large type on every tab: up, being called, or how the last one ended -->
       <div class="session-banner" id="session-banner" title="The session: connected, calling, or how the last one ended" role="status" aria-live="assertive" hidden>
         <span id="session-banner-text"></span>
@@ -518,6 +525,7 @@
                   <th scope="col" class="num"><button class="sort" data-sort="snr_db" title="Sort by the SNR of the last frame">SNR</button></th>
                   <th scope="col" class="num"><button class="sort" data-sort="best_snr_db" title="Sort by the best SNR heard from the station">Best</button></th>
                   <th scope="col" class="num"><button class="sort" data-sort="frequency_hz" title="Sort by the dial frequency it was heard on">Dial</button></th>
+                  <th scope="col" class="num"><button class="sort" data-sort="bandwidth_hz" title="Sort by the bandwidth the station runs, in hertz, as its last beacon, call or probe said; amber when it is not this station's">Hz</button></th>
                   <th scope="col" class="num"><button class="sort" data-sort="mode" title="Sort by the mode of its last frame">Mode</button></th>
                   <th scope="col"><button class="sort" data-sort="activity" title="Sort by what the station was doing">Activity</button></th>
                   <th scope="col" class="num"><button class="sort" data-sort="last_beacon_ms" title="Sort by when its last beacon was heard: how many beacons, and when the last one was">Beacons</button></th>
