@@ -545,6 +545,15 @@ function applyBeacon(beacon) {
     select.value = String(every);
   }
   const parts = [];
+  // a beacon pressed for and not gone yet: ND1J pressed twice on a busy channel and saw
+  // nothing either time (2026-09-29)
+  if (beacon?.waiting) {
+    parts.push(
+      beacon.waiting_for_clear
+        ? "Beacon waiting: the channel is busy — it goes when the signal stops, or on another dial if you pick one"
+        : "Beacon waiting to go out",
+    );
+  }
   if (every) {
     const next = beacon.next_in_s ?? 0;
     parts.push(
