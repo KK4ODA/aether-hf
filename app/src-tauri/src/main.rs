@@ -25,6 +25,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod close;
+mod logs;
 mod signal;
 mod update;
 
@@ -335,10 +336,10 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
     // what the daemon said. Each run gets a clean file so it describes this run — but the
     // run before it is kept alongside, because "I restarted it and it came good" is the
     // commonest way a fault is reported and truncating on start threw away the only record
-    // of exactly the run worth reading. One generation, not a rotation: the question is
-    // always "what did it do just before I restarted it".
+    // of exactly the run worth reading. The last ten runs are also kept under `logs/`, named
+    // for when each began: a fault reported days later needs its night's log (`logs.rs`).
     let log = daemon_log_path(&config);
-    let _ = std::fs::rename(&log, previous_log_path(&log));
+    logs::set_aside(&log, logs::KEEP);
     if let Ok(file) = std::fs::File::create(&log) {
         if let Ok(errors) = file.try_clone() {
             command.stderr(errors);
@@ -485,11 +486,6 @@ fn daemon_log_path(config: &std::path::Path) -> PathBuf {
         || PathBuf::from("aetherd.log"),
         |dir| dir.join("aetherd.log"),
     )
-}
-
-/// Where the run before this one is kept, beside the current log.
-fn previous_log_path(log: &std::path::Path) -> PathBuf {
-    log.with_extension("prev.log")
 }
 
 /// The last few lines of a file, for showing a person.
