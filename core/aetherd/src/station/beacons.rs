@@ -167,11 +167,24 @@ impl<P: Ptt> Station<P> {
         self.note("beacon", &detail);
     }
 
+    /// Whether a beacon is queued and has not gone yet — most often held for a busy channel.
+    #[must_use]
+    pub fn beacon_waiting(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|next| matches!(next, super::Outgoing::Frames(frames) if super::is_beacon(frames)))
+    }
+
     /// The beacon's part of `status`.
     #[must_use]
     pub fn beacon_status(&self) -> Value {
         let now = self.now();
+        let waiting = self.beacon_waiting();
         json!({
+            // a beacon pressed for and not yet sent, and whether the channel is what holds it:
+            // ND1J pressed twice on a busy channel and saw nothing either time (2026-09-29)
+            "waiting": waiting,
+            "waiting_for_clear": waiting && self.config.wait_for_clear && self.busy.busy(now),
             "every_s": self.beacons.every_s,
             "next_in_s": self.beacons.every_s.map(|_| (self.beacons.next_s - now).max(0.0)),
             "last_sent_ms": self.beacons.last_sent_ms,

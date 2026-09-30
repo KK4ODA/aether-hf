@@ -337,6 +337,10 @@ pub const BEACON_UNDER_AUTOMATIC_CONTROL: &str = "a station under automatic cont
     beacon: a beacon may be automatically controlled only on 28.20–28.30, 50.06–50.08, \
     144.275–144.300, 222.05–222.06 or 432.300–432.400 MHz, or on 33 cm and up (§97.203(d))";
 
+/// Why a second beacon is not queued behind one still waiting: pressed again because nothing
+/// seemed to happen, it would go out twice once the channel cleared (ND1J, 2026-09-29).
+pub const BEACON_ALREADY_WAITING: &str = "a beacon is already waiting to go out";
+
 /// Why a beacon named for another station is not sent: a beacon identifies this one.
 pub const BEACON_NOT_OURS: &str =
     "a beacon carries this station's callsign, or a name with one of its callsigns as its base";
@@ -1673,17 +1677,33 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// With the reason, in a sentence for the operator.
     pub fn tune_to(&mut self, hz: u64) -> Result<(), String> {
-        if self.transmitting {
-            return Err("the transmitter is keyed".into());
+        if self.transmitting || !self.playback.is_empty() {
+            return Err("a transmission is on the air".into());
         }
-        if self.engine.state() == State::Connected || self.engine.state() == State::Disconnecting {
+        if matches!(self.engine.state(), State::Connected | State::Disconnecting) {
             return Err("a session is running".into());
         }
         // nor with anything under way that expects this dial: a call or a probe whose answer
-        // would come back where the radio no longer listens, a Test, a beacon or a datagram
-        // queued to go — the panel tunes on a pick from the dial list now, and a pick is easy
-        // to make by accident
-        self.movable()?;
+        // would come back where the radio no longer listens, a Test — the panel tunes on a
+        // pick from the dial list, and a pick is easy to make by accident
+        if self.test_running() {
+            return Err("a Test session is running".into());
+        }
+        if self.engine.probing() {
+            return Err("a probe is out".into());
+        }
+        if self.engine.state() == State::Connecting {
+            return Err("a call is going out".into());
+        }
+        // A beacon or a KISS program's datagram that is only waiting for a clear channel goes
+        // with the radio: moving off a busy frequency is what an operator does about one, and
+        // it is judged by the rules at the new dial when it goes. ND1J's two beacons sat behind
+        // a busy channel and the dial list refused him "the station is transmitting", which it
+        // was not (2026-09-29). What does belong to this dial — an answer, the identifier after
+        // a session, a tone or drive bursts the operator is watching — holds it.
+        if let Some(what) = self.pending.iter().find_map(holds_the_dial) {
+            return Err(format!("{what} is waiting to go out on this frequency"));
+        }
         self.ptt
             .inner_mut()
             .set_frequency_hz(hz)
@@ -1726,6 +1746,9 @@ impl<P: Ptt> Station<P> {
         }
         if self.engine.state() != State::Idle {
             return Err("a session is running");
+        }
+        if self.beacon_waiting() {
+            return Err(BEACON_ALREADY_WAITING);
         }
         // the name a host program gave the beacon — VarAC's CQs and beacons are `KK4ODA-9`
         // and the like, meaning something to the program at the other end — is carried as
@@ -3848,6 +3871,20 @@ fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
     frames.len() == 1
         && frames[0].container == Container::Data
         && decode_data(&frames[0].payload).is_ok_and(|(header, _)| header.kind == DataKind::Beacon)
+}
+
+/// What in the queue ties the station to the dial it is on, named for the operator: all but a
+/// beacon or a datagram, which only wait for a clear channel and may go on any.
+fn holds_the_dial(next: &Outgoing) -> Option<&'static str> {
+    match next {
+        Outgoing::Frames(frames) if is_beacon(frames) => None,
+        Outgoing::Datagram { .. } => None,
+        Outgoing::Frames(_) => Some("an answer"),
+        Outgoing::Identifier => Some("the Morse identifier"),
+        Outgoing::Drive(_) | Outgoing::Pause { .. } => Some("a drive check"),
+        Outgoing::Audio { tone: true, .. } => Some("a tuner tone"),
+        Outgoing::Audio { .. } => Some("a keying test"),
+    }
 }
 
 /// Whether a queued burst is one control frame of this kind.
@@ -6686,6 +6723,33 @@ mod tests {
         station.connect("KK4XYZ").expect("idle");
         let refused = station.tune_to(7_101_000).expect_err("calling");
         assert!(refused.contains("call"), "{refused}");
+    }
+
+    #[test]
+    fn a_beacon_waiting_for_the_channel_goes_with_the_radio() {
+        // ND1J, 2026-09-29: two beacons pressed on a busy channel sat in the queue, and the
+        // dial list refused to move him off it with "the station is transmitting". A beacon
+        // waits once, is said to be waiting, and does not hold the dial
+        let mut station = idle_station();
+        assert_eq!(station.beacon_status()["waiting"], false);
+        station.beacon(None).expect("idle");
+        assert!(station.beacon_waiting());
+        assert_eq!(station.beacon_status()["waiting"], true);
+        assert_eq!(station.beacon(None), Err(BEACON_ALREADY_WAITING));
+        // the tune gets past every check of the station's own: what refuses it here is the
+        // test harness's keying, which cannot tune any radio
+        let refused = station.tune_to(7_082_000).expect_err("no CAT here");
+        assert!(refused.contains("keying interface has no way"), "{refused}");
+        // what belongs to this dial holds it, and says what it is
+        let mut station = idle_station();
+        station.key_test(1.0).expect("idle");
+        let refused = station
+            .tune_to(7_082_000)
+            .expect_err("a keying test queued");
+        assert_eq!(
+            refused,
+            "a keying test is waiting to go out on this frequency"
+        );
     }
 
     #[test]
