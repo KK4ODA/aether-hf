@@ -952,6 +952,21 @@ gone, and the antenna tuner's tone is *Tuner tone*. A radio that cannot be tuned
 list. The Stations list's *First heard* is a short stamp (time today, "Sep 26" otherwise; the full
 one in the tooltip) and its cells have 10 px sides, so its twelve columns fit 1280 px.
 
+**ND1J's log of 2026-09-29 (beta.71).** The log asked for (why his station answered nobody on
+the 27th) was gone: the shell overwrote `aetherd.log` at each start and kept one
+`aetherd.prev.log`. What it showed instead: two beacons pressed on a busy channel sat queued,
+unsaid, and the dial list then refused to move him off it — "the station is transmitting",
+which it was not (beta.71's `tune_to` used `movable()`). Now `tune_to` refuses only for a
+transmission on the air, a session, call, probe or Test, or a queued item that belongs to the
+dial (`holds_the_dial`: an answer, the identifier, a tuner tone, drive bursts, a keying test); a
+beacon or datagram waiting for a clear channel goes on the new dial. A second beacon while one
+waits is refused (`BEACON_ALREADY_WAITING`, `not_idle`), `status.beacon` has `waiting` and
+`waiting_for_clear`, and the Session tab's beacon line says so. The shell keeps the last ten
+runs' logs as `logs/aetherd-<UTC start>.log` beside the configuration (`app/src-tauri/src/logs.rs`,
+`KEEP`), `aetherd.prev.log` as before. The shell builds and tests in the cloud container after
+`apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+libxdo-dev` and `python tools/stage_daemon.py --no-build`.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

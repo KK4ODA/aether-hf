@@ -39,7 +39,9 @@ too, in a banner on every tab (`docs/user/fcc-regulatory-controls.md`). The conf
 `%APPDATA%\aether-hf\station.toml`; the daemon's output for this run is `aetherd.log`
 beside it and the run before it is `aetherd.prev.log`, and *Help > Open the configuration
 folder* takes you there. If restarting the modem made a problem go away, the log worth
-reading is `aetherd.prev.log` — the one from the run that misbehaved.
+reading is `aetherd.prev.log` — the one from the run that misbehaved. The last ten runs are
+also kept in the `logs` folder beside it, each named for when it began (in UTC, like
+`aetherd-20260927-011200.log`), so a problem from a few days ago can still be looked up.
 
 **A change in Setup takes effect when you save it.** Until then the modem runs on what it had,
 and the panel says so: the Setup tab carries an amber dot, the step you changed is marked, the
