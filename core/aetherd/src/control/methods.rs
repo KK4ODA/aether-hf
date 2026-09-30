@@ -859,6 +859,18 @@ fn beacon<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) 
             id,
             ApiError::new("bad_params", format!("Cannot beacon: {reason}."), false),
         ),
+        // the one pressed before goes as soon as the channel clears; a second would follow it
+        Err(reason) if reason == crate::station::BEACON_ALREADY_WAITING => Response::failed(
+            id,
+            ApiError::new(
+                "not_idle",
+                format!(
+                    "Cannot beacon: {reason}. It goes as soon as the channel is clear, or on \
+                     another dial if you pick one."
+                ),
+                true,
+            ),
+        ),
         // a session ends, and the beacon can go then; answer-only, or a callsign that will
         // not go into one, is not a matter of waiting
         Err(reason) if !answer_only(reason) && station.state() != aether_link::State::Idle => {
