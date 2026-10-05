@@ -78,6 +78,12 @@ pub trait AudioIo {
     fn starved(&self) -> usize;
     /// Drop whatever is queued for playback, for a transmission cut short.
     fn clear(&mut self);
+    /// How long a sample takes from the playback callback to leaving the device, as the
+    /// device reports it — the buffering the playback clock cannot see, which the keyed tail
+    /// has to cover (ADR-0038). `None` from a backend that cannot say.
+    fn output_latency_s(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// Anything that went wrong with a sound card.
@@ -133,6 +139,8 @@ struct Shared {
     playing: bool,
     /// Frames of silence played for an empty queue while it did.
     starved: usize,
+    /// The longest callback-to-device delay the device has reported, in seconds.
+    latency_s: Option<f64>,
 }
 
 type Queue = Arc<Mutex<Shared>>;
@@ -364,13 +372,20 @@ impl SoundCard {
         let output = output_device
             .build_output_stream(
                 &out_config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     // a poisoned queue means the modem thread panicked; play silence rather
                     // than join it, so the radio is not left with a stuck carrier
                     let Ok(mut shared) = play_queue.lock() else {
                         data.fill(0.0);
                         return;
                     };
+                    // when this callback's first sample will leave the device (ADR-0038)
+                    let stamp = info.timestamp();
+                    if let Some(delay) = stamp.playback.duration_since(&stamp.callback) {
+                        let seconds = delay.as_secs_f64();
+                        shared.latency_s =
+                            Some(shared.latency_s.map_or(seconds, |s| s.max(seconds)));
+                    }
                     fill_playback(&mut shared, data, out_channels);
                 },
                 |error| eprintln!("aetherd: playback stream: {error}"),
@@ -424,6 +439,10 @@ impl AudioIo for SoundCard {
 
     fn played(&self) -> u64 {
         self.to_play.lock().map_or(0, |shared| shared.played)
+    }
+
+    fn output_latency_s(&self) -> Option<f64> {
+        self.to_play.lock().ok().and_then(|shared| shared.latency_s)
     }
 
     fn drains_at(&self) -> u64 {
