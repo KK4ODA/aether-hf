@@ -996,6 +996,18 @@ day: ignoring OFDM detections within 4 % of the threshold (the model puts real �
 there). The drive was ruled out: ALC just moving, the tone floor at 75 W on PO; an OFDM burst
 reads ~30 W on an averaging meter at the same drive.
 
+**The turnaround, measured (ADR-0037, beta.76).** A 147 s video of a VARA 2750 Hz session
+(KK4ODA → W4NWG, FTDX10 AGC AUTO) timed by the speaker's mute: the FTDX10's scope shows a
+passband-shaped noise hump 85–170 ms after every unkey for 40–80 ms, early and late; the speaker
+(receive audio) shows none, and Aether's 53 releases in the WC4Y recordings come back in 50 ms
+and flat within ±1 dB — the flash is the scope's, not the audio's. VARA's peer answers 0.2–0.35 s
+after the release (no long guard). No recovery window. Fixed: `BusyDetector::skip` kept the attack
+votes and shape window from before the station keyed (busy on stale votes after a release).
+Recorded now: `tx_end`, `rx_trace` (3 s after a release, every 50 ms), `preamble`, frames'
+`start_s`/`end_s`, releases on the watchdog and abandon (`forced_release`);
+`tools/turnaround_plot.py` (sidecar or `--detect` for any program's recording). Next: does a
+frame with its first 0.1–0.3 s lost still decode (VARA works with KE4QCM's SignaLink).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

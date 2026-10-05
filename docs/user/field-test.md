@@ -206,6 +206,12 @@ whose DLY knob holds the key after the audio stops — is the usual case. Setup 
 keys: 500–800 ms suits a SignaLink. It costs a little on every exchange, so leave it at 0 unless
 a station you work needs it (ADR-0036).
 
+**What the receiver hears after you unkey.** `python tools/turnaround_plot.py <recording>.wav
+--png turn.png` lines up every release of a recording at t = 0: how soon the radio's audio came
+back, whether it rose above the settled noise, the busy detector's reading and any frame that
+started. `--detect` finds the releases in a recording made by anything else — VARA's session
+recorded from the radio's USB audio — so the two can be compared on one plot (ADR-0037).
+
 ## 6. The log
 
 Twenty sessions, three classes. A row per session in `field/LOG.md`: date, band, distance,

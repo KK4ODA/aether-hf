@@ -329,8 +329,11 @@ fn absorb(
             continue;
         };
         let detected = decoded.frame.detect_confidence(air);
+        let start = (origin + decoded.frame.start()) as f64 / fs;
         found.push(FrameRecord {
-            t_s: (origin + decoded.frame.start()) as f64 / fs,
+            t_s: start,
+            start_s: Some(start),
+            end_s: Some(start + decoded.frame.samples(air) as f64 / fs),
             kind: if control {
                 "control".to_owned()
             } else {

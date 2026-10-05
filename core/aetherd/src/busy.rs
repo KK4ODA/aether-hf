@@ -393,8 +393,17 @@ impl BusyDetector {
     ///
     /// A half-duplex station hears its own sidetone; letting that into the floor estimate
     /// would raise the floor by tens of dB and blind the detector for the whole window.
+    ///
+    /// The attack's votes and the shape path's window go too: they describe the channel
+    /// before this station keyed, and a block heard after it would otherwise be judged
+    /// together with them. A peer's signal that ended just before the key went down left
+    /// eight votes over the threshold, and the first quiet block after the station's own
+    /// deafness made the channel busy on them, with nothing on the air.
     pub fn skip(&mut self, samples: &[Complex]) {
         self.partial.clear();
+        self.over.clear();
+        self.shape_buffer.clear();
+        self.peaked = [false, false];
         self.blocks_skipped += samples.len() / self.block_samples.max(1);
     }
 
@@ -1562,6 +1571,45 @@ mod tests {
         );
         assert!((detector.level_db - level_before).abs() < 1e-12);
         assert!(!detector.busy(now + 1.0));
+    }
+
+    #[test]
+    fn a_signal_heard_before_our_own_transmission_does_not_make_the_channel_busy_after_it() {
+        // A peer's signal ended just before this station keyed: the attack's votes from it
+        // were still in the window when the station's own transmission went to `skip`, and
+        // the first quiet block after the deafness found eight of sixteen over the threshold
+        // and turned the channel busy with nothing on the air. Likewise a narrowband signal's
+        // peaked shape window.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let now = feed(&mut detector, 8.0, 0.01, 6, 0.0);
+        assert!(!detector.busy(now));
+        // the peer, 12 dB over the noise, for a second — busy, as it should be
+        let now = feed(&mut detector, 1.0, 0.04, 77, now);
+        assert!(
+            detector.busy(now),
+            "a signal 12 dB over the noise read clear"
+        );
+        // this station transmits for three seconds, longer than any hang
+        let sidetone = noise((3.0 * detector.config().fs) as usize, 1.0, 9);
+        detector.skip(&sidetone);
+        let now = now + 3.0;
+        assert!(
+            !detector.busy(now),
+            "the peer's busy outlasted the transmission"
+        );
+        // the quiet channel after it
+        let block = detector.config().block_s;
+        let per_block = (block * detector.config().fs) as usize;
+        let mut t = now;
+        for index in 0..8 {
+            t += block;
+            detector.push(&noise(per_block, 0.01, 500 + index), t);
+            assert!(
+                !detector.busy(t),
+                "block {index} after the transmission read busy ({:?}) on votes from before it",
+                detector.reason()
+            );
+        }
     }
 
     #[test]
