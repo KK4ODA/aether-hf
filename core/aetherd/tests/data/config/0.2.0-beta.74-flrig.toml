@@ -1,0 +1,27 @@
+# As beta.74 wrote a station keyed through FLRig: schema 9, the last before the answer gap
+# (ADR-0036).
+schema_version = 9
+callsign = "KK4ODA-1"
+
+[operator]
+grid = "EM73tv"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.158
+
+[ptt]
+kind = "flrig"
+address = "127.0.0.1:12345"
+
+[radio]
+bandwidth = 500
+max_mode = 14
+wait_for_clear = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "extra"
+sideband = "usb"

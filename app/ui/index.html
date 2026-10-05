@@ -1047,6 +1047,11 @@
                 <span class="sub">dB above the noise floor</span>
               </div>
               <div class="row">
+                <label for="radio-answer-gap">Answer gap</label>
+                <input id="radio-answer-gap" title="The least time between the end of another station's frame and this station keying, in milliseconds: 0 answers as the link times it; 500-800 gives a station keyed by VOX, such as a SignaLink, time to get back to receive" type="text" inputmode="numeric" class="port" value="0" aria-label="Answer gap in milliseconds" />
+                <span class="sub">ms before answering; 500–800 if the other station keys by VOX (SignaLink)</span>
+              </div>
+              <div class="row">
                 <label for="radio-max-key">Longest key</label>
                 <input id="radio-max-key" title="The watchdog's limit on a single transmission, in seconds; past it the key is released and stays released until asked again" type="text" inputmode="decimal" class="port" value="30" aria-label="Longest single transmission in seconds" />
                 <span class="sub">seconds; the watchdog releases the key past this</span>

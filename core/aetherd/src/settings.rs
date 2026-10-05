@@ -191,6 +191,13 @@ pub const RULES: &[Rule] = &[
         why: "the ladder has twenty rungs: the tone floor's six and the fourteen OFDM modes",
         ..rule("radio.max_mode")
     },
+    Rule {
+        min: Some(0.0),
+        max: Some(2000.0),
+        why: "two seconds is longer than any VOX hold worth answering after, and the other \
+              station's wait for an answer has to outlast it",
+        ..rule("radio.answer_gap_ms")
+    },
     // ── this installation ──────────────────────────────────────────────────────────
     Rule {
         scope: Scope::Machine,

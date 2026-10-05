@@ -1741,6 +1741,7 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "transmissions": station.stats.transmissions,
         "frames_detected": station.stats.frames_detected,
         "deferred_for_busy": station.stats.deferred_for_busy,
+        "deferred_for_gap": station.stats.deferred_for_gap,
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
