@@ -179,6 +179,25 @@ not reproduce; one at the edge of a mode; one that failed and should not have. C
 WAV and the sidecar into `field/sessions/`, commit them together, and from then on
 `cargo test` replays them. `field/README.md` says what belongs there.
 
+## 5a. When a contact fails: both sides' files
+
+A contact that did not get through has two sides, and the side that was not heard cannot be
+read from yours. In the Log tab, **Send files…** does both halves:
+
+* **Send my files** writes one zip — your logs (this run, the one before and the earlier runs
+  kept), the session history, the stations heard, the diagnostic bundle (your settings
+  without their secrets) and the summaries of the recordings from the period you choose, with
+  one station or with anybody — and opens an email to the address you give, with the zip's
+  folder open to drag it in. The audio is left out unless you tick it: a summary lists every
+  frame with its SNR and is a few kB, a recording is megabytes. Nothing is sent without you;
+  the zip waits in the `shared` folder beside your settings.
+* **Ask a station for its files** writes the request: an email with a link that, opened on
+  their computer with Aether HF running, fills their *Send files…* form in with your address
+  and your callsign. The Stations tab's session history has an **Ask for files** button on
+  each row that opens it for that station and that session's time.
+
+Neither holds what was said: the logs record how much was sent, never what.
+
 ## 6. The log
 
 Twenty sessions, three classes. A row per session in `field/LOG.md`: date, band, distance,
