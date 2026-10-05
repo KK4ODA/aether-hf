@@ -212,11 +212,12 @@ mod tests {
         assert_eq!(all.len(), LIMIT);
         assert_eq!(all[0].ended_ms, 1_000 + LIMIT as u64 + 4);
         let nd1j = log.sessions(Some("nd1j"));
-        assert!(!nd1j.is_empty());
+        assert!(!nd1j.is_empty(), "nd1j is empty");
         assert!(nd1j.iter().all(|s| s.remote == "ND1J"));
         assert!(nd1j.windows(2).all(|w| w[0].ended_ms > w[1].ended_ms));
         assert_eq!(log.clear(), LIMIT);
-        assert!(log.sessions(None).is_empty());
+        let unexpected = log.sessions(None);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]
@@ -226,7 +227,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut log = SessionLog::open(Some(path.clone()));
-            assert!(log.sessions(None).is_empty());
+            let unexpected = log.sessions(None);
+            assert!(unexpected.is_empty(), "{unexpected:?}");
             log.add(session("ND1J", 1_000));
             log.add(session("W4TGA", 2_000));
             log.save().expect("written");
@@ -238,7 +240,8 @@ mod tests {
         assert_eq!(sessions[1], session("ND1J", 1_000));
         // a damaged file is an empty history, not a refusal to start
         std::fs::write(&path, "{not json").expect("write");
-        assert!(SessionLog::open(Some(path)).sessions(None).is_empty());
+        let unexpected = SessionLog::open(Some(path)).sessions(None);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

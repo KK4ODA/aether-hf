@@ -454,7 +454,7 @@ fn tone_frames_are_received_as_the_model_receives_them() {
     let tolerance = float(&doc, "tone_llr_tolerance");
     let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
     let cases = doc["tone_receive"].as_array().expect("tone receive");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     let wide = tone::ToneDetector::for_kinds(&WIDE.tone_kinds());
     let narrow = tone::ToneDetector::for_kinds(&NARROW.tone_kinds());
     for case in cases {
@@ -537,7 +537,7 @@ fn whole_frames_match_the_model() {
     // clippers agree rather than merely both being clippers.
     let doc = vectors();
     let cases = doc["waveform_frames"].as_array().expect("waveform frames");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     assert!(
         cases.iter().any(|c| c["peak_reduced"] == true)
             && cases.iter().any(|c| c["peak_reduced"] == false),
@@ -851,7 +851,7 @@ fn a_frame_after_the_receivers_own_silence_is_found_where_the_model_finds_it() {
     // frame's first: its block hits and verdict exact, and then the frame the detector takes
     let doc = vectors();
     let cases = doc["tone_after_silence"].as_array().expect("cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     let kind = &tone::data_kinds()[1];
     let codec = tone::ToneCodec::new(kind).expect("codec");
     let detector = tone::ToneDetector::new();

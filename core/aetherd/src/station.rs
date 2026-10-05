@@ -5300,7 +5300,7 @@ mod tests {
             [delivery("m3", 20_000, false, Some("aborted"))]
         );
         let (pending, recent) = air.a.delivery_status();
-        assert!(pending.is_empty());
+        assert!(pending.is_empty(), "{pending:?}");
         let names: Vec<&str> = recent.iter().map(|d| d.reference.as_str()).collect();
         assert_eq!(names, ["m0", "m1", "m2", "m3"]);
     }
@@ -5625,7 +5625,7 @@ mod tests {
             "the ceiling: the tone floor's two rungs"
         );
         let permitted = air.b.take_regulatory_reports();
-        assert!(!permitted.is_empty());
+        assert!(!permitted.is_empty(), "permitted is empty");
         for d in &permitted {
             assert!(d.allowed(), "{d:?}");
             assert_eq!(d.code, "automatic_response", "{}", d.what);
@@ -6104,7 +6104,8 @@ mod tests {
         });
         assert_eq!(station.identifier_wpm(), Some(15.0));
         station.note_identifier_speed();
-        assert!(station.take_events().is_empty());
+        let unexpected = station.take_events();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]
@@ -6173,14 +6174,14 @@ mod tests {
         air.run(120.0, |_, b| b.received_len() >= 300);
         let on_b = air.b.take_frame_reports();
         let data: Vec<_> = on_b.iter().filter(|r| r.kind == "data").collect();
-        assert!(!data.is_empty());
+        assert!(!data.is_empty(), "data is empty");
         assert!(
             data.iter().all(|r| r.from.as_deref() == Some("W4ODA")),
             "{data:?}"
         );
         let on_a = air.a.take_frame_reports();
         let acks: Vec<_> = on_a.iter().filter(|r| r.kind == "control").collect();
-        assert!(!acks.is_empty());
+        assert!(!acks.is_empty(), "acks is empty");
         assert!(acks.iter().all(|r| r.from.as_deref() == Some("KK4XYZ")));
         assert!(
             acks.iter()
@@ -6643,7 +6644,7 @@ mod tests {
         // and whatever the narrow station heard was the floor's, never the wide OFDM
         let floor = 2;
         let reports = air.b.take_frame_reports();
-        assert!(!reports.is_empty());
+        assert!(!reports.is_empty(), "reports is empty");
         assert!(
             reports.iter().all(|r| r.mode < floor && r.decoded),
             "{reports:?}"

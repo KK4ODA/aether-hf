@@ -353,7 +353,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut list = HeardList::open(Some(path.clone()));
-            assert!(list.stations().is_empty());
+            let unexpected = list.stations();
+            assert!(unexpected.is_empty(), "{unexpected:?}");
             list.note(sighting("W4TGA", 1_000, 8.0));
             list.note(sighting("KK4XYZ", 2_000, 2.0));
             assert!(list.dirty());
@@ -367,10 +368,12 @@ mod tests {
         assert_eq!(list.stations()[1].first_heard_ms, 1_000);
         assert_eq!(list.clear(), 2);
         list.save().expect("written");
-        assert!(HeardList::open(Some(path.clone())).stations().is_empty());
+        let reopened = HeardList::open(Some(path.clone()));
+        assert!(reopened.stations().is_empty(), "{:?}", reopened.stations());
         // a file from some other version, or a damaged one, is an empty list, not a refusal
         std::fs::write(&path, "{not json").expect("write");
-        assert!(HeardList::open(Some(path)).stations().is_empty());
+        let reopened = HeardList::open(Some(path));
+        assert!(reopened.stations().is_empty(), "{:?}", reopened.stations());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

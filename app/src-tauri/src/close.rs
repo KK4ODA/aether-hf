@@ -92,7 +92,8 @@ mod tests {
             "an attached host alone is not a question"
         );
         // a daemon too old to say whether it probes is read as not probing
-        assert!(interruptions(&json!({"state": "idle"})).is_empty());
+        let unexpected = interruptions(&json!({"state": "idle"}));
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]

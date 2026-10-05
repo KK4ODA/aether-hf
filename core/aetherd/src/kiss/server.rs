@@ -1010,7 +1010,8 @@ mod tests {
             "the identifier is not sent on the air"
         );
         // nothing until the modem says it went
-        assert!(read_frames(&mut client, Duration::from_millis(200)).is_empty());
+        let unexpected = read_frames(&mut client, Duration::from_millis(200));
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         stub.publish
             .send(Event::new(
                 "datagram-sent",

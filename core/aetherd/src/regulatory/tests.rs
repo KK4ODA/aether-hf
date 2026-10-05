@@ -650,7 +650,7 @@ fn the_safe_dial_range_is_the_segment_less_the_signal() {
         Sideband::Usb,
     );
     let auto_dials = policy.safe_dials(&auto, wide, Direction::Respond);
-    assert!(!auto_dials.is_empty());
+    assert!(!auto_dials.is_empty(), "auto_dials is empty");
     assert!(
         auto_dials.iter().all(|d| d.rule == "§97.221(b)"),
         "{auto_dials:?}"

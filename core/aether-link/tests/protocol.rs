@@ -584,7 +584,8 @@ fn a_probe_is_not_answered_during_a_session_but_is_across_bandwidths() {
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
     assert_eq!(sim.engine(1).stats.probes_answered, 0);
-    assert!(sim.engine_mut(1).drain().is_empty());
+    let unexpected = sim.engine_mut(1).drain();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
     // idle, and the probe states another bandwidth: answered all the same, on the tone
     // floor both airs share, and the event names both bandwidths (ADR-0035)
     sim.engine_mut(0).disconnect();
@@ -623,7 +624,8 @@ fn a_probe_is_not_answered_during_a_session_but_is_across_bandwidths() {
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "W1AW", 0), now);
     assert_eq!(sim.engine(1).stats.probes_answered, 1);
-    assert!(sim.engine_mut(1).drain().is_empty());
+    let unexpected = sim.engine_mut(1).drain();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
     // while one addressed to it, in its bandwidth, is answered, with nothing to add
     sim.engine_mut(1)
         .on_frame(&probe_from("N0CALL", "KK4XYZ", 0), now);
@@ -1159,7 +1161,8 @@ fn a_pinned_mode_goes_out_whatever_the_peer_recommends() {
             .all(|r| r.snr_db.is_some_and(|s| (s - 15.0).abs() < 1.0)),
         "{rungs:?}"
     );
-    assert!(sim.engine_mut(0).take_ladder().is_empty());
+    let unexpected = sim.engine_mut(0).take_ladder();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
     assert!(sim.engine(0).all_acknowledged());
 }
 
@@ -1669,7 +1672,7 @@ fn a_regulatory_ceiling_holds_every_frame_the_station_sends() {
     sim.engine_mut(0).send(&[1u8; 1500]);
     sim.run(6000.0, 3.0);
     let later = &sim.frames_sent(0)[before..];
-    assert!(!later.is_empty());
+    assert!(!later.is_empty(), "later is empty");
     assert!(
         later
             .iter()
@@ -2826,7 +2829,8 @@ fn a_station_offering_the_turn_does_not_take_it_back_over_what_it_cannot_read() 
         &control_frame(aether_link::ControlKind::Ack, session, at, &t),
         at,
     );
-    assert!(transmitted(&mut a).is_empty());
+    let unexpected = transmitted(&mut a);
+    assert!(unexpected.is_empty(), "{unexpected:?}");
     assert!(!offers_again(&mut a));
     assert_eq!(a.role(), Role::Iss);
 }

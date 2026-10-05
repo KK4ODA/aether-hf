@@ -58,7 +58,7 @@ fn as_usize(value: &Value, key: &str) -> usize {
 fn crc_matches_the_model() {
     let doc = vectors();
     let cases = doc["crc"].as_array().expect("crc cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     for case in cases {
         let name = case["crc"].as_str().expect("crc name");
         let crc = crc_by_name(name);
@@ -88,7 +88,7 @@ fn crc_matches_the_model() {
 fn ldpc_encoding_matches_the_model() {
     let doc = vectors();
     let cases = doc["ldpc"].as_array().expect("ldpc cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     for case in cases {
         let bg = as_usize(case, "bg") as u8;
         let z = as_usize(case, "z");
@@ -117,7 +117,7 @@ fn ldpc_encoding_matches_the_model() {
 fn rate_matching_matches_the_model() {
     let doc = vectors();
     let cases = doc["rate_match"].as_array().expect("rate_match cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     let mut codes: HashMap<(u8, usize), NrLdpcCode> = HashMap::new();
     for case in cases {
         let bg = as_usize(case, "bg") as u8;
@@ -152,7 +152,7 @@ fn decoding_recovers_the_model_s_information_bits() {
     // input the core must recover exactly the information bits the model recovered.
     let doc = vectors();
     let cases = doc["decode"].as_array().expect("decode cases");
-    assert!(!cases.is_empty());
+    assert!(!cases.is_empty(), "cases is empty");
     for case in cases {
         let bg = as_usize(case, "bg") as u8;
         let z = as_usize(case, "z");

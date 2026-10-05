@@ -573,7 +573,8 @@ mod tests {
         for block in silence.chunks(1000) {
             assert!(rx.feed(block).is_empty());
         }
-        assert!(rx.take_preambles().is_empty());
+        let unexpected = rx.take_preambles();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert_eq!(rx.frames_decoded, 0);
     }
 

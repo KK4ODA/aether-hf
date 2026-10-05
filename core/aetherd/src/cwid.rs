@@ -279,7 +279,7 @@ mod tests {
         // from a digital mode are exactly what makes one unwelcome on a shared band.
         let cw = CwId::default();
         let audio = cw.audio("E", RATE); // a single dit
-        assert!(!audio.is_empty());
+        assert!(!audio.is_empty(), "audio is empty");
         let edge = (EDGE_S * RATE) as usize;
         let first = audio[..edge / 2]
             .iter()
@@ -323,8 +323,10 @@ mod tests {
     #[test]
     fn a_callsign_with_nothing_sendable_produces_nothing() {
         let cw = CwId::default();
-        assert!(cw.audio("", RATE).is_empty());
-        assert!(cw.audio("!!!", RATE).is_empty());
+        let unexpected = cw.audio("", RATE);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
+        let unexpected = cw.audio("!!!", RATE);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert!((cw.duration_s("") - 0.0).abs() < 1e-12);
     }
 }
