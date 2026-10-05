@@ -967,6 +967,23 @@ runs' logs as `logs/aetherd-<UTC start>.log` beside the configuration (`app/src-
 `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 libxdo-dev` and `python tools/stage_daemon.py --no-build`.
 
+**Files from the other side (2026-10-05, after KE4QCM's failed contacts and beta.72).** Five
+calls from KE4QCM on 3.590 MHz at 500 Hz: his calls decoded here at 1–6.5 dB, this station's
+acceptances mostly did not reach him (he called again after being accepted; a probe went
+unanswered; no "heard there" in any session), and in the last his data read as rung 14 at
+−3 dB — unexplained from this side. Asking for his files meant a PowerShell line in an email,
+so: `share.prepare {hours, remote?, audio?}` (`core/aetherd/src/share.rs`: `gather`, a
+hand-written zip per PKWARE APPNOTE §4 — stored `.wav`, deflated text, `flate2` for the deflate
+and CRC; `shared/` beside the configuration, newest five kept; the diagnostic bundle and a
+README inside; audio refused during a session), and the Log tab's **Send files…** form
+(`#share-form`: *Send my files* writes the zip, reveals it and opens a `mailto:`; *Ask a station
+for its files* writes a request whose link `http://127.0.0.1:8515/#share?to=…&station=…&hours=…`
+opens the other panel's form filled in — `shareFromLink`; remembered addresses
+`aether.shareTo`/`aether.myEmail`), and an **Ask for files** button on each session row. Also:
+clippy 1.99 (2026-09-28) added `assert_is_empty`, and CI's stable lint failed on 63 test
+assertions — each now prints what it found; the shell's kept logs are named from their own
+first line (Windows file-system tunnelling had dated every copy 2026-09-14).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
