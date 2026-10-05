@@ -279,6 +279,17 @@ pub struct RadioSection {
     /// station inside the sub-bands whatever this says; `docs/user/frequency-plan.md`.
     #[serde(default)]
     pub answer_only: bool,
+    /// The least time, in milliseconds, between the end of a frame heard from another
+    /// station and this station keying: its answers, acknowledgements and polls wait that
+    /// long. A station keyed by VOX — a `SignaLink`, whose DLY knob holds the key after the
+    /// audio stops — is still transmitting for a moment after its frame ends, and an answer
+    /// that starts inside that moment is not heard: KE4QCM's calls reached this station and
+    /// its acceptances did not reach him (2026-10-05). 0, the default, answers as the link
+    /// times it (a quarter second after the frame); 500–800 suits a VOX-keyed peer. The
+    /// other station holds its wait for a frame it hears arriving, so a later answer is
+    /// still taken for one (ADR-0036).
+    #[serde(default)]
+    pub answer_gap_ms: u32,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
     /// constellations, or a band where they never work. Indexes the ladder of the bandwidth
     /// in use — the tone floor's kinds, then the OFDM modes (ADR-0013, ADR-0014, ADR-0015):
@@ -367,6 +378,7 @@ impl Default for RadioSection {
             busy_threshold_db: default_busy_threshold(),
             bandwidth: default_bandwidth(),
             answer_only: false,
+            answer_gap_ms: 0,
             max_mode: default_max_mode(),
             compress: false,
             cw_id: false,
@@ -872,7 +884,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -893,6 +905,7 @@ pub const MIGRATIONS: &[Migration] = &[
     kiss_port,
     host_keying,
     flrig_keying,
+    answer_gap,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1021,6 +1034,11 @@ fn host_keying(_table: &mut toml::Table) {}
 /// Schema 8 → 9, keying through `FLRig`: nothing moves — `[ptt] kind = "flrig"` is a new
 /// choice, and the step is for going back, as the two before it (`<name>.bak-v8`).
 fn flrig_keying(_table: &mut toml::Table) {}
+
+/// Schema 9 → 10, the answer gap (ADR-0036): nothing moves — `radio.answer_gap_ms` is a new
+/// key with a default that answers as before, and the step is for going back
+/// (`<name>.bak-v9`).
+fn answer_gap(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1412,6 +1430,7 @@ pub const LIVE_KEYS: &[&str] = &[
     // BW commands (ADR-0026)
     "radio.bandwidth",
     "radio.answer_only",
+    "radio.answer_gap_ms",
     "radio.busy_threshold_db",
     // the identifier is rendered at each transmission, so its settings apply to the next
     "radio.cw_id",
@@ -1621,7 +1640,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 9
+schema_version = 10
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1684,6 +1703,10 @@ bandwidth = 2300
 # transmits only inside the §97.221(b) sub-bands, or on 6 m: every Aether signal measures over
 # the 500 Hz that §97.221(c) allows elsewhere (docs/user/fcc-regulatory-controls.md).
 answer_only = false
+# The least time between the end of another station's frame and this station keying, in
+# milliseconds. 0 answers as the link times it; 500-800 lets a station keyed by VOX (a
+# SignaLink, whose DLY knob holds its key after the audio stops) get back to receive first.
+answer_gap_ms = 0
 # The fastest mode this station will use: a rung of the ladder — the tone floor's kinds (six
 # at 2300 Hz, four at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has
 # fifteen rungs and anything past 14 means 14.

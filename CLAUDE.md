@@ -984,6 +984,18 @@ clippy 1.99 (2026-09-28) added `assert_is_empty`, and CI's stable lint failed on
 assertions — each now prints what it found; the shell's kept logs are named from their own
 first line (Windows file-system tunnelling had dated every copy 2026-09-14).
 
+**The answer gap (ADR-0036, beta.75, 2026-10-05).** VARA connects KE4QCM and WC4Y to this
+station at 35–50 W; Aether's acceptances did not reach KE4QCM, whose SignaLink holds its key for
+its DLY time after the audio stops — Aether keys at the decode of a call (acceptances, probe
+answers) or 0.25 s after a frame (ACKs), into that hold. `[radio] answer_gap_ms` (0–2000,
+default 0, live; Setup step 4 *Answer gap*) holds anything that radiates until the gap after the
+end of the last frame heard (`heard_end`, `held_for_busy`, `deferred_for_gap`); the other
+station's waits hold for a frame heard arriving, so a late answer is still taken. Configuration
+schema 10 (`answer_gap`, a no-op step; fixture `0.2.0-beta.74-flrig.toml`). Rejected the same
+day: ignoring OFDM detections within 4 % of the threshold (the model puts real −8 dB frames
+there). The drive was ruled out: ALC just moving, the tone floor at 75 W on PO; an OFDM burst
+reads ~30 W on an averaging meter at the same drive.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

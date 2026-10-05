@@ -198,6 +198,14 @@ read from yours. In the Log tab, **Send files…** does both halves:
 
 Neither holds what was said: the logs record how much was sent, never what.
 
+**Your calls are heard, your answers are not.** When the other station keeps calling after you
+accepted, or its probes report no answer while yours get through, the start of your answers
+is probably landing while its radio is still on transmit. A station keyed by VOX — a SignaLink,
+whose DLY knob holds the key after the audio stops — is the usual case. Setup → Modem settings →
+**Answer gap** makes your station wait that long after the other station's frame before it
+keys: 500–800 ms suits a SignaLink. It costs a little on every exchange, so leave it at 0 unless
+a station you work needs it (ADR-0036).
+
 ## 6. The log
 
 Twenty sessions, three classes. A row per session in `field/LOG.md`: date, band, distance,

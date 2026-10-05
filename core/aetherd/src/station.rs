@@ -99,6 +99,9 @@ pub struct StationConfig {
     pub max_key_s: f64,
     /// Refuse to start a transmission while the channel is occupied.
     pub wait_for_clear: bool,
+    /// The least time between the end of a frame heard from another station and this
+    /// station keying, in seconds (`radio.answer_gap_ms`, ADR-0036).
+    pub answer_gap_s: f64,
     /// Offer stream compression in the connect handshake. Used only if the peer offers it
     /// too; a station that cannot decompress must never be sent a compressed stream.
     pub compress: bool,
@@ -149,6 +152,7 @@ impl Default for StationConfig {
             // tolerate.
             max_key_s: 30.0,
             wait_for_clear: true,
+            answer_gap_s: 0.0,
             compress: true,
             cw_id: None,
             record_dir: None,
@@ -688,6 +692,8 @@ pub struct StationStats {
     pub frames_detected: usize,
     /// Times a transmission was held back because the channel was busy.
     pub deferred_for_busy: usize,
+    /// Transmissions held for the answer gap after another station's frame (ADR-0036).
+    pub deferred_for_gap: usize,
     /// Times the key-time watchdog fired.
     pub watchdog_trips: usize,
     /// Application bytes handed to the compressor this session.
@@ -790,6 +796,9 @@ pub struct Station<P: Ptt> {
     /// arrives after the key is released, and read as channel it would hold the next burst
     /// back for its own echo.
     deaf_until: f64,
+    /// Where the last frame heard from another station ended, in the station's clock: the
+    /// answer gap counts from here (ADR-0036).
+    heard_end: f64,
     /// The two playback clocks and how the transmission now running stands against them.
     clock: PlaybackClock,
     /// The exact audio of the transmission now running, when the operator asked for it
@@ -966,6 +975,7 @@ impl<P: Ptt> Station<P> {
             held_since: None,
             held_from: None,
             deaf_until: f64::NEG_INFINITY,
+            heard_end: f64::NEG_INFINITY,
             clock: PlaybackClock::default(),
             tx_capture: None,
             pending: VecDeque::new(),
@@ -1588,6 +1598,7 @@ impl<P: Ptt> Station<P> {
         self.config.max_key_s = config.radio.max_key_s;
         self.refresh_burst_cap(self.now());
         self.config.wait_for_clear = config.radio.wait_for_clear;
+        self.config.answer_gap_s = f64::from(config.radio.answer_gap_ms) / 1000.0;
         // the operator's fastest rung, on the ladder running now — and in the engine, which
         // used to keep the one it started with until the modem restarted
         self.config.max_mode_setting = Some(config.radio.max_mode);
@@ -2472,6 +2483,9 @@ impl<P: Ptt> Station<P> {
             };
             let start = (origin + decoded.frame.start()) as f64 / fs;
             let frame_s = decoded.frame.samples(&air) as f64 / fs;
+            // the answer gap counts from the end of whatever was heard, read or not: a frame
+            // that did not decode is still answered (ADR-0036)
+            self.heard_end = self.heard_end.max(start + frame_s);
             let decoded_ok = decoded.ok();
             let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected);
             // A frame that decoded is real whatever its acquisition looked like, and a weak
@@ -2922,8 +2936,16 @@ impl<P: Ptt> Station<P> {
             };
         let polite =
             !responding && !own_access && self.config.wait_for_clear && !self.channel_clear(now);
-        if radiates && (waits_out || polite) {
-            self.stats.deferred_for_busy += 1;
+        // Nothing keys inside the answer gap after another station's frame, whatever it is: a
+        // station keyed by VOX is still transmitting for its hold after the frame ends, and
+        // an acceptance sent into that hold was never heard (KE4QCM, 2026-10-05; ADR-0036).
+        let settling = now < self.heard_end + self.config.answer_gap_s;
+        if radiates && (waits_out || polite || settling) {
+            if waits_out || polite {
+                self.stats.deferred_for_busy += 1;
+            } else {
+                self.stats.deferred_for_gap += 1;
+            }
             // the engine's timers move with the burst, or a retry fires against a burst
             // that has not left yet and the two go out back to back when the channel clears
             if let Some(since) = self.held_since {
@@ -4486,6 +4508,77 @@ mod tests {
             air.a.engine().last_probe().is_some(),
             "the probe went unanswered with wait_for_clear on; b answered {} probe(s)",
             air.b.engine().stats.probes_answered
+        );
+    }
+
+    /// How long after the end of the last frame it heard a station first keyed, with `gap`
+    /// as its answer gap, when the other station probed it; and whether the prober took the
+    /// answer.
+    fn probe_answered_after(gap: f64) -> (f64, bool) {
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            answer_gap_s: gap,
+            ..config
+        });
+        air.run(2.0, |_, _| false);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        let mut keyed_after = None;
+        air.run(30.0, |a, b| {
+            if keyed_after.is_none() && b.transmitting() {
+                keyed_after = Some(b.now() - b.heard_end);
+            }
+            a.engine().last_probe().is_some()
+        });
+        let answered = air.a.engine().last_probe().is_some();
+        (
+            keyed_after.expect("the probed station never keyed"),
+            answered,
+        )
+    }
+
+    #[test]
+    fn an_answer_waits_out_the_gap_and_is_still_taken() {
+        // A station keyed by VOX — a SignaLink, whose DLY knob holds the key after the audio
+        // stops — is still transmitting for a moment after its frame ends, and an acceptance
+        // that started inside that moment never reached KE4QCM (2026-10-05). With an answer
+        // gap the station keys no sooner than the gap after the frame it heard; the prober,
+        // which holds its wait for a frame it hears arriving, still takes the later answer.
+        let (prompt, answered) = probe_answered_after(0.0);
+        assert!(answered, "the probe went unanswered without a gap");
+        assert!(
+            prompt < 0.4,
+            "without a gap the answer keyed {prompt:.2} s after the probe"
+        );
+        let (late, answered) = probe_answered_after(0.8);
+        assert!(
+            late >= 0.8,
+            "the answer keyed {late:.2} s after the probe, inside the gap"
+        );
+        assert!(
+            late < 1.2,
+            "the answer waited {late:.2} s, well past the gap"
+        );
+        assert!(
+            answered,
+            "the prober gave up on an answer {late:.2} s after its probe"
+        );
+    }
+
+    #[test]
+    fn a_session_crosses_with_both_stations_answering_late() {
+        // every acceptance, acknowledgement and poll waits the gap; the other station's waits
+        // hold for a frame they hear arriving, so the session still runs to the end
+        let message = b"Both stations waited out the gap before every answer.";
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            answer_gap_s: 0.8,
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received().as_slice(), message.as_slice());
+        assert!(
+            air.b.stats.deferred_for_gap > 0,
+            "the called station never waited the gap"
         );
     }
 
