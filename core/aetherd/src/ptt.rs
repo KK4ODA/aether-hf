@@ -819,7 +819,7 @@ mod tests {
             std::time::Instant::now() + std::time::Duration::from_secs(5),
         )
         .expect("a timeout is not an error");
-        assert!(got.is_empty());
+        assert!(got.is_empty(), "{got:?}");
     }
 
     /// A backend that counts what it was asked to do, and can be told to refuse.

@@ -1224,9 +1224,13 @@ mod tests {
             "a round trip changed the configuration"
         );
         assert!(applied.changed.is_empty(), "{:?}", applied.changed);
-        assert!(applied.unknown.is_empty());
-        assert!(applied.invalid.is_empty());
-        assert!(applied.missing_hardware.is_empty());
+        assert!(applied.unknown.is_empty(), "{:?}", applied.unknown);
+        assert!(applied.invalid.is_empty(), "{:?}", applied.invalid);
+        assert!(
+            applied.missing_hardware.is_empty(),
+            "{:?}",
+            applied.missing_hardware
+        );
         assert_eq!(applied.memories.as_deref(), Some(memories().as_slice()));
     }
 
@@ -1301,8 +1305,8 @@ mod tests {
             applied.config.update,
             crate::config::UpdateSection::default()
         );
-        assert!(applied.unknown.is_empty());
-        assert!(applied.invalid.is_empty());
+        assert!(applied.unknown.is_empty(), "{:?}", applied.unknown);
+        assert!(applied.invalid.is_empty(), "{:?}", applied.invalid);
     }
 
     #[test]
@@ -1412,7 +1416,7 @@ mod tests {
             .remove("ptt");
         let applied = profile.apply(&config, None).expect("apply");
         assert_eq!(applied.config.ptt, PttConfig::None);
-        assert!(applied.invalid.is_empty());
+        assert!(applied.invalid.is_empty(), "{:?}", applied.invalid);
     }
 
     #[test]
@@ -1477,7 +1481,11 @@ mod tests {
         let applied = profile
             .apply(&config, Some(&Inventory::default()))
             .expect("apply");
-        assert!(applied.missing_hardware.is_empty());
+        assert!(
+            applied.missing_hardware.is_empty(),
+            "{:?}",
+            applied.missing_hardware
+        );
     }
 
     #[test]
@@ -1655,7 +1663,8 @@ mod tests {
         let config_path = dir.join("station.toml");
         let mut store = Store::open(Some(&config_path));
         assert_eq!(store.dir(), Some(dir.join("profiles").as_path()));
-        assert!(store.list().is_empty());
+        let unexpected = store.list();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert_eq!(store.active(), None);
 
         let home = Profile::capture(
@@ -1894,7 +1903,8 @@ mod tests {
     #[test]
     fn a_daemon_without_a_configuration_file_has_no_store() {
         let mut store = Store::open(None);
-        assert!(store.list().is_empty());
+        let unexpected = store.list();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert_eq!(store.dir(), None);
         let profile = Profile::capture("X", &station(), &[], None, &now());
         assert_eq!(

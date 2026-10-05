@@ -3154,7 +3154,8 @@ mod tests {
         };
         e.on_ack(&ack);
         assert!(e.all_acknowledged());
-        assert!(e.unacked().is_empty());
+        let unexpected = e.unacked();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]
@@ -3698,7 +3699,8 @@ mod tests {
                 &Readable::new(ControlKind::Ack, true, 0, ordinary, end),
                 end,
             );
-            assert!(sent_controls(&mut e).is_empty());
+            let unexpected = sent_controls(&mut e);
+            assert!(unexpected.is_empty(), "{unexpected:?}");
             let again = e.deadline_of(Timer::Keepalive).expect("idle");
             assert!(
                 (again - (end + timing.turnaround_s)).abs() < 1e-9,
@@ -3759,7 +3761,8 @@ mod tests {
                 &Readable::new(ControlKind::Ack, floor, 0, 0, answered),
                 answered,
             );
-            assert!(sent_controls(&mut e).is_empty());
+            let unexpected = sent_controls(&mut e);
+            assert!(unexpected.is_empty(), "{unexpected:?}");
             let again = e.deadline_of(Timer::Wait).expect("armed");
             assert!(
                 (again - (answered + timing.turnaround_s)).abs() < 1e-9,
@@ -3838,7 +3841,8 @@ mod tests {
         for arrives in [false, true] {
             let mut b = chatting(Role::Irs);
             b.send(b"hello");
-            assert!(transmitted(&mut b).is_empty());
+            let unexpected = transmitted(&mut b);
+            assert!(unexpected.is_empty(), "{unexpected:?}");
             let due = b.deadline_of(Timer::Request).expect("a request waiting");
             assert!((due - (100.0 + b.reaction_s())).abs() < 1e-9);
             if arrives {
@@ -3849,7 +3853,7 @@ mod tests {
             b.tick(due);
             let mut sent = transmitted(&mut b);
             if arrives {
-                assert!(sent.is_empty());
+                assert!(sent.is_empty(), "{sent:?}");
                 assert_eq!(b.stats.turn_requests, 0);
                 let ack_due = b.deadline_of(Timer::Ack).expect("an acknowledgement due");
                 b.tick(ack_due); // the frame's end: the acknowledgement asks
@@ -3930,7 +3934,8 @@ mod tests {
         b.set_chat(false);
         assert!(b.deadline_of(Timer::Request).is_none());
         b.tick(130.0);
-        assert!(transmitted(&mut b).is_empty());
+        let unexpected = transmitted(&mut b);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert_eq!(b.stats.turn_requests, 0);
         b.set_chat(true);
         b.send(b" again"); // the next line asks

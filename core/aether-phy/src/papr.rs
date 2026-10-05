@@ -297,7 +297,8 @@ mod tests {
 
     #[test]
     fn an_empty_or_silent_burst_is_left_alone() {
-        assert!(ClipAndFilter::default().process(&[]).is_empty());
+        let unexpected = ClipAndFilter::default().process(&[]);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         let silence = vec![(0.0, 0.0); 100];
         assert_eq!(ClipAndFilter::default().process(&silence), silence);
         assert!((papr_db(&silence) - 0.0).abs() < 1e-12);

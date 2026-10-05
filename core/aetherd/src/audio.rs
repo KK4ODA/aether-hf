@@ -697,7 +697,8 @@ mod tests {
         audio.playback(&[0.5; 50]);
         audio.clear();
         assert_eq!(audio.queued(), 0);
-        assert!(audio.capture().is_empty());
+        let unexpected = audio.capture();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         assert_eq!(audio.played(), 100, "cleared audio never played");
     }
 
@@ -721,7 +722,8 @@ mod tests {
     #[test]
     fn loopback_returns_what_was_played() {
         let mut audio = Loopback::new();
-        assert!(audio.capture().is_empty());
+        let unexpected = audio.capture();
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         audio.playback(&[0.1, 0.2, 0.3]);
         assert_eq!(audio.queued(), 3);
         assert_eq!(audio.capture(), vec![0.1, 0.2, 0.3]);
@@ -753,12 +755,12 @@ mod tests {
         match list_devices() {
             Ok(devices) => {
                 for device in devices {
-                    assert!(!device.name.is_empty());
+                    assert!(!device.name.is_empty(), "device.name is empty");
                 }
             }
             Err(error) => {
                 // an error is a legitimate answer here, as long as it is an error
-                assert!(!error.to_string().is_empty());
+                assert!(!error.to_string().is_empty(), "error.to_string() is empty");
             }
         }
     }

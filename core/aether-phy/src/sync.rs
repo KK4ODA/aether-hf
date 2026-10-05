@@ -690,14 +690,17 @@ mod tests {
     fn silence_produces_no_detections() {
         let detector = FrameDetector::default();
         let quiet = vec![(0.0, 0.0); 20_000];
-        assert!(detector.detect(&quiet, 4).is_empty());
+        let unexpected = detector.detect(&quiet, 4);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]
     fn a_buffer_shorter_than_the_reference_is_handled() {
         let detector = FrameDetector::default();
-        assert!(detector.detect(&[(0.0, 0.0); 10], 1).is_empty());
-        assert!(detector.bank(&[(0.0, 0.0); 10]).peak.is_empty());
+        let unexpected = detector.detect(&[(0.0, 0.0); 10], 1);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
+        let unexpected = detector.bank(&[(0.0, 0.0); 10]).peak;
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]

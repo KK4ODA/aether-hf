@@ -619,7 +619,7 @@ mod tests {
         // BW500 goes to the modem, which moves and is answered OK, or cannot and is answered
         // WRONG, by the server once it knows (ADR-0026)
         let bandwidth = host.command("BW500");
-        assert!(bandwidth.replies.is_empty());
+        assert!(bandwidth.replies.is_empty(), "{:?}", bandwidth.replies);
         assert_eq!(bandwidth.action, HostAction::Bandwidth(500));
         // Winlink Express 1.8.5's own opening line, verbatim: PUBLIC ON, CWID ON,
         // COMPRESSION ON, BW<max>, MYCALL, LISTEN ON
@@ -734,8 +734,10 @@ mod tests {
     #[test]
     fn an_empty_line_is_not_an_error() {
         let mut host = state();
-        assert!(host.command("").replies.is_empty());
-        assert!(host.command("   ").replies.is_empty());
+        let unexpected = host.command("").replies;
+        assert!(unexpected.is_empty(), "{unexpected:?}");
+        let unexpected = host.command("   ").replies;
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]

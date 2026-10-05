@@ -2127,7 +2127,7 @@ mod tests {
             .result
             .expect("result");
         let bins = result["bins_db"].as_array().expect("bins");
-        assert!(!bins.is_empty());
+        assert!(!bins.is_empty(), "bins is empty");
         let bin_hz = result["bin_hz"].as_f64().expect("bin_hz");
         let peak = bins
             .iter()
@@ -2320,7 +2320,8 @@ mod tests {
             &request("sessions.clear", json!({})),
         );
         assert_eq!(response.result.expect("result")["cleared"], 3);
-        assert!(daemon.sessions.sessions(None).is_empty());
+        let unexpected = daemon.sessions.sessions(None);
+        assert!(unexpected.is_empty(), "{unexpected:?}");
         // without the daemon's state there is no history, and the answer is an empty one
         let response = dispatch(&mut station, &request("sessions.list", json!({})));
         assert_eq!(

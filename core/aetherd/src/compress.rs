@@ -407,7 +407,8 @@ alternate is the usual one if the band is unusable.\r\n\
         assert!(out.is_empty() || rx.failed());
         let _ = rx.push(b"more");
         assert!(rx.failed(), "it kept trying to read a stream it had lost");
-        assert!(rx.push(b"and more").is_empty());
+        let unexpected = rx.push(b"and more");
+        assert!(unexpected.is_empty(), "{unexpected:?}");
     }
 
     #[test]

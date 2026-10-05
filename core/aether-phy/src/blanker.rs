@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn an_empty_block_is_not_an_error() {
         let result = NoiseBlanker::default().process(&[]);
-        assert!(result.samples.is_empty());
+        assert!(result.samples.is_empty(), "{:?}", result.samples);
         assert!(result.fraction() == 0.0, "an empty block blanks nothing");
     }
 }
