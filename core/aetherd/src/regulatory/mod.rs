@@ -1027,7 +1027,14 @@ fn judge_data(c: &Case, band: &str, mut d: Draft) -> Decision {
         ControlMode::Remote => "remote control",
         ControlMode::Automatic => "an operator at the control point",
     };
-    let summary = format!("FCC: data permitted — {width:.0} Hz fits the {band} data segment");
+    // The width is the FCC's occupied bandwidth (§97.3(a)(8): out to 26 dB down), the wider of
+    // its two readings — about 700 Hz for the 500 Hz mode's OFDM rungs. Shown beside "500 Hz"
+    // as a bare number it read as the mode being wrong: "why is it saying 709 Hz wide and not
+    // 500?" (ND1J, 2026-10-05). It says which measure it is (ADR-0039).
+    let summary = format!(
+        "FCC: data permitted — occupies {width:.0} Hz by the FCC's 26 dB measure, inside the \
+         {band} data segment"
+    );
     let detail = format!(
         "{rf_text}: inside the {band} data segment {} ({}), within {} privileges, under \
          {control_word}.",

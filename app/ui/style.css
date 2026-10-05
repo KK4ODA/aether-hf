@@ -924,8 +924,13 @@ details.hint > p {
   --state: var(--status-link);
 }
 
-.session-banner[data-state="calling"] {
+.session-banner[data-state="calling"],
+.session-banner[data-state="closing"] {
   --state: var(--status-warning);
+}
+
+.session-banner[data-state="working"] {
+  --state: var(--status-rx);
 }
 
 .session-banner[data-state="ended"] {

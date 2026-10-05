@@ -72,6 +72,15 @@ pub struct LinkConfig {
     pub turn_retries: usize,
     /// Disconnect attempts before closing anyway.
     pub disc_retries: usize,
+    /// A sender asked to disconnect finishes what it has queued first — and gives up on it,
+    /// and sends its DISC, once this many whole exchanges at the family the link runs in (or
+    /// `disc_patience_s`, whichever is longer) pass with nothing new acknowledged (ADR-0039):
+    /// on a path where the acknowledgements do not arrive the queue never empties, and
+    /// Disconnect did nothing until the link timed out (ND1J, 2026-10-05). Half the link
+    /// timeout, so it always comes first; any progress starts the count again.
+    pub disc_patience_exchanges: f64,
+    /// See `disc_patience_exchanges`.
+    pub disc_patience_s: f64,
     /// An idle sender polls the receiver this often.
     pub keepalive_s: f64,
     /// No valid frame from the peer for this long ends the session — or longer where the
@@ -153,6 +162,8 @@ impl Default for LinkConfig {
             connect_retries: 8,
             turn_retries: 3,
             disc_retries: 3,
+            disc_patience_exchanges: 2.0,
+            disc_patience_s: 20.0,
             keepalive_s: 10.0,
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
@@ -473,6 +484,8 @@ pub struct LinkEngine {
     /// The family this station's last POLL went out in (ADR-0034).
     poll_floor: bool,
     disc_requested: bool,
+    /// When a sender asked to disconnect stops waiting for its queue (ADR-0039).
+    disc_patience_until: Option<f64>,
     disc_tries: usize,
     /// This station placed the call: when both stations believe they hold the turn, the
     /// caller keeps it and the called station yields (ADR-0023).
@@ -594,6 +607,7 @@ impl LinkEngine {
             unread_there: false,
             poll_floor: false,
             disc_requested: false,
+            disc_patience_until: None,
             caller: false,
             disc_tries: 0,
             connect_tries: 0,
@@ -1368,17 +1382,31 @@ impl LinkEngine {
     /// — the longest data frame either side sends or may send next, and that family's
     /// control frame — whichever is longer.
     fn link_timeout(&self) -> f64 {
+        self.config
+            .link_timeout_s
+            .max(self.config.link_timeout_exchanges * self.exchange_s())
+    }
+
+    /// One whole exchange at the family the link runs in: a full burst of the longest data
+    /// frame either side sends or may send next, the control frame of that family that
+    /// answers it, both turnarounds and the gap that ends the burst.
+    fn exchange_s(&self) -> f64 {
         let frame = self
             .peer_data_frame_s()
             .max(self.timing.data_frame_s_for(self.burst_mode()));
         let floor = self.peer_floor || self.timing.is_floor(self.burst_mode());
-        let exchange = self.burst_capacity(frame) as f64 * frame
+        self.burst_capacity(frame) as f64 * frame
             + self.timing.control_frame_s_for(floor)
             + 2.0 * self.timing.turnaround_s
-            + self.config.burst_gap_s;
+            + self.config.burst_gap_s
+    }
+
+    /// How long a sender asked to disconnect waits for its queue to be acknowledged before it
+    /// leaves without the rest (ADR-0039).
+    fn disc_patience(&self) -> f64 {
         self.config
-            .link_timeout_s
-            .max(self.config.link_timeout_exchanges * exchange)
+            .disc_patience_s
+            .max(self.config.disc_patience_exchanges * self.exchange_s())
     }
 
     /// Frames of `frame_s` seconds one burst may carry: the configured count, and no more
@@ -1880,6 +1908,29 @@ impl LinkEngine {
             self.send_disc();
             return;
         }
+        if self.disc_requested {
+            // the queue is waited for, but not for ever: a path whose acknowledgements never
+            // arrive never empties it (ADR-0039)
+            match self.disc_patience_until {
+                None => self.disc_patience_until = Some(self.now + self.disc_patience()),
+                Some(until) if self.now >= until => {
+                    let unacked: usize = self
+                        .unacked()
+                        .iter()
+                        .filter_map(|&seq| self.records.iter().find(|r| r.seq == seq))
+                        .map(|r| r.body.len())
+                        .sum();
+                    let left = self.tx_queue.len() + unacked;
+                    self.actions.push(Action::Event {
+                        name: "disconnect",
+                        detail: format!("{left} bytes not acknowledged; leaving without them"),
+                    });
+                    self.send_disc();
+                    return;
+                }
+                Some(_) => {}
+            }
+        }
         let hand_over = match self.peer_request {
             PeerRequest::None => false,
             PeerRequest::Break => true,
@@ -2066,11 +2117,17 @@ impl LinkEngine {
                 snr_db: ack.snr_db,
             });
         }
+        let mut progressed = false;
         for record in &mut self.records {
             if !record.acked && record.sent() && ack.received(record.seq) {
                 record.acked = true;
                 self.stats.bytes_acked += record.body.len();
+                progressed = true;
             }
+        }
+        if progressed && self.disc_patience_until.is_some() {
+            // progress: a sender leaving waits its patience again from here
+            self.disc_patience_until = Some(self.now + self.disc_patience());
         }
         while self.tx_base != self.tx_next {
             let base = self.tx_base;
@@ -2896,6 +2953,7 @@ impl LinkEngine {
         self.poll_floor = false;
         self.disc_tries = 0;
         self.disc_requested = false;
+        self.disc_patience_until = None;
         self.caller = false;
         self.waiting_for = None;
         self.rx_base = 0;

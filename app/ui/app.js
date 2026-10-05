@@ -152,7 +152,9 @@ function onEvent(frame) {
         chime("up");
         focusComposer();
       } else if (data.name === "disconnected") {
-        showBanner("ended", `SESSION ENDED — ${data.detail}`, 15000);
+        const left = leftBehind ? ` — ${leftBehind}` : "";
+        leftBehind = "";
+        showBanner("ended", `SESSION ENDED — ${data.detail}${left}`, 15000);
         chime("down");
       }
       refreshStatus();
@@ -181,6 +183,10 @@ function onEvent(frame) {
       // the probe's answer, or its absence, where the button is
       if (data.name === "probe") noteProbe(data.detail ?? "");
       if (data.name === "test") noteTest(data.detail ?? "");
+      // a sender that left without what the path would not carry says how much (ADR-0039)
+      if (data.name === "disconnect") leftBehind = data.detail ?? "";
+      // what the banner shows moves with these at once, not at the next poll
+      if (["probe", "test", "beacon", "disconnect"].includes(data.name)) refreshStatus();
       break;
     case "regulatory":
       onRegulatory(data);
@@ -379,22 +385,63 @@ function showBanner(state, text, hideAfterMs = 0) {
   }
 }
 
+// What a sender that left without the rest of its queue said it left (ADR-0039), for the
+// banner that says the session ended.
+let leftBehind = "";
+
+// The station probed last from this panel, for the banner: the status says a probe is out,
+// not to whom.
+let probeTarget = "";
+
+// What the banner says the station is doing, from the status just read: the session first,
+// then anything else under way that somebody is waiting on. ND1J pressed Disconnect, saw
+// nothing change while his station finished what it had queued, and took the button for
+// broken (2026-10-05); every action that takes a while now says so until it is done.
+function bannerFor(status) {
+  const who = status.remote || "";
+  const test = status.test;
+  if (status.state === "connecting") {
+    return ["calling", test ? `TEST SESSION — calling ${who}…` : `CALLING ${who}…`];
+  }
+  if (status.state === "disconnecting") {
+    return ["closing", `DISCONNECTING — ${who}: waiting for the answer…`];
+  }
+  if (status.state === "connected" && status.closing) {
+    return [
+      "closing",
+      status.role === "iss"
+        ? `DISCONNECTING — ${who}: sending what is still queued first… Abort closes now`
+        : `DISCONNECTING — ${who}: after the burst now arriving…`,
+    ];
+  }
+  if (status.state === "connected") {
+    const role = { iss: ", sending", irs: ", receiving" }[status.role] ?? "";
+    if (test) return ["connected", `TEST SESSION — ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
+    return ["connected", `CONNECTED — ${who || "?"}${role}`];
+  }
+  if (test) return ["working", `TEST SESSION — ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
+  if (status.probing) return ["working", probeTarget ? `PROBING ${probeTarget}…` : "PROBING…"];
+  if (status.beacon?.waiting) {
+    return ["working", status.beacon.waiting_for_clear ? "BEACON WAITING — the channel is busy" : "SENDING BEACON…"];
+  }
+  if (status.transmitting) return ["working", "TRANSMITTING…"];
+  return null;
+}
+
 // Keep the banner true to the status the panel just read: a reload lands on a session
 // already up, a call placed by a host program shows as calling, and an idle modem with
-// nothing announced takes a stale banner down.
+// nothing under way takes a stale banner down. A session's end stays up its while: the
+// identifier that follows it is no news.
 function syncBanner(status) {
   const banner = $("session-banner");
   const showing = banner.hidden ? "" : banner.dataset.state;
-  if (status.state === "connected") {
-    const role = { iss: ", sending", irs: ", receiving" }[status.role] ?? "";
-    const text = `CONNECTED — ${status.remote || "?"}${role}`;
-    if (showing === "connected") $("session-banner-text").textContent = text;
-    else showBanner("connected", text);
-  } else if (status.state === "connecting") {
-    if (showing !== "calling") showBanner("calling", `CALLING ${status.remote || ""}…`);
-  } else if (status.state === "disconnecting") {
-    if (showing !== "calling") showBanner("calling", `CLOSING — ${status.remote || ""}`);
-  } else if (showing === "connected" || showing === "calling") {
+  const next = bannerFor(status);
+  if (next) {
+    const [state, text] = next;
+    if (showing === "ended" && state === "working") return;
+    if (showing === state) $("session-banner-text").textContent = text;
+    else showBanner(state, text);
+  } else if (showing && showing !== "ended") {
     banner.hidden = true;
   }
 }
@@ -4038,7 +4085,7 @@ function renderRegDetail() {
     if (typeof d.rf_low_hz === "number") {
       regFact(facts, "On the air", `${khz(d.rf_low_hz)} – ${khz(d.rf_high_hz)}`, "The RF range the transmission covers: the dial and the audio it occupies, on this sideband");
     }
-    regFact(facts, "Occupies", `${Math.round(d.bandwidth_hz)} Hz of audio (${Math.round(d.audio_low_hz)}–${Math.round(d.audio_high_hz)} Hz)`, "Measured from the waveform, under the wider reading of §97.3(a)(8)");
+    regFact(facts, "Occupies (FCC 26 dB)", `${Math.round(d.bandwidth_hz)} Hz of audio (${Math.round(d.audio_low_hz)}–${Math.round(d.audio_high_hz)} Hz)`, "Measured from the waveform out to 26 dB down, the wider reading of §97.3(a)(8): wider than the mode's nominal 500 or 2300 Hz, which is the width of its carriers");
     regFact(facts, "Dial", describeDial(d), "The dial the decision used, and where it came from");
     if (d.band) regFact(facts, "Band", d.band, "The amateur band the signal is in");
     if (d.segment) {
@@ -4629,6 +4676,7 @@ function wire() {
     }
     $("probe-result").textContent = `Probing ${remote}…`;
     delete $("probe-result").dataset.state;
+    probeTarget = remote;
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
   });

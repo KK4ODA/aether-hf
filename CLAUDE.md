@@ -1020,6 +1020,16 @@ recommendation from polls (slower after a fade: failures already step it down wh
 arrive) and floor answers by the peer's report (no gain on a lopsided path). The real fix is the
 other station reading the answers: ADR-0032/0034 on a current build.
 
+**ND1J's messages (ADR-0039, beta.78).** "The disconnect button does not work": a sender's
+Disconnect waited for its queue to be acknowledged, which a path whose acknowledgements are lost
+never does; now it leaves after `disc_patience_exchanges` (2) whole exchanges (`_exchange_s`, shared
+with the link timeout) or `disc_patience_s` (20 s) with nothing new acknowledged, reporting
+`disconnect: <n> bytes not acknowledged`. "Why 709 Hz and not 500?": the FCC occupied bandwidth
+(26 dB, the wider reading) of the 500 Hz OFDM rungs; the summary now says "occupies 709 Hz by the
+FCC's 26 dB measure". The banner across every tab now shows every action under way, from the
+polled status (`bannerFor`): calling, connected, disconnecting (both phases), Test and step,
+probing, beacon waiting or going, transmitting; ended stays up its 15 s and says what was left.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
