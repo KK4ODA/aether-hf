@@ -212,11 +212,17 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 
 A recording is a mono 16-bit WAV at the modem's 48 kHz of everything the sound card
 delivered, and a JSON sidecar of what the modem made of it: every frame the receiver found
-(`t_s`, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `detect_confidence`, `decoded`, `bytes`), every event with
+(`t_s` — when it was reported —, `start_s` and `end_s` — where it lay, from beta.76 —, `kind`, `mode`, `rv`, `snr_3k_db`, `cfo_hz` — null when the acquisition was a probable noise trigger — `confidence`, `detect_confidence`, `decoded`, `bytes`), every event with
 every frame the station **sent** (`sent`: `t_s`, `kind`, `mode`, `rv`, `floor`, `bytes`), every change of the busy state as a `busy` event whose detail gives, in a fixed order, the level, the floor, their difference, the margin, the threshold, the change and why (`-19.8 dBFS | floor -27.2 | delta +7.4 dB | margin 6.0 | threshold -21.2 dBFS | OFF -> ON | energy over the threshold for the attack`; the reason may also be `a frame decoded (acquired at 1.72)` or `the passband is peaked (18.3 dB over its median)`, and `ON -> OFF … | hangover ran out with the energy under the threshold`),
 every event with the modem's state, when the transmitter was keyed and released, a
 `tx_peak` event after each transmission carrying its peak in dBFS — so a burst nobody
-decoded can be read against how hard the transmitter was being driven for it — the counters
+decoded can be read against how hard the transmitter was being driven for it — and from
+beta.76 the turnaround (ADR-0037): a `tx_end` event beside each release (`played <s> drains_at
+<s> tail <s> deaf_for <s>`, `cut` when it was cut short; `watchdog` or `abandoned` for a release
+forced by either), an `rx_trace` event every 50 ms for 3 s after it (`after <s> power <dB> level
+<dB> floor <dB> busy 0|1 deaf 0|1`: the block's own baseband power and the busy detector's
+reading) and a `preamble` event for every frame announced (`ago <s> frame_s <s> tone 0|1
+confidence <x> heeded 0|1`); `tools/turnaround_plot.py` draws them. The counters
 at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (CAT, `rigctld` or FLRig; a
 serial keying line or a CM108 codec cannot, and the field is null rather than a guess). Times are seconds from the

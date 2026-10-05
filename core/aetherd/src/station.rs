@@ -314,6 +314,12 @@ fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
 /// second covers it with room for a slower rig; the receiver itself still hears throughout.
 const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
 
+/// How long after the key comes up the recording traces what the receiver hears
+/// (`trace_after_release`), and how often.
+const RELEASE_TRACE_S: f64 = 3.0;
+/// See [`RELEASE_TRACE_S`].
+const RELEASE_TRACE_STEP_S: f64 = 0.05;
+
 /// How long each drive-setting burst runs: enough to read the ALC and move the level while
 /// it is still transmitting, since the level is live and the meter answers at once.
 const DRIVE_BURST_S: f64 = 6.0;
@@ -799,6 +805,10 @@ pub struct Station<P: Ptt> {
     /// Where the last frame heard from another station ended, in the station's clock: the
     /// answer gap counts from here (ADR-0036).
     heard_end: f64,
+    /// When the key last came up, for the receive trace after it (`trace_after_release`).
+    released_at: f64,
+    /// When that trace last wrote a line.
+    traced_at: f64,
     /// The two playback clocks and how the transmission now running stands against them.
     clock: PlaybackClock,
     /// The exact audio of the transmission now running, when the operator asked for it
@@ -976,6 +986,8 @@ impl<P: Ptt> Station<P> {
             held_from: None,
             deaf_until: f64::NEG_INFINITY,
             heard_end: f64::NEG_INFINITY,
+            released_at: f64::NEG_INFINITY,
+            traced_at: f64::NEG_INFINITY,
             clock: PlaybackClock::default(),
             tx_capture: None,
             pending: VecDeque::new(),
@@ -1573,12 +1585,29 @@ impl<P: Ptt> Station<P> {
         self.playing_test = false;
         self.tx_peak_running = 0.0;
         let now = self.now();
+        if was_transmitting {
+            self.forced_release(now, "abandoned");
+        }
         let result = self.ptt.unkey(now);
         if was_transmitting {
             self.engine.on_tx_done(now);
             self.pump();
         }
         result
+    }
+
+    /// A transmission that ended without `finish_transmission` — the key watchdog, or the
+    /// keying interface failing — still ends in the recording, where the replay looks for
+    /// the end of this station's deafness, and still leaves the busy detector deaf to the
+    /// tail the card plays after it.
+    fn forced_release(&mut self, now: f64, why: &str) {
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(now, "ptt", "released", &state);
+            recording.event(now, "tx_end", why, &state);
+        }
+        self.released_at = now;
+        self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
     }
 
     /// As the receiving station, demand the sending role.
@@ -2240,6 +2269,7 @@ impl<P: Ptt> Station<P> {
             self.absorb(&baseband, now);
         }
         self.note_busy_transition(now);
+        self.trace_after_release(&baseband, now);
         self.sample_passband(now);
 
         self.refresh_burst_cap(now);
@@ -2255,6 +2285,7 @@ impl<P: Ptt> Station<P> {
             self.clock.cut_short = false;
             self.tx_capture = None;
             self.transmitting = false;
+            self.forced_release(now, "watchdog");
             self.ptt.unkey(now)?;
             self.engine.on_tx_done(now);
             self.note("watchdog", "key time exceeded");
@@ -2373,7 +2404,26 @@ impl<P: Ptt> Station<P> {
                 let dbfs = 20.0 * f64::from(peak).log10();
                 recording.event(now, "tx_peak", &format!("{dbfs:.1} dBFS"), &state);
             }
+            // Where the sound card stood when the key came up, against where it drains: how
+            // long the radio stayed keyed past the burst's last sample, which the turnaround
+            // plot puts at its t = 0 (ADR-0037).
+            let rate = self.config.params.audio_rate as f64;
+            let seconds = |samples: Option<u64>| samples.map(|s| format!("{:.3}", s as f64 / rate));
+            recording.event(
+                now,
+                "tx_end",
+                &format!(
+                    "played {} drains_at {} tail {:.3} deaf_for {:.3}{}",
+                    seconds(self.clock.device_played).unwrap_or_else(|| "-".into()),
+                    seconds(self.clock.drains_at).unwrap_or_else(|| "-".into()),
+                    self.config.key_tail_s,
+                    self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S,
+                    if cut { " cut" } else { "" },
+                ),
+                &state,
+            );
         }
+        self.released_at = now;
         self.ptt.unkey(now)?;
         self.datagram_transmitted(cut);
         // the queue drained now, and what the sound card still holds is the tail's
@@ -2382,6 +2432,37 @@ impl<P: Ptt> Station<P> {
         self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
         self.pump();
         Ok(())
+    }
+
+    /// For [`RELEASE_TRACE_S`] after the key comes up, a line every [`RELEASE_TRACE_STEP_S`]
+    /// in the recording: the block's own power, the busy detector's level and floor, whether
+    /// it is busy and whether it is still deaf to this station's tail. What the receiver
+    /// hears as the radio comes back to receive, against what the station made of it — the
+    /// raw audio is in the WAV, the station's reading of it only here (ADR-0037).
+    fn trace_after_release(&mut self, baseband: &[Complex], now: f64) {
+        if self.recording.is_none()
+            || now - self.released_at > RELEASE_TRACE_S
+            || now - self.traced_at < RELEASE_TRACE_STEP_S
+            || baseband.is_empty()
+        {
+            return;
+        }
+        self.traced_at = now;
+        let power =
+            baseband.iter().map(|&(i, q)| i * i + q * q).sum::<f64>() / baseband.len() as f64;
+        let detail = format!(
+            "after {:.3} power {:.1} level {:.1} floor {:.1} busy {} deaf {}",
+            now - self.released_at,
+            10.0 * power.max(1e-12).log10(),
+            self.busy.level_db,
+            self.busy.floor_db,
+            u8::from(self.busy.busy(now)),
+            u8::from(now < self.deaf_until),
+        );
+        let state = format!("{:?}", self.engine.state());
+        if let Some(recording) = &mut self.recording {
+            recording.event(now, "rx_trace", &detail, &state);
+        }
     }
 
     /// How many of the baseband samples of the block just captured came in after the
@@ -2433,9 +2514,13 @@ impl<P: Ptt> Station<P> {
             };
             self.report(&decoded, rung, now);
             let detected = decoded.frame.detect_confidence(&air);
+            let span_start = (origin + decoded.frame.start()) as f64 / fs;
+            let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
             if let Some(recording) = &mut self.recording {
                 recording.frame(crate::record::FrameRecord {
                     t_s: now,
+                    start_s: Some(span_start),
+                    end_s: Some(span_end),
                     kind: if control {
                         "control".into()
                     } else {
@@ -3114,7 +3199,27 @@ impl<P: Ptt> Station<P> {
         let air = self.air();
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
-            if !pending.tone && pending.detect_confidence < DETECT_CONFIDENCE_TRUSTED {
+            let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
+            // every announcement, heeded or not, so a frame can be placed against the key's
+            // release and a phantom just after it seen (ADR-0037)
+            if let Some(recording) = &mut self.recording {
+                let start = (origin + pending.start) as f64 / fs;
+                let detail = format!(
+                    "ago {:.3} frame_s {:.3} tone {} confidence {:.2} heeded {}",
+                    now - start,
+                    pending.end.saturating_sub(pending.start) as f64 / fs,
+                    u8::from(pending.tone),
+                    pending.detect_confidence,
+                    u8::from(trusted),
+                );
+                recording.event(
+                    now,
+                    "preamble",
+                    &detail,
+                    &format!("{:?}", self.engine.state()),
+                );
+            }
+            if !trusted {
                 continue;
             }
             // the frame named itself — an OFDM preamble its layout, a tone frame its kind:
@@ -4123,6 +4228,86 @@ mod tests {
         assert!(
             peak["detail"].as_str().expect("detail").contains("dBFS"),
             "and the burst's peak is recorded beside it: {peak}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_traces_what_the_receiver_heard_after_the_key_came_up() {
+        // ADR-0037: the WAV holds what the radio delivered after a transmission, and only
+        // these lines say what the station made of it — where the key came up against the
+        // sound card's clock, and the busy detector's level, floor and deafness after it.
+        let dir = std::env::temp_dir().join(format!("aether-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                record_dir: Some(dir.clone()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station
+            .start_recording(Some("trace"), None)
+            .expect("start the recording");
+        station.set_drive(1).expect("set drive");
+        let rate = station.config.params.audio_rate;
+        let _ = drain_peak(&mut station, rate * 20);
+        assert!(!station.transmitting(), "the drive burst never ended");
+        // two seconds of the radio back on receive, in 20 ms blocks
+        let block = rate / 50;
+        let mut state = 7u32;
+        for _ in 0..100 {
+            let noise: Vec<f32> = (0..block)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (f64::from(state >> 8) / f64::from(1u32 << 24) - 0.5) as f32 * 0.02
+                })
+                .collect();
+            station.capture(&noise).expect("capture");
+        }
+        let summary = station.stop_recording().expect("a recording");
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let events = sidecar["events"].as_array().expect("events");
+        let end = events
+            .iter()
+            .find(|e| e["event"] == "tx_end")
+            .expect("a tx_end event beside the release");
+        let detail = end["detail"].as_str().expect("detail");
+        assert!(
+            detail.contains("drains_at") && detail.contains("deaf_for"),
+            "the release says where the card stood: {detail}"
+        );
+        let trace: Vec<&str> = events
+            .iter()
+            .filter(|e| e["event"] == "rx_trace")
+            .map(|e| e["detail"].as_str().expect("detail"))
+            .collect();
+        assert!(
+            trace.len() >= 30,
+            "{} trace lines in two seconds",
+            trace.len()
+        );
+        assert!(
+            trace
+                .iter()
+                .all(|line| line.contains("power") && line.contains("floor")),
+            "a trace line: {}",
+            trace[0]
+        );
+        assert!(
+            trace[0].ends_with("deaf 1"),
+            "the first line is inside the deafness: {}",
+            trace[0]
+        );
+        assert!(
+            trace.last().is_some_and(|line| line.ends_with("deaf 0")),
+            "the last is past it: {:?}",
+            trace.last()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

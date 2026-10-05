@@ -67,6 +67,14 @@ pub struct FrameRecord {
     /// Protocol, not traffic: a data frame's payload is never recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<String>,
+    /// Where the frame started and ended on the recording's clock — `t_s` is when it was
+    /// reported, after its end — so a frame can be placed against the key's release
+    /// (`tools/turnaround_plot.py`). Absent from a sidecar written before beta.76.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_s: Option<f64>,
+    /// See [`FrameRecord::start_s`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_s: Option<f64>,
 }
 
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
@@ -225,6 +233,8 @@ impl Recording {
     /// A frame the receiver found.
     pub fn frame(&mut self, mut record: FrameRecord) {
         record.t_s -= self.t0;
+        record.start_s = record.start_s.map(|t| t - self.t0);
+        record.end_s = record.end_s.map(|t| t - self.t0);
         self.frames.push(record);
     }
 
@@ -738,6 +748,8 @@ mod tests {
         }
         recording.frame(FrameRecord {
             t_s: 11.5,
+            start_s: None,
+            end_s: None,
             kind: "data".into(),
             mode: 4,
             rv: 0,
