@@ -25,7 +25,9 @@ mod beacons;
 mod datagrams;
 mod fieldtest;
 mod host;
-pub use bandwidth::{KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, params_for};
+pub use bandwidth::{
+    KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
+};
 pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
