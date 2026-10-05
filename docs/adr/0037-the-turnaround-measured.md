@@ -118,6 +118,31 @@ lands 0.2–0.35 s after the release, and its own listening must have started by
     first 320 ms sync block. The tone detector also confirms on its middle and end blocks.
   * Whether a frame missing its first quarter second still decodes is the test to run next. It is a
     better fix than a longer gap if it fails.
+* **Measured the same day** (`tools/bench_clipped.py`, 30 frames a point; the receiver's audio
+  is zeroed for the frame's first part, as a radio still keyed or still switching delivers it):
+
+  | Frame | Channel, SNR | First 0 / 100 / 200 / 300 / 500 ms lost: decoded |
+  |---|---|---|
+  | 500 Hz `tone-control` (calls, answers on the floor) | AWGN −10, Good −6, AWGN 0 | 30/30 at every clip; 28–30 on Good |
+  | 500 Hz `tone-36` (floor data, connect bodies) | the same | 27–30 at every clip |
+  | 500 Hz OFDM control, 0.43 s (ACKs, polls at an OFDM rung) | AWGN 0, Good +4 | 30 and 26 with nothing lost; **0 from 100 ms** |
+  | 2 300 Hz OFDM control, 0.43 s | AWGN 0, Good +4 | 30 and 29; **0 from 100 ms** |
+
+  The tone floor's three sync blocks carry a frame whose start was never heard. The ordinary
+  family's control frame is all preamble at its start and only 0.43 s long, so a tenth of a second
+  lost loses it whole. A peer still keyed by its VOX hold, or a receiver back late, loses every
+  OFDM acknowledgement and poll and none of the floor's frames. That is KE4QCM's pattern: his
+  floor calls and this station's floor acceptances get through, and the session dies at the first
+  OFDM exchange. VARA's answer to the same hold is not visible. ADR-0036's gap is the fix this
+  station can make alone.
+* **This station's own keyed tail.** After a burst's last sample the key stays down for `key_tail_s`
+  (0.05 s) plus `playback_lead_s` (0.25 s). Since ADR-0010 §7 the key is released against the
+  card's own clock, so the playback lead in the tail now covers only the codec's buffering after the
+  card's callback. An Aether peer answers 0.25 s plus its key lead after the frame's end. A tail
+  that outlasts it by more than the radio's switching time costs this station the first part of the
+  peer's OFDM answer, and with it the whole frame. The `tx_end` and `rx_trace` events measure the
+  margin on the air. A shorter tail is the candidate fix, once a recording shows the margin is the
+  problem.
 * The sidecar grows by about 60 lines a release, under 3 s of trace each. The format is unchanged:
   new keys only, which older readers skip.
 
