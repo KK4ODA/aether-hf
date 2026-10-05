@@ -1203,6 +1203,7 @@
             </div>
             <div class="toolbar-end">
               <button id="btn-clear-log" class="small quiet" title="Clear the panel's log; the modem's own file is untouched">Clear</button>
+              <button id="btn-share-open" class="small" title="Send your logs and session files to another operator by email, or ask a station for theirs" aria-controls="share-form" aria-expanded="false">Send files…</button>
               <button id="btn-diagnostics" class="small" title="Copy the diagnostic bundle for a bug report: version, settings without the token, the link, the devices and the last log lines">Copy diagnostic bundle</button>
               <details class="help-pop" id="log-help" title="What the log and the bundle hold">
                 <summary title="What the log and the bundle hold" aria-label="What the log and the bundle hold">?</summary>
@@ -1214,8 +1215,46 @@
                   the state of the link, the devices this machine reports, and the daemon's last few
                   hundred log lines. It never contains your traffic.
                 </p>
+                <p>
+                  <strong>Send files…</strong> is for a contact that failed: it writes one zip with
+                  this station's logs (this run, the one before, and the earlier runs kept), the
+                  session history, the stations heard, the diagnostic bundle and the recordings'
+                  summaries from the period you choose — the audio only if you tick it — and opens an
+                  email to attach it to. <em>Ask a station for its files</em> writes the email the
+                  other way: it carries a link that opens their panel with this form filled in.
+                  Nothing is sent without you: the zip waits in the <code>shared</code> folder beside
+                  your settings, and your own email program sends it.
+                </p>
               </details>
             </div>
+          </div>
+          <!-- the files of a contact for another operator, or a request for theirs: the side that
+               was not heard cannot be read from here (KE4QCM, 2026-10-05) -->
+          <div class="share-form" id="share-form" title="Send your files to another operator by email, or ask a station for theirs" hidden>
+            <div class="tool-row inset-row">
+              <select id="share-mode" title="Send your own files, or write to a station asking for theirs" aria-label="What to do">
+                <option value="send">Send my files</option>
+                <option value="ask">Ask a station for its files</option>
+              </select>
+              <label for="share-email" id="share-email-label" title="Who the files go to">to</label>
+              <input id="share-email" type="email" class="prose" placeholder="their@email" autocomplete="email" title="Who the files go to: the operator who asked for them" aria-labelledby="share-email-label" />
+              <label for="share-station" title="Only the sessions with this station; empty for every session">sessions with</label>
+              <input id="share-station" type="text" class="call" list="share-stations" placeholder="any station" autocomplete="off" spellcheck="false" title="Only the sessions with this station (its other SSIDs too); empty for every session" aria-label="Sessions with" />
+              <datalist id="share-stations"></datalist>
+              <label for="share-hours" title="How far back">from the last</label>
+              <select id="share-hours" title="How far back the sessions and logs go" aria-label="How far back">
+                <option value="1">hour</option>
+                <option value="3" selected>3 hours</option>
+                <option value="12">12 hours</option>
+                <option value="24">day</option>
+                <option value="72">3 days</option>
+                <option value="168">week</option>
+              </select>
+              <label class="check" id="share-audio-row" title="The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it"><input type="checkbox" id="share-audio" title="The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it" /> audio</label>
+              <button id="btn-share" class="primary" title="Write the zip and open an email to attach it to">Prepare email</button>
+              <button id="btn-share-cancel" class="quiet" title="Close without sending anything">Cancel</button>
+            </div>
+            <p class="sub share-note" id="share-note" title="What the last step did, and where the file is" role="status" aria-live="polite"></p>
           </div>
           <div id="log" title="What the modem reported, newest last" class="log" role="log" aria-label="Log" tabindex="0"></div>
           <div class="pane-foot">

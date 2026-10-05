@@ -1724,6 +1724,17 @@ function renderSessions() {
       pill.title = "A Test session: its report is in the recording's sidecar";
       ended.append(" ", pill);
     }
+    // a session that did not go well: the other side's files say why
+    const ask = document.createElement("button");
+    ask.className = "small ghost";
+    ask.textContent = "Ask for files";
+    ask.title = `Write to ${s.remote} asking for their logs and session files, to see their side of this contact`;
+    ask.addEventListener("click", () => {
+      selectTab($("tab-log"));
+      const hours = Math.min(168, Math.max(1, Math.ceil((Date.now() - s.started_ms) / 3_600_000) + 1));
+      openShareForm("ask", { station: s.remote, hours });
+    });
+    ended.append(" ", ask);
     body.append(row);
   }
 }
@@ -4751,6 +4762,7 @@ function wire() {
     if (socket && socket.readyState === WebSocket.OPEN) refreshStatus();
   }, 5000);
   $("btn-diagnostics").addEventListener("click", copyDiagnostics);
+  wireShare();
   $("btn-contribute").addEventListener("click", contributeTestSession);
   $("contribute-link").addEventListener("click", openContributeLink);
   $("wz-profile").addEventListener("change", applyProfile);
@@ -4957,6 +4969,252 @@ async function copyDiagnostics() {
   } catch (error) {
     note.textContent = error.message;
   }
+}
+
+// ── files for another operator ──────────────────────────────────────
+//
+// A failed contact has two sides, and the side that was not heard cannot be read from here.
+// Asking KE4QCM for his files (2026-10-05) meant a PowerShell line pasted into an email. Now
+// *Send my files* has the daemon write one zip (`share.prepare`) and opens an email to attach
+// it to, and *Ask a station for its files* writes the request: a link that opens the other
+// station's own panel at this form, filled in with who to send to and which sessions.
+
+const SHARE_TO_KEY = "aether.shareTo";
+const MY_EMAIL_KEY = "aether.myEmail";
+// the other station's panel, as the desktop application serves it: not this page's own
+// address, which a browser on another port or host would put in the link
+const PANEL_URL = "http://127.0.0.1:8515/";
+
+function remembered(key) {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function remember(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // a private window: remembered for this page's life only
+  }
+}
+
+function shareMode() {
+  return $("share-mode").value === "ask" ? "ask" : "send";
+}
+
+// The form's words follow what it does: in *send* the address is where the files go; in
+// *ask* it is this operator's own, where the other station's files are to come back to.
+function applyShareMode() {
+  const ask = shareMode() === "ask";
+  const email = $("share-email");
+  $("share-email-label").textContent = ask ? "reply to" : "to";
+  email.placeholder = ask ? "your@email" : "their@email";
+  email.title = ask
+    ? "Your own address: where the other station is to send its files"
+    : "Who the files go to: the operator who asked for them";
+  email.value = remembered(ask ? MY_EMAIL_KEY : SHARE_TO_KEY) || email.value;
+  const station = $("share-station");
+  station.placeholder = ask ? "their callsign" : "any station";
+  station.title = ask
+    ? "The station whose files you want"
+    : "Only the sessions with this station (its other SSIDs too); empty for every session";
+  $("share-audio-row").hidden = ask;
+  $("btn-share").textContent = ask ? "Write request" : "Prepare email";
+  $("btn-share").title = ask
+    ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
+    : "Write the zip and open an email to attach it to";
+}
+
+function openShareForm(mode = "send", fill = {}) {
+  const form = $("share-form");
+  form.hidden = false;
+  $("btn-share-open").setAttribute("aria-expanded", "true");
+  $("share-mode").value = mode;
+  applyShareMode();
+  if (fill.to) $("share-email").value = fill.to;
+  if (fill.station != null) $("share-station").value = fill.station;
+  if (fill.hours) {
+    const select = $("share-hours");
+    const hours = String(fill.hours);
+    if (![...select.options].some((o) => o.value === hours)) {
+      const option = document.createElement("option");
+      option.value = hours;
+      option.textContent = `${hours} hours`;
+      select.append(option);
+    }
+    select.value = hours;
+  }
+  // the stations this one has heard or worked, to pick from
+  const list = $("share-stations");
+  list.replaceChildren();
+  const calls = new Set([...sessionList.map((s) => s.remote), ...heardList.map((s) => s.callsign)]);
+  for (const call of calls) {
+    const option = document.createElement("option");
+    option.value = call;
+    list.append(option);
+  }
+  $("share-note").textContent = fill.note ?? "";
+  ($("share-email").value ? $("btn-share") : $("share-email")).focus();
+}
+
+function closeShareForm() {
+  $("share-form").hidden = true;
+  $("btn-share-open").setAttribute("aria-expanded", "false");
+}
+
+// A mail link: the desktop shell's opener hands it to the mail program; a browser follows it.
+async function openMail(url) {
+  const opener = window.__TAURI__?.opener;
+  if (opener?.openUrl) {
+    await opener.openUrl(url);
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = url;
+  a.click();
+}
+
+function mailto(to, subject, body) {
+  return `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+async function showSharedFile(path) {
+  const opener = window.__TAURI__?.opener;
+  if (opener?.revealItemInDir) {
+    try {
+      await opener.revealItemInDir(path);
+      return true;
+    } catch {
+      // gone, or not allowed: the path below
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(path);
+  } catch {
+    // shown in the note either way
+  }
+  return false;
+}
+
+async function prepareShare() {
+  const note = $("share-note");
+  const email = $("share-email").value.trim();
+  const station = $("share-station").value.trim().toUpperCase();
+  const hours = Number($("share-hours").value) || 3;
+  const me = $("callsign").textContent.trim();
+  if (shareMode() === "ask") {
+    if (!station) {
+      note.textContent = "Whose files? Enter their callsign.";
+      $("share-station").focus();
+      return;
+    }
+    if (!email) {
+      note.textContent = "Your own email address is needed: it is where their files are to go.";
+      $("share-email").focus();
+      return;
+    }
+    remember(MY_EMAIL_KEY, email);
+    const link = `${PANEL_URL}#share?to=${encodeURIComponent(email)}&station=${encodeURIComponent(me)}&hours=${hours}`;
+    const body = [
+      "Hi,",
+      "",
+      `Our contact did not get through, and the half of it I cannot see from here is yours. Could you send me your Aether HF files from the last ${hours === 1 ? "hour" : `${hours} hours`}?`,
+      "",
+      "With Aether HF running (0.2.0-beta.74 or later), open this link — it fills the form in for you:",
+      link,
+      "",
+      `Then press "Prepare email" and attach the zip it shows you. Or, in Aether: Log tab > Send files…, to ${email}, sessions with ${me}, Prepare email.`,
+      "",
+      "It is your logs and the summaries of the sessions — no audio unless you tick it, and never what was said.",
+      "",
+      "73,",
+      me,
+    ].join("\n");
+    try {
+      await openMail(mailto("", `Aether HF: your files from our contact (${me} – ${station})`, body));
+      note.textContent = `An email to ${station} is open in your mail program: add their address and send it.`;
+    } catch (error) {
+      note.textContent = `Could not open the mail program (${error.message ?? error}). The link to send them: ${link}`;
+    }
+    return;
+  }
+  if (!email) {
+    note.textContent = "Who to? Enter the address of the operator who asked for the files.";
+    $("share-email").focus();
+    return;
+  }
+  remember(SHARE_TO_KEY, email);
+  note.textContent = "Writing the zip…";
+  let result;
+  try {
+    result = await call("share.prepare", {
+      hours,
+      remote: station || null,
+      audio: $("share-audio").checked,
+    });
+  } catch (error) {
+    note.textContent = error.message;
+    return;
+  }
+  const size = result.bytes >= 1048576 ? `${(result.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(result.bytes / 1024))} kB`;
+  const sessions = `${result.sessions} recorded session${result.sessions === 1 ? "" : "s"}`;
+  const body = [
+    "Hi,",
+    "",
+    `Attached are my Aether HF files from the last ${hours === 1 ? "hour" : `${hours} hours`}${station ? `, sessions with ${station}` : ""}: ${sessions}, the logs and the diagnostic bundle (${result.name}, ${size}).`,
+    "",
+    "73,",
+    result.callsign || me,
+  ].join("\n");
+  const shown = await showSharedFile(result.path);
+  try {
+    await openMail(mailto(email, `Aether HF files from ${result.callsign || me}${station ? ` — sessions with ${station}` : ""}`, body));
+  } catch {
+    // the file is written either way; the note says where
+  }
+  note.textContent = shown
+    ? `Wrote ${result.name} (${size}, ${sessions}). Attach it to the email that opened — its folder is open too — and send.`
+    : `Wrote ${result.path} (${size}, ${sessions}); the path is on the clipboard. Attach it to the email that opened, and send.`;
+  log(`files for ${email}: ${result.name}, ${size}, ${sessions}`, "info", "share");
+}
+
+// A link from another station's request: `#share?to=…&station=…&hours=…` opens the form here.
+function shareFromLink() {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#share")) return;
+  const params = new URLSearchParams(hash.slice(hash.indexOf("?") + 1));
+  try {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  } catch {
+    // left in the address bar: harmless
+  }
+  selectTab($("tab-log"));
+  const station = (params.get("station") ?? "").toUpperCase();
+  openShareForm("send", {
+    to: params.get("to") ?? "",
+    station,
+    hours: Number(params.get("hours")) || 3,
+    note: station
+      ? `${station} asked for your files from your sessions with them. Check the address, then Prepare email.`
+      : "Check the address, then Prepare email.",
+  });
+}
+
+function wireShare() {
+  $("btn-share-open").addEventListener("click", () =>
+    $("share-form").hidden ? openShareForm(shareMode()) : closeShareForm(),
+  );
+  $("btn-share-cancel").addEventListener("click", closeShareForm);
+  $("share-mode").addEventListener("change", applyShareMode);
+  $("btn-share").addEventListener("click", prepareShare);
+  $("share-form").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeShareForm();
+  });
+  window.addEventListener("hashchange", shareFromLink);
+  shareFromLink();
 }
 
 let recordingPath = null;

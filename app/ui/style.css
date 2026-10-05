@@ -2234,6 +2234,30 @@ details.fold-card > summary:hover .card-title {
   flex: 1 1 320px;
 }
 
+/* the files for another operator: a form row over the log */
+.share-form {
+  border-bottom: 1px solid var(--border);
+  padding: var(--s2) var(--s3);
+}
+
+.share-form .tool-row {
+  flex-wrap: wrap;
+}
+
+.share-form input[type="email"] {
+  flex: 1 1 22ch;
+  min-width: 18ch;
+}
+
+.share-form select {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.share-note:empty {
+  display: none;
+}
+
 /* a station in another bandwidth than this one's (ADR-0035) */
 td.bw-other {
   color: var(--status-warning);
@@ -2559,6 +2583,7 @@ label.check {
 }
 
 input[type="text"],
+input[type="email"],
 select,
 textarea {
   background: var(--bg-2);
@@ -2572,17 +2597,20 @@ textarea {
 }
 
 input[type="text"],
+input[type="email"],
 select {
   min-height: var(--control-h);
 }
 
 input[type="text"]:hover,
+input[type="email"]:hover,
 select:hover,
 textarea:hover {
   border-color: var(--border-strong);
 }
 
 input[type="text"]:focus,
+input[type="email"]:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);
