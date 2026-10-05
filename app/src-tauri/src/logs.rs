@@ -18,10 +18,15 @@ pub fn set_aside(log: &Path, keep: usize) {
     if let Ok(meta) = std::fs::metadata(log) {
         let dir = runs_dir(log);
         if std::fs::create_dir_all(&dir).is_ok() {
-            // named for when the run began: the file's creation time where the system keeps
-            // one, its last write otherwise — close enough to find "Saturday night"
-            let began = meta.created().or_else(|_| meta.modified()).ok();
-            let name = format!("aetherd-{}.log", stamp(began));
+            // named for when the run began, as its own first line says. Not the file's creation
+            // time: Windows carries a deleted file's creation time over to a new file of the same
+            // name made soon after ("file system tunnelling"), and every copy of the author's
+            // log was dated the day the first one was made. The last write, when the first line
+            // says nothing — a run that died before it logged.
+            let name = match first_stamp(log) {
+                Some(began) => format!("aetherd-{began}.log"),
+                None => format!("aetherd-{}.log", stamp(meta.modified().ok())),
+            };
             let _ = std::fs::copy(log, unique(&dir.join(name)));
             prune(&dir, keep);
         }
@@ -58,6 +63,25 @@ fn stamp(at: Option<std::time::SystemTime>) -> String {
         t.minute(),
         t.second()
     )
+}
+
+/// The run's start, from its log's first line — `2026-10-04T21:32:27.810Z info  daemon: …` —
+/// as `20261004-213227`; `None` when the line carries no such time.
+fn first_stamp(log: &Path) -> Option<String> {
+    use std::io::BufRead as _;
+    let file = std::fs::File::open(log).ok()?;
+    let mut line = String::new();
+    std::io::BufReader::new(file).read_line(&mut line).ok()?;
+    let at = line.get(..19)?;
+    let b = at.as_bytes();
+    let shape = b.len() == 19
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b[13] == b':'
+        && b[16] == b':';
+    let digits: String = at.chars().filter(char::is_ascii_digit).collect();
+    (shape && digits.len() == 14).then(|| format!("{}-{}", &digits[..8], &digits[8..]))
 }
 
 /// `path`, or `path` with `-2`, `-3`… before the extension when it is taken: two runs begun in
@@ -118,28 +142,25 @@ mod tests {
     fn each_run_is_kept_dated_and_the_last_as_prev() {
         let dir = scratch("kept");
         let log = dir.join("aetherd.log");
-        std::fs::write(&log, "the first run\n").expect("write");
+        let run = "2026-10-04T21:32:27.810Z info  daemon: aetherd starting\n";
+        std::fs::write(&log, run).expect("write");
         set_aside(&log, KEEP);
         assert!(!log.exists(), "the new run starts from a clean file");
-        assert_eq!(
-            std::fs::read_to_string(previous(&log)).expect("prev"),
-            "the first run\n"
-        );
+        assert_eq!(std::fs::read_to_string(previous(&log)).expect("prev"), run);
         let kept: Vec<_> = std::fs::read_dir(runs_dir(&log))
             .expect("logs/")
             .filter_map(Result::ok)
             .collect();
         assert_eq!(kept.len(), 1);
         let name = kept[0].file_name().into_string().expect("name");
-        assert!(name.starts_with("aetherd-20"), "{name}");
+        // named for when the run began, from its first line — not the file's creation time,
+        // which Windows carries over from the log deleted before it
+        assert_eq!(name, "aetherd-20261004-213227.log");
         assert_eq!(
             kept[0].path().extension().and_then(|e| e.to_str()),
             Some("log")
         );
-        assert_eq!(
-            std::fs::read_to_string(kept[0].path()).expect("dated"),
-            "the first run\n"
-        );
+        assert_eq!(std::fs::read_to_string(kept[0].path()).expect("dated"), run);
         // a start with no log before it keeps nothing and fails nothing
         set_aside(&log, KEEP);
         let _ = std::fs::remove_dir_all(&dir);
@@ -178,6 +199,23 @@ mod tests {
             unique(&taken).file_name().and_then(|n| n.to_str()),
             Some("aetherd-20260927-011200-2.log")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_log_whose_first_line_has_no_time_is_named_for_its_last_write() {
+        let dir = scratch("untimed");
+        let log = dir.join("aetherd.log");
+        std::fs::write(&log, "thread 'main' panicked\n").expect("write");
+        assert_eq!(first_stamp(&log), None);
+        set_aside(&log, KEEP);
+        let name = std::fs::read_dir(runs_dir(&log))
+            .expect("logs/")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().into_string().expect("name"))
+            .next()
+            .expect("kept");
+        assert!(name.starts_with("aetherd-20"), "{name}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
