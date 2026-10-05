@@ -91,6 +91,16 @@ class LinkConfig:
     (ADR-0029). An acknowledgement it can read says the other station is still receiving, and
     silence says nothing either way: after those the turn is taken back as it always was."""
     disc_retries: int = 3
+    disc_patience_exchanges: float = 2.0
+    """A sender asked to disconnect finishes what it has queued first — and gives up on it, and
+    sends its DISC, once this many whole exchanges at the family the link runs in (or
+    :attr:`disc_patience_s`, whichever is longer) pass with nothing new acknowledged (ADR-0039).
+    On a path where the other station's acknowledgements do not arrive the queue never
+    empties, and Disconnect did nothing until the link timed out: "the disconnect button does
+    not work" (ND1J, 2026-10-05). Half the link timeout (:attr:`link_timeout_exchanges`), so it
+    always comes first; any progress starts the count again."""
+    disc_patience_s: float = 20.0
+    """See :attr:`disc_patience_exchanges`."""
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
     link_timeout_s: float = 45.0
@@ -393,6 +403,8 @@ class LinkEngine:
         self._poll_floor = False
         """The family this station's last POLL went out in (ADR-0034)."""
         self._disc_requested = False
+        self._disc_patience_until: float | None = None
+        """When a sender asked to disconnect stops waiting for its queue (ADR-0039)."""
         self._disc_tries = 0
         self._connect_tries = 0
         self._peer_floor = False
@@ -905,20 +917,29 @@ class LinkEngine:
         index = modes.index(below[-1]) if below else 0
         self._recommended = modes[max(0, index - self.cfg.silence_step)]
 
-    def _link_timeout(self) -> float:
-        """How long the peer may stay silent before the session ends: the configured time,
-        or :attr:`LinkConfig.link_timeout_exchanges` whole exchanges at the family the link
-        runs in — the longest data frame either side sends or may send next, and the
-        control frame of that family — whichever is longer."""
+    def _exchange_s(self) -> float:
+        """One whole exchange at the family the link runs in: a full burst of the longest
+        data frame either side sends or may send next, the control frame of that family that
+        answers it, both turnarounds and the gap that ends the burst."""
         frame = max(self._peer_data_frame_s(), self.timing.data_frame_s_for(self._burst_mode()))
         floor = self._peer_floor or self.timing.is_floor(self._burst_mode())
-        exchange = (
+        return (
             self._burst_capacity(frame) * frame
             + self.timing.control_frame_s_for(floor)
             + 2 * self.timing.turnaround_s
             + self.cfg.burst_gap_s
         )
-        return max(self.cfg.link_timeout_s, self.cfg.link_timeout_exchanges * exchange)
+
+    def _link_timeout(self) -> float:
+        """How long the peer may stay silent before the session ends: the configured time,
+        or :attr:`LinkConfig.link_timeout_exchanges` whole exchanges (:meth:`_exchange_s`),
+        whichever is longer."""
+        return max(self.cfg.link_timeout_s, self.cfg.link_timeout_exchanges * self._exchange_s())
+
+    def _disc_patience(self) -> float:
+        """How long a sender asked to disconnect waits for its queue to be acknowledged before
+        it leaves without the rest (ADR-0039)."""
+        return max(self.cfg.disc_patience_s, self.cfg.disc_patience_exchanges * self._exchange_s())
 
     def _robust_mode(self, floor: bool) -> int:
         """The slowest mode of the given family whose frame carries a connect body (with a
@@ -1148,6 +1169,20 @@ class LinkEngine:
         if self._disc_requested and not self._unacked() and not self._tx_queue:
             self._send_disc()
             return
+        if self._disc_requested:
+            # the queue is waited for, but not for ever: a path whose acknowledgements never
+            # arrive never empties it (ADR-0039)
+            if self._disc_patience_until is None:
+                self._disc_patience_until = self.now + self._disc_patience()
+            elif self.now >= self._disc_patience_until:
+                left = len(self._tx_queue) + sum(
+                    len(self._records[s].body) for s in self._unacked()
+                )
+                self.actions.append(
+                    Event("disconnect", f"{left} bytes not acknowledged; leaving without them")
+                )
+                self._send_disc()
+                return
         if self._peer_break or (
             self._peer_wants_tx
             and (self._bursts_since_turn >= self.cfg.bursts_before_turn or not self._has_work())
@@ -1396,6 +1431,9 @@ class LinkEngine:
             if not rec.acked and rec.sent and ack.received(s):
                 rec.acked = True
                 self.stats.bytes_acked += len(rec.body)
+                if self._disc_patience_until is not None:
+                    # progress: a sender leaving waits its patience again from here
+                    self._disc_patience_until = self.now + self._disc_patience()
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
             del self._records[self._tx_base]
             self._tx_base = seq_after(self._tx_base)
@@ -2028,6 +2066,7 @@ class LinkEngine:
         self._turn_unread = False
         self._unread_there = self._poll_floor = False
         self._disc_requested = False
+        self._disc_patience_until = None
         self._waiting_for = None
         self._rx_base = 0
         self._rx_buf.clear()

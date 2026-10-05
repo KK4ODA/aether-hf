@@ -928,7 +928,7 @@ fn note_ptt_failure(
 fn level_of(name: &str) -> Level {
     match name {
         "error" => Level::Error,
-        "watchdog" | "timeout" | "failed" | "mismatch" => Level::Warn,
+        "watchdog" | "timeout" | "failed" | "mismatch" | "disconnect" => Level::Warn,
         _ => Level::Info,
     }
 }

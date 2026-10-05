@@ -43,3 +43,4 @@ context → decision → alternatives considered → consequences.
 | [0036](0036-the-answer-gap.md) | The answer gap — a station waits a set time after another station's frame before it keys, so a VOX-keyed station hears its answers | accepted |
 | [0037](0037-the-turnaround-measured.md) | The turnaround, measured — no receive recovery window; the busy detector forgets the channel before its own transmission; the turnaround is recorded | accepted |
 | [0038](0038-nd1j-two-sessions.md) | ND1J's two sessions — a hopeless frame is re-encoded sooner, a frame of nobody's session is no part of a burst, the keyed tail follows the sound card, and a waiting beacon does not go into a session | accepted |
+| [0039](0039-disconnect-patience.md) | A sender's Disconnect gives up on what the path will not carry; the occupied width says which measure it is | accepted |

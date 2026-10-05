@@ -3194,3 +3194,35 @@ def test_a_beacon_heard_in_a_session_is_neither_acknowledged_nor_a_failure(
     assert not [f for f in sent if f.container is Container.CONTROL], "the beacon was answered"
     assert b.rate.margin_db == margin and b.stats.frames_failed == failed
     assert not b._burst
+
+
+def test_a_disconnect_leaves_without_what_the_path_will_not_carry() -> None:
+    """ND1J, 2026-10-05: "the disconnect button does not work". A sender's Disconnect delivers
+    what is queued first, and on a path that carried none of it — his frames at a rung the path
+    could not carry, this station's answers lost — that never finished; the session ended only
+    when the link timed out. A sender asked to disconnect now waits two whole exchanges with
+    nothing new acknowledged, and then sends its DISC without the rest, saying how much was
+    left (ADR-0039). The other station answers it and both are idle well before the link
+    timeout."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.rate import NARROW_AWGN_THRESHOLD_DB
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("ND1J", timing, LinkConfig(), seed=1)
+    b = LinkEngine("KK4ODA", timing, LinkConfig(), seed=2)
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=3)
+    a.connect("KK4ODA")
+    sim.run(until=60)
+    assert a.state is State.CONNECTED
+    # from now on no data frame decodes, whatever its rung; control frames still do
+    sim.thresholds = {m: 99.0 for m in NARROW_AWGN_THRESHOLD_DB}
+    a.send(bytes(400))
+    asked = sim.t
+    a.disconnect()
+    sim.run(until=asked + 600)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    ended = [e for e in sim.events(0) if e.startswith("disconnected:")]
+    assert ended and "link timeout" not in ended[-1], sim.events(0)
+    assert any(e.startswith("disconnect:") and "not acknowledged" in e for e in sim.events(0))
+    assert sim.t - asked < a._link_timeout(), (sim.t - asked, a._link_timeout())

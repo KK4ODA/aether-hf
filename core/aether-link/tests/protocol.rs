@@ -2870,3 +2870,39 @@ fn an_acknowledgement_is_not_acknowledged() {
     let (_, sent) = at_next_deadline(&mut b);
     assert_eq!(control_kinds(&sent), [aether_link::ControlKind::Ack]);
 }
+
+#[test]
+fn a_disconnect_leaves_without_what_the_path_will_not_carry() {
+    // ND1J, 2026-10-05: "the disconnect button does not work". A sender's Disconnect delivers
+    // what is queued first, and on a path that carried none of it that never finished: the
+    // session ended only when the link timed out. Now the sender waits two whole exchanges with
+    // nothing new acknowledged and leaves without the rest, saying how much (ADR-0039).
+    let t = air_timing(NARROW_500, false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let mut sim = TwoStationSim::new(a, b, 6.0, 3);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    let connected_by = sim.run(60.0, 1e9);
+    assert_eq!(sim.engine(0).state(), State::Connected, "{connected_by}");
+    // from now on no data frame decodes, whatever its rung; control frames still do
+    sim.set_thresholds(Some(vec![99.0; t.mode_threshold_db.len()]));
+    sim.engine_mut(0).send(&[0u8; 400]);
+    sim.engine_mut(0).disconnect();
+    let asked = connected_by;
+    let ended = sim.run(asked + 600.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    let events = sim.events(0);
+    let last = events
+        .iter()
+        .rev()
+        .find(|e| e.starts_with("disconnected:"))
+        .expect("the session ended");
+    assert!(!last.contains("link timeout"), "{events:?}");
+    assert!(
+        events
+            .iter()
+            .any(|e| e.starts_with("disconnect:") && e.contains("not acknowledged")),
+        "{events:?}"
+    );
+    assert!(ended - asked < 120.0, "{:.0} s to leave", ended - asked);
+}

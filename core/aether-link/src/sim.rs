@@ -336,6 +336,12 @@ impl TwoStationSim {
         self
     }
 
+    /// Change the per-rung thresholds in the middle of a run — a path that stops carrying
+    /// data while its control frames still get through, say (ADR-0039).
+    pub fn set_thresholds(&mut self, thresholds: Option<Vec<f64>>) {
+        self.thresholds = thresholds;
+    }
+
     /// The two control frames' thresholds on the channel modelled, indexed by family
     /// (ordinary, floor).
     #[must_use]
