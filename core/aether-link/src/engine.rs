@@ -120,6 +120,13 @@ pub struct LinkConfig {
     pub bursts_before_turn: usize,
     /// HARQ buffers are reset after this many failed combines, which bounds a wrong guess.
     pub max_combines: usize,
+    /// A frame the peer measured further below its rung's threshold than combining all
+    /// `max_combines` of its transmissions could make up — 10·log10 of their number, plus
+    /// `reencode_hopeless_db` — is re-encoded after this many instead (ADR-0038): ND1J's
+    /// rung-12 frames, 12 dB under their threshold, went out eight times each (2026-10-05).
+    pub reencode_early_after: usize,
+    /// See `reencode_early_after`.
+    pub reencode_hopeless_db: f64,
     /// Capability bits offered in the connect handshake. What they mean is the caller's
     /// business; the link layer carries them and reports what the peer offered.
     pub capabilities: u8,
@@ -158,6 +165,8 @@ impl Default for LinkConfig {
             ceiling: None,
             bursts_before_turn: 3,
             max_combines: 4,
+            reencode_early_after: 2,
+            reencode_hopeless_db: 1.0,
             capabilities: 0,
             chat: false,
         }
@@ -317,6 +326,9 @@ struct RxRecord {
     /// It was combined with an earlier transmission of its block: a failure after that is a
     /// failure of both.
     combined: bool,
+    /// It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
+    /// session's — and is no part of the burst (ADR-0038).
+    outside: bool,
 }
 
 /// The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
@@ -1276,6 +1288,21 @@ impl LinkEngine {
         }
     }
 
+    /// Whether the peer's last measurement of this station's frames is further below
+    /// `mode`'s threshold than `max_combines` transmissions combined could make up (ADR-0038).
+    /// Only a measurement will do: the rung the peer recommends sits a margin and the
+    /// ladder's spacing below the path, and on the tone floor 15 dB below a frame that
+    /// combining still rescues.
+    fn hopeless(&self, mode: usize) -> bool {
+        let (Some(heard), Some(threshold)) = (self.peer_snr_db, self.rate.threshold_db(mode))
+        else {
+            return false;
+        };
+        let combines = self.config.max_combines.max(1) as f64;
+        let reach = threshold - 10.0 * combines.log10() - self.config.reencode_hopeless_db;
+        heard < reach
+    }
+
     /// The mode the next burst's new frames go out at: the pin while one is set, the
     /// peer's recommendation otherwise, never past the operator's ceiling or the rules'.
     fn burst_mode(&self) -> usize {
@@ -1997,7 +2024,15 @@ impl LinkEngine {
                 continue;
             };
             let record = &self.records[index];
-            if record.tx_count >= self.config.max_combines && recommendation < record.mode {
+            // so far under its threshold that combining cannot close the gap: sooner
+            // (ADR-0038)
+            let due = if self.hopeless(record.mode) {
+                self.config.reencode_early_after
+            } else {
+                self.config.max_combines
+            };
+            let record = &self.records[index];
+            if record.tx_count >= due && recommendation < record.mode {
                 if let Some(target) =
                     self.reencode_target(record.body.len(), record.mode, recommendation)
                 {
@@ -2142,11 +2177,15 @@ impl LinkEngine {
             rv: frame.rv(),
             trusted: frame.trusted(),
             combined: false,
+            outside: false,
         };
         if self.decode_record(frame, &mut record) {
             self.burst.push(record);
             let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
             self.arm(Timer::Ack, delay);
+        } else if record.outside && self.burst.is_empty() {
+            // nothing of a burst arrived: the acknowledgement its preamble armed answers nobody
+            self.disarm(Timer::Ack);
         }
     }
 
@@ -2257,7 +2296,11 @@ impl LinkEngine {
         // session data, whatever its session byte says: a datagram's holds its own number
         // (ADR-0019), which can equal this session's
         if header.kind.outside_sessions() || header.session != self.session {
-            return true;
+            // no frame of a burst (ADR-0038): counted, it was a failure that widened the
+            // margin, and the acknowledgement its preamble armed answered nobody — ND1J's
+            // beacon in the middle of a session drew one (2026-10-05)
+            record.outside = true;
+            return false;
         }
         record.payload = Some(payload.to_vec());
         record.seq = Some(header.seq);
@@ -2971,6 +3014,7 @@ mod tests {
             rv,
             trusted,
             combined: false,
+            outside: false,
         }
     }
 
@@ -3940,5 +3984,138 @@ mod tests {
         b.set_chat(true);
         b.send(b" again"); // the next line asks
         assert_eq!(b.stats.turn_requests, 1);
+    }
+
+    // ── ADR-0038: ND1J's two sessions of 2026-10-05 ──────────────────
+
+    /// A frame of any container, at any SNR, readable or not.
+    struct Heard {
+        container: Container,
+        mode: usize,
+        floor: bool,
+        snr_db: f64,
+        t_end: f64,
+        length_s: f64,
+        payload: Option<Vec<u8>>,
+    }
+
+    impl SoftFrame for Heard {
+        fn container(&self) -> Container {
+            self.container
+        }
+        fn mode(&self) -> usize {
+            self.mode
+        }
+        fn floor(&self) -> bool {
+            self.floor
+        }
+        fn rv(&self) -> u8 {
+            0
+        }
+        fn snr_db(&self) -> f64 {
+            self.snr_db
+        }
+        fn trusted(&self) -> bool {
+            true
+        }
+        fn t_start(&self) -> f64 {
+            self.t_end - self.length_s
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            (self.payload.clone(), vec![0.0])
+        }
+    }
+
+    /// The control frames the engine has sent since it was last asked, decoded, with their
+    /// family.
+    fn answers(e: &mut LinkEngine) -> Vec<(ControlFrame, bool)> {
+        transmitted(e)
+            .into_iter()
+            .filter(|f| f.container == Container::Control)
+            .map(|f| {
+                (
+                    ControlFrame::decode(&f.payload).expect("a control frame"),
+                    f.floor,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_hopelessly_below_its_rung_is_re_encoded_sooner() {
+        // Combining four transmissions makes up about 6 dB; a frame measured further under its
+        // rung's threshold than that is re-encoded after two transmissions, not four.
+        let top = 12;
+        let reach = AWGN_THRESHOLD_DB[top] - 10.0 * 4f64.log10();
+        for (heard_at, early) in [(reach - 2.0, true), (reach + 2.0, false)] {
+            let mut e = engine(wide());
+            e.state = State::Connected;
+            e.role = Role::Iss;
+            e.session = 7;
+            e.now = 100.0;
+            e.pin_mode(Some(top), Some(16)).expect("pin");
+            e.send(&[7u8; 16]); // the first burst goes at once, at the pinned rung
+            e.pin_mode(None, None).expect("unpin");
+            assert_eq!(e.records.len(), 1, "not the case measured");
+            assert!(
+                e.records[0].mode == top && e.records[0].tx_count == 1,
+                "not the case measured: {:?}",
+                e.records[0]
+            );
+            e.records[0].tx_count = 2;
+            e.peer_snr_db = Some(heard_at);
+            let seq = e.records[0].seq;
+            e.reencode_stranded(&[seq], 0);
+            assert_eq!(
+                e.records[0].mode != top,
+                early,
+                "heard at {heard_at:.1} dB: {:?}",
+                e.records[0]
+            );
+            assert_eq!(e.stats.frames_reencoded, usize::from(early));
+        }
+    }
+
+    #[test]
+    fn a_beacon_heard_in_a_session_is_neither_acknowledged_nor_a_failure() {
+        // ND1J's station sent a beacon in the middle of a session, and KK4ODA answered it: the
+        // preamble had armed an acknowledgement, and the frame was counted as a failed one.
+        let mut e = receiving(5.0);
+        e.now = 100.0;
+        let robust = e.robust_mode(true);
+        let body = pack_callsign("ND1J").expect("a callsign");
+        let header = DataHeader {
+            kind: DataKind::Beacon,
+            seq: 0,
+            session: 0,
+        };
+        let payload = encode_data(&header, &body, e.timing.capacity(robust)).expect("encode");
+        let length = e.timing.data_frame_s_for(robust);
+        let start = 101.0;
+        let margin = e.rate.margin_db();
+        let failed = e.stats.frames_failed;
+        e.on_preamble(start, start + 0.5, Some(length));
+        assert!(
+            e.deadlines.iter().any(|&(timer, _)| timer == Timer::Ack),
+            "the preamble armed nothing: not the case measured"
+        );
+        let beacon = Heard {
+            container: Container::Data,
+            mode: robust,
+            floor: true,
+            snr_db: 4.0,
+            t_end: start + length,
+            length_s: length,
+            payload: Some(payload),
+        };
+        e.on_frame(&beacon, start + length);
+        e.tick(start + length + 10.0);
+        assert!(answers(&mut e).is_empty(), "the beacon was answered");
+        assert!((e.rate.margin_db() - margin).abs() < 1e-12);
+        assert_eq!(e.stats.frames_failed, failed);
+        assert!(e.burst.is_empty());
     }
 }

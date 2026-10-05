@@ -407,6 +407,12 @@ impl RateController {
         }
     }
 
+    /// The threshold of a mode of this controller's table, if it has one.
+    #[must_use]
+    pub fn threshold_db(&self, mode: usize) -> Option<f64> {
+        self.thresholds.get(mode).copied()
+    }
+
     /// Feed one burst: the mean SNR of its frames, how many decoded and failed, and the mode
     /// they were sent in — which is what turns a failure into a measurement.
     pub fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {

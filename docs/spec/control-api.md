@@ -218,7 +218,7 @@ every event with the modem's state, when the transmitter was keyed and released,
 `tx_peak` event after each transmission carrying its peak in dBFS — so a burst nobody
 decoded can be read against how hard the transmitter was being driven for it — and from
 beta.76 the turnaround (ADR-0037): a `tx_end` event beside each release (`played <s> drains_at
-<s> tail <s> deaf_for <s>`, `cut` when it was cut short; `watchdog` or `abandoned` for a release
+<s> tail <s> latency <s> deaf_for <s>`, `latency` being what the sound card reports of its own delay, `-` when it reports none, `cut` when it was cut short; `watchdog` or `abandoned` for a release
 forced by either), an `rx_trace` event every 50 ms for 3 s after it (`after <s> power <dB> level
 <dB> floor <dB> busy 0|1 deaf 0|1`: the block's own baseband power and the busy detector's
 reading) and a `preamble` event for every frame announced (`ago <s> frame_s <s> tone 0|1

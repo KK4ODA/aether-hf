@@ -3134,3 +3134,63 @@ def test_chat_leaves_a_transfer_alone(live: PhyTiming) -> None:
         assert b.stats.turn_requests == 0
         arrivals[chat] = (got[1] - t, got[0] - t)
     assert arrivals[True] == arrivals[False], arrivals
+
+
+# ── ADR-0038: ND1J's two sessions of 2026-10-05 ──────────────────────
+
+
+def test_a_frame_hopelessly_below_its_rung_is_re_encoded_sooner(timing: PhyTiming) -> None:
+    """Combining four transmissions makes up about 6 dB. A frame the other station measured
+    further below its rung's threshold than that is re-encoded after two transmissions, not
+    four: ND1J's rung-12 frames, 12 dB under, went out eight times each. One the combining can
+    still rescue keeps its codeword until max_combines, as before."""
+    top = usable_modes()[-1]
+
+    def sender(heard_at: float) -> LinkEngine:
+        a = LinkEngine("W4ODA", timing, LinkConfig())
+        a.role, a.state, a.session, a.now = Role.ISS, State.CONNECTED, 7, 100.0
+        a.pin_mode(top, body_bytes=16)
+        a.send(bytes(range(16)))  # the first burst goes at once, at the pinned rung
+        a.pin_mode(None)
+        a._recommended = 0
+        a.peer_snr_db = heard_at
+        return a
+
+    reach = sender(0.0).rate.thresholds[top] - 10.0 * math.log10(4)
+    for heard_at, early in ((reach - 2.0, True), (reach + 2.0, False)):
+        a = sender(heard_at)
+        (rec,) = a._records.values()
+        assert rec.mode == top and rec.tx_count == 1, "not the case measured"
+        rec.tx_count = 2
+        a._send_burst()
+        assert (rec.mode != top) is early, (heard_at, rec)
+        assert a.stats.frames_reencoded == int(early)
+
+
+def test_a_beacon_heard_in_a_session_is_neither_acknowledged_nor_a_failure(
+    timing: PhyTiming,
+) -> None:
+    """ND1J's station sent a beacon in the middle of a session, and KK4ODA answered it with an
+    acknowledgement: the beacon's preamble had armed one, and the frame, no part of any burst,
+    was counted as a failed frame of one — a failure that widened the margin. A frame of nobody's
+    session is dropped from the burst, and with nothing else in it the acknowledgement goes."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, sent = _connected_irs(timing)
+    robust = b._robust_mode(True)
+    capacity = timing.capacity(robust)
+    payload = encode_data(DataHeader(DataKind.BEACON, 0, 0), pack_callsign("ND1J"), capacity)
+    length = timing.data_frame_s_for(robust)
+    start = b.now + 1.0
+    margin = b.rate.margin_db
+    failed = b.stats.frames_failed
+    b.on_preamble(start, start + 0.5, length)
+    assert "ack" in b._deadlines, "the preamble armed nothing: not the case measured"
+    frame = SimFrame(
+        Container.DATA, robust, 0, 4.0, start, start + length, payload, 0.0, floor=True
+    )
+    b.on_frame(frame, start + length)
+    b.tick(start + length + 10.0)
+    assert not [f for f in sent if f.container is Container.CONTROL], "the beacon was answered"
+    assert b.rate.margin_db == margin and b.stats.frames_failed == failed
+    assert not b._burst

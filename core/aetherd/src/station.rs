@@ -314,6 +314,14 @@ fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
 /// second covers it with room for a slower rig; the receiver itself still hears throughout.
 const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
 
+/// Room kept past the sound card's own reported delay before the key comes up: its
+/// report is of the buffer, not the codec and the cable after it (ADR-0038).
+const DEVICE_LATENCY_MARGIN_S: f64 = 0.03;
+
+/// The least the keyed tail keeps for the card, whatever it reports: a report of nothing is
+/// a host that does not know, not a card with no buffer.
+const DEVICE_LATENCY_MIN_S: f64 = 0.05;
+
 /// How long after the key comes up the recording traces what the receiver hears
 /// (`trace_after_release`), and how often.
 const RELEASE_TRACE_S: f64 = 3.0;
@@ -809,6 +817,9 @@ pub struct Station<P: Ptt> {
     released_at: f64,
     /// When that trace last wrote a line.
     traced_at: f64,
+    /// How long a sample takes to leave the sound card after its callback, as the card
+    /// reports it (`AudioIo::output_latency_s`); `None` until it does, or for one that cannot.
+    device_latency_s: Option<f64>,
     /// The two playback clocks and how the transmission now running stands against them.
     clock: PlaybackClock,
     /// The exact audio of the transmission now running, when the operator asked for it
@@ -988,6 +999,7 @@ impl<P: Ptt> Station<P> {
             heard_end: f64::NEG_INFINITY,
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
+            device_latency_s: None,
             clock: PlaybackClock::default(),
             tx_capture: None,
             pending: VecDeque::new(),
@@ -2385,6 +2397,7 @@ impl<P: Ptt> Station<P> {
         self.tx_peak_last = Some(self.tx_peak_running);
         let peak = self.tx_peak_running;
         self.tx_peak_running = 0.0;
+        let tail_s = self.tail_s();
         if let Some(capture) = self.tx_capture.take() {
             match capture.finish(self.config.record_dir.as_deref()) {
                 Ok(summary) => self.events.push(format!("tx:{summary}")),
@@ -2413,10 +2426,12 @@ impl<P: Ptt> Station<P> {
                 now,
                 "tx_end",
                 &format!(
-                    "played {} drains_at {} tail {:.3} deaf_for {:.3}{}",
+                    "played {} drains_at {} tail {:.3} latency {} deaf_for {:.3}{}",
                     seconds(self.clock.device_played).unwrap_or_else(|| "-".into()),
                     seconds(self.clock.drains_at).unwrap_or_else(|| "-".into()),
-                    self.config.key_tail_s,
+                    tail_s,
+                    self.device_latency_s
+                        .map_or_else(|| "-".to_owned(), |s| format!("{s:.3}")),
                     self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S,
                     if cut { " cut" } else { "" },
                 ),
@@ -2432,6 +2447,32 @@ impl<P: Ptt> Station<P> {
         self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
         self.pump();
         Ok(())
+    }
+
+    /// The sound card's report of how long a sample takes to leave it after its callback
+    /// (ADR-0038): the run loop passes it on each pass, and the keyed tail follows it.
+    pub fn device_latency(&mut self, seconds: Option<f64>) {
+        if let Some(s) = seconds.filter(|s| s.is_finite() && *s >= 0.0 && *s < 1.0) {
+            self.device_latency_s = Some(s);
+        }
+    }
+
+    /// The silence the key stays down for after a burst's last sample (ADR-0038). It covers
+    /// the sound card's buffering after the playback clock has passed the sample: the card's
+    /// own report plus a margin, between [`DEVICE_LATENCY_MIN_S`] and the assumed playback
+    /// lead, where it reports one; the whole assumed lead where it does not. ND1J's answers
+    /// began 90–180 ms after the key came up and the radio's audio 60–120 ms after it: a
+    /// quarter second of a tail kept for a card that needs a tenth is what that margin was.
+    fn tail_s(&self) -> f64 {
+        let lead = self.config.playback_lead_s;
+        let base = self.config.key_tail_s - lead;
+        match self.device_latency_s {
+            Some(latency) if lead > 0.0 => {
+                base + (latency + DEVICE_LATENCY_MARGIN_S)
+                    .clamp(DEVICE_LATENCY_MIN_S.min(lead), lead)
+            }
+            _ => self.config.key_tail_s,
+        }
     }
 
     /// For [`RELEASE_TRACE_S`] after the key comes up, a line every [`RELEASE_TRACE_STEP_S`]
@@ -2977,6 +3018,7 @@ impl<P: Ptt> Station<P> {
     /// Whether the transmission at the head of the queue waits for a busy channel: a
     /// transmission this station starts, when the operator asked to wait for a clear one.
     fn held_for_busy(&mut self, now: f64) -> bool {
+        self.drop_beacons_in_session();
         let Some(next) = self.pending.front() else {
             return true;
         };
@@ -3045,6 +3087,21 @@ impl<P: Ptt> Station<P> {
         false
     }
 
+    /// A beacon still waiting when a session starts — held for a busy channel, and the busy
+    /// channel was the call — is dropped: a beacon is for a station nobody is talking to, and
+    /// sent now it would go into the middle of the session (ADR-0038). A session refuses a new
+    /// one already ([`Self::beacon`]); this is the one queued before it began.
+    fn drop_beacons_in_session(&mut self) {
+        if self.engine.state() == State::Idle || !self.beacon_waiting() {
+            return;
+        }
+        self.pending
+            .retain(|next| !matches!(next, Outgoing::Frames(frames) if is_beacon(frames)));
+        self.held_since = None;
+        self.held_from = None;
+        self.note("beacon", "dropped: a session started before it went out");
+    }
+
     /// Take the transmission at the head of the queue — judged and allowed — and render it.
     fn render_next(&mut self, now: f64) {
         let Some(outgoing) = self.pending.pop_front() else {
@@ -3086,7 +3143,7 @@ impl<P: Ptt> Station<P> {
                 self.config.params.audio_rate as u32,
                 self.config.tx_level,
                 self.config.key_lead_s,
-                self.config.key_tail_s,
+                self.tail_s(),
                 &frames,
             ));
         }
@@ -3122,7 +3179,7 @@ impl<P: Ptt> Station<P> {
 
         let audio_rate = self.config.params.audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
-        let tail = (self.config.key_tail_s * audio_rate) as usize;
+        let tail = (self.tail_s() * audio_rate) as usize;
         // flush the chain after the burst, or its filters keep the tail of the last frame
         let mut rendered = self.to_audio.process(&baseband);
         rendered.extend(self.to_audio.flush());
@@ -3140,7 +3197,7 @@ impl<P: Ptt> Station<P> {
     fn render_identifier(&mut self, now: f64) {
         let audio_rate = self.config.params.audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
-        let tail = (self.config.key_tail_s * audio_rate) as usize;
+        let tail = (self.tail_s() * audio_rate) as usize;
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         self.identifier.final_due = true;
         self.append_cw_id(now, audio_rate);
@@ -3159,7 +3216,7 @@ impl<P: Ptt> Station<P> {
     fn render_audio(&mut self, samples: Vec<f32>, tone: bool) {
         let audio_rate = self.config.params.audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
-        let tail = (self.config.key_tail_s * audio_rate) as usize;
+        let tail = (self.tail_s() * audio_rate) as usize;
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         self.playback.extend(samples);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
@@ -3169,7 +3226,7 @@ impl<P: Ptt> Station<P> {
                 self.config.params.audio_rate as u32,
                 self.config.tx_level,
                 self.config.key_lead_s,
-                self.config.key_tail_s,
+                self.tail_s(),
                 &[],
             ));
         }
@@ -3417,8 +3474,7 @@ impl<P: Ptt> Station<P> {
         // does not — an operator's own `max_burst_s`, a watchdog setting just lowered —
         // passes it to the next transmission rather than taking the burst over the key's
         // limit, where the watchdog would cut both.
-        let on_air =
-            (self.playback.len() + gap + audio.len()) as f64 / audio_rate + self.config.key_tail_s;
+        let on_air = (self.playback.len() + gap + audio.len()) as f64 / audio_rate + self.tail_s();
         if on_air > self.config.max_key_s - KEY_TIME_MARGIN_S / 2.0 {
             self.identifier.transmitted_since = true;
             return;
@@ -5091,6 +5147,63 @@ mod tests {
                 "peak {peak} leaves no headroom at tx_level 0.25"
             );
         }
+    }
+
+    #[test]
+    fn the_keyed_tail_follows_what_the_sound_card_reports_it_holds() {
+        // ADR-0038: the whole quarter-second lead was kept after every burst whatever the
+        // card, and ND1J's answers began only 0-100 ms after the radio was back on receive.
+        // The tail now covers the card's own reported delay and a margin, within bounds; a
+        // card that reports nothing keeps the whole lead.
+        let lead = 0.25;
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                playback_lead_s: lead,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let base = station.config.key_tail_s - lead;
+        assert!(
+            (station.tail_s() - (base + lead)).abs() < 1e-12,
+            "no report: the whole lead"
+        );
+        station.device_latency(Some(0.04));
+        let expected = base + 0.04 + DEVICE_LATENCY_MARGIN_S;
+        assert!(
+            (station.tail_s() - expected).abs() < 1e-12,
+            "{}",
+            station.tail_s()
+        );
+        // never under the least, never over the lead, and nonsense is ignored
+        station.device_latency(Some(0.0));
+        assert!((station.tail_s() - (base + DEVICE_LATENCY_MIN_S)).abs() < 1e-12);
+        station.device_latency(Some(0.9));
+        assert!((station.tail_s() - (base + lead)).abs() < 1e-12);
+        station.device_latency(Some(f64::NAN));
+        assert!((station.tail_s() - (base + lead)).abs() < 1e-12);
+        // and the burst's silence after its last sample is that tail
+        station.device_latency(Some(0.04));
+        station.tune(1.0).expect("idle");
+        let mut rendered = Vec::new();
+        let mut out = vec![0.0f32; 960];
+        for _ in 0..200 {
+            let count = station.playback(&mut out).expect("playback");
+            rendered.extend_from_slice(&out[..count]);
+        }
+        let rate = station.config.params.audio_rate as f64;
+        let last = rendered
+            .iter()
+            .rposition(|x| x.abs() > 1e-4)
+            .expect("a tone");
+        let silence_s = (rendered.len() - last - 1) as f64 / rate;
+        assert!(
+            silence_s >= expected - 0.03,
+            "{silence_s:.3} s of tail, {expected:.3} expected"
+        );
     }
 
     #[test]
@@ -7004,6 +7117,31 @@ mod tests {
         station.connect("KK4XYZ").expect("idle");
         let refused = station.tune_to(7_101_000).expect_err("calling");
         assert!(refused.contains("call"), "{refused}");
+    }
+
+    #[test]
+    fn a_beacon_still_waiting_when_a_session_starts_does_not_go_out_in_it() {
+        // a beacon held for a busy channel — and the busy channel was a call — must not go
+        // out in the middle of the session it started (ADR-0038); a session refuses a new
+        // beacon already
+        let mut station = idle_station();
+        station.beacon(None).expect("idle");
+        assert!(station.beacon_waiting());
+        station.connect("KK4XYZ").expect("idle");
+        assert_ne!(station.engine().state(), State::Idle);
+        assert_eq!(station.beacon(None), Err("a session is running"));
+        let _ = station.held_for_busy(station.now());
+        assert!(
+            !station.beacon_waiting(),
+            "the beacon stayed queued under the session"
+        );
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e == "beacon:dropped: a session started before it went out"),
+            "and nobody was told"
+        );
     }
 
     #[test]

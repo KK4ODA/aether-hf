@@ -31,6 +31,7 @@ combine — the CRC decides, and a standalone decode is always tried as well.
 from __future__ import annotations
 
 import contextlib
+import math
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -148,6 +149,14 @@ class LinkConfig:
     a repeat on the floor costs 3.2 s and an answer as long."""
     max_combines: int = 4
     """HARQ buffers are reset after this many failed combines (guards a wrong inference)."""
+    reencode_early_after: int = 2
+    """A frame the peer measured further below its rung's threshold than combining all
+    :attr:`max_combines` of its transmissions could make up — 10·log10 of their number, plus
+    :attr:`reencode_hopeless_db` — is re-encoded after this many instead (ADR-0038). Its
+    copies were being combined toward a sum that could never decode: ND1J's rung-12 frames,
+    12 dB under their threshold, went out eight times each (2026-10-05)."""
+    reencode_hopeless_db: float = 1.0
+    """See :attr:`reencode_early_after`."""
     capabilities: int = 0
     """Capability bits offered in the connect handshake. What they mean is the caller's
     business; the link layer carries them and reports what the peer offered. Bit 0 is stream
@@ -238,6 +247,9 @@ class _RxRecord:
     combined: bool = False
     """It was combined with an earlier transmission of its block: a failure after that is a
     failure of both."""
+    outside: bool = False
+    """It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
+    session's — and is no part of the burst (ADR-0038)."""
 
 
 SELF_DECODABLE_RVS = frozenset({0, 3})
@@ -843,6 +855,18 @@ class LinkEngine:
             return self._unread_there or self.timing.is_floor(self._burst_mode())
         return self._peer_floor
 
+    def _hopeless(self, mode: int) -> bool:
+        """Whether the peer's last measurement of this station's frames is further below
+        ``mode``'s threshold than :attr:`LinkConfig.max_combines` transmissions combined could
+        make up (ADR-0038). Only a measurement will do: the rung the peer recommends sits a
+        margin and the ladder's spacing below the path, and on the tone floor 15 dB below a
+        frame that combining still rescues."""
+        thresholds = self.rate.thresholds
+        if self.peer_snr_db is None or mode not in thresholds:
+            return False
+        reach = thresholds[mode] - 10.0 * math.log10(max(1, self.cfg.max_combines))
+        return self.peer_snr_db < reach - self.cfg.reencode_hopeless_db
+
     def _burst_mode(self) -> int:
         """The mode the next burst's new frames go out at: the pin while one is set, the
         peer's recommendation otherwise, never past the operator's ceiling."""
@@ -1281,7 +1305,12 @@ class LinkEngine:
         # bodies for that reason, and so should anything that expects to fall far.
         for s in unacked:
             rec = self._records[s]
-            if rec.tx_count >= self.cfg.max_combines and recommendation < rec.mode:
+            # so far under its threshold that combining cannot close the gap: sooner
+            # (ADR-0038)
+            due = (
+                self.cfg.reencode_early_after if self._hopeless(rec.mode) else self.cfg.max_combines
+            )
+            if rec.tx_count >= due and recommendation < rec.mode:
                 target = self._reencode_target(len(rec.body), rec.mode, recommendation)
                 if target is not None:
                     rec.mode = target
@@ -1433,6 +1462,10 @@ class LinkEngine:
         self._burst.append(rec)
         if self._decode_record(rec):
             self._arm("ack", max(0.0, frame.t_end - self.now) + self._irs_reply_delay())
+        elif rec.outside:
+            self._burst.remove(rec)
+            if not self._burst:
+                self._disarm("ack")
 
     def _decode_record(self, rec: _RxRecord) -> bool:
         """Decode a frame of the burst, alone or combined with an earlier transmission of its
@@ -1515,8 +1548,12 @@ class LinkEngine:
         # session data, whatever its session byte says: a datagram's holds its own number
         # (ADR-0019), which can equal this session's
         if header.kind in OUTSIDE_SESSIONS or header.session != self.session:
+            # no frame of a burst (ADR-0038): counted, it was a failure that widened the
+            # margin, and the acknowledgement its preamble armed answered nobody — ND1J's
+            # beacon in the middle of a session drew one (2026-10-05)
             rec.payload = None
-            return True
+            rec.outside = True
+            return False
         self._note_peer_frame(rec.frame)
         self._last_peer_frame = self.now
         self._heard_peer_db = rec.frame.snr_db

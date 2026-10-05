@@ -1008,6 +1008,18 @@ Recorded now: `tx_end`, `rx_trace` (3 s after a release, every 50 ms), `preamble
 `tools/turnaround_plot.py` (sidecar or `--detect` for any program's recording). Next: does a
 frame with its first 0.1–0.3 s lost still decode (VARA works with KE4QCM's SignaLink).
 
+**ND1J's two sessions (ADR-0038, beta.77).** 3.590 MHz, 500 Hz, ND1J calling: session 1 faded
++10 → −1 dB under his idle polls and his next frames went at rung 12 for 100 s; session 2 he heard
+this station at −3 to −5 dB and lost its short acknowledgements. Kept: a frame the peer measured
+further under its rung than `max_combines` copies make up (10·log10 + 1 dB) is re-encoded after 2
+(`_hopeless`; bench neutral, −0.3 % at −6/−3 dB); a beacon/probe/datagram/other session's frame
+is no part of a burst (no failure, no acknowledgement); the keyed tail = `key_tail_s` + the card's
+reported delay (cpal timestamps, `output_latency_s`, `device_latency`) + 30 ms, 50 ms–0.25 s;
+a beacon waiting when a session starts is dropped. Measured and not kept: tracking the
+recommendation from polls (slower after a fade: failures already step it down where answers
+arrive) and floor answers by the peer's report (no gain on a lopsided path). The real fix is the
+other station reading the answers: ADR-0032/0034 on a current build.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

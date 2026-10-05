@@ -977,6 +977,7 @@ fn serve(
         // the card's clock goes in ahead of the block, so a block that outlasts this
         // station's own transmission is muted only up to where the transmission ended
         station.device_played(audio.played());
+        station.device_latency(audio.output_latency_s());
         let captured = audio.capture();
         let idle = captured.is_empty();
         if !idle {
@@ -1002,6 +1003,7 @@ fn serve(
         // the card's own clock, when the last sample has really left — where `fill_card`,
         // having queued it, says the card drains.
         station.device_played(audio.played());
+        station.device_latency(audio.output_latency_s());
         fill_card(station, audio, backlog, block, daemon, &mut last_ptt_fault);
         let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
         note_pass(
