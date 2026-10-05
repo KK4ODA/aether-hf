@@ -29,6 +29,7 @@ pub mod regulatory;
 pub mod replay;
 pub mod sessions;
 pub mod settings;
+pub mod share;
 pub mod sim;
 pub mod spectrum;
 pub mod station;

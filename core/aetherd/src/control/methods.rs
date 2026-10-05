@@ -378,21 +378,12 @@ pub fn dispatch_with<P: Ptt>(
         "config.get" => return config_get(daemon, request.id.clone()),
         "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
         "diagnostics" => return diagnostics(station, daemon, request.id.clone()),
+        "share.prepare" => {
+            return share_prepare(station, daemon, &request.params, request.id.clone());
+        }
         // whether a restart is something the panel can do for the operator is the
         // daemon's to know, not the station's
-        "heard.list" => {
-            let stations = daemon
-                .as_ref()
-                .map_or_else(Vec::new, |d| d.heard.stations().to_vec());
-            return Response::ok(
-                request.id.clone(),
-                json!({
-                    "stations": stations,
-                    "limit": crate::heard::LIMIT,
-                    "path": daemon.as_ref().and_then(|d| d.heard.path()).map(|p| p.display().to_string()),
-                }),
-            );
-        }
+        "heard.list" => return heard_list(daemon.as_deref(), request.id.clone()),
         "heard.clear" => {
             let cleared = daemon.map_or(0, |d| d.heard.clear());
             return Response::ok(request.id.clone(), json!({ "cleared": cleared }));
@@ -591,6 +582,188 @@ fn unix_ms(time: std::time::SystemTime) -> u64 {
 /// what was it doing", and the operator is rarely at the station when they are asked. This
 /// answers all of them at once, with the secrets out and the recent log in, so the panel can
 /// offer one "copy" button and an issue can be filed from a phone.
+/// The zip another operator asks for: the logs, the history, the stations heard, the
+/// diagnostic bundle and the recordings of a period, for the operator to attach to an email
+/// (`share.rs`). The audio, megabytes a recording, only when asked for and only while idle:
+/// the zip is written on the run loop.
+fn share_prepare<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: Option<&mut DaemonState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let Some(daemon) = daemon else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unavailable",
+                "Nothing to share: this modem keeps no files.",
+                false,
+            ),
+        );
+    };
+    let (hours, remote, audio) = match share_params(params, id.clone()) {
+        Ok(asked) => asked,
+        Err(refused) => return refused,
+    };
+    if audio && station.state() != aether_link::State::Idle {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "not_idle",
+                "Cannot share the audio during a session: the recordings are large, and copying \
+                 them would hold the modem up. Share without the audio, or after the session.",
+                true,
+            ),
+        );
+    }
+    let now = unix_ms(std::time::SystemTime::now());
+    let since_ms = now.saturating_sub((hours * 3_600_000.0) as u64);
+    let places = crate::share::Places {
+        config: daemon.path.clone(),
+        recordings: station.record_dir().map(std::path::Path::to_path_buf),
+        log_file: daemon.config.log.file.clone(),
+    };
+    let request = crate::share::Request {
+        since_ms,
+        remote: remote.clone(),
+        audio,
+    };
+    let mut gathered = crate::share::gather(&places, &request);
+    // the settings without their secrets, the devices, the status: the diagnostic bundle
+    let callsign = station.engine().my_call.clone();
+    let bundle = diagnostics(station, Some(&mut *daemon), None)
+        .result
+        .unwrap_or(Value::Null);
+    gathered.entries.push((
+        "diagnostics.json".into(),
+        crate::share::Entry::Bytes(serde_json::to_vec_pretty(&bundle).unwrap_or_default()),
+    ));
+    let readme = format!(
+        "Aether HF {} at {callsign}\nFiles shared {} UTC\nPeriod: the last {hours} h, from {} UTC\n\
+         Sessions {}: {} recorded\nAudio: {}\n",
+        env!("CARGO_PKG_VERSION"),
+        crate::share::stamp(now),
+        crate::share::stamp(since_ms),
+        remote
+            .as_deref()
+            .map_or_else(|| "with any station".to_owned(), |r| format!("with {r}")),
+        gathered.sessions,
+        if audio { "included" } else { "left out" },
+    );
+    gathered.entries.push((
+        "README.txt".into(),
+        crate::share::Entry::Bytes(readme.into_bytes()),
+    ));
+    let state = format!("{:?}", station.state());
+    match write_shared(daemon, &callsign, now, &gathered, &state) {
+        Ok((path, bytes)) => Response::ok(
+            id,
+            json!({
+                "path": path.display().to_string(),
+                "name": path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                "bytes": bytes,
+                "files": gathered.entries.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                "sessions": gathered.sessions,
+                "remote": remote,
+                "hours": hours,
+                "audio": audio,
+                "callsign": callsign,
+            }),
+        ),
+        Err(message) => Response::failed(id, ApiError::new("io", message, true)),
+    }
+}
+
+/// What `share.prepare` was asked for: the hours back, the station, the audio.
+///
+/// # Errors
+/// The response refusing a period outside 15 minutes to 14 days.
+fn share_params(
+    params: &Value,
+    id: Option<String>,
+) -> Result<(f64, Option<String>, bool), Response> {
+    let hours = params.get("hours").and_then(Value::as_f64).unwrap_or(3.0);
+    if !(0.25..=24.0 * 14.0).contains(&hours) {
+        return Err(Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "Share files from the last 15 minutes to 14 days.",
+                false,
+            ),
+        ));
+    }
+    let remote = params
+        .get("remote")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_ascii_uppercase);
+    let audio = params
+        .get("audio")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok((hours, remote, audio))
+}
+
+/// Write the zip under `shared/` beside the configuration, keep the newest few, and log it.
+///
+/// # Errors
+/// What could not be written, in a sentence.
+fn write_shared(
+    daemon: &mut DaemonState,
+    callsign: &str,
+    now: u64,
+    gathered: &crate::share::Gathered,
+    state: &str,
+) -> Result<(std::path::PathBuf, u64), String> {
+    let dir = crate::share::shared_dir(&daemon.path);
+    let safe_call: String = callsign
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!(
+        "aether-{safe_call}-{}.zip",
+        crate::share::stamp(now)
+    ));
+    let bytes = std::fs::create_dir_all(&dir)
+        .and_then(|()| crate::share::write_zip(&path, &gathered.entries, now))
+        .map_err(|error| format!("Could not write {}: {error}", path.display()))?;
+    crate::share::prune(&dir, crate::share::KEEP);
+    daemon.log.record(
+        crate::log::Level::Info,
+        "share",
+        &format!(
+            "files for another operator: {} ({} files, {} sessions, {bytes} bytes)",
+            path.display(),
+            gathered.entries.len(),
+            gathered.sessions
+        ),
+        state,
+    );
+    Ok((path, bytes))
+}
+
+/// Every station heard, most recent first, and where the list is kept.
+fn heard_list(daemon: Option<&DaemonState>, id: Option<String>) -> Response {
+    let stations = daemon.map_or_else(Vec::new, |d| d.heard.stations().to_vec());
+    Response::ok(
+        id,
+        json!({
+            "stations": stations,
+            "limit": crate::heard::LIMIT,
+            "path": daemon.and_then(|d| d.heard.path()).map(|p| p.display().to_string()),
+        }),
+    )
+}
+
 fn diagnostics<P: Ptt>(
     station: &mut Station<P>,
     daemon: Option<&mut DaemonState>,
@@ -2174,6 +2347,51 @@ mod tests {
             &request("beacon.every", json!({"minutes": 0})),
         );
         assert!(response.result.expect("stopped")["every_s"].is_null());
+    }
+
+    #[test]
+    fn a_zip_of_the_files_another_operator_needs_is_written_beside_the_configuration() {
+        // KE4QCM, 2026-10-05: the files of the side that was not heard were a PowerShell line
+        // pasted into an email. `share.prepare` writes the same zip under `shared/`
+        let dir = std::env::temp_dir().join(format!("aether-share-api-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("aetherd.log"), "a run\n").expect("write");
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.path = dir.join("station.toml");
+        let ask = |params: Value| Request {
+            id: Some("1".into()),
+            method: "share.prepare".to_owned(),
+            params,
+        };
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &ask(json!({"hours": 3, "remote": "kk4oda-1"})),
+        );
+        let result = response.result.expect("result");
+        let path = std::path::PathBuf::from(result["path"].as_str().expect("path"));
+        assert!(path.is_file(), "{path:?}");
+        assert_eq!(path.parent(), Some(dir.join("shared").as_path()));
+        assert_eq!(
+            std::fs::metadata(&path).expect("zip").len(),
+            result["bytes"].as_u64().expect("bytes")
+        );
+        let files: Vec<&str> = result["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(files, ["aetherd.log", "diagnostics.json", "README.txt"]);
+        assert_eq!(result["remote"], "KK4ODA-1");
+        assert_eq!(result["sessions"], 0);
+        assert_eq!(result["audio"], false);
+        // a period outside 15 minutes to 14 days is refused
+        let refused = dispatch_with(&mut station, Some(&mut daemon), &ask(json!({"hours": 0})));
+        assert_eq!(refused.error.expect("refused").code, "bad_params");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
