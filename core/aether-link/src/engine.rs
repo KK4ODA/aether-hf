@@ -689,6 +689,18 @@ impl LinkEngine {
         self.peer_capabilities
     }
 
+    /// When this station, receiving a burst, will acknowledge it — `None` when it owes no
+    /// acknowledgement. The daemon asks before it lets a frame it only half heard hold that
+    /// answer back (ADR-0040).
+    #[must_use]
+    pub fn acknowledgement_at(&self) -> Option<f64> {
+        if self.role == Role::Irs {
+            self.deadline_of(Timer::Ack)
+        } else {
+            None
+        }
+    }
+
     /// Whether a session is up.
     #[must_use]
     pub fn connected(&self) -> bool {

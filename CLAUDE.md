@@ -1030,6 +1030,19 @@ FCC's 26 dB measure". The banner across every tab now shows every action under w
 polled status (`bannerFor`): calling, connected, disconnecting (both phases), Test and step,
 probing, beacon waiting or going, transmitting; ended stays up its 15 s and says what was left.
 
+**Both sides of one session (ADR-0040, beta.79).** ND1J's Test of 2026-10-06 01:58Z, recorded at
+both ends (his sidecar has no audio; `recordings/*_test.json` is his): of KK4ODA-1's ordinary control
+frames he decoded 38, detected 8 more and never detected 22 — 21 of those keyed while *he* was
+transmitting. A burst carries no length, the receiver infers its end from silence, and the last frame
+of his bursts arrived faded: announced at confidence 1.00–1.27, under `DETECT_CONFIDENCE_TRUSTED`
+(1.3), and ignored in 17 of the 21. Now an untrusted ordinary arrival is heeded as a long frame when
+the engine owes an acknowledgement (`LinkEngine::acknowledgement_at`) and it begins within
+`FOLLOW_ON_EARLY_S` before to `FOLLOW_ON_WINDOW_S` (0.6 s) after `heard_end`; counted as
+`follow_on_heeded`, recorded `heeded 2`. Replayed on the session's announcements: 17 of 21 held, 2
+delivered answers a second late. To match two stations' sidecars: offset = the difference of their
+`started`, then each sent frame against the other's frames within its length; the peer's `ptt`
+events say when it was keyed. ND1J runs an IC-7300 (CI-V keying, its USB codec) at 40 W.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
