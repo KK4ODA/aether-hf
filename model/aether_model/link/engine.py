@@ -323,12 +323,12 @@ class LinkStats:
     """Frames given another codeword at a slower mode after going unacknowledged at their
     own for :attr:`LinkConfig.max_combines` transmissions."""
     turn_requests: int = 0
+    """Acknowledgements this station sent unasked, to ask for the turn in a chat
+    (:attr:`LinkConfig.chat`)."""
     turn_offers: int = 0
     """Bursts that ended with the turn on offer (ADR-0047)."""
     turns_taken: int = 0
     """Acknowledgements that took the turn offered, this station's burst after them (ADR-0047)."""
-    """Acknowledgements this station sent unasked, to ask for the turn in a chat
-    (:attr:`LinkConfig.chat`)."""
 
 
 @dataclass(frozen=True)

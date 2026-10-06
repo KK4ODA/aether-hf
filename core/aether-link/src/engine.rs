@@ -151,6 +151,13 @@ pub struct LinkConfig {
     /// lost, slightly less keyed time. Named for where it began — a host's `CHAT ON` — and kept
     /// switchable ([`LinkEngine::set_chat`]) for benches comparing the engine before.
     pub chat: bool,
+    /// A burst that empties this station's queue ends with a TURN that offers the turn, and a
+    /// receiving station with data of its own takes it in its acknowledgement — the
+    /// acknowledgement and its first burst in one transmission (ADR-0047) — instead of an
+    /// acknowledgement asking for the turn, a TURN, and then the burst. Proposed, and off: the
+    /// link bench charges no keying of the transmitter, which is what it saves; the scenario
+    /// harness decides.
+    pub offer_turn: bool,
 }
 
 impl Default for LinkConfig {
@@ -180,6 +187,7 @@ impl Default for LinkConfig {
             reencode_hopeless_db: 1.0,
             capabilities: 0,
             chat: true,
+            offer_turn: false,
         }
     }
 }
@@ -268,6 +276,11 @@ pub struct LinkStats {
     /// Acknowledgements this station sent unasked, to ask for the turn in a chat
     /// ([`LinkConfig::chat`]).
     pub turn_requests: usize,
+    /// Bursts that ended with the turn on offer (ADR-0047).
+    pub turn_offers: usize,
+    /// Acknowledgements that took the turn offered, this station's burst after them
+    /// (ADR-0047).
+    pub turns_taken: usize,
 }
 
 /// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
@@ -500,6 +513,8 @@ pub struct LinkEngine {
     /// The family this station's last POLL went out in (ADR-0034).
     poll_floor: bool,
     disc_requested: bool,
+    /// This station, receiving, was offered the turn at the end of the burst (ADR-0047).
+    offered: bool,
     /// When a sender asked to disconnect stops waiting for its queue (ADR-0039).
     disc_patience_until: Option<f64>,
     disc_tries: usize,
@@ -623,6 +638,7 @@ impl LinkEngine {
             unread_there: false,
             poll_floor: false,
             disc_requested: false,
+            offered: false,
             disc_patience_until: None,
             caller: false,
             disc_tries: 0,
@@ -1993,6 +2009,12 @@ impl LinkEngine {
     }
 
     fn send_burst(&mut self) {
+        self.send_burst_after(Vec::new());
+    }
+
+    /// A burst, after `prefix` in the same transmission: the acknowledgement that took the
+    /// turn (ADR-0047).
+    fn send_burst_after(&mut self, prefix: Vec<TxFrame>) {
         let mode = self.burst_mode();
         let recommendation = self.recommended.min(self.cap());
         let unacked = self.unacked();
@@ -2062,6 +2084,7 @@ impl LinkEngine {
             }
         }
 
+        let offer = self.offers_turn(family, &seqs);
         let mut frames = Vec::with_capacity(seqs.len());
         for seq in &seqs {
             let Some(index) = self.records.iter().position(|r| r.seq == *seq) else {
@@ -2076,16 +2099,34 @@ impl LinkEngine {
         }
         // each frame says how many of the burst come after it — in pairs, never fewer — so a
         // receiver that loses one in a fade still knows the burst is not over and does not
-        // answer over it (ADR-0041, ADR-0046)
+        // answer over it (ADR-0041, ADR-0046) — the offer counted among them (ADR-0047)
         let count = frames.len();
         for (i, frame) in frames.iter_mut().enumerate() {
-            frame.follows = crate::frames::countdown_of(count - 1 - i);
+            frame.follows = crate::frames::countdown_of(count - 1 - i + usize::from(offer));
         }
         self.stats.frames_sent += frames.len();
+        let mut frames = [prefix, frames].concat();
+        if offer {
+            let turn = self.control(ControlKind::Turn, control_flags::OFFER, 0, 0, None, 0);
+            frames.push(turn);
+            self.stats.turn_offers += 1;
+        }
         self.stats.bursts += 1;
         self.bursts_since_turn += 1;
         self.disarm(Timer::Keepalive);
         self.transmit(frames);
+        self.wait_for_burst_ack(&seqs, family, recommendation, count, offer);
+    }
+
+    /// The wait for the acknowledgement of the burst just sent.
+    fn wait_for_burst_ack(
+        &mut self,
+        seqs: &[u8],
+        family: bool,
+        recommendation: usize,
+        count: usize,
+        offer: bool,
+    ) {
         // the receiver's quiet after this burst: its family, and the longest frame it will
         // expect — this burst's, or the mode it recommended, as its own peer_data_frame_s
         // has it
@@ -2104,13 +2145,21 @@ impl LinkEngine {
             .iter()
             .map(|&f| self.timing.control_frame_s_for(f))
             .fold(0.0, f64::max);
-        // a receiver that lost the burst's last frame takes the one before at its word — one or
-        // two following — and answers a frame late (ADR-0046): the wait covers it
-        let late = if family || count < 2 {
+        // A receiver that lost the burst's last frame takes the one before at its word and
+        // answers that frame late (ADR-0046); one that lost the offer takes the last data
+        // frame's count — the offer among it — at its word, up to two frames (ADR-0047). The
+        // wait covers them.
+        let last_s = seqs
+            .last()
+            .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)));
+        let late = if family {
             0.0
+        } else if offer {
+            2.0 * last_s
+        } else if count >= 2 {
+            last_s
         } else {
-            seqs.last()
-                .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)))
+            0.0
         };
         let responder = families
             .iter()
@@ -2118,6 +2167,19 @@ impl LinkEngine {
             .fold(0.0, f64::max)
             + late;
         self.wait_for(Waiting::Ack, control, responder);
+    }
+
+    /// Whether this burst ends with the turn on offer (ADR-0047): it empties the queue, with
+    /// nothing else outstanding, and the other station takes the turn in its acknowledgement if
+    /// it has something to send. Ordinary frames only: a floor control frame is 3.2 s.
+    fn offers_turn(&self, family: bool, seqs: &[u8]) -> bool {
+        self.config.offer_turn
+            && self.state == State::Connected
+            && !family
+            && self.tx_queue.is_empty()
+            && self.pinned.is_none()
+            && !self.disc_requested
+            && self.unacked().iter().all(|s| seqs.contains(s))
     }
 
     /// A frame sent `max_combines` times at its mode without an acknowledgement is stranded
@@ -2211,6 +2273,13 @@ impl LinkEngine {
         };
         self.waiting_for = None;
         self.disarm(Timer::Wait);
+        if ack.flags & control_flags::TAKEN != 0 {
+            // the other station took the turn this one offered: its burst follows (ADR-0047)
+            self.take_irs();
+            self.peer_request = PeerRequest::None;
+            self.bursts_since_turn = 0;
+            return;
+        }
         self.maybe_start_burst();
     }
 
@@ -2613,6 +2682,7 @@ impl LinkEngine {
         }
 
         let (bitmap, missing, next_new) = self.receive_window();
+        let missing_now = missing.clone();
         self.ack_history
             .insert(0, AckSnapshot { missing, next_new });
         self.ack_history.truncate(2);
@@ -2626,6 +2696,17 @@ impl LinkEngine {
         }
         if self.break_requested {
             flags |= control_flags::BREAK | control_flags::WANT_TX;
+        }
+        // the turn offered is taken when there is something to send and nothing of the other
+        // station's is missing: it has nothing left to send (ADR-0047)
+        let take = self.offered
+            && self.role == Role::Irs
+            && !self.tx_queue.is_empty()
+            && missing_now.is_empty()
+            && self.state == State::Connected;
+        self.offered = false;
+        if take {
+            flags |= control_flags::TAKEN | control_flags::WANT_TX;
         }
         self.stated_want = flags & control_flags::WANT_TX != 0;
         self.ack_counter = (self.ack_counter + 1) % 8;
@@ -2644,6 +2725,12 @@ impl LinkEngine {
             snr,
             recommended as u8,
         );
+        if take {
+            self.stats.turns_taken += 1;
+            self.become_iss();
+            self.send_burst_after(vec![frame]);
+            return;
+        }
         self.transmit(vec![frame]);
     }
 
@@ -2767,6 +2854,15 @@ impl LinkEngine {
                     self.arm(Timer::Ack, delay);
                 }
             }
+            ControlKind::Turn if control.flags & control_flags::OFFER != 0 => {
+                // the end of a burst that emptied the sender's queue (ADR-0047): the burst is
+                // over with this frame, and the acknowledgement may take the turn
+                if self.role == Role::Irs {
+                    self.offered = true;
+                    let delay = self.timing.turnaround_s + (frame.t_end() - self.now).max(0.0);
+                    self.arm(Timer::Ack, delay);
+                }
+            }
             ControlKind::Turn => {
                 if self.role == Role::Irs || self.waiting_for == Some(Waiting::Turn) {
                     self.take_iss();
@@ -2803,6 +2899,11 @@ impl LinkEngine {
     }
 
     fn take_iss(&mut self) {
+        self.become_iss();
+        self.answer_turn();
+    }
+
+    fn become_iss(&mut self) {
         self.role = Role::Iss;
         self.unread_there = false;
         // the first burst of a turn goes out where this station's own measurements of the
@@ -2823,11 +2924,11 @@ impl LinkEngine {
         self.stated_want = false;
         self.bursts_since_turn = 0;
         self.retries = 0;
+        self.offered = false;
         self.actions.push(Action::Event {
             name: "role",
             detail: "iss".into(),
         });
-        self.answer_turn();
     }
 
     /// What tells the station that sent a TURN that this one has taken the turn: the first
