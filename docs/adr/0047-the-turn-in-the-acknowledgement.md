@@ -91,12 +91,16 @@ the engine before the offer too):
 
 3. **A misread countdown** (seed 40): a failed frame whose chips read rung 13 in a burst at rung
    7 also read "none follow"; its acquisition was trusted, and the receiver answered at the
-   turnaround (ADR-0045) over the rest of the burst. A countdown from a frame that did not decode
-   is now believed only when the rung its chips name is one the receiver has asked for or below
-   (`_believed` / `believed`): the count rides in the same chips. A fading session with three
-   frames in ten misread so: 25 collisions (27 in the port) → 1 (0), against 15 with no
+   turnaround (ADR-0045) over the rest of the burst. Decoded frames earlier in that burst had
+   given the right count; a decoded frame's count now wins, and a failed frame's bounds the burst
+   only when nothing of it decoded (`_burst_end` / `burst_end`). A fading session with three
+   frames in ten misread so: 25 collisions (27 in the port) → 1 (0), against 16 with no
    countdown at all (`a_misread_countdown_does_not_cut_the_burst_short`; the one left is a
-   misread first frame whose follower faded out unheard).
+   misread first frame whose follower faded out unheard). The first form of this rule — a failed
+   frame's count believed only at a rung the receiver had asked for — cut the Test's ladder short,
+   whose rungs are pinned above anything asked and of whose bursts nothing may decode (80 m
+   asymmetric: 13 collisions in three runs, 6 without it;
+   `a_burst_nothing_of_which_decoded_goes_by_its_failed_frames_counts`).
 4. **A frame from before the answer** (seed 31): the last frame of a burst arrived faded, its
    preamble too faint to hold the acknowledgement back, and the receiver finished it 60 ms after
    the station had keyed — ending before the keying, so (1) did not apply. Taken for the first

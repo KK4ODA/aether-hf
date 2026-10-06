@@ -1108,8 +1108,9 @@ transmission (`send_burst_after`/`_send_burst(prefix)`, `offer_turn` default on,
 a trusted data frame (`turn_taken_unread`). The link bench saw nothing (it charges no keying);
 the harness: Winlink-shaped sessions −13.5 % at 40 m, −9 % at 80 m/500 Hz. The A/B found and
 fixed: a failed frame lying under the station's own keying is kept from the engine
-(`frames_under_own_tx`, `aetherd`); a countdown from a frame that did not decode is believed
-only at a rung the receiver has asked for or below (`believed`); a frame that did not decode
+(`frames_under_own_tx`, `aetherd`); a decoded frame's countdown wins over a failed one's, which
+bounds the burst only when nothing of it decoded (`burst_end`; a rule keyed on the rung asked for
+cut the Test ladder's pinned bursts short); a frame that did not decode
 and began before the station's last transmission starts no burst (`answered_already`,
 `tx_started`). To A/B an engine default on the harness: build the daemon twice with the
 default flipped in the source, copy each binary out, and run both through the same scenario

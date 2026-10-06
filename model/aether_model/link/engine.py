@@ -1626,15 +1626,12 @@ class LinkEngine:
             and rec.frame.t_start < self._tx_started - 1e-9
         )
 
-    def _believed(self, rec: _RxRecord) -> bool:
-        """Whether a frame's countdown can be believed: it decoded, or its acquisition is
-        trusted and the mode its chips name is one this station has asked for or below. The
-        countdown rides in the same chips; a failed frame read at a rung far above any this
-        station asked for has chips that are noise, and one read "none follow" in a burst at
-        rung 7 set the answer over the rest of the burst (the scenario harness; ADR-0047)."""
-        if rec.payload is not None:
-            return True
-        return rec.frame.trusted and (self._asked is None or rec.frame.mode <= self._asked)
+    @staticmethod
+    def _believed(rec: _RxRecord) -> bool:
+        """Whether a frame's countdown can be believed at all: it decoded, or its acquisition was
+        trusted. A phantom's chips are noise. Among the believed, a decoded frame's count wins
+        (:meth:`_burst_end`)."""
+        return rec.payload is not None or rec.frame.trusted
 
     def _announced_end(self, rec: _RxRecord) -> float | None:
         """The latest a frame of a burst says the burst ends: its own end, and the most frames
@@ -1671,6 +1668,18 @@ class LinkEngine:
         heard."""
         heard = max(rec.frame.t_end for rec in self._burst)
         bounds = [b for b in (self._announced_end(rec) for rec in self._burst) if b is not None]
+        # A frame that decoded read its count from chips its codeword vouches for; one that did
+        # not may have read them wrong — a failed frame whose chips read rung 13 in a burst at
+        # rung 7 read "none follow" too, and the answer went over the rest of the burst (the
+        # scenario harness, ADR-0047). A decoded frame's count bounds the burst whenever there
+        # is one; a failed frame's only when nothing of the burst decoded — the Test's ladder,
+        # pinned at rungs the path cannot carry, has nothing else to go by.
+        decoded = [
+            b
+            for b in (self._announced_end(rec) for rec in self._burst if rec.payload is not None)
+            if b is not None
+        ]
+        bounds = decoded or bounds
         return max(heard, min(bounds)) if bounds else heard
 
     def _decode_record(self, rec: _RxRecord) -> bool:

@@ -2410,8 +2410,8 @@ impl LinkEngine {
                 self.burst_t0 = None;
                 return;
             }
-            record.announced_end = self.announced_end(frame, &record);
-            record.closes_at = (self.believed(frame, &record) && frame.follows() == Some(0))
+            record.announced_end = Self::announced_end(frame, &record);
+            record.closes_at = (Self::believed(frame, &record) && frame.follows() == Some(0))
                 .then(|| frame.t_end());
             self.burst.push(record);
             // a burst whose last frame said none follow it is over when that frame ends: the
@@ -2443,21 +2443,18 @@ impl LinkEngine {
             && frame.t_start() < self.tx_started - 1e-9
     }
 
-    /// Whether a frame's countdown can be believed: it decoded, or its acquisition is trusted
-    /// and the rung its chips name is one this station has asked for or below. The countdown
-    /// rides in the same chips; a failed frame read at a rung far above any this station asked
-    /// for has chips that are noise, and one read "none follow" in a burst at rung 7 set the
-    /// answer over the rest of the burst (the scenario harness; ADR-0047).
-    fn believed<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> bool {
-        record.payload.is_some()
-            || (frame.trusted() && self.asked.is_none_or(|asked| frame.mode() <= asked))
+    /// Whether a frame's countdown can be believed at all: it decoded, or its acquisition was
+    /// trusted. A phantom's chips are noise. Among the believed, a decoded frame's count wins
+    /// ([`burst_end`](Self::burst_end)).
+    fn believed<F: SoftFrame>(frame: &F, record: &RxRecord) -> bool {
+        record.payload.is_some() || frame.trusted()
     }
 
     /// Where a frame of a burst says the burst ends: its own end, and the frames it says
     /// follow it, each as long as itself (ADR-0041). Believed as [`believed`](Self::believed)
     /// says; a phantom's chips are noise.
-    fn announced_end<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> Option<f64> {
-        let believed = self.believed(frame, record);
+    fn announced_end<F: SoftFrame>(frame: &F, record: &RxRecord) -> Option<f64> {
+        let believed = Self::believed(frame, record);
         let follows = frame.follows().filter(|_| believed)?;
         let most = crate::frames::most_following(follows);
         Some(frame.t_end() + f64::from(most) * (frame.t_end() - frame.t_start()).max(0.0))
@@ -2489,11 +2486,25 @@ impl LinkEngine {
             .iter()
             .map(|record| record.t_end)
             .fold(f64::NEG_INFINITY, f64::max);
-        let bound = self
-            .burst
-            .iter()
-            .filter_map(|record| record.announced_end)
-            .fold(f64::INFINITY, f64::min);
+        // A frame that decoded read its count from chips its codeword vouches for; one that did
+        // not may have read them wrong — a failed frame whose chips read rung 13 in a burst at
+        // rung 7 read "none follow" too, and the answer went over the rest of the burst (the
+        // scenario harness, ADR-0047). A decoded frame's count bounds the burst whenever there
+        // is one; a failed frame's only when nothing of the burst decoded — the Test's ladder,
+        // pinned at rungs the path cannot carry, has nothing else to go by.
+        let tightest = |decoded_only: bool| {
+            self.burst
+                .iter()
+                .filter(|record| !decoded_only || record.payload.is_some())
+                .filter_map(|record| record.announced_end)
+                .fold(f64::INFINITY, f64::min)
+        };
+        let decoded = tightest(true);
+        let bound = if decoded.is_finite() {
+            decoded
+        } else {
+            tightest(false)
+        };
         if bound.is_finite() {
             heard.max(bound)
         } else {
@@ -4414,6 +4425,43 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_burst_nothing_of_which_decoded_goes_by_its_failed_frames_counts() {
+        // The scenario harness, 80 m (ADR-0047): the Test's ladder pins rungs the path cannot
+        // carry, and nothing of such a burst decodes. Its frames' counts are all there is to go
+        // by, and they hold the answer until the frames they announce have ended; a decoded
+        // frame's count, where there is one, wins over a failed one's (a misread "none follow"
+        // cut a burst short).
+        let heard = |start: f64, follows: u8, decoded: bool| {
+            let t_end = start + 1.0;
+            RxRecord {
+                slot: 0,
+                mode: 12,
+                snr_db: 3.0,
+                payload: decoded.then(|| vec![1]),
+                seq: None,
+                rv: 0,
+                trusted: true,
+                combined: false,
+                outside: false,
+                t_end,
+                announced_end: Some(
+                    t_end + f64::from(crate::frames::most_following(follows)) * 1.0,
+                ),
+                closes_at: (follows == 0).then_some(t_end),
+            }
+        };
+        let mut e = chatting(Role::Irs);
+        e.asked = Some(4);
+        // nothing decoded, at a rung far above any asked for: the failed frames' counts hold
+        e.burst = vec![heard(0.0, 2, false), heard(1.0, 2, false)];
+        assert!((e.burst_end() - 5.0).abs() < 1e-9, "{}", e.burst_end());
+        // a decoded frame's count wins over a failed one that reads "none follow"
+        e.burst = vec![heard(0.0, 2, true), heard(1.0, 0, false)];
+        assert!((e.burst_end() - 5.0).abs() < 1e-9, "{}", e.burst_end());
+        assert!(!e.burst_closed());
     }
 
     #[test]
