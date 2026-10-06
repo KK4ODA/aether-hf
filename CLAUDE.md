@@ -1053,7 +1053,13 @@ Tone frames carry none. `TxFrame.follows`, `SoftFrame.follows` (trait default `N
 `data_burst_following`/`rung_burst_following`, the `frame` event, frame reports and sidecar frames
 carry it; `TwoStationSim::without_countdown`/`collisions` (Rust) compare. `tools/bench_follows.py`:
 3 615 of 3 615 counts read right wherever mode and RV were, −6…+6 dB, all classes, both airs.
-beta.79 and beta.80 do not connect.
+beta.79 and beta.80 do not connect. A protocol change is announced, not offered: the Release workflow's
+`tools/protocol_notice.py` opens the notes with "Update required" against the previous `v*` tag,
+the manifest carries `link_protocol` (`make_update_manifest.py`), the shell's `LINK_PROTOCOL`
+(`update.rs`, test-held to `frames.rs`) titles such an offer "Update required", and a call or
+answer in another protocol fills the panel's mismatch banner (`what` = `version`, `note_version`).
+**A protocol bump changes `LINK_PROTOCOL` in the shell too** (the test says so). The splash and
+Help / About credit KK4ODA and the on-air testers (ND1J, WC4Y, KE4QCM, W4TGA).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

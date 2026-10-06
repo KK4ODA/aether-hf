@@ -334,6 +334,12 @@ jobs:
         env:
           OUTPUT: notes.md
 
+      # A release whose link protocol differs from the last one's cannot connect to it: the
+      # notes open by saying so, which every installed version's updates window shows
+      - name: Update notice for a new link protocol
+        if: needs.plan.outputs.channel != 'nightly'
+        run: python tools/protocol_notice.py --tag "$TAG" --notes notes.md
+
       - name: Checksums
         working-directory: dist
         run: sha256sum * | tee SHA256SUMS

@@ -82,6 +82,14 @@ pub struct Mismatch {
     pub at_ms: u64,
     /// The sentence the log and the panel give: who, both bandwidths, and what to do.
     pub sentence: String,
+    /// For `what` = `version`: the link protocol the other station's frame stated, and this
+    /// station's — stations of different protocols cannot connect (ADR-0041). The bandwidths
+    /// are then both this station's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theirs_protocol: Option<u8>,
+    /// See [`Mismatch::theirs_protocol`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ours_protocol: Option<u8>,
 }
 
 /// The waveform of a bandwidth this version runs.
@@ -352,6 +360,71 @@ impl<P: Ptt> Station<P> {
             ours_hz: ours,
             at_ms: now_ms,
             sentence,
+            theirs_protocol: None,
+            ours_protocol: None,
+        });
+    }
+
+    /// A call to this station, or an answer to its call, from a station speaking another link
+    /// protocol: the engine ignores it — the two cannot connect — and the panel says which of
+    /// the two needs to update, where before only a log line said "ignored" (ADR-0041).
+    pub(super) fn note_version(&mut self, decoded: &aether_phy::DecodedFrame) {
+        use aether_link::frames::{ConnectBody, DataKind, PROTOCOL_VERSION, decode_data};
+        if decoded.frame.is_control()
+            || !matches!(self.engine.state(), State::Idle | State::Connecting)
+        {
+            return;
+        }
+        let Some((header, body)) = decoded
+            .payload
+            .as_ref()
+            .and_then(|payload| decode_data(payload).ok())
+        else {
+            return;
+        };
+        if !matches!(header.kind, DataKind::ConnectReq | DataKind::ConnectAck) {
+            return;
+        }
+        let Ok(connect) = ConnectBody::decode(&body) else {
+            return;
+        };
+        if connect.version == PROTOCOL_VERSION || !self.engine.callsigns.contains(&connect.dst) {
+            return;
+        }
+        let (src, theirs, ours) = (connect.src, connect.version, PROTOCOL_VERSION);
+        let now_ms = super::beacons::unix_ms();
+        if self.bandwidth.mismatch.as_ref().is_some_and(|m| {
+            m.callsign == src && m.what == "version" && now_ms.saturating_sub(m.at_ms) < 60_000
+        }) {
+            return;
+        }
+        let happened = if header.kind == DataKind::ConnectReq {
+            format!("{src} called this station and was not answered")
+        } else {
+            format!("{src} answered this station's call and the answer was ignored")
+        };
+        let fix = if theirs < ours {
+            format!("{src} runs an older version of Aether HF and needs to update to connect.")
+        } else {
+            "This station runs an older version of Aether HF: update it (Help › Check for \
+             Updates) to connect."
+                .to_owned()
+        };
+        let sentence = format!(
+            "{happened}: it speaks link protocol {theirs}, this station {ours}, and stations of \
+             different protocols cannot connect. {fix}"
+        );
+        self.note("mismatch", &sentence);
+        let hz = self.bandwidth_hz();
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: src,
+            what: "version",
+            theirs_hz: hz,
+            ours_hz: hz,
+            at_ms: now_ms,
+            sentence,
+            theirs_protocol: Some(theirs),
+            ours_protocol: Some(ours),
         });
     }
 

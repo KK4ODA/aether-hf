@@ -41,8 +41,18 @@ const PHASES = {
     buttons: ["restore", "check", "close"],
   },
   available: {
-    title: (v) => `Aether HF ${v.version} is available`,
+    // a version of another link protocol (ADR-0041) is not a suggestion: the two cannot connect
+    title: (v) =>
+      v.incompatible
+        ? `Update required: Aether HF ${v.version}`
+        : `Aether HF ${v.version} is available`,
     text: (v) =>
+      (v.incompatible
+        ? `Aether HF ${v.version} speaks link protocol ${v.incompatible.theirs}; ` +
+          `${v.current} speaks ${v.incompatible.ours}. Stations on different protocols ` +
+          "cannot connect to each other, so install it now — and ask the stations you work " +
+          "to update too. "
+        : "") +
       `You have ${v.current}.${v.date ? ` Published ${published(v.date)}.` : ""} Installing ` +
       "stops the modem, installs over this version and starts Aether HF again; your " +
       "settings are kept, and so is the version you have now.",
@@ -110,6 +120,7 @@ function render(view) {
   const spec = PHASES[view.phase] ?? PHASES.error;
   const phase = $("phase");
   phase.dataset.phase = view.phase in PHASES ? view.phase : "error";
+  phase.dataset.required = view.incompatible ? "true" : "false";
   $("title").textContent = typeof spec.title === "function" ? spec.title(view) : spec.title;
   $("text").textContent = spec.text(view) ?? "";
   $("current").textContent = view.current ?? "—";

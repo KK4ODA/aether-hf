@@ -2656,6 +2656,8 @@ impl<P: Ptt> Station<P> {
             if narrower.is_none() {
                 self.note_mismatch(&decoded);
             }
+            // a call or an answer in another link protocol, which cannot connect (ADR-0041)
+            self.note_version(&decoded);
             if let Some(caller) = narrower {
                 self.move_to(500, BandwidthWhy::Call(caller));
                 rung = decoded.frame.rung(&self.air()).unwrap_or(rung);
@@ -7207,6 +7209,62 @@ mod tests {
         assert!(
             reports.iter().all(|r| r.mode < floor && r.decoded),
             "{reports:?}"
+        );
+    }
+
+    #[test]
+    fn a_call_in_another_link_protocol_says_who_needs_to_update() {
+        // a station of an older version calls: the engine ignores it, as it always has, and the
+        // panel now says why and which side needs updating — not only a log line (ADR-0041)
+        use aether_link::frames::{ConnectBody, DataHeader, PROTOCOL_VERSION, encode_data};
+        let mut air = Air::new(1.0, 0.0005);
+        let body = ConnectBody {
+            src: "W4ODA".into(),
+            dst: "KK4XYZ".into(),
+            caps: aether_link::frames::with_bandwidth(0, 2300),
+            version: PROTOCOL_VERSION - 1,
+            snr_db: None,
+        }
+        .encode()
+        .expect("body");
+        let header = DataHeader {
+            kind: DataKind::ConnectReq,
+            seq: 0,
+            session: 9,
+        };
+        let mode = air.a.engine.robust_mode(true);
+        let capacity = air.a.engine.timing().capacity(mode);
+        let payload = encode_data(&header, &body, capacity).expect("fits");
+        air.a
+            .pending
+            .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+                container: Container::Data,
+                payload,
+                mode,
+                rv: 0,
+                floor: false,
+                follows: 0,
+            }]));
+        air.run(30.0, |_, b| b.mismatch().is_some());
+        assert!(!air.b.connected());
+        let mismatch = air.b.mismatch().expect("the call was noticed").clone();
+        assert_eq!(
+            (mismatch.callsign.as_str(), mismatch.what),
+            ("W4ODA", "version")
+        );
+        assert_eq!(
+            (mismatch.theirs_protocol, mismatch.ours_protocol),
+            (Some(PROTOCOL_VERSION - 1), Some(PROTOCOL_VERSION))
+        );
+        assert!(
+            mismatch.sentence.contains("W4ODA runs an older version")
+                && mismatch.sentence.contains("needs to update"),
+            "{}",
+            mismatch.sentence
+        );
+        assert_eq!(
+            air.b.bandwidth_status()["mismatch"]["theirs_protocol"],
+            PROTOCOL_VERSION - 1
         );
     }
 

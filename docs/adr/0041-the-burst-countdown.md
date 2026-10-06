@@ -80,6 +80,17 @@ the case the countdown is for; the air does (ADR-0040's 21 collisions in eight m
 * The sender's own wait for the acknowledgement is unchanged: the receiver now answers at the
   burst's end where before it sometimes answered early.
 * ADR-0040's rule stays: it covers a frame whose own count was never read.
+* **Saying it is an update, not a suggestion.** Stations of different link protocols ignore
+  each other's calls, so from this release (a) the release notes open with an "Update
+  required" paragraph whenever a tag's protocol differs from the previous release's
+  (`tools/protocol_notice.py`, in the Release workflow) — every installed version shows the
+  notes, so a beta.79 offered beta.80 reads it; (b) the updater manifest carries
+  `link_protocol` (`make_update_manifest.py`), and a shell from beta.80 on titles an offer of
+  another protocol "Update required" (`update.rs` `LINK_PROTOCOL`, held to the port's constant
+  by a test; `incompatibility`; the updates window and Help / About); (c) a call to this
+  station, or an answer to its call, in another protocol is shown on the panel's mismatch
+  banner with which side needs to update (`note_version`, `Mismatch.theirs_protocol`), where
+  before only the log said "ignored".
 * Tests: `test_a_data_frame_says_how_many_of_its_burst_follow_it` (model PHY, both airs),
   `a_data_frame_says_how_many_of_its_burst_follow_it` (port), the PHY vectors' three turned
   cases (bit-exact), `each_frame_of_a_burst_says_over_the_air_how_many_follow_it` (daemon, over

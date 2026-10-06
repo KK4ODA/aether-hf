@@ -81,6 +81,7 @@ body.updater {
   background: var(--status-link);
 }
 
+.phase[data-required="true"] .phase-mark,
 .phase[data-phase="restart-required"] .phase-mark,
 .phase[data-phase="incomplete"] .phase-mark {
   background: var(--status-warning);
