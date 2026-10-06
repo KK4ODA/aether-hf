@@ -21,8 +21,8 @@ pub struct HostPresence {
     pub attached: bool,
     /// It said `LISTEN ON` (or `LISTEN CQ`, or `CHAT ON`, which includes it): answer calls.
     pub listening: bool,
-    /// It said `CHAT ON`: the session is keyboard-to-keyboard, and the station that does not
-    /// hold the turn asks for it when its operator has typed a line (ADR-0027).
+    /// It said `CHAT ON`. The turn request it once switched on is in every session now
+    /// (ADR-0044); what it still decides is the KISS programs' priority (ADR-0019).
     pub chat: bool,
 }
 
@@ -54,17 +54,6 @@ impl<P: Ptt> Station<P> {
         if !presence.attached && was.attached {
             // what it asked for goes with it; withdrawing a request cannot fail
             let _ = self.host_bandwidth(None);
-        }
-        let chatting = |p: HostPresence| p.attached && p.chat;
-        if chatting(presence) != chatting(was) {
-            // from the next line on, in a session already up as in the next one
-            self.engine.set_chat(chatting(presence));
-            let detail = if chatting(presence) {
-                "on: the host program said CHAT ON; the station without the turn asks for it"
-            } else {
-                "off"
-            };
-            self.note("chat", detail);
         }
         if presence.answering() != was.answering() {
             let detail = if presence.answering() {

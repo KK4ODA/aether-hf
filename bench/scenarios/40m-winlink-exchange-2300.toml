@@ -1,0 +1,28 @@
+name = "40m-winlink-exchange-2300"
+description = """40m at 2300 Hz, a Winlink-shaped exchange: B2F's handshake and proposals, a
+message each way, the answers between them — eight changes of direction, each a reply the host
+sends the moment the last line arrived. How long the turnarounds take is most of the session."""
+tags = ["40m", "stress", "winlink"]
+bandwidth = 2300
+seconds = 900
+seed = 31
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "W4TGA"
+
+[path]
+profile = "good"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "message 60", "reply 80", "message 120", "reply 40", "message 1500", "reply 120", "message 40", "reply 2000", "message 40", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

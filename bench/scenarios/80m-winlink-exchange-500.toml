@@ -1,0 +1,28 @@
+name = "80m-winlink-exchange-500"
+description = """80m at 500 Hz, a Winlink-shaped exchange: B2F's handshake and proposals, a
+message each way, the answers between them — eight changes of direction, each a reply the host
+sends the moment the last line arrived. How long the turnarounds take is most of the session."""
+tags = ["80m", "stress", "winlink"]
+bandwidth = 500
+seconds = 900
+seed = 32
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "W4TGA"
+
+[path]
+profile = "moderate"
+snr_db = 6.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "message 60", "reply 80", "message 120", "reply 40", "message 1500", "reply 120", "message 40", "reply 2000", "message 40", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

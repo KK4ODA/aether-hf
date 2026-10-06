@@ -174,17 +174,19 @@ class LinkConfig:
     compression (deflate, RFC 1951); bits 1–2 state the bandwidth this station transmits in
     (:func:`~aether_model.link.frames.with_bandwidth`), and a request or answer stating
     another is ignored — see ``docs/spec/air-interface.md`` §7.3."""
-    chat: bool = False
-    """The session is keyboard-to-keyboard: the host program said ``CHAT ON`` (VARA's published
-    command). A line typed at the station that does not hold the turn otherwise waits for the
+    chat: bool = True
+    """The station without the turn asks for it (ADR-0027, in every session since ADR-0044). A
+    message queued at the station that does not hold the turn would otherwise wait for the
     sender's next poll — up to :attr:`keepalive_s` on an idle link — and then for the poll's
-    answer and a TURN before its own burst can go. In a chat that station asks for the turn as
-    soon as the channel is quiet instead: an acknowledgement nobody asked for, with WANT_TX,
-    which an idle sender in a chat answers with a TURN; and an idle sender does not poll over a
-    frame it hears arriving, since in a chat that frame may be such a request (ADR-0027). On
-    the link bench's fading classes, −12 to +12 dB, it cuts a line's median delay by 17–70 %
-    with about the keyed time the polls took and no more sessions lost. Off, the engine is as
-    it always was; :meth:`LinkEngine.set_chat` switches it during a session."""
+    answer and a TURN before its own burst could go: 13 s a change of direction at +6 to +12 dB,
+    and a Winlink session changes direction at every proposal, answer and message. Instead that
+    station asks as soon as the channel is quiet: an acknowledgement nobody asked for, with
+    WANT_TX, which an idle sender answers with a TURN; and an idle sender does not poll over a
+    frame it hears arriving, since that frame may be such a request. On the link bench with a
+    host that answers at once (Winlink's B2F shape), a reply's median wait falls from 13 s to
+    3.4–6 s at +6 to +12 dB, with no line lost and slightly less keyed time. Named for where it
+    began — a host's ``CHAT ON`` — and kept switchable (:meth:`LinkEngine.set_chat`) for the
+    benches that compare it with the engine before."""
 
 
 OUTSIDE_SESSIONS = frozenset(
@@ -585,7 +587,8 @@ class LinkEngine:
             self._maybe_request_turn()
 
     def set_chat(self, on: bool) -> None:
-        """Keyboard-to-keyboard or not, from now on (:attr:`LinkConfig.chat`): the host
+        """The turn request on or off, from now on (:attr:`LinkConfig.chat`) — on in every
+        session (ADR-0044); off only for a bench comparing the engine before. Was: the host
         program's ``CHAT ON`` / ``CHAT OFF``, which may come in the middle of a session."""
         self.cfg.chat = on
         if not on:
