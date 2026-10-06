@@ -154,9 +154,10 @@ pub struct LinkConfig {
     /// A burst that empties this station's queue ends with a TURN that offers the turn, and a
     /// receiving station with data of its own takes it in its acknowledgement — the
     /// acknowledgement and its first burst in one transmission (ADR-0047) — instead of an
-    /// acknowledgement asking for the turn, a TURN, and then the burst. Proposed, and off: the
-    /// link bench charges no keying of the transmitter, which is what it saves; the scenario
-    /// harness decides.
+    /// acknowledgement asking for the turn, a TURN, and then the burst: one keying of the
+    /// transmitter a change of direction instead of two. On the scenario harness Winlink-shaped
+    /// sessions 13.5 % shorter at 40 m (2300 Hz) and 9 % at 80 m (500 Hz). Switchable for the
+    /// benches that compare the engine before.
     pub offer_turn: bool,
 }
 
@@ -187,7 +188,7 @@ impl Default for LinkConfig {
             reencode_hopeless_db: 1.0,
             capabilities: 0,
             chat: true,
-            offer_turn: false,
+            offer_turn: true,
         }
     }
 }
@@ -3500,7 +3501,13 @@ mod tests {
         e.recommended = 4;
         let body = crate::frames::data_capacity(e.timing.data_capacity[4]);
         e.send(&vec![0u8; 6 * body]);
-        let first: Vec<usize> = transmitted(&mut e).iter().map(|f| f.mode).collect();
+        // six data frames (and the turn on offer after them: the burst empties the queue,
+        // ADR-0047)
+        let first: Vec<usize> = transmitted(&mut e)
+            .iter()
+            .filter(|f| f.container == Container::Data)
+            .map(|f| f.mode)
+            .collect();
         assert_eq!(first, vec![4; 6]);
         let stranded = e.config.max_combines;
         for record in &mut e.records {

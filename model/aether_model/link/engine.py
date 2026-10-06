@@ -188,13 +188,14 @@ class LinkConfig:
     3.4–6 s at +6 to +12 dB, with no line lost and slightly less keyed time. Named for where it
     began — a host's ``CHAT ON`` — and kept switchable (:meth:`LinkEngine.set_chat`) for the
     benches that compare it with the engine before."""
-    offer_turn: bool = False
+    offer_turn: bool = True
     """A burst that empties this station's queue ends with a TURN that offers the turn, and a
     receiving station with data of its own takes it in its acknowledgement — the acknowledgement
     and its first burst in one transmission (ADR-0047) — instead of an acknowledgement asking for
-    the turn, a TURN, and then the burst. Proposed, and off: on the link bench the offer costs the
-    air the TURN it replaces did, and what it saves — a keying of the transmitter — is what the
-    bench does not charge; the scenario harness is where it is to be decided."""
+    the turn, a TURN, and then the burst: one keying of the transmitter a change of direction
+    instead of two. On the scenario harness Winlink-shaped sessions 13.5 % shorter at 40 m
+    (2300 Hz) and 9 % at 80 m (500 Hz); the link bench, which charges no keying, sees none of
+    it. Switchable for the benches that compare the engine before."""
 
 
 OUTSIDE_SESSIONS = frozenset(

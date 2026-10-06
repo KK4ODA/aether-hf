@@ -178,7 +178,12 @@ fn a_break_hands_the_channel_over() {
     sim.run(600.0, 3.0);
     assert_eq!(sim.delivered(1), outbound.as_slice(), "A to B");
     assert_eq!(sim.delivered(0), reply.as_slice(), "B to A after handover");
-    assert_eq!(sim.engine(0).stats.turns, 1);
+    // one handover: a TURN, or the turn offered at the end of the burst that emptied A's queue
+    // and taken in B's acknowledgement (ADR-0047)
+    assert_eq!(
+        sim.engine(0).stats.turns + sim.engine(1).stats.turns_taken,
+        1
+    );
 }
 
 #[test]
@@ -1721,7 +1726,9 @@ impl aether_link::SoftFrame for Handed {
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
-    // version 6 counts a burst's following frames in pairs (ADR-0046), which a version 5
+    // version 7 offers the turn at the end of a burst (ADR-0047), which a version 6 station
+    // would take for a TURN to answer; version 6 counts a burst's following frames in pairs
+    // (ADR-0046), which a version 5
     // receiver reads as the frames themselves and answers a frame early; version 5 turns an
     // ordinary data frame's mode chips by the frames of its burst that
     // follow it (ADR-0041), which a version 4 receiver takes for noise; version 4 of the link
@@ -1730,8 +1737,8 @@ fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     // ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     // other frames by the same numbers, so a call from one is not a session to start — it is
     // ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 6);
-    for version in [1u8, 2, 3, 4, 5] {
+    assert_eq!(PROTOCOL_VERSION, 7);
+    for version in [1u8, 2, 3, 4, 5, 6] {
         let t = timing(false);
         let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
         let body = ConnectBody {
@@ -2406,9 +2413,14 @@ fn a_burst_is_not_repeated_over_its_acknowledgement_arriving() {
     // A burst's acknowledgement can start late too — the receiving station's quiet stretched
     // by a frame it heard arriving, a receiver running behind — and a burst sent again over it
     // loses the acknowledgement and costs the burst's air time. The retry waits for the
-    // frame's end, and the acknowledgement is taken when it arrives
+    // frame's end, and the acknowledgement is taken when it arrives. The burst alone: without
+    // the turn on offer after it (ADR-0047)
     let t = timing(false);
-    let (mut a, mut b) = pair(&t, &LinkConfig::default());
+    let config = LinkConfig {
+        offer_turn: false,
+        ..LinkConfig::default()
+    };
+    let (mut a, mut b) = pair(&t, &config);
 
     // the handshake over a perfect wire, with a line waiting to go
     a.connect("KK4XYZ").expect("idle");
@@ -2694,6 +2706,8 @@ fn handing_over(
 ) -> (LinkEngine, LinkEngine, Vec<aether_link::TxFrame>, f64) {
     let config = LinkConfig {
         chat: false,
+        // the TURN these tests are about, not the turn offered at the end of a burst (ADR-0047)
+        offer_turn: false,
         ..LinkConfig::default()
     };
     let (mut a, mut b) = pair(t, &config);
@@ -3059,8 +3073,13 @@ fn an_acknowledgement_goes_a_turnaround_after_a_burst_said_to_be_over() {
     // waits that, as before
     let t = timing(true);
     let message: Vec<u8> = (0..24).flat_map(|_| 0..=255u8).collect();
+    // the countdown alone: without the turn on offer, which closes a burst by itself (ADR-0047)
+    let config = LinkConfig {
+        offer_turn: false,
+        ..LinkConfig::default()
+    };
     for countdown in [true, false] {
-        let (a, b) = pair(&t, &LinkConfig::default());
+        let (a, b) = pair(&t, &config);
         let mut sim = TwoStationSim::new(a, b, 20.0, 3);
         if !countdown {
             sim = sim.without_countdown();

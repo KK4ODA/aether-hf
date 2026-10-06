@@ -84,6 +84,7 @@ POLICIES: dict[str, dict[str, Setting]] = {
     "request+keepalive20": {"chat": True, "keepalive_s": 20.0},
     "handover+request+keepalive20": {"chat": True, "handover": "always", "keepalive_s": 20.0},
     "request+offer": {"chat": True, "offer_turn": True},
+    "request-without-offer": {"chat": True, "offer_turn": False},
 }
 """The turn policies measured: today's (``base``); a shorter idle poll (``keepalive5``); the
 sender handing the turn over as soon as its line is acknowledged (``handover``, the
@@ -92,7 +93,8 @@ sender handing the turn over as soon as its line is acknowledged (``handover``, 
 a frame arriving (``hold``); and combinations — with a longer idle poll too, which asking makes
 possible: a poll no longer carries the other station's wish to send, only the news that the
 link is alive; and the turn offered at the end of a burst that empties the queue
-(``request+offer``, ADR-0047, proposed). Every key but ``handover`` and ``hold`` is a ``LinkConfig`` field."""
+(``request+offer``, ADR-0047, the default since protocol 7; ``request-without-offer`` is the
+engine before it). Every key but ``handover`` and ``hold`` is a ``LinkConfig`` field."""
 
 LINES = (10, 20)
 """Lines per conversation, inclusive."""
