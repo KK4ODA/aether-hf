@@ -1,0 +1,60 @@
+name = "80m-nvis-evening-500"
+description = """80 m at night at 500 Hz, the ND1J path of 2026-10-06: NVIS fading, a few dB of SNR,
+static crashes, an RTTY contest station and a wide VARA-class station either side; an FTDX10
+whose codec is silent for a quarter second after the key comes up at one end, an IC-7300 at the
+other. A Test session: probe, call, message, the mode ladder, a file, disconnect."""
+tags = ["80m", "nightly"]
+bandwidth = 500
+seconds = 1200
+seed = 6
+
+[stations.a]
+callsign = "ND1J"
+answer_gap_ms = 0
+[stations.a.radio]
+tx_delay_ms = 20
+rx_recovery_ms = 30
+
+[stations.b]
+callsign = "KK4ODA"
+answer_gap_ms = 500
+[stations.b.radio]
+tx_delay_ms = 30
+rx_recovery_ms = 280
+
+[path]
+profile = "nvis"
+snr_db = 6.0
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = 9.0
+[path.b_to_a]
+snr_db = 4.0
+
+[[qrm]]
+kind = "rtty"
+at = "both"
+audio_hz = 2150
+power_db = -4.0
+profile = "good"
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "a"
+audio_hz = 3100
+power_db = -8.0
+partner_db = -10.0
+profile = "nvis"
+
+[crashes]
+at = "both"
+rate_per_s = 0.6
+peak_db = 25.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+max_collisions = 5

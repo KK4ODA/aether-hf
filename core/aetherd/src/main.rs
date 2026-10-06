@@ -96,6 +96,8 @@ struct Args {
     /// default. The receiver's cost is per call rather than per sample, so the same
     /// recording at 100 ms tells whether the loop's passes are search-bound.
     block_ms: Option<f64>,
+    /// A channel server to take the audio from, in lockstep (ADR-0042): the scenario harness.
+    channel: Option<String>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -106,6 +108,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         replay: None,
         expect: None,
         block_ms: None,
+        channel: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -176,6 +179,9 @@ fn parse_args() -> Result<Option<Args>, String> {
                     argv.next().ok_or("--expect needs a session sidecar")?,
                 ));
             }
+            "--channel" => {
+                args.channel = Some(argv.next().ok_or("--channel needs HOST:PORT")?);
+            }
             "--block-ms" => {
                 let value = argv
                     .next()
@@ -208,6 +214,8 @@ aetherd — the Aether HF station daemon
                       and fail if fewer frames decode than did on the day
       --block-ms N    feed the replay in blocks of N ms (default 20, the daemon's own);
                       the receiver's cost per block is printed either way
+      --channel HOST:PORT  take the audio from a scenario harness's channel server, in
+                      lockstep, keying nothing (tools/session_matrix.py)
       --list-devices  print the audio devices this machine offers
       --list-ports    print the serial ports this machine offers
       --example-config  print a commented configuration to start from
@@ -257,9 +265,11 @@ fn run() -> Result<Exit, String> {
     // must not put a carrier on the air to find out that they had the wrong serial port.
     // Neither does a simulated channel: there is no radio on the other end of a socket.
     let sim = config.sim_config();
-    let ptt = keying(&config, args.dry_run || sim.is_some(), &mut daemon);
+    // a harness's channel server is a simulated channel too (ADR-0042)
+    let simulated = sim.is_some() || args.channel.is_some();
+    let ptt = keying(&config, args.dry_run || simulated, &mut daemon);
     let mut station = Station::new(
-        station_config(&config, &daemon.path),
+        station_config(&config, &daemon.path, simulated),
         ptt,
         seed_from_callsign(&config.callsign),
     );
@@ -281,7 +291,10 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    let mut audio = sound(&config, args.dry_run, sim.as_ref(), &mut daemon)?;
+    let mut audio = match &args.channel {
+        Some(address) => harness_channel(address, &config, &mut daemon)?,
+        None => sound(&config, args.dry_run, sim.as_ref(), &mut daemon)?,
+    };
     daemon
         .log
         .record(Level::Info, "audio", &daemon.audio, "Idle");
@@ -456,7 +469,11 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
 }
 
 /// What the station is told from the configuration file.
-fn station_config(config: &Config, config_path: &std::path::Path) -> StationConfig {
+fn station_config(
+    config: &Config,
+    config_path: &std::path::Path,
+    simulated: bool,
+) -> StationConfig {
     // recordings live beside the configuration unless told otherwise, and a relative
     // directory is relative to it — the one place the operator already knows
     let beside = config_path
@@ -498,7 +515,7 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
         }),
         cw_id_interval_s: config.radio.cw_id_interval_s,
         operator: config.operator.clone(),
-        regulatory: regulatory_settings(config),
+        regulatory: regulatory_settings(config, simulated),
         // a host program keys the radio when it hears PTT ON, and the audio waits for it
         key_lead_s: match config.ptt {
             PttConfig::Host { lead_ms } => f64::from(lead_ms) / 1000.0,
@@ -511,8 +528,8 @@ fn station_config(config: &Config, config_path: &std::path::Path) -> StationConf
 /// The regulatory settings the station runs with (ADR-0018): the file's — except that a
 /// daemon on a simulated channel, which keys no transmitter, is not judged unless its file
 /// chooses a profile, so a bench pair needs no dial and no license class.
-fn regulatory_settings(config: &Config) -> aetherd::regulatory::Settings {
-    let simulated = config.sim.listen.is_some() || config.sim.connect.is_some();
+fn regulatory_settings(config: &Config, simulated: bool) -> aetherd::regulatory::Settings {
+    let simulated = simulated || config.sim.listen.is_some() || config.sim.connect.is_some();
     if simulated && config.regulatory.profile.is_empty() {
         aetherd::regulatory::Settings::unchecked()
     } else {
@@ -1478,6 +1495,25 @@ fn keying(config: &Config, keys_nothing: bool, daemon: &mut DaemonState) -> Box<
     }
 }
 
+/// A scenario harness's channel server, in place of a sound card (ADR-0042).
+///
+/// # Errors
+/// If the server cannot be reached.
+fn harness_channel(
+    address: &str,
+    config: &Config,
+    daemon: &mut DaemonState,
+) -> Result<Box<dyn AudioIo>, String> {
+    let link = aetherd::channel_link::ChannelLink::open(
+        address,
+        &config.callsign,
+        config.audio.sample_rate,
+    )
+    .map_err(|e| format!("cannot reach the channel server at {address}: {e}"))?;
+    daemon.audio.clone_from(&link.description);
+    Ok(Box::new(link))
+}
+
 /// The audio to run on — or silence that says why there is none.
 ///
 /// Same reasoning as [`keying`]: the Setup screen naming the sound card is served by this
@@ -1732,6 +1768,7 @@ mod tests {
         for flag in [
             "--config",
             "--call",
+            "--channel",
             "--dry-run",
             "--list-devices",
             "--list-ports",

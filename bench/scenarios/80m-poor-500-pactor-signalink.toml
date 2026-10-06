@@ -1,0 +1,47 @@
+name = "80m-poor-500-pactor-signalink"
+description = """80 m, a Poor path at 500 Hz, a PACTOR station on frequency now and then, and a
+called station on a SignaLink whose VOX holds the key 400 ms after the audio stops (KE4QCM's,
+2026-10-05) — the caller with a 500 ms answer gap. A call, 2 kB, a reply, a disconnect."""
+tags = ["80m", "nightly"]
+bandwidth = 500
+seconds = 900
+seed = 8
+
+[stations.a]
+callsign = "KK4ODA"
+answer_gap_ms = 500
+[stations.a.radio]
+rx_recovery_ms = 280
+
+[stations.b]
+callsign = "KE4QCM"
+[stations.b.radio]
+tx_delay_ms = 40
+vox_hold_ms = 400
+
+[path]
+profile = "poor"
+snr_db = 8.0
+cfo_hz = 5.0
+
+[[qrm]]
+kind = "pactor"
+at = "both"
+audio_hz = 1650
+power_db = -12.0
+partner_db = -8.0
+profile = "poor"
+
+[crashes]
+at = "both"
+rate_per_s = 0.4
+peak_db = 22.0
+
+[script]
+steps = ["connect", "message 2000", "reply 300", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+max_collisions = 5
