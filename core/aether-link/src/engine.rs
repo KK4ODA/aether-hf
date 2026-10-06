@@ -139,17 +139,17 @@ pub struct LinkConfig {
     /// Capability bits offered in the connect handshake. What they mean is the caller's
     /// business; the link layer carries them and reports what the peer offered.
     pub capabilities: u8,
-    /// The session is keyboard-to-keyboard: the host program said `CHAT ON` (VARA's published
-    /// command). A line typed at the station that does not hold the turn otherwise waits for
-    /// the sender's next poll — up to `keepalive_s` on an idle link — and then for the poll's
-    /// answer and a TURN before its own burst can go. In a chat that station asks for the turn
-    /// as soon as the channel is quiet instead: an acknowledgement nobody asked for, with
-    /// `WANT_TX`, which an idle sender in a chat answers with a TURN; and an idle sender does not
-    /// poll over a frame it hears arriving, since in a chat that frame may be such a request
-    /// (ADR-0027). On the link bench's fading classes, −12 to +12 dB, it cuts a line's median
-    /// delay by 17–70 % with about the keyed time the polls took and no more sessions lost.
-    /// Off, the engine is as it always was; [`LinkEngine::set_chat`] switches it during a
-    /// session.
+    /// The station without the turn asks for it (ADR-0027, in every session since ADR-0044). A
+    /// message queued at the station that does not hold the turn would otherwise wait for the
+    /// sender's next poll — up to `keepalive_s` on an idle link — and then for the poll's answer
+    /// and a TURN: 13 s a change of direction at +6 to +12 dB, and a Winlink session changes
+    /// direction at every proposal, answer and message. Instead that station asks as soon as the
+    /// channel is quiet: an acknowledgement nobody asked for, with `WANT_TX`, which an idle
+    /// sender answers with a TURN; and an idle sender does not poll over a frame it hears
+    /// arriving, since that frame may be such a request. On the link bench with a host that
+    /// answers at once (B2F's shape) a reply's median wait falls from 13 s to 3.4–6 s, no line
+    /// lost, slightly less keyed time. Named for where it began — a host's `CHAT ON` — and kept
+    /// switchable ([`LinkEngine::set_chat`]) for benches comparing the engine before.
     pub chat: bool,
 }
 
@@ -179,7 +179,7 @@ impl Default for LinkConfig {
             reencode_early_after: 2,
             reencode_hopeless_db: 1.0,
             capabilities: 0,
-            chat: false,
+            chat: true,
         }
     }
 }
@@ -3994,8 +3994,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_is_off_unless_asked_for() {
-        assert!(!LinkConfig::default().chat);
+    fn the_turn_request_is_on_in_every_session() {
+        // ADR-0044: not only under a host's CHAT ON — a Winlink session changes direction at
+        // every proposal, answer and message
+        assert!(LinkConfig::default().chat);
     }
 
     #[test]

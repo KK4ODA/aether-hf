@@ -2344,13 +2344,20 @@ def _holding_the_turn(timing: PhyTiming, work: bool) -> LinkEngine:
     something to send, a poll otherwise — and heard nothing back yet."""
     b = LinkEngine("KK4XYZ", timing, LinkConfig())
     b.state, b.role, b.session, b.now = State.CONNECTED, Role.IRS, 7, 100.0
+    t = 100.0
     if work:
         b.send(b"a line for the other station")
-    b.on_frame(_control_frame(ControlKind.TURN, 7, 100.0), 100.0)
+        # it asks for the turn (ADR-0044), and the TURN that answers comes after the request
+        request = [x for x in b.drain() if isinstance(x, Transmit)]
+        if request:
+            t += request[0].duration_s
+            b.on_tx_done(t)
+            t += 1.0
+    b.on_frame(_control_frame(ControlKind.TURN, 7, t), t)
     assert b.role is Role.ISS
     answer = [x for x in b.drain() if isinstance(x, Transmit)]
     assert len(answer) == 1
-    b.on_tx_done(100.0 + answer[0].duration_s)
+    b.on_tx_done(t + answer[0].duration_s)
     return b
 
 
@@ -2976,8 +2983,10 @@ def _arrival(sim: TwoStationSim, who: int, length: int, since: float) -> float |
     return _arrivals(sim, {who: length}, since).get(who)
 
 
-def test_chat_is_off_unless_asked_for() -> None:
-    assert LinkConfig().chat is False
+def test_the_turn_request_is_on_in_every_session() -> None:
+    """ADR-0044: not only under a host's CHAT ON — a Winlink session changes direction at every
+    proposal, answer and message."""
+    assert LinkConfig().chat is True
 
 
 def test_in_a_chat_the_receiving_station_asks_for_the_turn(live: PhyTiming) -> None:

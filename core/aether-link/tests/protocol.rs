@@ -2682,12 +2682,18 @@ fn at_next_deadline(engine: &mut LinkEngine) -> (f64, Vec<aether_link::TxFrame>)
 /// Two stations in a session over a perfect wire, by hand, the called one with something to
 /// send (`work`) or asking for the turn with nothing (a break): the caller's poll has fetched
 /// the wish, and the caller has just keyed its TURN, which nobody has heard yet. Returns them,
-/// the TURN and when it was keyed.
+/// the TURN and when it was keyed. The wish goes by the poll, as it does when the called
+/// station's own request for the turn (ADR-0044) was not heard: these tests are about the TURN
+/// that follows, so the request is left out of them.
 fn handing_over(
     t: &PhyTiming,
     work: bool,
 ) -> (LinkEngine, LinkEngine, Vec<aether_link::TxFrame>, f64) {
-    let (mut a, mut b) = pair(t, &LinkConfig::default());
+    let config = LinkConfig {
+        chat: false,
+        ..LinkConfig::default()
+    };
+    let (mut a, mut b) = pair(t, &config);
     a.connect("KK4XYZ").expect("idle");
     let request = transmitted(&mut a);
     let now = relay(&mut a, &mut b, &request, 0.0);

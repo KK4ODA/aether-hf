@@ -7486,7 +7486,7 @@ mod tests {
             listening: true,
             chat: true,
         });
-        // CHAT ON reaches the link: the station without the turn asks for it (ADR-0027)
+        // the station without the turn asks for it in every session (ADR-0044)
         assert!(station.engine().config().chat);
         assert_eq!(station.host_bandwidth(Some(500)), Ok(500));
         // and a move to the other air keeps it
@@ -7516,9 +7516,10 @@ mod tests {
         assert!(refused.contains("a call is going out"), "{refused}");
         assert_eq!(station.bandwidth_hz(), 500);
         station.abort();
-        // the host goes, and takes its bandwidth and its chat with it once the station is quiet
+        // the host goes, and takes its bandwidth with it once the station is quiet; the turn
+        // request stays, as it is in every session (ADR-0044)
         station.set_host(HostPresence::default());
-        assert!(!station.engine().config().chat);
+        assert!(station.engine().config().chat);
         let rate = WIDE_2300.audio_rate as f64;
         let mut out = vec![0.0f32; 4096];
         for seed in 0..(30.0 * rate / 4096.0) as u32 {

@@ -73,7 +73,7 @@ HERE = Path(__file__).resolve().parents[1]
 Setting = float | int | bool | str | None
 
 POLICIES: dict[str, dict[str, Setting]] = {
-    "base": {},
+    "base": {"chat": False},  # the engine before ADR-0044: no turn request
     "keepalive5": {"keepalive_s": 5.0},
     "handover": {"handover": "always"},
     "handover+keepalive5": {"handover": "always", "keepalive_s": 5.0},

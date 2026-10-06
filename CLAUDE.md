@@ -1089,7 +1089,11 @@ signal's power 1/12 → 10/12 frames, nothing changes without QRM; and retransmi
 faster, the RTTY contest's Tests complete at rungs 12–13 instead of 5–6. Not fixed, in the ADR:
 the B2F turnaround (13 s, 3.5 s with ADR-0027's request — the author's call), 7 ms NVIS beyond the
 5 ms prefix (P9-3), a strong CW off the carrier grid, 500 Hz on fading (P9-5), the climb.
-`/tmp`-style A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
+**ADR-0044 (the author's decision, same day):** the turn request (ADR-0027) is on in every
+session, not only under a host's `CHAT ON` — Winlink-shaped scenarios (`*-winlink-exchange-*`)
+24–25 % shorter; `set_chat` stays for benches (`bench_chat.py` `base` = off). Harness runs of one
+build are not identical (daemon threads): judge a single difference against a second run.
+A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 
 **Never run an installer or the packaged app from a Claude session on the author's
