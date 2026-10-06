@@ -476,6 +476,9 @@ pub struct LinkEngine {
     rate: RateController,
     deadlines: Vec<(Timer, f64)>,
     tx_busy_until: f64,
+    /// When this station's last transmission began, as far as the engine knows: no later than
+    /// it went on the air.
+    tx_started: f64,
     // sending side
     tx_queue: Vec<u8>,
     records: Vec<TxRecord>,
@@ -624,6 +627,7 @@ impl LinkEngine {
             rate,
             deadlines: Vec::new(),
             tx_busy_until: 0.0,
+            tx_started: f64::NEG_INFINITY,
             tx_queue: Vec::new(),
             records: Vec::new(),
             tx_base: 0,
@@ -1283,7 +1287,8 @@ impl LinkEngine {
 
     fn transmit(&mut self, frames: Vec<TxFrame>) {
         let duration_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
-        self.tx_busy_until = self.now + self.timing.tx_latency_s + duration_s;
+        self.tx_started = self.now + self.timing.tx_latency_s;
+        self.tx_busy_until = self.tx_started + duration_s;
         self.actions.push(Action::Transmit { frames, duration_s });
         // The link timeout spans four exchanges at the family the link runs in, and was
         // reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered
@@ -2380,10 +2385,14 @@ impl LinkEngine {
             closes_at: None,
         };
         if self.decode_record(frame, &mut record) {
-            record.announced_end = Self::announced_end(frame, &record);
-            record.closes_at = ((record.payload.is_some() || frame.trusted())
-                && frame.follows() == Some(0))
-            .then(|| frame.t_end());
+            if self.answered_already(frame, &record) {
+                // what it carried for combining is kept (`decode_record`); it starts no burst
+                self.burst_t0 = None;
+                return;
+            }
+            record.announced_end = self.announced_end(frame, &record);
+            record.closes_at = (self.believed(frame, &record) && frame.follows() == Some(0))
+                .then(|| frame.t_end());
             self.burst.push(record);
             // a burst whose last frame said none follow it is over when that frame ends: the
             // answer waits only the turnaround, not the silence that would otherwise show it
@@ -2401,11 +2410,34 @@ impl LinkEngine {
         }
     }
 
+    /// Whether a frame that did not decode belongs to a burst this station has answered: it
+    /// began before this station's last transmission did, and nothing of a burst since has
+    /// arrived. A burst that answers that transmission begins after it; a frame before it is the
+    /// last of the burst already answered, its preamble too faint to hold the answer back,
+    /// finished by the receiver after the station had keyed. Taken for a new burst, it was
+    /// acknowledged again, over the sender's reply to the first acknowledgement (the scenario
+    /// harness, 80 m at 500 Hz; ADR-0047).
+    fn answered_already<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> bool {
+        record.payload.is_none()
+            && self.burst.is_empty()
+            && frame.t_start() < self.tx_started - 1e-9
+    }
+
+    /// Whether a frame's countdown can be believed: it decoded, or its acquisition is trusted
+    /// and the rung its chips name is one this station has asked for or below. The countdown
+    /// rides in the same chips; a failed frame read at a rung far above any this station asked
+    /// for has chips that are noise, and one read "none follow" in a burst at rung 7 set the
+    /// answer over the rest of the burst (the scenario harness; ADR-0047).
+    fn believed<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> bool {
+        record.payload.is_some()
+            || (frame.trusted() && self.asked.is_none_or(|asked| frame.mode() <= asked))
+    }
+
     /// Where a frame of a burst says the burst ends: its own end, and the frames it says
-    /// follow it, each as long as itself (ADR-0041). Believed from a frame that decoded or whose
-    /// acquisition was trusted; a phantom's chips are noise.
-    fn announced_end<F: SoftFrame>(frame: &F, record: &RxRecord) -> Option<f64> {
-        let believed = record.payload.is_some() || frame.trusted();
+    /// follow it, each as long as itself (ADR-0041). Believed as [`believed`](Self::believed)
+    /// says; a phantom's chips are noise.
+    fn announced_end<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> Option<f64> {
+        let believed = self.believed(frame, record);
         let follows = frame.follows().filter(|_| believed)?;
         let most = crate::frames::most_following(follows);
         Some(frame.t_end() + f64::from(most) * (frame.t_end() - frame.t_start()).max(0.0))
@@ -4356,6 +4388,39 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_frame_from_before_the_answer_starts_no_burst() {
+        // The scenario harness, 80 m at 500 Hz (ADR-0047): the last frame of a burst arrived
+        // faded, its preamble too faint to hold the acknowledgement back, and the receiver
+        // finished it just after the station had keyed. Taken for the first frame of a new
+        // burst, it was acknowledged again, over the sender's reply to the first
+        // acknowledgement. A frame that did not decode and began before this station's last
+        // transmission belongs to the burst already answered; one after it is a new burst's.
+        for before in [true, false] {
+            let mut e = chatting(Role::Irs);
+            e.tx_started = 110.0;
+            e.now = 110.1;
+            let start = if before { 109.0 } else { 110.05 };
+            let frame = Heard {
+                container: Container::Data,
+                mode: 8,
+                floor: false,
+                snr_db: 3.0,
+                t_end: start + 1.05,
+                length_s: 1.05,
+                payload: None,
+            };
+            e.on_frame(&frame, 111.2);
+            if before {
+                assert!(e.burst.is_empty() && e.burst_t0.is_none());
+                assert!(e.deadline_of(Timer::Ack).is_none());
+            } else {
+                assert_eq!(e.burst.len(), 1);
+                assert!(e.deadline_of(Timer::Ack).is_some());
+            }
+        }
     }
 
     #[test]

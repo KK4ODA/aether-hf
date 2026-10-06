@@ -3248,7 +3248,7 @@ def _collisions(sim: TwoStationSim) -> int:
     return sum(any(x < b1 - 1e-9 and b0 + 1e-9 < y for x, y in a) for b0, b1 in b)
 
 
-def _fading_session(countdown: bool, garbled: bool = False) -> TwoStationSim:
+def _fading_session(countdown: bool, garbled: bool = False, misread: bool = False) -> TwoStationSim:
     from aether_model.frame.modes import NARROW
     from aether_model.link.harness import phy_timing
 
@@ -3275,6 +3275,12 @@ def _fading_session(countdown: bool, garbled: bool = False) -> TwoStationSim:
             # and the count their chips seem to carry is noise
             sf.trusted = False
             sf._draw = 2.0
+            sf.follows = 0
+        elif misread and frame.container is Container.DATA and int(t0 * 1000) % 10 >= 7:
+            # three in ten more arrive undecodable with an acquisition the receiver trusts and
+            # chips read wrong: the fastest rung of the ladder, and "none follow"
+            sf._draw = 2.0
+            sf.mode = len(timing.data_capacity) - 1
             sf.follows = 0
         return sf
 
@@ -3494,3 +3500,45 @@ def test_a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it(
         if x[0] < y[1] - 1e-9 and y[0] < x[1] - 1e-9
     ]
     assert overlaps == []
+
+
+def test_a_misread_countdown_does_not_cut_the_burst_short() -> None:
+    """The scenario harness, 80 m at 500 Hz (ADR-0047): a frame that did not decode read its
+    chips as rung 13 in a burst at rung 7, and its countdown as "none follow"; its acquisition
+    was trusted, and the acknowledgement went at the turnaround over the rest of the burst. A
+    countdown is believed from a frame that did not decode only when the rung it names is one
+    the receiver has asked for or below."""
+    sim = _fading_session(countdown=True, misread=True)
+    assert bytes(sim.delivered(1)) == bytes(range(256)) * 12
+    # 25 with the misread counts believed
+    assert _collisions(sim) == 0, _collisions(sim)
+
+
+@pytest.mark.parametrize("before_our_answer", [True, False])
+def test_a_frame_from_before_the_answer_starts_no_burst(
+    timing: PhyTiming, before_our_answer: bool
+) -> None:
+    """The scenario harness, 80 m at 500 Hz (ADR-0047): the last frame of a burst arrived
+    faded, its preamble too faint to hold the acknowledgement back, and the receiver finished
+    it just after the station had keyed. Taken for the first frame of a new burst, it was
+    acknowledged again, over the sender's reply to the first acknowledgement. A frame that
+    did not decode and began before this station's last transmission belongs to the burst
+    already answered; a frame after it is a new burst's."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, _ = _connected_irs(timing)
+    b._burst = []
+    b._burst_t0 = None
+    b._disarm("ack")
+    keyed = b.now + 10.0
+    b._tx_started = keyed
+    b.now = keyed + 0.1
+    start = keyed - 1.0 if before_our_answer else keyed + 0.05
+    frame = SimFrame(Container.DATA, 8, 0, 3.0, start, start + 1.05, b"", 2.0)
+    b.on_frame(frame, keyed + 1.2)
+    if before_our_answer:
+        assert b._burst == [] and b._burst_t0 is None
+        assert "ack" not in b._deadlines
+    else:
+        assert len(b._burst) == 1
+        assert "ack" in b._deadlines
