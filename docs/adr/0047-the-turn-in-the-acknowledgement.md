@@ -1,7 +1,7 @@
 # ADR-0047: The turn offered at the end of a burst, taken in the acknowledgement
 
-**Status:** proposed, 2026-10-06 — built in the model and ported, off (`LinkConfig.offer_turn`
-false in both); measured on the scenario harness (§5), the author's decision pending. Flags
+**Status:** accepted, 2026-10-06, the author's decision after §5 — link protocol 7, released
+with protocol 6 (ADR-0046) in beta.85; `LinkConfig.offer_turn` on by default in both suites. Flags
 `OFFER` (TURN) and `TAKEN` (ACK); `_send_burst(prefix=…)` / `send_burst_after`, `_on_ack`,
 `_on_control`, `_send_ack`, `_turn_taken_unread` / `turn_taken_unread`; stats `turn_offers`,
 `turns_taken`; `bench_chat.py`'s `request+offer` policy.
@@ -24,8 +24,7 @@ turnaround. The author's bar is VARA HF, where neither station is seen waiting a
    and, while the offer is unanswered, a data frame that does not decode but that the physical
    layer trusts counts too (§5): only data can follow an offer that way.
 
-It is a wire change (the two flags; a version-6 station ignores neither safely), so it would be
-protocol 7.
+It is a wire change (the two flags; a version-6 station ignores neither safely): protocol 7.
 
 ## 3. Measured, and why it is not decided
 
@@ -49,8 +48,8 @@ saving is there; that needs the port.
 
 ## 4. The port
 
-The Rust engine has the same rules behind `LinkConfig::offer_turn` (false); a daemon built with
-it true is what the harness ran. The offer frame is counted in the burst's countdown, the
+The Rust engine has the same rules behind `LinkConfig::offer_turn`; the harness's A/B ran the
+daemon built with it each way. The offer frame is counted in the burst's countdown, the
 sender's wait for the acknowledgement covers two frames more when it offered, and
 `the_turn_on_offer_is_taken_in_the_acknowledgement` holds both settings in both suites.
 
@@ -87,17 +86,39 @@ Two faults the first rounds found, fixed before the table:
    (`a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it`, both suites; without the
    rule the Rust test counts four collisions).
 
-Open, not fixed:
+The two collisions left in the table, fixed after it (both on the receiving side, and both in
+the engine before the offer too):
 
-* Seed 40's collision is not the offer's: a failed frame whose chips read mode 13 in a burst at
-  rung 7 also read "none follow", and the receiver answered at the turnaround (ADR-0045) over
-  the rest of the burst. A countdown from a frame that did not decode is believed when its
-  acquisition is trusted; a mode faster than any the receiver has asked for says its chips are
-  not.
-* Seed 31's collision repeats with the offer on (three rounds) and not off; the two stations'
-  recordings do not yet reconcile with the channel's keying record around it.
+3. **A misread countdown** (seed 40): a failed frame whose chips read rung 13 in a burst at rung
+   7 also read "none follow"; its acquisition was trusted, and the receiver answered at the
+   turnaround (ADR-0045) over the rest of the burst. A countdown from a frame that did not decode
+   is now believed only when the rung its chips name is one the receiver has asked for or below
+   (`_believed` / `believed`): the count rides in the same chips. A fading session with three
+   frames in ten misread so: 25 collisions (27 in the port) → 1 (0), against 15 with no
+   countdown at all (`a_misread_countdown_does_not_cut_the_burst_short`; the one left is a
+   misread first frame whose follower faded out unheard).
+4. **A frame from before the answer** (seed 31): the last frame of a burst arrived faded, its
+   preamble too faint to hold the acknowledgement back, and the receiver finished it 60 ms after
+   the station had keyed — ending before the keying, so (1) did not apply. Taken for the first
+   frame of a new burst, it was acknowledged again, over the sender's reply to the first
+   acknowledgement. A frame that did not decode and began before this station's last
+   transmission now starts no burst (`_answered_already` / `answered_already`, `tx_started`;
+   `a_frame_from_before_the_answer_starts_no_burst`). The recordings had seemed not to agree with
+   the channel's keying record: a sidecar's times count from the session's start, the channel's
+   from its own, and the offset is the first keying of each.
 
-## 6. Decision pending
+With all four, the release build on the same sixteen sessions:
 
-The author's: keep it — protocol 7, on by default, released with protocol 6 so that testers
-update once — or drop it. Until then the code stays behind `offer_turn`, off.
+| | offer off (fixes 1, 2) | release (offer on, fixes 1–4) |
+|---|---|---|
+| 40 m, 5 sessions, air | 437 s | 378 s (−13.5 %) |
+| 80 m, 11 sessions, air | 3 571 s | 3 216 s (−10 %) |
+| collisions (40 m / 80 m) | 0 / 1 | 0 / 0 |
+| sessions failed | 0 | 0 |
+
+## 6. Decision
+
+Kept (the author, 2026-10-06): protocol 7, the offer on by default, released with protocol 6 so
+that testers update once. `offer_turn` stays switchable for the benches (`bench_chat.py`'s
+`request-without-offer` is the engine before it). Tests that are about a plain `TURN`, or about
+the countdown's timing alone, run with it off and say so.

@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 5,
+Status: **draft**, tracking the reference model on `master` (link protocol version 7,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -362,7 +362,12 @@ the one frame more it may say. A receiver picks the (mode, RV) sequence by the
 quarter turn of that correlation's phase against the comb pilots' channel estimate; the pilot
 symbols are then known with the turned chips. A frame with `f = 0` is the frame of version 4.
 The countdown is outside the codeword, like the RV, so retransmissions still soft-combine
-whatever their position in a later burst. Tone-floor frames carry no countdown.
+whatever their position in a later burst. Tone-floor frames carry no countdown. A receiver
+believes a frame's count when the frame decoded, or when its acquisition was confident and the
+rung its chips name is one the receiver has asked for or below — the count rides in the same
+chips, and a rung far above any asked for says they were read wrong (ADR-0047). A frame that did
+not decode and began before the receiver's own last transmission belongs to the burst that
+transmission answered, and starts no new one.
 
 ---
 
@@ -539,12 +544,14 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 5 |
+| 15 | link protocol version: 7 |
 | 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
 
 A station ignores a request or an acceptance whose version is not its own, and says so.
 Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the control frame's
-recommended mode to five bits (ADR-0014), and 4 added the 500 Hz middle kinds (ADR-0015). The
+recommended mode to five bits (ADR-0014), 4 added the 500 Hz middle kinds (ADR-0015), 5 the
+burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), and 7 the turn offered at the end
+of a burst (ADR-0047). The
 same number names different frames in different versions, so a session between two versions
 cannot run.
 
@@ -642,7 +649,7 @@ CONTROL container:
 | 6 | recommended mode (5 bits) \| counter (3 bits) |
 
 Kinds: `ACK` (0), `POLL` (1), `TURN` (2), `DISC` (3), `DISC_ACK` (4). Flags, in an ACK:
-`WANT_TX` (0x1) and `BREAK` (0x2). The base, bitmap, recommended mode and counter are an
+`WANT_TX` (0x1), `BREAK` (0x2) and `TAKEN` (0x8); in a `TURN`, `OFFER` (0x4). The base, bitmap, recommended mode and counter are an
 ACK's; the other kinds send them as zero. The recommended mode is a rung of the air's ladder;
 the counter numbers a station's acknowledgements modulo 8, for logs. Protocol version 2 split
 the byte four and four; the fast kinds (ADR-0014) took the 2 300 Hz ladder to twenty rungs.
@@ -715,7 +722,24 @@ ordinary `POLL`, since a station answers in the family it last read the other in
 goes again a turnaround after that answer, on the floor; the `POLL` does too, unless the answer
 prompts a `TURN` or a burst, and then that `TURN` goes on the floor. The station's `POLL`s and
 `TURN`s stay on the floor until a `POLL` is answered in its own family or the turn changes hands
-(ADR-0034). When two
+(ADR-0034).
+
+**The turn on offer** (version 7, ADR-0047). A sending station whose ordinary burst empties its
+queue, with nothing else unacknowledged and no disconnect asked, ends the burst with a `TURN`
+carrying `OFFER`, counted among the frames the burst's countdown says follow. A receiving
+station with data of its own, and none of the other station's missing, answers with an `ACK`
+carrying `TAKEN` and `WANT_TX` and its own first burst after it in the same transmission; it is
+now the sending station. One without data answers with the `ACK` alone, and the sender keeps
+the turn. A sender that reads `TAKEN` takes the receiving role and acknowledges the burst that
+followed. One that misses that `ACK` and hears a data frame of the session — decoded, or one it
+did not decode but acquired with confidence, in the ordinary family, while its offer is
+unanswered — takes the receiving role all the same: only data can follow an offer that way. The
+sender's wait for the acknowledgement covers two of its frames more than its burst, for a
+receiver that lost the offer and took the last data frame's count at its word. An offer
+replaces the request for the turn and the `TURN` that answered it: one keying of each
+transmitter a change of direction instead of two.
+
+When two
 stations call each other at once, the one whose callsign sorts higher keeps calling and ignores
 the other's request, and the other answers it.
 

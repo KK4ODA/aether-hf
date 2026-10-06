@@ -421,8 +421,10 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// (ADR-0041): an ordinary data frame's mode chips are turned by the number of frames of its
 /// burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
 /// noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
-/// would answer a frame early.
-pub const PROTOCOL_VERSION: u8 = 6;
+/// would answer a frame early. 7 since the turn offered at the end of a burst (ADR-0047): a
+/// TURN's `OFFER` flag and an acknowledgement's `TAKEN`, which a 6 would take for a TURN to
+/// answer and an acknowledgement alone.
+pub const PROTOCOL_VERSION: u8 = 7;
 
 /// The largest countdown a data frame carries (ADR-0041): the physical layer turns the frame's
 /// mode chips a quarter turn a step, so four values.

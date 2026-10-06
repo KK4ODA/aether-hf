@@ -235,7 +235,7 @@ def most_following(countdown: int) -> int:
     return 2 * countdown
 
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 """The link protocol a station speaks, in the connect body's version byte. 2 since the tone
 floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 above the OFDM mode of version 1 — so a session between the two would run on numbers that
@@ -248,7 +248,9 @@ as it was, but one number says what both ladders are). 5 since the burst countdo
 (ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its
 burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
 noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
-would answer a frame early."""
+would answer a frame early. 7 since the turn offered at the end of a burst (ADR-0047): a TURN's
+OFFER flag and an acknowledgement's TAKEN, which a station of version 6 would take for a TURN to
+answer and an acknowledgement alone."""
 
 
 @dataclass(frozen=True)

@@ -54,7 +54,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.84` on 2026-09-14…10-06, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.85` on 2026-09-14…10-06, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
 other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
@@ -1097,8 +1097,23 @@ build are not identical (daemon threads): judge a single difference against a se
 silences between transmissions are a median 0.11 s. A burst whose latest frame said 0 follow is
 acknowledged after the turnaround only (`_burst_closed`), the request's quiet uses the family in
 use, and the runner polls every 20 ms (`POLL_S`; at 0.25 s it had been costing the Winlink
-exchange a third of its time). Next: fold the TURN into the acknowledgement (ADR-0047, a
-protocol change — plan first).
+exchange a third of its time).
+**ADR-0046 (protocol 6):** the countdown counts in pairs and never short (`countdown_of` =
+⌈n/2⌉ capped 3, `most_following` = 2c; the burst ends by the tightest believed bound); the
+sender waits a frame more for bursts of two or more. **ADR-0047 (protocol 7, beta.85, the
+author's decision):** a burst that empties the sender's queue ends with a TURN carrying `OFFER`;
+a receiver with data answers with an ACK carrying `TAKEN|WANT_TX` and its own burst in the same
+transmission (`send_burst_after`/`_send_burst(prefix)`, `offer_turn` default on, stats
+`turn_offers`/`turns_taken`); an offering sender that misses the ACK reads the turn as taken from
+a trusted data frame (`turn_taken_unread`). The link bench saw nothing (it charges no keying);
+the harness: Winlink-shaped sessions −13.5 % at 40 m, −9 % at 80 m/500 Hz. The A/B found and
+fixed: a failed frame lying under the station's own keying is kept from the engine
+(`frames_under_own_tx`, `aetherd`); a countdown from a frame that did not decode is believed
+only at a rung the receiver has asked for or below (`believed`); a frame that did not decode
+and began before the station's last transmission starts no burst (`answered_already`,
+`tx_started`). To A/B an engine default on the harness: build the daemon twice with the
+default flipped in the source, copy each binary out, and run both through the same scenario
+seeds (a scenario file with `seed = N` and a `-sN` name per seed).
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 

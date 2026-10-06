@@ -163,7 +163,7 @@ fn newer(candidate: &str, current: &str) -> bool {
 /// The link protocol this build's modem speaks: `aether_link::frames::PROTOCOL_VERSION`, which
 /// a test holds this to. A release's manifest states its own (`link_protocol`), and an offer
 /// of another is an update the operator must take to keep working other stations.
-pub const LINK_PROTOCOL: u8 = 6;
+pub const LINK_PROTOCOL: u8 = 7;
 
 /// An offered version that speaks another link protocol than this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
