@@ -482,6 +482,18 @@ impl LevelMeter {
 /// threshold is ADR business, because it would cost weak-signal frames that do decode.
 pub const DETECT_CONFIDENCE_TRUSTED: f64 = 1.3;
 
+/// How long after the end of the last frame heard an arrival may begin and still be taken
+/// for the next frame of the same burst, whatever its confidence (ADR-0040). The frames of a
+/// burst are contiguous, so the next one starts where the last ended; an acquisition places
+/// it up to half a second late when it reads the start weakly, and in ND1J's session of
+/// 2026-10-06 the faint arrivals over which this station keyed its acknowledgement began
+/// 0.0–0.55 s after the last frame's end.
+pub const FOLLOW_ON_WINDOW_S: f64 = 0.6;
+
+/// How far before that end such an arrival may begin: the last frame's own end is a
+/// measurement too.
+pub const FOLLOW_ON_EARLY_S: f64 = 0.15;
+
 /// The carrier offset worth reporting. It is real when the frame decoded, or when
 /// acquisition itself was confident enough to trust; `None` for a probable noise trigger,
 /// whose offset is the correlator locking onto noise, not a real frequency error. Nothing
@@ -708,6 +720,9 @@ pub struct StationStats {
     pub deferred_for_busy: usize,
     /// Transmissions held for the answer gap after another station's frame (ADR-0036).
     pub deferred_for_gap: usize,
+    /// Arrivals heard below the trusted confidence that were still taken for the next frame
+    /// of a burst, because they began where it would (ADR-0040).
+    pub follow_on_heeded: usize,
     /// Times the key-time watchdog fired.
     pub watchdog_trips: usize,
     /// Application bytes handed to the compressor this session.
@@ -3257,6 +3272,19 @@ impl<P: Ptt> Station<P> {
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
             let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
+            // A faint arrival is still heeded where the next frame of a burst would begin while
+            // this station owes the burst its acknowledgement: there a phantom costs a late
+            // answer, and a real frame ignored is an answer keyed over it — the frame lost,
+            // the answer unheard, and the burst sent again. In ND1J's session of 2026-10-06,
+            // 21 of the 22 acknowledgements he never heard went out while he was still sending,
+            // and 17 of them over an arrival this station had heard below the gate (ADR-0040).
+            let start_s = (origin + pending.start) as f64 / fs;
+            let follow_on = !trusted
+                && !pending.tone
+                && self.engine.acknowledgement_at().is_some()
+                && start_s >= self.heard_end - FOLLOW_ON_EARLY_S
+                && start_s <= self.heard_end + FOLLOW_ON_WINDOW_S;
+            let heeded = trusted || follow_on;
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
             if let Some(recording) = &mut self.recording {
@@ -3267,7 +3295,8 @@ impl<P: Ptt> Station<P> {
                     pending.end.saturating_sub(pending.start) as f64 / fs,
                     u8::from(pending.tone),
                     pending.detect_confidence,
-                    u8::from(trusted),
+                    // 2: heeded as the next frame of a burst, below the gate
+                    if follow_on { 2 } else { u8::from(trusted) },
                 );
                 recording.event(
                     now,
@@ -3276,14 +3305,20 @@ impl<P: Ptt> Station<P> {
                     &format!("{:?}", self.engine.state()),
                 );
             }
-            if !trusted {
+            if !heeded {
                 continue;
             }
             // the frame named itself — an OFDM preamble its layout, a tone frame its kind:
             // its own air time, not a guess from the peer's last mode — a floor frame after
             // ordinary connect frames is five times as long, and an answer timed for an
             // ordinary one tramples it (ADR-0012)
-            let frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
+            let mut frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
+            if follow_on {
+                // read weakly, its layout may be read wrong too — a data frame taken for a
+                // control frame was the usual case — and the frames of a burst are data frames
+                self.stats.follow_on_heeded += 1;
+                frame_s = frame_s.max(air.long.duration_s());
+            }
             self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
             self.engine
                 .on_preamble((origin + pending.start) as f64 / fs, now, Some(frame_s));
@@ -4802,6 +4837,80 @@ mod tests {
             answered,
             "the prober gave up on an answer {late:.2} s after its probe"
         );
+    }
+
+    #[test]
+    fn a_faint_arrival_where_the_next_frame_would_begin_holds_the_acknowledgement() {
+        // ND1J, 2026-10-06: the fourth frame of his bursts arrived faded, acquisition read it
+        // below the trusted confidence, and this station keyed its acknowledgement over it —
+        // the frame lost, the answer unheard, the burst sent again. Where the next frame of a
+        // burst would begin, a faint arrival now holds the answer for a frame's length; a
+        // faint arrival anywhere else, or with no answer owed, still moves nothing (ADR-0040).
+        let message = vec![0x5Au8; 400];
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.a.send(&message);
+        air.run(90.0, |_, b| b.engine().acknowledgement_at().is_some());
+        let b = &mut air.b;
+        let due = b
+            .engine()
+            .acknowledgement_at()
+            .expect("an acknowledgement owed");
+        let fs = b.config.params.fs_baseband;
+        let long = b.air().long.duration_s();
+        let at = |s: f64| (s * fs) as usize;
+        let faint = |start_s: f64| aether_phy::PendingFrame {
+            start: at(start_s),
+            end: at(start_s + 0.434),
+            detect_confidence: 1.05,
+            tone: false,
+            control: true,
+        };
+        let now = b.now();
+
+        // well after the last frame ended: not the burst going on, nothing moves
+        let away = b.heard_end + 2.0;
+        b.heed_preambles(&[faint(away)], 0, now);
+        assert_eq!(
+            b.engine().acknowledgement_at(),
+            Some(due),
+            "a stray phantom moved the answer"
+        );
+        assert_eq!(b.stats.follow_on_heeded, 0);
+
+        // where the next frame would begin: the answer waits a whole data frame past it
+        let next = b.heard_end + 0.3;
+        b.heed_preambles(&[faint(next)], 0, now);
+        let held = b.engine().acknowledgement_at().expect("still owed");
+        assert!(
+            held >= next + long,
+            "the answer at {held:.2} s would key over a frame running to {:.2} s",
+            next + long
+        );
+        assert_eq!(b.stats.follow_on_heeded, 1);
+    }
+
+    #[test]
+    fn a_faint_arrival_holds_nothing_when_no_acknowledgement_is_owed() {
+        let mut station = idle_station();
+        let now = station.now();
+        station.heard_end = now;
+        let fs = station.config.params.fs_baseband;
+        let start = ((now + 0.2) * fs) as usize;
+        station.heed_preambles(
+            &[aether_phy::PendingFrame {
+                start,
+                end: start + 1000,
+                detect_confidence: 1.05,
+                tone: false,
+                control: false,
+            }],
+            0,
+            now,
+        );
+        assert_eq!(station.stats.follow_on_heeded, 0);
+        assert!(station.engine().acknowledgement_at().is_none());
+        assert!(!station.receiving(), "a phantom lit the receive indicator");
     }
 
     #[test]

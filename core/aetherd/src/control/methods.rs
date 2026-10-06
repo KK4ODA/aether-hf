@@ -1742,6 +1742,8 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "frames_detected": station.stats.frames_detected,
         "deferred_for_busy": station.stats.deferred_for_busy,
         "deferred_for_gap": station.stats.deferred_for_gap,
+        // faint arrivals taken for the next frame of a burst being acknowledged (ADR-0040)
+        "follow_on_heeded": station.stats.follow_on_heeded,
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
