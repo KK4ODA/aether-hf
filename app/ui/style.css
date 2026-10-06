@@ -2254,6 +2254,15 @@ details.fold-card > summary:hover .card-title {
   min-width: 18ch;
 }
 
+.share-form input[type="url"] {
+  flex: 1 1 40ch;
+  min-width: 24ch;
+}
+
+.share-form .test-bar-row {
+  padding: var(--s2) 0 0;
+}
+
 .share-form select {
   width: auto;
   flex: 0 0 auto;
@@ -2589,6 +2598,7 @@ label.check {
 
 input[type="text"],
 input[type="email"],
+input[type="url"],
 select,
 textarea {
   background: var(--bg-2);
@@ -2603,12 +2613,14 @@ textarea {
 
 input[type="text"],
 input[type="email"],
+input[type="url"],
 select {
   min-height: var(--control-h);
 }
 
 input[type="text"]:hover,
 input[type="email"]:hover,
+input[type="url"]:hover,
 select:hover,
 textarea:hover {
   border-color: var(--border-strong);
@@ -2616,6 +2628,7 @@ textarea:hover {
 
 input[type="text"]:focus,
 input[type="email"]:focus,
+input[type="url"]:focus,
 select:focus,
 textarea:focus {
   border-color: var(--accent);

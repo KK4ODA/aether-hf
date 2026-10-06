@@ -1230,8 +1230,11 @@
                   summaries from the period you choose — the audio only if you tick it — and opens an
                   email to attach it to. <em>Ask a station for its files</em> writes the email the
                   other way: it carries a link that opens their panel with this form filled in.
-                  Nothing is sent without you: the zip waits in the <code>shared</code> folder beside
-                  your settings, and your own email program sends it.
+                  With an <strong>upload address</strong> and a code from your upload script
+                  (<code>tools/drive_upload/</code>), their panel shows <strong>Send</strong> instead:
+                  one press, and the zip goes into your Google Drive folder, with no attachment to
+                  forget. Nothing is sent without you: the zip waits in the <code>shared</code> folder
+                  beside your settings until you press a button.
                 </p>
               </details>
             </div>
@@ -1259,8 +1262,21 @@
                 <option value="168">week</option>
               </select>
               <label class="check" id="share-audio-row" title="The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it"><input type="checkbox" id="share-audio" title="The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it" /> audio</label>
+              <button id="btn-share-upload" class="primary" title="Write the zip and send it straight to the station that asked for it: no email, no attachment" hidden>Send</button>
               <button id="btn-share" class="primary" title="Write the zip and open an email to attach it to">Prepare email</button>
               <button id="btn-share-cancel" class="quiet" title="Close without sending anything">Cancel</button>
+            </div>
+            <!-- asking: where the other station's files are to go, so that their panel can send
+                 them with one button (tools/drive_upload/) -->
+            <div class="tool-row inset-row" id="share-upload-row" title="Where the other station's panel sends the files: your upload script and the code you made for that station" hidden>
+              <label for="share-upload-url" title="Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec">upload to</label>
+              <input id="share-upload-url" type="url" class="prose" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false" title="Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec. Remembered. Leave empty to have them email the zip instead" aria-label="Upload address" />
+              <label for="share-upload-code" title="The upload code makeCodes made for this station">code</label>
+              <input id="share-upload-code" type="text" class="call" placeholder="WC4Y-…" autocomplete="off" spellcheck="false" title="The upload code makeCodes made for this station: it lets their panel put the files in your folder" aria-label="Upload code" />
+            </div>
+            <div class="test-bar-row" id="share-upload-progress" title="How much of the zip has gone" hidden>
+              <progress id="share-upload-bar" max="1" value="0" title="How much of the zip has gone"></progress>
+              <span class="sub" id="share-upload-label" title="Bytes sent of the zip's size"></span>
             </div>
             <p class="sub share-note" id="share-note" title="What the last step did, and where the file is" role="status" aria-live="polite"></p>
           </div>

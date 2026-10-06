@@ -1115,6 +1115,14 @@ and began before the station's last transmission starts no burst (`answered_alre
 `tx_started`). To A/B an engine default on the harness: build the daemon twice with the
 default flipped in the source, copy each binary out, and run both through the same scenario
 seeds (a scenario file with `seed = N` and a `-sN` name per seed).
+**Files by upload (beta.85, the author's request):** the request link (`#share?…&up=<script>&code=<code>&audio=1`)
+can name the asking station's upload script (`tools/drive_upload/`: a Google Apps Script web app in
+its own account — `begin` hands out a Drive resumable upload session for one file, `finish` counts
+the code and emails the owner; codes made with `makeCodes`, kept in Script Properties); the other
+panel's **Send to <call>** has the daemon upload the zip (`share.upload`, `upload.rs`: `ureq` with
+rustls, 8 MB pieces, resumes after a dropped connection, its own thread, `status.upload`). Only
+`https://script.google.com/…/exec` addresses are accepted; nothing secret is in the program.
+`tools/drive_upload/try_upload.py` checks a deployment. The author deploys the script himself.
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 

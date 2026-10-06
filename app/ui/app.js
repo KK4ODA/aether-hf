@@ -5049,6 +5049,17 @@ async function copyDiagnostics() {
 
 const SHARE_TO_KEY = "aether.shareTo";
 const MY_EMAIL_KEY = "aether.myEmail";
+// this station's upload script (tools/drive_upload/), for the requests it writes
+const UPLOAD_URL_KEY = "aether.uploadUrl";
+// where a request link said the files are to go: its upload script, the code it issued, and
+// the station that asked — set by the link, and what the Send button sends to
+let uploadTarget = null;
+
+// An upload script's address: a Google Apps Script web app, as the daemon accepts.
+function isUploadAddress(url) {
+  return /^https:\/\/script\.google\.com\/(a\/macros\/[^/?#\s]+|macros)\/s\/[^/?#\s]+\/exec$/.test(url);
+}
+
 // the other station's panel, as the desktop application serves it: not this page's own
 // address, which a browser on another port or host would put in the link
 const PANEL_URL = "http://127.0.0.1:8515/";
@@ -5089,11 +5100,27 @@ function applyShareMode() {
   station.title = ask
     ? "The station whose files you want"
     : "Only the sessions with this station (its other SSIDs too); empty for every session";
-  $("share-audio-row").hidden = ask;
-  $("btn-share").textContent = ask ? "Write request" : "Prepare email";
+  const audio = ask
+    ? "Ask for the recordings' audio too: what a test session's analysis needs, megabytes a minute"
+    : "The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it";
+  $("share-audio-row").title = audio;
+  $("share-audio").title = audio;
+  $("share-upload-row").hidden = !ask;
+  if (ask) $("share-upload-url").value ||= remembered(UPLOAD_URL_KEY);
+  // a request that named an upload script: one button sends there, and email is the fallback
+  const upload = !ask && uploadTarget != null;
+  const send = $("btn-share-upload");
+  send.hidden = !upload;
+  if (upload) {
+    send.textContent = `Send to ${uploadTarget.to || "them"}`;
+    send.title = `Write the zip and send it straight to ${uploadTarget.to || "the station that asked"}'s upload folder: no email, no attachment`;
+  }
+  $("btn-share").classList.toggle("primary", !upload);
+  $("btn-share").textContent = ask ? "Write request" : upload ? "Email instead" : "Prepare email";
   $("btn-share").title = ask
     ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
     : "Write the zip and open an email to attach it to";
+  $("share-upload-progress").hidden = true;
 }
 
 function openShareForm(mode = "send", fill = {}) {
@@ -5125,7 +5152,9 @@ function openShareForm(mode = "send", fill = {}) {
     list.append(option);
   }
   $("share-note").textContent = fill.note ?? "";
-  ($("share-email").value ? $("btn-share") : $("share-email")).focus();
+  if (fill.audio != null) $("share-audio").checked = fill.audio;
+  if (shareMode() === "send" && uploadTarget) $("btn-share-upload").focus();
+  else ($("share-email").value ? $("btn-share") : $("share-email")).focus();
 }
 
 function closeShareForm() {
@@ -5185,22 +5214,58 @@ async function prepareShare() {
       return;
     }
     remember(MY_EMAIL_KEY, email);
-    const link = `${PANEL_URL}#share?to=${encodeURIComponent(email)}&station=${encodeURIComponent(me)}&hours=${hours}`;
-    const body = [
-      "Hi,",
-      "",
-      `Our contact did not get through, and the half of it I cannot see from here is yours. Could you send me your Aether HF files from the last ${hours === 1 ? "hour" : `${hours} hours`}?`,
-      "",
-      "With Aether HF running (0.2.0-beta.74 or later), open this link — it fills the form in for you:",
-      link,
-      "",
-      `Then press "Prepare email" and attach the zip it shows you. Or, in Aether: Log tab > Send files…, to ${email}, sessions with ${me}, Prepare email.`,
-      "",
-      "It is your logs and the summaries of the sessions — no audio unless you tick it, and never what was said.",
-      "",
-      "73,",
-      me,
-    ].join("\n");
+    const endpoint = $("share-upload-url").value.trim();
+    const code = $("share-upload-code").value.trim();
+    if (endpoint && !isUploadAddress(endpoint)) {
+      note.textContent = "That is not an upload script's address: it is the web app URL, https://script.google.com/macros/s/…/exec (tools/drive_upload/README.md).";
+      $("share-upload-url").focus();
+      return;
+    }
+    if (endpoint && !/^[A-Za-z0-9_-]{4,64}$/.test(code)) {
+      note.textContent = `The upload code for ${station} is needed: makeCodes in your upload script makes one.`;
+      $("share-upload-code").focus();
+      return;
+    }
+    if (endpoint) remember(UPLOAD_URL_KEY, endpoint);
+    const audio = $("share-audio").checked;
+    let link = `${PANEL_URL}#share?to=${encodeURIComponent(email)}&station=${encodeURIComponent(me)}&hours=${hours}`;
+    if (audio) link += "&audio=1";
+    if (endpoint) link += `&up=${encodeURIComponent(endpoint)}&code=${encodeURIComponent(code)}`;
+    const period = hours === 1 ? "hour" : `${hours} hours`;
+    const what = audio
+      ? "It is your logs, the summaries of the sessions and their recordings — never what was typed."
+      : "It is your logs and the summaries of the sessions — no audio, and never what was typed.";
+    const body = endpoint
+      ? [
+          "Hi,",
+          "",
+          `Could you send me your Aether HF files from the last ${period}${audio ? ", with the recordings" : ""}? It is one button now.`,
+          "",
+          "With Aether HF running (0.2.0-beta.85 or later), open this link — it fills the form in for you:",
+          link,
+          "",
+          `Then press "Send to ${me}". The files go straight to my Google Drive folder: no email, no attachment.`,
+          "",
+          what,
+          "",
+          "73,",
+          me,
+        ].join("\n")
+      : [
+          "Hi,",
+          "",
+          `Our contact did not get through, and the half of it I cannot see from here is yours. Could you send me your Aether HF files from the last ${period}?`,
+          "",
+          "With Aether HF running (0.2.0-beta.74 or later), open this link — it fills the form in for you:",
+          link,
+          "",
+          `Then press "Prepare email" and attach the zip it shows you. Or, in Aether: Log tab > Send files…, to ${email}, sessions with ${me}, Prepare email.`,
+          "",
+          what,
+          "",
+          "73,",
+          me,
+        ].join("\n");
     try {
       await openMail(mailto("", `Aether HF: your files from our contact (${me} – ${station})`, body));
       note.textContent = `An email to ${station} is open in your mail program: add their address and send it.`;
@@ -5261,14 +5326,78 @@ function shareFromLink() {
   }
   selectTab($("tab-log"));
   const station = (params.get("station") ?? "").toUpperCase();
+  const endpoint = params.get("up") ?? "";
+  const code = params.get("code") ?? "";
+  uploadTarget = isUploadAddress(endpoint) && /^[A-Za-z0-9_-]{4,64}$/.test(code)
+    ? { endpoint, code, to: station }
+    : null;
+  const audio = params.get("audio") === "1";
   openShareForm("send", {
     to: params.get("to") ?? "",
     station,
     hours: Number(params.get("hours")) || 3,
-    note: station
-      ? `${station} asked for your files from your sessions with them. Check the address, then Prepare email.`
-      : "Check the address, then Prepare email.",
+    audio,
+    note: uploadTarget
+      ? `${station || "A station"} asked for your files from your sessions with them${audio ? ", with the recordings" : ""}. Press Send to ${station || "them"}: the zip goes straight to their upload folder.`
+      : station
+        ? `${station} asked for your files from your sessions with them. Check the address, then Prepare email.`
+        : "Check the address, then Prepare email.",
   });
+}
+
+const sizeOf = (bytes) =>
+  bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} kB`;
+
+// Send to the station that asked: the daemon writes the zip (`share.prepare`) and sends it to
+// the upload script the request link named (`share.upload`), on a thread of its own; this
+// follows `status.upload` until it is done. Email stays the way round when it fails.
+async function sendByUpload() {
+  if (!uploadTarget) return;
+  const note = $("share-note");
+  const button = $("btn-share-upload");
+  const station = $("share-station").value.trim().toUpperCase();
+  const hours = Number($("share-hours").value) || 3;
+  const audio = $("share-audio").checked;
+  const to = uploadTarget.to || "them";
+  button.disabled = true;
+  note.textContent = "Writing the zip…";
+  try {
+    const prepared = await call("share.prepare", { hours, remote: station || null, audio });
+    await call("share.upload", {
+      name: prepared.name,
+      endpoint: uploadTarget.endpoint,
+      code: uploadTarget.code,
+      note: `${prepared.sessions} recorded session${prepared.sessions === 1 ? "" : "s"} from the last ${hours} h${station ? ` with ${station}` : ""}${audio ? ", with the audio" : ""}.`,
+    });
+    const bar = $("share-upload-bar");
+    const label = $("share-upload-label");
+    $("share-upload-progress").hidden = false;
+    note.textContent = `Sending ${prepared.name} (${sizeOf(prepared.bytes)}) to ${to}…`;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const upload = (await call("status")).upload ?? {};
+      const total = upload.total || prepared.bytes;
+      bar.value = total ? upload.sent / total : 0;
+      label.textContent = `${sizeOf(upload.sent || 0)} of ${sizeOf(total)}`;
+      if (upload.state === "done") {
+        bar.value = 1;
+        note.textContent = `Sent ✓ — ${prepared.name} (${sizeOf(prepared.bytes)}) is in ${upload.to || to}'s upload folder, and they have been told.`;
+        log(`files sent to ${upload.to || to}: ${prepared.name}, ${sizeOf(prepared.bytes)}`, "info", "share");
+        return;
+      }
+      if (upload.state === "failed") {
+        throw new Error(`${upload.error} The zip is kept: Email instead sends it by hand.`);
+      }
+    }
+  } catch (error) {
+    note.textContent = error.code === "unknown_method"
+      ? "This modem is older than the Send button: update Aether HF (0.2.0-beta.85 or later), or use Email instead."
+      : error.message;
+    $("share-upload-progress").hidden = true;
+    log(`files not sent to ${to}: ${error.message}`, "warn", "share");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function wireShare() {
@@ -5278,6 +5407,7 @@ function wireShare() {
   $("btn-share-cancel").addEventListener("click", closeShareForm);
   $("share-mode").addEventListener("change", applyShareMode);
   $("btn-share").addEventListener("click", prepareShare);
+  $("btn-share-upload").addEventListener("click", sendByUpload);
   $("share-form").addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeShareForm();
   });
