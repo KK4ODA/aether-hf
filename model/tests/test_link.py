@@ -38,7 +38,7 @@ from aether_model.link.frames import (
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
-from aether_model.link.sim import TwoStationSim
+from aether_model.link.sim import SimFrame, TwoStationSim
 
 
 @pytest.fixture(scope="module")
@@ -1909,11 +1909,13 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
 # ── holding the link on a fading path (P9-7) ──────────────────────────
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 4])
 def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     timing: PhyTiming, version: int
 ) -> None:
-    """Version 4 of the link protocol numbers the 500 Hz ladder's rungs with its middle kinds
+    """Version 5 turns an ordinary DATA frame's mode chips by the frames of its burst that
+    follow it (ADR-0041), which a version 4 receiver takes for noise; version 4 numbers the
+    500 Hz ladder's rungs with its middle kinds
     (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
     ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     other frames by the same numbers, so a call from one is not a session to start — it is
@@ -1921,7 +1923,7 @@ def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
     from aether_model.link.phy import Container, TxFrame
 
-    assert PROTOCOL_VERSION == 4 and ConnectBody("A", "B").version == 4
+    assert PROTOCOL_VERSION == 5 and ConnectBody("A", "B").version == 5
     b = LinkEngine("KK4XYZ", timing, None, seed=2)
     body = ConnectBody("W4ODA", "KK4XYZ", version=version).encode()
     payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))
@@ -3226,3 +3228,53 @@ def test_a_disconnect_leaves_without_what_the_path_will_not_carry() -> None:
     assert ended and "link timeout" not in ended[-1], sim.events(0)
     assert any(e.startswith("disconnect:") and "not acknowledged" in e for e in sim.events(0))
     assert sim.t - asked < a._link_timeout(), (sim.t - asked, a._link_timeout())
+
+
+def _collisions(sim: TwoStationSim) -> int:
+    """Transmissions of station B that overlapped one of A's."""
+    a, b = sim.st[0].busy, sim.st[1].busy
+    return sum(any(x < b1 - 1e-9 and b0 + 1e-9 < y for x, y in a) for b0, b1 in b)
+
+
+def _fading_session(countdown: bool) -> TwoStationSim:
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("ND1J", timing, LinkConfig(), seed=1)
+    b = LinkEngine("KK4ODA", timing, LinkConfig(), seed=2)
+
+    def faded(rx: int, container: Container, t0: float) -> bool:
+        # three data frames in ten fade out of the receiver's hearing altogether: not even
+        # their preambles are detected (the same frame is judged the same each time it is asked)
+        return rx == 1 and container is Container.DATA and int(t0 * 1000) % 10 < 3
+
+    sim = TwoStationSim(a, b, snr_db=14.0, seed=3, unheard=faded)
+    if not countdown:
+        made = sim._factory
+
+        def blind(frame: TxFrame, snr: float, t0: float, t1: float) -> object:
+            sf = made(frame, snr, t0, t1)
+            if isinstance(sf, SimFrame):
+                sf.follows = None
+            return sf
+
+        sim._factory = blind  # type: ignore[assignment]
+    a.connect("KK4ODA")
+    sim.run(until=60)
+    assert a.state is State.CONNECTED
+    a.send(bytes(range(256)) * 12)
+    sim.run(until=sim.t + 900)
+    return sim
+
+
+def test_a_receiver_does_not_answer_over_a_frame_it_lost_in_a_fade() -> None:
+    """ND1J, 2026-10-06: the last frame of his bursts arrived faded, KK4ODA-1 took the silence
+    for the end of the burst and acknowledged over it 21 times in eight minutes — the frame
+    lost, the acknowledgement unheard, the burst sent again. Each frame now says how many of
+    its burst follow it (ADR-0041), and a receiver that loses one still waits for it."""
+    blind = _fading_session(countdown=False)
+    told = _fading_session(countdown=True)
+    assert bytes(told.delivered(1)) == bytes(range(256)) * 12
+    assert _collisions(blind) >= 5, _collisions(blind)
+    assert _collisions(told) <= _collisions(blind) // 4, (_collisions(told), _collisions(blind))

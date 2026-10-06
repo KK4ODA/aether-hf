@@ -226,6 +226,10 @@ impl SoftFrame for PhyFrame {
         self.trusted
     }
 
+    fn follows(&self) -> Option<u8> {
+        self.frame.follows()
+    }
+
     fn t_start(&self) -> f64 {
         self.t_start
     }
@@ -571,6 +575,9 @@ pub struct FrameReport {
     /// an answer's, a probe's or a probe answer's capability byte (ADR-0035); none for any
     /// other frame, or for a beacon from before ADR-0024.
     pub bandwidth_hz: Option<u32>,
+    /// How many more frames of its burst an ordinary data frame said follow it (ADR-0041);
+    /// none for control and tone frames, which cannot say.
+    pub follows: Option<u8>,
 }
 
 /// A session's account, kept from the moment it comes up to the moment it ends.
@@ -1857,6 +1864,7 @@ impl<P: Ptt> Station<P> {
                 mode,
                 rv: 0,
                 floor: false,
+                follows: 0,
             }]));
         self.stats.beacons_sent += 1;
         Ok(())
@@ -2026,6 +2034,7 @@ impl<P: Ptt> Station<P> {
             rv: 0,
             // a data frame's family follows its mode; this flag is for control frames
             floor: false,
+            follows: 0,
         };
         for n in 0..bursts {
             if n > 0 {
@@ -2577,11 +2586,8 @@ impl<P: Ptt> Station<P> {
                     t_s: now,
                     start_s: Some(span_start),
                     end_s: Some(span_end),
-                    kind: if control {
-                        "control".into()
-                    } else {
-                        "data".into()
-                    },
+                    follows: decoded.frame.follows(),
+                    kind: if control { "control" } else { "data" }.into(),
                     mode: rung,
                     rv: decoded.frame.rv(),
                     snr_3k_db: decoded.frame.snr_3k_db(),
@@ -2697,6 +2703,7 @@ impl<P: Ptt> Station<P> {
             to: None,
             control: None,
             bandwidth_hz: None,
+            follows: frame.follows(),
         };
         // a frame that belongs to the session is the other station's; one with another
         // session id is somebody else's business and stays unattributed
@@ -2747,8 +2754,7 @@ impl<P: Ptt> Station<P> {
             }
         }
         // what the frame says its sender runs is what a call to it should be made in
-        if let (Some(from), Some(hz)) = (&report.from, report.bandwidth_hz) {
-            let from = from.clone();
+        if let (Some(from), Some(hz)) = (report.from.clone(), report.bandwidth_hz) {
             self.learn_bandwidth(&from, hz as usize);
         }
         // a piece of somebody's datagram: joined with the others, and named by the first
@@ -3168,8 +3174,13 @@ impl<P: Ptt> Station<P> {
             let burst = match frame.container {
                 // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
                 Container::Data => {
-                    self.transmitter
-                        .rung_burst(&frame.payload, frame.mode, frame.rv)
+                    // an OFDM frame says how many of the burst follow it (ADR-0041)
+                    self.transmitter.rung_burst_following(
+                        &frame.payload,
+                        frame.mode,
+                        frame.rv,
+                        frame.follows,
+                    )
                 }
                 Container::Control => {
                     self.transmitter
@@ -6632,6 +6643,52 @@ mod tests {
     }
 
     #[test]
+    fn each_frame_of_a_burst_says_over_the_air_how_many_follow_it() {
+        // the countdown rides in the chips (ADR-0041): through the real modem and the audio,
+        // the receiver reads every data frame of a burst counting down to its last
+        // incompressible, so it takes whole bursts
+        let message: Vec<u8> = (0..1500u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.a.send(&message);
+        let mut reports = Vec::new();
+        for _ in 0..40 {
+            air.run(5.0, |_, _| false);
+            reports.extend(air.b.take_frame_reports());
+            if air.b.received_len() >= message.len() {
+                break;
+            }
+        }
+        assert_eq!(air.b.take_received().as_slice(), message.as_slice());
+        let counts: Vec<Option<u8>> = reports
+            .iter()
+            .filter(|r| r.kind == "data" && r.decoded)
+            .map(|r| r.follows)
+            .collect();
+        assert!(
+            counts.iter().any(|&c| c.is_some_and(|n| n > 0)),
+            "no frame said more of its burst followed: {counts:?}"
+        );
+        assert!(
+            counts.windows(2).all(|w| match (w[0], w[1]) {
+                // within a burst each frame says one fewer; a burst's last says none
+                (Some(a), Some(b)) => b + 1 == a || a == 0 || a == 3,
+                _ => true,
+            }),
+            "the countdown did not count down: {counts:?}"
+        );
+        assert!(
+            reports
+                .iter()
+                .filter(|r| r.kind == "control")
+                .all(|r| r.follows.is_none()),
+            "a control frame cannot say"
+        );
+    }
+
+    #[test]
     fn every_frame_is_reported_with_what_the_receiver_made_of_it() {
         // the readings a panel shows come from the receiver's own estimates, frame by
         // frame: a beacon names its sender outright, and once a session is up the frames
@@ -7883,6 +7940,7 @@ mod tests {
                 rv: 0,
                 chip_runner_up: 1,
                 mode_confidence: 1.0,
+                follows: 0,
             }),
         };
         assert!(!station.receiving(), "dark to begin with");

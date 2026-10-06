@@ -75,6 +75,10 @@ pub struct FrameRecord {
     /// See [`FrameRecord::start_s`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_s: Option<f64>,
+    /// How many more frames of its burst an ordinary data frame said follow it (ADR-0041);
+    /// absent for control and tone frames, and from a sidecar written before beta.80.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<u8>,
 }
 
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
@@ -750,6 +754,7 @@ mod tests {
             t_s: 11.5,
             start_s: None,
             end_s: None,
+            follows: None,
             kind: "data".into(),
             mode: 4,
             rv: 0,

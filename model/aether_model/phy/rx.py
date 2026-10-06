@@ -40,6 +40,7 @@ from aether_model.frame.modes import LONG, SHORT, FrameLayout, air_interface
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import (
     FrameType,
+    follows_of,
     preamble,
 )
 from aether_model.phy.sync import FrameSync
@@ -80,6 +81,9 @@ class ReceivedFrame:
     mode_confidence: float = 1.0
     """Best chip metric divided by the runner-up; below ~1.3 the caller may retry with
     ``chip_runner_up`` if the CRC fails."""
+    follows: int = 0
+    """How many more frames of its burst the frame says follow it, read from the phase of its
+    mode chips (ADR-0041); 0 for CONTROL frames."""
 
 
 def layout_for(header_type: FrameType, params: WaveformParams = WIDE_2300) -> FrameLayout:
@@ -205,7 +209,7 @@ class FrameReceiver:
                 return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
 
         # 3. mode and redundancy version from the pilot-symbol chips (DATA frames)
-        mode_idx, rv, runner_up, confidence = 0, 0, 0, 1.0
+        mode_idx, rv, runner_up, confidence, follows = 0, 0, 0, 1.0, 0
         if sync.header.frame_type is FrameType.DATA:
             dc = self.data_c
             z_parts = []
@@ -216,11 +220,14 @@ class FrameReceiver:
             z /= max(float(np.linalg.norm(z)), 1e-12)
             seqs = self.pre.sequences_for(layout)
             n_used = len(z)
-            metrics = np.array([abs(np.vdot(seq[:n_used], z)) for seq in seqs]) / np.sqrt(n_used)
+            correlations = np.array([np.vdot(seq[:n_used], z) for seq in seqs])
+            metrics = np.abs(correlations) / np.sqrt(n_used)
             order = np.argsort(metrics)[::-1]
             best, runner_up = int(order[0]), int(order[1])
             confidence = float(metrics[order[0]] / max(metrics[order[1]], 1e-12))
-            mode_idx, rv = self.pre.chip_hypothesis(best if hypothesis is None else hypothesis)
+            chosen = best if hypothesis is None else hypothesis
+            mode_idx, rv = self.pre.chip_hypothesis(chosen)
+            follows = follows_of(complex(correlations[chosen]))
 
         # 4. known carrier values per symbol, then channel estimates
         known = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
@@ -228,7 +235,9 @@ class FrameReceiver:
         for pilot_no, s_i in enumerate(pilot_syms):
             known[s_i] = self.pilot_seq
             if sync.header.frame_type is FrameType.DATA:
-                known[s_i, self.data_c] = self.pre.mode_chips(mode_idx, pilot_no, rv, layout)
+                known[s_i, self.data_c] = self.pre.mode_chips(
+                    mode_idx, pilot_no, rv, layout, follows
+                )
             full[s_i] = True
         for s_i in data_syms:
             known[s_i, pc] = ref
@@ -279,4 +288,5 @@ class FrameReceiver:
             rv=rv,
             chip_runner_up=runner_up,
             mode_confidence=confidence,
+            follows=follows,
         )

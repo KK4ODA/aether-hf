@@ -55,6 +55,10 @@ one its first ten. Each air interface's chip sequences are indexed by *its* mode
 (:meth:`Preamble.chip_index`)."""
 N_RV = 4
 """Redundancy versions signalled per frame (TS 38.212 rate matching has four)."""
+MAX_FOLLOWS = 3
+"""Most frames a DATA frame can say follow it in its burst (ADR-0041): the countdown rides in
+the phase of the frame's mode chips — a quarter turn a frame — so four values, the last read
+as "three or more"."""
 MAX_PILOT_SYMBOLS = 4
 
 
@@ -70,12 +74,17 @@ class FrameHeader:
     """Mode index for DATA frames; ignored (0) for CONTROL frames."""
     rv: int = 0
     """HARQ redundancy version for DATA frames; ignored (0) for CONTROL frames."""
+    follows: int = 0
+    """How many more frames of its burst follow this DATA frame, capped at
+    :data:`MAX_FOLLOWS` (ADR-0041); ignored (0) for CONTROL frames."""
 
     def __post_init__(self) -> None:
         if not 0 <= self.mode < N_MODES:
             raise ValueError(f"mode index must be 0 … {N_MODES - 1}")
         if not 0 <= self.rv < N_RV:
             raise ValueError(f"redundancy version must be 0 … {N_RV - 1}")
+        if not 0 <= self.follows <= MAX_FOLLOWS:
+            raise ValueError(f"frames following must be 0 … {MAX_FOLLOWS}")
 
 
 def chip_index(mode: int, rv: int, n_modes: int = N_MODES) -> int:
@@ -83,6 +92,17 @@ def chip_index(mode: int, rv: int, n_modes: int = N_MODES) -> int:
     sequences, so RV-0 frames are unchanged from the P2-3 air interface (golden vectors
     hold)."""
     return rv * n_modes + mode
+
+
+def follows_turn(follows: int) -> complex:
+    """The phase a DATA frame's mode chips are turned by to say ``follows`` (ADR-0041)."""
+    return complex(1j**follows)
+
+
+def follows_of(correlation: complex) -> int:
+    """The countdown a turned chip correlation names: the nearest quarter turn."""
+    quarter = round(math.atan2(correlation.imag, correlation.real) / (math.pi / 2))
+    return int(quarter) % 4
 
 
 def chip_hypothesis(index: int, n_modes: int = N_MODES) -> tuple[int, int]:
@@ -187,13 +207,18 @@ class Preamble:
         pilot_symbol_index: int,
         rv: int = 0,
         layout: FrameLayout | None = None,
+        follows: int = 0,
     ) -> ComplexArray:
-        """Chips (±1) for the data carriers of the given full pilot symbol of a DATA frame."""
+        """Chips for the data carriers of the given full pilot symbol of a DATA frame: the
+        (mode, rv) sequence (±1), turned by ``follows`` quarter turns (ADR-0041). The
+        receiver picks the sequence by the magnitude of its correlation, which the turn does
+        not touch, and reads the turn from its phase against the comb pilots' channel
+        estimate — so the countdown costs the mode and RV decision nothing."""
         seq = self.sequences_for(layout)[self.chip_index(mode, rv)]
         a = pilot_symbol_index * self.n_data
         if a + self.n_data > len(seq):
             raise ValueError("more pilot symbols than the chip sequence covers")
-        return seq[a : a + self.n_data]
+        return seq[a : a + self.n_data] * follows_turn(follows)
 
 
 @cache

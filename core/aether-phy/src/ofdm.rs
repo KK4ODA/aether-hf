@@ -219,6 +219,16 @@ impl OfdmModulator {
     /// If `chips` is given and is not one per data carrier.
     #[must_use]
     pub fn pilot_symbol(&self, chips: Option<&[f64]>) -> Vec<Complex> {
+        self.pilot_symbol_turned(chips, (1.0, 0.0))
+    }
+
+    /// [`Self::pilot_symbol`] with the chips turned by `turn` — how a DATA frame says how many
+    /// frames of its burst follow it (ADR-0041).
+    ///
+    /// # Panics
+    /// If `chips` is given and is not one per data carrier.
+    #[must_use]
+    pub fn pilot_symbol_turned(&self, chips: Option<&[f64]>, turn: Complex) -> Vec<Complex> {
         let mut out = self.map.pilot_sequence().to_vec();
         if let Some(chips) = chips {
             assert_eq!(
@@ -227,7 +237,7 @@ impl OfdmModulator {
                 "one chip per data carrier"
             );
             for (&carrier, &chip) in self.map.data_carriers().iter().zip(chips) {
-                out[carrier] = (chip, 0.0);
+                out[carrier] = (chip * turn.0, chip * turn.1);
             }
         }
         out

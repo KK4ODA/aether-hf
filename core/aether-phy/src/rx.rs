@@ -27,7 +27,7 @@ use crate::{
     constellation::Complex,
     modes::{AirInterface, FrameLayout, LONG, SHORT, air_interface},
     ofdm::{DemodError, OfdmDemodulator},
-    preamble::{FrameType, Preamble},
+    preamble::{FrameType, Preamble, follows_of, follows_turn},
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -136,6 +136,9 @@ pub struct ReceivedFrame {
     pub chip_runner_up: usize,
     /// Best chip metric over the runner-up; below about 1.3 a caller may retry.
     pub mode_confidence: f64,
+    /// How many more frames of its burst the frame says follow it, read from the phase of
+    /// its mode chips (ADR-0041); 0 for a control frame.
+    pub follows: u8,
 }
 
 /// Turns a located frame into symbols and LLR weights.
@@ -324,6 +327,7 @@ impl FrameReceiver {
 
         // 3. mode and redundancy version from the chips on the pilot symbols
         let (mut mode, mut rv, mut runner_up, mut confidence) = (0usize, 0u8, 0usize, 1.0f64);
+        let mut follows = 0u8;
         if sync.frame_type == FrameType::Data {
             let mut observed: Vec<Complex> = Vec::new();
             for &symbol in &pilot_symbols {
@@ -340,12 +344,14 @@ impl FrameReceiver {
             }
             let used = observed.len();
             let mut metrics = vec![0.0f64; self.preamble.n_sequences()];
+            let mut correlations = vec![(0.0f64, 0.0f64); self.preamble.n_sequences()];
             for (index, metric) in metrics.iter_mut().enumerate() {
                 let sequence = self.preamble.chip_sequence(index);
                 let mut accumulator = (0.0, 0.0);
                 for (slot, &chip) in sequence.iter().take(used).enumerate() {
                     accumulator = c::add(accumulator, c::scale(observed[slot], chip));
                 }
+                correlations[index] = accumulator;
                 *metric = c::norm_sq(accumulator).sqrt() / (used as f64).sqrt();
             }
             let mut order: Vec<usize> = (0..metrics.len()).collect();
@@ -353,9 +359,13 @@ impl FrameReceiver {
             let best = order[0];
             runner_up = order[1];
             confidence = metrics[best] / metrics[runner_up].max(1e-12);
-            let (m, r) = self.preamble.chip_hypothesis(hypothesis.unwrap_or(best));
+            let chosen = hypothesis.unwrap_or(best);
+            let (m, r) = self.preamble.chip_hypothesis(chosen);
             mode = m;
             rv = r;
+            // the turn does not touch the magnitude the hypothesis was picked by; its phase
+            // against the comb pilots' channel estimate is the burst countdown (ADR-0041)
+            follows = follows_of(correlations[chosen]);
         }
 
         // 4. known carrier values per symbol, then the channel estimates
@@ -365,8 +375,9 @@ impl FrameReceiver {
             known[symbol].copy_from_slice(map.pilot_sequence());
             if sync.frame_type == FrameType::Data {
                 let chips = self.preamble.mode_chips(mode, pilot_number, rv);
+                let turn = follows_turn(follows);
                 for (&carrier, &chip) in data_carriers.iter().zip(&chips) {
-                    known[symbol][carrier] = (chip, 0.0);
+                    known[symbol][carrier] = (chip * turn.0, chip * turn.1);
                 }
             }
             is_pilot_symbol[symbol] = true;
@@ -460,6 +471,7 @@ impl FrameReceiver {
             rv,
             chip_runner_up: runner_up,
             mode_confidence: confidence,
+            follows,
         })
     }
 }

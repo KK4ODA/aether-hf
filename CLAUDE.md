@@ -1043,6 +1043,18 @@ delivered answers a second late. To match two stations' sidecars: offset = the d
 `started`, then each sent frame against the other's frames within its length; the peer's `ptt`
 events say when it was keyed. ND1J runs an IC-7300 (CI-V keying, its USB codec) at 40 W.
 
+**The burst countdown (ADR-0041, beta.80, link protocol 5).** Each ordinary DATA frame says how many
+frames of its burst follow it (0–3, `MAX_FOLLOWS`) by turning its mode chips `j^f` — outside the
+codeword like the RV, so retransmissions still combine; the receiver picks (mode, RV) by magnitude
+as before and reads `f` from the phase (`follows_turn`/`follows_of`, `ReceivedFrame.follows`,
+`Received::follows`). The sender counts its burst (`_send_burst`); the receiver's acknowledgement
+waits `f` frame lengths first (`_ack_after`/`ack_after`, believed from a decoded or trusted frame).
+Tone frames carry none. `TxFrame.follows`, `SoftFrame.follows` (trait default `None`),
+`data_burst_following`/`rung_burst_following`, the `frame` event, frame reports and sidecar frames
+carry it; `TwoStationSim::without_countdown`/`collisions` (Rust) compare. `tools/bench_follows.py`:
+3 615 of 3 615 counts read right wherever mode and RV were, −6…+6 dB, all classes, both airs.
+beta.79 and beta.80 do not connect.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

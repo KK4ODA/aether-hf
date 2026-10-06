@@ -57,7 +57,9 @@ class FrameTransmitter:
             if i in pilots:
                 chips = None
                 if header.frame_type is FrameType.DATA:
-                    chips = self.pre.mode_chips(header.mode, pilot_no, header.rv, layout)
+                    chips = self.pre.mode_chips(
+                        header.mode, pilot_no, header.rv, layout, header.follows
+                    )
                 pilot_no += 1
                 symbols.append(self.mod.symbol_values(None, full_pilot=True, chips=chips))
             else:

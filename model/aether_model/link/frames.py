@@ -209,7 +209,11 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
     return (caps & ~CAP_BANDWIDTH_MASK & 0xFF) | (code << CAP_BANDWIDTH_SHIFT)
 
 
-PROTOCOL_VERSION = 4
+MAX_FOLLOWS = 3
+"""Most frames of its burst a DATA frame says follow it (ADR-0041): the PHY turns the frame's
+mode chips a quarter turn a frame, so four values, the last meaning "three or more"."""
+
+PROTOCOL_VERSION = 5
 """The link protocol a station speaks, in the connect body's version byte. 2 since the tone
 floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 above the OFDM mode of version 1 — so a session between the two would run on numbers that
@@ -218,7 +222,10 @@ version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 
 air, between the floor's two and the OFDM modes, and a control frame whose recommended mode
 has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two more
 rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz ladder is
-as it was, but one number says what both ladders are)."""
+as it was, but one number says what both ladders are). 5 since the burst countdown
+(ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its
+burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
+noise."""
 
 
 @dataclass(frozen=True)

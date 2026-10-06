@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 from aether_model.frame.codec import FrameCodec
 from aether_model.frame.modes import FrameLayout, Mode, air_interface
 from aether_model.phy.blanker import NoiseBlanker
-from aether_model.phy.preamble import FrameHeader, FrameType
+from aether_model.phy.preamble import MAX_FOLLOWS, FrameHeader, FrameType
 from aether_model.phy.rx import FrameReceiver, ReceivedFrame
 from aether_model.phy.sync import FrameDetector, FrameSync
 from aether_model.phy.tone import ToneDetector, ToneFrame, ToneSync, burst, demodulate
@@ -86,21 +86,25 @@ class Modem:
     def modes(self) -> tuple[Mode, ...]:
         return self.air.modes
 
-    def data_burst(self, payload: bytes, mode: Mode, rv: int = 0) -> ComplexArray:
-        """An OFDM DATA frame at ``mode`` on the LONG layout."""
+    def data_burst(self, payload: bytes, mode: Mode, rv: int = 0, follows: int = 0) -> ComplexArray:
+        """An OFDM DATA frame at ``mode`` on the LONG layout, saying ``follows`` more frames of
+        its burst come after it (ADR-0041)."""
         layout = self.air.long
         codec = self.codec(mode, layout)
         return self.tx.baseband(
-            FrameHeader(FrameType.DATA, mode.index, rv), layout, codec.encode(payload, rv)
+            FrameHeader(FrameType.DATA, mode.index, rv, min(follows, MAX_FOLLOWS)),
+            layout,
+            codec.encode(payload, rv),
         )
 
-    def rung_burst(self, payload: bytes, rung: int, rv: int = 0) -> ComplexArray:
-        """A DATA frame at a rung of the ladder: a tone-floor kind or an OFDM mode."""
+    def rung_burst(self, payload: bytes, rung: int, rv: int = 0, follows: int = 0) -> ComplexArray:
+        """A DATA frame at a rung of the ladder: a tone-floor kind or an OFDM mode. A tone
+        frame has nowhere to carry the burst countdown and goes without it."""
         r = self.air.ladder[rung]
         if r.tone is not None:
             return burst(r.tone, payload, rv)
         assert r.mode is not None
-        return self.data_burst(payload, r.mode, rv)
+        return self.data_burst(payload, r.mode, rv, follows)
 
     def rung_payload_bytes(self, rung: int) -> int:
         return self.air.ladder[rung].payload_bytes

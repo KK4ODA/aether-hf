@@ -45,3 +45,4 @@ context → decision → alternatives considered → consequences.
 | [0038](0038-nd1j-two-sessions.md) | ND1J's two sessions — a hopeless frame is re-encoded sooner, a frame of nobody's session is no part of a burst, the keyed tail follows the sound card, and a waiting beacon does not go into a session | accepted |
 | [0039](0039-disconnect-patience.md) | A sender's Disconnect gives up on what the path will not carry; the occupied width says which measure it is | accepted |
 | [0040](0040-a-faint-arrival-holds-the-acknowledgement.md) | A faint arrival where the next frame of a burst would begin holds the acknowledgement | accepted |
+| [0041](0041-the-burst-countdown.md) | Each frame of a burst says how many follow it, in a turn of its mode chips; link protocol 5 | accepted |

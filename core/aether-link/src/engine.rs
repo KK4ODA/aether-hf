@@ -32,9 +32,9 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
-        control_flags, data_capacity, decode_data, encode_data, in_window, pack_callsign,
-        seq_after, seq_distance,
+        MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
+        bandwidth_hz_of, control_flags, data_capacity, decode_data, encode_data, in_window,
+        pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{RateConfig, RateController},
@@ -1296,6 +1296,7 @@ impl LinkEngine {
             mode: 0,
             rv: 0,
             floor: self.control_floor(),
+            follows: 0,
         }
     }
 
@@ -1563,6 +1564,7 @@ impl LinkEngine {
             mode: record.mode,
             rv: ((record.tx_count - 1) % 4) as u8,
             floor: false,
+            follows: 0,
         }
     }
 
@@ -1604,6 +1606,7 @@ impl LinkEngine {
             mode,
             rv: 0,
             floor: false,
+            follows: 0,
         }]);
 
         if kind == DataKind::ConnectReq {
@@ -1656,6 +1659,7 @@ impl LinkEngine {
             mode,
             rv: 0,
             floor: false,
+            follows: 0,
         }]);
     }
 
@@ -2044,6 +2048,12 @@ impl LinkEngine {
             frames.push(self.data_frame(&mut record));
             self.records[index] = record;
         }
+        // each frame says how many of the burst come after it, so a receiver that loses one in
+        // a fade still knows the burst is not over and does not answer over it (ADR-0041)
+        let count = frames.len();
+        for (i, frame) in frames.iter_mut().enumerate() {
+            frame.follows = u8::try_from(count - 1 - i).map_or(MAX_FOLLOWS, |n| n.min(MAX_FOLLOWS));
+        }
         self.stats.frames_sent += frames.len();
         self.stats.bursts += 1;
         self.bursts_since_turn += 1;
@@ -2249,13 +2259,30 @@ impl LinkEngine {
             outside: false,
         };
         if self.decode_record(frame, &mut record) {
+            let delay = (frame.t_end() - self.now).max(0.0) + self.ack_after(frame, &record);
             self.burst.push(record);
-            let delay = (frame.t_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
             self.arm(Timer::Ack, delay);
         } else if record.outside && self.burst.is_empty() {
             // nothing of a burst arrived: the acknowledgement its preamble armed answers nobody
             self.disarm(Timer::Ack);
         }
+    }
+
+    /// How long after a frame of a burst its acknowledgement waits: the reply delay, and first
+    /// the frames the frame says follow it, each as long as itself (ADR-0041). A frame of the
+    /// burst lost in a fade then holds the answer as surely as one heard — in ND1J's session of
+    /// 2026-10-06 the acknowledgement went out over the burst's last frame 21 times, and both
+    /// were lost. The countdown is believed from a frame that decoded or whose acquisition was
+    /// trusted; a phantom's chips are noise.
+    fn ack_after<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> f64 {
+        let believed = record.payload.is_some() || frame.trusted();
+        let follows = if believed {
+            frame.follows().unwrap_or(0)
+        } else {
+            0
+        };
+        let rest = f64::from(follows) * (frame.t_end() - frame.t_start()).max(0.0);
+        rest + self.irs_reply_delay(None, None)
     }
 
     /// Decode a frame of the burst, alone or combined with an earlier transmission of its

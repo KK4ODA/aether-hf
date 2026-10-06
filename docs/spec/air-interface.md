@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 4,
+Status: **draft**, tracking the reference model on `master` (link protocol version 5,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -350,6 +350,15 @@ first transmission whose payload, and therefore sequence number, it never decode
 CONTROL frames always use the control mode and RV 0; their pilot symbols carry the plain
 pilot sequence.
 
+**The burst countdown** (link protocol version 5, ADR-0041). A DATA frame's chips are multiplied
+by `j^f`, where `f` is the number of frames of its burst that follow it, capped at 3 (0 for
+the last frame, 3 for "three or more"). A receiver picks the (mode, RV) sequence by the
+*magnitude* of its correlation, which the turn does not change, and reads `f` as the nearest
+quarter turn of that correlation's phase against the comb pilots' channel estimate; the pilot
+symbols are then known with the turned chips. A frame with `f = 0` is the frame of version 4.
+The countdown is outside the codeword, like the RV, so retransmissions still soft-combine
+whatever their position in a later burst. Tone-floor frames carry no countdown.
+
 ---
 
 ## 4. Modes — the ladder
@@ -506,7 +515,8 @@ carried, and a sender leaves that byte for the next frame.
 retransmission is the same codeword under another redundancy version, and the receiver
 soft-combines them; a header that changed would make the combination meaningless. That is why
 no burst length or position appears here — the receiver derives a frame's position in its
-burst from its air time, and the end of a burst from the silence that follows.
+burst from its air time, and the end of a burst from the silence that follows and from the
+countdown an OFDM frame carries in its chips (§3.2, §9).
 
 Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in a control
 frame), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5) and `DATAGRAM` (6). A receiver ignores a
@@ -524,7 +534,7 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 4 |
+| 15 | link protocol version: 5 |
 | 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
 
 A station ignores a request or an acceptance whose version is not its own, and says so.
@@ -783,7 +793,10 @@ selective-repeat window), and no more than fit in the transmitter's key time, on
 
 ## 9. Timing
 
-A receiver establishes the end of a burst from silence. Two cases:
+A receiver establishes the end of a burst from silence, and — on the OFDM rungs — from the
+countdown each frame carries (§3.2): after a frame that says `f` more follow, the receiver
+waits `f` frame times before the silence below can end the burst, so a following frame lost
+in a fade is not answered over (ADR-0041). The silence rule has two cases:
 
 * if the physical layer can report a *detected preamble* before the frame is decoded, the
   receiver need only wait that long plus a small guard;

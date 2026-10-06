@@ -62,6 +62,34 @@ pub struct FrameHeader {
     pub mode: usize,
     /// Redundancy version, for DATA frames.
     pub rv: u8,
+    /// How many more frames of its burst follow a DATA frame, at most [`MAX_FOLLOWS`]
+    /// (ADR-0041): the frame's mode chips are turned a quarter turn a frame.
+    pub follows: u8,
+}
+
+/// Most frames of its burst a DATA frame can say follow it (ADR-0041): four quarter turns, the
+/// last read as "three or more".
+pub const MAX_FOLLOWS: u8 = 3;
+
+/// The phase a DATA frame's mode chips are turned by to say `follows` (ADR-0041).
+#[must_use]
+pub const fn follows_turn(follows: u8) -> Complex {
+    match follows % 4 {
+        0 => (1.0, 0.0),
+        1 => (0.0, 1.0),
+        2 => (-1.0, 0.0),
+        _ => (0.0, -1.0),
+    }
+}
+
+/// The countdown a turned chip correlation names: the nearest quarter turn.
+#[must_use]
+pub fn follows_of(correlation: Complex) -> u8 {
+    let quarter = (correlation.1.atan2(correlation.0) / core::f64::consts::FRAC_PI_2).round();
+    // the nearest of four quarter turns, so the cast is of −2…2
+    #[allow(clippy::cast_possible_truncation)]
+    let quarter = quarter as i32;
+    quarter.rem_euclid(4) as u8
 }
 
 impl FrameHeader {
@@ -80,7 +108,19 @@ impl FrameHeader {
             frame_type,
             mode,
             rv,
+            follows: 0,
         })
+    }
+
+    /// The same header saying `follows` more frames of its burst come after it (ADR-0041).
+    ///
+    /// # Errors
+    /// If `follows` is over [`MAX_FOLLOWS`].
+    pub const fn with_follows(self, follows: u8) -> Result<Self, HeaderError> {
+        if follows > MAX_FOLLOWS {
+            return Err(HeaderError::BadFollows(follows));
+        }
+        Ok(Self { follows, ..self })
     }
 
     /// A control frame, which always uses the control mode and RV 0.
@@ -90,6 +130,7 @@ impl FrameHeader {
             frame_type: FrameType::Control,
             mode: 0,
             rv: 0,
+            follows: 0,
         }
     }
 }
@@ -101,6 +142,8 @@ pub enum HeaderError {
     BadMode(usize),
     /// Redundancy version outside the signalled range.
     BadRedundancyVersion(u8),
+    /// A burst countdown over [`MAX_FOLLOWS`].
+    BadFollows(u8),
 }
 
 impl core::fmt::Display for HeaderError {
@@ -109,6 +152,9 @@ impl core::fmt::Display for HeaderError {
             Self::BadMode(m) => write!(f, "mode index must be 0..{N_MODES}, got {m}"),
             Self::BadRedundancyVersion(rv) => {
                 write!(f, "redundancy version must be 0..{N_RV}, got {rv}")
+            }
+            Self::BadFollows(n) => {
+                write!(f, "frames following must be 0..={MAX_FOLLOWS}, got {n}")
             }
         }
     }

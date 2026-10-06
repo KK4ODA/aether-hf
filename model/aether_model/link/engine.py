@@ -34,12 +34,13 @@ import contextlib
 import math
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from aether_model.link.frames import (
     CONNECT_BODY_BYTES,
     MAX_BURST,
+    MAX_FOLLOWS,
     PROTOCOL_VERSION,
     WINDOW,
     ConnectBody,
@@ -1389,11 +1390,15 @@ class LinkEngine:
             if fresh:
                 self._ladder_pending = (mode, fresh)
         frames = []
-        for s in seqs:
+        for i, s in enumerate(seqs):
             rec = self._records[s]
             if rec.sent:
                 self.stats.frames_resent += 1
-            frames.append(self._data_frame(rec))
+            # each frame says how many of the burst come after it, so a receiver that loses
+            # one in a fade still knows the burst is not over and does not answer over it
+            # (ADR-0041)
+            follows = min(len(seqs) - 1 - i, MAX_FOLLOWS)
+            frames.append(replace(self._data_frame(rec), follows=follows))
         self.stats.frames_sent += len(frames)
         self.stats.bursts += 1
         self._burst_seqs = seqs
@@ -1499,11 +1504,23 @@ class LinkEngine:
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
         if self._decode_record(rec):
-            self._arm("ack", max(0.0, frame.t_end - self.now) + self._irs_reply_delay())
+            self._arm("ack", max(0.0, frame.t_end - self.now) + self._ack_after(rec))
         elif rec.outside:
             self._burst.remove(rec)
             if not self._burst:
                 self._disarm("ack")
+
+    def _ack_after(self, rec: _RxRecord) -> float:
+        """How long after a frame of a burst its acknowledgement waits: the reply delay, and
+        first the frames the frame says follow it, each as long as itself (ADR-0041). A
+        frame of the burst lost in a fade then holds the answer as surely as one heard — in
+        ND1J's session of 2026-10-06 the acknowledgement went out over the burst's last frame
+        21 times, and both were lost. The countdown is believed from a frame that decoded or
+        whose acquisition was trusted; a phantom's chips are noise."""
+        frame = rec.frame
+        follows = frame.follows if (rec.payload is not None or frame.trusted) else None
+        rest = (follows or 0) * max(0.0, frame.t_end - frame.t_start)
+        return rest + self._irs_reply_delay()
 
     def _decode_record(self, rec: _RxRecord) -> bool:
         """Decode a frame of the burst, alone or combined with an earlier transmission of its

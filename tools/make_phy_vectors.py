@@ -237,8 +237,15 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
         (NARROW_MODES[12], NARROW_LONG, FrameType.DATA, 1),
         (NARROW_CONTROL_MODE, NARROW_SHORT, FrameType.CONTROL, 0),
     ]
+    # frames saying how many of their burst follow them (ADR-0041), last so the cases before
+    # keep their payloads: the chips turned by one, two and three quarter turns
+    counted = [
+        (MODES[4], LONG, FrameType.DATA, 2, 3),
+        (NARROW_MODES[7], NARROW_LONG, FrameType.DATA, 0, 1),
+        (NARROW_MODES[3], NARROW_LONG, FrameType.DATA, 3, 2),
+    ]
     transmitters_by_params: dict = {}
-    for mode, layout, frame_type, rv in cases:
+    for mode, layout, frame_type, rv, follows in [(*c, 0) for c in cases] + counted:
         params = layout.waveform
         if params not in transmitters_by_params:
             transmitters_by_params[params] = (
@@ -254,7 +261,7 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
         payload = rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8).tobytes()
         qam = codec.encode(payload, rv)
         header = (
-            FrameHeader(FrameType.DATA, mode.index, rv)
+            FrameHeader(FrameType.DATA, mode.index, rv, follows)
             if frame_type is FrameType.DATA
             else FrameHeader(FrameType.CONTROL)
         )
@@ -275,6 +282,7 @@ def waveform_cases() -> list[dict]:  # type: ignore[type-arg]
                     "layout": layout.name,
                     "frame_type": frame_type.name,
                     "rv": rv,
+                    "follows": follows,
                     "peak_reduced": peak_reduced,
                     "payload": payload.hex(),
                     "n_samples": len(waveform),

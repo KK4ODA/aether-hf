@@ -334,6 +334,7 @@ fn absorb(
             t_s: start,
             start_s: Some(start),
             end_s: Some(start + decoded.frame.samples(air) as f64 / fs),
+            follows: decoded.frame.follows(),
             kind: if control {
                 "control".to_owned()
             } else {

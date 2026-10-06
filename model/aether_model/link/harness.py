@@ -61,6 +61,8 @@ class RealSoftFrame:
     _decode: Callable[[FloatArray | None], tuple[bytes | None, FloatArray]]
     trusted: bool = True
     """The harness detects in a buffer that holds the frame it sent: what it finds is real."""
+    follows: int | None = None
+    """The burst countdown its chips carried (ADR-0041); ``None`` for tone and control frames."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         buf = buffer if isinstance(buffer, np.ndarray) else None
@@ -151,7 +153,7 @@ class PhyBridge:
     def _burst(self, frame: TxFrame) -> ComplexArray:
         if frame.container is Container.DATA:
             self.modes_sent.append(frame.mode)
-            return self.modem.rung_burst(frame.payload, frame.mode, frame.rv)
+            return self.modem.rung_burst(frame.payload, frame.mode, frame.rv, frame.follows)
         return self.modem.control_burst(frame.payload, frame.rv, floor=frame.floor)
 
     def padded(self, burst: ComplexArray) -> ComplexArray:
@@ -238,6 +240,7 @@ class PhyBridge:
             t_end=t_end,
             floor=False,
             _decode=decode,
+            follows=received.follows if data else None,
         )
 
 
