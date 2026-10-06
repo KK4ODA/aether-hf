@@ -863,7 +863,12 @@ mod tests {
             let noise = power / 10f64.powf(1.8) * WIDE_2300.fs_baseband / 3000.0;
             // twenty carriers across 200 Hz around +300 Hz, at the signal's power in all
             let tones: Vec<(f64, f64)> = (0..20)
-                .map(|_| (200.0 + 200.0 * rng.uniform(), std::f64::consts::TAU * rng.uniform()))
+                .map(|_| {
+                    (
+                        200.0 + 200.0 * rng.uniform(),
+                        std::f64::consts::TAU * rng.uniform(),
+                    )
+                })
                 .collect();
             let amplitude = (power / tones.len() as f64).sqrt();
             for (n, sample) in buffer.iter_mut().enumerate() {
@@ -883,7 +888,12 @@ mod tests {
                 };
                 let frame = rx.receive(&buffer, &sync, None).expect("receive");
                 let (payload, _) = codec
-                    .decode(&frame.symbols, NoiseVar::PerSymbol(&frame.noise_var), 0, None)
+                    .decode(
+                        &frame.symbols,
+                        NoiseVar::PerSymbol(&frame.noise_var),
+                        0,
+                        None,
+                    )
                     .expect("decode");
                 decoded.push(payload.as_deref() == Some(data.as_slice()));
                 reported.push(frame.snr_3k_db);
