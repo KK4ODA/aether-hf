@@ -411,8 +411,16 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// air, between the floor's two and the OFDM modes, and a control frame whose recommended
 /// mode has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two
 /// more rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz
-/// ladder is as it was, but one number says what both ladders are).
-pub const PROTOCOL_VERSION: u8 = 4;
+/// ladder is as it was, but one number says what both ladders are). 5 since the burst countdown
+/// (ADR-0041): an ordinary data frame's mode chips are turned by the number of frames of its
+/// burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
+/// noise.
+pub const PROTOCOL_VERSION: u8 = 5;
+
+/// Most frames of its burst a data frame says follow it (ADR-0041): the physical layer turns
+/// the frame's mode chips a quarter turn a frame, so four values, the last meaning "three or
+/// more".
+pub const MAX_FOLLOWS: u8 = 3;
 
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;

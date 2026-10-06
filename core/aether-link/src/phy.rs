@@ -34,6 +34,10 @@ pub struct TxFrame {
     /// A control frame to go out on the floor — the tone floor's control frame (ADR-0013).
     /// A data frame's family follows its mode; this flag is only read for control frames.
     pub floor: bool,
+    /// How many more frames of its burst follow this data frame, at most three (ADR-0041).
+    /// The engine sets it when it lays out a burst; a frame that cannot carry it (the tone
+    /// floor's) goes without.
+    pub follows: u8,
 }
 
 /// A frame the physical layer detected, whether or not its payload decoded.
@@ -56,6 +60,11 @@ pub trait SoftFrame {
     /// A frame that decodes is real whatever this says; a simulated frame is always real.
     fn trusted(&self) -> bool {
         true
+    }
+    /// How many more frames of its burst the frame says follow it, as the physical layer read
+    /// it (ADR-0041); `None` when the frame cannot say — a tone-floor frame, a control frame.
+    fn follows(&self) -> Option<u8> {
+        None
     }
     /// When the frame started, in the receiver's clock.
     fn t_start(&self) -> f64;

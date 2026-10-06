@@ -560,10 +560,11 @@ fn whole_frames_match_the_model() {
         let demodulator = OfdmDemodulator::new(params);
         let period = params.symbol_samples();
         let label = format!(
-            "{} Hz {} rv{} ({})",
+            "{} Hz {} rv{} follows {} ({})",
             params.bandwidth.hz(),
             case["mode_name"].as_str().unwrap_or("?"),
             int(case, "rv"),
+            int(case, "follows"),
             case["layout"].as_str().unwrap_or("?")
         );
         let (mode, layout) = mode_and_layout(&air, case);
@@ -579,7 +580,10 @@ fn whole_frames_match_the_model() {
         };
         let rv = int(case, "rv") as u8;
         let header = match case["frame_type"].as_str().expect("frame type") {
-            "DATA" => FrameHeader::new(FrameType::Data, mode.index, rv).expect("header"),
+            // the burst countdown turns the chips (ADR-0041)
+            "DATA" => FrameHeader::new(FrameType::Data, mode.index, rv)
+                .and_then(|header| header.with_follows(int(case, "follows") as u8))
+                .expect("header"),
             "CONTROL" => FrameHeader::control(),
             other => panic!("unknown frame type {other}"),
         };

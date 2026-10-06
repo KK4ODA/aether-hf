@@ -31,6 +31,10 @@ class TxFrame:
     floor: bool = False
     """A CONTROL frame to go out on the floor — the tone floor's control frame (ADR-0013).
     A DATA frame's family follows its mode; this flag is only read for control frames."""
+    follows: int = 0
+    """How many more frames of its burst follow this DATA frame, at most three (ADR-0041).
+    The engine sets it when it lays out a burst; a PHY whose frame cannot carry it (the tone
+    floor's) leaves it off the air."""
 
 
 class SoftFrame(Protocol):
@@ -50,6 +54,9 @@ class SoftFrame(Protocol):
     floor: bool
     """The frame is the floor's (the tone floor, ADR-0013). A DATA frame's family is also
     its mode's; for a control frame this is the only way the engine learns it."""
+    follows: int | None
+    """How many more frames of its burst the frame says follow it (ADR-0041), as the PHY read
+    it; ``None`` when the frame cannot say — a tone-floor frame, a control frame."""
     """Air time of the frame in the receiver's clock (seconds)."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:

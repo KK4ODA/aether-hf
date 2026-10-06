@@ -66,6 +66,9 @@ pub struct SimFrame {
     /// The SNR the receiver reports, which the frame is not judged at when they differ: a
     /// tone-floor frame's reading capped ([`TwoStationSim::with_floor_reading_cap`]).
     reported_db: f64,
+    /// The burst countdown as sent, on an ordinary data frame (ADR-0041): a simulated
+    /// receiver reads it right whenever it detects the frame.
+    follows: Option<u8>,
 }
 
 impl SimFrame {
@@ -92,6 +95,7 @@ impl SimFrame {
             threshold: AWGN_THRESHOLD_DB.get(mode).copied().unwrap_or(0.0),
             floor: false,
             reported_db: snr_db,
+            follows: None,
         }
     }
 }
@@ -115,6 +119,10 @@ impl SoftFrame for SimFrame {
 
     fn snr_db(&self) -> f64 {
         self.reported_db
+    }
+
+    fn follows(&self) -> Option<u8> {
+        self.follows
     }
 
     fn t_start(&self) -> f64 {
@@ -276,6 +284,8 @@ pub struct TwoStationSim {
     key_limit_s: Option<f64>,
     /// Frames a receiver never detects ([`with_unheard`](Self::with_unheard)).
     unheard: Option<Unheard>,
+    /// Receivers read no burst countdown ([`without_countdown`](Self::without_countdown)).
+    no_countdown: bool,
     /// Decibels added to the channel SNR for one frame
     /// ([`with_frame_snr_offset`](Self::with_frame_snr_offset)).
     frame_snr_offset: Option<FrameSnrOffset>,
@@ -300,8 +310,29 @@ impl TwoStationSim {
             floor_reading_cap_db: None,
             key_limit_s: None,
             unheard: None,
+            no_countdown: false,
             frame_snr_offset: None,
         }
+    }
+
+    /// Receivers that read no burst countdown, as before ADR-0041: they take the silence after
+    /// a frame for the end of the burst — the comparison the countdown is measured against.
+    #[must_use]
+    pub const fn without_countdown(mut self) -> Self {
+        self.no_countdown = true;
+        self
+    }
+
+    /// How many of station `b`'s transmissions overlapped one of station `a`'s: answers keyed
+    /// over the other station's burst, which neither hears.
+    #[must_use]
+    pub fn collisions(&self, a: usize, b: usize) -> usize {
+        let theirs = &self.stations[a].busy;
+        self.stations[b]
+            .busy
+            .iter()
+            .filter(|&&(b0, b1)| theirs.iter().any(|&(x, y)| x < b1 - 1e-9 && b0 + 1e-9 < y))
+            .count()
     }
 
     /// Frames a receiver never detects, preamble or frame: called with the receiver, the
@@ -576,6 +607,8 @@ impl TwoStationSim {
             draw: if cut { 2.0 } else { self.rng.next_unit() },
             threshold,
             floor,
+            follows: (frame.container == Container::Data && !floor && !self.no_countdown)
+                .then_some(frame.follows),
         };
         self.stations[rx].engine.tick(arrival);
         self.stations[rx].engine.on_frame(&sim, arrival);

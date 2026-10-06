@@ -19,7 +19,7 @@ use crate::{
     modes::{AirInterface, FrameLayout, Mode, Rung, air_interface},
     ofdm::DemodError,
     passband::band_limit_taps,
-    preamble::{FrameHeader, FrameType, HeaderError},
+    preamble::{FrameHeader, FrameType, HeaderError, MAX_FOLLOWS},
     rx::{FrameReceiver, FrameSync, ReceivedFrame},
     sync::FrameDetector,
     tone::{self, ToneCodec, ToneDetector, ToneFrame, ToneKind, ToneSync},
@@ -143,6 +143,16 @@ impl Received {
         match self {
             Self::Ofdm(frame) => frame.cfo_hz,
             Self::Tone(_, sync) => sync.cfo_hz,
+        }
+    }
+
+    /// How many more frames of its burst an ordinary DATA frame says follow it (ADR-0041);
+    /// `None` for a control frame and a tone frame, which cannot say.
+    #[must_use]
+    pub fn follows(&self) -> Option<u8> {
+        match self {
+            Self::Ofdm(frame) if frame.sync.frame_type == FrameType::Data => Some(frame.follows),
+            _ => None,
         }
     }
 
@@ -350,9 +360,25 @@ impl Modem {
         mode: Mode,
         rv: u8,
     ) -> Result<Vec<Complex>, ModemError> {
+        self.data_burst_following(payload, mode, rv, 0)
+    }
+
+    /// [`Self::data_burst`] for a frame `follows` more frames of its burst come after; its
+    /// chips say so, up to [`MAX_FOLLOWS`] (ADR-0041).
+    ///
+    /// # Errors
+    /// If the payload is the wrong length for the mode.
+    pub fn data_burst_following(
+        &mut self,
+        payload: &[u8],
+        mode: Mode,
+        rv: u8,
+        follows: u8,
+    ) -> Result<Vec<Complex>, ModemError> {
         let layout = self.air.long;
         let qam = self.codec(mode, layout)?.encode(payload, rv)?;
-        let header = FrameHeader::new(FrameType::Data, mode.index, rv)?;
+        let header = FrameHeader::new(FrameType::Data, mode.index, rv)?
+            .with_follows(follows.min(MAX_FOLLOWS))?;
         Ok(self.tx.baseband(&header, &layout, &qam)?)
     }
 
@@ -370,9 +396,28 @@ impl Modem {
         rung: usize,
         rv: u8,
     ) -> Result<Vec<Complex>, ModemError> {
+        self.rung_burst_following(payload, rung, rv, 0)
+    }
+
+    /// [`Self::rung_burst`] for a frame `follows` more frames of its burst come after. An
+    /// OFDM frame says so in its chips (ADR-0041); a tone frame has nowhere to and goes
+    /// without it.
+    ///
+    /// # Errors
+    /// If the payload is the wrong length for the rung.
+    ///
+    /// # Panics
+    /// If the ladder has no such rung.
+    pub fn rung_burst_following(
+        &mut self,
+        payload: &[u8],
+        rung: usize,
+        rv: u8,
+        follows: u8,
+    ) -> Result<Vec<Complex>, ModemError> {
         match self.air.rung(rung) {
             Rung::Tone(kind) => Ok(tone::burst(self.tone_codec(kind)?, payload, rv)?),
-            Rung::Ofdm(mode, _) => self.data_burst(payload, mode, rv),
+            Rung::Ofdm(mode, _) => self.data_burst_following(payload, mode, rv, follows),
         }
     }
 
@@ -632,6 +677,43 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert!(frames[0].frame.is_control());
         assert_eq!(frames[0].payload.as_deref(), Some(payload.as_slice()));
+    }
+
+    #[test]
+    fn a_data_frame_says_how_many_of_its_burst_follow_it() {
+        // the countdown turns the mode chips a quarter turn a frame; the receiver reads the
+        // turn and decodes the frame as before, on both airs (ADR-0041)
+        for params in [crate::waveform::WIDE_2300, crate::waveform::NARROW_500] {
+            let mut modem = Modem::new(params, false);
+            let mode = modem.modes()[4];
+            let payload: Vec<u8> = (0..modem.payload_bytes(Some(mode)))
+                .map(|i| (i * 13 + 5) as u8)
+                .collect();
+            for follows in 0..=MAX_FOLLOWS {
+                let burst = modem
+                    .data_burst_following(&payload, mode, 1, follows)
+                    .expect("burst");
+                let mut buffer = vec![(0.0, 0.0); 700];
+                buffer.extend(burst);
+                buffer.extend(std::iter::repeat_n((0.0, 0.0), 1200));
+                let decoded = modem.decode_buffer(&buffer, 2);
+                assert_eq!(
+                    decoded.len(),
+                    1,
+                    "{} Hz, {follows} following",
+                    params.bandwidth.hz()
+                );
+                assert_eq!(decoded[0].frame.follows(), Some(follows));
+                assert_eq!(decoded[0].frame.rv(), 1);
+            }
+            // a control frame cannot say
+            let control = modem.control_burst(&[1, 2, 3], 0).expect("burst");
+            let mut buffer = vec![(0.0, 0.0); 700];
+            buffer.extend(control);
+            buffer.extend(std::iter::repeat_n((0.0, 0.0), 1200));
+            let decoded = modem.decode_buffer(&buffer, 2);
+            assert_eq!(decoded[0].frame.follows(), None);
+        }
     }
 
     #[test]

@@ -1868,6 +1868,7 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "to": frame.to,
         "control": frame.control,
         "bandwidth_hz": frame.bandwidth_hz,
+        "follows": frame.follows,
     })
 }
 

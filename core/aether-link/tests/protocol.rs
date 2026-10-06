@@ -1720,13 +1720,15 @@ impl aether_link::SoftFrame for Handed {
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
-    // version 4 of the link protocol numbers the 500 Hz ladder's rungs with its middle kinds
+    // version 5 turns an ordinary data frame's mode chips by the frames of its burst that
+    // follow it (ADR-0041), which a version 4 receiver takes for noise; version 4 of the link
+    // protocol numbers the 500 Hz ladder's rungs with its middle kinds
     // (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
     // ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     // other frames by the same numbers, so a call from one is not a session to start — it is
     // ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 4);
-    for version in [1u8, 2, 3] {
+    assert_eq!(PROTOCOL_VERSION, 5);
+    for version in [1u8, 2, 3, 4] {
         let t = timing(false);
         let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
         let body = ConnectBody {
@@ -2905,4 +2907,46 @@ fn a_disconnect_leaves_without_what_the_path_will_not_carry() {
         "{events:?}"
     );
     assert!(ended - asked < 120.0, "{:.0} s to leave", ended - asked);
+}
+
+fn fading_session(countdown: bool) -> TwoStationSim {
+    let t = air_timing(NARROW_500, true);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    // three data frames in ten fade out of the receiver's hearing altogether: not even their
+    // preambles are detected (the same frame is judged the same each time it is asked)
+    let faded: aether_link::sim::Unheard = Box::new(|rx, container, t0| {
+        rx == 1 && container == Container::Data && ((t0 * 1000.0) as i64).rem_euclid(10) < 3
+    });
+    let mut sim = TwoStationSim::new(a, b, 14.0, 3).with_unheard(faded);
+    if !countdown {
+        sim = sim.without_countdown();
+    }
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    let connected_by = sim.run(60.0, 1e9);
+    assert_eq!(sim.engine(0).state(), State::Connected, "{connected_by}");
+    let message: Vec<u8> = (0..12).flat_map(|_| 0..=255u8).collect();
+    sim.engine_mut(0).send(&message);
+    sim.run(connected_by + 900.0, 3.0);
+    sim
+}
+
+#[test]
+fn a_receiver_does_not_answer_over_a_frame_it_lost_in_a_fade() {
+    // ND1J, 2026-10-06: the last frame of his bursts arrived faded, KK4ODA-1 took the silence
+    // for the end of the burst and acknowledged over it 21 times in eight minutes — the frame
+    // lost, the acknowledgement unheard, the burst sent again. Each frame now says how many of
+    // its burst follow it (ADR-0041), and a receiver that loses one still waits for it.
+    let blind = fading_session(false);
+    let told = fading_session(true);
+    let message: Vec<u8> = (0..12).flat_map(|_| 0..=255u8).collect();
+    assert_eq!(told.delivered(1), message.as_slice());
+    let (before, after) = (blind.collisions(0, 1), told.collisions(0, 1));
+    assert!(
+        before >= 5,
+        "the fades caused only {before} collisions without the countdown"
+    );
+    assert!(
+        after <= before / 4,
+        "{after} collisions with the countdown, {before} without"
+    );
 }

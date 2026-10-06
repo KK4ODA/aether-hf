@@ -255,3 +255,32 @@ def test_full_audio_path_round_trip(modem: Modem, rng: np.random.Generator) -> N
     y = AudioToBaseband(P).process(audio.astype(np.float64))
     frames = modem.decode_buffer(y)
     assert len(frames) == 1 and frames[0].payload == payload
+
+
+@pytest.mark.parametrize("bandwidth", [2300, 500])
+def test_a_data_frame_says_how_many_of_its_burst_follow_it(bandwidth: int) -> None:
+    """The burst countdown (ADR-0041) turns a DATA frame's mode chips a quarter turn a frame:
+    the receiver reads it at 0 dB through a carrier offset, and the frame decodes as before."""
+    from aether_model.phy.preamble import FrameHeader
+    from aether_model.waveform import WAVEFORMS, Bandwidth
+
+    params = WAVEFORMS[Bandwidth(bandwidth)]
+    modem = Modem(params)
+    mode = next(r.mode for r in modem.air.ladder if r.mode is not None)
+    layout = modem.air.long
+    codec = modem.codec(mode, layout)
+    rng = np.random.default_rng(bandwidth)
+    for follows in range(4):
+        payload = bytes(rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8))
+        burst = modem.tx.baseband(
+            FrameHeader(FrameType.DATA, mode.index, 0, follows), layout, codec.encode(payload, 0)
+        )
+        y = np.concatenate((np.zeros(1500, complex), burst, np.zeros(3000, complex)))
+        y = make_channel(
+            "awgn", snr_db=0.0, fs=params.fs_baseband, seed=follows, signal_power=1.0, cfo_hz=17.0
+        ).process(y)
+        y = modem.detector.condition(y)
+        frame = modem.demodulate(y, modem.detector.detect(y, max_frames=1)[0])
+        assert (frame.mode, frame.rv, frame.follows) == (mode.index, 0, follows)
+        out, _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
+        assert out == payload

@@ -14,7 +14,7 @@ use crate::{
     modes::{AirInterface, FrameLayout, air_interface},
     ofdm::OfdmModulator,
     papr::{ClipAndFilter, clip_target_db},
-    preamble::{FrameHeader, FrameType, Preamble},
+    preamble::{FrameHeader, FrameType, Preamble, follows_turn},
     waveform::{WIDE_2300, WaveformParams},
 };
 
@@ -116,7 +116,10 @@ impl FrameTransmitter {
                     FrameType::Control => None,
                 };
                 pilot_number += 1;
-                symbols.push(self.modulator.pilot_symbol(chips.as_deref()));
+                symbols.push(
+                    self.modulator
+                        .pilot_symbol_turned(chips.as_deref(), follows_turn(header.follows)),
+                );
             } else {
                 let slice = &qam[position..position + self.n_data_carriers];
                 position += self.n_data_carriers;

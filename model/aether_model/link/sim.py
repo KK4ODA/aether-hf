@@ -91,6 +91,9 @@ class SimFrame:
     Unset, its reported SNR."""
     trusted: bool = True
     """A simulated frame is a real frame, and its SNR the channel's."""
+    follows: int | None = None
+    """The burst countdown as sent, on an ordinary DATA frame (ADR-0041): a simulated
+    receiver reads it right whenever it detects the frame."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
@@ -220,6 +223,7 @@ class TwoStationSim:
             _decode_snr_db=decode_snr_db,
             _threshold=threshold,
             _judge_snr_db=judge_snr_db,
+            follows=None if control or floor else frame.follows,
         )
 
     # ── scheduling ────────────────────────────────────────────────────

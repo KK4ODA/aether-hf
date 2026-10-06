@@ -255,6 +255,7 @@ impl<P: Ptt> Station<P> {
                 mode: rung,
                 rv: 0,
                 floor: false,
+                follows: 0,
             })
             .collect();
         let count = frames.len();
