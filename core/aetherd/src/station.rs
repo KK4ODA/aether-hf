@@ -310,6 +310,15 @@ fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
         .max(1.1)
 }
 
+/// How much of a frame that did not decode may lie under this station's own transmission
+/// before it is taken for a fragment and kept from the engine: more than the receiver's
+/// timing slack and the capture's lag, less than any frame.
+const UNDER_OWN_TX_S: f64 = 0.05;
+
+/// The spans of this station's own transmissions remembered for that judgement: a frame
+/// reaches the engine within a second or two of its end.
+const MUTED_SPANS_KEPT: usize = 8;
+
 /// How much later than the playback lead a sound card's capture of this station's own
 /// burst may still be arriving, over and above the lead itself: device buffering both ways,
 /// and the radio's own switch back to receive. Measured on an FTDX10 over USB: the receive
@@ -723,6 +732,9 @@ pub struct StationStats {
     pub transmissions: usize,
     /// Frames acquisition found.
     pub frames_detected: usize,
+    /// Frames that did not decode and lay partly under this station's own transmission, so
+    /// were never heard whole: kept from the engine.
+    pub frames_under_own_tx: usize,
     /// Times a transmission was held back because the channel was busy.
     pub deferred_for_busy: usize,
     /// Transmissions held for the answer gap after another station's frame (ADR-0036).
@@ -808,6 +820,9 @@ pub struct Station<P: Ptt> {
     /// it leaves, which is what lets the level change under a tone that is playing.
     playback: VecDeque<f32>,
     baseband_seen: usize,
+    /// The receiver's input this station muted while it transmitted, as spans of
+    /// `baseband_seen`, the latest last.
+    muted: VecDeque<(usize, usize)>,
     audio_seen: usize,
     transmitting: bool,
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
@@ -1009,6 +1024,7 @@ impl<P: Ptt> Station<P> {
             busy,
             playback: VecDeque::new(),
             baseband_seen: 0,
+            muted: VecDeque::new(),
             audio_seen: 0,
             transmitting: false,
             playing_test: false,
@@ -2285,11 +2301,13 @@ impl<P: Ptt> Station<P> {
             let after = self.captured_after_transmission(audio.len(), baseband.len());
             if after == 0 || !self.playback.is_empty() {
                 let muted = vec![(0.0, 0.0); baseband.len()];
+                self.note_muted(muted.len());
                 self.absorb(&muted, now);
             } else {
                 let during = baseband.len() - after;
                 let ended = now - after as f64 * self.config.params.fs_baseband.recip();
                 let muted = vec![(0.0, 0.0); during];
+                self.note_muted(during);
                 self.absorb(&muted, ended);
                 self.finish_transmission(ended)?;
                 self.absorb(&baseband[during..], now);
@@ -2551,6 +2569,53 @@ impl<P: Ptt> Station<P> {
     // ── internals ─────────────────────────────────────────────────────
 
     /// Feed the streaming receiver and pass what it finds to the engine.
+    /// The next `len` samples the receiver is given are silence for this station's own
+    /// transmission.
+    fn note_muted(&mut self, len: usize) {
+        let from = self.baseband_seen;
+        match self.muted.back_mut() {
+            Some(span) if span.1 == from => span.1 += len,
+            _ => {
+                self.muted.push_back((from, from + len));
+                if self.muted.len() > MUTED_SPANS_KEPT {
+                    self.muted.pop_front();
+                }
+            }
+        }
+    }
+
+    /// Whether a frame found at receiver samples `start..end` lay under this station's own
+    /// transmission for more than [`UNDER_OWN_TX_S`].
+    fn under_own_tx(&self, start: usize, end: usize) -> bool {
+        let limit = UNDER_OWN_TX_S * self.config.params.fs_baseband;
+        self.muted.iter().any(|&(m0, m1)| {
+            let overlap = end.min(m1).saturating_sub(start.max(m0));
+            overlap as f64 > limit
+        })
+    }
+
+    /// A frame that did not decode and lay partly under this station's own transmission
+    /// was never heard whole — the receiver was given silence for that part — and its timing
+    /// is as doubtful as its content: one acquired three quarters of a second late, out of the
+    /// last frame of a burst already acknowledged, ran on under the acknowledgement, took a
+    /// burst to be still arriving, and the acknowledgement went again over the sender's next
+    /// burst (the scenario harness, 80 m at 500 Hz). It says nothing of the other station's
+    /// burst, and the engine does not see it.
+    fn fragment_of_own_tx(
+        &mut self,
+        decoded: &aether_phy::modem::DecodedFrame,
+        origin: usize,
+        air: &aether_phy::modes::AirInterface,
+    ) -> bool {
+        let first = origin + decoded.frame.start();
+        let fragment =
+            !decoded.ok() && self.under_own_tx(first, first + decoded.frame.samples(air));
+        if fragment {
+            self.stats.frames_under_own_tx += 1;
+        }
+        fragment
+    }
+
     fn absorb(&mut self, baseband: &[Complex], now: f64) {
         let fs = self.config.params.fs_baseband;
         // where this receiver's positions start: a move to the other bandwidth (ADR-0026)
@@ -2623,13 +2688,12 @@ impl<P: Ptt> Station<P> {
                 );
                 continue;
             }
-            let container = if control {
-                Container::Control
-            } else {
-                Container::Data
-            };
+            let container = [Container::Data, Container::Control][usize::from(control)];
             let start = (origin + decoded.frame.start()) as f64 / fs;
             let frame_s = decoded.frame.samples(&air) as f64 / fs;
+            if self.fragment_of_own_tx(&decoded, origin, &air) {
+                continue;
+            }
             // the answer gap counts from the end of whatever was heard, read or not: a frame
             // that did not decode is still answered (ADR-0036)
             self.heard_end = self.heard_end.max(start + frame_s);
@@ -4558,6 +4622,38 @@ mod tests {
             NullPtt::default(),
             1,
         )
+    }
+
+    /// A frame that did not decode is kept from the engine when more than
+    /// [`UNDER_OWN_TX_S`] of it lay under this station's own transmission — the receiver was
+    /// given silence there — and not when it only touches it, or lies clear of it.
+    #[test]
+    fn a_frame_under_the_stations_own_transmission_is_a_fragment() {
+        let mut station = idle_station();
+        let fs = station.config.params.fs_baseband;
+        let s = |seconds: f64| (seconds * fs) as usize;
+        station.baseband_seen = s(10.0);
+        station.note_muted(s(0.5));
+        station.baseband_seen += s(0.5);
+        // muted in two blocks: one span
+        station.note_muted(s(0.4));
+        station.baseband_seen += s(0.4);
+        assert_eq!(station.muted.len(), 1);
+        assert_eq!(station.muted[0], (s(10.0), s(10.9)));
+        // a frame acquired late, running on under the transmission
+        assert!(station.under_own_tx(s(9.2), s(10.25)));
+        // one that ended as the station keyed, within the receiver's slack
+        assert!(!station.under_own_tx(s(8.9), s(10.03)));
+        // one after it
+        assert!(!station.under_own_tx(s(11.0), s(12.0)));
+        // the spans kept are the latest
+        for k in 0..MUTED_SPANS_KEPT + 2 {
+            station.baseband_seen += s(1.0);
+            station.note_muted(s(0.1) + k);
+            station.baseband_seen += s(0.1) + k;
+        }
+        assert_eq!(station.muted.len(), MUTED_SPANS_KEPT);
+        assert!(!station.under_own_tx(s(9.2), s(10.25)));
     }
 
     /// Run the station until it has nothing queued, returning the largest sample it played.
