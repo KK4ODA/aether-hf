@@ -170,6 +170,12 @@ pub mod control_flags {
     pub const WANT_TX: u8 = 0x1;
     /// The receiving station demands the sending role now.
     pub const BREAK: u8 = 0x2;
+    /// (TURN) Sent at the end of a burst that emptied the sender's queue: the turn is the
+    /// receiving station's for the taking, with its acknowledgement (ADR-0047).
+    pub const OFFER: u8 = 0x4;
+    /// (ACK) The turn offered is taken: this station's own data follows the acknowledgement
+    /// in the same transmission (ADR-0047).
+    pub const TAKEN: u8 = 0x8;
 }
 
 /// Anything malformed in a received frame.

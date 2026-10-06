@@ -3109,3 +3109,41 @@ fn a_fade_over_the_end_of_a_burst_is_not_answered_over() {
         assert_eq!(sim.collisions(0, 1), 0, "offset {offset}");
     }
 }
+
+/// ADR-0047 (proposed, off by default): a burst that empties the sender's queue ends with a
+/// TURN carrying OFFER, and a receiving station with data answers with an acknowledgement
+/// carrying TAKEN and its own burst in the same transmission — one keying for the change of
+/// direction where the request and the TURN take two. Off, the handover is a TURN as before.
+#[test]
+fn the_turn_on_offer_is_taken_in_the_acknowledgement() {
+    for offer in [false, true] {
+        let t = timing(false);
+        let config = LinkConfig {
+            offer_turn: offer,
+            ..LinkConfig::default()
+        };
+        let (mut a, mut b) = pair(&t, &config);
+        let reply: Vec<u8> = "REPLY FROM KK4XYZ. ".repeat(8).into_bytes();
+        let outbound = vec![0u8; 300];
+        a.connect("KK4XYZ").expect("idle");
+        a.send(&outbound);
+        b.send(&reply);
+        let mut sim = TwoStationSim::new(a, b, 12.0, 5);
+        sim.run(300.0, 3.0);
+        assert_eq!(
+            sim.delivered(1),
+            outbound.as_slice(),
+            "A to B, offer {offer}"
+        );
+        assert_eq!(sim.delivered(0), reply.as_slice(), "B to A, offer {offer}");
+        let (a, b) = (&sim.engine(0).stats, &sim.engine(1).stats);
+        if offer {
+            assert!(a.turn_offers >= 1, "offers {}", a.turn_offers);
+            assert_eq!(b.turns_taken, 1);
+            assert_eq!(a.turns, 0);
+        } else {
+            assert_eq!((a.turn_offers, b.turns_taken), (0, 0));
+            assert_eq!(a.turns, 1);
+        }
+    }
+}
