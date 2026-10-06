@@ -266,6 +266,20 @@ pub fn file_size_for(message_bps: f64, ceiling: usize, remaining_s: f64) -> usiz
     earned.clamp(1024.min(ceiling), ceiling)
 }
 
+/// The time the ladder leaves for the file: the least file there is — a kilobyte, or the
+/// ceiling when that is smaller — at the rate the message measured, the minute
+/// [`file_size_for`] keeps in hand, and half a minute for the rung that may be in flight when
+/// the ladder looks. On the 80 m asymmetric scenario a ladder that passed rung 10 ran until 30 s
+/// were left, and a kilobyte at 70 bit/s then timed out (the scenario harness, 2026-10-06).
+/// Nothing when there is no file, or no rate to size it by.
+#[must_use]
+pub fn file_reserve_s(message_bps: f64, ceiling: usize) -> f64 {
+    if ceiling == 0 || message_bps <= 0.0 {
+        return 0.0;
+    }
+    1024.min(ceiling) as f64 * 8.0 / message_bps + 60.0 + 30.0
+}
+
 /// A Test session in progress, or the last one run.
 #[derive(Debug, Clone)]
 pub struct TestRun {
@@ -726,7 +740,11 @@ impl<P: Ptt> Station<P> {
                 self.sync_test_report(run);
             }
             Step::Ladder => {
-                let out_of_time = run.remaining_s(now) < 30.0;
+                // a rung is started only with the file's time still in hand; one under way is
+                // seen through
+                let bps = run.message.map_or(0.0, |m| m.bps());
+                let reserve = file_reserve_s(bps, run.plan.file_bytes).max(30.0);
+                let out_of_time = !run.entered && run.remaining_s(now) < reserve;
                 if !run.plan.ladder
                     || run.ladder_next >= run.modes.len()
                     || run.ladder_fails >= LADDER_FAILS
@@ -734,7 +752,7 @@ impl<P: Ptt> Station<P> {
                 {
                     if run.plan.ladder && out_of_time && run.ladder_next < run.modes.len() {
                         run.adjustments.push(format!(
-                            "ladder stopped after {} rungs: no time left",
+                            "ladder stopped after {} rungs: the time left is the file's",
                             run.rungs.len()
                         ));
                     }
@@ -743,7 +761,6 @@ impl<P: Ptt> Station<P> {
                     }
                     // the file is what the message's rate earns in about two minutes, in the
                     // time the ladder left
-                    let bps = run.message.map_or(0.0, |m| m.bps());
                     run.file_size = file_size_for(bps, run.plan.file_bytes, run.remaining_s(now));
                     if run.file_size == 0 && run.plan.file_bytes > 0 {
                         run.adjustments
@@ -920,6 +937,16 @@ mod tests {
         assert_eq!(file_size_for(1000.0, 16_384, 90.0), 3584);
         assert_eq!(file_size_for(1000.0, 16_384, 45.0), 0);
         assert_eq!(file_size_for(1000.0, 0, 600.0), 0);
+        // the ladder keeps time for the least file at the measured rate: a kilobyte at
+        // 70 bit/s is 117 s, a minute in hand and half a minute for a rung in flight
+        assert!((file_reserve_s(70.0, 16_384) - (8192.0 / 70.0 + 90.0)).abs() < 1e-9);
+        assert!((file_reserve_s(70.0, 512) - (4096.0 / 70.0 + 90.0)).abs() < 1e-9);
+        assert!(file_reserve_s(70.0, 0).abs() < f64::EPSILON);
+        assert!(file_reserve_s(0.0, 16_384).abs() < f64::EPSILON);
+        // and what it keeps is enough for that file
+        let left = file_reserve_s(70.0, 16_384) - 30.0;
+        assert_eq!(file_size_for(70.0, 16_384, left), 1024);
+        assert!(f64::from(1024u16) * 8.0 / 70.0 <= left - 60.0 + 1e-9);
     }
 
     #[test]
