@@ -83,6 +83,7 @@ POLICIES: dict[str, dict[str, Setting]] = {
     "ordinary-handover+request": {"chat": True, "handover": "ordinary"},
     "request+keepalive20": {"chat": True, "keepalive_s": 20.0},
     "handover+request+keepalive20": {"chat": True, "handover": "always", "keepalive_s": 20.0},
+    "request+offer": {"chat": True, "offer_turn": True},
 }
 """The turn policies measured: today's (``base``); a shorter idle poll (``keepalive5``); the
 sender handing the turn over as soon as its line is acknowledged (``handover``, the
@@ -90,7 +91,8 @@ sender handing the turn over as soon as its line is acknowledged (``handover``, 
 ``LinkConfig.chat``, what ADR-0027 adopted), and the same without the idle sender's hold over
 a frame arriving (``hold``); and combinations — with a longer idle poll too, which asking makes
 possible: a poll no longer carries the other station's wish to send, only the news that the
-link is alive. Every key but ``handover`` and ``hold`` is a ``LinkConfig`` field."""
+link is alive; and the turn offered at the end of a burst that empties the queue
+(``request+offer``, ADR-0047, proposed). Every key but ``handover`` and ``hold`` is a ``LinkConfig`` field."""
 
 LINES = (10, 20)
 """Lines per conversation, inclusive."""
@@ -110,9 +112,12 @@ CONNECT_S = 400.0
 """How long the call may take before the session is given up as never connected."""
 LINE_S = 900.0
 """How long a line may take to arrive before the session is given up as stalled."""
-STEP_S = 1.0
-"""The simulator is run in steps of this while a line is on its way; delivery times are
-exact whatever the step (the simulator notes them)."""
+STEP_S = 0.05
+"""The simulator is run in steps of this while a line is on its way. Delivery times are exact
+whatever the step (the simulator notes them), but a reply is typed after the step that
+delivered the line: at 1 s (until ADR-0047) the receiving station had acknowledged the line
+before a reply typed at once was queued, so an acknowledgement never carried a reply's WANT_TX,
+and every reply asked for the turn on its own."""
 
 MAX_KEY_S = 30.0
 """The daemon's default key-time limit (``[radio] max_key_s``)."""

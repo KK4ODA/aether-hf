@@ -3429,3 +3429,27 @@ def test_a_fade_over_the_end_of_a_burst_is_not_answered_over(offset: float) -> N
     sim.run(until=sim.t + 1200)
     assert bytes(sim.delivered(1)) == message
     assert _collisions(sim) == 0
+
+
+@pytest.mark.parametrize("offer", [False, True])
+def test_the_turn_on_offer_is_taken_in_the_acknowledgement(timing: PhyTiming, offer: bool) -> None:
+    """ADR-0047 (proposed, off by default): a burst that empties the sender's queue ends with a
+    TURN carrying OFFER, and a receiving station with data answers with an acknowledgement
+    carrying TAKEN and its own burst in the same transmission — one keying for the change of
+    direction where the request and the TURN take two. Off, the handover is a TURN as before."""
+    a, b = _pair(timing, LinkConfig(offer_turn=offer))
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=5)
+    reply = b"REPLY FROM KK4XYZ. " * 8
+    a.connect("KK4XYZ")
+    a.send(bytes(300))
+    b.send(reply)
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(300)
+    assert sim.delivered(0) == reply
+    if offer:
+        assert a.stats.turn_offers >= 1
+        assert b.stats.turns_taken == 1
+        assert a.stats.turns == 0
+    else:
+        assert a.stats.turn_offers == 0 and b.stats.turns_taken == 0
+        assert a.stats.turns == 1

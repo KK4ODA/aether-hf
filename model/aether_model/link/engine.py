@@ -188,6 +188,13 @@ class LinkConfig:
     3.4–6 s at +6 to +12 dB, with no line lost and slightly less keyed time. Named for where it
     began — a host's ``CHAT ON`` — and kept switchable (:meth:`LinkEngine.set_chat`) for the
     benches that compare it with the engine before."""
+    offer_turn: bool = False
+    """A burst that empties this station's queue ends with a TURN that offers the turn, and a
+    receiving station with data of its own takes it in its acknowledgement — the acknowledgement
+    and its first burst in one transmission (ADR-0047) — instead of an acknowledgement asking for
+    the turn, a TURN, and then the burst. Proposed, and off: on the link bench the offer costs the
+    air the TURN it replaces did, and what it saves — a keying of the transmitter — is what the
+    bench does not charge; the scenario harness is where it is to be decided."""
 
 
 OUTSIDE_SESSIONS = frozenset(
@@ -316,6 +323,10 @@ class LinkStats:
     """Frames given another codeword at a slower mode after going unacknowledged at their
     own for :attr:`LinkConfig.max_combines` transmissions."""
     turn_requests: int = 0
+    turn_offers: int = 0
+    """Bursts that ended with the turn on offer (ADR-0047)."""
+    turns_taken: int = 0
+    """Acknowledgements that took the turn offered, this station's burst after them (ADR-0047)."""
     """Acknowledgements this station sent unasked, to ask for the turn in a chat
     (:attr:`LinkConfig.chat`)."""
 
@@ -385,6 +396,8 @@ class LinkEngine:
         self._tx_base = 0
         self._tx_next = 0
         self._burst_seqs: list[int] = []
+        self._offered = False
+        """This station, receiving, was offered the turn at the end of the burst (ADR-0047)."""
         self._retries = 0
         self._bursts_since_turn = 0
         self._peer_wants_tx = False
@@ -1348,7 +1361,9 @@ class LinkEngine:
         control frames and connect and probe answers included — goes out in that family."""
         return self.cfg.ceiling is not None and self.timing.is_floor(self.cfg.ceiling)
 
-    def _send_burst(self) -> None:
+    def _send_burst(self, prefix: tuple[TxFrame, ...] = ()) -> None:
+        """A burst, after ``prefix`` in the same transmission: the acknowledgement that took
+        the turn (ADR-0047)."""
         mode = self._burst_mode()
         recommendation = min(self._recommended, self._cap())
         unacked = self._unacked()
@@ -1409,17 +1424,32 @@ class LinkEngine:
             fresh = [s for s in seqs if not self._records[s].sent]
             if fresh:
                 self._ladder_pending = (mode, fresh)
-        frames = []
+        # A burst that empties the queue, with nothing else outstanding, ends with the turn on
+        # offer (ADR-0047): the other station takes it in its acknowledgement if it has
+        # something to send. Ordinary frames only: a floor control frame is 3.2 s.
+        offer = (
+            self.cfg.offer_turn
+            and self.state is State.CONNECTED
+            and not family
+            and not self._tx_queue
+            and self._pinned is None
+            and not self._disc_requested
+            and set(self._unacked()) <= set(seqs)
+        )
+        frames = list(prefix)
         for i, s in enumerate(seqs):
             rec = self._records[s]
             if rec.sent:
                 self.stats.frames_resent += 1
             # each frame says how many of the burst come after it, so a receiver that loses
             # one in a fade still knows the burst is not over and does not answer over it
-            # (ADR-0041)
-            follows = countdown_of(len(seqs) - 1 - i)
+            # (ADR-0041) — the offer counted among them
+            follows = countdown_of(len(seqs) - 1 - i + int(offer))
             frames.append(replace(self._data_frame(rec), follows=follows))
-        self.stats.frames_sent += len(frames)
+        if offer:
+            frames.append(self._control(ControlKind.TURN, flags=ControlFlags.OFFER))
+            self.stats.turn_offers += 1
+        self.stats.frames_sent += len(frames) - len(prefix) - int(offer)
         self.stats.bursts += 1
         self._burst_seqs = seqs
         self._bursts_since_turn += 1
@@ -1438,13 +1468,12 @@ class LinkEngine:
         # this burst's alone gave up on a floor acknowledgement a second into it, and the
         # recommendation it carried was lost with it (ADR-0016).
         families = {family, self._peer_floor}
-        # a receiver that lost the burst's last frame takes the one before at its word — one
-        # or two following — and answers a frame late (ADR-0046): the wait covers it
-        late = (
-            0.0
-            if family or len(seqs) < 2
-            else self.timing.data_frame_s_for(self._records[seqs[-1]].mode)
-        )
+        # A receiver that lost the burst's last frame takes the one before at its word and
+        # answers that frame late (ADR-0046); one that lost the offer takes the last data frame's
+        # count — the offer among it — at its word, up to two frames (ADR-0047). The wait covers
+        # them.
+        frame_s = self.timing.data_frame_s_for(self._records[seqs[-1]].mode)
+        late = 0.0 if family else frame_s * (2 if offer else 1 if len(seqs) >= 2 else 0)
         self._wait_for(
             "ack",
             max(self.timing.control_frame_s_for(f) for f in families),
@@ -1476,6 +1505,12 @@ class LinkEngine:
         self._peer_break = bool(ack.flags & ControlFlags.BREAK)
         self._waiting_for = None
         self._disarm("wait")
+        if ack.flags & ControlFlags.TAKEN:
+            # the other station took the turn this one offered: its burst follows (ADR-0047)
+            self._take_irs()
+            self._peer_wants_tx = self._peer_break = False
+            self._bursts_since_turn = 0
+            return
         self._maybe_start_burst()
 
     # ── IRS: bursts, HARQ and ACKs ────────────────────────────────────
@@ -1766,24 +1801,38 @@ class LinkEngine:
             flags |= ControlFlags.WANT_TX
         if self._break_requested:
             flags |= ControlFlags.BREAK | ControlFlags.WANT_TX
+        # the turn offered is taken when there is something to send and nothing of the other
+        # station's is missing: it has nothing left to send (ADR-0047)
+        take = (
+            self._offered
+            and self.role is Role.IRS
+            and bool(self._tx_queue)
+            and not missing
+            and self.state is State.CONNECTED
+        )
+        self._offered = False
+        if take:
+            flags |= ControlFlags.TAKEN | ControlFlags.WANT_TX
         self._stated_want = bool(flags & ControlFlags.WANT_TX)
         self._ack_counter = (self._ack_counter + 1) % 8
         self.stats.acks_sent += 1
         recommended = self.rate.recommend()
         self._asked = recommended if self._asked is None else max(self._asked, recommended)
-        self._transmit(
-            [
-                self._control(
-                    ControlKind.ACK,
-                    flags=flags,
-                    base=self._rx_base,
-                    bitmap=bitmap,
-                    snr_db=snr,
-                    recommended_mode=recommended,
-                    counter=self._ack_counter,
-                )
-            ]
+        ack = self._control(
+            ControlKind.ACK,
+            flags=flags,
+            base=self._rx_base,
+            bitmap=bitmap,
+            snr_db=snr,
+            recommended_mode=recommended,
+            counter=self._ack_counter,
         )
+        if take:
+            self.stats.turns_taken += 1
+            self._become_iss()
+            self._send_burst(prefix=(ack,))
+            return
+        self._transmit([ack])
 
     def _receive_window(self) -> tuple[int, list[int], int]:
         """What an acknowledgement says has arrived: the bitmap of the window from the base,
@@ -1887,6 +1936,12 @@ class LinkEngine:
                 # caller keeps the turn, so the two can never both yield (ADR-0023).
                 self._take_irs()
                 self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
+        elif ctl.kind is ControlKind.TURN and ctl.flags & ControlFlags.OFFER:
+            # the end of a burst that emptied the sender's queue (ADR-0047): the burst is over
+            # with this frame, and the acknowledgement may take the turn
+            if self.role is Role.IRS:
+                self._offered = True
+                self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
         elif ctl.kind is ControlKind.TURN:
             if self.role is Role.IRS or self._waiting_for == "turn":
                 self._take_iss()
@@ -1913,6 +1968,10 @@ class LinkEngine:
         self._disarm("keepalive")
 
     def _take_iss(self) -> None:
+        self._become_iss()
+        self._answer_turn()
+
+    def _become_iss(self) -> None:
         self.role = Role.ISS
         self._unread_there = False
         # the first burst of a turn goes out where this station's own measurements of the
@@ -1932,8 +1991,8 @@ class LinkEngine:
         self._stated_want = False
         self._bursts_since_turn = 0
         self._retries = 0
+        self._offered = False
         self.actions.append(Event("role", "iss"))
-        self._answer_turn()
 
     def _answer_turn(self) -> None:
         """What tells the station that sent a TURN that this one has taken the turn: the first
