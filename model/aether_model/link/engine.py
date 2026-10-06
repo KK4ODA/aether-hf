@@ -398,6 +398,8 @@ class LinkEngine:
         self._burst_seqs: list[int] = []
         self._offered = False
         """This station, receiving, was offered the turn at the end of the burst (ADR-0047)."""
+        self._offer_out = False
+        """The last burst this station sent offered the turn, and nothing has answered it."""
         self._retries = 0
         self._bursts_since_turn = 0
         self._peer_wants_tx = False
@@ -1449,6 +1451,7 @@ class LinkEngine:
         if offer:
             frames.append(self._control(ControlKind.TURN, flags=ControlFlags.OFFER))
             self.stats.turn_offers += 1
+        self._offer_out = offer
         self.stats.frames_sent += len(frames) - len(prefix) - int(offer)
         self.stats.bursts += 1
         self._burst_seqs = seqs
@@ -1505,6 +1508,7 @@ class LinkEngine:
         self._peer_break = bool(ack.flags & ControlFlags.BREAK)
         self._waiting_for = None
         self._disarm("wait")
+        self._offer_out = False
         if ack.flags & ControlFlags.TAKEN:
             # the other station took the turn this one offered: its burst follows (ADR-0047)
             self._take_irs()
@@ -1531,17 +1535,22 @@ class LinkEngine:
         if self.role is Role.ISS and self._waiting_for in ("ack", "poll", None):
             # a DATA frame from the peer while we hold the turn: it believes it is ISS
             # (a TURN of ours it answered late, or a lost TURN retry). Data wins.
+            # Or, after a burst that offered the turn, one that does not decode: the
+            # acknowledgement that took the turn was lost (ADR-0047).
             payload, _ = frame.decode(None)
             if payload is None:
-                return
-            try:
-                header, _ = decode_data(payload)
-            except ValueError:
-                return
-            if header.session != self.session:
-                return
-            if header.kind is DataKind.CONNECT_ACK:
-                return  # repeated accept: our confirmation is on its way
+                if not self._turn_taken_unread(frame):
+                    return
+            else:
+                try:
+                    header, _ = decode_data(payload)
+                except ValueError:
+                    return
+                if header.session != self.session:
+                    return
+                if header.kind is DataKind.CONNECT_ACK:
+                    return  # repeated accept: our confirmation is on its way
+            self._offer_out = False
             self.role = Role.IRS
             self._waiting_for = None
             self._unread_there = False
@@ -1957,7 +1966,24 @@ class LinkEngine:
                 self._disarm("keepalive")
                 self._answer_turn()
 
+    def _turn_taken_unread(self, frame: SoftFrame) -> bool:
+        """Whether a data frame that did not decode says the turn this station offered was
+        taken (ADR-0047): the acknowledgement that took it was lost, and the other station's
+        burst is arriving. Only data can follow an offer that way — the other station answers
+        an offer it does not take with an acknowledgement alone — so a frame the physical
+        layer trusts, in the family of the session's ordinary frames, is that burst. Waiting
+        for an acknowledgement that will not come, the sender sent its burst again over the
+        other station's (the scenario harness, 80 m at 500 Hz)."""
+        return (
+            self._offer_out
+            and self._waiting_for == "ack"
+            and frame.trusted
+            and not frame.floor
+            and frame.floor == self.timing.is_floor(frame.mode)
+        )
+
     def _take_irs(self) -> None:
+        self._offer_out = False
         if self.role is not Role.IRS:
             self.actions.append(Event("role", "irs"))
         self.role = Role.IRS

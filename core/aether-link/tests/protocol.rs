@@ -3147,3 +3147,54 @@ fn the_turn_on_offer_is_taken_in_the_acknowledgement() {
         }
     }
 }
+
+/// ADR-0047: the acknowledgement that takes the turn offered goes unread, and so do the first
+/// frames of the burst behind it. The sender must not wait out its acknowledgement and send its
+/// burst again over the other station's: a trusted data frame of the session's family arriving
+/// after an offer is that burst, and the sender becomes the receiving station (found by the
+/// scenario harness, 80 m at 500 Hz).
+#[test]
+fn a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it() {
+    use aether_link::{ControlFrame, ControlKind, TxFrame, frames::control_flags};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    for taken_heard in [false, true] {
+        let t = timing(false);
+        let config = LinkConfig {
+            offer_turn: true,
+            ..LinkConfig::default()
+        };
+        let (mut a, mut b) = pair(&t, &config);
+        let after_taken = Rc::new(Cell::new(0u8));
+        let left = Rc::clone(&after_taken);
+        let offset = move |frame: &TxFrame| -> f64 {
+            if frame.container == Container::Control {
+                if ControlFrame::decode(&frame.payload).is_ok_and(|c| {
+                    c.kind == ControlKind::Ack && c.flags & control_flags::TAKEN != 0
+                }) {
+                    left.set(2);
+                    return if taken_heard { 0.0 } else { -60.0 };
+                }
+            } else if left.get() > 0 {
+                left.set(left.get() - 1);
+                return -60.0;
+            }
+            0.0
+        };
+        let reply: Vec<u8> = "REPLY FROM KK4XYZ. ".repeat(20).into_bytes();
+        a.connect("KK4XYZ").expect("idle");
+        a.send(&[0u8; 300]);
+        b.send(&reply);
+        let mut sim = TwoStationSim::new(a, b, 12.0, 5).with_frame_snr_offset(Box::new(offset));
+        sim.run(300.0, 3.0);
+        assert_eq!(
+            sim.delivered(1),
+            [0u8; 300].as_slice(),
+            "heard {taken_heard}"
+        );
+        assert_eq!(sim.delivered(0), reply.as_slice(), "heard {taken_heard}");
+        assert_eq!(sim.engine(1).stats.turns_taken, 1, "heard {taken_heard}");
+        assert_eq!(sim.collisions(0, 1), 0, "heard {taken_heard}");
+        assert_eq!(after_taken.get(), 0);
+    }
+}

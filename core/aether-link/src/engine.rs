@@ -515,6 +515,8 @@ pub struct LinkEngine {
     disc_requested: bool,
     /// This station, receiving, was offered the turn at the end of the burst (ADR-0047).
     offered: bool,
+    /// The last burst this station sent offered the turn, and nothing has answered it.
+    offer_out: bool,
     /// When a sender asked to disconnect stops waiting for its queue (ADR-0039).
     disc_patience_until: Option<f64>,
     disc_tries: usize,
@@ -639,6 +641,7 @@ impl LinkEngine {
             poll_floor: false,
             disc_requested: false,
             offered: false,
+            offer_out: false,
             disc_patience_until: None,
             caller: false,
             disc_tries: 0,
@@ -2111,6 +2114,7 @@ impl LinkEngine {
             frames.push(turn);
             self.stats.turn_offers += 1;
         }
+        self.offer_out = offer;
         self.stats.bursts += 1;
         self.bursts_since_turn += 1;
         self.disarm(Timer::Keepalive);
@@ -2273,6 +2277,7 @@ impl LinkEngine {
         };
         self.waiting_for = None;
         self.disarm(Timer::Wait);
+        self.offer_out = false;
         if ack.flags & control_flags::TAKEN != 0 {
             // the other station took the turn this one offered: its burst follows (ADR-0047)
             self.take_irs();
@@ -2312,18 +2317,26 @@ impl LinkEngine {
             && matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll) | None)
         {
             // A data frame from the peer while we hold the turn: it believes it is the sender
-            // (a turn of ours it answered late, or a lost turn retry). Data wins.
+            // (a turn of ours it answered late, or a lost turn retry). Data wins. Or, after a
+            // burst that offered the turn, one that does not decode: the acknowledgement that
+            // took the turn was lost (ADR-0047).
             let (payload, _) = frame.decode(None);
-            let Some(payload) = payload else { return };
-            let Ok((header, _)) = decode_data(&payload) else {
-                return;
-            };
-            if header.session != self.session {
-                return;
+            match payload {
+                None if !self.turn_taken_unread(frame) => return,
+                None => {}
+                Some(payload) => {
+                    let Ok((header, _)) = decode_data(&payload) else {
+                        return;
+                    };
+                    if header.session != self.session {
+                        return;
+                    }
+                    if header.kind == DataKind::ConnectAck {
+                        return; // a repeated accept: our confirmation is on its way
+                    }
+                }
             }
-            if header.kind == DataKind::ConnectAck {
-                return; // a repeated accept: our confirmation is on its way
-            }
+            self.offer_out = false;
             self.role = Role::Irs;
             self.waiting_for = None;
             self.unread_there = false;
@@ -2883,7 +2896,23 @@ impl LinkEngine {
         }
     }
 
+    /// Whether a data frame that did not decode says the turn this station offered was taken
+    /// (ADR-0047): the acknowledgement that took it was lost, and the other station's burst is
+    /// arriving. Only data can follow an offer that way — the other station answers an offer
+    /// it does not take with an acknowledgement alone — so a frame the physical layer trusts,
+    /// in the family of the session's ordinary frames, is that burst. Waiting for an
+    /// acknowledgement that would not come, the sender sent its burst again over the other
+    /// station's (the scenario harness, 80 m at 500 Hz).
+    fn turn_taken_unread<F: SoftFrame>(&self, frame: &F) -> bool {
+        self.offer_out
+            && self.waiting_for == Some(Waiting::Ack)
+            && frame.trusted()
+            && !frame.floor()
+            && !self.timing.is_floor(frame.mode())
+    }
+
     fn take_irs(&mut self) {
+        self.offer_out = false;
         if self.role != Role::Irs {
             self.actions.push(Action::Event {
                 name: "role",
