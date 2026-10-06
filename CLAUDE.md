@@ -1061,6 +1061,22 @@ answer in another protocol fills the panel's mismatch banner (`what` = `version`
 **A protocol bump changes `LINK_PROTOCOL` in the shell too** (the test says so). The splash and
 Help / About credit KK4ODA and the on-air testers (ND1J, WC4Y, KE4QCM, W4TGA).
 
+**The scenario harness (ADR-0042).** `aetherd --channel HOST:PORT` takes its audio from a channel
+server in lockstep (`channel_link.rs`: the playback clock is the server's, silence counted; keys
+nothing, rules unchecked unless a profile is named); `tools/channel_server.py` runs the A/B bench's
+`CableChannel` each way plus `aether_model.qrm` (VARA-class wide ARQ, PACTOR, RTTY, atmospheric
+crashes; streaming, seeded, block-exact) and the radios (0.25 s card latency, `tx_delay_ms`,
+`vox_hold_ms`, `rx_recovery_ms`, silence while keyed), and reports collisions;
+`tools/session_matrix.py` drives two daemons through `bench/scenarios/*.toml` (README there; a Test
+starts from idle — it makes its own call) and judges connect/deliver/Test/clean end/collisions;
+`--daemon-b` runs the other station on another build. 2.5–5× faster than the air. CI runs
+`--tag quick`; `nightly.yml` the 80 m/40 m set. Its first runs found: a receiving station's DISC
+(sent in place of the acknowledgement) held two seconds by ADR-0022's identifier rule while the busy
+detector still held the burst it answered (`answers_burst` in `held_for_busy`); and an untrusted
+frame re-arming the acknowledgement for its own end over an earlier frame's countdown (`_burst_end`
+/ `burst_end`, the latest announced end of the burst; model first). A field report becomes a
+scenario first.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

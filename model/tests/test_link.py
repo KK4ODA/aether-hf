@@ -3236,7 +3236,7 @@ def _collisions(sim: TwoStationSim) -> int:
     return sum(any(x < b1 - 1e-9 and b0 + 1e-9 < y for x, y in a) for b0, b1 in b)
 
 
-def _fading_session(countdown: bool) -> TwoStationSim:
+def _fading_session(countdown: bool, garbled: bool = False) -> TwoStationSim:
     from aether_model.frame.modes import NARROW
     from aether_model.link.harness import phy_timing
 
@@ -3250,16 +3250,23 @@ def _fading_session(countdown: bool) -> TwoStationSim:
         return rx == 1 and container is Container.DATA and int(t0 * 1000) % 10 < 3
 
     sim = TwoStationSim(a, b, snr_db=14.0, seed=3, unheard=faded)
-    if not countdown:
-        made = sim._factory
+    made = sim._factory
 
-        def blind(frame: TxFrame, snr: float, t0: float, t1: float) -> object:
-            sf = made(frame, snr, t0, t1)
-            if isinstance(sf, SimFrame):
-                sf.follows = None
+    def heard(frame: TxFrame, snr: float, t0: float, t1: float) -> object:
+        sf = made(frame, snr, t0, t1)
+        if not isinstance(sf, SimFrame):
             return sf
+        if not countdown:
+            sf.follows = None
+        elif garbled and frame.container is Container.DATA and int(t0 * 1000) % 10 >= 7:
+            # three in ten more arrive too faint to read: undecodable, acquisition untrusted,
+            # and the count their chips seem to carry is noise
+            sf.trusted = False
+            sf._draw = 2.0
+            sf.follows = 0
+        return sf
 
-        sim._factory = blind  # type: ignore[assignment]
+    sim._factory = heard  # type: ignore[assignment]
     a.connect("KK4ODA")
     sim.run(until=60)
     assert a.state is State.CONNECTED
@@ -3278,3 +3285,16 @@ def test_a_receiver_does_not_answer_over_a_frame_it_lost_in_a_fade() -> None:
     assert bytes(told.delivered(1)) == bytes(range(256)) * 12
     assert _collisions(blind) >= 5, _collisions(blind)
     assert _collisions(told) <= _collisions(blind) // 4, (_collisions(told), _collisions(blind))
+
+
+def test_a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short() -> None:
+    """The scenario harness on an 80 m Poor path (ADR-0042): a frame said three more followed,
+    the next arrived too faint to believe its count, and the acknowledgement was set for that
+    frame's end — over the two frames the earlier one had announced, eight times in a session.
+    The burst ends where the latest count heard says it does."""
+    blind = _fading_session(countdown=False, garbled=True)
+    sim = _fading_session(countdown=True, garbled=True)
+    assert bytes(sim.delivered(1)) == bytes(range(256)) * 12
+    # 12 before the fix, 19 with no countdown at all; what is left is the count's ceiling — a
+    # frame can say "three or more", and a burst of six whose later frames are all lost
+    assert _collisions(sim) <= _collisions(blind) // 4, (_collisions(sim), _collisions(blind))

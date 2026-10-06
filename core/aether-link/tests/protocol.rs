@@ -2910,6 +2910,10 @@ fn a_disconnect_leaves_without_what_the_path_will_not_carry() {
 }
 
 fn fading_session(countdown: bool) -> TwoStationSim {
+    fading_session_with(countdown, false)
+}
+
+fn fading_session_with(countdown: bool, garbled: bool) -> TwoStationSim {
     let t = air_timing(NARROW_500, true);
     let (a, b) = pair(&t, &LinkConfig::default());
     // three data frames in ten fade out of the receiver's hearing altogether: not even their
@@ -2920,6 +2924,12 @@ fn fading_session(countdown: bool) -> TwoStationSim {
     let mut sim = TwoStationSim::new(a, b, 14.0, 3).with_unheard(faded);
     if !countdown {
         sim = sim.without_countdown();
+    }
+    if garbled {
+        // three in ten more arrive too faint to read
+        sim = sim.with_garbled(Box::new(|rx, container, t0| {
+            rx == 1 && container == Container::Data && ((t0 * 1000.0) as i64).rem_euclid(10) >= 7
+        }));
     }
     sim.engine_mut(0).connect("KK4XYZ").expect("idle");
     let connected_by = sim.run(60.0, 1e9);
@@ -2945,6 +2955,22 @@ fn a_receiver_does_not_answer_over_a_frame_it_lost_in_a_fade() {
         before >= 5,
         "the fades caused only {before} collisions without the countdown"
     );
+    assert!(
+        after <= before / 4,
+        "{after} collisions with the countdown, {before} without"
+    );
+}
+
+#[test]
+fn a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short() {
+    // the scenario harness on an 80 m Poor path (ADR-0042): a frame said three more followed,
+    // the next arrived too faint to believe its count, and the acknowledgement was set for that
+    // frame's end — over the frames the earlier one had announced, eight times in a session
+    let blind = fading_session_with(false, true);
+    let told = fading_session_with(true, true);
+    let message: Vec<u8> = (0..12).flat_map(|_| 0..=255u8).collect();
+    assert_eq!(told.delivered(1), message.as_slice());
+    let (before, after) = (blind.collisions(0, 1), told.collisions(0, 1));
     assert!(
         after <= before / 4,
         "{after} collisions with the countdown, {before} without"

@@ -69,6 +69,8 @@ pub struct SimFrame {
     /// The burst countdown as sent, on an ordinary data frame (ADR-0041): a simulated
     /// receiver reads it right whenever it detects the frame.
     follows: Option<u8>,
+    /// Acquired too faintly to trust ([`TwoStationSim::with_garbled`]).
+    untrusted: bool,
 }
 
 impl SimFrame {
@@ -96,6 +98,7 @@ impl SimFrame {
             floor: false,
             reported_db: snr_db,
             follows: None,
+            untrusted: false,
         }
     }
 }
@@ -123,6 +126,10 @@ impl SoftFrame for SimFrame {
 
     fn follows(&self) -> Option<u8> {
         self.follows
+    }
+
+    fn trusted(&self) -> bool {
+        !self.untrusted
     }
 
     fn t_start(&self) -> f64 {
@@ -286,6 +293,8 @@ pub struct TwoStationSim {
     unheard: Option<Unheard>,
     /// Receivers read no burst countdown ([`without_countdown`](Self::without_countdown)).
     no_countdown: bool,
+    /// Frames heard too faintly to read ([`with_garbled`](Self::with_garbled)).
+    garbled: Option<Unheard>,
     /// Decibels added to the channel SNR for one frame
     /// ([`with_frame_snr_offset`](Self::with_frame_snr_offset)).
     frame_snr_offset: Option<FrameSnrOffset>,
@@ -311,8 +320,20 @@ impl TwoStationSim {
             key_limit_s: None,
             unheard: None,
             no_countdown: false,
+            garbled: None,
             frame_snr_offset: None,
         }
+    }
+
+    /// Frames a receiver detects too faintly to read, called as [`with_unheard`]'s: they arrive
+    /// undecodable, their acquisition untrusted, and the count their chips seem to carry is
+    /// noise (zero) — the frame after a countdown on an 80 m Poor path (ADR-0042).
+    ///
+    /// [`with_unheard`]: Self::with_unheard
+    #[must_use]
+    pub fn with_garbled(mut self, garbled: Unheard) -> Self {
+        self.garbled = Some(garbled);
+        self
     }
 
     /// Receivers that read no burst countdown, as before ADR-0041: they take the silence after
@@ -594,6 +615,10 @@ impl TwoStationSim {
             Some(cap) if floor => snr_db.min(cap),
             _ => snr_db,
         };
+        let garbled = self
+            .garbled
+            .as_ref()
+            .is_some_and(|garbled| garbled(rx, frame.container, t0));
         let sim = SimFrame {
             container: frame.container,
             mode: frame.mode,
@@ -603,12 +628,18 @@ impl TwoStationSim {
             t_start: t0 + self.prop_s,
             t_end: arrival,
             payload: frame.payload.clone(),
-            // a frame cut by the sender's watchdog is acquired and past every probability
-            draw: if cut { 2.0 } else { self.rng.next_unit() },
+            // a frame cut by the sender's watchdog, or heard too faintly to read, is acquired and
+            // past every probability
+            draw: if cut || garbled {
+                2.0
+            } else {
+                self.rng.next_unit()
+            },
             threshold,
             floor,
             follows: (frame.container == Container::Data && !floor && !self.no_countdown)
-                .then_some(frame.follows),
+                .then_some(if garbled { 0 } else { frame.follows }),
+            untrusted: garbled,
         };
         self.stations[rx].engine.tick(arrival);
         self.stations[rx].engine.on_frame(&sim, arrival);
