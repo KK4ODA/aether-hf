@@ -3549,3 +3549,36 @@ def test_a_frame_from_before_the_answer_starts_no_burst(
     else:
         assert len(b._burst) == 1
         assert "ack" in b._deadlines
+
+
+@pytest.mark.parametrize("size", [100, 1500])
+def test_an_offer_is_not_answered_into_a_receiver_still_coming_back(size: int) -> None:
+    """The scenario harness, 40 m with a receiver that takes 280 ms to come back after
+    transmitting (ADR-0047): the other station answered each acknowledgement a turnaround later,
+    its one data frame fell in the deafness, and only the offer after it was heard — which drew
+    an acknowledgement at once, and the frame went again into the same deafness, for the rest of
+    the session. An acknowledgement of an offer that measured none of the burst's data takes the
+    offer off the next burst, so nothing answers it at once and its retry is heard."""
+    from aether_model.frame.modes import WIDE
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(WIDE.params)
+    a = LinkEngine("W4TGA", timing, LinkConfig(), seed=1)
+    b = LinkEngine("KK4ODA", timing, LinkConfig(), seed=2)
+    holder: dict[str, TwoStationSim] = {}
+
+    def recovering(rx: int, container: Container, t0: float) -> bool:
+        # station B hears nothing for 0.3 s after its own transmission ends
+        if rx != 1:
+            return False
+        ends = [e for _, e in holder["sim"].st[rx].busy if e <= t0 + 1e-9]
+        return bool(ends) and t0 - max(ends) < 0.3
+
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=1, unheard=recovering)
+    holder["sim"] = sim
+    a.connect("KK4ODA")
+    sim.run(until=60)
+    assert a.state is State.CONNECTED
+    a.send(bytes(size))
+    sim.run(until=sim.t + 120)
+    assert bytes(sim.delivered(1)) == bytes(size)

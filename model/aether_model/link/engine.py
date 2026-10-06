@@ -401,6 +401,10 @@ class LinkEngine:
         """This station, receiving, was offered the turn at the end of the burst (ADR-0047)."""
         self._offer_out = False
         """The last burst this station sent offered the turn, and nothing has answered it."""
+        self._offer_unheard = False
+        """The last acknowledgement of a burst that offered the turn measured none of its data:
+        the other station heard the offer and not the frames before it. The next burst goes
+        without the offer, so that nothing answers it at once (ADR-0047)."""
         self._tx_started = float("-inf")
         """When this station's last transmission began, as far as the engine knows: no later
         than it went on the air."""
@@ -1442,6 +1446,7 @@ class LinkEngine:
             and self._pinned is None
             and not self._disc_requested
             and set(self._unacked()) <= set(seqs)
+            and not self._offer_unheard
         )
         frames = list(prefix)
         for i, s in enumerate(seqs):
@@ -1513,6 +1518,18 @@ class LinkEngine:
         self._peer_break = bool(ack.flags & ControlFlags.BREAK)
         self._waiting_for = None
         self._disarm("wait")
+        # An acknowledgement of an offer that measured none of the burst's data: the other
+        # station heard the offer at the end and not the frames before it. A receiver whose
+        # radio takes longer to come back after transmitting than this station takes to answer
+        # loses the start of every answer, and a one-frame burst is nothing but its start: the
+        # offer drew an acknowledgement at once, the frame went again a turnaround later, into
+        # the same deafness, for as long as the session lasted (the scenario harness, 40 m with
+        # a 280 ms receiver recovery). Without the offer the burst goes unanswered, and its
+        # retry comes when the other station has long been listening (ADR-0047).
+        if self._offer_out:
+            self._offer_unheard = ack.snr_db is None
+        elif ack.snr_db is not None:
+            self._offer_unheard = False
         self._offer_out = False
         if ack.flags & ControlFlags.TAKEN:
             # the other station took the turn this one offered: its burst follows (ADR-0047)
