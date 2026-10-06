@@ -352,6 +352,14 @@ struct RxRecord {
 /// before (ADR-0020).
 const SELF_DECODABLE_RVS: [u8; 2] = [0, 3];
 
+/// The redundancy version of a frame's first, second, third and fourth transmission under one
+/// codeword, then round again (ADR-0043). A retransmission on HF is as often of a frame the
+/// receiver never detected as of one it could not decode, so the second copy must decode on its
+/// own: RV 0 again, which combines with a failed first copy as well as any other. RV 2 then adds
+/// the parity RV 0 does not carry, RV 3 the systematic bits with the outermost parity. Under the
+/// old 0, 1, 2, 3 a frame whose first copy was missed could not decode until its fourth.
+const RV_SEQUENCE: [u8; 4] = [0, 0, 2, 3];
+
 #[derive(Debug, Clone)]
 struct AckSnapshot {
     /// Unreceived sequence numbers between the base and the highest seen, ascending.
@@ -1565,7 +1573,7 @@ impl LinkEngine {
             container: Container::Data,
             payload,
             mode: record.mode,
-            rv: ((record.tx_count - 1) % 4) as u8,
+            rv: RV_SEQUENCE[(record.tx_count - 1) % RV_SEQUENCE.len()],
             floor: false,
             follows: 0,
         }

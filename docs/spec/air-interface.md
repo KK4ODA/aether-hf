@@ -663,8 +663,10 @@ decoder fed a false detection converges to it. Every other frame carries a non-z
 One station is the information sending station (ISS), the other the information receiving
 station (IRS). The ISS sends a burst of data frames; the IRS answers each burst with one ACK
 carrying the selective-repeat bitmap, the SNR it measured, and the mode it recommends. The
-ISS retransmits what the bitmap reports missing — same codeword, next redundancy version (0,
-1, 2, 3, then 0 again) — and fills the remainder of the burst with new frames at the
+ISS retransmits what the bitmap reports missing — same codeword, next redundancy version in
+the order 0, 0, 2, 3, then round again (ADR-0043: the second copy is RV 0 so that it decodes on
+its own when the first was never detected; the receiver reads the RV from the chips and combines
+any order) — and fills the remainder of the burst with new frames at the
 recommended mode. A frame sent four times unacknowledged at a rung the recommendation has
 since left is re-encoded at the slowest rung, from the recommendation up, that carries its
 body: a new codeword under the same sequence number, which the receiver does not combine with

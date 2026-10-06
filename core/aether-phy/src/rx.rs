@@ -24,11 +24,11 @@
 //! away. Per symbol, a hit symbol's LLRs shrink on their own and it becomes an erasure.
 
 use crate::{
-    constellation::Complex,
+    constellation::{Complex, Constellation},
     modes::{AirInterface, FrameLayout, LONG, SHORT, air_interface},
     ofdm::{DemodError, OfdmDemodulator},
     preamble::{FrameType, Preamble, follows_of, follows_turn},
-    waveform::{WIDE_2300, WaveformParams},
+    waveform::{Modulation, WIDE_2300, WaveformParams},
 };
 
 /// Complex helpers, kept local so the crate has no numeric dependency of its own.
@@ -141,6 +141,22 @@ pub struct ReceivedFrame {
     pub follows: u8,
 }
 
+/// A pilot carrier whose residual is over this many times the median pilot's carries an
+/// interferer, and is left out of the reported SNR (ADR-0043).
+const OUTLIER_PILOT: f64 = 4.0;
+
+/// The median, as numpy takes it: the mean of the middle two of an even count.
+fn median(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        f64::midpoint(sorted[mid - 1], sorted[mid])
+    } else {
+        sorted[mid]
+    }
+}
+
 /// Turns a located frame into symbols and LLR weights.
 #[derive(Debug)]
 pub struct FrameReceiver {
@@ -155,6 +171,14 @@ pub struct FrameReceiver {
     /// A symbol's variance is never allowed below this multiple of the frame value, so an
     /// unluckily quiet pilot set cannot make the decoder over-trust a symbol.
     pub noise_floor_fraction: f64,
+    /// Weigh each data carrier by its own noise (ADR-0043). An interferer narrower than the
+    /// signal — RTTY, a carrier, a PACTOR station — sits on a few carriers for the whole frame;
+    /// the per-symbol estimate averages it over every carrier, and the decoder trusted exactly
+    /// the bits it should have discarded.
+    pub per_carrier_noise: bool,
+    /// A carrier's slicing error must be this many times the median carrier's before its noise
+    /// is raised: under it, the scatter of a clean carrier's estimate over 12–32 symbols.
+    pub carrier_noise_threshold: f64,
 }
 
 impl Default for FrameReceiver {
@@ -174,6 +198,63 @@ impl FrameReceiver {
             preamble: Preamble::new(params),
             noise_shrinkage: 0.5,
             noise_floor_fraction: 0.25,
+            per_carrier_noise: true,
+            carrier_noise_threshold: 2.0,
+        }
+    }
+
+    /// The noise the frame's SNR is reported against: the pilots' residual power, less the
+    /// pilot carriers an interferer sits on (over [`OUTLIER_PILOT`] times the median pilot's)
+    /// when [`per_carrier_noise`](Self::per_carrier_noise) weighs them out of the decode
+    /// (ADR-0043) — otherwise an RTTY station on a few carriers read as a path 10 dB worse, and
+    /// the rate controller kept a frame the decoder could read at the tone floor.
+    fn reported_noise(&self, per_pilot: &[f64], sigma2: f64) -> f64 {
+        if !self.per_carrier_noise || per_pilot.is_empty() {
+            return sigma2;
+        }
+        let median = median(per_pilot);
+        let clean: Vec<f64> = per_pilot
+            .iter()
+            .copied()
+            .filter(|&value| value <= OUTLIER_PILOT * median)
+            .collect();
+        if clean.is_empty() {
+            sigma2
+        } else {
+            clean.iter().sum::<f64>() / clean.len() as f64
+        }
+    }
+
+    /// Raise the noise of the carriers that are noisier than the frame's typical one: each
+    /// carrier's slicing error over the data symbols, in units of the noise the per-symbol
+    /// estimate gave it, against the median carrier's (ADR-0043). `symbols` and `noise_var` are
+    /// time-major, `n_data` carriers a symbol.
+    fn weigh_carriers(
+        &self,
+        symbols: &[Complex],
+        noise_var: &mut [f64],
+        n_data: usize,
+        modulation: Modulation,
+    ) {
+        if n_data == 0 || symbols.is_empty() {
+            return;
+        }
+        let constellation = Constellation::new(modulation);
+        let points = constellation.points();
+        let mut error = vec![0.0f64; n_data];
+        for (index, (&symbol, &variance)) in symbols.iter().zip(noise_var.iter()).enumerate() {
+            let nearest = points
+                .iter()
+                .map(|&point| c::norm_sq(c::sub(symbol, point)))
+                .fold(f64::INFINITY, f64::min);
+            error[index % n_data] += nearest / variance;
+        }
+        let median = median(&error).max(1e-12);
+        for (index, variance) in noise_var.iter_mut().enumerate() {
+            let factor = error[index % n_data] / median;
+            if factor >= self.carrier_noise_threshold {
+                *variance *= factor;
+            }
         }
     }
 
@@ -413,14 +494,16 @@ impl FrameReceiver {
         // undo the (2r+1)-tap averaging bias: 3/2 for the ordinary ±1
         let bias = (2 * radius + 1) as f64 / (2 * radius) as f64;
         let mut per_symbol = Vec::with_capacity(data_symbols.len());
+        let mut per_pilot = vec![0.0f64; pilot_carriers.len()];
         let mut total = 0.0f64;
         let mut count = 0usize;
         for &symbol in &data_symbols {
             let mut sum = 0.0;
             for (slot, &carrier) in pilot_carriers.iter().enumerate() {
                 let expected = c::mul(channel[symbol][carrier], known[symbol][carrier]);
-                sum += c::norm_sq(c::sub(raw[symbol][carrier], expected));
-                let _ = slot;
+                let residual = c::norm_sq(c::sub(raw[symbol][carrier], expected));
+                sum += residual;
+                per_pilot[slot] += residual;
             }
             let mean = sum / pilot_carriers.len() as f64;
             per_symbol.push(mean * bias);
@@ -446,7 +529,10 @@ impl FrameReceiver {
             .map(|(s, carrier)| c::norm_sq(channel[s][carrier]))
             .sum::<f64>()
             / (data_symbols.len() * n_carriers) as f64;
-        let snr_carrier = signal_power / sigma2.max(1e-12);
+        for value in &mut per_pilot {
+            *value = *value / data_symbols.len().max(1) as f64 * bias;
+        }
+        let snr_carrier = signal_power / self.reported_noise(&per_pilot, sigma2).max(1e-12);
         let bandwidth_ratio = self.params.occupied_bandwidth_hz() / 3000.0;
 
         // 6. equalise the data carriers, time-major
@@ -458,6 +544,15 @@ impl FrameReceiver {
                 symbols.push(c::div(raw[symbol][carrier], h));
                 noise_var.push(sigma2_symbol[position] / c::norm_sq(h).max(1e-9));
             }
+        }
+
+        if self.per_carrier_noise {
+            let modulation = if sync.frame_type == FrameType::Data {
+                self.air.modes[mode].modulation
+            } else {
+                self.air.control_mode().modulation
+            };
+            self.weigh_carriers(&symbols, &mut noise_var, data_carriers.len(), modulation);
         }
 
         Ok(ReceivedFrame {
@@ -730,6 +825,76 @@ mod tests {
             .expect("receive");
         let (mode, rv) = rx.preamble.chip_hypothesis(frame.chip_runner_up);
         assert_eq!((forced.mode, forced.rv), (mode, rv));
+    }
+
+    /// A pseudo-random stream for the tests: xorshift, Box–Muller.
+    struct Gauss(u64);
+
+    impl Gauss {
+        fn uniform(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            ((self.0 >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        }
+
+        fn complex(&mut self, variance: f64) -> Complex {
+            let r = (-variance * self.uniform().ln()).sqrt();
+            let a = std::f64::consts::TAU * self.uniform();
+            (r * a.cos(), r * a.sin())
+        }
+    }
+
+    #[test]
+    fn a_narrowband_interferer_costs_only_the_carriers_it_sits_on() {
+        // ADR-0043: 200 Hz of interference at the signal's power — an RTTY station, roughly —
+        // lies on five of 42 data carriers for the whole frame. Weighed carrier by carrier
+        // they become erasures and the frame decodes; under one variance a symbol the decoder
+        // believes them, and it does not.
+        let mode_index = 8; // 16-QAM ½
+        let codec = FrameCodec::new(MODES[mode_index], LONG).expect("codec");
+        for seed in 1..=4u64 {
+            let (mut buffer, data, sync) = transmit(mode_index, 0, 500);
+            let frame_samples = &buffer[500..buffer.len() - 600];
+            let power = frame_samples.iter().map(|&x| c::norm_sq(x)).sum::<f64>()
+                / frame_samples.len() as f64;
+            let mut rng = Gauss(0x9E37_79B9_7F4A_7C15 ^ seed);
+            // white noise 18 dB under the signal in 3 kHz of the 8 kHz baseband
+            let noise = power / 10f64.powf(1.8) * WIDE_2300.fs_baseband / 3000.0;
+            // twenty carriers across 200 Hz around +300 Hz, at the signal's power in all
+            let tones: Vec<(f64, f64)> = (0..20)
+                .map(|_| (200.0 + 200.0 * rng.uniform(), std::f64::consts::TAU * rng.uniform()))
+                .collect();
+            let amplitude = (power / tones.len() as f64).sqrt();
+            for (n, sample) in buffer.iter_mut().enumerate() {
+                let t = n as f64 / WIDE_2300.fs_baseband;
+                for &(f, phase) in &tones {
+                    let a = std::f64::consts::TAU * f * t + phase;
+                    *sample = c::add(*sample, (amplitude * a.cos(), amplitude * a.sin()));
+                }
+                *sample = c::add(*sample, rng.complex(noise));
+            }
+            let mut decoded = Vec::new();
+            let mut reported = Vec::new();
+            for weighed in [false, true] {
+                let rx = FrameReceiver {
+                    per_carrier_noise: weighed,
+                    ..FrameReceiver::default()
+                };
+                let frame = rx.receive(&buffer, &sync, None).expect("receive");
+                let (payload, _) = codec
+                    .decode(&frame.symbols, NoiseVar::PerSymbol(&frame.noise_var), 0, None)
+                    .expect("decode");
+                decoded.push(payload.as_deref() == Some(data.as_slice()));
+                reported.push(frame.snr_3k_db);
+            }
+            assert_eq!(decoded, [false, true], "seed {seed}: [unweighed, weighed]");
+            // the SNR the rate controller is told leaves the interfered pilots out
+            assert!(
+                reported[1] > 10.0 && reported[0] + 10.0 < reported[1],
+                "seed {seed}: reported {reported:?}"
+            );
+        }
     }
 
     #[test]

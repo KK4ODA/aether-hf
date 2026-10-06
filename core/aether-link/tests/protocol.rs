@@ -2976,3 +2976,38 @@ fn a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short() {
         "{after} collisions with the countdown, {before} without"
     );
 }
+
+#[test]
+fn a_frame_whose_copies_go_unheard_is_sent_again_at_rv_0_first() {
+    // ADR-0043: a retransmission is as often of a frame the receiver never detected as of one
+    // it could not decode, so the second copy is RV 0 again — it decodes on its own and
+    // combines with a failed first copy as well as any — then RV 2 and RV 3. RV 1 decodes
+    // alone at no SNR, and was the second copy
+    let t = timing(false);
+    let (a, b) = pair(&t, &LinkConfig::default());
+    let connected_at = std::rc::Rc::new(std::cell::Cell::new(f64::INFINITY));
+    let after = std::rc::Rc::clone(&connected_at);
+    let lost = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let mut sim =
+        TwoStationSim::new(a, b, 15.0, 3).with_unheard(Box::new(move |rx, container, t0| {
+            if rx == 1 && container == Container::Data && t0 >= after.get() {
+                lost.set(lost.get() + 1);
+                return lost.get() <= 3;
+            }
+            false
+        }));
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.run(60.0, 3.0);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    connected_at.set(sim.t);
+    let before = sim.frames_sent(0).len();
+    sim.engine_mut(0).send(&[0u8; 10]);
+    sim.run(sim.t + 300.0, 3.0);
+    assert_eq!(sim.delivered(1), [0u8; 10].as_slice());
+    let rvs: Vec<u8> = sim.frames_sent(0)[before..]
+        .iter()
+        .filter(|f| f.container == Container::Data)
+        .map(|f| f.rv)
+        .collect();
+    assert_eq!(rvs[..4], [0, 0, 2, 3], "{rvs:?}");
+}

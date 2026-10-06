@@ -1077,6 +1077,21 @@ frame re-arming the acknowledgement for its own end over an earlier frame's coun
 / `burst_end`, the latest announced end of the burst; model first). A field report becomes a
 scenario first.
 
+**The stress scenarios and ADR-0043 (after beta.81).** Fourteen 80/40 m scenarios tagged `stress`
+(`--tag stress --jobs 4`; not all expected to pass), with the channel server's new path keys
+`level` (a schedule in dB), `cfo_drift_hz_per_s`, `sro_ppm`, a radio's `agc`, a station's own
+`bandwidth` and `[expect] idle`. They found: narrowband QRM trusted — the receiver now weighs each
+data carrier by its own slicing error against the median carrier's (`per_carrier_noise`, both
+suites) and reports SNR without the pilots an interferer sits on (`OUTLIER_PILOT`), RTTY at the
+signal's power 1/12 → 10/12 frames, nothing changes without QRM; and retransmissions went RV 0,
+1, 2, 3 though RV 1/2 never decode alone and RV 3 only on some rungs — now `RV_SEQUENCE` 0, 0,
+2, 3 (no wire change). A/B against beta.81 on the same seeds: the 500 Hz scenarios 1.4–2.2×
+faster, the RTTY contest's Tests complete at rungs 12–13 instead of 5–6. Not fixed, in the ADR:
+the B2F turnaround (13 s, 3.5 s with ADR-0027's request — the author's call), 7 ms NVIS beyond the
+5 ms prefix (P9-3), a strong CW off the carrier grid, 500 Hz on fading (P9-5), the climb.
+`/tmp`-style A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
+`session_matrix.py --daemon <that>/release/aetherd`.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
