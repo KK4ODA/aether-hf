@@ -50,3 +50,4 @@ context → decision → alternatives considered → consequences.
 | [0043](0043-per-carrier-noise-and-the-rv-order.md) | Each carrier weighed by its own noise, the reported SNR without the interfered pilots, and a frame's second copy RV 0 again | accepted |
 | [0044](0044-the-turn-request-in-every-session.md) | The station without the turn asks for it in every session, not only under a host's CHAT ON | accepted |
 | [0045](0045-the-answer-after-a-burst-said-to-be-over.md) | The answer after a burst said to be over waits only the turnaround; the request's quiet in the family in use | accepted |
+| [0046](0046-the-countdown-in-pairs.md) | The burst countdown counts in pairs and never short; link protocol 6 | accepted |

@@ -56,9 +56,9 @@ one its first ten. Each air interface's chip sequences are indexed by *its* mode
 N_RV = 4
 """Redundancy versions signalled per frame (TS 38.212 rate matching has four)."""
 MAX_FOLLOWS = 3
-"""Most frames a DATA frame can say follow it in its burst (ADR-0041): the countdown rides in
-the phase of the frame's mode chips — a quarter turn a frame — so four values, the last read
-as "three or more"."""
+"""The largest burst countdown a DATA frame carries (ADR-0041): it rides in the phase of the
+frame's mode chips, a quarter turn a step, so four values. What a step means is the link
+layer's: two frames since link protocol 6 (ADR-0046)."""
 MAX_PILOT_SYMBOLS = 4
 
 

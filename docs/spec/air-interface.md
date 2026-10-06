@@ -350,9 +350,14 @@ first transmission whose payload, and therefore sequence number, it never decode
 CONTROL frames always use the control mode and RV 0; their pilot symbols carry the plain
 pilot sequence.
 
-**The burst countdown** (link protocol version 5, ADR-0041). A DATA frame's chips are multiplied
-by `j^f`, where `f` is the number of frames of its burst that follow it, capped at 3 (0 for
-the last frame, 3 for "three or more"). A receiver picks the (mode, RV) sequence by the
+**The burst countdown** (link protocol version 5, ADR-0041; counted in pairs since version 6,
+ADR-0046). A DATA frame's chips are multiplied by `j^f`, where `f` is half the number of frames
+of its burst that follow it, rounded up: 0 for the last frame, 1 for one or two following, 2 for
+three or four, 3 for five or six. It never says fewer frames than follow — a receiver takes
+`2f` as the most still to come, and the burst's end as the tightest such bound any frame it
+believed gives — so one that hears only a burst's first frames does not answer over the rest,
+which version 5's "three or more" let it do; the sender's wait for the acknowledgement covers
+the one frame more it may say. A receiver picks the (mode, RV) sequence by the
 *magnitude* of its correlation, which the turn does not change, and reads `f` as the nearest
 quarter turn of that correlation's phase against the comb pilots' channel estimate; the pilot
 symbols are then known with the turned chips. A frame with `f = 0` is the frame of version 4.

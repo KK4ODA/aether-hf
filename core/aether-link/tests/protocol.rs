@@ -1721,15 +1721,17 @@ impl aether_link::SoftFrame for Handed {
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
-    // version 5 turns an ordinary data frame's mode chips by the frames of its burst that
+    // version 6 counts a burst's following frames in pairs (ADR-0046), which a version 5
+    // receiver reads as the frames themselves and answers a frame early; version 5 turns an
+    // ordinary data frame's mode chips by the frames of its burst that
     // follow it (ADR-0041), which a version 4 receiver takes for noise; version 4 of the link
     // protocol numbers the 500 Hz ladder's rungs with its middle kinds
     // (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
     // ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     // other frames by the same numbers, so a call from one is not a session to start — it is
     // ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 5);
-    for version in [1u8, 2, 3, 4] {
+    assert_eq!(PROTOCOL_VERSION, 6);
+    for version in [1u8, 2, 3, 4, 5] {
         let t = timing(false);
         let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
         let body = ConnectBody {
@@ -3065,5 +3067,45 @@ fn an_acknowledgement_goes_a_turnaround_after_a_burst_said_to_be_over() {
             !gaps.is_empty() && gaps.iter().all(|g| (g - 0.01 - expected).abs() < 0.01),
             "countdown {countdown}: expected {expected} after each burst, {gaps:?}"
         );
+    }
+}
+
+#[test]
+fn the_countdown_counts_in_pairs_and_never_short() {
+    // ADR-0046: half the frames that follow, rounded up — exact at the last frame, never fewer
+    // than follow, one more at most
+    use aether_link::frames::{countdown_of, most_following};
+    let counts: Vec<u8> = (0..7).map(countdown_of).collect();
+    assert_eq!(counts, [0, 1, 1, 2, 2, 3, 3]);
+    for n in 0..7usize {
+        let most = usize::from(most_following(countdown_of(n)));
+        assert!(
+            n <= most && most <= n + 1,
+            "{n} following, said at most {most}"
+        );
+    }
+}
+
+#[test]
+fn a_fade_over_the_end_of_a_burst_is_not_answered_over() {
+    // the scenario harness, 80 m at 500 Hz (ADR-0045): a receiver that heard only the first
+    // frames of a burst of six read "three or more" as three and answered over the rest.
+    // Counted in pairs the countdown never says fewer than follow (ADR-0046): a fade of 3.5 s
+    // every 11 s over a 3 kB transfer, which took the ends of bursts, collides with nothing
+    let narrow = air_timing(NARROW_500, true);
+    let message: Vec<u8> = (0..12).flat_map(|_| 0..=255u8).collect();
+    for offset in [2.74f64, 5.48, 13.7] {
+        let a = LinkEngine::new("ND1J", narrow.clone(), LinkConfig::default(), 1);
+        let b = LinkEngine::new("KK4ODA", narrow.clone(), LinkConfig::default(), 2);
+        let mut sim =
+            TwoStationSim::new(a, b, 14.0, 3).with_unheard(Box::new(move |rx, container, t0| {
+                rx == 1 && container == Container::Data && (t0 + offset) % 11.0 < 3.5
+            }));
+        sim.engine_mut(0).connect("KK4ODA").expect("idle");
+        sim.run(60.0, 3.0);
+        sim.engine_mut(0).send(&message);
+        sim.run(sim.t + 1200.0, 3.0);
+        assert_eq!(sim.delivered(1), message.as_slice(), "offset {offset}");
+        assert_eq!(sim.collisions(0, 1), 0, "offset {offset}");
     }
 }

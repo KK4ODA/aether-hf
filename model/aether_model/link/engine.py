@@ -40,7 +40,6 @@ from enum import Enum
 from aether_model.link.frames import (
     CONNECT_BODY_BYTES,
     MAX_BURST,
-    MAX_FOLLOWS,
     PROTOCOL_VERSION,
     WINDOW,
     ConnectBody,
@@ -52,10 +51,12 @@ from aether_model.link.frames import (
     ProbeBody,
     bandwidth_code,
     bandwidth_hz_of,
+    countdown_of,
     data_capacity,
     decode_data,
     encode_data,
     in_window,
+    most_following,
     pack_callsign,
     seq_after,
     seq_distance,
@@ -1416,7 +1417,7 @@ class LinkEngine:
             # each frame says how many of the burst come after it, so a receiver that loses
             # one in a fade still knows the burst is not over and does not answer over it
             # (ADR-0041)
-            follows = min(len(seqs) - 1 - i, MAX_FOLLOWS)
+            follows = countdown_of(len(seqs) - 1 - i)
             frames.append(replace(self._data_frame(rec), follows=follows))
         self.stats.frames_sent += len(frames)
         self.stats.bursts += 1
@@ -1437,10 +1438,17 @@ class LinkEngine:
         # this burst's alone gave up on a floor acknowledgement a second into it, and the
         # recommendation it carried was lost with it (ADR-0016).
         families = {family, self._peer_floor}
+        # a receiver that lost the burst's last frame takes the one before at its word — one
+        # or two following — and answers a frame late (ADR-0046): the wait covers it
+        late = (
+            0.0
+            if family or len(seqs) < 2
+            else self.timing.data_frame_s_for(self._records[seqs[-1]].mode)
+        )
         self._wait_for(
             "ack",
             max(self.timing.control_frame_s_for(f) for f in families),
-            max(self._irs_reply_delay(f, expected) for f in families),
+            max(self._irs_reply_delay(f, expected) for f in families) + late,
         )
 
     def _on_ack(self, ack: ControlFrame) -> None:
@@ -1534,18 +1542,19 @@ class LinkEngine:
                 self._disarm("ack")
 
     @staticmethod
-    def _announced_end(rec: _RxRecord) -> float:
-        """Where a frame of a burst says the burst ends: its own end, and the frames it says
-        follow it, each as long as itself (ADR-0041). Believed from a frame that decoded or
-        whose acquisition was trusted; a phantom's chips are noise."""
+    def _announced_end(rec: _RxRecord) -> float | None:
+        """The latest a frame of a burst says the burst ends: its own end, and the most frames
+        its countdown says may follow it, each as long as itself (ADR-0041, ADR-0046). None from
+        a frame neither decoded nor trusted: a phantom's chips are noise."""
         frame = rec.frame
-        follows = frame.follows if (rec.payload is not None or frame.trusted) else None
-        return frame.t_end + (follows or 0) * max(0.0, frame.t_end - frame.t_start)
+        if frame.follows is None or not (rec.payload is not None or frame.trusted):
+            return None
+        return frame.t_end + most_following(frame.follows) * max(0.0, frame.t_end - frame.t_start)
 
     def _burst_closed(self) -> bool:
         """Whether the burst is known to be over at :meth:`_burst_end`: the frame that ends
-        latest said, believably, that none follow it (ADR-0041's countdown at 0, exact where
-        3 means "three or more"). Without it the end is inferred from silence."""
+        latest said, believably, that none follow it (a countdown of 0 is exact). Without it
+        the end is inferred from silence."""
         end = self._burst_end()
         for rec in self._burst:
             frame = rec.frame
@@ -1561,8 +1570,14 @@ class LinkEngine:
         it set the answer for its own end, over the two frames an earlier one had announced
         (the scenario harness, ADR-0042: eight collisions on an 80 m Poor path). In ND1J's
         session of 2026-10-06 the acknowledgement went out over the burst's last frame 21
-        times, and both were lost (ADR-0040)."""
-        return max(self._announced_end(rec) for rec in self._burst)
+        times, and both were lost (ADR-0040).
+
+        Every countdown is a bound — the most frames that may follow (ADR-0046) — so the burst
+        ends by the tightest any believed frame gives, and no earlier than the end of any frame
+        heard."""
+        heard = max(rec.frame.t_end for rec in self._burst)
+        bounds = [b for b in (self._announced_end(rec) for rec in self._burst) if b is not None]
+        return max(heard, min(bounds)) if bounds else heard
 
     def _decode_record(self, rec: _RxRecord) -> bool:
         """Decode a frame of the burst, alone or combined with an earlier transmission of its
