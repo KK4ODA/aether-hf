@@ -37,6 +37,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from aether_model.frame.modes import LONG, SHORT, FrameLayout, air_interface
+from aether_model.phy.constellation import constellation
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import (
     FrameType,
@@ -128,6 +129,16 @@ class FrameReceiver:
     runs, so its noise-averaging buys little while its design mismatch still costs. Both
     implementations and the measurements are kept so the question can be reopened with a
     joint 2-D design rather than two separable ones bolted together."""
+    per_carrier_noise: bool = True
+    """Weigh each data carrier by its own noise (ADR-0043). An interferer narrower than the
+    signal — RTTY, a carrier, a PACTOR station on 40 m on a contest weekend — sits on a few
+    carriers for the whole frame; the per-symbol estimate averages it over every carrier, so
+    the decoder trusted exactly the bits it should have discarded. Each carrier's slicing
+    error over the frame's data symbols, against the median carrier's, scales its noise
+    variance when it stands out (:attr:`carrier_noise_threshold`)."""
+    carrier_noise_threshold: float = 2.0
+    """A carrier's slicing error must be this many times the median carrier's before its noise
+    is raised: under it, the scatter of a clean carrier's estimate over 12–32 symbols."""
 
     def __init__(self, params: WaveformParams = WIDE_2300) -> None:
         self.p = params
@@ -137,6 +148,35 @@ class FrameReceiver:
         self.pilot_seq = self.cmap.pilot_sequence
         self.pilot_c = self.cmap.pilot_carriers
         self.data_c = self.cmap.data_carriers
+
+    def _carrier_factors(
+        self, eq: ComplexArray, nv: FloatArray, sync: FrameSync, mode_idx: int
+    ) -> FloatArray:
+        """How much noisier each data carrier is than the frame's typical one: the slicing
+        error of its equalized symbols, in units of the noise the per-symbol estimate gave
+        it, against the median carrier's — 1 where it does not stand out."""
+        air = air_interface(self.p)
+        control = sync.header.frame_type is FrameType.CONTROL
+        modulation = (air.control_mode if control else air.modes[mode_idx]).modulation
+        points = constellation(modulation).points
+        nearest = points[np.argmin(np.abs(eq[:, :, None] - points[None, None, :]), axis=2)]
+        err = np.mean(np.abs(eq - nearest) ** 2 / nv, axis=0)
+        factor = err / max(float(np.median(err)), 1e-12)
+        return np.where(factor >= self.carrier_noise_threshold, factor, 1.0)
+
+    def _reported_noise(self, resid: ComplexArray, bias: float, sigma2: float) -> float:
+        """The noise the frame's SNR is reported against: the pilots' residual power, less
+        the pilot carriers an interferer sits on (over :attr:`OUTLIER_PILOT` times the median
+        pilot's) when :attr:`per_carrier_noise` weighs them out of the decode (ADR-0043) —
+        otherwise an RTTY station on a few carriers read as a path 10 dB worse, and the rate
+        controller kept a frame the decoder could read at the tone floor."""
+        if not self.per_carrier_noise:
+            return sigma2
+        per_pilot = np.mean(np.abs(resid) ** 2, axis=0) * bias
+        clean = per_pilot[per_pilot <= self.OUTLIER_PILOT * float(np.median(per_pilot))]
+        return float(np.mean(clean)) if len(clean) else sigma2
+
+    OUTLIER_PILOT = 4.0
 
     def frame_span(self, sync: FrameSync) -> tuple[int, int]:
         layout = layout_for(sync.header.frame_type, self.p)
@@ -270,11 +310,13 @@ class FrameReceiver:
             sigma2 * self.noise_floor_fraction,
         )
         sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
-        snr_carrier = sig_power / max(sigma2, 1e-12)
+        snr_carrier = sig_power / max(self._reported_noise(resid, bias, sigma2), 1e-12)
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
         # 5. equalize data carriers of payload symbols, time-major
         eq = raw[data_syms][:, self.data_c] / h[data_syms][:, self.data_c]
         nv = sigma2_sym[:, None] / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
+        if self.per_carrier_noise:
+            nv = nv * self._carrier_factors(eq, nv, sync, mode_idx)[None, :]
         return ReceivedFrame(
             sync=sync,
             layout=layout,

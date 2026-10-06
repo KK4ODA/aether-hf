@@ -269,6 +269,17 @@ them, RV 3 wraps round to them): a frame at RV 1 or 2 is mostly parity and, at t
 modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path, 2026-09-25,
 against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
 
+RV_SEQUENCE = (0, 0, 2, 3)
+"""The redundancy version of a frame's first, second, third and fourth transmission under one
+codeword, then round again (ADR-0043). On HF a retransmission is as often of a frame the
+receiver never detected — a fade, a collision, a burst's faded end — as of one it detected and
+could not decode, so the second copy must decode on its own: RV 0 again, which also combines
+with a failed first copy as well as any other (27 of 29 against RV 1's 24, 2300 Hz Poor). RV 2
+then adds the parity neither RV 0 carries, and RV 3 the systematic bits with the code's
+outermost parity. The order was 0, 1, 2, 3, under which a frame whose first copy was missed
+could not decode until its fourth: RV 1 and RV 2 decode alone at no SNR, and RV 3 not at all on
+the 36 bit/s tone rung (85 s of tone frames at +5 dB on a 500 Hz path, the scenario harness)."""
+
 
 @dataclass
 class _AckSnapshot:
@@ -973,7 +984,8 @@ class LinkEngine:
         rec.tx_count += 1
         cap = self.timing.capacity(rec.mode)
         payload = encode_data(DataHeader(rec.kind, rec.seq, self.session), rec.body, cap)
-        return TxFrame(Container.DATA, payload, mode=rec.mode, rv=(rec.tx_count - 1) % 4)
+        rv = RV_SEQUENCE[(rec.tx_count - 1) % len(RV_SEQUENCE)]
+        return TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv)
 
     def _send_connect(self, kind: DataKind, snr_db: float | None = None) -> None:
         src, dst = self.my_call, self.remote_call

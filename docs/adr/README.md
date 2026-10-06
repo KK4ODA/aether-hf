@@ -47,3 +47,4 @@ context → decision → alternatives considered → consequences.
 | [0040](0040-a-faint-arrival-holds-the-acknowledgement.md) | A faint arrival where the next frame of a burst would begin holds the acknowledgement | accepted |
 | [0041](0041-the-burst-countdown.md) | Each frame of a burst says how many follow it, in a turn of its mode chips; link protocol 5 | accepted |
 | [0042](0042-the-scenario-harness.md) | Whole sessions between real daemons through simulated band conditions; a receiver's DISC answers its burst at once | accepted |
+| [0043](0043-per-carrier-noise-and-the-rv-order.md) | Each carrier weighed by its own noise, the reported SNR without the interfered pilots, and a frame's second copy RV 0 again | accepted |

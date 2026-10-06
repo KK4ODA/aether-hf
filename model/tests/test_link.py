@@ -3298,3 +3298,39 @@ def test_a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short() -> N
     # 12 before the fix, 19 with no countdown at all; what is left is the count's ceiling — a
     # frame can say "three or more", and a burst of six whose later frames are all lost
     assert _collisions(sim) <= _collisions(blind) // 4, (_collisions(sim), _collisions(blind))
+
+
+def test_a_frame_whose_copies_go_unheard_is_sent_again_at_rv_0_first(timing: PhyTiming) -> None:
+    """ADR-0043: a retransmission is as often of a frame the receiver never detected as of one
+    it could not decode, so the second copy is RV 0 again — it decodes on its own, and
+    combines with a failed first copy as well as any — then RV 2 and RV 3. RV 1 decodes alone
+    at no SNR and was the second copy."""
+    from aether_model.link.engine import RV_SEQUENCE
+    from aether_model.link.phy import Container
+
+    a, b = _pair(timing)
+    sent: list[int] = []
+    original = a._transmit
+
+    def wrapped(frames: list[TxFrame]) -> None:
+        if a.state is State.CONNECTED and a.role is Role.ISS:
+            sent.extend(f.rv for f in frames if f.container is Container.DATA)
+        original(frames)
+
+    a._transmit = wrapped  # type: ignore[method-assign]
+    # the session's first three data frames never reach the other station
+    lost: list[float] = []
+
+    def unheard(rx: int, container: Container, t: float) -> bool:
+        if rx == 1 and container is Container.DATA and a.state is State.CONNECTED:
+            lost.append(t)
+            return len(lost) <= 3
+        return False
+
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=3, unheard=unheard)
+    a.connect("KK4XYZ")
+    a.send(bytes(10))
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(10)
+    assert RV_SEQUENCE == (0, 0, 2, 3)
+    assert sent[:4] == [0, 0, 2, 3], sent

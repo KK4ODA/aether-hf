@@ -284,3 +284,37 @@ def test_a_data_frame_says_how_many_of_its_burst_follow_it(bandwidth: int) -> No
         assert (frame.mode, frame.rv, frame.follows) == (mode.index, 0, follows)
         out, _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
         assert out == payload
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_a_narrowband_interferer_costs_only_the_carriers_it_sits_on(seed: int) -> None:
+    """ADR-0043: 200 Hz of interference at the signal's power (an RTTY station, roughly) lies
+    on five of 42 data carriers for the whole frame. Weighing each carrier by its own noise
+    turns them into erasures and the frame decodes; with one variance for every carrier the
+    decoder believes them, and it does not."""
+    from aether_model.phy.rx import FrameReceiver
+
+    modem = Modem(WIDE_2300)
+    mode = MODES[8]  # 16-QAM ½
+    codec = modem.codec(mode, modem.air.long)
+    rng = np.random.default_rng(seed)
+    payload = bytes(rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8))
+    y = np.concatenate((np.zeros(1500, complex), modem.data_burst(payload, mode), np.zeros(3000)))
+    interferer = InterfererConfig(300.0, 0.0, kind="noise", bandwidth_hz=200.0)
+    y = HfChannel(
+        ChannelConfig(snr_db=18.0, signal_power=1.0, seed=seed, interferer=interferer)
+    ).process(y)
+    y = modem.detector.condition(y)
+    sync = modem.detector.detect(y, max_frames=1)[0]
+    decoded, reported = {}, {}
+    for weighed in (False, True):
+        rx = FrameReceiver(WIDE_2300)
+        rx.per_carrier_noise = weighed
+        frame = rx.receive(y, sync)
+        decoded[weighed], _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
+        reported[weighed] = frame.snr_3k_db
+    assert decoded[True] == payload
+    assert decoded[False] != payload
+    # and the SNR the rate controller is told leaves the interfered pilots out: the path's
+    # 18 dB less what the fading costs, not the interferer's average over every carrier
+    assert reported[True] > 14.0 > reported[False] + 5.0, reported

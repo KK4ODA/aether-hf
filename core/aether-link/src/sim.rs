@@ -233,6 +233,8 @@ pub struct SentFrame {
     pub mode: usize,
     /// Whether a CONTROL frame went on the tone floor.
     pub floor: bool,
+    /// Its redundancy version.
+    pub rv: u8,
 }
 
 /// One side of the simulated link.
@@ -531,6 +533,7 @@ impl TwoStationSim {
                 container: frame.container,
                 mode: frame.mode,
                 floor: frame.floor,
+                rv: frame.rv,
             });
             let cut = t + duration > key_up + 1e-9;
             let floor = match frame.container {
