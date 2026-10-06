@@ -177,6 +177,15 @@ pub struct DaemonState {
     /// Whether the settings or the profiles changed since the run loop last told the
     /// clients: set by the methods, taken by the loop, which publishes a `profile` event.
     profiles_changed: bool,
+    /// The shared zip on its way to the station that asked for it (`share.upload`).
+    pub upload: crate::upload::Upload,
+    /// How the upload reaches the network: a function, so the tests can stand in for Google.
+    pub upload_http: fn() -> Box<dyn crate::upload::Http>,
+}
+
+/// The network, for an upload.
+fn web() -> Box<dyn crate::upload::Http> {
+    Box::new(crate::upload::Web::default())
 }
 
 /// The host (VARA-compatible) interface, as `status` reports it.
@@ -211,6 +220,8 @@ impl DaemonState {
             audio_fault: None,
             config_note: None,
             devices: device_inventory,
+            upload: crate::upload::Upload::default(),
+            upload_http: web,
             device_list: crate::devices::DeviceList::default(),
             devices_told: 0,
             devices_last_told: None,
@@ -381,6 +392,9 @@ pub fn dispatch_with<P: Ptt>(
         "share.prepare" => {
             return share_prepare(station, daemon, &request.params, request.id.clone());
         }
+        "share.upload" => {
+            return share_upload(station, daemon, &request.params, request.id.clone());
+        }
         // whether a restart is something the panel can do for the operator is the
         // daemon's to know, not the station's
         "heard.list" => return heard_list(daemon.as_deref(), request.id.clone()),
@@ -514,6 +528,7 @@ fn daemon_status<P: Ptt>(station: &mut Station<P>, daemon: Option<&DaemonState>)
     result["kiss"] = kiss_status(daemon);
     result["audio_fault"] = json!(daemon.and_then(|d| d.audio_fault.clone()));
     result["config_note"] = json!(daemon.and_then(|d| d.config_note.clone()));
+    result["upload"] = json!(daemon.map(|d| d.upload.progress()));
     // which installation this daemon runs from: a shell that finds one already
     // listening decides from this whether it is its own to stop
     result["binary"] = json!(
@@ -673,6 +688,88 @@ fn share_prepare<P: Ptt>(
         ),
         Err(message) => Response::failed(id, ApiError::new("io", message, true)),
     }
+}
+
+/// Send a zip `share.prepare` wrote to the station that asked for it: to the upload script its
+/// request link named, with the code it issued (`upload.rs`). The upload runs on a thread of its
+/// own; `status.upload` says how it goes.
+fn share_upload<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: Option<&mut DaemonState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let refuse = |code: &str, message: &str| {
+        Response::failed(id.clone(), ApiError::new(code, message, false))
+    };
+    let Some(daemon) = daemon else {
+        return refuse("unavailable", "Nothing to send: this modem keeps no files.");
+    };
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (name, endpoint, code) = (text("name"), text("endpoint"), text("code"));
+    if !crate::upload::endpoint_allowed(&endpoint) {
+        return refuse(
+            "bad_params",
+            "That is not an upload address: the request link should carry the address of the \
+             asking station's upload script (https://script.google.com/…/exec).",
+        );
+    }
+    if !crate::upload::code_allowed(&code) {
+        return refuse(
+            "bad_params",
+            "The request link's upload code is missing or damaged: ask for the link again.",
+        );
+    }
+    // a name `share.prepare` gave, in `shared/`, and nothing else
+    let plain = !name.is_empty()
+        && std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        && !name.contains(['/', '\\'])
+        && !name.contains("..");
+    let file = crate::share::shared_dir(&daemon.path).join(&name);
+    if !plain || !file.is_file() {
+        return refuse(
+            "not_found",
+            "That zip is not in the shared folder: prepare the files again.",
+        );
+    }
+    if daemon.upload.busy() {
+        return Response::failed(
+            id,
+            ApiError::new("busy", "Another upload is under way.", true),
+        );
+    }
+    let bytes = std::fs::metadata(&file).map_or(0, |m| m.len());
+    let job = crate::upload::Job {
+        file: file.clone(),
+        name: name.clone(),
+        endpoint,
+        code,
+        note: params
+            .get("note")
+            .and_then(Value::as_str)
+            .map(|n| n.chars().take(2000).collect())
+            .unwrap_or_default(),
+        callsign: station.engine().my_call.clone(),
+    };
+    if let Err(error) = daemon.upload.start(job, (daemon.upload_http)()) {
+        return Response::failed(id, ApiError::new("busy", error, true));
+    }
+    daemon.log.record(
+        crate::log::Level::Info,
+        "share",
+        &format!("sending {name} ({bytes} bytes) to the station that asked for it"),
+        &format!("{:?}", station.state()),
+    );
+    Response::ok(id, json!({ "started": true, "name": name, "bytes": bytes }))
 }
 
 /// What `share.prepare` was asked for: the hours back, the station, the audio.
@@ -1756,6 +1853,9 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "frames_reencoded": stats.frames_reencoded,
         // a chat's requests for the turn (ADR-0027)
         "turn_requests": stats.turn_requests,
+        // the turn offered at the end of a burst, and taken with an acknowledgement (ADR-0047)
+        "turn_offers": stats.turn_offers,
+        "turns_taken": stats.turns_taken,
     })
 }
 
@@ -2396,6 +2496,96 @@ mod tests {
         // a period outside 15 minutes to 14 days is refused
         let refused = dispatch_with(&mut station, Some(&mut daemon), &ask(json!({"hours": 0})));
         assert_eq!(refused.error.expect("refused").code, "bad_params");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shared_zip_goes_to_the_upload_script_the_request_named() {
+        // the request link carries the asking station's upload script and a code; the zip
+        // goes there on a thread of its own and `status.upload` follows it
+        struct Script;
+        impl crate::upload::Http for Script {
+            fn post(&self, _: &str, body: &str) -> Result<crate::upload::Reply, String> {
+                let asked: Value = serde_json::from_str(body).expect("json");
+                let answer = if asked["action"] == "begin" {
+                    json!({"ok": true, "upload_url": "https://www.googleapis.com/upload/s", "to": "KK4ODA"})
+                } else {
+                    json!({"ok": true, "link": "https://drive.google.com/file/d/F/view"})
+                };
+                Ok(crate::upload::Reply {
+                    status: 200,
+                    body: answer.to_string(),
+                    ..crate::upload::Reply::default()
+                })
+            }
+            fn get(&self, _: &str) -> Result<crate::upload::Reply, String> {
+                Err("not asked".into())
+            }
+            fn put(&self, _: &str, _: &str, _: &[u8]) -> Result<crate::upload::Reply, String> {
+                Ok(crate::upload::Reply {
+                    status: 201,
+                    body: json!({"id": "F"}).to_string(),
+                    ..crate::upload::Reply::default()
+                })
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("aether-upload-api-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shared")).expect("temp dir");
+        std::fs::write(dir.join("shared").join("aether-W4ODA-x.zip"), b"PK zip").expect("zip");
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.path = dir.join("station.toml");
+        daemon.upload_http = || Box::new(Script);
+        let ask = |params: Value| Request {
+            id: Some("1".into()),
+            method: "share.upload".to_owned(),
+            params,
+        };
+        let good = json!({
+            "name": "aether-W4ODA-x.zip",
+            "endpoint": "https://script.google.com/macros/s/AKfy/exec",
+            "code": "W4TGA-7k2m9q",
+            "note": "last night's Test",
+        });
+        for (key, bad, code) in [
+            ("endpoint", "https://example.org/upload", "bad_params"),
+            ("code", "x", "bad_params"),
+            ("name", "../station.toml", "not_found"),
+            ("name", "aether-W4ODA-gone.zip", "not_found"),
+        ] {
+            let mut params = good.clone();
+            params[key] = json!(bad);
+            let refused = dispatch_with(&mut station, Some(&mut daemon), &ask(params));
+            assert_eq!(refused.error.expect("refused").code, code, "{key} {bad}");
+        }
+        let started = dispatch_with(&mut station, Some(&mut daemon), &ask(good));
+        assert_eq!(started.result.expect("started")["bytes"], 6);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            let status = dispatch_with(
+                &mut station,
+                Some(&mut daemon),
+                &Request {
+                    id: Some("2".into()),
+                    method: "status".to_owned(),
+                    params: json!({}),
+                },
+            )
+            .result
+            .expect("status");
+            if status["upload"]["state"] == "done" || std::time::Instant::now() > deadline {
+                break status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(status["upload"]["state"], "done", "{}", status["upload"]);
+        assert_eq!(status["upload"]["sent"], 6);
+        assert_eq!(status["upload"]["to"], "KK4ODA");
+        assert_eq!(
+            status["upload"]["link"],
+            "https://drive.google.com/file/d/F/view"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

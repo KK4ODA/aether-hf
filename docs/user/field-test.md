@@ -195,6 +195,13 @@ read from yours. In the Log tab, **Send files…** does both halves:
   their computer with Aether HF running, fills their *Send files…* form in with your address
   and your callsign. The Stations tab's session history has an **Ask for files** button on
   each row that opens it for that station and that session's time.
+* **With an upload script** ([`tools/drive_upload/`](../../tools/drive_upload/README.md), set up
+  once in your own Google account), the request also carries your script's address and a code
+  you made for that station. Their panel then shows **Send to <your call>**: one press, and the
+  zip goes straight into a folder in your Google Drive, in pieces, picking up after a dropped
+  connection. There is nothing for them to attach, and no limit at email's 25 MB, which a Test
+  session's recording passes. You get an email with a link to it. *Email instead* stays there
+  as the way round.
 
 Neither holds what was said: the logs record how much was sent, never what.
 
