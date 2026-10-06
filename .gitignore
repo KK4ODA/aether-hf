@@ -27,3 +27,4 @@ bench-out/
 .DS_Store
 Thumbs.db
 core/target/
+/runs/

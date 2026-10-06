@@ -46,3 +46,4 @@ context → decision → alternatives considered → consequences.
 | [0039](0039-disconnect-patience.md) | A sender's Disconnect gives up on what the path will not carry; the occupied width says which measure it is | accepted |
 | [0040](0040-a-faint-arrival-holds-the-acknowledgement.md) | A faint arrival where the next frame of a burst would begin holds the acknowledgement | accepted |
 | [0041](0041-the-burst-countdown.md) | Each frame of a burst says how many follow it, in a turn of its mode chips; link protocol 5 | accepted |
+| [0042](0042-the-scenario-harness.md) | Whole sessions between real daemons through simulated band conditions; a receiver's DISC answers its burst at once | accepted |

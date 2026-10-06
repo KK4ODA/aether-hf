@@ -1,0 +1,24 @@
+name = "quick-awgn-2300"
+description = "The smoke test: a clean wire at 2300 Hz, a call, a message each way, a disconnect."
+tags = ["quick"]
+bandwidth = 2300
+seconds = 240
+seed = 1
+
+[stations.a]
+callsign = "W4ODA"
+[stations.b]
+callsign = "KK4XYZ"
+
+[path]
+profile = "awgn"
+snr_db = 15.0
+
+[script]
+steps = ["connect", "message 3000", "reply 600", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+max_collisions = 0

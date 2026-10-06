@@ -116,6 +116,21 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: cargo test --release --all-features
 
+      # Whole sessions between two real daemons through the scenario harness's channel
+      # (ADR-0042): the quick ones here, the 80 m and 40 m set nightly and before a release.
+      # The tests above built the daemon this runs.
+      - name: Scenarios (quick)
+        run: uv run python tools/session_matrix.py --tag quick --out "${{ runner.temp }}/scenarios"
+
+      - name: Keep the scenario runs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: scenarios-${{ matrix.os }}
+          path: ${{ runner.temp }}/scenarios
+          if-no-files-found: ignore
+          retention-days: 7
+
       # What the daemons said, for a two-daemon test that failed on a runner: the loop's
       # slow passes, the busy transitions, and the sidecars with every frame each side
       # heard. A failure there is a timing failure, and the logs are the only witness.

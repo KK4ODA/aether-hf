@@ -3072,11 +3072,23 @@ impl<P: Ptt> Station<P> {
         let busy = self.busy.busy(now);
         let busy_but_for_a_frame =
             busy && !matches!(self.busy.reason(), Some(BusyReason::Frame { .. }));
+        // A receiving station's DISC goes in place of the acknowledgement of the burst it has
+        // just heard (ADR-0023), and is that burst's answer: it goes when the acknowledgement
+        // would have. Held while the busy detector still held the burst itself — by its energy
+        // as well as by its decode — it waited two seconds, the sender heard no answer and sent
+        // the burst again, and the two were keyed at once (found by the scenario harness,
+        // ADR-0042). A later DISC, a retry, still waits out the other's identifier.
+        let answers_burst = matches!(next, Outgoing::Frames(frames)
+                if is_control(frames, ControlKind::Disc))
+            && self.engine.role() == Role::Irs
+            && now < self.heard_end + self.busy.config().frame_hold_s;
         let held_for = self.held_from.map_or(0.0, |from| now - from);
         let waits_out = held_for < OTHER_ID_WAIT_MAX_S
             && match next {
                 Outgoing::Frames(frames) if is_control(frames, ControlKind::Disc) => {
-                    self.engine.state() == State::Disconnecting && busy_but_for_a_frame
+                    self.engine.state() == State::Disconnecting
+                        && busy_but_for_a_frame
+                        && !answers_burst
                 }
                 Outgoing::Frames(frames) if is_control(frames, ControlKind::DiscAck) => {
                     held_for < ANSWER_LISTEN_S || busy_but_for_a_frame
@@ -4924,6 +4936,48 @@ mod tests {
         assert_eq!(station.stats.follow_on_heeded, 0);
         assert!(station.engine().acknowledgement_at().is_none());
         assert!(!station.receiving(), "a phantom lit the receive indicator");
+    }
+
+    #[test]
+    fn a_receiving_station_that_disconnects_answers_the_burst_with_its_disc_at_once() {
+        // Found by the scenario harness on its first run (ADR-0042): the receiving station
+        // pressed Disconnect as a message arrived, its DISC — sent in place of the burst's
+        // acknowledgement (ADR-0023) — waited two seconds behind the busy detector's hold on the
+        // burst it answered, the sender heard no answer and sent the burst again, and the two
+        // were keyed at once. ND1J's "the disconnect button does not work", from the other side.
+        let message: Vec<u8> = (0..900u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        // noise a few tens of dB under the signal, and a quiet half minute for the busy
+        // detectors to learn it: then a burst's energy, not only its decode, holds the channel
+        let mut air = Air::new(1.0, 0.01);
+        air.run(30.0, |_, _| false);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        // the called station sends; the caller disconnects the moment it has it all
+        air.b.send(&message);
+        air.run(120.0, |a, _| a.received_len() >= message.len());
+        assert_eq!(air.a.received_len(), message.len());
+        let heard_end = air.a.heard_end;
+        air.a.disconnect();
+        let mut keyed_at = None;
+        air.run(60.0, |a, b| {
+            if keyed_at.is_none() && a.transmitting {
+                keyed_at = Some(a.now());
+            }
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        let keyed_at = keyed_at.expect("the DISC went out");
+        assert!(
+            keyed_at - heard_end < 1.2,
+            "the DISC keyed {:.2} s after the burst it answers",
+            keyed_at - heard_end
+        );
+        assert_eq!(
+            air.b.engine().stats.frames_resent,
+            0,
+            "the sender heard no answer and sent the burst again"
+        );
     }
 
     #[test]
