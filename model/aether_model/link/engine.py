@@ -400,6 +400,9 @@ class LinkEngine:
         """This station, receiving, was offered the turn at the end of the burst (ADR-0047)."""
         self._offer_out = False
         """The last burst this station sent offered the turn, and nothing has answered it."""
+        self._tx_started = float("-inf")
+        """When this station's last transmission began, as far as the engine knows: no later
+        than it went on the air."""
         self._retries = 0
         self._bursts_since_turn = 0
         self._peer_wants_tx = False
@@ -853,7 +856,8 @@ class LinkEngine:
 
     def _transmit(self, frames: list[TxFrame]) -> None:
         dur = sum(self.timing.frame_s(f) for f in frames)
-        self._tx_busy_until = self.now + self.timing.tx_latency_s + dur
+        self._tx_started = self.now + self.timing.tx_latency_s
+        self._tx_busy_until = self._tx_started + dur
         self.actions.append(Transmit(frames, dur))
         if "link" in self._deadlines:
             # The link timeout spans four exchanges at the family the link runs in, and was
@@ -1574,7 +1578,12 @@ class LinkEngine:
         # again and by nothing else (_accept)
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
-        if self._decode_record(rec):
+        decoded = self._decode_record(rec)
+        if decoded and self._answered_already(rec):
+            # what it carried for combining is kept (`_decode_record`); it starts no burst
+            self._burst.remove(rec)
+            self._burst_t0 = None
+        elif decoded:
             # a burst whose last frame said none follow it is over when that frame ends: the
             # answer waits only the turnaround, not the silence that would otherwise show
             # it (ADR-0045)
@@ -1585,13 +1594,37 @@ class LinkEngine:
             if not self._burst:
                 self._disarm("ack")
 
-    @staticmethod
-    def _announced_end(rec: _RxRecord) -> float | None:
+    def _answered_already(self, rec: _RxRecord) -> bool:
+        """Whether a frame that did not decode belongs to a burst this station has answered:
+        it began before this station's last transmission did, and nothing of a burst since has
+        arrived. A burst that answers that transmission begins after it; a frame before it is
+        the last of the burst already answered, its preamble too faint to hold the answer
+        back, finished by the receiver after the station had keyed. Taken for a new burst, it
+        was acknowledged again, over the sender's reply to the first acknowledgement (the
+        scenario harness, 80 m at 500 Hz; ADR-0047)."""
+        return (
+            rec.payload is None
+            and len(self._burst) == 1
+            and rec.frame.t_start < self._tx_started - 1e-9
+        )
+
+    def _believed(self, rec: _RxRecord) -> bool:
+        """Whether a frame's countdown can be believed: it decoded, or its acquisition is
+        trusted and the mode its chips name is one this station has asked for or below. The
+        countdown rides in the same chips; a failed frame read at a rung far above any this
+        station asked for has chips that are noise, and one read "none follow" in a burst at
+        rung 7 set the answer over the rest of the burst (the scenario harness; ADR-0047)."""
+        if rec.payload is not None:
+            return True
+        return rec.frame.trusted and (self._asked is None or rec.frame.mode <= self._asked)
+
+    def _announced_end(self, rec: _RxRecord) -> float | None:
         """The latest a frame of a burst says the burst ends: its own end, and the most frames
-        its countdown says may follow it, each as long as itself (ADR-0041, ADR-0046). None from
-        a frame neither decoded nor trusted: a phantom's chips are noise."""
+        its countdown says may follow it, each as long as itself (ADR-0041, ADR-0046). None
+        from a frame whose countdown is not believed (:meth:`_believed`): a phantom's chips are
+        noise."""
         frame = rec.frame
-        if frame.follows is None or not (rec.payload is not None or frame.trusted):
+        if frame.follows is None or not self._believed(rec):
             return None
         return frame.t_end + most_following(frame.follows) * max(0.0, frame.t_end - frame.t_start)
 
@@ -1602,8 +1635,7 @@ class LinkEngine:
         end = self._burst_end()
         for rec in self._burst:
             frame = rec.frame
-            believed = rec.payload is not None or frame.trusted
-            if believed and frame.follows == 0 and frame.t_end >= end - 1e-9:
+            if self._believed(rec) and frame.follows == 0 and frame.t_end >= end - 1e-9:
                 return True
         return False
 

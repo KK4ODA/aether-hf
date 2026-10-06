@@ -301,6 +301,9 @@ pub struct TwoStationSim {
     no_countdown: bool,
     /// Frames heard too faintly to read ([`with_garbled`](Self::with_garbled)).
     garbled: Option<Unheard>,
+    /// Frames read with their chips wrong ([`with_misread`](Self::with_misread)): the mode
+    /// they are read at, and which.
+    misread: Option<(usize, Unheard)>,
     /// Decibels added to the channel SNR for one frame
     /// ([`with_frame_snr_offset`](Self::with_frame_snr_offset)).
     frame_snr_offset: Option<FrameSnrOffset>,
@@ -327,6 +330,7 @@ impl TwoStationSim {
             unheard: None,
             no_countdown: false,
             garbled: None,
+            misread: None,
             frame_snr_offset: None,
         }
     }
@@ -339,6 +343,18 @@ impl TwoStationSim {
     #[must_use]
     pub fn with_garbled(mut self, garbled: Unheard) -> Self {
         self.garbled = Some(garbled);
+        self
+    }
+
+    /// Frames a receiver acquires with a trust it should not have and reads with their chips
+    /// wrong, called as [`with_unheard`]'s: they arrive undecodable, read at `mode` and with a
+    /// countdown of zero — a failed frame read at rung 13 in a burst at rung 7 on an 80 m path
+    /// (ADR-0047).
+    ///
+    /// [`with_unheard`]: Self::with_unheard
+    #[must_use]
+    pub fn with_misread(mut self, mode: usize, misread: Unheard) -> Self {
+        self.misread = Some((mode, misread));
         self
     }
 
@@ -628,9 +644,14 @@ impl TwoStationSim {
             .garbled
             .as_ref()
             .is_some_and(|garbled| garbled(rx, frame.container, t0));
+        let misread = self
+            .misread
+            .as_ref()
+            .filter(|(_, which)| which(rx, frame.container, t0))
+            .map(|&(mode, _)| mode);
         let sim = SimFrame {
             container: frame.container,
-            mode: frame.mode,
+            mode: misread.unwrap_or(frame.mode),
             rv: frame.rv,
             channel_db: snr_db,
             reported_db,
@@ -639,7 +660,7 @@ impl TwoStationSim {
             payload: frame.payload.clone(),
             // a frame cut by the sender's watchdog, or heard too faintly to read, is acquired and
             // past every probability
-            draw: if cut || garbled {
+            draw: if cut || garbled || misread.is_some() {
                 2.0
             } else {
                 self.rng.next_unit()
@@ -647,7 +668,11 @@ impl TwoStationSim {
             threshold,
             floor,
             follows: (frame.container == Container::Data && !floor && !self.no_countdown)
-                .then_some(if garbled { 0 } else { frame.follows }),
+                .then_some(if garbled || misread.is_some() {
+                    0
+                } else {
+                    frame.follows
+                }),
             untrusted: garbled,
         };
         self.stations[rx].engine.tick(arrival);

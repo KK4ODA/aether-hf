@@ -2923,6 +2923,10 @@ fn fading_session(countdown: bool) -> TwoStationSim {
 }
 
 fn fading_session_with(countdown: bool, garbled: bool) -> TwoStationSim {
+    fading_session_full(countdown, garbled, false)
+}
+
+fn fading_session_full(countdown: bool, garbled: bool, misread: bool) -> TwoStationSim {
     let t = air_timing(NARROW_500, true);
     let (a, b) = pair(&t, &LinkConfig::default());
     // three data frames in ten fade out of the receiver's hearing altogether: not even their
@@ -2939,6 +2943,19 @@ fn fading_session_with(countdown: bool, garbled: bool) -> TwoStationSim {
         sim = sim.with_garbled(Box::new(|rx, container, t0| {
             rx == 1 && container == Container::Data && ((t0 * 1000.0) as i64).rem_euclid(10) >= 7
         }));
+    }
+    if misread {
+        // three in ten more arrive undecodable with an acquisition the receiver trusts and
+        // chips read wrong: the fastest rung of the ladder, and "none follow"
+        let fastest = t.data_capacity.len() - 1;
+        sim = sim.with_misread(
+            fastest,
+            Box::new(|rx, container, t0| {
+                rx == 1
+                    && container == Container::Data
+                    && ((t0 * 1000.0) as i64).rem_euclid(10) >= 7
+            }),
+        );
     }
     sim.engine_mut(0).connect("KK4XYZ").expect("idle");
     let connected_by = sim.run(60.0, 1e9);
@@ -2984,6 +3001,19 @@ fn a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short() {
         after <= before / 4,
         "{after} collisions with the countdown, {before} without"
     );
+}
+
+#[test]
+fn a_misread_countdown_does_not_cut_the_burst_short() {
+    // the scenario harness, 80 m at 500 Hz (ADR-0047): a frame that did not decode read its
+    // chips as rung 13 in a burst at rung 7, and its countdown as "none follow"; its acquisition
+    // was trusted, and the acknowledgement went at the turnaround over the rest of the burst. A
+    // countdown is believed from a frame that did not decode only when the rung it names is one
+    // the receiver has asked for or below.
+    let sim = fading_session_full(true, false, true);
+    let message: Vec<u8> = (0..12).flat_map(|_| 0..=255u8).collect();
+    assert_eq!(sim.delivered(1), message.as_slice());
+    assert_eq!(sim.collisions(0, 1), 0);
 }
 
 #[test]
