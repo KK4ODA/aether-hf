@@ -45,7 +45,9 @@ DEFAULT_DAEMON = (
     ROOT / "core" / "target" / "release" / ("aetherd.exe" if os.name == "nt" else "aetherd")
 )
 SCENARIOS = ROOT / "bench" / "scenarios"
-POLL_S = 0.25
+POLL_S = 0.02
+"""How often the runner looks: a host program answers within milliseconds of a delivery, and
+at several times real time a quarter second of wall clock was a second of air."""
 
 
 def free_port() -> int:

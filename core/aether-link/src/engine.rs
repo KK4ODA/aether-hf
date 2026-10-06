@@ -343,6 +343,9 @@ struct RxRecord {
     /// Where it says its burst ends: its own end and the frames it says follow it (ADR-0041),
     /// or only its end when its count cannot be believed.
     announced_end: f64,
+    /// Where it ended, when it said, believably, that none of its burst follow it (ADR-0041's
+    /// countdown at 0): the burst is over there (ADR-0045).
+    closes_at: Option<f64>,
 }
 
 /// The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
@@ -1862,7 +1865,17 @@ impl LinkEngine {
     /// to be idle. The floor's frames announce themselves last; a PHY that reports no
     /// preambles is heard only at a frame's end, so the longest frame decides.
     fn reaction_s(&self) -> f64 {
-        let announce = [false, true].map(|floor| self.timing.preamble_detect_s_for(floor));
+        // the family the other station answers in — the one it was last heard in — and the
+        // longer of the two before it has been heard at all (ADR-0045)
+        let families: &[bool] = if self.last_peer_frame > 0.0 {
+            std::slice::from_ref(&self.peer_floor)
+        } else {
+            &[false, true]
+        };
+        let announce: Vec<Option<f64>> = families
+            .iter()
+            .map(|&floor| self.timing.preamble_detect_s_for(floor))
+            .collect();
         let first = if announce.iter().any(Option::is_none) {
             self.timing.data_frame_s_for(0)
         } else {
@@ -2269,11 +2282,23 @@ impl LinkEngine {
             combined: false,
             outside: false,
             announced_end: frame.t_end(),
+            closes_at: None,
         };
         if self.decode_record(frame, &mut record) {
             record.announced_end = Self::announced_end(frame, &record);
+            record.closes_at = ((record.payload.is_some() || frame.trusted())
+                && frame.follows() == Some(0))
+            .then(|| frame.t_end());
             self.burst.push(record);
-            let delay = (self.burst_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
+            // a burst whose last frame said none follow it is over when that frame ends: the
+            // answer waits only the turnaround, not the silence that would otherwise show it
+            // (ADR-0045)
+            let reply = if self.burst_closed() {
+                self.timing.turnaround_s
+            } else {
+                self.irs_reply_delay(None, None)
+            };
+            let delay = (self.burst_end() - self.now).max(0.0) + reply;
             self.arm(Timer::Ack, delay);
         } else if record.outside && self.burst.is_empty() {
             // nothing of a burst arrived: the acknowledgement its preamble armed answers nobody
@@ -2292,6 +2317,16 @@ impl LinkEngine {
             0
         };
         frame.t_end() + f64::from(follows) * (frame.t_end() - frame.t_start()).max(0.0)
+    }
+
+    /// Whether the burst is known to be over at [`burst_end`](Self::burst_end): the frame that
+    /// ends latest said, believably, that none follow it — the countdown at 0 is exact, where 3
+    /// means "three or more" (ADR-0045). Without it the end is inferred from silence.
+    fn burst_closed(&self) -> bool {
+        let end = self.burst_end();
+        self.burst
+            .iter()
+            .any(|record| record.closes_at.is_some_and(|at| at >= end - 1e-9))
     }
 
     /// Where the burst being received ends, as far as anything heard of it says: the latest end
@@ -3136,6 +3171,7 @@ mod tests {
             combined: false,
             outside: false,
             announced_end: 0.0,
+            closes_at: None,
         }
     }
 

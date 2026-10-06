@@ -1473,14 +1473,15 @@ def _timing(*, start_of_frame: bool) -> PhyTiming:
 
 def test_start_of_frame_signal_raises_throughput() -> None:
     """P2-2a: told when a frame *starts*, the receiver no longer has to wait a whole frame of
-    silence to know a burst has ended, which is about a quarter of the air time."""
+    silence to know a burst has ended, which is about a quarter of the air time. Measured on
+    frames without the burst countdown, which since ADR-0045 ends the wait by itself."""
     msg = bytes(16000)
     times = {}
     for sof in (False, True):
         timing = _timing(start_of_frame=sof)
         a = LinkEngine("W4ODA", timing, seed=1)
         b = LinkEngine("KK4XYZ", timing, seed=2)
-        sim = TwoStationSim(a, b, snr_db=14.0, seed=5)
+        sim = TwoStationSim(a, b, snr_db=14.0, seed=5, countdown=False)
         a.connect("KK4XYZ")
         a.send(msg)
         a.disconnect()
@@ -3343,3 +3344,49 @@ def test_a_frame_whose_copies_go_unheard_is_sent_again_at_rv_0_first(timing: Phy
     assert sim.delivered(1) == bytes(10)
     assert RV_SEQUENCE == (0, 0, 2, 3)
     assert sent[:4] == [0, 0, 2, 3], sent
+
+
+@pytest.mark.parametrize("countdown", [True, False])
+def test_an_acknowledgement_goes_a_turnaround_after_a_burst_said_to_be_over(
+    live: PhyTiming, countdown: bool
+) -> None:
+    """ADR-0045: a burst whose last frame said none follow it (ADR-0041's countdown at 0) is over
+    when that frame ends, so the acknowledgement waits only the turnaround — not the silence a
+    receiver otherwise needs to be sure no next frame is starting (a preamble's detection, the
+    gap between bursts, the turnaround: 0.57 s). Without the countdown it waits that, as before."""
+    a = LinkEngine("W4ODA", live, LinkConfig(), seed=1)
+    b = LinkEngine("KK4ODA", live, LinkConfig(), seed=2)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=3, countdown=countdown)
+    heard_end: list[float] = []
+    made = sim._factory
+
+    def heard(frame: TxFrame, snr: float, t0: float, t1: float) -> object:
+        if frame.container is Container.DATA and b.state is State.CONNECTED:
+            heard_end.append(t1)
+        return made(frame, snr, t0, t1)
+
+    sim._factory = heard  # type: ignore[assignment]
+    gaps: list[float] = []
+    original = b._transmit
+
+    def wrapped(frames: list[TxFrame]) -> None:
+        # an acknowledgement of a burst: data heard since the last one
+        if heard_end and any(
+            f.container is Container.CONTROL
+            and ControlFrame.decode(f.payload).kind is ControlKind.ACK
+            for f in frames
+        ):
+            gaps.append(b.now - heard_end[-1])
+            heard_end.clear()
+        original(frames)
+
+    b._transmit = wrapped  # type: ignore[method-assign]
+    a.connect("KK4ODA")
+    sim.run(until=60)
+    heard_end.clear()
+    gaps.clear()  # the call's own exchange is not a burst
+    a.send(bytes(range(256)) * 24)
+    sim.run(until=sim.t + 300)
+    assert sim.delivered(1) == bytes(range(256)) * 24
+    expected = live.turnaround_s if countdown else b._irs_reply_delay(False)
+    assert gaps and all(abs(g - expected) < 1e-6 for g in gaps), (expected, gaps)

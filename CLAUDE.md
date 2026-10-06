@@ -1093,6 +1093,12 @@ the B2F turnaround (13 s, 3.5 s with ADR-0027's request — the author's call), 
 session, not only under a host's `CHAT ON` — Winlink-shaped scenarios (`*-winlink-exchange-*`)
 24–25 % shorter; `set_chat` stays for benches (`bench_chat.py` `base` = off). Harness runs of one
 build are not identical (daemon threads): judge a single difference against a second run.
+**ADR-0045 (the author: "3.5–6 s sounds high"):** that number was a reply's whole delivery; the
+silences between transmissions are a median 0.11 s. A burst whose latest frame said 0 follow is
+acknowledged after the turnaround only (`_burst_closed`), the request's quiet uses the family in
+use, and the runner polls every 20 ms (`POLL_S`; at 0.25 s it had been costing the Winlink
+exchange a third of its time). Next: fold the TURN into the acknowledgement (ADR-0046, a
+protocol change — plan first).
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 

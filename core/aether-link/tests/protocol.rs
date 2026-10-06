@@ -844,7 +844,8 @@ fn adaptation_pays_for_itself() {
 #[test]
 fn a_start_of_frame_signal_raises_throughput() {
     // P2-2a: told when a frame *starts*, the receiver no longer has to wait a whole frame of
-    // silence to know a burst has ended, which is about a quarter of the air time
+    // silence to know a burst has ended, which is about a quarter of the air time. Measured on
+    // frames without the burst countdown, which since ADR-0045 ends the wait by itself
     let message = vec![0u8; 16000];
     let mut times = Vec::new();
     for start_of_frame in [false, true] {
@@ -853,7 +854,7 @@ fn a_start_of_frame_signal_raises_throughput() {
         a.connect("KK4XYZ").expect("idle");
         a.send(&message);
         a.disconnect();
-        let mut sim = TwoStationSim::new(a, b, 14.0, 5);
+        let mut sim = TwoStationSim::new(a, b, 14.0, 5).without_countdown();
         times.push(sim.run(6000.0, 3.0));
         assert_eq!(sim.delivered(1), message.as_slice());
     }
@@ -3016,4 +3017,53 @@ fn a_frame_whose_copies_go_unheard_is_sent_again_at_rv_0_first() {
         .map(|f| f.rv)
         .collect();
     assert_eq!(rvs[..4], [0, 0, 2, 3], "{rvs:?}");
+}
+
+#[test]
+fn an_acknowledgement_goes_a_turnaround_after_a_burst_said_to_be_over() {
+    // ADR-0045: a burst whose last frame said none follow it (ADR-0041's countdown at 0) is over
+    // when that frame ends, so the acknowledgement waits only the turnaround — not the silence a
+    // receiver otherwise needs to be sure no next frame is starting. Without the countdown it
+    // waits that, as before
+    let t = timing(true);
+    let message: Vec<u8> = (0..24).flat_map(|_| 0..=255u8).collect();
+    for countdown in [true, false] {
+        let (a, b) = pair(&t, &LinkConfig::default());
+        let mut sim = TwoStationSim::new(a, b, 20.0, 3);
+        if !countdown {
+            sim = sim.without_countdown();
+        }
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        sim.run(60.0, 3.0);
+        let (from_a, from_b) = (sim.frames_sent(0).len(), sim.frames_sent(1).len());
+        sim.engine_mut(0).send(&message);
+        sim.run(sim.t + 300.0, 3.0);
+        assert_eq!(sim.delivered(1), message.as_slice());
+        // each acknowledgement against the end of the data frame before it
+        let data: Vec<f64> = sim.frames_sent(0)[from_a..]
+            .iter()
+            .filter(|f| f.container == Container::Data)
+            .map(|f| f.t_end)
+            .collect();
+        let gaps: Vec<f64> = sim.frames_sent(1)[from_b..]
+            .iter()
+            .filter_map(|ack| {
+                let last = data
+                    .iter()
+                    .copied()
+                    .filter(|&end| end <= ack.t_start)
+                    .fold(f64::NAN, f64::max);
+                (ack.t_start - last < 2.0).then_some(ack.t_start - last)
+            })
+            .collect();
+        // without it: a preamble's detection, the gap between bursts, the turnaround
+        let silence = t.preamble_detect_s_for(false).expect("reported")
+            + LinkConfig::default().burst_gap_s
+            + t.turnaround_s;
+        let expected = if countdown { t.turnaround_s } else { silence };
+        assert!(
+            !gaps.is_empty() && gaps.iter().all(|g| (g - 0.01 - expected).abs() < 0.01),
+            "countdown {countdown}: expected {expected} after each burst, {gaps:?}"
+        );
+    }
 }

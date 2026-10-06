@@ -798,7 +798,10 @@ selective-repeat window), and no more than fit in the transmitter's key time, on
 A receiver establishes the end of a burst from silence, and — on the OFDM rungs — from the
 countdown each frame carries (§3.2): after a frame that says `f` more follow, the receiver
 waits `f` frame times before the silence below can end the burst, so a following frame lost
-in a fade is not answered over (ADR-0041). The silence rule has two cases:
+in a fade is not answered over (ADR-0041). When the frame that ends latest said, believably
+(it decoded, or its acquisition was trusted), that none follow it, the burst is over at its end
+and the acknowledgement waits only the turnaround (ADR-0045). Otherwise the silence rule has
+two cases:
 
 * if the physical layer can report a *detected preamble* before the frame is decoded, the
   receiver need only wait that long plus a small guard;
