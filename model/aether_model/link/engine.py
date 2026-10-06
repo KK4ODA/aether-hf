@@ -1504,23 +1504,30 @@ class LinkEngine:
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
         if self._decode_record(rec):
-            self._arm("ack", max(0.0, frame.t_end - self.now) + self._ack_after(rec))
+            self._arm("ack", max(0.0, self._burst_end() - self.now) + self._irs_reply_delay())
         elif rec.outside:
             self._burst.remove(rec)
             if not self._burst:
                 self._disarm("ack")
 
-    def _ack_after(self, rec: _RxRecord) -> float:
-        """How long after a frame of a burst its acknowledgement waits: the reply delay, and
-        first the frames the frame says follow it, each as long as itself (ADR-0041). A
-        frame of the burst lost in a fade then holds the answer as surely as one heard — in
-        ND1J's session of 2026-10-06 the acknowledgement went out over the burst's last frame
-        21 times, and both were lost. The countdown is believed from a frame that decoded or
+    @staticmethod
+    def _announced_end(rec: _RxRecord) -> float:
+        """Where a frame of a burst says the burst ends: its own end, and the frames it says
+        follow it, each as long as itself (ADR-0041). Believed from a frame that decoded or
         whose acquisition was trusted; a phantom's chips are noise."""
         frame = rec.frame
         follows = frame.follows if (rec.payload is not None or frame.trusted) else None
-        rest = (follows or 0) * max(0.0, frame.t_end - frame.t_start)
-        return rest + self._irs_reply_delay()
+        return frame.t_end + (follows or 0) * max(0.0, frame.t_end - frame.t_start)
+
+    def _burst_end(self) -> float:
+        """Where the burst being received ends, as far as anything heard of it says: the
+        latest end any of its frames announced. A later frame never brings it earlier — one
+        whose count could not be believed said nothing of the frames after it, and taken alone
+        it set the answer for its own end, over the two frames an earlier one had announced
+        (the scenario harness, ADR-0042: eight collisions on an 80 m Poor path). In ND1J's
+        session of 2026-10-06 the acknowledgement went out over the burst's last frame 21
+        times, and both were lost (ADR-0040)."""
+        return max(self._announced_end(rec) for rec in self._burst)
 
     def _decode_record(self, rec: _RxRecord) -> bool:
         """Decode a frame of the burst, alone or combined with an earlier transmission of its

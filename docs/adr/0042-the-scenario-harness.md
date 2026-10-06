@@ -70,7 +70,10 @@ Speed, two daemons and the channel server on four cores (this container): the sm
 | 80 m NVIS 500 Hz, the ND1J path | the Test's file timed out; 5 collisions, 12.6 s keyed together |
 | 80 m Poor 500 Hz, PACTOR, a SignaLink's 400 ms hold | delivered; 8 collisions, 8.4 s keyed together |
 
-Those three are the next work, each reproduced here before anything is changed.
+Those three are the next work, each reproduced here before anything is changed. With §4's two
+fixes the same set passes, all four: the 80 m Poor path 8 collisions → 1; the 80 m NVIS path
+5 collisions (12.6 s) → 2 (3.1 s) and its Test complete; the 40 m Moderate path's Test complete
+(rung 14), where the file had timed out.
 
 ## 4. What it found on its first run
 
@@ -85,6 +88,17 @@ the receiving side. A receiving station's DISC within the detector's frame hold 
 answers now goes when the acknowledgement would have (`held_for_busy`, `answers_burst`); a DISC
 retry still waits out the identifier.
 `a_receiving_station_that_disconnects_answers_the_burst_with_its_disc_at_once` fails without it.
+
+**And on the 80 m Poor path** (the PACTOR and SignaLink scenario), eight collisions: the
+receiving station acknowledged about 1.3 s before the sender's six-frame bursts ended. Its
+recording showed why — the third frame said three more followed, the fourth arrived too faint to
+believe its count, and the acknowledgement, re-armed from that frame alone, was set for the
+fourth frame's end, over the two the third had announced. The burst now ends where the latest
+count heard says it does (`_burst_end`/`burst_end`, `announced_end` per record; model first, both
+suites): a later frame never brings it earlier. In the faded-session test with three frames in
+ten unheard and three more read too faintly, the collisions went from 12 to 2 (19 with no
+countdown); the two left are the count's ceiling — a frame says "three or more", and a burst of
+six whose later frames are all lost (`a_frame_read_too_faintly_to_believe_does_not_cut_the_burst_short`).
 
 ## 5. Consequences
 

@@ -340,6 +340,9 @@ struct RxRecord {
     /// It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
     /// session's — and is no part of the burst (ADR-0038).
     outside: bool,
+    /// Where it says its burst ends: its own end and the frames it says follow it (ADR-0041),
+    /// or only its end when its count cannot be believed.
+    announced_end: f64,
 }
 
 /// The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
@@ -2257,10 +2260,12 @@ impl LinkEngine {
             trusted: frame.trusted(),
             combined: false,
             outside: false,
+            announced_end: frame.t_end(),
         };
         if self.decode_record(frame, &mut record) {
-            let delay = (frame.t_end() - self.now).max(0.0) + self.ack_after(frame, &record);
+            record.announced_end = Self::announced_end(frame, &record);
             self.burst.push(record);
+            let delay = (self.burst_end() - self.now).max(0.0) + self.irs_reply_delay(None, None);
             self.arm(Timer::Ack, delay);
         } else if record.outside && self.burst.is_empty() {
             // nothing of a burst arrived: the acknowledgement its preamble armed answers nobody
@@ -2268,21 +2273,31 @@ impl LinkEngine {
         }
     }
 
-    /// How long after a frame of a burst its acknowledgement waits: the reply delay, and first
-    /// the frames the frame says follow it, each as long as itself (ADR-0041). A frame of the
-    /// burst lost in a fade then holds the answer as surely as one heard — in ND1J's session of
-    /// 2026-10-06 the acknowledgement went out over the burst's last frame 21 times, and both
-    /// were lost. The countdown is believed from a frame that decoded or whose acquisition was
-    /// trusted; a phantom's chips are noise.
-    fn ack_after<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> f64 {
+    /// Where a frame of a burst says the burst ends: its own end, and the frames it says
+    /// follow it, each as long as itself (ADR-0041). Believed from a frame that decoded or whose
+    /// acquisition was trusted; a phantom's chips are noise.
+    fn announced_end<F: SoftFrame>(frame: &F, record: &RxRecord) -> f64 {
         let believed = record.payload.is_some() || frame.trusted();
         let follows = if believed {
             frame.follows().unwrap_or(0)
         } else {
             0
         };
-        let rest = f64::from(follows) * (frame.t_end() - frame.t_start()).max(0.0);
-        rest + self.irs_reply_delay(None, None)
+        frame.t_end() + f64::from(follows) * (frame.t_end() - frame.t_start()).max(0.0)
+    }
+
+    /// Where the burst being received ends, as far as anything heard of it says: the latest end
+    /// any of its frames announced. A later frame never brings it earlier — one whose count
+    /// could not be believed said nothing of the frames after it, and taken alone it set the
+    /// answer for its own end, over the frames an earlier one had announced (the scenario
+    /// harness, ADR-0042: eight collisions on an 80 m Poor path). In ND1J's session of
+    /// 2026-10-06 the acknowledgement went out over the burst's last frame 21 times, and both
+    /// were lost (ADR-0040).
+    fn burst_end(&self) -> f64 {
+        self.burst
+            .iter()
+            .map(|record| record.announced_end)
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 
     /// Decode a frame of the burst, alone or combined with an earlier transmission of its
@@ -3112,6 +3127,7 @@ mod tests {
             trusted,
             combined: false,
             outside: false,
+            announced_end: 0.0,
         }
     }
 
