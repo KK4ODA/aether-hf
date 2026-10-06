@@ -1222,7 +1222,11 @@ class LinkEngine:
         next burst, a TURN or a DISC — and until that much quiet has passed the channel is not
         known to be idle. The floor's frames announce themselves last; a PHY that reports no
         preambles is heard only at a frame's end, so the longest frame decides."""
-        announce = [self.timing.preamble_detect_s_for(floor) for floor in (False, True)]
+        # the family the other station answers in — the one it was last heard in, as the
+        # acknowledgement it answers went in the one this station last read (ADR-0045); a
+        # station that has heard nothing of it yet allows for the longer
+        families = (self._peer_floor,) if self._last_peer_frame > 0.0 else (False, True)
+        announce = [self.timing.preamble_detect_s_for(floor) for floor in families]
         if any(a is None for a in announce):
             first = self.timing.data_frame_s_for(0)
         else:
@@ -1519,7 +1523,11 @@ class LinkEngine:
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
         if self._decode_record(rec):
-            self._arm("ack", max(0.0, self._burst_end() - self.now) + self._irs_reply_delay())
+            # a burst whose last frame said none follow it is over when that frame ends: the
+            # answer waits only the turnaround, not the silence that would otherwise show
+            # it (ADR-0045)
+            reply = self.timing.turnaround_s if self._burst_closed() else self._irs_reply_delay()
+            self._arm("ack", max(0.0, self._burst_end() - self.now) + reply)
         elif rec.outside:
             self._burst.remove(rec)
             if not self._burst:
@@ -1533,6 +1541,18 @@ class LinkEngine:
         frame = rec.frame
         follows = frame.follows if (rec.payload is not None or frame.trusted) else None
         return frame.t_end + (follows or 0) * max(0.0, frame.t_end - frame.t_start)
+
+    def _burst_closed(self) -> bool:
+        """Whether the burst is known to be over at :meth:`_burst_end`: the frame that ends
+        latest said, believably, that none follow it (ADR-0041's countdown at 0, exact where
+        3 means "three or more"). Without it the end is inferred from silence."""
+        end = self._burst_end()
+        for rec in self._burst:
+            frame = rec.frame
+            believed = rec.payload is not None or frame.trusted
+            if believed and frame.follows == 0 and frame.t_end >= end - 1e-9:
+                return True
+        return False
 
     def _burst_end(self) -> float:
         """Where the burst being received ends, as far as anything heard of it says: the

@@ -225,7 +225,7 @@ impl PartialEq for Ev {
 impl Eq for Ev {}
 
 /// A frame a station put on the pipe, as a test looks at it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SentFrame {
     /// DATA or CONTROL.
     pub container: Container,
@@ -235,6 +235,10 @@ pub struct SentFrame {
     pub floor: bool,
     /// Its redundancy version.
     pub rv: u8,
+    /// When it went on the air, and when it ended, at the sender.
+    pub t_start: f64,
+    /// See [`t_start`](Self::t_start).
+    pub t_end: f64,
 }
 
 /// One side of the simulated link.
@@ -534,6 +538,8 @@ impl TwoStationSim {
                 mode: frame.mode,
                 floor: frame.floor,
                 rv: frame.rv,
+                t_start: t,
+                t_end: t + duration,
             });
             let cut = t + duration > key_up + 1e-9;
             let floor = match frame.container {

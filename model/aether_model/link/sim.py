@@ -149,6 +149,7 @@ class TwoStationSim:
         floor_reading_cap_db: float | None = None,
         key_limit_s: float | None = None,
         unheard: Callable[[int, Container, float], bool] | None = None,
+        countdown: bool = True,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -186,6 +187,9 @@ class TwoStationSim:
         thresholds are then the AWGN table's. Unset, every frame sees the channel SNR and
         the per-class averages of :attr:`thresholds`."""
         self.unheard = unheard
+        self.countdown = countdown
+        """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
+        it — how the receiver's other ways of finding a burst's end are measured."""
         """Frames a receiver never detects, preamble or frame: called with the receiver, the
         frame's container and when it started. A fade that lets one kind of frame through and
         not another — the called station's data lost while its control frames arrive — is
@@ -223,7 +227,7 @@ class TwoStationSim:
             _decode_snr_db=decode_snr_db,
             _threshold=threshold,
             _judge_snr_db=judge_snr_db,
-            follows=None if control or floor else frame.follows,
+            follows=None if control or floor or not self.countdown else frame.follows,
         )
 
     # ── scheduling ────────────────────────────────────────────────────
