@@ -138,6 +138,8 @@ class Run:
     connected: bool = False
     test: dict | None = None
     probe: str | None = None
+    transfers: list[str] = field(default_factory=list)
+    final_states: list[str] = field(default_factory=list)
 
     def air_s(self) -> float:
         try:
@@ -202,17 +204,21 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         cfg = stations.get(who, {})
         callsign = cfg.get("callsign", "W4ODA" if who == "a" else "KK4XYZ")
         control = free_port()
-        record = run.dir / who / "recordings"
+        record = (run.dir / who / "recordings").resolve()
         record.mkdir(parents=True, exist_ok=True)
         config = run.dir / who / "station.toml"
         config.write_text(
             STATION_TOML.format(
                 callsign=callsign,
                 tx_level=cfg.get("tx_level", 0.25),
-                bandwidth=sc.get("bandwidth", 2300),
+                bandwidth=cfg.get("bandwidth", sc.get("bandwidth", 2300)),
                 wait_for_clear=str(cfg.get("wait_for_clear", True)).lower(),
                 answer_gap_ms=int(cfg.get("answer_gap_ms", 0)),
-                max_mode=int(cfg.get("max_mode", 19 if sc.get("bandwidth", 2300) == 2300 else 14)),
+                max_mode=int(
+                    cfg.get(
+                        "max_mode", 14 if cfg.get("bandwidth", sc.get("bandwidth")) == 500 else 19
+                    )
+                ),
                 control=control,
                 record=record.as_posix(),
             ),
@@ -262,11 +268,16 @@ def step(run: Run, text: str) -> bool:
         n = int(arg)
         before = receiver.counter("bytes_delivered")
         data = incompressible(n, salt=len(run.notes) + n)
+        began = run.air_s()
         call(sender.control, "send", {"data": base64.b64encode(data).decode()})
         ok = run.wait(
             f"{word} {n}",
             lambda: receiver.counter("bytes_delivered") - before >= n,
             float(run.scenario.get("transfer_s", 300)),
+        )
+        took = max(run.air_s() - began, 0.1)
+        run.transfers.append(
+            f"{word} {n} B {took:.0f} s {8 * n / took:.0f} bps" if ok else f"{word} {n} B lost"
         )
         run.delivered_ok &= ok
         return ok
@@ -316,6 +327,7 @@ def judge(run: Run, ends: list[str]) -> dict:
         report = json.loads((run.dir / "channel.json").read_text(encoding="utf-8"))
     collisions = len(report.get("collisions", []))
     clean = all("timeout" not in e and e not in ("none", "unknown") for e in ends)
+    idle = all(s == "idle" for s in run.final_states)
     failures = []
     if expect.get("connected") and not run.connected:
         failures.append("did not connect")
@@ -327,6 +339,8 @@ def judge(run: Run, ends: list[str]) -> dict:
         failures.append(f"test {got_test}")
     if expect.get("clean_end") and not clean:
         failures.append(f"ended {'/'.join(ends)}")
+    if expect.get("idle") and not idle:
+        failures.append(f"left {'/'.join(run.final_states)}")
     if "max_collisions" in expect and collisions > int(expect["max_collisions"]):
         failures.append(f"{collisions} collisions")
     test = run.test or {}
@@ -343,6 +357,7 @@ def judge(run: Run, ends: list[str]) -> dict:
         "file_bps": (test.get("file") or {}).get("bps"),
         "highest_rung": test.get("highest_passed"),
         "ends": " / ".join(ends),
+        "transfers": "; ".join(run.transfers),
     }
 
 
@@ -361,9 +376,22 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
         for text in scenario.get("script", {}).get("steps", []):
             if not step(run, text):
                 break
-        # a moment for the last frames and the sessions' history to settle
-        run.wait("settle", lambda: False, 3, note=False)
+        # the last frames and the sessions' history settle: an abort's DISC goes out after
+        # the burst it cut, and the other station needs to hear it
+        a, b = run.stations["a"], run.stations["b"]
+        run.wait(
+            "settle",
+            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
+            30,
+            note=False,
+        )
+        run.wait("settle", lambda: False, 2, note=False)
         ends = session_ends(run)
+        for st in run.stations.values():
+            try:
+                run.final_states.append(str(st.status()["state"]))
+            except (OSError, KeyError, ValueError):
+                run.final_states.append("unknown")
     finally:
         for st in run.stations.values():
             st.process.terminate()

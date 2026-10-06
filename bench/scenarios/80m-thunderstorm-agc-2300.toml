@@ -1,0 +1,39 @@
+name = "80m-thunderstorm-agc-2300"
+description = """80 m on a summer evening with a thunderstorm within a few hundred km: crashes
+twice a second up to 35 dB over the noise, and both radios on AGC AUTO, so every crash pulls the
+gain down for a tenth of a second and ramps it back at 50 dB/s — the session's own signal with
+it. Moderate path, +10 dB. A Test session."""
+tags = ["80m", "stress"]
+bandwidth = 2300
+seconds = 1200
+seed = 17
+
+[stations.a]
+callsign = "W4TGA"
+[stations.a.radio]
+agc = "auto"
+[stations.b]
+callsign = "KK4ODA"
+[stations.b.radio]
+agc = "auto"
+rx_recovery_ms = 280
+
+[path]
+profile = "moderate"
+snr_db = 10.0
+cfo_hz = 3.0
+
+[crashes]
+at = "both"
+rate_per_s = 2.0
+peak_db = 35.0
+spread_db = 8.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

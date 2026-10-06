@@ -1,0 +1,28 @@
+name = "80m-band-closes-2300"
+description = """80 m at 2300 Hz at dawn: the band closes for good two minutes into a 16 kB
+transfer (the path falls 35 dB over 20 s). Both stations must notice, end the session and come
+back to idle by themselves — nothing left keyed, calling or connected."""
+tags = ["80m", "stress"]
+bandwidth = 2300
+seconds = 900
+seed = 14
+transfer_s = 400
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "nvis"
+snr_db = 10.0
+cfo_hz = 2.0
+level = [[100.0, 0.0], [120.0, -35.0]]
+
+[script]
+steps = ["connect", "message 16000", "wait 200"]
+
+[expect]
+connected = true
+idle = true
+max_collisions = 5

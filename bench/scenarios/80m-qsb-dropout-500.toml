@@ -1,0 +1,29 @@
+name = "80m-qsb-dropout-500"
+description = """80 m at 500 Hz, a Moderate path at +8 dB, and in the middle of an 8 kB transfer the path
+drops 30 dB for 40 s (a deep slow fade, the skip zone moving) and comes back. The link should hold
+or end cleanly and the message arrive whole after the fade."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 13
+transfer_s = 900
+
+[stations.a]
+callsign = "KE4QCM"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 8.0
+cfo_hz = 2.0
+level = [[90.0, 0.0], [95.0, -30.0], [135.0, -30.0], [140.0, 0.0]]
+
+[script]
+steps = ["connect", "message 8000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+max_collisions = 5

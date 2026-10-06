@@ -1,0 +1,29 @@
+name = "80m-offset-500"
+description = """80 m at 500 Hz with the two dials 45 Hz apart (one radio uncalibrated, or the
+operator tuned by ear) — a tenth of the signal's width. A probe, a call, 2 kB, a disconnect."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 900
+seed = 16
+
+[stations.a]
+callsign = "ND1J"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 6.0
+cfo_hz = 45.0
+[path.b_to_a]
+cfo_hz = -45.0
+
+[script]
+steps = ["probe", "connect", "message 2000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 5

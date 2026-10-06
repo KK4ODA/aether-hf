@@ -1,0 +1,37 @@
+name = "40m-hidden-vara-2300"
+description = """40 m by day at 2300 Hz: a VARA-class pair works on top of this channel, heard
+strongly by the called station and not at all by the caller (skip: the hidden terminal). The
+caller's busy detector sees a clear channel, the called station's receiver sees the other
+signal over the caller's. A call, 4 kB, a disconnect."""
+tags = ["40m", "stress"]
+bandwidth = 2300
+seconds = 900
+seed = 12
+
+[stations.a]
+callsign = "W4TGA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 12.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "b"
+audio_hz = 1900
+power_db = -3.0
+partner_db = -12.0
+profile = "moderate"
+
+[script]
+steps = ["connect", "message 4000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 5

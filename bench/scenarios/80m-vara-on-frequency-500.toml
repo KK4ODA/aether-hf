@@ -1,0 +1,38 @@
+name = "80m-vara-on-frequency-500"
+description = """80 m at 500 Hz with a VARA-class pair on the same frequency, heard by both
+stations a little under this session's level, pausing between their exchanges as ARQ does. A
+call has to find a gap (wait_for_clear), the session has to share the channel. A call, 2 kB, a
+disconnect — and few collisions with each other."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1500
+seed = 23
+connect_within_s = 600
+transfer_s = 600
+
+[stations.a]
+callsign = "W4TGA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 8.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "both"
+audio_hz = 1500
+power_db = -6.0
+partner_db = -10.0
+profile = "moderate"
+
+[script]
+steps = ["connect", "message 2000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+max_collisions = 5

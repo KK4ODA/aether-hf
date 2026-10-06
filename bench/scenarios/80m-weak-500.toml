@@ -1,0 +1,32 @@
+name = "80m-weak-500"
+description = """80 m at 500 Hz at the edge: −7 dB on a Poor (disturbed) path with static —
+where VARA HF 500 still connects. A call, 1 kB, a disconnect."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 18
+transfer_s = 900
+
+[stations.a]
+callsign = "KE4QCM"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "poor"
+snr_db = -7.0
+cfo_hz = 3.0
+
+[crashes]
+at = "both"
+rate_per_s = 0.3
+peak_db = 22.0
+
+[script]
+steps = ["connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+max_collisions = 5
