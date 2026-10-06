@@ -160,6 +160,31 @@ fn newer(candidate: &str, current: &str) -> bool {
 
 // ── what the window shows ───────────────────────────────────────────
 
+/// The link protocol this build's modem speaks: `aether_link::frames::PROTOCOL_VERSION`, which
+/// a test holds this to. A release's manifest states its own (`link_protocol`), and an offer
+/// of another is an update the operator must take to keep working other stations.
+pub const LINK_PROTOCOL: u8 = 5;
+
+/// An offered version that speaks another link protocol than this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct IncompatibleUpdate {
+    /// The protocol the offered version speaks.
+    pub theirs: u8,
+    /// The protocol this version speaks.
+    pub ours: u8,
+}
+
+/// Whether a manifest offers a version of another link protocol: `None` when it speaks this
+/// one's, or does not say (every manifest before beta.80).
+#[must_use]
+pub fn incompatibility(manifest: &serde_json::Value) -> Option<IncompatibleUpdate> {
+    let theirs = u8::try_from(manifest.get("link_protocol")?.as_u64()?).ok()?;
+    (theirs != LINK_PROTOCOL).then_some(IncompatibleUpdate {
+        theirs,
+        ours: LINK_PROTOCOL,
+    })
+}
+
 /// One phase of an update, as the window shows it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "phase", rename_all = "kebab-case")]
@@ -179,6 +204,10 @@ pub enum Phase {
         notes: String,
         /// When it was published, RFC 3339, if the manifest says.
         date: Option<String>,
+        /// The link protocol it speaks, when the manifest says and it is not this version's:
+        /// it cannot connect to stations running this one, nor this one to stations running
+        /// it, so the window urges the update rather than offering it (ADR-0041).
+        incompatible: Option<IncompatibleUpdate>,
     },
     /// The installer is coming down.
     Downloading {
@@ -414,6 +443,7 @@ pub async fn check(app: AppHandle, quiet: bool) {
             d.format(&time::format_description::well_known::Rfc3339)
                 .ok()
         }),
+        incompatible: incompatibility(&update.raw_json),
     };
     if let Ok(mut pending) = app.state::<Updater>().pending.lock() {
         *pending = Some(update);
@@ -1018,6 +1048,34 @@ fn report(app: &AppHandle, text: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_link_protocol_is_the_modems_and_an_offer_of_another_is_incompatible() {
+        let frames = include_str!("../../../core/aether-link/src/frames.rs");
+        let modem: u8 = frames
+            .lines()
+            .find_map(|line| line.strip_prefix("pub const PROTOCOL_VERSION: u8 = "))
+            .and_then(|rest| rest.trim_end_matches(';').parse().ok())
+            .expect("the modem's link protocol");
+        assert_eq!(
+            LINK_PROTOCOL, modem,
+            "a protocol bump changes LINK_PROTOCOL too"
+        );
+        let offer = |json: &str| incompatibility(&serde_json::from_str(json).expect("json"));
+        assert_eq!(
+            offer(r#"{"version":"0.2.0-beta.90"}"#),
+            None,
+            "a manifest that does not say"
+        );
+        assert_eq!(offer(&format!(r#"{{"link_protocol":{modem}}}"#)), None);
+        assert_eq!(
+            offer(&format!(r#"{{"link_protocol":{}}}"#, modem + 1)),
+            Some(IncompatibleUpdate {
+                theirs: modem + 1,
+                ours: modem
+            })
+        );
+    }
 
     #[test]
     fn a_stable_installation_is_never_offered_a_prerelease() {

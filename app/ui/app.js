@@ -3655,10 +3655,22 @@ function renderMismatch(mismatch) {
   }
   $("mismatch-banner-text").textContent = mismatch.sentence;
   banner.dataset.at = String(mismatch.at_ms);
+  // a station on another link protocol (ADR-0041): the fix is an update, not the bandwidth
+  const version = mismatch.what === "version";
+  $("btn-mismatch-setup").hidden = version;
+  // the update button only when this station's version is the older one
+  $("btn-mismatch-update").hidden = !version || theirsOlder(mismatch) !== false;
   banner.hidden = false;
 }
 
+// whether the other station's version is the older one: then it is the one to update
+function theirsOlder(mismatch) {
+  if (mismatch.theirs_protocol == null || mismatch.ours_protocol == null) return null;
+  return mismatch.theirs_protocol < mismatch.ours_protocol;
+}
+
 function wireMismatch() {
+  $("btn-mismatch-update").addEventListener("click", () => $("btn-check-updates")?.click());
   $("btn-mismatch-setup").addEventListener("click", () => {
     selectTab($("tab-setup"));
     document.querySelector('.step[data-step="4"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -4505,7 +4517,9 @@ function describeUpdate(view) {
     case "no-stable-yet":
       return ["current", "No stable release yet: this beta is the newest. Choose betas in Setup step 5 to be offered the next one.", view.current];
     case "available":
-      return ["available", `Version ${view.version} is available — the updates window has its notes and installs it.`, view.version];
+      return view.incompatible
+        ? ["available", `Update required: version ${view.version} speaks link protocol ${view.incompatible.theirs} and this one ${view.incompatible.ours} — stations on different protocols cannot connect. The updates window installs it.`, view.version]
+        : ["available", `Version ${view.version} is available — the updates window has its notes and installs it.`, view.version];
     case "downloading":
       return ["busy", `Downloading ${view.version}${percent}`, view.version];
     case "installing":
@@ -5861,7 +5875,8 @@ function splash() {
     return;
   }
   const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const dwell = reduced ? 700 : 1300;
+  // long enough to read the credit under the mark
+  const dwell = reduced ? 1800 : 2600;
   setTimeout(() => {
     overlay.classList.add("gone");
     setTimeout(() => overlay.remove(), reduced ? 0 : 300);

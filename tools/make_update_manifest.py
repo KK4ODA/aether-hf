@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,19 @@ def platform_of(name: str) -> str | None:
     return None
 
 
+FRAMES = Path(__file__).resolve().parents[1] / "core" / "aether-link" / "src" / "frames.rs"
+
+
+def link_protocol(frames: Path = FRAMES) -> int | None:
+    """The link protocol this tree's modem speaks. The shell compares a manifest's with its own,
+    and urges an update of another — the two cannot connect (ADR-0041); the Tauri updater
+    ignores keys it does not know."""
+    found = re.search(
+        r"^pub const PROTOCOL_VERSION: u8 = (\d+);", frames.read_text(encoding="utf-8"), re.M
+    )
+    return int(found.group(1)) if found else None
+
+
 def build(version: str, url_base: str, assets: Path, notes: str) -> dict[str, object]:
     platforms: dict[str, dict[str, str]] = {}
     for signature in sorted(assets.glob("*.sig")):
@@ -55,6 +69,7 @@ def build(version: str, url_base: str, assets: Path, notes: str) -> dict[str, ob
         "version": version,
         "notes": notes,
         "pub_date": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "link_protocol": link_protocol(),
         "platforms": platforms,
     }
 
