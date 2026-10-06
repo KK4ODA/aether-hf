@@ -1910,11 +1910,13 @@ def test_a_control_frame_is_judged_at_its_own_family() -> None:
 # ── holding the link on a fading path (P9-7) ──────────────────────────
 
 
-@pytest.mark.parametrize("version", [1, 2, 3, 4])
+@pytest.mark.parametrize("version", [1, 2, 3, 4, 5])
 def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     timing: PhyTiming, version: int
 ) -> None:
-    """Version 5 turns an ordinary DATA frame's mode chips by the frames of its burst that
+    """Version 6 counts a burst's following frames in pairs (ADR-0046), which a version 5
+    receiver reads as the frames themselves and answers a frame early; version 5 turns an
+    ordinary DATA frame's mode chips by the frames of its burst that
     follow it (ADR-0041), which a version 4 receiver takes for noise; version 4 numbers the
     500 Hz ladder's rungs with its middle kinds
     (ADR-0015), version 3 the 2 300 Hz one's with the fast kinds (ADR-0014), version 2 the
@@ -1924,7 +1926,7 @@ def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
     from aether_model.link.phy import Container, TxFrame
 
-    assert PROTOCOL_VERSION == 5 and ConnectBody("A", "B").version == 5
+    assert PROTOCOL_VERSION == 6 and ConnectBody("A", "B").version == 6
     b = LinkEngine("KK4XYZ", timing, None, seed=2)
     body = ConnectBody("W4ODA", "KK4XYZ", version=version).encode()
     payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))
@@ -3390,3 +3392,40 @@ def test_an_acknowledgement_goes_a_turnaround_after_a_burst_said_to_be_over(
     assert sim.delivered(1) == bytes(range(256)) * 24
     expected = live.turnaround_s if countdown else b._irs_reply_delay(False)
     assert gaps and all(abs(g - expected) < 1e-6 for g in gaps), (expected, gaps)
+
+
+def test_the_countdown_counts_in_pairs_and_never_short() -> None:
+    """ADR-0046: half the frames that follow, rounded up — exact at the last frame, never fewer
+    than follow, one more at most."""
+    from aether_model.link.frames import countdown_of, most_following
+
+    assert [countdown_of(n) for n in range(7)] == [0, 1, 1, 2, 2, 3, 3]
+    for n in range(7):
+        assert n <= most_following(countdown_of(n)) <= n + 1
+
+
+@pytest.mark.parametrize("offset", [2.74, 5.48, 13.7])
+def test_a_fade_over_the_end_of_a_burst_is_not_answered_over(offset: float) -> None:
+    """The scenario harness, 80 m at 500 Hz (ADR-0045): a receiver that heard only the first
+    frames of a burst of six read "three or more" as three and answered over the rest. Counted
+    in pairs the countdown never says fewer than follow (ADR-0046): a fade of 3.5 s every 11 s
+    over a 3 kB transfer, which took the ends of bursts — three collisions in twelve patterns on
+    version 5 — collides with nothing."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+
+    timing = phy_timing(NARROW.params)
+    a = LinkEngine("ND1J", timing, LinkConfig(), seed=1)
+    b = LinkEngine("KK4ODA", timing, LinkConfig(), seed=2)
+
+    def fade(rx: int, container: Container, t0: float) -> bool:
+        return rx == 1 and container is Container.DATA and (t0 + offset) % 11.0 < 3.5
+
+    sim = TwoStationSim(a, b, snr_db=14.0, seed=3, unheard=fade)
+    a.connect("KK4ODA")
+    sim.run(until=60)
+    message = bytes(range(256)) * 12
+    a.send(message)
+    sim.run(until=sim.t + 1200)
+    assert bytes(sim.delivered(1)) == message
+    assert _collisions(sim) == 0

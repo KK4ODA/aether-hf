@@ -6729,8 +6729,10 @@ mod tests {
         );
         assert!(
             counts.windows(2).all(|w| match (w[0], w[1]) {
-                // within a burst each frame says one fewer; a burst's last says none
-                (Some(a), Some(b)) => b + 1 == a || a == 0 || a == 3,
+                // within a burst the count of pairs still to come (ADR-0046) holds or drops by
+                // one from frame to frame — 3, 2, 2, 1, 1, 0 for six — and a burst's last says
+                // none
+                (Some(a), Some(b)) => b == a || b + 1 == a || a == 0,
                 _ => true,
             }),
             "the countdown did not count down: {counts:?}"

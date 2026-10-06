@@ -210,10 +210,26 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
 
 
 MAX_FOLLOWS = 3
-"""Most frames of its burst a DATA frame says follow it (ADR-0041): the PHY turns the frame's
-mode chips a quarter turn a frame, so four values, the last meaning "three or more"."""
+"""The largest countdown a DATA frame carries (ADR-0041): the PHY turns the frame's mode chips
+a quarter turn a step, so four values."""
 
-PROTOCOL_VERSION = 5
+
+def countdown_of(following: int) -> int:
+    """The countdown a DATA frame carries for the frames of its burst that follow it: half of
+    them, rounded up (ADR-0046) — 0 for the last frame, 1 for one or two following, 2 for three
+    or four, 3 for five or six. It never says fewer than follow, so a receiver that hears only
+    the burst's first frames does not answer over the rest, as "three or more" let it; it says
+    at most one more, and only the last frame's loss makes that matter. Exact for bursts up to
+    seven frames; :attr:`LinkConfig.burst_frames` is six."""
+    return min(MAX_FOLLOWS, (following + 1) // 2)
+
+
+def most_following(countdown: int) -> int:
+    """The most frames a countdown says may follow (:func:`countdown_of`)."""
+    return 2 * countdown
+
+
+PROTOCOL_VERSION = 6
 """The link protocol a station speaks, in the connect body's version byte. 2 since the tone
 floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 above the OFDM mode of version 1 — so a session between the two would run on numbers that
@@ -225,7 +241,8 @@ rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 H
 as it was, but one number says what both ladders are). 5 since the burst countdown
 (ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its
 burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
-noise."""
+noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
+would answer a frame early."""
 
 
 @dataclass(frozen=True)

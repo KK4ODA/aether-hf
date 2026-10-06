@@ -414,13 +414,30 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// ladder is as it was, but one number says what both ladders are). 5 since the burst countdown
 /// (ADR-0041): an ordinary data frame's mode chips are turned by the number of frames of its
 /// burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
-/// noise.
-pub const PROTOCOL_VERSION: u8 = 5;
+/// noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
+/// would answer a frame early.
+pub const PROTOCOL_VERSION: u8 = 6;
 
-/// Most frames of its burst a data frame says follow it (ADR-0041): the physical layer turns
-/// the frame's mode chips a quarter turn a frame, so four values, the last meaning "three or
-/// more".
+/// The largest countdown a data frame carries (ADR-0041): the physical layer turns the frame's
+/// mode chips a quarter turn a step, so four values.
 pub const MAX_FOLLOWS: u8 = 3;
+
+/// The countdown a data frame carries for the frames of its burst that follow it: half of them,
+/// rounded up (ADR-0046) — 0 for the last frame, 1 for one or two following, 2 for three or
+/// four, 3 for five or six. It never says fewer than follow, so a receiver that hears only the
+/// burst's first frames does not answer over the rest, as "three or more" let it; it says at
+/// most one more, and only the last frame's loss makes that matter. Exact for bursts up to
+/// seven frames; the default burst is six.
+#[must_use]
+pub fn countdown_of(following: usize) -> u8 {
+    u8::try_from(following.div_ceil(2)).map_or(MAX_FOLLOWS, |n| n.min(MAX_FOLLOWS))
+}
+
+/// The most frames a countdown says may follow ([`countdown_of`]).
+#[must_use]
+pub fn most_following(countdown: u8) -> u8 {
+    2 * countdown
+}
 
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;

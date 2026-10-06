@@ -66,6 +66,6 @@ Two waits in that account had nothing left to wait for:
 * Two transmissions a change of direction remain: an acknowledgement asking for the turn, and the
   TURN. Folding the turn into the acknowledgement — the receiving station answering a burst that
   emptied the sender's queue with its acknowledgement and its own data in one transmission — is
-  the next step and a protocol change (ADR-0046, to be planned).
+  the next step and a protocol change (ADR-0047, planned).
 * The countdown's ceiling: a burst of six whose later frames are lost is taken to end two frames
   early (ADR-0042's open item), and a false detection after a burst still delays its answer.

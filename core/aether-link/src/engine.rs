@@ -32,9 +32,9 @@
 use crate::{
     frames::{
         CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
-        bandwidth_hz_of, control_flags, data_capacity, decode_data, encode_data, in_window,
-        pack_callsign, seq_after, seq_distance,
+        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
+        control_flags, data_capacity, decode_data, encode_data, in_window, pack_callsign,
+        seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{RateConfig, RateController},
@@ -340,9 +340,11 @@ struct RxRecord {
     /// It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
     /// session's — and is no part of the burst (ADR-0038).
     outside: bool,
-    /// Where it says its burst ends: its own end and the frames it says follow it (ADR-0041),
-    /// or only its end when its count cannot be believed.
-    announced_end: f64,
+    /// Where it ended.
+    t_end: f64,
+    /// The latest its burst may end by its countdown — its own end and the most frames the
+    /// count says may follow (ADR-0041, ADR-0046) — or none when the count cannot be believed.
+    announced_end: Option<f64>,
     /// Where it ended, when it said, believably, that none of its burst follow it (ADR-0041's
     /// countdown at 0): the burst is over there (ADR-0045).
     closes_at: Option<f64>,
@@ -2072,11 +2074,12 @@ impl LinkEngine {
             frames.push(self.data_frame(&mut record));
             self.records[index] = record;
         }
-        // each frame says how many of the burst come after it, so a receiver that loses one in
-        // a fade still knows the burst is not over and does not answer over it (ADR-0041)
+        // each frame says how many of the burst come after it — in pairs, never fewer — so a
+        // receiver that loses one in a fade still knows the burst is not over and does not
+        // answer over it (ADR-0041, ADR-0046)
         let count = frames.len();
         for (i, frame) in frames.iter_mut().enumerate() {
-            frame.follows = u8::try_from(count - 1 - i).map_or(MAX_FOLLOWS, |n| n.min(MAX_FOLLOWS));
+            frame.follows = crate::frames::countdown_of(count - 1 - i);
         }
         self.stats.frames_sent += frames.len();
         self.stats.bursts += 1;
@@ -2101,10 +2104,19 @@ impl LinkEngine {
             .iter()
             .map(|&f| self.timing.control_frame_s_for(f))
             .fold(0.0, f64::max);
+        // a receiver that lost the burst's last frame takes the one before at its word — one or
+        // two following — and answers a frame late (ADR-0046): the wait covers it
+        let late = if family || count < 2 {
+            0.0
+        } else {
+            seqs.last()
+                .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)))
+        };
         let responder = families
             .iter()
             .map(|&f| self.irs_reply_delay(Some(f), Some(expected)))
-            .fold(0.0, f64::max);
+            .fold(0.0, f64::max)
+            + late;
         self.wait_for(Waiting::Ack, control, responder);
     }
 
@@ -2281,7 +2293,8 @@ impl LinkEngine {
             trusted: frame.trusted(),
             combined: false,
             outside: false,
-            announced_end: frame.t_end(),
+            t_end: frame.t_end(),
+            announced_end: None,
             closes_at: None,
         };
         if self.decode_record(frame, &mut record) {
@@ -2309,19 +2322,16 @@ impl LinkEngine {
     /// Where a frame of a burst says the burst ends: its own end, and the frames it says
     /// follow it, each as long as itself (ADR-0041). Believed from a frame that decoded or whose
     /// acquisition was trusted; a phantom's chips are noise.
-    fn announced_end<F: SoftFrame>(frame: &F, record: &RxRecord) -> f64 {
+    fn announced_end<F: SoftFrame>(frame: &F, record: &RxRecord) -> Option<f64> {
         let believed = record.payload.is_some() || frame.trusted();
-        let follows = if believed {
-            frame.follows().unwrap_or(0)
-        } else {
-            0
-        };
-        frame.t_end() + f64::from(follows) * (frame.t_end() - frame.t_start()).max(0.0)
+        let follows = frame.follows().filter(|_| believed)?;
+        let most = crate::frames::most_following(follows);
+        Some(frame.t_end() + f64::from(most) * (frame.t_end() - frame.t_start()).max(0.0))
     }
 
     /// Whether the burst is known to be over at [`burst_end`](Self::burst_end): the frame that
-    /// ends latest said, believably, that none follow it — the countdown at 0 is exact, where 3
-    /// means "three or more" (ADR-0045). Without it the end is inferred from silence.
+    /// ends latest said, believably, that none follow it — a countdown of 0 is exact (ADR-0045).
+    /// Without it the end is inferred from silence.
     fn burst_closed(&self) -> bool {
         let end = self.burst_end();
         self.burst
@@ -2336,11 +2346,25 @@ impl LinkEngine {
     /// harness, ADR-0042: eight collisions on an 80 m Poor path). In ND1J's session of
     /// 2026-10-06 the acknowledgement went out over the burst's last frame 21 times, and both
     /// were lost (ADR-0040).
+    ///
+    /// Every countdown is a bound — the most frames that may follow (ADR-0046) — so the burst ends
+    /// by the tightest any believed frame gives, and no earlier than the end of any frame heard.
     fn burst_end(&self) -> f64 {
-        self.burst
+        let heard = self
+            .burst
             .iter()
-            .map(|record| record.announced_end)
-            .fold(f64::NEG_INFINITY, f64::max)
+            .map(|record| record.t_end)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let bound = self
+            .burst
+            .iter()
+            .filter_map(|record| record.announced_end)
+            .fold(f64::INFINITY, f64::min);
+        if bound.is_finite() {
+            heard.max(bound)
+        } else {
+            heard
+        }
     }
 
     /// Decode a frame of the burst, alone or combined with an earlier transmission of its
@@ -3170,7 +3194,8 @@ mod tests {
             trusted,
             combined: false,
             outside: false,
-            announced_end: 0.0,
+            t_end: 0.0,
+            announced_end: None,
             closes_at: None,
         }
     }

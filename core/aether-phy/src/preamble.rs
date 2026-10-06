@@ -67,8 +67,8 @@ pub struct FrameHeader {
     pub follows: u8,
 }
 
-/// Most frames of its burst a DATA frame can say follow it (ADR-0041): four quarter turns, the
-/// last read as "three or more".
+/// The largest burst countdown a DATA frame carries (ADR-0041): four quarter turns. What a step
+/// means is the link layer's: two frames since link protocol 6 (ADR-0046).
 pub const MAX_FOLLOWS: u8 = 3;
 
 /// The phase a DATA frame's mode chips are turned by to say `follows` (ADR-0041).
