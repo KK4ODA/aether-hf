@@ -363,9 +363,10 @@ quarter turn of that correlation's phase against the comb pilots' channel estima
 symbols are then known with the turned chips. A frame with `f = 0` is the frame of version 4.
 The countdown is outside the codeword, like the RV, so retransmissions still soft-combine
 whatever their position in a later burst. Tone-floor frames carry no countdown. A receiver
-believes a frame's count when the frame decoded, or when its acquisition was confident and the
-rung its chips name is one the receiver has asked for or below — the count rides in the same
-chips, and a rung far above any asked for says they were read wrong (ADR-0047). A frame that did
+believes a frame's count when the frame decoded or its acquisition was confident, and a decoded
+frame's count wins: the burst ends by the tightest bound a decoded frame gives, and by a failed
+frame's only when nothing of the burst decoded — the count rides in chips a failed frame may
+have read wrong (ADR-0047). A frame that did
 not decode and began before the receiver's own last transmission belongs to the burst that
 transmission answered, and starts no new one.
 

@@ -3582,3 +3582,30 @@ def test_an_offer_is_not_answered_into_a_receiver_still_coming_back(size: int) -
     a.send(bytes(size))
     sim.run(until=sim.t + 120)
     assert bytes(sim.delivered(1)) == bytes(size)
+
+
+def test_a_burst_nothing_of_which_decoded_goes_by_its_failed_frames_counts(
+    timing: PhyTiming,
+) -> None:
+    """The scenario harness, 80 m (ADR-0047): the Test's ladder pins rungs the path cannot
+    carry, and nothing of such a burst decodes. Its frames' counts — read from chips the
+    receiver acquired with confidence — are all there is to go by, and they hold the answer
+    until the frames they announce have ended; a decoded frame's count, where there is one,
+    wins over a failed one's (a misread "none follow" cut a burst short)."""
+    from aether_model.link.engine import _RxRecord
+    from aether_model.link.sim import SimFrame
+
+    _, b, _ = _connected_irs(timing)
+    b._asked = 4
+
+    def heard(start: float, follows: int, decoded: bool) -> _RxRecord:
+        frame = SimFrame(Container.DATA, 12, 0, 3.0, start, start + 1.0, b"", 2.0, follows=follows)
+        return _RxRecord(frame, 0, payload=b"x" if decoded else None)
+
+    # nothing decoded, at a rung far above any asked for: the failed frames' counts hold
+    b._burst = [heard(0.0, 2, False), heard(1.0, 2, False)]
+    assert b._burst_end() == 1.0 + 4 * 1.0  # the tightest: up to four after the first
+    # a decoded frame's count wins over a failed one that reads "none follow"
+    b._burst = [heard(0.0, 2, True), heard(1.0, 0, False)]
+    assert b._burst_end() == 1.0 + 4 * 1.0
+    assert not b._burst_closed()
