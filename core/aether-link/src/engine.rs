@@ -521,6 +521,10 @@ pub struct LinkEngine {
     offered: bool,
     /// The last burst this station sent offered the turn, and nothing has answered it.
     offer_out: bool,
+    /// The last acknowledgement of a burst that offered the turn measured none of its data:
+    /// the other station heard the offer and not the frames before it. The next burst goes
+    /// without the offer, so that nothing answers it at once (ADR-0047).
+    offer_unheard: bool,
     /// When a sender asked to disconnect stops waiting for its queue (ADR-0039).
     disc_patience_until: Option<f64>,
     disc_tries: usize,
@@ -647,6 +651,7 @@ impl LinkEngine {
             disc_requested: false,
             offered: false,
             offer_out: false,
+            offer_unheard: false,
             disc_patience_until: None,
             caller: false,
             disc_tries: 0,
@@ -2190,6 +2195,7 @@ impl LinkEngine {
             && self.pinned.is_none()
             && !self.disc_requested
             && self.unacked().iter().all(|s| seqs.contains(s))
+            && !self.offer_unheard
     }
 
     /// A frame sent `max_combines` times at its mode without an acknowledgement is stranded
@@ -2283,6 +2289,19 @@ impl LinkEngine {
         };
         self.waiting_for = None;
         self.disarm(Timer::Wait);
+        // An acknowledgement of an offer that measured none of the burst's data: the other
+        // station heard the offer at the end and not the frames before it. A receiver whose
+        // radio takes longer to come back after transmitting than this station takes to answer
+        // loses the start of every answer, and a one-frame burst is nothing but its start: the
+        // offer drew an acknowledgement at once, the frame went again a turnaround later, into
+        // the same deafness, for as long as the session lasted (the scenario harness, 40 m with
+        // a 280 ms receiver recovery). Without the offer the burst goes unanswered, and its
+        // retry comes when the other station has long been listening (ADR-0047).
+        if self.offer_out {
+            self.offer_unheard = ack.snr_db.is_none();
+        } else if ack.snr_db.is_some() {
+            self.offer_unheard = false;
+        }
         self.offer_out = false;
         if ack.flags & control_flags::TAKEN != 0 {
             // the other station took the turn this one offered: its burst follows (ADR-0047)

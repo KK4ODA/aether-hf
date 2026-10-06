@@ -304,6 +304,9 @@ pub struct TwoStationSim {
     /// Frames read with their chips wrong ([`with_misread`](Self::with_misread)): the mode
     /// they are read at, and which.
     misread: Option<(usize, Unheard)>,
+    /// How long each station's receiver stays deaf after its own transmission
+    /// ([`with_rx_recovery`](Self::with_rx_recovery)).
+    rx_recovery_s: [f64; 2],
     /// Decibels added to the channel SNR for one frame
     /// ([`with_frame_snr_offset`](Self::with_frame_snr_offset)).
     frame_snr_offset: Option<FrameSnrOffset>,
@@ -331,6 +334,7 @@ impl TwoStationSim {
             no_countdown: false,
             garbled: None,
             misread: None,
+            rx_recovery_s: [0.0; 2],
             frame_snr_offset: None,
         }
     }
@@ -399,7 +403,20 @@ impl TwoStationSim {
     }
 
     fn is_unheard(&self, rx: usize, container: Container, t0: f64) -> bool {
-        self.unheard.as_ref().is_some_and(|f| f(rx, container, t0))
+        let recovering = self.stations[rx]
+            .busy
+            .iter()
+            .any(|&(_, end)| end <= t0 + 1e-9 && t0 - end < self.rx_recovery_s[rx]);
+        recovering || self.unheard.as_ref().is_some_and(|f| f(rx, container, t0))
+    }
+
+    /// A station whose receiver hears nothing for `seconds` after its own transmission ends —
+    /// a radio slow to switch back, a VOX interface's hold — so that a frame starting then is
+    /// never detected (the scenario harness's `rx_recovery_ms`).
+    #[must_use]
+    pub fn with_rx_recovery(mut self, who: usize, seconds: f64) -> Self {
+        self.rx_recovery_s[who] = seconds;
+        self
     }
 
     /// Use per-rung thresholds other than the air's AWGN table — a fading channel, say, or a

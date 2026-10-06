@@ -3247,3 +3247,25 @@ fn a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it() {
         assert_eq!(after_taken.get(), 0);
     }
 }
+
+/// The scenario harness, 40 m with a receiver that takes 280 ms to come back after transmitting
+/// (ADR-0047): the other station answered each acknowledgement a turnaround later, its one data
+/// frame fell in the deafness, and only the offer after it was heard — which drew an
+/// acknowledgement at once, and the frame went again into the same deafness, for the rest of the
+/// session. An acknowledgement of an offer that measured none of the burst's data takes the offer
+/// off the next burst, so nothing answers it at once and its retry is heard.
+#[test]
+fn an_offer_is_not_answered_into_a_receiver_still_coming_back() {
+    for size in [100usize, 1500] {
+        let t = timing(true);
+        let (a, b) = pair(&t, &LinkConfig::default());
+        let mut sim = TwoStationSim::new(a, b, 12.0, 1).with_rx_recovery(1, 0.3);
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        let connected_by = sim.run(60.0, 1e9);
+        assert_eq!(sim.engine(0).state(), State::Connected, "{connected_by}");
+        let message = vec![0u8; size];
+        sim.engine_mut(0).send(&message);
+        sim.run(connected_by + 120.0, 1e9);
+        assert_eq!(sim.delivered(1), message.as_slice(), "{size} bytes");
+    }
+}
