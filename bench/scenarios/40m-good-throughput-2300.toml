@@ -1,0 +1,27 @@
+name = "40m-good-throughput-2300"
+description = """40 m, a Good path at +20 dB, nobody else on: how fast a 16 kB message and a 4 kB
+reply go — the number to put beside VARA HF 2300's on the same path."""
+tags = ["40m", "stress"]
+bandwidth = 2300
+seconds = 900
+seed = 20
+
+[stations.a]
+callsign = "W4TGA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 20.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "message 16000", "reply 4000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

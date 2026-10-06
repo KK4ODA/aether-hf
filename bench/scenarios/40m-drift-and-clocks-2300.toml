@@ -1,0 +1,34 @@
+name = "40m-drift-and-clocks-2300"
+description = """40 m at 2300 Hz between two radios that do not agree: 25 Hz apart and drifting
+a further 3 Hz a minute (a rig warming up), and sound cards 120 ppm apart one way and 80 the
+other (cheap USB codecs). A Test session — tone frames are 5.4 s long, so the clocks walk."""
+tags = ["40m", "stress"]
+bandwidth = 2300
+seconds = 1200
+seed = 15
+
+[stations.a]
+callsign = "W4TGA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 8.0
+cfo_hz = 25.0
+cfo_drift_hz_per_s = 0.05
+[path.a_to_b]
+sro_ppm = 120.0
+[path.b_to_a]
+sro_ppm = -80.0
+cfo_hz = -25.0
+cfo_drift_hz_per_s = -0.05
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

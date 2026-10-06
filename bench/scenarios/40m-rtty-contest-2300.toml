@@ -1,0 +1,54 @@
+name = "40m-rtty-contest-2300"
+description = """40 m on a contest weekend at 2300 Hz: four RTTY stations inside the passband,
+from 6 dB under to 3 dB over this session's signal, on a Good path at +12 dB. A Test session."""
+tags = ["40m", "stress"]
+bandwidth = 2300
+seconds = 1200
+seed = 19
+
+[stations.a]
+callsign = "W4TGA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 12.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "rtty"
+at = "both"
+audio_hz = 700
+power_db = 3.0
+profile = "good"
+
+[[qrm]]
+kind = "rtty"
+at = "a"
+audio_hz = 1250
+power_db = -2.0
+profile = "moderate"
+
+[[qrm]]
+kind = "rtty"
+at = "b"
+audio_hz = 1900
+power_db = -6.0
+profile = "good"
+
+[[qrm]]
+kind = "rtty"
+at = "both"
+audio_hz = 2450
+power_db = 0.0
+profile = "moderate"
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

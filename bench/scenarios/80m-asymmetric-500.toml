@@ -1,0 +1,39 @@
+name = "80m-asymmetric-500"
+description = """80 m at 500 Hz on a lopsided path, as ND1J ↔ KK4ODA measured it (about 0 dB one
+way, +5 the other): the caller is heard at 0 dB on a Moderate path and hears the other at +6. A
+Test session — its acknowledgements and polls go the hard way."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 11
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.a.radio]
+rx_recovery_ms = 280
+[stations.b]
+callsign = "ND1J"
+[stations.b.radio]
+rx_recovery_ms = 30
+
+[path]
+profile = "moderate"
+cfo_hz = 3.0
+[path.a_to_b]
+snr_db = 0.0
+[path.b_to_a]
+snr_db = 6.0
+
+[crashes]
+at = "both"
+rate_per_s = 0.3
+peak_db = 20.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

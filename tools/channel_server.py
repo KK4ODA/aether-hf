@@ -22,7 +22,9 @@ The radios are modelled at both ends, from what the field recordings showed (ADR
   SignaLink's DLY): nothing radiates, and the station hears nothing;
 * ``rx_recovery_ms`` — the receiver delivers silence that long after the key comes up (a
   rig's T/R recovery, a codec unmuting);
-* while a station transmits, its receive audio is silence, as a transceiver's is.
+* while a station transmits, its receive audio is silence, as a transceiver's is;
+* ``agc`` — ``off``, ``fast``, ``auto`` or ``slow``: the receiver's AGC (:class:`Agc`), with
+  ``agc_threshold_db`` above the noise it hears (12) and the hang and decay overridable.
 
 The report says when each station was keyed on the air, and every stretch both were — a
 collision, which no recording at either end can show.
@@ -37,7 +39,7 @@ import socket
 import struct
 import sys
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +47,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.channel import noise_power_for_snr
+from aether_model.channel import HfChannel, SampleRateOffset, noise_power_for_snr
 from aether_model.qrm import (
     AtmosphericCrashes,
     OfdmArqStation,
@@ -65,22 +67,70 @@ MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR = 1, 2, 3, 4
 # ── the channel, one direction ────────────────────────────────────────
 
 
+SRO_CUSHION = BASEBAND_RATE // 4
+"""Baseband samples held back when the clocks differ (0.25 s): a receiver whose card runs fast
+takes the stream a little quicker than it comes, and this is what it eats into — 100 ppm for
+40 minutes."""
+
+
+def level_at(schedule: list[list[float]], t: np.ndarray) -> np.ndarray:
+    """The path's level in dB at times ``t``: straight lines between ``[seconds, dB]`` points,
+    the first and last held — QSB, a band closing, a skip zone moving through."""
+    if not schedule:
+        return np.zeros(len(t))
+    times = np.array([float(p[0]) for p in schedule])
+    levels = np.array([float(p[1]) for p in schedule])
+    return np.asarray(np.interp(t, times, levels), dtype=np.float64)
+
+
 class ScenarioChannel(CableChannel):
     """:class:`CableChannel` with the scenario's other signals and crashes added at the
     receiver, after the path's fading and noise — they reach the receiver by paths of their
-    own."""
+    own — and, from the path's keys:
 
-    def __init__(self, extras: list[object], **kwargs: object) -> None:
+    * ``level`` — ``[[seconds, dB], …]``: the signal's level against ``snr_db`` over the
+      session (the noise and the other signals stay where they are);
+    * ``cfo_drift_hz_per_s`` — the offset moving, as a rig warming up does;
+    * ``sro_ppm`` — the receiving card's clock against the sender's: the whole stream it
+      hears is resampled, so a frame's timing walks across a long frame."""
+
+    def __init__(
+        self,
+        extras: list[object],
+        level: list[list[float]] | None = None,
+        cfo_drift_hz_per_s: float = 0.0,
+        sro_ppm: float = 0.0,
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
         self.extras = extras
+        self.level = level or []
+        self._n = 0  # baseband samples processed
+        if cfo_drift_hz_per_s or sro_ppm:
+            cfg = self.hf.config
+            self.hf = HfChannel(replace(cfg, cfo_drift_hz_per_s=cfo_drift_hz_per_s))
+        self.sro = SampleRateOffset(float(BASEBAND_RATE), sro_ppm) if sro_ppm else None
+        self._sro_fifo = np.zeros(SRO_CUSHION if sro_ppm else 0, dtype=np.complex128)
 
     def process(self, audio: np.ndarray) -> np.ndarray:  # type: ignore[override]
         audio = np.asarray(audio, dtype=np.float64)
         baseband = self._mix_down(audio)
+        n = len(baseband)
         scale = math.sqrt(self.reference_power)
+        if self.level:
+            t = (self._n + np.arange(n)) / BASEBAND_RATE
+            baseband = baseband * 10.0 ** (level_at(self.level, t) / 20.0)
+        self._n += n
         impaired = self.hf.process(baseband / scale)
         for extra in self.extras:
             impaired = impaired + extra.next(len(impaired))  # type: ignore[attr-defined]
+        if self.sro is not None:
+            self._sro_fifo = np.concatenate((self._sro_fifo, self.sro.process(impaired)))
+            if len(self._sro_fifo) < n:  # the cushion spent: a gap, as a card that ran dry
+                self._sro_fifo = np.concatenate(
+                    (self._sro_fifo, np.zeros(n - len(self._sro_fifo), dtype=np.complex128))
+                )
+            impaired, self._sro_fifo = self._sro_fifo[:n], self._sro_fifo[n:]
         out = self._mix_up(impaired * scale, len(audio))
         peak = float(np.max(np.abs(out))) if len(out) else 0.0
         if peak > 0.98:
@@ -145,6 +195,38 @@ def signal_dbfs(scenario: dict, who: str) -> float:
     return 20.0 * math.log10(level / math.sqrt(2.0))
 
 
+class Agc:
+    """A receiver's AGC as the FTDX10 recordings showed it (``busy.rs``): the gain steps down
+    within a millisecond when the envelope passes the threshold, holds ``hang_ms``, then ramps
+    back at ``decay_db_s``. It acts on the whole passband — a crash or a strong station
+    nearby takes this session's signal down with it — and it runs on 1 ms envelope steps."""
+
+    STEP = AUDIO_RATE // 1000
+
+    def __init__(self, threshold: float, hang_ms: float, decay_db_s: float) -> None:
+        self.threshold = threshold
+        self.hang = hang_ms / 1000.0
+        self.decay = decay_db_s / 1000.0  # dB a step
+        self.gain_db = 0.0
+        self.held = 0.0  # seconds of hang left
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        steps = audio.reshape(-1, self.STEP)
+        peaks = np.max(np.abs(steps), axis=1)
+        gains = np.empty(len(peaks))
+        for i, peak in enumerate(peaks):
+            limit = 20.0 * math.log10(self.threshold / peak) if peak > self.threshold else 0.0
+            if limit < self.gain_db:
+                self.gain_db, self.held = limit, self.hang
+            elif self.held > 0.0:
+                self.held -= 0.001
+            else:
+                self.gain_db = min(0.0, limit, self.gain_db + self.decay)
+            gains[i] = self.gain_db
+        out = steps * (10.0 ** (gains / 20.0))[:, None]
+        return out.reshape(-1).astype(np.float32)
+
+
 # ── one station ───────────────────────────────────────────────────────
 
 
@@ -165,6 +247,7 @@ class Station:
     keyed_since: int | None = None
     last_keyed: int = -(10**12)
     intervals: list[list[float]] = field(default_factory=list)
+    agc: Agc | None = None
 
     def read_exact(self, n: int) -> bytes:
         data = b""
@@ -236,7 +319,24 @@ class Server:
                 snr_db=snr,
                 signal_dbfs=signal_dbfs(scenario, tx),
                 cfo_hz=float(path.get("cfo_hz", 0.0)),
+                cfo_drift_hz_per_s=float(path.get("cfo_drift_hz_per_s", 0.0)),
+                sro_ppm=float(path.get("sro_ppm", 0.0)),
+                level=path.get("level"),
                 seed=seed * 10 + (1 if tx == "a" else 2),
+            )
+        for st, who, tx in ((a, "a", "b"), (b, "b", "a")):
+            radio = scenario.get("stations", {}).get(who, {}).get("radio", {})
+            if radio.get("agc", "off") == "off":
+                continue
+            # the threshold sits above the noise the station hears, as a rig's does
+            noise_rms = 10.0 ** ((self.channels[tx].noise_dbfs_3k or -60.0) / 20.0)
+            hang, decay = {"fast": (20.0, 200.0), "auto": (100.0, 50.0), "slow": (400.0, 15.0)}[
+                radio["agc"]
+            ]
+            st.agc = Agc(
+                noise_rms * 10.0 ** (float(radio.get("agc_threshold_db", 12.0)) / 20.0),
+                float(radio.get("agc_hang_ms", hang)),
+                float(radio.get("agc_decay_db_s", decay)),
             )
         self.latency = round(DEVICE_LATENCY_S * AUDIO_RATE)
         for st in (a, b):
@@ -288,6 +388,10 @@ class Server:
         heard_a = self.channels["b"].process(audio_b)
         heard_a[self._deaf(self.a, keyed_a)] = 0.0
         heard_b[self._deaf(self.b, keyed_b)] = 0.0
+        if self.a.agc is not None:
+            heard_a = self.a.agc.process(heard_a)
+        if self.b.agc is not None:
+            heard_b = self.b.agc.process(heard_b)
         both = keyed_a & keyed_b
         self.both_keyed += int(both.sum())
         for i in np.flatnonzero(both):

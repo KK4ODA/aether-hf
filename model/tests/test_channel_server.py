@@ -121,3 +121,35 @@ def test_two_stations_keyed_at_once_are_counted_as_a_collision() -> None:
     assert len(report["collisions"]) == 1
     # a on the air 0.35–0.85 s, b from 0.65 s: overlapping 0.20 s
     assert abs(report["both_keyed_s"] - 0.20) < 0.03
+
+
+def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
+    t = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
+    got = cs.level_at([[5.0, 0.0], [15.0, -20.0]], t)
+    assert list(got) == [0.0, 0.0, -10.0, -20.0, -20.0]
+    assert list(cs.level_at([], t)) == [0.0] * 5
+
+
+def test_a_clock_offset_keeps_every_block_whole() -> None:
+    ch = cs.ScenarioChannel(
+        [], sro_ppm=200.0, channel="awgn", snr_db=None, signal_dbfs=-15.0, seed=1
+    )
+    tone = 0.25 * np.sin(2 * np.pi * 1500.0 * np.arange(cs.TICK) / RATE)
+    for _ in range(100):
+        assert len(ch.process(tone)) == cs.TICK
+
+
+def test_the_agc_steps_down_on_a_peak_holds_then_ramps_back() -> None:
+    agc = cs.Agc(threshold=0.1, hang_ms=100.0, decay_db_s=50.0)
+    crash = np.zeros(cs.TICK, dtype=np.float32)
+    crash[:48] = 1.0  # 20 dB over the threshold for a millisecond
+    agc.process(crash)
+    assert abs(agc.gain_db + 20.0) < 1e-5
+    quiet = np.full(cs.TICK, 0.01, dtype=np.float32)
+    for _ in range(4):  # 80 ms: still holding
+        out = agc.process(quiet)
+    assert abs(agc.gain_db + 20.0) < 1e-5
+    assert abs(float(out[0]) - 0.001) < 1e-6
+    for _ in range(10):  # 200 ms more: 20 ms of hang left, then 180 ms at 50 dB/s
+        agc.process(quiet)
+    assert -12.0 < agc.gain_db < -10.0

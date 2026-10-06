@@ -1,0 +1,29 @@
+name = "80m-nvis-disturbed-500"
+description = """80 m at 500 Hz on ITU-R F.1487's disturbed NVIS channel: two equal paths 7 ms
+apart, 1 Hz Doppler, +8 dB. The OFDM symbol's effective prefix is 5 ms, so no OFDM rung survives
+the echo and the link lives on the tone floor (P9-3): 1 kB, which it should still carry."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 900
+seed = 24
+transfer_s = 700
+
+[stations.a]
+callsign = "ND1J"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "nvis"
+snr_db = 8.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 5

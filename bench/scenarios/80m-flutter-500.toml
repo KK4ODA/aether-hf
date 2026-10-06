@@ -1,0 +1,27 @@
+name = "80m-flutter-500"
+description = """80 m at night during a geomagnetic disturbance: flutter fading (CCIR's fast
+channel, ~10 Hz Doppler) at +8 dB, 500 Hz. A Test session — OFDM's pilots chase a channel that
+changes within a symbol; the tone floor should carry it."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 21
+
+[stations.a]
+callsign = "ND1J"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "flutter"
+snr_db = 8.0
+cfo_hz = 2.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5
