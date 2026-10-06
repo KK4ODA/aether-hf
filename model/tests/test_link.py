@@ -3453,3 +3453,44 @@ def test_the_turn_on_offer_is_taken_in_the_acknowledgement(timing: PhyTiming, of
     else:
         assert a.stats.turn_offers == 0 and b.stats.turns_taken == 0
         assert a.stats.turns == 1
+
+
+@pytest.mark.parametrize("taken_heard", [False, True])
+def test_a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it(
+    timing: PhyTiming, taken_heard: bool
+) -> None:
+    """ADR-0047: the acknowledgement that takes the turn offered goes unread, and so do the
+    first frames of the burst behind it. The sender must not wait out its acknowledgement and
+    send its burst again over the other station's: a trusted data frame of the session's
+    family arriving after an offer is that burst, and the sender becomes the receiving
+    station (found by the scenario harness, 80 m at 500 Hz)."""
+    a, b = _pair(timing, LinkConfig(offer_turn=True))
+    lost = {"after_taken": 0}
+
+    def offset(frame: TxFrame) -> float:
+        if frame.container is Container.CONTROL:
+            ctl = ControlFrame.decode(frame.payload)
+            if ctl.flags & ControlFlags.TAKEN:
+                lost["after_taken"] = 2
+                return 0.0 if taken_heard else -60.0
+        elif lost["after_taken"] > 0:
+            lost["after_taken"] -= 1
+            return -60.0
+        return 0.0
+
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=5, frame_snr_offset=offset)
+    reply = b"REPLY FROM KK4XYZ. " * 20
+    a.connect("KK4XYZ")
+    a.send(bytes(300))
+    b.send(reply)
+    sim.run(until=300)
+    assert sim.delivered(1) == bytes(300)
+    assert sim.delivered(0) == reply
+    assert b.stats.turns_taken == 1
+    overlaps = [
+        (x, y)
+        for x in sim.st[0].busy
+        for y in sim.st[1].busy
+        if x[0] < y[1] - 1e-9 and y[0] < x[1] - 1e-9
+    ]
+    assert overlaps == []
