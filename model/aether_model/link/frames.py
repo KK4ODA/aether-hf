@@ -100,6 +100,12 @@ class ControlFlags(IntFlag):
     """(ACK) the receiving station has data to send."""
     BREAK = 0x2
     """(ACK) the receiving station demands the sending role now."""
+    OFFER = 0x4
+    """(TURN) sent at the end of a burst that emptied the sender's queue: the turn is the
+    receiving station's for the taking, with its acknowledgement (ADR-0047)."""
+    TAKEN = 0x8
+    """(ACK) the turn offered is taken: this station's own data follows the acknowledgement in
+    the same transmission (ADR-0047)."""
 
 
 # ── callsigns ─────────────────────────────────────────────────────────
