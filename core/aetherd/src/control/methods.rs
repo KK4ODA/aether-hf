@@ -721,10 +721,12 @@ fn share_upload<P: Ptt>(
              asking station's upload script (https://script.google.com/…/exec).",
         );
     }
-    if !crate::upload::code_allowed(&code) {
+    // a code is no longer needed — the script bounds a public address by the day — but one
+    // from an earlier request link still goes, and has to look like one
+    if !code.is_empty() && !crate::upload::code_allowed(&code) {
         return refuse(
             "bad_params",
-            "The request link's upload code is missing or damaged: ask for the link again.",
+            "The request link's upload code is damaged: send without it, or ask for the link again.",
         );
     }
     // a name `share.prepare` gave, in `shared/`, and nothing else
@@ -2559,6 +2561,15 @@ mod tests {
             params[key] = json!(bad);
             let refused = dispatch_with(&mut station, Some(&mut daemon), &ask(params));
             assert_eq!(refused.error.expect("refused").code, code, "{key} {bad}");
+        }
+        // no code at all is fine: the project's upload needs none
+        let mut codeless = good.clone();
+        codeless["code"] = json!("");
+        let accepted = dispatch_with(&mut station, Some(&mut daemon), &ask(codeless));
+        assert!(accepted.error.is_none(), "{:?}", accepted.error);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while daemon.upload.busy() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let started = dispatch_with(&mut station, Some(&mut daemon), &ask(good));
         assert_eq!(started.result.expect("started")["bytes"], 6);

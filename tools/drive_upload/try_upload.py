@@ -1,12 +1,13 @@
 """Try the upload script once deployed: send a small file the way an Aether station does.
 
-    python tools/drive_upload/try_upload.py https://script.google.com/macros/s/…/exec CODE
+    python tools/drive_upload/try_upload.py https://script.google.com/macros/s/…/exec [CODE]
 
 It asks the script for a place to put one file (``begin``), sends a 1 MB test zip there in two
 pieces through Google Drive's resumable upload — the second piece after asking the session
 where it stands, as a station does after a dropped connection — and tells the script it is
 done (``finish``). If it prints the file's link, the script works: the file is in your
-"Aether HF uploads" folder, an email is on its way to you, and the code has one upload fewer.
+"Aether HF uploads" folder, an email is on its way to you, and the day's count (``today``) has
+one upload more — and a code, if one was given, one upload fewer.
 
 Only the standard library: nothing to install.
 """
@@ -67,7 +68,7 @@ def put(url: str, content_range: str, body: bytes) -> tuple[int, dict[str, str],
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("endpoint", help="the web app's address, ending /exec")
-    ap.add_argument("code", help="a code makeCodes made")
+    ap.add_argument("code", nargs="?", default="", help="a code makeCodes made (optional)")
     args = ap.parse_args()
 
     data = bytes(i * 7 % 251 for i in range(1024 * 1024))

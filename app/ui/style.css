@@ -2254,14 +2254,6 @@ details.fold-card > summary:hover .card-title {
   min-width: 24ch;
 }
 
-/* an upload code is the callsign and ten hex digits: the whole of it shows */
-.share-form #share-upload-code {
-  flex: 0 0 24ch;
-  width: 24ch;
-  /* shown as typed: the codes are lower-case hex, and the callsign style capitalises */
-  text-transform: none;
-}
-
 .share-form .test-bar-row {
   padding: var(--s2) 0 0;
 }

@@ -40,8 +40,8 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 > file — records it, and *Report my last test as a GitHub issue* (Log → **Send files…**) turns the
 > recording into a report the project can replay: how every volunteer contact becomes a
 > measurement. When a contact fails, **Send files…** on the Log tab asks the other station for
-> its side; with an upload script ([`tools/drive_upload/`](tools/drive_upload/README.md)) their
-> panel sends its logs and recordings to your Google Drive with one button.
+> its side, and *Send my files to the Aether project* sends a station's logs and recordings to
+> the project's Google Drive with one button ([`tools/drive_upload/`](tools/drive_upload/README.md)).
 >
 > **Stations must run the same link protocol to connect.** Beta 85 is link protocol 7, and it
 > does not connect to beta 84 or earlier: the update window says *Update required* when a

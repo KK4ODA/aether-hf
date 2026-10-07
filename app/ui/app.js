@@ -5005,20 +5005,22 @@ async function act(operation, description) {
 // ── files for another operator ──────────────────────────────────────
 //
 // A failed contact has two sides, and the side that was not heard cannot be read from here.
-// Asking KE4QCM for his files (2026-10-05) meant a PowerShell line pasted into an email. Now
-// *Send my files* has the daemon write one zip (`share.prepare`) and opens an email to attach
-// it to, and *Ask a station for its files* writes the request: a link that opens the other
-// station's own panel at this form, filled in with who to send to and which sessions.
+// Asking KE4QCM for his files (2026-10-05) meant a PowerShell line pasted into an email; then
+// codes per station and a hidden upload row, and a first-time user still pressed *Prepare
+// email* (the author, 2026-10-07). So the form is four plain choices, each with only its own
+// fields, and the first one is ready to go: *Send my files to the Aether project* uploads one
+// zip (`share.prepare`, `share.upload`) to the project's folder — no address, no code, no
+// attachment. The address is built in and public; the script bounds what it takes a day.
+
+// The Aether project's upload script (tools/drive_upload/): where *Send my files to the Aether
+// project* goes, and whose owner a request from that station asks the files back to.
+const PROJECT_UPLOAD_URL = "";
+const PROJECT_CALL = "KK4ODA";
 
 const SHARE_TO_KEY = "aether.shareTo";
 const MY_EMAIL_KEY = "aether.myEmail";
-// this station's upload script (tools/drive_upload/), for the requests it writes and for
-// sending its own files there; and the code that script made for this station's own uploads
-const UPLOAD_URL_KEY = "aether.uploadUrl";
-const UPLOAD_CODE_KEY = "aether.uploadCode";
-const UPLOAD_CODE = /^[A-Za-z0-9_-]{4,64}$/;
-// where a request link said the files are to go: its upload script, the code it issued, and
-// the station that asked — set by the link, and what the Send button sends to
+// where an older request link said the files are to go — its upload script, its code and the
+// station that asked; a request written now names the project instead
 let uploadTarget = null;
 
 // An upload script's address: a Google Apps Script web app, as the daemon accepts.
@@ -5046,105 +5048,103 @@ function remember(key, value) {
   }
 }
 
-// Where *Send my files* can upload without a request link: an upload script's address and a
-// code from it typed into the form — this station's own script and the code it made for this
-// station, or another operator's. Null until both are whole.
-function uploadFromFields() {
-  const endpoint = $("share-upload-url").value.trim();
-  const code = $("share-upload-code").value.trim();
-  return isUploadAddress(endpoint) && UPLOAD_CODE.test(code) ? { endpoint, code, to: "" } : null;
+// The project's folder is there to send to once its address is built in.
+function projectOpen() {
+  return isUploadAddress(PROJECT_UPLOAD_URL);
 }
 
-// What the Upload button sends to: the request link's target first, the form's otherwise.
+// Whether this station is the project's own: its requests ask for the files to the project's
+// folder, not to an email address.
+function ownsProject() {
+  const me = $("callsign").textContent.trim().toUpperCase().split(/[-/]/)[0];
+  return projectOpen() && me === PROJECT_CALL;
+}
+
+// What the Send button sends to: an older request link's own script, or the project's folder.
 function uploadDestination() {
-  return uploadTarget ?? (shareMode() === "send" ? uploadFromFields() : null);
+  if (uploadTarget) return uploadTarget;
+  return projectOpen() ? { endpoint: PROJECT_UPLOAD_URL, code: "", to: PROJECT_CALL } : null;
 }
 
+// "project" (send my files to the project), "email" (email my files), "ask" (ask a station for
+// its files) or "report" (the last Test as a GitHub issue).
 function shareMode() {
   const mode = $("share-mode").value;
-  return mode === "ask" || mode === "report" ? mode : "send";
+  return ["project", "email", "ask", "report"].includes(mode) ? mode : "email";
 }
 
-// The form's words follow what it does: in *send* the address is where the files go; in
-// *ask* it is this operator's own, where the other station's files are to come back to.
+const SHARE_FIELDS = {
+  project: ["share-station-label", "share-station", "share-hours-label", "share-hours", "share-audio-row"],
+  email: ["share-email-label", "share-email", "share-station-label", "share-station", "share-hours-label", "share-hours", "share-audio-row"],
+  ask: ["share-station-label", "share-station", "share-hours-label", "share-hours", "share-audio-row"],
+  report: [],
+};
+
+// The form shows the chosen task's fields and nothing else, and its button says what will
+// happen.
 function applyShareMode() {
   const mode = shareMode();
-  const ask = mode === "ask";
-  // the report needs none of the fields: it is the last Test session, whoever it was with
-  const report = mode === "report";
-  for (const id of ["share-email-label", "share-email", "share-station-label", "share-station",
-    "share-hours-label", "share-hours", "share-audio-row"]) {
-    $(id).hidden = report;
+  // a request that names no project goes by email: the reply address is then needed
+  const askByEmail = mode === "ask" && !ownsProject();
+  const fields = new Set([...SHARE_FIELDS[mode], ...(askByEmail ? ["share-email-label", "share-email"] : [])]);
+  for (const id of new Set(Object.values(SHARE_FIELDS).flat().concat(["share-email-label", "share-email"]))) {
+    $(id).hidden = !fields.has(id);
   }
   const email = $("share-email");
-  $("share-email-label").textContent = ask ? "reply to" : "to";
-  email.placeholder = ask ? "your@email" : "their@email";
-  email.title = ask
-    ? "Your own address: where the other station is to send its files"
-    : "Who the files go to: the operator who asked for them";
-  email.value = remembered(ask ? MY_EMAIL_KEY : SHARE_TO_KEY) || email.value;
+  $("share-email-label").textContent = mode === "ask" ? "reply to" : "to";
+  email.placeholder = mode === "ask" ? "your@email" : "their@email";
+  email.title = mode === "ask"
+    ? "Your own address: where the other station is to email its files"
+    : "Who the files go to";
+  email.value = remembered(mode === "ask" ? MY_EMAIL_KEY : SHARE_TO_KEY) || email.value;
   const station = $("share-station");
-  station.placeholder = ask ? "their callsign" : "any station";
-  station.title = ask
+  $("share-station-label").textContent = mode === "ask" ? "station" : "sessions with";
+  station.placeholder = mode === "ask" ? "their callsign" : "any station";
+  station.title = mode === "ask"
     ? "The station whose files you want"
     : "Only the sessions with this station (its other SSIDs too); empty for every session";
-  const audio = ask
+  const audio = mode === "ask"
     ? "Ask for the recordings' audio too: what a test session's analysis needs, megabytes a minute"
-    : "The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it";
+    : "The recordings' audio too: megabytes a minute, so leave it out unless it was asked for";
   $("share-audio-row").title = audio;
   $("share-audio").title = audio;
-  // the upload row: in *ask*, this station's script, for the link; in *send*, any script to
-  // upload to — unless a request link already named the place
-  $("share-upload-row").hidden = report || (!ask && uploadTarget != null);
-  $("share-upload-url").value ||= remembered(UPLOAD_URL_KEY);
-  // the code is another station's when asking and this station's own when sending: one mode's
-  // never carries into the other, where it would go into a request link or a wrong upload
-  $("share-upload-code").value = ask ? "" : remembered(UPLOAD_CODE_KEY);
-  $("share-upload-url").title = ask
-    ? "Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec. Remembered. Leave empty to have them email the zip instead"
-    : "An upload script's address to send this zip to — your own (tools/drive_upload/README.md) or one another operator gave you: the web app URL ending in /exec. Remembered. Leave empty to email the zip";
-  $("share-upload-code").title = ask
-    ? "The upload code makeCodes made for this station: it lets their panel put the files in your folder"
-    : "The upload code that script's owner made for your callsign (for your own script: add your callsign to STATIONS and run makeCodes). Remembered";
-  // a request that named an upload script, or a script and code typed in: one button sends
-  // there, and email is the fallback
-  updateUploadButton();
-  $("btn-share").textContent = report
-    ? "Open the report"
-    : ask ? "Write request" : uploadDestination() ? "Email instead" : "Prepare email";
-  $("btn-share").title = report
-    ? "Open a pre-filled GitHub issue with your last Test session's numbers, for the project"
-    : ask
-      ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
-      : "Write the zip and open an email to attach it to";
-  if (report) {
-    $("share-note").textContent = "A GitHub issue for the project, pre-filled with your last Test session: a free GitHub account is needed. Attach the test's .json from the recordings folder.";
+  const target = uploadDestination();
+  const button = $("btn-share");
+  if (mode === "project") {
+    button.textContent = target?.to && target.to !== PROJECT_CALL ? `Send to ${target.to}` : "Send";
+    button.title = "Write one zip of your logs and sessions and upload it to the Aether project's folder: no email, no attachment";
+  } else if (mode === "email") {
+    button.textContent = "Prepare email";
+    button.title = "Write the zip and open an email to attach it to";
+  } else if (mode === "ask") {
+    button.textContent = "Write request";
+    button.title = "Open an email to the other operator with a link that opens their Aether HF ready to send";
+  } else {
+    button.textContent = "Open the report";
+    button.title = "Open a pre-filled GitHub issue with your last Test session's numbers, for the project";
   }
   $("share-upload-progress").hidden = true;
+  $("share-note").textContent = {
+    project: `Your logs and the sessions you choose, as one zip, to ${target?.to && target.to !== PROJECT_CALL ? `${target.to}'s upload folder` : `the Aether project (${PROJECT_CALL})`}. Never what was typed.`,
+    email: "Writes one zip and opens an email to attach it to.",
+    ask: ownsProject()
+      ? "Writes an email to the other operator: its link opens their Aether HF ready to send the files to the project's folder."
+      : "Writes an email to the other operator: its link opens their Aether HF ready to email the files to you.",
+    report: "A GitHub issue for the project, pre-filled with your last Test session: a free GitHub account is needed. Attach the test's .json from the recordings folder.",
+  }[mode];
 }
 
-// The Upload button follows the form: shown in *send* when there is somewhere to upload to.
-function updateUploadButton() {
-  const ask = shareMode() !== "send";
-  const target = ask ? null : uploadDestination();
-  const send = $("btn-share-upload");
-  send.hidden = target == null;
-  if (target) {
-    send.textContent = target.to ? `Send to ${target.to}` : "Upload";
-    send.title = target.to
-      ? `Write the zip and send it straight to ${target.to}'s upload folder: no email, no attachment`
-      : "Write the zip and upload it to the upload script above — your Google Drive folder, or the other operator's: no email, no attachment";
-  }
-  $("btn-share").classList.toggle("primary", target == null);
-  if (!ask) {
-    $("btn-share").textContent = target ? "Email instead" : "Prepare email";
-  }
+// The choices on offer: the project's folder only once its address is built in.
+function shareChoices() {
+  const project = $("share-mode").querySelector('option[value="project"]');
+  if (project) project.hidden = !projectOpen() && !uploadTarget;
 }
 
-function openShareForm(mode = "send", fill = {}) {
+function openShareForm(mode = projectOpen() ? "project" : "email", fill = {}) {
   const form = $("share-form");
   form.hidden = false;
   $("btn-share-open").setAttribute("aria-expanded", "true");
+  shareChoices();
   $("share-mode").value = mode;
   applyShareMode();
   if (fill.to) $("share-email").value = fill.to;
@@ -5169,10 +5169,9 @@ function openShareForm(mode = "send", fill = {}) {
     option.value = call;
     list.append(option);
   }
-  $("share-note").textContent = fill.note ?? "";
+  if (fill.note) $("share-note").textContent = fill.note;
   if (fill.audio != null) $("share-audio").checked = fill.audio;
-  if (shareMode() === "send" && uploadTarget) $("btn-share-upload").focus();
-  else ($("share-email").value ? $("btn-share") : $("share-email")).focus();
+  $("btn-share").focus();
 }
 
 function closeShareForm() {
@@ -5215,8 +5214,13 @@ async function showSharedFile(path) {
 }
 
 async function prepareShare() {
-  if (shareMode() === "report") {
+  const mode = shareMode();
+  if (mode === "report") {
     await reportTestSession();
+    return;
+  }
+  if (mode === "project") {
+    await sendByUpload();
     return;
   }
   const note = $("share-note");
@@ -5224,70 +5228,44 @@ async function prepareShare() {
   const station = $("share-station").value.trim().toUpperCase();
   const hours = Number($("share-hours").value) || 3;
   const me = $("callsign").textContent.trim();
-  if (shareMode() === "ask") {
+  if (mode === "ask") {
     if (!station) {
       note.textContent = "Whose files? Enter their callsign.";
       $("share-station").focus();
       return;
     }
-    if (!email) {
+    const toProject = ownsProject();
+    if (!toProject && !email) {
       note.textContent = "Your own email address is needed: it is where their files are to go.";
       $("share-email").focus();
       return;
     }
-    remember(MY_EMAIL_KEY, email);
-    const endpoint = $("share-upload-url").value.trim();
-    const code = $("share-upload-code").value.trim();
-    if (endpoint && !isUploadAddress(endpoint)) {
-      note.textContent = "That is not an upload script's address: it is the web app URL, https://script.google.com/macros/s/…/exec (tools/drive_upload/README.md).";
-      $("share-upload-url").focus();
-      return;
-    }
-    if (endpoint && !UPLOAD_CODE.test(code)) {
-      note.textContent = `The upload code for ${station} is needed: makeCodes in your upload script makes one.`;
-      $("share-upload-code").focus();
-      return;
-    }
-    if (endpoint) remember(UPLOAD_URL_KEY, endpoint);
+    if (!toProject) remember(MY_EMAIL_KEY, email);
     const audio = $("share-audio").checked;
-    let link = `${PANEL_URL}#share?to=${encodeURIComponent(email)}&station=${encodeURIComponent(me)}&hours=${hours}`;
+    let link = `${PANEL_URL}#share?station=${encodeURIComponent(me)}&hours=${hours}`;
     if (audio) link += "&audio=1";
-    if (endpoint) link += `&up=${encodeURIComponent(endpoint)}&code=${encodeURIComponent(code)}`;
+    link += toProject ? "&project=1" : `&to=${encodeURIComponent(email)}`;
     const period = hours === 1 ? "hour" : `${hours} hours`;
     const what = audio
       ? "It is your logs, the summaries of the sessions and their recordings — never what was typed."
       : "It is your logs and the summaries of the sessions — no audio, and never what was typed.";
-    const body = endpoint
-      ? [
-          "Hi,",
-          "",
-          `Could you send me your Aether HF files from the last ${period}${audio ? ", with the recordings" : ""}? It is one button now.`,
-          "",
-          "With Aether HF running (0.2.0-beta.85 or later), open this link — it fills the form in for you:",
-          link,
-          "",
-          `Then press "Send to ${me}". The files go straight to my Google Drive folder: no email, no attachment.`,
-          "",
-          what,
-          "",
-          "73,",
-          me,
-        ].join("\n")
-      : [
-          "Hi,",
-          "",
-          `Our contact did not get through, and the half of it I cannot see from here is yours. Could you send me your Aether HF files from the last ${period}?`,
-          "",
-          "With Aether HF running (0.2.0-beta.74 or later), open this link — it fills the form in for you:",
-          link,
-          "",
-          `Then press "Prepare email" and attach the zip it shows you. Or, in Aether: Log tab > Send files…, to ${email}, sessions with ${me}, Prepare email.`,
-          "",
-          what,
-          "",
-          "73,",
-          me,
-        ].join("\n");
+    const body = [
+      "Hi,",
+      "",
+      `Could you send me your Aether HF files from the last ${period}${audio ? ", with the recordings" : ""}? It is one button.`,
+      "",
+      "With Aether HF running, open this link — it opens the Log tab with the form filled in:",
+      link,
+      "",
+      toProject
+        ? `Then press Send. The files go straight to the Aether project's folder: no email, no attachment. (Or in Aether HF: Log tab > Send files… > "Send my files to the Aether project" > Send.)`
+        : `Then press "Prepare email" and attach the zip it shows you. (Or in Aether HF: Log tab > Send files… > "Email my files to someone", to ${email}.)`,
+      "",
+      what,
+      "",
+      "73,",
+      me,
+    ].join("\n");
     try {
       await openMail(mailto("", `Aether HF: your files from our contact (${me} – ${station})`, body));
       note.textContent = `An email to ${station} is open in your mail program: add their address and send it.`;
@@ -5297,7 +5275,7 @@ async function prepareShare() {
     return;
   }
   if (!email) {
-    note.textContent = "Who to? Enter the address of the operator who asked for the files.";
+    note.textContent = "Who to? Enter their email address.";
     $("share-email").focus();
     return;
   }
@@ -5314,7 +5292,7 @@ async function prepareShare() {
     note.textContent = error.message;
     return;
   }
-  const size = result.bytes >= 1048576 ? `${(result.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(result.bytes / 1024))} kB`;
+  const size = sizeOf(result.bytes);
   const sessions = `${result.sessions} recorded session${result.sessions === 1 ? "" : "s"}`;
   const body = [
     "Hi,",
@@ -5336,7 +5314,9 @@ async function prepareShare() {
   log(`files for ${email}: ${result.name}, ${size}, ${sessions}`, "info", "share");
 }
 
-// A link from another station's request: `#share?to=…&station=…&hours=…` opens the form here.
+// A link from another station's request opens the form here, filled in:
+// `#share?station=…&hours=…&audio=1` and `&project=1` (send to the project's folder) or
+// `&to=…` (email them); an older link's `&up=…&code=…` names its own upload script.
 function shareFromLink() {
   const hash = window.location.hash;
   if (!hash.startsWith("#share")) return;
@@ -5350,43 +5330,41 @@ function shareFromLink() {
   const station = (params.get("station") ?? "").toUpperCase();
   const endpoint = params.get("up") ?? "";
   const code = params.get("code") ?? "";
-  uploadTarget = isUploadAddress(endpoint) && UPLOAD_CODE.test(code)
+  uploadTarget = isUploadAddress(endpoint) && /^[A-Za-z0-9_-]{4,64}$/.test(code)
     ? { endpoint, code, to: station }
     : null;
   const audio = params.get("audio") === "1";
-  openShareForm("send", {
+  const upload = uploadTarget != null || (params.get("project") === "1" && projectOpen());
+  const asked = `${station || "A station"} asked for your files from your sessions with them${audio ? ", with the recordings" : ""}.`;
+  openShareForm(upload ? "project" : "email", {
     to: params.get("to") ?? "",
     station,
     hours: Number(params.get("hours")) || 3,
     audio,
-    note: uploadTarget
-      ? `${station || "A station"} asked for your files from your sessions with them${audio ? ", with the recordings" : ""}. Press Send to ${station || "them"}: the zip goes straight to their upload folder.`
-      : station
-        ? `${station} asked for your files from your sessions with them. Check the address, then Prepare email.`
-        : "Check the address, then Prepare email.",
+    note: upload
+      ? `${asked} Press ${uploadTarget ? `Send to ${station}` : "Send"}: the zip goes straight to ${uploadTarget ? "their upload folder" : "the Aether project's folder"}.`
+      : `${asked} Check the address, then Prepare email.`,
   });
 }
 
 const sizeOf = (bytes) =>
   bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} kB`;
 
-// Send to the station that asked: the daemon writes the zip (`share.prepare`) and sends it to
-// the upload script the request link named (`share.upload`), on a thread of its own; this
-// follows `status.upload` until it is done. Email stays the way round when it fails.
+// *Send my files to the Aether project* (or an older link's Send to <call>): the daemon writes
+// the zip (`share.prepare`) and uploads it (`share.upload`) on a thread of its own; this follows
+// `status.upload` until it is done. Email stays the way round when it fails.
 async function sendByUpload() {
   const target = uploadDestination();
-  if (!target) return;
   const note = $("share-note");
-  const button = $("btn-share-upload");
+  if (!target) {
+    note.textContent = "The project's upload folder is not set up in this version: use Email my files to someone.";
+    return;
+  }
+  const button = $("btn-share");
   const station = $("share-station").value.trim().toUpperCase();
   const hours = Number($("share-hours").value) || 3;
   const audio = $("share-audio").checked;
-  const to = target.to || "the upload folder";
-  if (!target.to) {
-    // typed in, not from a link: kept for next time
-    remember(UPLOAD_URL_KEY, target.endpoint);
-    remember(UPLOAD_CODE_KEY, target.code);
-  }
+  const to = target.to || PROJECT_CALL;
   button.disabled = true;
   note.textContent = "Writing the zip…";
   try {
@@ -5409,17 +5387,17 @@ async function sendByUpload() {
       label.textContent = `${sizeOf(upload.sent || 0)} of ${sizeOf(total)}`;
       if (upload.state === "done") {
         bar.value = 1;
-        note.textContent = `Sent ✓ — ${prepared.name} (${sizeOf(prepared.bytes)}) is in ${upload.to ? `${upload.to}'s` : "the"} upload folder, and ${upload.to ? "they have" : "its owner has"} been told.`;
+        note.textContent = `Sent ✓ — ${prepared.name} (${sizeOf(prepared.bytes)}) is in ${upload.to || to}'s folder, and ${upload.to || to} has been told. Thank you.`;
         log(`files sent to ${upload.to || to}: ${prepared.name}, ${sizeOf(prepared.bytes)}`, "info", "share");
         return;
       }
       if (upload.state === "failed") {
-        throw new Error(`${upload.error} The zip is kept: Email instead sends it by hand.`);
+        throw new Error(`${upload.error} The zip is kept: Email my files to someone sends it by hand.`);
       }
     }
   } catch (error) {
     note.textContent = error.code === "unknown_method"
-      ? "This modem is older than the Send button: update Aether HF (0.2.0-beta.85 or later), or use Email instead."
+      ? "This modem is older than the Send button: update Aether HF, or use Email my files to someone."
       : error.message;
     $("share-upload-progress").hidden = true;
     log(`files not sent to ${to}: ${error.message}`, "warn", "share");
@@ -5430,20 +5408,11 @@ async function sendByUpload() {
 
 function wireShare() {
   $("btn-share-open").addEventListener("click", () =>
-    $("share-form").hidden ? openShareForm(shareMode()) : closeShareForm(),
+    $("share-form").hidden ? openShareForm() : closeShareForm(),
   );
   $("btn-share-cancel").addEventListener("click", closeShareForm);
   $("share-mode").addEventListener("change", applyShareMode);
   $("btn-share").addEventListener("click", prepareShare);
-  $("btn-share-upload").addEventListener("click", sendByUpload);
-  for (const id of ["share-upload-url", "share-upload-code"]) {
-    $(id).addEventListener("input", updateUploadButton);
-  }
-  // this station's own code is kept as soon as it is whole, so a trip to *ask* and back keeps it
-  $("share-upload-code").addEventListener("input", () => {
-    const code = $("share-upload-code").value.trim();
-    if (shareMode() === "send" && !uploadTarget && UPLOAD_CODE.test(code)) remember(UPLOAD_CODE_KEY, code);
-  });
   $("share-form").addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeShareForm();
   });

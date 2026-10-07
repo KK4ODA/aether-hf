@@ -124,8 +124,8 @@ The matrix above is the snapshot of 2026-09-15. What has changed in its rows sin
 * **PTT** — FLRig and host-program keying (beta.69–.70); an *Answer gap* (ADR-0036) gives a
   VOX-keyed station such as a SignaLink time to return to receive.
 * **Diagnostics for a report** — the Log tab's *Send files…* zips the logs and sidecars for
-  the other station, and *Send to <call>* uploads them to the asking station's Google Drive
-  (beta.85).
+  the other station, and *Send my files to the Aether project* uploads them to the project's
+  Google Drive with one button (beta.85; no codes since beta.88).
 * **Update notification** — a release that changes the link protocol is offered as *Update
   required*; stations on different protocols cannot connect, and the panel says which one
   must update.
