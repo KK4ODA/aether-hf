@@ -1371,17 +1371,33 @@ impl ToneDetector {
     /// `max_contradictions` of its sync symbols may hold another tone, strong
     /// ([`contradictions`](Self::contradictions)): a pattern read at a part-symbol offset
     /// inside a strong frame it does not name — another air's (ADR-0015) — matches half its
-    /// symbols and is contradicted in the rest.
+    /// symbols and is contradicted in the rest — unless its two best blocks are each whole to
+    /// `clean_block_hits` and uncontradicted (ADR-0049): no shift of a frame lines up two of
+    /// its blocks, and a ghost is contradicted in every block, while a frame that slipped a
+    /// symbol on its way (WC4Y's acceptances of 2026-10-05) is contradicted in its end block
+    /// by its own next tones.
     #[must_use]
     pub fn confirmed(&self, samples: &[Complex], sync: &ToneSync) -> bool {
         let Some(e) = tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()) else {
             return false;
         };
-        let mut hits = block_hits_in(&e, sync.kind, sync.rv);
+        let blocks = block_hits_in(&e, sync.kind, sync.rv);
+        let mut hits = blocks;
         hits.sort_unstable();
-        hits.iter().sum::<usize>() >= TONE.min_hits
-            && hits[1] >= TONE.min_block_hits
-            && contradictions_in(&e, sync.kind, sync.rv) <= TONE.max_contradictions
+        if hits.iter().sum::<usize>() < TONE.min_hits || hits[1] < TONE.min_block_hits {
+            return false;
+        }
+        let against = block_contradictions_in(&e, sync.kind, sync.rv);
+        if against.iter().sum::<usize>() <= TONE.max_contradictions {
+            return true;
+        }
+        // a frame spoiled in one block still stands on the other two when both are whole
+        // and uncontradicted; the stable sort keeps the earlier block on a tie, as the model
+        let mut order = [0, 1, 2];
+        order.sort_by(|&a, &b| blocks[b].cmp(&blocks[a]));
+        order[..2]
+            .iter()
+            .all(|&b| blocks[b] >= TONE.clean_block_hits && against[b] == 0)
     }
 
     /// Sync symbols of `sync` whose strongest tone is not their own, holds at least
@@ -1395,7 +1411,7 @@ impl ToneDetector {
     pub fn contradictions(&self, samples: &[Complex], sync: &ToneSync) -> usize {
         tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols())
             .map_or(3 * SYNC_SYMBOLS, |e| {
-                contradictions_in(&e, sync.kind, sync.rv)
+                block_contradictions_in(&e, sync.kind, sync.rv).iter().sum()
             })
     }
 
@@ -1479,8 +1495,8 @@ fn block_hits_in(e: &[f64], kind: &ToneKind, rv: u8) -> [usize; 3] {
     })
 }
 
-/// [`ToneDetector::contradictions`] from a frame's slot energies `e`.
-fn contradictions_in(e: &[f64], kind: &ToneKind, rv: u8) -> usize {
+/// [`ToneDetector::contradictions`] from a frame's slot energies `e`, per sync block.
+fn block_contradictions_in(e: &[f64], kind: &ToneKind, rv: u8) -> [usize; 3] {
     let tones = TONE.tones;
     let layout = kind.layout(usize::from(rv));
     let rows: Vec<(usize, &[f64])> = layout
@@ -1492,12 +1508,15 @@ fn contradictions_in(e: &[f64], kind: &ToneKind, rv: u8) -> usize {
         .map(|k| median(&mut rows.iter().map(|(_, row)| row[k]).collect::<Vec<_>>()))
         .collect();
     let noise = sync_noise(e, &layout, kind);
-    rows.iter()
-        .filter(|&&(own, row)| {
-            let top = argmax(row);
-            top != own && row[top] >= TONE.contradiction * noise && row[top] >= 4.0 * steady[top]
-        })
-        .count()
+    // the sync rows come in layout order, a block's eight after the one before's
+    let mut out = [0; 3];
+    for (i, &(own, row)) in rows.iter().enumerate() {
+        let top = argmax(row);
+        if top != own && row[top] >= TONE.contradiction * noise && row[top] >= 4.0 * steady[top] {
+            out[i / SYNC_SYMBOLS] += 1;
+        }
+    }
+    out
 }
 
 // ── streaming ──────────────────────────────────────────────────────────
@@ -2019,6 +2038,53 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_that_slipped_a_symbol_stands_on_its_two_clean_blocks() {
+        // WC4Y's audio of 2026-10-05 (ADR-0049): an acceptance with 40 ms more audio in it than
+        // was sent, after its middle block, has its end block a symbol late — contradicted by
+        // its own next tones — and was refused. Two whole uncontradicted blocks are a frame's
+        let kind = &data_kinds()[0];
+        let n = TONE.symbol_samples;
+        let x = burst(&codec(kind), &payload(kind, 3), 0).expect("burst");
+        let at = 110 * n;
+        let mut slipped = x[..at].to_vec();
+        slipped.extend_from_slice(&x[at - n..at]);
+        slipped.extend_from_slice(&x[at..]);
+        let lead = 3000;
+        let mut y: Vec<Complex> = vec![(0.0, 0.0); lead];
+        y.extend_from_slice(&slipped);
+        y.extend(std::iter::repeat_n((0.0, 0.0), 3000));
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut noise = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64 / u64::MAX as f64 - 0.5) * 0.8
+        };
+        for s in &mut y {
+            *s = (s.0 + noise(), s.1 + noise());
+        }
+        let det = ToneDetector::new();
+        let reading = ToneSync {
+            start: lead,
+            cfo_hz: 0.0,
+            kind,
+            rv: 0,
+            statistic: 0.0,
+        };
+        assert_eq!(det.block_hits(&y, kind, 0, lead, 0.0), [8, 8, 0]);
+        assert!(det.contradictions(&y, &reading) > TONE.max_contradictions);
+        assert!(det.confirmed(&y, &reading));
+        let found = det.detect(&y, 4);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].kind.name, found[0].rv), (kind.name, 0));
+        assert!(
+            found[0].start.abs_diff(lead) <= det.hop(),
+            "{}",
+            found[0].start
+        );
+    }
+
+    #[test]
     fn a_strong_other_tone_contradicts_and_a_steady_one_does_not() {
         // ADR-0015: slot energies of a frame at unit noise, its sync tones at 100
         let kind = &data_kinds()[0];
@@ -2033,18 +2099,27 @@ mod tests {
         for &(s, t) in &sync {
             e[s * tones + t] = 100.0;
         }
-        assert_eq!(contradictions_in(&e, kind, 0), 0);
+        assert_eq!(
+            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            0
+        );
         // three symbols hold another tone, stronger than their own: three contradictions
         for &(s, t) in &sync[..3] {
             e[s * tones + (t + 5) % tones] = 200.0;
         }
-        assert_eq!(contradictions_in(&e, kind, 0), 3);
+        assert_eq!(
+            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            3
+        );
         // a symbol whose own tone faded, its strongest one no more than noise makes, is a
         // miss and no contradiction
         let (s, t) = sync[0];
         e[s * tones + t] = 0.5;
         e[s * tones + (t + 5) % tones] = 5.0;
-        assert_eq!(contradictions_in(&e, kind, 0), 2);
+        assert_eq!(
+            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            2
+        );
         // a steady carrier stronger than every sync tone contradicts nothing
         let mut steady = vec![1.0f64; kind.symbols() * tones];
         for &(s, t) in &sync {
@@ -2056,7 +2131,12 @@ mod tests {
         for s in 0..kind.symbols() {
             steady[s * tones + carrier] = 150.0;
         }
-        assert_eq!(contradictions_in(&steady, kind, 0), 0);
+        assert_eq!(
+            block_contradictions_in(&steady, kind, 0)
+                .iter()
+                .sum::<usize>(),
+            0
+        );
     }
 
     #[test]

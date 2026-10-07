@@ -389,6 +389,14 @@ class ToneDetector:
     there; the other twelve were full of the real frame's tones. Measured: 8–12 contradictions
     for every such ghost, at most one for a real frame of any kind from its decode threshold
     to 30 dB on AWGN and ITU Poor."""
+    CLEAN_BLOCK_HITS = 7
+    """Hits each of a frame's two best sync blocks must have, with no contradiction in either,
+    for the frame to stand whatever its third block holds (ADR-0049). WC4Y's audio of
+    2026-10-05 held two acceptances read 8/8 and 8/8 in their start and middle blocks and
+    refused on the end block: the frame had slipped 40 ms on its way, its end block sat a
+    symbol late, and its own tones there were five contradictions. No shift of a frame lines
+    up two of its blocks (:attr:`~aether_model.frame.modes.ToneKind.block_offsets`), and a
+    ghost is contradicted in every block, so two clean blocks are a frame's alone."""
 
     def __init__(
         self,
@@ -519,12 +527,17 @@ class ToneDetector:
         it does not name matches half its symbols and is contradicted in the rest."""
         kind = sync.kind
         e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
-        hits = sorted(_block_hits(e, kind, sync.rv))
-        return (
-            sum(hits) >= self.MIN_HITS
-            and hits[-2] >= self.MIN_BLOCK_HITS
-            and self._contradictions(e, kind, sync.rv) <= self.MAX_CONTRADICTIONS
-        )
+        blocks = _block_hits(e, kind, sync.rv)
+        hits = sorted(blocks)
+        if sum(hits) < self.MIN_HITS or hits[-2] < self.MIN_BLOCK_HITS:
+            return False
+        against = self._block_contradictions(e, kind, sync.rv)
+        if sum(against) <= self.MAX_CONTRADICTIONS:
+            return True
+        # a frame spoiled in one block — a slip or a burst of interference over it — still
+        # stands on the other two when both are whole and uncontradicted (ADR-0049)
+        best = sorted(range(len(blocks)), key=lambda b: blocks[b], reverse=True)[:2]
+        return all(blocks[b] >= self.CLEAN_BLOCK_HITS and against[b] == 0 for b in best)
 
     def contradictions(self, x: ComplexArray, sync: ToneSync) -> int:
         """Sync symbols of ``sync`` whose strongest tone is not their own, holds at least
@@ -536,6 +549,10 @@ class ToneDetector:
         return self._contradictions(e, kind, sync.rv)
 
     def _contradictions(self, e: FloatArray, kind: ToneKind, rv: int) -> int:
+        return sum(self._block_contradictions(e, kind, rv))
+
+    def _block_contradictions(self, e: FloatArray, kind: ToneKind, rv: int) -> list[int]:
+        """:meth:`contradictions`, per sync block (start, middle, end)."""
         layout = kind.layout(rv)
         idx = np.flatnonzero(layout >= 0)
         rows = e[idx]
@@ -544,7 +561,8 @@ class ToneDetector:
         steady = np.median(rows, axis=0)[top]
         noise = sync_noise(e, layout, kind)
         against = (top != layout[idx]) & (peak >= self.CONTRADICTION * noise) & (peak >= 4 * steady)
-        return int(np.sum(against))
+        per_block = against.reshape(len(kind.block_offsets), SYNC_SYMBOLS)
+        return [int(n) for n in per_block.sum(axis=1)]
 
     def sync_statistic(
         self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float

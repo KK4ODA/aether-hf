@@ -515,6 +515,31 @@ def test_a_fast_frame_after_silence_is_not_taken_for_its_early_reading() -> None
         assert frame.decode()[0] == payload
 
 
+def test_a_frame_that_slipped_a_symbol_stands_on_its_two_clean_blocks() -> None:
+    """WC4Y's audio of 2026-10-05 (ADR-0049): an acceptance that reached him clean had 40 ms
+    more audio in it than was sent, after its middle block, so its end block sat a symbol late
+    — eight contradictions, each the frame's own next tone — and the detector refused a frame
+    that decodes. Two whole uncontradicted blocks are a frame's alone."""
+    kind = M.TONE_DATA[0]
+    det = T.ToneDetector()
+    n = kind.num.symbol_samples
+    rng = np.random.default_rng(3)
+    payload = _payload(rng, kind)
+    x = T.burst(kind, payload, 0)
+    at = 110  # past the middle block: the end block slips, the data mostly survives
+    x = np.concatenate((x[: at * n], x[at * n - n : at * n], x[at * n :]))
+    start = 3000
+    y = np.concatenate((np.zeros(start, complex), x, np.zeros(3000, complex)))
+    y = make_channel("awgn", snr_db=-4.0, fs=kind.num.fs, seed=3, signal_power=1.0).process(y)
+    reading = det.refine(y, kind, 0, start, 0.0)
+    assert det.block_hits(y, kind, 0, reading.start, reading.cfo_hz) == [8, 8, 0]
+    assert det.contradictions(y, reading) > det.MAX_CONTRADICTIONS
+    for found in (det.detect(y), _streamed(y)):
+        assert [(f.kind, f.rv) for f in found] == [(kind, 0)], found
+        assert abs(found[0].start - start) <= det.hop
+        assert T.demodulate(y, kind, 0, found[0].start, found[0].cfo_hz).decode()[0] == payload
+
+
 def test_a_false_arrival_gives_way_to_a_frame_announced_inside_it() -> None:
     """ADR-0014: with 25 patterns in the search a first block of noise, or of noise and a
     symbol or two of a strong frame's first block, now and then passes the announcement's
