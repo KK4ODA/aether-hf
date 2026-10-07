@@ -1123,6 +1123,9 @@ panel's **Send to <call>** has the daemon upload the zip (`share.upload`, `uploa
 rustls, 8 MB pieces, resumes after a dropped connection, its own thread, `status.upload`). Only
 `https://script.google.com/…/exec` addresses are accepted; nothing secret is in the program.
 `tools/drive_upload/try_upload.py` checks a deployment. The author deploys the script himself.
+*Send my files* uploads too (beta.87): an address and a code typed into the same row
+(`uploadFromFields`; the own code kept as `aether.uploadCode`, never carried into *ask*) show an
+**Upload** button.
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 **WC4Y's two Tests (2026-10-05, issues #2 and #3; beta.86).** Read from both stations' sidecars

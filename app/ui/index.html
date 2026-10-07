@@ -1239,7 +1239,10 @@
                   (<code>tools/drive_upload/</code>), their panel shows <strong>Send to
                   <em>your call</em></strong>: one press, a bar shows the zip going, and it lands in
                   your Google Drive folder with no attachment to forget; <em>Email instead</em> stays
-                  there if the upload fails. Tick <em>audio</em> when asking to have the recordings
+                  there if the upload fails. <em>Send my files</em> can upload too: put an upload
+                  address and its code in the same row — your own script with a code made for your
+                  callsign, or another operator's — and <strong>Upload</strong> sends the zip there
+                  instead of an email. Tick <em>audio</em> when asking to have the recordings
                   sent too. Nothing is sent without you: the zip waits in the <code>shared</code> folder
                   beside your settings until you press a button.
                 </p>
@@ -1275,7 +1278,7 @@
             </div>
             <!-- asking: where the other station's files are to go, so that their panel can send
                  them with one button (tools/drive_upload/) -->
-            <div class="tool-row inset-row" id="share-upload-row" title="Where the other station's panel sends the files: your upload script and the code you made for that station" hidden>
+            <div class="tool-row inset-row" id="share-upload-row" title="An upload script and its code: where the other station's panel sends its files when you ask, or where your own files go when you send" hidden>
               <label for="share-upload-url" title="Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec">upload to</label>
               <input id="share-upload-url" type="url" class="prose" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false" title="Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec. Remembered. Leave empty to have them email the zip instead" aria-label="Upload address" />
               <label for="share-upload-code" title="The upload code makeCodes made for this station">code</label>

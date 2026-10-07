@@ -211,6 +211,9 @@ read from yours. In the Log tab, **Send files…** does both halves:
   connection. There is nothing for them to attach, and no limit at email's 25 MB, which a Test
   session's recording passes. You get an email with a link to it. *Email instead* stays there
   as the way round.
+* **Uploading your own files** works the same way: in *Send my files*, put an upload address and
+  a code made for your callsign in the **upload to** / **code** row (your own script, or one
+  another operator gave you), and **Upload** sends the zip there instead of opening an email.
 
 Neither holds what was said: the logs record how much was sent, never what.
 

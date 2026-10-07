@@ -46,6 +46,17 @@ recordings, and fill in the **upload address** (the `/exec` URL, which the panel
 and **that station's code**. *Write request* opens an email to them with the link. When they
 open the link, their panel shows **Send to KK4ODA**, and the files come to your folder.
 
+## Sending your own files there
+
+The same script takes your own files. Add your callsign to `STATIONS` and run **makeCodes**
+for a code of your own. Then, on the **Log** tab, **Send files…** → *Send my files*: put the
+upload address and your code in the **upload to** / **code** row (both remembered), and press
+**Upload**. The zip goes to your folder as another station's would, and you get the email.
+Another operator can give you their address and a code for your callsign, and **Upload** sends
+there instead.
+
+## Codes
+
 A code is for one station. Make more with **makeCodes** (edit `STATIONS` first), and revoke
 one with **revokeCode**: put the code between its quotes, then Run. To stop all uploads,
 *Deploy → Manage deployments → Archive*. A new deployment gives a new address.

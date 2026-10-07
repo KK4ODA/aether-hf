@@ -5049,8 +5049,11 @@ async function copyDiagnostics() {
 
 const SHARE_TO_KEY = "aether.shareTo";
 const MY_EMAIL_KEY = "aether.myEmail";
-// this station's upload script (tools/drive_upload/), for the requests it writes
+// this station's upload script (tools/drive_upload/), for the requests it writes and for
+// sending its own files there; and the code that script made for this station's own uploads
 const UPLOAD_URL_KEY = "aether.uploadUrl";
+const UPLOAD_CODE_KEY = "aether.uploadCode";
+const UPLOAD_CODE = /^[A-Za-z0-9_-]{4,64}$/;
 // where a request link said the files are to go: its upload script, the code it issued, and
 // the station that asked — set by the link, and what the Send button sends to
 let uploadTarget = null;
@@ -5080,6 +5083,20 @@ function remember(key, value) {
   }
 }
 
+// Where *Send my files* can upload without a request link: an upload script's address and a
+// code from it typed into the form — this station's own script and the code it made for this
+// station, or another operator's. Null until both are whole.
+function uploadFromFields() {
+  const endpoint = $("share-upload-url").value.trim();
+  const code = $("share-upload-code").value.trim();
+  return isUploadAddress(endpoint) && UPLOAD_CODE.test(code) ? { endpoint, code, to: "" } : null;
+}
+
+// What the Upload button sends to: the request link's target first, the form's otherwise.
+function uploadDestination() {
+  return uploadTarget ?? (shareMode() === "send" ? uploadFromFields() : null);
+}
+
 function shareMode() {
   return $("share-mode").value === "ask" ? "ask" : "send";
 }
@@ -5105,22 +5122,45 @@ function applyShareMode() {
     : "The recordings' audio too: megabytes each, so leave it out unless the other operator asks for it";
   $("share-audio-row").title = audio;
   $("share-audio").title = audio;
-  $("share-upload-row").hidden = !ask;
-  if (ask) $("share-upload-url").value ||= remembered(UPLOAD_URL_KEY);
-  // a request that named an upload script: one button sends there, and email is the fallback
-  const upload = !ask && uploadTarget != null;
-  const send = $("btn-share-upload");
-  send.hidden = !upload;
-  if (upload) {
-    send.textContent = `Send to ${uploadTarget.to || "them"}`;
-    send.title = `Write the zip and send it straight to ${uploadTarget.to || "the station that asked"}'s upload folder: no email, no attachment`;
-  }
-  $("btn-share").classList.toggle("primary", !upload);
-  $("btn-share").textContent = ask ? "Write request" : upload ? "Email instead" : "Prepare email";
+  // the upload row: in *ask*, this station's script, for the link; in *send*, any script to
+  // upload to — unless a request link already named the place
+  $("share-upload-row").hidden = !ask && uploadTarget != null;
+  $("share-upload-url").value ||= remembered(UPLOAD_URL_KEY);
+  // the code is another station's when asking and this station's own when sending: one mode's
+  // never carries into the other, where it would go into a request link or a wrong upload
+  $("share-upload-code").value = ask ? "" : remembered(UPLOAD_CODE_KEY);
+  $("share-upload-url").title = ask
+    ? "Your upload script's address (tools/drive_upload/README.md): the web app URL ending in /exec. Remembered. Leave empty to have them email the zip instead"
+    : "An upload script's address to send this zip to — your own (tools/drive_upload/README.md) or one another operator gave you: the web app URL ending in /exec. Remembered. Leave empty to email the zip";
+  $("share-upload-code").title = ask
+    ? "The upload code makeCodes made for this station: it lets their panel put the files in your folder"
+    : "The upload code that script's owner made for your callsign (for your own script: add your callsign to STATIONS and run makeCodes). Remembered";
+  // a request that named an upload script, or a script and code typed in: one button sends
+  // there, and email is the fallback
+  updateUploadButton();
+  $("btn-share").textContent = ask ? "Write request" : uploadDestination() ? "Email instead" : "Prepare email";
   $("btn-share").title = ask
     ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
     : "Write the zip and open an email to attach it to";
   $("share-upload-progress").hidden = true;
+}
+
+// The Upload button follows the form: shown in *send* when there is somewhere to upload to.
+function updateUploadButton() {
+  const ask = shareMode() === "ask";
+  const target = ask ? null : uploadDestination();
+  const send = $("btn-share-upload");
+  send.hidden = target == null;
+  if (target) {
+    send.textContent = target.to ? `Send to ${target.to}` : "Upload";
+    send.title = target.to
+      ? `Write the zip and send it straight to ${target.to}'s upload folder: no email, no attachment`
+      : "Write the zip and upload it to the upload script above — your Google Drive folder, or the other operator's: no email, no attachment";
+  }
+  $("btn-share").classList.toggle("primary", target == null);
+  if (!ask) {
+    $("btn-share").textContent = target ? "Email instead" : "Prepare email";
+  }
 }
 
 function openShareForm(mode = "send", fill = {}) {
@@ -5221,7 +5261,7 @@ async function prepareShare() {
       $("share-upload-url").focus();
       return;
     }
-    if (endpoint && !/^[A-Za-z0-9_-]{4,64}$/.test(code)) {
+    if (endpoint && !UPLOAD_CODE.test(code)) {
       note.textContent = `The upload code for ${station} is needed: makeCodes in your upload script makes one.`;
       $("share-upload-code").focus();
       return;
@@ -5328,7 +5368,7 @@ function shareFromLink() {
   const station = (params.get("station") ?? "").toUpperCase();
   const endpoint = params.get("up") ?? "";
   const code = params.get("code") ?? "";
-  uploadTarget = isUploadAddress(endpoint) && /^[A-Za-z0-9_-]{4,64}$/.test(code)
+  uploadTarget = isUploadAddress(endpoint) && UPLOAD_CODE.test(code)
     ? { endpoint, code, to: station }
     : null;
   const audio = params.get("audio") === "1";
@@ -5352,21 +5392,27 @@ const sizeOf = (bytes) =>
 // the upload script the request link named (`share.upload`), on a thread of its own; this
 // follows `status.upload` until it is done. Email stays the way round when it fails.
 async function sendByUpload() {
-  if (!uploadTarget) return;
+  const target = uploadDestination();
+  if (!target) return;
   const note = $("share-note");
   const button = $("btn-share-upload");
   const station = $("share-station").value.trim().toUpperCase();
   const hours = Number($("share-hours").value) || 3;
   const audio = $("share-audio").checked;
-  const to = uploadTarget.to || "them";
+  const to = target.to || "the upload folder";
+  if (!target.to) {
+    // typed in, not from a link: kept for next time
+    remember(UPLOAD_URL_KEY, target.endpoint);
+    remember(UPLOAD_CODE_KEY, target.code);
+  }
   button.disabled = true;
   note.textContent = "Writing the zip…";
   try {
     const prepared = await call("share.prepare", { hours, remote: station || null, audio });
     await call("share.upload", {
       name: prepared.name,
-      endpoint: uploadTarget.endpoint,
-      code: uploadTarget.code,
+      endpoint: target.endpoint,
+      code: target.code,
       note: `${prepared.sessions} recorded session${prepared.sessions === 1 ? "" : "s"} from the last ${hours} h${station ? ` with ${station}` : ""}${audio ? ", with the audio" : ""}.`,
     });
     const bar = $("share-upload-bar");
@@ -5381,7 +5427,7 @@ async function sendByUpload() {
       label.textContent = `${sizeOf(upload.sent || 0)} of ${sizeOf(total)}`;
       if (upload.state === "done") {
         bar.value = 1;
-        note.textContent = `Sent ✓ — ${prepared.name} (${sizeOf(prepared.bytes)}) is in ${upload.to || to}'s upload folder, and they have been told.`;
+        note.textContent = `Sent ✓ — ${prepared.name} (${sizeOf(prepared.bytes)}) is in ${upload.to ? `${upload.to}'s` : "the"} upload folder, and ${upload.to ? "they have" : "its owner has"} been told.`;
         log(`files sent to ${upload.to || to}: ${prepared.name}, ${sizeOf(prepared.bytes)}`, "info", "share");
         return;
       }
@@ -5408,6 +5454,14 @@ function wireShare() {
   $("share-mode").addEventListener("change", applyShareMode);
   $("btn-share").addEventListener("click", prepareShare);
   $("btn-share-upload").addEventListener("click", sendByUpload);
+  for (const id of ["share-upload-url", "share-upload-code"]) {
+    $(id).addEventListener("input", updateUploadButton);
+  }
+  // this station's own code is kept as soon as it is whole, so a trip to *ask* and back keeps it
+  $("share-upload-code").addEventListener("input", () => {
+    const code = $("share-upload-code").value.trim();
+    if (shareMode() === "send" && !uploadTarget && UPLOAD_CODE.test(code)) remember(UPLOAD_CODE_KEY, code);
+  });
   $("share-form").addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeShareForm();
   });
