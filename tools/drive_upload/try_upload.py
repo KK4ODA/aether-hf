@@ -31,7 +31,22 @@ def ask(endpoint: str, payload: dict[str, object]) -> dict[str, object]:
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:
-        answer: dict[str, object] = json.loads(response.read().decode())
+        text = response.read().decode(errors="replace")
+        where = response.geturl()
+    try:
+        answer: dict[str, object] = json.loads(text)
+    except json.JSONDecodeError:
+        # a web page, not the script's answer: a sign-in page (the deployment is not open to
+        # Anyone), Google's "not found" (a wrong address, or the /dev one), or an error page
+        title = text.split("<title>", 1)[1].split("</title>", 1)[0] if "<title>" in text else ""
+        sys.exit(
+            f"The address answered with a web page, not the upload script: {title!r}\n"
+            f"  ended at {where}\n"
+            "  Open the address in a browser: it should show "
+            '{"ok":true,"service":"aether-hf upload",...}.\n'
+            "  If it asks you to sign in or says you need access, the deployment is not "
+            "'Who has access: Anyone'."
+        )
     if answer.get("ok") is not True:
         sys.exit(f"The script refused: {answer.get('error')}")
     return answer
