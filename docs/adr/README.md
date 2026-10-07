@@ -55,3 +55,4 @@ context → decision → alternatives considered → consequences.
 | [0048](0048-an-acknowledgement-is-an-acceptance.md) | A caller that reads an acknowledgement of its own session has been accepted | accepted |
 | [0049](0049-a-frame-stands-on-two-clean-blocks.md) | A tone frame stands on two clean sync blocks | accepted |
 | [0050](0050-debug-mode.md) | Debug mode sends the host program's sessions to the project | accepted |
+| [0051](0051-a-connection-waits-for-a-scanning-host-to-listen.md) | A connection the station answered waits for a scanning host (RMS Trimode) to be listening again before its CONNECTED is sent | accepted |
