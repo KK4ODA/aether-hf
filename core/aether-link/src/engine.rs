@@ -31,8 +31,8 @@
 
 use crate::{
     frames::{
-        CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind,
-        MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
+        CAP_BANDWIDTH_MASK, CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader,
+        DataKind, MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
         control_flags, data_capacity, decode_data, encode_data, in_window, pack_callsign,
         seq_after, seq_distance,
     },
@@ -282,6 +282,9 @@ pub struct LinkStats {
     /// Acknowledgements that took the turn offered, this station's burst after them
     /// (ADR-0047).
     pub turns_taken: usize,
+    /// Calls this station took as accepted from an acknowledgement of its own session, the
+    /// acceptance itself not read (ADR-0048).
+    pub acceptances_inferred: usize,
 }
 
 /// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
@@ -2839,8 +2842,13 @@ impl LinkEngine {
             }
             return;
         };
-        if matches!(self.state, State::Idle | State::Connecting) || control.session != self.session
-        {
+        if self.state == State::Connecting {
+            if control.kind == ControlKind::Ack && control.session == self.session {
+                self.accepted_unread(frame, &control);
+            }
+            return;
+        }
+        if self.state == State::Idle || control.session != self.session {
             return;
         }
         self.last_peer_frame = self.now;
@@ -3242,6 +3250,55 @@ impl LinkEngine {
             self.send_burst();
         } else {
             self.send_poll(); // confirms the handshake and fetches the first acknowledgement
+        }
+    }
+
+    /// A caller that reads an acknowledgement of its own session has been accepted: the
+    /// called station takes the session number only from a request it accepted, and answers
+    /// the tries it cannot read with acknowledgements (ADR-0016). WC4Y's call of 2026-10-05
+    /// read one of those while all four acceptances were lost, and kept calling until it
+    /// gave up (ADR-0048).
+    ///
+    /// The acceptance's body says bandwidth, link protocol and capabilities; an
+    /// acknowledgement says the first two — a station accepts only a request in its own
+    /// bandwidth and protocol. Capabilities are settled only when this station offered none
+    /// beyond the bandwidth: what the two agree is then nothing, whatever the other offered.
+    /// A caller that offered compression keeps calling for the acceptance itself.
+    fn accepted_unread<F: SoftFrame>(&mut self, frame: &F, control: &ControlFrame) {
+        if self.config.capabilities & !CAP_BANDWIDTH_MASK != 0 {
+            return;
+        }
+        self.disarm(Timer::Connect);
+        self.peer_capabilities = self.config.capabilities;
+        self.state = State::Connected;
+        self.role = Role::Iss;
+        self.caller = true;
+        self.last_peer_frame = self.now;
+        self.peer_floor = frame.floor();
+        self.heard_peer_db = Some(frame.snr_db());
+        self.arm(Timer::Link, self.link_timeout());
+        self.stats.acceptances_inferred += 1;
+        self.actions.push(Action::Event {
+            name: "accepted",
+            detail: format!(
+                "{}: its acceptance was not read; an acknowledgement of session {} was",
+                self.remote_call, self.session
+            ),
+        });
+        let detail = format!("{} (iss)", self.remote_call);
+        self.actions.push(Action::Event {
+            name: "connected",
+            detail,
+        });
+        self.rate.seed(frame.snr_db(), self.peer_floor);
+        self.recommended = match control.snr_db {
+            Some(heard) => self.config.initial_mode.max(self.rate.first_mode(heard)),
+            None => self.config.initial_mode,
+        };
+        if self.has_work() {
+            self.send_burst();
+        } else {
+            self.send_poll();
         }
     }
 

@@ -208,6 +208,68 @@ def test_a_repeated_acceptance_says_how_its_request_arrived(timing: PhyTiming) -
     assert first[0] == fresh.first_mode(18.0), first
 
 
+def _acceptances_lost(timing: PhyTiming, capabilities: int) -> tuple[TwoStationSim, LinkEngine]:
+    """WC4Y's call of 2026-10-05 (ADR-0048): every acceptance lost on the way to the caller,
+    and every try after the first arriving unreadable — so the called station, connected,
+    answers them with acknowledgements of the session, which the caller reads."""
+    config = LinkConfig(capabilities=capabilities)
+    a = LinkEngine("W4ODA", timing, config, seed=1)
+    b = LinkEngine("KK4XYZ", timing, config, seed=2)
+    requests: list[float] = []
+
+    def unreadable_after_the_first(frame: TxFrame) -> float:
+        if frame.container is not Container.DATA:
+            return 0.0
+        header, _ = decode_data(frame.payload)
+        if header.kind is not DataKind.CONNECT_REQ:
+            return 0.0
+        requests.append(0.0)
+        return 0.0 if len(requests) == 1 else -40.0
+
+    def acceptance_unheard(rx: int, container: Container, t0: float) -> bool:
+        # the caller hears no DATA frame at all: in this session the acceptances are all
+        return rx == 0 and container is Container.DATA
+
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_db=15.0,
+        seed=31,
+        frame_snr_offset=unreadable_after_the_first,
+        unheard=acceptance_unheard,
+    )
+    return sim, a
+
+
+def test_an_acknowledgement_of_the_callers_session_is_its_acceptance(timing: PhyTiming) -> None:
+    """A caller that reads an acknowledgement of its own session has been accepted: only a
+    station that accepted the request takes its session number. WC4Y read one such
+    acknowledgement while all four of KK4ODA-1's acceptances were lost, kept calling, and gave
+    up (ADR-0048). It offered nothing beyond its bandwidth, so the acceptance it missed held
+    nothing it did not know."""
+    sim, a = _acceptances_lost(timing, with_bandwidth(0, 2300))
+    message = bytes(range(256)) * 2
+    a.connect("KK4XYZ")
+    a.send(message)
+    a.disconnect()
+    sim.run(until=400)
+    assert a.stats.acceptances_inferred == 1, a.stats
+    assert any(e.startswith("accepted:KK4XYZ") for e in sim.events(0)), sim.events(0)
+    assert sim.delivered(1) == message
+    assert a.peer_capabilities == a.cfg.capabilities
+
+
+def test_a_caller_that_offered_compression_waits_for_the_acceptance(timing: PhyTiming) -> None:
+    """Compression is used only when both offer it, and only the acceptance says whether the
+    other did: a caller that offered it does not take an acknowledgement for the acceptance."""
+    sim, a = _acceptances_lost(timing, with_bandwidth(CAP_COMPRESSION, 2300))
+    a.connect("KK4XYZ")
+    a.send(bytes(100))
+    sim.run(until=400)
+    assert a.stats.acceptances_inferred == 0, a.stats
+    assert sim.delivered(1) == b""
+
+
 def test_a_request_heard_again_is_answered_and_nothing_else(timing: PhyTiming) -> None:
     """The acceptance again is the whole answer to a request heard again. The request had also
     armed an acknowledgement, which went out a burst's quiet after it — over the caller's first
