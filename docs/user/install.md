@@ -131,6 +131,14 @@ kept; the updates window then says there is no stable release yet.) A stable ins
 is never offered a beta or a nightly. *Help > Check for updates…*, or *Check for Updates* on
 the panel's Help / About tab, asks now, on whatever the setting says at that moment.
 
+**Update required.** Two stations connect only when they run the same *link protocol*,
+the rules their modems speak on the air. Most releases keep it. A release that changes it
+says so: its notes open with *Update required*, and the updates window titles the offer the
+same way. Beta 85 is link protocol 7 and does not connect to beta 84 or earlier. Update
+before your next contact, and ask the stations you work with to do the same. A call from, or
+an answer to, a station on another protocol is not taken as a contact: the panel says which
+of the two needs to update.
+
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
 for you, *Help > Restore the previous version…* goes back without a network. When a
