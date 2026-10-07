@@ -4,17 +4,26 @@
 //! kept as `aetherd.prev.log` — "I restarted it and it came good" is the commonest way a fault
 //! is reported. One generation was not enough: ND1J's log from a Saturday night was asked for
 //! on the Monday, and two restarts later only Monday's runs were left. So every run's log is
-//! also kept under `logs/`, named for when the run began, and the newest [`KEEP`] stay.
+//! also kept under `logs/`, named for when the run began. Ten runs were kept at first, and
+//! that was not enough either: every beta update restarts the daemon, and when WC4Y's
+//! sessions of 2026-10-05 were asked about two days later the evening's log was gone. Now a
+//! run's log stays for [`KEEP_DAYS`] days, with the newest [`KEEP_AT_LEAST`] kept whatever
+//! their age and no more than [`KEEP_AT_MOST`] in all.
 
 use std::path::{Path, PathBuf};
 
-/// How many earlier runs' logs are kept in `logs/`.
-pub const KEEP: usize = 10;
+/// How many days an earlier run's log is kept in `logs/`.
+pub const KEEP_DAYS: u64 = 30;
+/// The newest runs kept whatever their age: a station started now and then keeps its last few.
+pub const KEEP_AT_LEAST: usize = 10;
+/// The most runs kept whatever their age, so a daemon restarting in a loop cannot fill the disk.
+pub const KEEP_AT_MOST: usize = 500;
 
 /// Set the last run's log aside before a new run writes `log` from scratch: a dated copy in
-/// `logs/` beside it, and `aetherd.prev.log` as before. Older dated copies beyond `keep` go.
-/// Every step is best effort — a log that cannot be kept is never a reason not to start.
-pub fn set_aside(log: &Path, keep: usize) {
+/// `logs/` beside it, and `aetherd.prev.log` as before. Dated copies older than [`KEEP_DAYS`]
+/// go ([`prune`]). Every step is best effort — a log that cannot be kept is never a reason not
+/// to start.
+pub fn set_aside(log: &Path, now: std::time::SystemTime) {
     if let Ok(meta) = std::fs::metadata(log) {
         let dir = runs_dir(log);
         if std::fs::create_dir_all(&dir).is_ok() {
@@ -28,7 +37,7 @@ pub fn set_aside(log: &Path, keep: usize) {
                 None => format!("aetherd-{}.log", stamp(meta.modified().ok())),
             };
             let _ = std::fs::copy(log, unique(&dir.join(name)));
-            prune(&dir, keep);
+            prune(&dir, now);
         }
     }
     let _ = std::fs::rename(log, previous(log));
@@ -101,8 +110,11 @@ fn unique(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Keep the newest `keep` dated logs: the names sort by time.
-fn prune(dir: &Path, keep: usize) {
+/// Remove the dated logs that began more than [`KEEP_DAYS`] before `now`, keeping the newest
+/// [`KEEP_AT_LEAST`] whatever their age, and the oldest beyond [`KEEP_AT_MOST`] whatever theirs.
+/// A run's age is its name's start time — the names sort by time — or, for a log named
+/// `unknown`, its last write.
+fn prune(dir: &Path, now: std::time::SystemTime) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -121,9 +133,28 @@ fn prune(dir: &Path, keep: usize) {
         })
         .collect();
     runs.sort();
-    let excess = runs.len().saturating_sub(keep);
-    for old in &runs[..excess] {
-        let _ = std::fs::remove_file(old);
+    let cutoff = now
+        .checked_sub(std::time::Duration::from_secs(KEEP_DAYS * 86_400))
+        .map(|at| format!("aetherd-{}", stamp(Some(at))));
+    let old = |path: &PathBuf| {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name.starts_with("aetherd-unknown") {
+            let written = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            return written
+                .and_then(|at| now.duration_since(at).ok())
+                .is_some_and(|age| age.as_secs() > KEEP_DAYS * 86_400);
+        }
+        cutoff.as_deref().is_some_and(|cut| name < cut)
+    };
+    let protected = runs.len().saturating_sub(KEEP_AT_LEAST);
+    let over = runs.len().saturating_sub(KEEP_AT_MOST);
+    for (i, path) in runs.iter().enumerate() {
+        if i < over || (i < protected && old(path)) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -144,7 +175,7 @@ mod tests {
         let log = dir.join("aetherd.log");
         let run = "2026-10-04T21:32:27.810Z info  daemon: aetherd starting\n";
         std::fs::write(&log, run).expect("write");
-        set_aside(&log, KEEP);
+        set_aside(&log, std::time::SystemTime::now());
         assert!(!log.exists(), "the new run starts from a clean file");
         assert_eq!(std::fs::read_to_string(previous(&log)).expect("prev"), run);
         let kept: Vec<_> = std::fs::read_dir(runs_dir(&log))
@@ -162,31 +193,78 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(kept[0].path()).expect("dated"), run);
         // a start with no log before it keeps nothing and fails nothing
-        set_aside(&log, KEEP);
+        set_aside(&log, std::time::SystemTime::now());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn the_newest_runs_are_kept_and_the_oldest_go() {
-        let dir = scratch("pruned");
-        let runs = runs_dir(&dir.join("aetherd.log"));
-        std::fs::create_dir_all(&runs).expect("logs/");
-        for day in 10..25 {
-            std::fs::write(runs.join(format!("aetherd-202609{day}-120000.log")), "x")
-                .expect("write");
-        }
-        // not ours: left alone
-        std::fs::write(runs.join("notes.txt"), "mine").expect("write");
-        prune(&runs, KEEP);
-        let mut left: Vec<String> = std::fs::read_dir(&runs)
+    fn left_in(runs: &Path) -> Vec<String> {
+        let mut left: Vec<String> = std::fs::read_dir(runs)
             .expect("logs/")
             .filter_map(Result::ok)
             .filter_map(|e| e.file_name().into_string().ok())
             .collect();
         left.sort();
-        assert_eq!(left.len(), KEEP + 1, "{left:?}");
-        assert_eq!(left[0], "aetherd-20260915-120000.log");
+        left
+    }
+
+    /// 2026-10-07 12:00:00 UTC.
+    fn october_7() -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_791_374_400)
+    }
+
+    #[test]
+    fn a_months_runs_are_kept_and_older_ones_go() {
+        // WC4Y's evening of 2026-10-05 was asked about two days and a dozen restarts later
+        let dir = scratch("pruned");
+        let runs = runs_dir(&dir.join("aetherd.log"));
+        std::fs::create_dir_all(&runs).expect("logs/");
+        // two runs a day from 2026-08-29 to 2026-10-07
+        for day in 0..40u64 {
+            let at = october_7() - std::time::Duration::from_secs((39 - day) * 86_400);
+            for hour in ["010000", "130000"] {
+                let date = &stamp(Some(at))[..8];
+                std::fs::write(runs.join(format!("aetherd-{date}-{hour}.log")), "x")
+                    .expect("write");
+            }
+        }
+        // not ours: left alone
+        std::fs::write(runs.join("notes.txt"), "mine").expect("write");
+        prune(&runs, october_7());
+        let left = left_in(&runs);
         assert!(left.contains(&"notes.txt".to_owned()));
+        // 30 days back from noon on the 7th: the 7th of September at 13:00 stays, 01:00 goes
+        assert_eq!(left[0], "aetherd-20260907-130000.log", "{left:?}");
+        assert!(left.contains(&"aetherd-20261005-010000.log".to_owned()));
+        assert_eq!(left.len(), 2 * 30 + 1 + 1, "{left:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_last_few_runs_stay_whatever_their_age_and_a_loop_cannot_fill_the_disk() {
+        let dir = scratch("bounds");
+        let runs = runs_dir(&dir.join("aetherd.log"));
+        std::fs::create_dir_all(&runs).expect("logs/");
+        // a station last started in the spring keeps its last runs
+        for day in 10..25 {
+            std::fs::write(runs.join(format!("aetherd-202604{day}-120000.log")), "x")
+                .expect("write");
+        }
+        prune(&runs, october_7());
+        let left = left_in(&runs);
+        assert_eq!(left.len(), KEEP_AT_LEAST, "{left:?}");
+        assert_eq!(left[0], "aetherd-20260415-120000.log");
+        // a daemon restarting in a loop today is held to the most kept
+        for n in 0..(KEEP_AT_MOST + 20) {
+            std::fs::write(
+                runs.join(format!("aetherd-20261007-{:02}{:02}00.log", n / 60, n % 60)),
+                "x",
+            )
+            .expect("write");
+        }
+        prune(&runs, october_7());
+        let left = left_in(&runs);
+        assert_eq!(left.len(), KEEP_AT_MOST, "{}", left.len());
+        assert!(left.iter().all(|n| n.starts_with("aetherd-20261007")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -208,7 +286,7 @@ mod tests {
         let log = dir.join("aetherd.log");
         std::fs::write(&log, "thread 'main' panicked\n").expect("write");
         assert_eq!(first_stamp(&log), None);
-        set_aside(&log, KEEP);
+        set_aside(&log, std::time::SystemTime::now());
         let name = std::fs::read_dir(runs_dir(&log))
             .expect("logs/")
             .filter_map(Result::ok)
