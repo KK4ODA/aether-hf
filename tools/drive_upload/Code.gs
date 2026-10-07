@@ -28,9 +28,13 @@ const UPLOADS_PER_CODE = 3;
 /** The largest file accepted, bytes: a day of recordings with their audio is well under it. */
 const MAX_BYTES = 400 * 1024 * 1024;
 
-/** Uploads and bytes accepted a day (UTC), all stations together: the bound on a public address. */
-const DAILY_UPLOADS = 20;
-const DAILY_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * Uploads and bytes accepted a day (UTC), all stations together: the bound on a public address.
+ * Debug mode sends every session a host program runs, about 6 MB a minute of audio, so a few
+ * testers through a gateway send dozens a day. Keep DAILY_BYTES under the Drive's free space.
+ */
+const DAILY_UPLOADS = 80;
+const DAILY_BYTES = 8 * 1024 * 1024 * 1024;
 
 const PROPS = PropertiesService.getScriptProperties();
 
@@ -187,7 +191,10 @@ function finish(asked) {
     }
     const size = file.getSize();
     const note = String(asked.note || '').slice(0, 2000);
-    MailApp.sendEmail(
+    // the file is in the folder whatever the mail does: Apps Script sends 100 emails a day
+    // from a personal account, and a refusal here must not make the station send it again
+    try {
+      MailApp.sendEmail(
         Session.getEffectiveUser().getEmail(),
         'Aether HF files from ' + safe(asked.callsign) + ' (' + Math.round(size / 1024) + ' kB)',
         safe(asked.callsign) + ' sent ' + file.getName() + ', ' + size + ' bytes' +
@@ -196,6 +203,9 @@ function finish(asked) {
             file.getUrl() + '\n\n' +
             (known ? 'Code ' + code + ' (' + known.station + ') has ' + known.left + ' upload(s) left.\n' : '') +
             'Today: ' + dayUse().uploads + ' of ' + DAILY_UPLOADS + ' uploads.');
+    } catch (mailError) {
+      console.warn('no email for ' + file.getName() + ': ' + mailError);
+    }
     return {ok: true, link: file.getUrl()};
   } finally {
     lock.releaseLock();

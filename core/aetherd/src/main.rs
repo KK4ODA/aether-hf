@@ -291,6 +291,8 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
+    say_debug_mode(&config, &mut daemon);
+
     let mut audio = match &args.channel {
         Some(address) => harness_channel(address, &config, &mut daemon)?,
         None => sound(&config, args.dry_run, sim.as_ref(), &mut daemon)?,
@@ -493,6 +495,7 @@ fn station_config(
         answer_only: config.radio.answer_only,
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
+        record_host_sessions: config.record.send_to_project,
         record_notes: config.record.notes.clone(),
         record_tx_audio: config.record.tx_audio,
         playback_lead_s: DEVICE_LATENCY_S,
@@ -1389,6 +1392,120 @@ fn report_frames(
         }
     }
     note_sessions(station, Some(control), daemon);
+    debug_uploads(station, control, daemon);
+}
+
+/// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
+/// every start, as the panel does once on screen.
+fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
+    if config.record.send_to_project {
+        daemon.log.record(
+            Level::Info,
+            "debug",
+            "debug mode is on: every session a host program runs is recorded, and its files — \
+             the recording with its audio, the logs, the settings without their secrets — go to \
+             the Aether project a minute after it ends ([record] send_to_project)",
+            "Idle",
+        );
+    }
+}
+
+/// Debug mode (ADR-0050): the host program's sessions that ended go to the Aether project,
+/// one zip at a time, while the station is idle. What happened is said in the log, to the
+/// clients too: an operator should see their files go.
+fn debug_uploads(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+) {
+    let now = unix_ms_now();
+    let state = state_name(station);
+    let say = |daemon: &mut DaemonState, level: Level, detail: &str| {
+        daemon.log.record(level, "debug", detail, &state);
+        control.publish(&Event::new(
+            "log",
+            json!({ "name": "debug", "detail": detail, "state": state }),
+        ));
+    };
+    if !daemon.config.record.send_to_project && !daemon.debug.waiting.is_empty() {
+        let kept = daemon.debug.waiting.len();
+        daemon.debug.clear();
+        say(
+            daemon,
+            Level::Info,
+            &format!(
+                "debug mode turned off: {kept} session{} kept on this computer",
+                if kept == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    if daemon.debug.sending() {
+        let progress = daemon.upload.progress();
+        match progress.state {
+            "done" => {
+                let n = daemon.debug.sending.len();
+                daemon.debug.finished(None, now);
+                say(
+                    daemon,
+                    Level::Info,
+                    &format!(
+                        "sent {} ({} bytes, {n} session{}) to the Aether project",
+                        progress.name.unwrap_or_default(),
+                        progress.total,
+                        if n == 1 { "" } else { "s" }
+                    ),
+                );
+            }
+            "failed" => {
+                let error = progress.error.unwrap_or_else(|| "it failed".into());
+                let left = daemon.debug.finished(Some(error.clone()), now);
+                let detail = if left.is_empty() {
+                    format!("not sent to the Aether project: {error} It is tried again later.")
+                } else {
+                    format!(
+                        "not sent to the Aether project after {} tries: {error} The files of \
+                         the session{} with {} stay in the recordings folder.",
+                        aetherd::debug::MAX_TRIES,
+                        if left.len() == 1 { "" } else { "s" },
+                        left.iter()
+                            .map(|p| p.remote.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                say(daemon, Level::Warn, &detail);
+            }
+            _ => {}
+        }
+        return;
+    }
+    let idle = station.state() == aether_link::State::Idle && !station.transmitting();
+    if !daemon.config.record.send_to_project || !daemon.debug.due(now, idle, daemon.upload.busy()) {
+        return;
+    }
+    let pending = daemon.debug.take();
+    match aetherd::control::methods::start_debug_upload(station, daemon, &pending) {
+        Ok(name) => {
+            let with: Vec<&str> = pending.iter().map(|p| p.remote.as_str()).collect();
+            say(
+                daemon,
+                Level::Info,
+                &format!(
+                    "sending the session{} with {} to the Aether project as {name}",
+                    if pending.len() == 1 { "" } else { "s" },
+                    with.join(", ")
+                ),
+            );
+        }
+        Err(error) => {
+            daemon.debug.finished(Some(error.clone()), now);
+            say(
+                daemon,
+                Level::Warn,
+                &format!("not sent to the Aether project: {error}"),
+            );
+        }
+    }
 }
 
 /// A session that ended joins the history, which is written at once — sessions end rarely
@@ -1410,6 +1527,30 @@ fn note_sessions(
                 "session",
                 serde_json::to_value(&session).unwrap_or(serde_json::Value::Null),
             ));
+        }
+        // debug mode (ADR-0050): a host program's session, recorded, goes to the project
+        if daemon.config.record.send_to_project
+            && session.host
+            && !session.test
+            && let Some(recording) = session.recording.clone()
+        {
+            let pending = aetherd::debug::Pending {
+                recording,
+                remote: session.remote.clone(),
+                started_ms: session.started_ms,
+            };
+            if let Some(dropped) = daemon.debug.session_ended(pending, now_ms) {
+                daemon.log.record(
+                    Level::Warn,
+                    "debug",
+                    &format!(
+                        "too many sessions waiting to go to the Aether project: the one with {} \
+                         stays in the recordings folder",
+                        dropped.remote
+                    ),
+                    &state_name(station),
+                );
+            }
         }
         daemon.sessions.add(session);
     }

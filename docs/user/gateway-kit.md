@@ -115,7 +115,14 @@ log_permitted = true      # log the basis of every transmission, not only the re
 
 [record]
 auto = true               # every session as a WAV and a sidecar
+send_to_project = true    # debug mode (ADR-0050): host-program sessions go to the project
 ```
+
+**Debug mode** is on by default during the field trials: a minute after each session a host
+program (RMS Trimode, BPQ32, Pat) runs, its recording — the audio, from which what was sent
+can be decoded — the logs and the settings without their secrets are uploaded to the Aether
+project, while the station is idle. The daemon says so in its log at every start. Set
+`send_to_project = false` to keep everything on the gateway.
 
 **Nothing is transmitted until `[regulatory]` names the rules, the control and the licence
 class** (ADR-0018, [fcc-regulatory-controls.md](fcc-regulatory-controls.md)). Under

@@ -114,6 +114,9 @@ pub struct StationConfig {
     /// Record every session on its own: start when one connects, stop when it ends. For a
     /// gateway, which nobody is watching, and for field validation, which wants all of them.
     pub record_auto: bool,
+    /// Debug mode (ADR-0050): record every session a host program runs, whatever
+    /// `record_auto` says — the daemon sends those recordings to the project.
+    pub record_host_sessions: bool,
     /// What every recording that starts on its own should say about the station: the band,
     /// the antenna, whatever the operator would have written down had they been there.
     pub record_notes: String,
@@ -157,6 +160,7 @@ impl Default for StationConfig {
             cw_id: None,
             record_dir: None,
             record_auto: false,
+            record_host_sessions: false,
             record_notes: String::new(),
             cw_id_interval_s: 600.0,
             operator: crate::config::OperatorSection::default(),
@@ -614,6 +618,12 @@ struct SessionNotes {
     heard_there_db: Option<f64>,
     top_rung_sent: Option<usize>,
     top_rung_heard: Option<usize>,
+    /// A host program was attached when it came up: its session, as far as the station can
+    /// tell (debug mode sends those, ADR-0050).
+    host: bool,
+    /// The recording running is the session's own, started when it came up: it ends with
+    /// the session, though the setting or the host program that started it has gone since.
+    recorded: bool,
 }
 
 /// The most finished sessions held for the daemon between two calls of
@@ -1691,6 +1701,7 @@ impl<P: Ptt> Station<P> {
         self.ptt.max_key_s = config.radio.max_key_s;
         self.busy.set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
+        self.config.record_host_sessions = config.record.send_to_project;
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
         self.set_regulatory(config.regulatory.settings());
@@ -2923,6 +2934,7 @@ impl<P: Ptt> Station<P> {
             top_rung_sent: notes.top_rung_sent,
             top_rung_heard: notes.top_rung_heard,
             test: self.test_running(),
+            host: notes.host,
             recording: self.recording().and_then(|(path, _)| {
                 path.file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
@@ -2965,6 +2977,7 @@ impl<P: Ptt> Station<P> {
             caller: detail.ends_with("(iss)"),
             frequency_hz: self.frequency.value,
             acked_at_start: self.engine.stats.bytes_acked,
+            host: self.host_attached(),
             ..SessionNotes::default()
         });
         self.moved.clear();
@@ -3024,6 +3037,7 @@ impl<P: Ptt> Station<P> {
                     // moment one comes up and thrown away when it ends: their state is the
                     // stream's history, and carrying it into the next session would make the
                     // first bytes undecodable.
+                    let session_recorded = self.session_notes.as_ref().is_some_and(|n| n.recorded);
                     if name == "connected" {
                         self.session_began(&detail);
                         connected = true;
@@ -3034,16 +3048,25 @@ impl<P: Ptt> Station<P> {
                     // a session is the unit of a field recording: one file per session,
                     // started when it comes up and closed when it ends — unless a Test
                     // session is recording itself, probe to disconnect
-                    if self.config.record_auto && !self.test_running() {
-                        if name == "connected" {
+                    let record_this = self.config.record_auto
+                        || (self.config.record_host_sessions && self.host_attached());
+                    if (record_this || session_recorded) && !self.test_running() {
+                        if name == "connected" && record_this {
                             // a note given for the next recording wins; otherwise the
                             // standing one, which is what an unattended station has
                             let notes = self.record_notes.take().or_else(|| {
                                 (!self.config.record_notes.is_empty())
                                     .then(|| self.config.record_notes.clone())
                             });
-                            if let Err(error) = self.start_recording(None, notes.as_deref()) {
-                                self.note("error", &format!("could not record: {error}"));
+                            match self.start_recording(None, notes.as_deref()) {
+                                Ok(_) => {
+                                    if let Some(notes) = &mut self.session_notes {
+                                        notes.recorded = true;
+                                    }
+                                }
+                                Err(error) => {
+                                    self.note("error", &format!("could not record: {error}"));
+                                }
                             }
                         } else if name == "disconnected" {
                             self.stop_recording();
@@ -5625,6 +5648,49 @@ mod tests {
             standing[0]["session"]["frequency_hz"].is_null(),
             "a keying line cannot know the frequency, and must not pretend to"
         );
+    }
+
+    #[test]
+    fn debug_mode_records_the_host_programs_sessions_and_only_those() {
+        // ADR-0050: with a host program attached the session is recorded and marked as the
+        // program's, which is what the daemon sends; without one, nothing is recorded
+        let dir = std::env::temp_dir().join(format!("aether-debug-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.set_recording(Some(dir.clone()), false, "");
+        air.b.config.record_host_sessions = true;
+        let program = HostPresence {
+            attached: true,
+            listening: true,
+            chat: false,
+        };
+        let message = b"Winlink by way of Aether.";
+        for attached in [true, false] {
+            air.b.set_host(if attached {
+                program
+            } else {
+                HostPresence::default()
+            });
+            air.a.connect("KK4XYZ").expect("idle");
+            air.a.send(message);
+            air.run(90.0, |a, _| a.engine().stats.bytes_acked >= message.len());
+            assert_eq!(
+                air.b.recording().is_some(),
+                attached,
+                "recording with a host program attached: {attached}"
+            );
+            air.a.disconnect();
+            air.run(60.0, |a, b| {
+                a.state() == State::Idle && b.state() == State::Idle
+            });
+            assert!(air.b.recording().is_none());
+            let finished = air.b.take_finished_sessions();
+            assert_eq!(finished.len(), 1);
+            assert_eq!(finished[0].host, attached);
+            assert_eq!(finished[0].recording.is_some(), attached);
+            air.a.reset_counters();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -32,6 +32,12 @@ use std::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// The Aether project's upload script (`tools/drive_upload/`): where debug mode sends the
+/// sessions a host program ran, and what the panel's *Send my files to the Aether project*
+/// uses (`PROJECT_UPLOAD_URL` in `app/ui/app.js`, held to this by a test). Public: the script
+/// bounds what it takes a day.
+pub const PROJECT_ENDPOINT: &str = "https://script.google.com/macros/s/AKfycbw5KhON9utE7jinNxv4g0ndw3k9wyw9miUGAZwPqLhoqh2tNZDBst8CiewQc5Q87avCIg/exec";
+
 /// The piece sent at a time: a multiple of 256 KiB, as the resumable protocol requires of every
 /// piece but the last. Small enough that a dropped connection costs little.
 pub const CHUNK: usize = 8 * 1024 * 1024;
@@ -186,6 +192,10 @@ pub struct Job {
     pub note: String,
     /// The sending station's callsign.
     pub callsign: String,
+    /// The zip's contents, when it is still to be written: debug mode writes it on the
+    /// upload's thread, not the run loop's — a session's audio is tens of megabytes, and the
+    /// modem must not stand still while it is copied (ADR-0050). The time is the zip's.
+    pub zip: Option<(Vec<(String, crate::share::Entry)>, u64)>,
 }
 
 /// How an upload is going, as `status.upload` reports it.
@@ -256,7 +266,8 @@ impl Upload {
         std::thread::Builder::new()
             .name("upload".into())
             .spawn(move || {
-                let outcome = run(http.as_ref(), &job, &shared, Duration::from_secs(2));
+                let outcome = write(&job)
+                    .and_then(|()| run(http.as_ref(), &job, &shared, Duration::from_secs(2)));
                 if let Ok(mut progress) = shared.lock() {
                     match outcome {
                         Ok((link, to)) => {
@@ -275,6 +286,26 @@ impl Upload {
             .map(|_| ())
             .map_err(|error| format!("The upload could not start: {error}"))
     }
+}
+
+/// Write the job's zip, when it carries one to write, beside the others in `shared/`.
+///
+/// # Errors
+/// The zip could not be written.
+fn write(job: &Job) -> Result<(), String> {
+    let Some((entries, now_ms)) = &job.zip else {
+        return Ok(());
+    };
+    if let Some(dir) = job.file.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| format!("Could not write {}: {error}", job.name))?;
+    }
+    crate::share::write_zip(&job.file, entries, *now_ms)
+        .map_err(|error| format!("Could not write {}: {error}", job.name))?;
+    if let Some(dir) = job.file.parent() {
+        crate::share::prune(dir, crate::share::KEEP);
+    }
+    Ok(())
 }
 
 /// Ask the script something: a `POST` of `payload`, its answer fetched where the redirect
@@ -627,6 +658,7 @@ mod tests {
             code: "WC4Y-abc123".into(),
             note: "the Test of last night".into(),
             callsign: "W4TGA".into(),
+            zip: None,
         }
     }
 

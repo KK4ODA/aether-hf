@@ -54,3 +54,4 @@ context → decision → alternatives considered → consequences.
 | [0047](0047-the-turn-in-the-acknowledgement.md) | The turn offered at the end of a burst, taken in the acknowledgement; link protocol 7 | accepted |
 | [0048](0048-an-acknowledgement-is-an-acceptance.md) | A caller that reads an acknowledgement of its own session has been accepted | accepted |
 | [0049](0049-a-frame-stands-on-two-clean-blocks.md) | A tone frame stands on two clean sync blocks | accepted |
+| [0050](0050-debug-mode.md) | Debug mode sends the host program's sessions to the project | accepted |

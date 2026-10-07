@@ -2,14 +2,16 @@
 
 Any Aether HF station can send its logs and sessions to the project with one button: **Log**
 tab → **Send files…** → *Send my files to the Aether project* → **Send**. No email, no
-attachment, no code. A recording is uncompressed audio, about 5.8 MB a minute, so a Test
+attachment, no code. In **debug mode** (Setup step 5, on by default during the field trials,
+ADR-0050) the station does it by itself a minute after each session Winlink Express, Pat or
+VarAC runs through it. A recording is uncompressed audio, about 5.8 MB a minute, so a Test
 session's zip is past what an email carries anyway. The files land in a folder in the project
 owner's Google Drive, and the owner gets an email with a link to each one.
 
 What does it is this small script, running in the owner's Google account. Its address is built
 into the panel (`PROJECT_UPLOAD_URL` in `app/ui/app.js`) and is public; nothing secret is in the
 Aether program. What keeps a public address harmless is what the script allows: one folder, files
-it cannot read back, at most `DAILY_UPLOADS` (20) uploads and `DAILY_BYTES` (2 GB) a day, 400 MB
+it cannot read back, at most `DAILY_UPLOADS` (80) uploads and `DAILY_BYTES` (8 GB) a day, 400 MB
 a file, and an email to the owner for every one.
 
 ## Setting it up (once, about ten minutes)
@@ -71,10 +73,12 @@ A request link from beta.85–87 that names its own upload script and code still
 ## What it allows
 
 * Up to `DAILY_UPLOADS` uploads and `DAILY_BYTES` a day (UTC), and 400 MB a file (`MAX_BYTES`).
+  Debug mode (ADR-0050) sends every session a host program runs, audio included — about 6 MB
+  a minute — so watch the Drive's free space; a free Google account has 15 GB in all.
 * Each upload goes into the folder under a name with the time, the sending station and the
   zip's name, and its description says who sent it.
 * The emails come from your own account to your own account (Apps Script's daily quota is
-  100 for a personal account).
+  100 for a personal account; past it the files still arrive, without their email).
 * The script runs as you, so it can reach your Drive: anybody with the address can put a file
   into that one folder, within the limits, and nothing more. It cannot read, list or delete
   anything.

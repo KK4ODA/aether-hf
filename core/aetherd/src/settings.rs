@@ -239,6 +239,12 @@ pub const RULES: &[Rule] = &[
     },
     Rule {
         scope: Scope::Machine,
+        why: "whether this computer sends its sessions to the project is its operator's \
+              consent, given here; a profile loaded from somebody else must not change it",
+        ..rule("record.send_to_project")
+    },
+    Rule {
+        scope: Scope::Machine,
         nullable: true,
         ..rule("sim.listen")
     },

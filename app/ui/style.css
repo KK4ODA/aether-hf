@@ -2234,6 +2234,12 @@ details.fold-card > summary:hover .card-title {
   flex: 1 1 320px;
 }
 
+/* debug mode, said once: information, not a warning */
+#debug-banner {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
 /* the files for another operator: a form row over the log */
 .share-form {
   border-bottom: 1px solid var(--border);

@@ -480,6 +480,7 @@ async function refreshStatus() {
 
   $("callsign").textContent = status.callsign || "—";
   renderBandwidth(status.bandwidth);
+  renderDebug(status.debug);
   // a first run: the configuration still has the placeholder callsign, so the wizard is
   // where this panel should open — once, and only until Setup is saved
   if (!firstRunShown && status.callsign === "N0CALL") {
@@ -2464,6 +2465,7 @@ async function loadConfig() {
   select($("update-channel"), liveConfig.update?.channel ?? "stable");
   $("update-check").checked = liveConfig.update?.check !== false;
   $("record-auto").checked = liveConfig.record?.auto === true;
+  $("record-send").checked = liveConfig.record?.send_to_project !== false;
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
@@ -2528,6 +2530,7 @@ const SETTING_NAMES = {
   "regulatory.log_permitted": "automatic log",
   "record.auto": "recording",
   "record.notes": "recording notes",
+  "record.send_to_project": "debug mode",
   "host.enabled": "host programs",
   "host.bind": "host port",
   "kiss.enabled": "KISS programs",
@@ -2795,6 +2798,7 @@ function formChanges() {
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
+  changes["record.send_to_project"] = $("record-send").checked;
   changes["record.notes"] = $("record-standing").value.trim();
   changes["audio.tx_level"] = txLevel();
   changes["host.enabled"] = $("host-enabled").checked;
@@ -3666,6 +3670,57 @@ function renderMismatch(mismatch) {
 function theirsOlder(mismatch) {
   if (mismatch.theirs_protocol == null || mismatch.ours_protocol == null) return null;
   return mismatch.theirs_protocol < mismatch.ours_protocol;
+}
+
+// ── debug mode (ADR-0050) ───────────────────────────────────────────
+//
+// On by default during the field trials: the sessions a host program runs go to the project
+// with their audio. The operator is told once, on whatever tab is open, with the switch; the
+// daemon's log lines (`debug`) say each upload as it goes.
+
+const DEBUG_NOTICE_KEY = "aether.debugNoticeSeen";
+
+function debugNoticeSeen() {
+  try {
+    return localStorage.getItem(DEBUG_NOTICE_KEY) === "1";
+  } catch {
+    return debugNoticeHidden;
+  }
+}
+
+// a private window cannot remember: the notice then stays away for the page's life
+let debugNoticeHidden = false;
+
+function hideDebugNotice() {
+  debugNoticeHidden = true;
+  try {
+    localStorage.setItem(DEBUG_NOTICE_KEY, "1");
+  } catch {
+    // remembered for this page only
+  }
+  $("debug-banner").hidden = true;
+}
+
+function renderDebug(debug) {
+  $("debug-banner").hidden = !debug?.on || debugNoticeHidden || debugNoticeSeen();
+}
+
+function wireDebug() {
+  $("btn-debug-keep").addEventListener("click", hideDebugNotice);
+  $("btn-debug-off").addEventListener("click", async () => {
+    try {
+      await call("config.set", { "record.send_to_project": false });
+      // saved: the form and its baseline say so, so Setup shows nothing unsaved
+      $("record-send").checked = false;
+      if (liveConfig?.record) liveConfig.record.send_to_project = false;
+      if (setupBaseline) setupBaseline["record.send_to_project"] = false;
+      showUnsaved();
+      log("debug mode off: sessions are no longer sent to the Aether project", "info", "share");
+      hideDebugNotice();
+    } catch (error) {
+      log(error.message, true);
+    }
+  });
 }
 
 function wireMismatch() {
@@ -4679,6 +4734,7 @@ function wire() {
   }
   wireStepper();
   wireMismatch();
+  wireDebug();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
   $("radio-cwid").addEventListener("change", showCwidCap);
   $("btn-probe").addEventListener("click", async () => {

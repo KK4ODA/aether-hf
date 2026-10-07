@@ -1,0 +1,37 @@
+# As beta.88 wrote a station a host program drives, recording every session: schema 10, the
+# last before debug mode (ADR-0050).
+schema_version = 10
+callsign = "KK4ODA-10"
+
+[operator]
+grid = "EM73tv"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.158
+
+[ptt]
+kind = "cat"
+port = "COM4"
+protocol = "yaesu"
+baud = 38400
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+wait_for_clear = true
+answer_gap_ms = 500
+
+[record]
+auto = true
+notes = "40 m, dipole"
+
+[host]
+enabled = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "automatic"
+license_class = "extra"
+sideband = "usb"
