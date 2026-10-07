@@ -8,7 +8,9 @@ request meets the rules the first time.
 ## Ground rules
 
 1. **Measured, not claimed.** A change to DSP or protocol code must move a number on a
-   committed benchmark curve or add a test that would have failed before. "It sounded better
+   committed benchmark curve, or add a test or a scenario under `bench/scenarios/` (the
+   scenario harness, ADR-0042) that would have failed before. A field report becomes a
+   scenario first. "It sounded better
    on 40 m last night" is a field report (welcome — file one!), not evidence.
 2. **Tests are never relaxed.** If a threshold is wrong, change it in a pull request that
    references an ADR explaining why. Known defects are `xfail(strict=True)` with the audit
@@ -23,8 +25,11 @@ request meets the rules the first time.
    reverse-engineering proprietary modems. Host-interface compatibility with VARA is limited
    to its published command set, and Aether's air interface is its own.
 5. **What goes over the air is an ADR.** A frame layout, preamble, mode table or handshake
-   change breaks every installed station; it needs a decision record in `docs/adr/` and a
-   spec update (`python tools/make_spec.py`) before it can be reviewed.
+   change breaks every installed station; it needs a decision record in `docs/adr/`, a
+   spec update (`python tools/make_spec.py`), and a bump of `PROTOCOL_VERSION` in
+   `core/aether-link/src/frames.rs` together with the shell's `LINK_PROTOCOL` in
+   `app/src-tauri/src/update.rs` (a test holds them equal). Stations on different protocols
+   cannot connect, so its release is announced *Update required*.
 6. **Conventions**: SNR in a 3 kHz noise bandwidth; Doppler spread as ITU-R F.1487 2σ;
    waveform parameters from `model/aether_model/waveform.py`, never restated by hand.
 7. **Licensing**: by contributing you agree your work is licensed MIT OR Apache-2.0. Code
@@ -58,6 +63,7 @@ request meets the rules the first time.
   ```
   uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
   cd core && cargo test --release --workspace && cargo clippy --all-targets --all-features -- -D warnings
+  uv run python tools/session_matrix.py --tag quick   # whole sessions between two daemons (ADR-0042)
   cd app/src-tauri && cargo clippy --all-targets -- -D warnings
   ```
 - Open a pull request using the template; fill in the **benchmark delta** section for any
@@ -78,8 +84,9 @@ needed:
   [`docs/user/kiss.md`](docs/user/kiss.md) — VarAC's broadcasts, APRS clients, BPQ32's KISS
   port — none of which has been tried yet.
 * **Setup on hardware we do not have**: CM108 GPIO keying (DRA, URI and similar boards —
-  built, untested on hardware), radios whose CAT keying is untested, a Mac with a radio,
-  Linux sound-card notes for `docs/user/`.
+  built, untested on hardware), radios whose CAT keying is untested, FLRig keying
+  (`[ptt] kind = "flrig"`), VOX interfaces such as the SignaLink with Setup's *Answer gap*
+  (ADR-0036), a Mac with a radio, Linux sound-card notes for `docs/user/`.
 * **Rules for another country**: a regulatory profile beside
   `core/aetherd/data/regulatory/us-fcc-part97.json`, from the administration's published
   rules ([`docs/user/fcc-regulatory-controls.md`](docs/user/fcc-regulatory-controls.md)).
@@ -95,7 +102,12 @@ the rules above: model first, a curve for every claim.
   *Copy diagnostic bundle*), or the exact command and output for the model.
 - **On-air reports**: use the on-air template — *Contribute the last test session* on the
   Session tab opens it filled in — and, if you can, attach the session recording (48 kHz mono
-  WAV plus its sidecar) — recordings become regression tests.
+  WAV plus its sidecar) — recordings become regression tests. Say both stations' versions:
+  stations on different link protocols cannot connect.
+- **Files for the other station**: Log tab → *Send files…* writes one zip of your logs,
+  session history and sidecars; when the station that asked sent a request link with an
+  upload address, *Send to <call>* puts it straight into their folder
+  ([`tools/drive_upload/`](tools/drive_upload/README.md)).
 - **Security**: see [`SECURITY.md`](SECURITY.md).
 
 ## Code of conduct

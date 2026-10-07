@@ -1,8 +1,9 @@
 """Keyboard-to-keyboard chat on the link bench: how long a typed line takes to arrive.
 
-    python tools/bench_chat.py [--policies base,handover,request] [--bandwidth 2300,500]
-                               [--channels awgn,good,moderate,poor] [--snr -6,0,6,12]
-                               [--trials 20] [--jobs 4] [--out bench/baselines/chat_handover.csv]
+    python tools/bench_chat.py [--policies request-without-offer,request+offer]
+                               [--bandwidth 2300,500] [--channels awgn,good,moderate,poor]
+                               [--snr -6,0,6,12] [--trials 30] [--first-trial N] [--jobs 4]
+                               [--out bench/baselines/chat_handover.csv]
 
 ``bench_link.py`` measures a transfer: one station sends, the other acknowledges, and what
 matters is goodput. A keyboard-to-keyboard contact is the other shape of traffic — short
@@ -31,9 +32,10 @@ fading_pipe.csv``) with the tone floor's SNR reading capped at its class's ceili
 — ``--logistic`` and ``--no-floor-cap`` for the older pipe and uncapped readings — and a burst
 is held to the daemon's key-time limit (ADR-0017, ``--max-burst-s``).
 
-**Policies** are ``LinkConfig`` overrides by name (:data:`POLICIES`) — ``chat`` is what
-ADR-0027 adopted — and ``handover`` and ``hold``, which run what it did not adopt
-(:class:`Candidate`); ``--policy name:key=value,…`` adds one. What was measured, and what was
+**Policies** are ``LinkConfig`` overrides by name (:data:`POLICIES`) — ``request``
+(``LinkConfig.chat``, ADR-0027; in every session since ADR-0044) and ``request+offer``
+(ADR-0047, the default since protocol 7); ``base`` is the engine before ADR-0044 — and
+``handover`` and ``hold``, which run what was not adopted (:class:`Candidate`); ``--policy name:key=value,…`` adds one. What was measured, and what was
 decided, is ADR-0027.
 
 Output: one row per (policy, bandwidth, channel, SNR) to ``--out`` — sessions, lines sent,
@@ -86,7 +88,7 @@ POLICIES: dict[str, dict[str, Setting]] = {
     "request+offer": {"chat": True, "offer_turn": True},
     "request-without-offer": {"chat": True, "offer_turn": False},
 }
-"""The turn policies measured: today's (``base``); a shorter idle poll (``keepalive5``); the
+"""The turn policies measured: the engine before ADR-0044 (``base``: no turn request); a shorter idle poll (``keepalive5``); the
 sender handing the turn over as soon as its line is acknowledged (``handover``, the
 :class:`Candidate` engine); the receiving station asking for the turn unasked (``request``:
 ``LinkConfig.chat``, what ADR-0027 adopted), and the same without the idle sender's hold over

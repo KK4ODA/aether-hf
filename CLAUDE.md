@@ -146,8 +146,7 @@ other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives 
   signal's gaps are steady, a gain transient never is. `tools/floor_trace.py` replays a
   recording through the detector and lists every dip; the field notes say AGC FAST/AUTO or
   OFF (SLOW ramps slowly enough to pass the gate). Recordings made from the Session tab's
-  Record button land in `%APPDATA%ether-hf
-ecordings\` on the author's machine.
+  Record button land in `%APPDATA%\aether-hf\recordings\` on the author's machine.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
   colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the

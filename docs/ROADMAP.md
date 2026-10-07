@@ -611,7 +611,7 @@ them (beta.53, .55, .60, .61); going back across a schema is the shell's restore
 installer run, which a runner without a desktop cannot drive — and stays a release-checklist
 item in `docs/user/install.md` until it can be automated.
 
-### Phase 6 — Field validation (weeks 36–48, overlapping)
+### Phase 6 — Field validation (weeks 36–48, overlapping; in progress: P6-1 … P6-5 done, P6-6 and P6-7 open — the scenario harness, ADR-0042, is where a field report is reproduced before it is fixed)
 
 Local audio-cable tests → two stations ground-wave → NVIS → 500–2 000 km paths → RMS
 gateway trial. Every session recorded (WAV + metadata) and folded into the regression
@@ -698,7 +698,7 @@ built in the model first, and ships only with its curve on Good, Moderate and Po
 
 | Order | Item | Done when |
 |---|---|---|
-| 1 | ~~**P9-6** trustworthy benches~~ | done 2026-09-23: the floor bug fixed, the fading pipe within a fifth of the real modem at six spot checks, every curve readable at equal peak power. Open (ADR-0020 §4): the pipe decodes any redundancy version alone, where the PHY decodes a lone RV 1 or 2 at 6–10 % — so the bench cannot price a lost acknowledgement |
+| 1 | ~~**P9-6** trustworthy benches~~ | done 2026-09-23: the floor bug fixed, the fading pipe within a fifth of the real modem at six spot checks, every curve readable at equal peak power. Open (ADR-0020 §4, ADR-0043): the pipe decodes any redundancy version alone, where through the real modem RV 1 and 2 decode alone at no SNR and RV 3 only where it carries every systematic bit — so the bench cannot price a lost acknowledgement; the sender's order is now 0, 0, 2, 3 |
 | 2 | ~~**P9-7** a start that assumes a fading path~~ | done 2026-09-24 as **holding the link** (ADR-0012): the start was not the problem on the calibrated bench; the link timeout, silence and a trampled ACK were. 500 Hz from 0 dB up 30/30 on every channel, −4 dB 27–30/30 (10/30 before); 2300 Hz unchanged. Marginal paths have been on the air since (ND1J on 80 m, ≈ 0 dB one way, 2026-09-24/25; KE4QCM, control frames at −1 to −9 dB, 2026-09-25) and lost sessions two ways the fading pipe cannot show — the key watchdog cutting tone bursts (ADR-0017) and a TURN repeated over a tone-floor answer (ADR-0023). Owed: such a path with beta.68 |
 | 3 | ~~**P9-8** the tone floor~~ | done 2026-09-24 (ADR-0013, model then port): the gate passed by 7.7 and 8.5 dB on Good and Moderate (6.0 AWGN, 11.5 Poor) at 36 bit/s; 2 300 Hz sessions complete down to −14 dB on the fading pipe, where nothing below −4 did. On the air since 2026-09-24/25 in both bandwidths (ND1J): six 5.36 s tone frames outran the 30 s key watchdog until ADR-0017 (beta.58). Owed: logged rows and a replay. Open: one two-daemon run on a macOS CI runner had the receiving station acknowledge four seconds into a tone burst and trample its second frame (1 of 2 runs there; not reproduced in 6 local runs or the re-run) — CI now keeps the audio of a failed two-daemon run, which is what it takes to replay it |
 | 4 | ~~**P9-9** middle modes — **fast tones** on the 2 300 Hz air~~ | done 2026-09-24 (ADR-0014, model then port, beta.53): the floor's frame with its data at 50 and 100 Bd — 76, 112, 157 and 228 bit/s as rungs 2–5 of the wide ladder, one detector for every kind; the gate passed by 5.2 and 5.5 dB on Good and Moderate at a higher rate than BPSK ⅕, and sessions on the fading pipe run two to three times faster from −6 to −2 dB, nothing slower. On the air 2026-09-24/25 (ND1J, 80 m): rung 2 decoded 9 of 9; rung 3 (tone50-75) failed at ≈ 0 dB on the NVIS path — open (ADR-0017 §4). What was planned: the curves show the gap (tone-36 at 54 bit/s, −17.3 dB; the first OFDM rung at 197 bit/s, −5.1 dB) and a candidate that more than fills it: the tone floor's 16-FSK at 50 and 100 baud (800 and 1 600 Hz wide). Genie timing, 40 frames a point: 72, 108, 143 and 215 bit/s at −15.6, −14.7, −13.1 and −11.2 dB on AWGN; the 215 bit/s kind beats BPSK ⅕ by 6.1 / 6.3 / 5.2 / 3.7 dB on AWGN / Good / Moderate / Poor. Gate: through the detector, ≥ 3 dB over the OFDM rung it displaces at equal rate on Good and Moderate, and session throughput on the fading pipe up from −10 to 0 dB with no class worse elsewhere |
@@ -929,7 +929,8 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     `docs/user/host-programs.md`. **Tier 2, next:** the bandwidth follows the host's
     `BW500`/`BW2300` and a call in either bandwidth is answered, as VARA's *Accept 500 Hz
     connections* does (an ADR: the daemon switches its waveform at runtime while idle);
-    chat-mode turn-taking under `CHAT ON`, measured first. **Evidence first:** VarAC's
+    chat-mode turn-taking under `CHAT ON`, measured first (done: ADR-0027, then in every session,
+    ADR-0044). **Evidence first:** VarAC's
     `DRIVELEVEL` scale, `CLEANTXBUFFER`, callsigns longer than nine characters (VarAC's `-T`
     alias on an SSID), and reading the dial from a host program's Hamlib or FLRig server so the
     rules can run with a host-owned radio.
@@ -943,7 +944,7 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     program is attached; recordings replay across a move. A program that tunes through
     `rigctld` shares the radio with Aether keying there, so the rules check keeps its dial
     (`docs/user/host-programs.md`). **Measured, then built — ADR-0027:** under the host's
-    `CHAT ON` the receiving station asks for the turn
+    `CHAT ON` (in every session since ADR-0044) the receiving station asks for the turn
     (`tools/bench_chat.py`: −36 % median, −28 % p90 latency per line on the fading classes, 7 %
     less keying, no more drops; handing the turn over after each burst was faster still and lost
     four times the sessions). **Measured, proposed — ADR-0029 (its §7(2)):** a station holding
@@ -951,9 +952,8 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     acknowledgement is not acknowledged — on ADR-0027's engine the handover candidates' lost
     sessions 72 → 17 and 66 → 18 of 1 800; with ADR-0030 on master the drop run's "no response"
     10 → 2, none of the six two-sender sessions left; latency and keying unchanged. The handover
-    candidates now lose about what today's policy does and may be measured again for adoption.
-    **Built on branch `flrig-keying`, for the next release (schema 9):**
-    keying, the dial and tuning through FLRig. **Needs the author:** `DRIVELEVEL`'s scale and
+    candidates are overtaken by ADR-0047: the turn offered at the end of a burst, the default
+    since protocol 7. FLRig keying, the dial and tuning shipped in beta.70 (schema 9; item 24). **Needs the author:** `DRIVELEVEL`'s scale and
     whether VarAC sends `CLEANTXBUFFER` (a VarAC command log), gateways (BPQ32 on the bench).
 24. **From the air, the bench, and the turnaround** (2026-09-26 … 10-07, betas .70–.85). FLRig
     keying (schema 9); the host program told only of its own sessions; the devices listed off the
@@ -968,8 +968,12 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     session (ADR-0044), the answer a turnaround after a burst said to be over (ADR-0045), and the
     turn offered at the end of a burst and taken in the acknowledgement (ADR-0047, protocol 7) —
     Winlink-shaped sessions 13.5 % (40 m) and 10 % (80 m, 500 Hz) shorter on the harness, which
-    also found and fixed four receiver faults on the way. **Files by upload** (beta.85): a
+    also found and fixed four faults on the way. **Files by upload** (beta.85): a
     request link that names the asking station's upload script, and *Send to <call>* on the other
     panel (`tools/drive_upload/`). A Test on a slow path now sends the file it can carry, and its
-    ladder keeps the file's time. **Open:** a file transfer that stalls after the ladder on the
-    80 m asymmetric scenario, one run in three, with or without the offer.
+    ladder keeps the file's time. **Open, in order:** a file transfer that stalls after the
+    ladder on the 80 m asymmetric scenario, one run in three, with or without the offer; the
+    October air sessions (ND1J 10-05 and 10-06, KE4QCM's answer-gap sessions) folded into
+    `field/LOG.md` once their sidecars are in hand; per-session counters in the sidecar
+    (`field/OTA-FOLLOWUPS.md` item 4); the compressed stream's own integrity check
+    (compression stays off by default until then).

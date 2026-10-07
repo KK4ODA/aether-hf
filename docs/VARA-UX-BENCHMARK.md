@@ -96,7 +96,7 @@ appropriate for Aether.
 * **A CPU gauge** — a number that would always read low; the log's dropped-sample warning is
   the reading that matters.
 
-## 5. Since beta.14 (to beta.68)
+## 5. Since beta.14 (to beta.85)
 
 The matrix above is the snapshot of 2026-09-15. What has changed in its rows since:
 
@@ -121,6 +121,17 @@ The matrix above is the snapshot of 2026-09-15. What has changed in its rows sin
   beta.60).
 * **The panel** — redesigned in betas .60–.68, the signal card undockable into its own
   window.
+* **PTT** — FLRig and host-program keying (beta.69–.70); an *Answer gap* (ADR-0036) gives a
+  VOX-keyed station such as a SignaLink time to return to receive.
+* **Diagnostics for a report** — the Log tab's *Send files…* zips the logs and sidecars for
+  the other station, and *Send to <call>* uploads them to the asking station's Google Drive
+  (beta.85).
+* **Update notification** — a release that changes the link protocol is offered as *Update
+  required*; stations on different protocols cannot connect, and the panel says which one
+  must update.
+* **Turn-taking** — the same in every session (ADR-0044–0047): the station without the turn
+  asks for it, and the sender offers it at the end of a burst that empties its queue; a host
+  program's `CHAT ON` no longer changes it.
 
 ## 6. Found on the way
 

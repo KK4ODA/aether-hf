@@ -1009,11 +1009,13 @@
             <!-- 4 -->
             <li class="step card console-card" data-step="4">
               <div class="card-head step-head">
-                <h3 class="card-title step-title" title="Bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges"><span class="step-num">4</span>Modem settings</h3>
+                <h3 class="card-title step-title" title="Bandwidth, speed, the busy channel, the answer gap, the key limit, the Morse identifier and band edges"><span class="step-num">4</span>Modem settings</h3>
                 <details class="help-pop push-right" id="step-4-help" title="What these settings do">
                   <summary title="What these settings do" aria-label="What these settings do">?</summary>
                   <p>
-                    Both stations of a session use the same <strong>bandwidth</strong>. This is the
+                    Both stations of a session use the same <strong>bandwidth</strong>, and the same
+                    link protocol: a call across either difference brings up the warning at the top,
+                    naming who has to change. This is the
                     station's own: a host program's <em>BW500</em> or <em>BW2300</em> moves it while the
                     program is attached, and a 2300 Hz station answers a 500 Hz call at 500 Hz and comes
                     back after the session. A change here takes effect once the station is idle, with no
@@ -1021,7 +1023,10 @@
                     only</strong> makes no call and sends no beacon; an unattended station is also
                     <em>Automatic</em> under Control in step 1, and the rules then decide where it may
                     answer (§97.221). <strong>Compression</strong> is deflate over the whole session, so
-                    on a weak path one lost frame can spoil the rest. The <strong>Morse ID</strong> is off
+                    on a weak path one lost frame can spoil the rest. The <strong>answer gap</strong> is the
+                    least time between the end of the other station's frame and this one keying: leave
+                    it at 0 unless the other station keys by VOX (a SignaLink), then 500–800 ms gives it
+                    time to get back to receive. The <strong>Morse ID</strong> is off
                     by default — Aether's frames carry both callsigns, and whether that satisfies your
                     licence is your call; under the US rules an automatically keyed identifier goes no
                     faster than 20 wpm (§97.119(b)(1)), whatever is set here. <strong>Band edges</strong>
@@ -1211,7 +1216,7 @@
             </div>
             <div class="toolbar-end">
               <button id="btn-clear-log" class="small quiet" title="Clear the panel's log; the modem's own file is untouched">Clear</button>
-              <button id="btn-share-open" class="small" title="Send your logs and session files to another operator by email, or ask a station for theirs" aria-controls="share-form" aria-expanded="false">Send files…</button>
+              <button id="btn-share-open" class="small" title="Send your logs and session files to another operator — by email, or straight to the station that asked — or ask a station for theirs" aria-controls="share-form" aria-expanded="false">Send files…</button>
               <button id="btn-diagnostics" class="small" title="Copy the diagnostic bundle for a bug report: version, settings without the token, the link, the devices and the last log lines">Copy diagnostic bundle</button>
               <details class="help-pop" id="log-help" title="What the log and the bundle hold">
                 <summary title="What the log and the bundle hold" aria-label="What the log and the bundle hold">?</summary>
@@ -1231,9 +1236,11 @@
                   email to attach it to. <em>Ask a station for its files</em> writes the email the
                   other way: it carries a link that opens their panel with this form filled in.
                   With an <strong>upload address</strong> and a code from your upload script
-                  (<code>tools/drive_upload/</code>), their panel shows <strong>Send</strong> instead:
-                  one press, and the zip goes into your Google Drive folder, with no attachment to
-                  forget. Nothing is sent without you: the zip waits in the <code>shared</code> folder
+                  (<code>tools/drive_upload/</code>), their panel shows <strong>Send to
+                  <em>your call</em></strong>: one press, a bar shows the zip going, and it lands in
+                  your Google Drive folder with no attachment to forget; <em>Email instead</em> stays
+                  there if the upload fails. Tick <em>audio</em> when asking to have the recordings
+                  sent too. Nothing is sent without you: the zip waits in the <code>shared</code> folder
                   beside your settings until you press a button.
                 </p>
               </details>
@@ -1241,7 +1248,7 @@
           </div>
           <!-- the files of a contact for another operator, or a request for theirs: the side that
                was not heard cannot be read from here (KE4QCM, 2026-10-05) -->
-          <div class="share-form" id="share-form" title="Send your files to another operator by email, or ask a station for theirs" hidden>
+          <div class="share-form" id="share-form" title="Send your files to another operator, by email or to the upload folder of the station that asked, or ask a station for theirs" hidden>
             <div class="tool-row inset-row">
               <select id="share-mode" title="Send your own files, or write to a station asking for theirs" aria-label="What to do">
                 <option value="send">Send my files</option>
@@ -1360,12 +1367,14 @@
             <div class="card-head"><h2 class="card-title" id="help-test-title" title="Running a test session and contributing it">Running a test session</h2></div>
             <p class="sub">
               A test session is how a contact becomes a measurement the project can use: a probe, a
-              message, a file and a burst at every mode, recorded, in about five minutes. The other
+              message, a burst at every mode and a file — the file what about two minutes at the
+              measured rate carry, as little as 256 bytes on a slow path — recorded, in about five
+              minutes (ten at most). The other
               station only has to be listening — a person at the panel or an unattended station set to
               answer only.
             </p>
             <ol class="help-steps">
-              <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one).</li>
+              <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one) — and the same link protocol: if either panel says <em>Update required</em>, update first, since a test, like any call, does not connect across it.</li>
               <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
               <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The whole run stops at ten minutes on its own; <em>Stop test</em> ends it earlier, keeping what was learned.</li>
               <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder — the Session tab's <em>Open folder</em> — as two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>

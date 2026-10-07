@@ -27,7 +27,11 @@ Read each new issue once and give it one of three answers within a few days:
 * **A bug with a way to reproduce it** — label `bug`, and either fix it or say when.
   A diagnostic bundle or a session recording (`.wav` + sidecar) is the evidence to ask
   for; `docs/user/field-test.md` says how to make one.
-* **An on-air report** — label `field`, thank them, fold its sidecar into the field log
+* **An on-air report** — label `field-report` (the on-air template sets it), thank them,
+  and first check both stations' versions: stations on different link protocols cannot
+  connect, which is no bug. A failure worth fixing becomes a scenario first
+  (`bench/scenarios/*.toml`, run with `tools/session_matrix.py`, ADR-0042): reproduced,
+  fixed, and kept as a check. Fold its sidecar into the field log
   (`python tools/field_ingest.py <sidecar.json> --class <awgn|good|moderate|poor>`: a row in
   `field/LOG.md`, `field/paths.csv` and `field/ladders.csv`), and put the recording into
   `field/sessions/` as a regression test when it decodes.
@@ -89,13 +93,16 @@ Every one of these has cost the project a day at some point; none is decoration.
 5. **The air interface is an ADR.** Anything that changes what goes over the air — a
    frame layout, a preamble, a mode table, the handshake — needs an ADR and a note in
    `docs/spec/air-interface.md` (regenerate its tables with `python tools/make_spec.py`),
-   and breaks compatibility with every installed station, so it lands in a release whose
-   notes say so.
+   and breaks compatibility with every installed station: it bumps `PROTOCOL_VERSION`
+   (`core/aether-link/src/frames.rs`) and the shell's `LINK_PROTOCOL`
+   (`app/src-tauri/src/update.rs`) together, and `tools/protocol_notice.py` opens the release
+   notes with *Update required*.
 6. **A benchmark delta for DSP and protocol changes.** The PR template asks for it. "No
    change expected" is acceptable for a refactor when the vectors and the suites say so;
    a claimed improvement needs the curve (`tools/bench_phy.py`, `tools/bench_tone.py`,
    `tools/bench_link.py --fading`, `tools/bench_calls.py`) in `bench/baselines/` and the
-   table in `bench/README.md`.
+   table in `bench/README.md`; for a link or timing change, the scenarios
+   (`tools/session_matrix.py`, `bench/scenarios/`) before and after.
 7. **Public sources only.** Nothing derived from VARA's internals, from decompiling, or
    from "I captured VARA's audio and matched it". Ask where a design came from when it is
    not obvious; a reference to a standard, a paper or an open implementation is the
@@ -140,7 +147,8 @@ Every one of these has cost the project a day at some point; none is decoration.
 ```bash
 python -m uv run --project model --no-sync python -m pytest model/tests -m "not slow" -p no:cacheprovider
 cd core && cargo test --release --workspace && cargo clippy --all-targets --all-features -- -D warnings
-cd ../app/src-tauri && cargo clippy --all-targets -- -D warnings
+cd .. && uv run python tools/session_matrix.py --tag quick
+cd app/src-tauri && cargo clippy --all-targets -- -D warnings
 ```
 
 For a modem change, also the benchmark the PR claims a delta on, at least at one SNR, so
@@ -177,7 +185,9 @@ when done. Never rebase or force-push a contributor's branch yourself.
 
 `CLAUDE.md` § "Cutting a release" is the procedure (`tools/release.py bump`, the tag, the
 Release workflow). Two things a contributor's change can need from you: an air-interface
-change means a note in the release that says every station must update, and a change to
+change bumps the link protocol, and `tools/protocol_notice.py` heads the release notes with
+*Update required* (the manifest carries `link_protocol` and the shell titles the offer the
+same way); and a change to
 the configuration schema — a new key is one (rule 15) — means a migration step in
 `core/aetherd/src/config.rs`, a fixture under `core/aetherd/tests/data/config/` and a line in
 the shell's `SCHEMA_HISTORY`.
@@ -189,9 +199,9 @@ What is set, so a change to it is a decision and not an accident:
 * **Merge methods**: rebase merging only, so a squash or a merge commit cannot happen by
   a stray click. Head branches are deleted on merge.
 * **A ruleset on `master`** ("master: CI green before merge", Settings → Rules): no
-  deletion, no force-push, changes arrive by pull request, and the eight CI jobs (model on
-  Windows and Ubuntu at two Python versions, core and app on both) must pass before a
-  merge. Repository admins bypass it, which is what lets the maintainer keep pushing
+  deletion, no force-push, changes arrive by pull request, and the ten CI jobs (model on
+  Windows and Ubuntu at two Python versions; core and app on Ubuntu, Windows and macOS —
+  core runs the quick scenarios too) must pass before a merge. Repository admins bypass it, which is what lets the maintainer keep pushing
   straight to `master`; a contributor cannot.
 * **Discussions on**: questions go to Q&A and on-air stories to Show and tell instead of
   into issues; the issue templates' `config.yml` points there.

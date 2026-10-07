@@ -1,5 +1,9 @@
 # OTA test 1 — findings and what to do next
 
+> **Historical (OTA-1, 2026-09-17).** Later findings are in `OTA-2-FINDINGS.md` and ADR-0017 …
+> ADR-0047; how to run a test now is [`docs/user/field-test.md`](../docs/user/field-test.md).
+> Each item below says where it stands as of 2026-10-07 (beta.85).
+
 The first radio-to-radio test (2026-09-17, KK4ODA home FTDX10 / 20 W into a dipole ↔
 KK4ODA-2 mobile TS-480 / 35 W into a screwdriver antenna, 40 m 7101 kHz, 500 Hz) is
 analysed in full from **both stations'** saved sidecars (the home's six and the mobile's
@@ -25,6 +29,9 @@ on are the **compression desync** (item 1), which is a real modem robustness gap
 ## Action items, most important first
 
 ### 1. Compression desync corrupts the whole stream (modem — blocks trusting compression)
+
+**Status:** mitigated — compression is off by default since beta.28; the stream's own
+integrity check is still open.
 
 On a lossy path a single frame that the ARQ accepts but that carries the wrong bytes, or a
 gap the reassembly does not catch, desyncs the deflate stream, and **every byte after it
@@ -80,6 +87,11 @@ compression off (item 1) so at least the payload is intact when frames do get th
 
 ### 3. Five of six ended in link timeout, not a clean disconnect (modem — medium)
 
+**Status:** overtaken — the link timeout spans four exchanges at the family in use and an
+unanswered burst steps down (ADR-0012), the deadline follows the link to the floor
+(ADR-0033), and a station leaving gives up on what the path will not carry (ADR-0022,
+ADR-0039).
+
 On the marginal path the retransmit ladder (rv0→rv3) never cleared and the dead-man timer
 fired. Confirm the link-timeout value is sensible for HF and whether a failing station
 should attempt a graceful DISC before the timer, so the other end is not left waiting.
@@ -102,6 +114,8 @@ disturbs the noise floor the detector learns.
 
 ### 4. Sidecar counters are daemon-lifetime, not per-session (diagnostic quality — low)
 
+**Status:** still open.
+
 The six sidecars' `counters` blocks are monotonic across the whole run; per-session truth
 is only in the `frames` array. Record per-session counter deltas (or snapshot-and-zero at
 session start) so one sidecar tells the whole story of one session. Beta 26's *Reset
@@ -111,22 +125,26 @@ counters* button is a manual stopgap.
 
 Carried over; not part of this path.
 
-## Protocol for the next OTA test
+## Protocol for the next OTA test (as written for OTA-2; today's is `docs/user/field-test.md`)
 
 1. Both stations on **Beta 27** (this release), both at **500 Hz**, same agreed
-   frequency and time.
+   frequency and time. (Today: both on the current beta — 0.2.0-beta.85, link protocol 7; a
+   station on another protocol is told *Update required*.)
 2. **Set the radio RX filter to ~500 Hz centred on 1500 Hz** and AGC FAST/AUTO or OFF
    (item 3b), so a crowded band does not keep the busy detector tripped.
 3. **Probe first** (Session tab). Record the both-way SNR. Proceed only if it is roughly
    ≥ 6 dB each way.
 4. Run a **Test session** (Session tab) if the probe is good — it sends a probe, a message,
-   a file and a burst at every mode, and leaves a `_test` sidecar the bench can replay.
+   a burst at every mode and a file (sized to the path since beta.85), and leaves a `_test`
+   sidecar the bench can replay.
    Then Contribute it (the button is on the Session tab now).
 5. Do **two data passes**: one with **compression off**, one with it **on**, sending a
    known repeated string (e.g. "the quick brown fox jumps over the lazy dog") both
    directions so decode correctness is checkable by eye.
-6. If it keeps timing out, **pin a slow mode**: set *Fastest mode* low (3–4) in Setup step
-   4, to test whether the rate controller is over-climbing for the path.
+6. If it keeps timing out, **pin a slow mode**: set *Fastest mode* low in Setup step 4, to
+   test whether the rate controller is over-climbing for the path. (Since the tone floor the
+   lowest rungs are tone kinds — 0–5 at 2300 Hz, 0–3 at 500 Hz — so a low OFDM rung is 6–8 or
+   4–6; and since ADR-0020 the controller learns only from frames that were there.)
 7. Keep the mobile **stationary**; note whether the engine is running (alternator RFI).
 8. **Both operators keep and send their `recordings/` sidecars + WAVs.** The mobile's are
    as important as the home's.
