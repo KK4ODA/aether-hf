@@ -253,9 +253,15 @@ pub fn message_snr(probe: Option<(Option<f64>, f64)>) -> Option<f64> {
     probe.map(|(there, here)| there.unwrap_or(here))
 }
 
-/// The file the measured rate earns: about two minutes' worth, at least a kilobyte,
-/// never past the ceiling, and nothing at all when the time left in the budget is under
-/// a minute. Rounded down to 256 bytes so the number reads as what it is.
+/// The least file worth sending, bytes.
+const FILE_MIN: usize = 256;
+
+/// The file the measured rate earns: about two minutes' worth, never past the ceiling, and
+/// nothing at all when the time left in the budget is under a minute or would carry less than
+/// [`FILE_MIN`]. Rounded down to 256 bytes so the number reads as what it is. It had a floor of
+/// a kilobyte, which on the 80 m evening scenario (19–36 bit/s) was four to seven minutes the
+/// budget did not have: the Test ended "the file timed out" every time (the scenario harness,
+/// 2026-10-07).
 #[must_use]
 pub fn file_size_for(message_bps: f64, ceiling: usize, remaining_s: f64) -> usize {
     if ceiling == 0 || remaining_s < 60.0 || message_bps <= 0.0 {
@@ -263,13 +269,16 @@ pub fn file_size_for(message_bps: f64, ceiling: usize, remaining_s: f64) -> usiz
     }
     let seconds = FILE_TARGET_S.min(remaining_s - 60.0);
     let earned = (message_bps * seconds / 8.0) as usize / 256 * 256;
-    earned.clamp(1024.min(ceiling), ceiling)
+    if earned < FILE_MIN.min(ceiling) {
+        return 0;
+    }
+    earned.min(ceiling)
 }
 
-/// The time the ladder leaves for the file: the least file there is — a kilobyte, or the
-/// ceiling when that is smaller — at the rate the message measured, the minute
-/// [`file_size_for`] keeps in hand, and half a minute for the rung that may be in flight when
-/// the ladder looks. On the 80 m asymmetric scenario a ladder that passed rung 10 ran until 30 s
+/// The time the ladder leaves for the file: a kilobyte — or the ceiling when that is
+/// smaller — at the rate the message measured, but no more than the two minutes a file is sized
+/// for, the minute [`file_size_for`] keeps in hand, and half a minute for the rung that may be
+/// in flight when the ladder looks. On the 80 m asymmetric scenario a ladder that passed rung 10 ran until 30 s
 /// were left, and a kilobyte at 70 bit/s then timed out (the scenario harness, 2026-10-06).
 /// Nothing when there is no file, or no rate to size it by.
 #[must_use]
@@ -277,7 +286,7 @@ pub fn file_reserve_s(message_bps: f64, ceiling: usize) -> f64 {
     if ceiling == 0 || message_bps <= 0.0 {
         return 0.0;
     }
-    1024.min(ceiling) as f64 * 8.0 / message_bps + 60.0 + 30.0
+    (1024.min(ceiling) as f64 * 8.0 / message_bps).min(FILE_TARGET_S) + 60.0 + 30.0
 }
 
 /// A Test session in progress, or the last one run.
@@ -931,7 +940,11 @@ mod tests {
         // two minutes' worth at the measured rate, within a kilobyte and the ceiling
         assert_eq!(file_size_for(1000.0, 16_384, 600.0), 14_848);
         assert_eq!(file_size_for(2000.0, 16_384, 600.0), 16_384);
-        assert_eq!(file_size_for(50.0, 16_384, 600.0), 1024);
+        // a slow path gets the file it can carry in two minutes, down to 256 bytes — the
+        // floor of a kilobyte timed out at 19 bit/s every time
+        assert_eq!(file_size_for(50.0, 16_384, 600.0), 512);
+        assert_eq!(file_size_for(19.0, 16_384, 600.0), 256);
+        assert_eq!(file_size_for(10.0, 16_384, 600.0), 0);
         assert_eq!(file_size_for(1000.0, 600, 600.0), 600);
         // and what the budget leaves: 90 s left is 30 s of file
         assert_eq!(file_size_for(1000.0, 16_384, 90.0), 3584);
@@ -941,12 +954,15 @@ mod tests {
         // 70 bit/s is 117 s, a minute in hand and half a minute for a rung in flight
         assert!((file_reserve_s(70.0, 16_384) - (8192.0 / 70.0 + 90.0)).abs() < 1e-9);
         assert!((file_reserve_s(70.0, 512) - (4096.0 / 70.0 + 90.0)).abs() < 1e-9);
+        // never more than the two minutes a file is sized for
+        assert!((file_reserve_s(19.0, 16_384) - (120.0 + 90.0)).abs() < 1e-9);
         assert!(file_reserve_s(70.0, 0).abs() < f64::EPSILON);
         assert!(file_reserve_s(0.0, 16_384).abs() < f64::EPSILON);
         // and what it keeps is enough for that file
         let left = file_reserve_s(70.0, 16_384) - 30.0;
-        assert_eq!(file_size_for(70.0, 16_384, left), 1024);
-        assert!(f64::from(1024u16) * 8.0 / 70.0 <= left - 60.0 + 1e-9);
+        let sized = file_size_for(70.0, 16_384, left);
+        assert_eq!(sized, 768); // a kilobyte's time, rounded down to 256 bytes
+        assert!(sized as f64 * 8.0 / 70.0 <= left - 60.0);
     }
 
     #[test]
