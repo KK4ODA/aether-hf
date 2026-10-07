@@ -1136,8 +1136,13 @@ blocks each have 7 of 8 hits and no contradiction stands whatever the third hold
 decodes both acceptances in his recording, and a 1 920-frame false-detection run found no
 difference between the rules. Rejected the same day: a per-family fading margin. The model puts
 rung 3 (tone4x100-75) several dB *below* OFDM rung 4 on ground+NVIS and Moderate alike, so the
-air's reversal is not the channel. Slips are the suspect: 1 of 28 frames in his 01:02 audio. No
-wire change: beta.85 and beta.86 interoperate.
+air's reversal is not the channel. It was collisions: this station's own 01:02 recording shows
+KK4ODA-1 keying acknowledgements over WC4Y's four-frame rung-3 bursts, armed by a noise detection
+(a failed ordinary frame at rung 14), which beta.72 let replace frame 2's announced deadline; today's
+engine arms the acknowledgement only from decoded frames, and a simulated rerun never collides.
+Slips are real but rare (1 of 28 frames in his 01:02 audio). No wire change: beta.85 and beta.86
+interoperate. A shared Drive file over the Drive tool's 10 MB limit downloads directly with
+`curl -L "https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t"`.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
