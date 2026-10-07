@@ -955,3 +955,21 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     **Built on branch `flrig-keying`, for the next release (schema 9):**
     keying, the dial and tuning through FLRig. **Needs the author:** `DRIVELEVEL`'s scale and
     whether VarAC sends `CLEANTXBUFFER` (a VarAC command log), gateways (BPQ32 on the bench).
+24. **From the air, the bench, and the turnaround** (2026-09-26 … 10-07, betas .70–.85). FLRig
+    keying (schema 9); the host program told only of its own sessions; the devices listed off the
+    run loop; files from the other side (`share.prepare`, the Log tab's *Send files…*); the answer
+    gap for VOX-keyed stations (ADR-0036, schema 10); the turnaround measured on video
+    (ADR-0037); ND1J's sessions (ADR-0038–0040: hopeless frames re-encoded sooner, Disconnect that
+    leaves, both sides of a session read together). **The burst countdown** (ADR-0041, link
+    protocol 5; in pairs since protocol 6, ADR-0046), announced as *Update required*. **The
+    scenario harness** (ADR-0042): two real daemons through simulated bands in lockstep, the
+    stress set; it found narrowband QRM trusted (per-carrier noise, ADR-0043) and the RV order.
+    **The turnaround** (the author: "VARA never waits that long"): the turn request in every
+    session (ADR-0044), the answer a turnaround after a burst said to be over (ADR-0045), and the
+    turn offered at the end of a burst and taken in the acknowledgement (ADR-0047, protocol 7) —
+    Winlink-shaped sessions 13.5 % (40 m) and 10 % (80 m, 500 Hz) shorter on the harness, which
+    also found and fixed four receiver faults on the way. **Files by upload** (beta.85): a
+    request link that names the asking station's upload script, and *Send to <call>* on the other
+    panel (`tools/drive_upload/`). A Test on a slow path now sends the file it can carry, and its
+    ladder keeps the file's time. **Open:** a file transfer that stalls after the ladder on the
+    80 m asymmetric scenario, one run in three, with or without the offer.

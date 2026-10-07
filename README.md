@@ -12,7 +12,7 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 
 > **Status: beta — field testing on the air.**
 > Signed builds ship from [Releases](https://github.com/KK4ODA/aether-hf/releases)
-> (`0.2.0-beta.68` at the time of writing): a Windows installer, Linux packages, an unsigned
+> (`0.2.0-beta.85` at the time of writing): a Windows installer, Linux packages, an unsigned
 > macOS build for Apple Silicon, and the standalone `aetherd` daemon for gateways, with
 > in-place updates on a beta channel. The modem — 3GPP LDPC, OFDM, 16-FSK tone frames,
 > selective-repeat ARQ with HARQ soft combining, rate control, compression — climbs a
@@ -28,12 +28,24 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 > the radio is keyed** — FCC Part 97 today, 160 m to 6 m
 > ([`docs/user/fcc-regulatory-controls.md`](docs/user/fcc-regulatory-controls.md)). Sessions
 > with other stations on 80 and 40 m are finding what a bench cannot, and each fix is an ADR
-> (0017, 0020–0023). Every performance figure in this repository comes from a committed
+> (0017, 0020–0023, 0036–0040). A **scenario harness** runs two real daemons through simulated
+> band conditions — fading, QRM from VARA, PACTOR and RTTY stations, static crashes, radios slow
+> to switch — and is how a field report becomes a test before it becomes a fix
+> ([ADR-0042](docs/adr/0042-the-scenario-harness.md)). A change of direction now costs one
+> transmission, not three: the station without the turn asks for it, and the sender offers it
+> at the end of a burst that empties its queue (ADR-0044–0047; Winlink-shaped sessions 10–25 %
+> shorter). Every performance figure in this repository comes from a committed
 > benchmark curve in `bench/baselines/`. A **Test session** (Session → *Test session*) runs a
 > fixed sequence against any listening station — a probe, a message, a burst at every mode, a
 > file — records it, and *Contribute the last test session*, on the same tab, turns the
 > recording into a report the project can replay: how every volunteer contact becomes a
-> measurement.
+> measurement. When a contact fails, **Send files…** on the Log tab asks the other station for
+> its side; with an upload script ([`tools/drive_upload/`](tools/drive_upload/README.md)) their
+> panel sends its logs and recordings to your Google Drive with one button.
+>
+> **Stations must run the same link protocol to connect.** Beta 85 is link protocol 7, and it
+> does not connect to beta 84 or earlier: the update window says *Update required* when a
+> release changes the protocol.
 
 ## Screenshots
 
@@ -111,10 +123,10 @@ distilled from how the community received Mercury, the other VARA alternative, i
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done (model) |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, VARA-compatible TCP, gateway kit | done; Pat, Winlink Express and VarAC pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done, and redesigned in betas .60–.68; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.68` |
-| 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air; then on-air crowdsourcing — a Test session every volunteer can run, whose sidecar the bench replays (P6-7) | **in progress**: tooling and the Test session built; on the air with other stations since 2026-09-23 — bursts that fit the key watchdog (ADR-0017), rate control that learns only from evidence (ADR-0020), the peer's SNR both ways (ADR-0021), the end of a session (ADR-0022) and leaving and handing over (ADR-0023) came from those sessions |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.85`; a protocol change is announced as *Update required* |
+| 6 — Field validation | recordings, replay regression tier, simulated channel, measured-vs-predicted tool, field protocol; then the air; then on-air crowdsourcing — a Test session every volunteer can run, whose sidecar the bench replays (P6-7) | **in progress**: tooling and the Test session built; on the air with other stations since 2026-09-23 — bursts that fit the key watchdog (ADR-0017), rate control that learns only from evidence (ADR-0020), the peer's SNR both ways (ADR-0021), the end of a session (ADR-0022) and leaving and handing over (ADR-0023) came from those sessions, and since then the answer gap for VOX-keyed stations (ADR-0036), the turnaround measured (ADR-0037), both sides of one session read together (ADR-0040), the burst countdown (ADR-0041, ADR-0046), the scenario harness (ADR-0042) and files from the other station by upload |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth P2P contacts are made in (VarAC's calling frequencies), the bandwidth in the connect handshake, an answer-only unattended mode, and a two-way SNR probe | **done on the bench**: `[radio] bandwidth = 500`, `BW500`, answer-only, the probe (ADR-0006), VarAC pinging and connecting over the simulated channel; the air with a VarAC station remains |
-| 9 — The modem's second rung | a faster start, modes below 200 bit/s, an audio-level A/B bench against VARA HF, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: a faster climb and start (ADR-0007, 0008), a calibrated fading link bench, holding the link (ADR-0012), the tone floor, fast tones and the 500 Hz middle kinds (ADR-0013–0015), calls on the floor (ADR-0016); the A/B bench's tool is written and waits on its cables (P9-1); time diversity is paused |
+| 9 — The modem's second rung | a faster start, modes below 200 bit/s, an audio-level A/B bench against VARA HF, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: a faster climb and start (ADR-0007, 0008), a calibrated fading link bench, holding the link (ADR-0012), the tone floor, fast tones and the 500 Hz middle kinds (ADR-0013–0015), calls on the floor (ADR-0016); the receiver weighs each carrier by its own noise against narrowband QRM (ADR-0043); the turn asked for and offered, one transmission a change of direction (ADR-0044–0047); the A/B bench's tool is written and waits on its cables (P9-1); time diversity is paused |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to over Bluetooth or Wi-Fi, then a phone app, then the modem inside the phone | back burner |
 | 10 — Aether FM foundation | an FM PHY on the same link layer | back burner |
 
@@ -147,8 +159,11 @@ field/         the field log, findings from the air, and the recorded sessions t
 deploy/        systemd unit for a gateway
 tools/         benchmarks (bench_phy, bench_link, bench_tone, bench_calls …) · vector
                generators · release.py · field_ingest.py · compare_air.py · channel_cable.py ·
-               kiss_test_client.py · make_occupancy.py · make_spec.py
-bench/         committed baseline curves, including the release gate's; ab/ (the VARA A/B bench)
+               channel_server.py and session_matrix.py (the scenario harness) ·
+               kiss_test_client.py · make_occupancy.py · make_spec.py ·
+               drive_upload/ (the upload script for files from other stations)
+bench/         committed baseline curves, including the release gate's; ab/ (the VARA A/B bench);
+               scenarios/ (the scenario harness's band conditions)
 vectors/       golden test vectors (TX bit-exact, RX must decode)
 Logos/         the artwork the icons are made from
 ```
@@ -170,7 +185,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 `aetherd --config <file> --dry-run` runs the daemon with no radio; two daemons joined by
-`[sim]` make a bench with no radio either (`docs/user/field-test.md` §1). CI runs all of the
+`[sim]` make a bench with no radio either (`docs/user/field-test.md` §1). The scenario harness
+runs two daemons through a band condition in lockstep, 2.5–5× faster than the air:
+`uv run python tools/session_matrix.py --tag quick` (CI's set), `--tag stress --jobs 4`, or
+named scenarios from `bench/scenarios/` (its README says how to write one). CI runs all of the
 above on Windows and Ubuntu and regenerates every cross-validation vector, failing on drift:
 a mismatch means the core is wrong, never that the vectors are stale.
 
