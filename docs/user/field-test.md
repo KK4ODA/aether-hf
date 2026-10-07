@@ -120,7 +120,13 @@ answer, sizes the message; the message's measured rate sizes the file to about t
 minutes' worth of what is left), the run keeps to a time budget, and **Stop test** — the
 same button while it runs — ends it at once, keeping what was learned. The ladder runs
 before the file: with the file first, three tests with ND1J on a slow path spent the whole
-budget on the transfers and never reached a rung (2026-09-25).
+budget on the transfers and never reached a rung (2026-09-25). And the ladder leaves the file
+its time: it starts no rung once only the file's time is left (the log says *ladder stopped
+after N rungs: the time left is the file's*). On a slow path the file is what two minutes
+carry, as little as 256 bytes, rather than a kilobyte the budget cannot fit.
+
+Both stations must run the same link protocol: a release that changes it says *Update
+required*, and a Test, like any call, does not connect across it.
 
 While it runs, the Session tab shows the step (*step 4 of 6, climbing the mode ladder*),
 the time elapsed and the most the budget leaves — never a countdown, since how long a
@@ -147,7 +153,10 @@ each way, how the other station heard you, how it ended, and the recording's nam
 **Contribute it**: *Contribute the last test session*, at the foot of the Session tab's
 **Recording and last session** box, opens a pre-filled GitHub issue (in a plain browser it
 copies the link instead); attach the sidecar — the `.json` beside the `.wav` in the
-recordings folder, which *Open folder* in the same box shows you — and send. The audio is yours to attach or not. `tools/field_ingest.py` folds what
+recordings folder, which *Open folder* in the same box shows you — and send. The audio is yours to attach or not.
+When the author has asked you for a session's files with a request link, it is simpler
+still: open the link and press **Send to <call>** (§5a). The recording, the sidecar and your
+logs go to their upload folder in one press, audio included if they asked for it. `tools/field_ingest.py` folds what
 arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
 <sidecar>` runs the model's engines against what the path did.
 
