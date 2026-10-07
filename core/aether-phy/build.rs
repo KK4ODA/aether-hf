@@ -211,7 +211,7 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
          hop_div: {},\n    bin_div: {},\n    \
          clip: {:?},\n    max_cfo_hz: {:?},\n    threshold: {:?},\n    min_hits: {},\n    \
          min_block_hits: {},\n    min_first_hits: {},\n    contradiction: {:?},\n    \
-         max_contradictions: {},\n    announce_threshold: {:?},\n    \
+         max_contradictions: {},\n    clean_block_hits: {},\n    announce_threshold: {:?},\n    \
          lookahead: {},\n    \
          announce_lookahead: {},\n}};",
         f("fs"),
@@ -231,6 +231,7 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
         du("min_first_hits"),
         df("contradiction"),
         du("max_contradictions"),
+        du("clean_block_hits"),
         df("announce_threshold"),
         du("lookahead"),
         du("announce_lookahead"),
@@ -325,6 +326,7 @@ fn main() {
              pub min_first_hits: usize,\n    \
              pub contradiction: f64,\n    \
              pub max_contradictions: usize,\n    \
+             pub clean_block_hits: usize,\n    \
              pub announce_threshold: f64,\n    \
              pub lookahead: usize,\n    \
              pub announce_lookahead: usize,\n\

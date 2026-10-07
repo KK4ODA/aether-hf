@@ -252,7 +252,8 @@ def tone_block() -> str:
             f"{det.MIN_HITS} of 24 sync tones strongest, {det.MIN_BLOCK_HITS} of them in a "
             "second block; a silent symbol is no evidence; at most "
             f"{det.MAX_CONTRADICTIONS} contradicted (another tone strongest, "
-            f"{det.CONTRADICTION:.0f}x the noise, not steady)",
+            f"{det.CONTRADICTION:.0f}x the noise, not steady), unless the two best blocks "
+            f"each have {det.CLEAN_BLOCK_HITS} of 8 and none contradicted",
         ],
         [
             "Arrival threshold",
