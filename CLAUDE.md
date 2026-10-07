@@ -960,9 +960,10 @@ transmission on the air, a session, call, probe or Test, or a queued item that b
 dial (`holds_the_dial`: an answer, the identifier, a tuner tone, drive bursts, a keying test); a
 beacon or datagram waiting for a clear channel goes on the new dial. A second beacon while one
 waits is refused (`BEACON_ALREADY_WAITING`, `not_idle`), `status.beacon` has `waiting` and
-`waiting_for_clear`, and the Session tab's beacon line says so. The shell keeps the last ten
-runs' logs as `logs/aetherd-<UTC start>.log` beside the configuration (`app/src-tauri/src/logs.rs`,
-`KEEP`), `aetherd.prev.log` as before. The shell builds and tests in the cloud container after
+`waiting_for_clear`, and the Session tab's beacon line says so. The shell keeps every run's log
+as `logs/aetherd-<UTC start>.log` beside the configuration for 30 days (`app/src-tauri/src/logs.rs`:
+`KEEP_DAYS`, at least `KEEP_AT_LEAST` 10, at most `KEEP_AT_MOST` 500; ten runs alone lost the
+evening of WC4Y's 2026-10-05 sessions to beta updates), `aetherd.prev.log` as before. The shell builds and tests in the cloud container after
 `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 libxdo-dev` and `python tools/stage_daemon.py --no-build`.
 

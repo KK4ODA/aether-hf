@@ -339,7 +339,7 @@ fn ensure_daemon(resources: Option<&std::path::Path>) -> Result<Option<Child>, S
     // of exactly the run worth reading. The last ten runs are also kept under `logs/`, named
     // for when each began: a fault reported days later needs its night's log (`logs.rs`).
     let log = daemon_log_path(&config);
-    logs::set_aside(&log, logs::KEEP);
+    logs::set_aside(&log, std::time::SystemTime::now());
     if let Ok(file) = std::fs::File::create(&log) {
         if let Ok(errors) = file.try_clone() {
             command.stderr(errors);
