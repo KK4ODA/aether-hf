@@ -5014,7 +5014,7 @@ async function act(operation, description) {
 
 // The Aether project's upload script (tools/drive_upload/): where *Send my files to the Aether
 // project* goes, and whose owner a request from that station asks the files back to.
-const PROJECT_UPLOAD_URL = "";
+const PROJECT_UPLOAD_URL = "https://script.google.com/macros/s/AKfycbw5KhON9utE7jinNxv4g0ndw3k9wyw9miUGAZwPqLhoqh2tNZDBst8CiewQc5Q87avCIg/exec";
 const PROJECT_CALL = "KK4ODA";
 
 const SHARE_TO_KEY = "aether.shareTo";
