@@ -60,12 +60,22 @@ Why the second cannot admit what the contradiction rule was written against:
 
 ## 4. False detections
 
-A bench sends frames of every tone kind of both airs through both airs' detectors: AWGN, Good,
-Moderate and Poor, at −8, 0, 10, 20 and 30 dB, half of them straight after a span of exact
-silence (a receiver's own transmission). It counts every detection that is not the frame
-sent, under the old rule and the new. The run is in progress. After 40 of its 80 points
-(960 frames), the two rules agree on every detection: the same frames found, and the same
-single false detection under both. This section is completed when the run ends.
+A bench sent frames of every tone kind of both airs through both airs' detectors: AWGN, Good,
+Moderate and Poor, at −8, 0, 10, 20 and 30 dB, 24 frames a point, half of them straight after a
+span of exact silence (a receiver's own transmission). It counted every detection that is not the
+frame sent, under the old rule and the new.
+
+| receiving air | sending air | frames | right, old / new | false, old / new |
+|---|---|---|---|---|
+| 2300 Hz | 2300 Hz | 480 | 480 / 480 | 0 / 0 |
+| 2300 Hz | 500 Hz | 480 | 288 / 288 | 1 / 1 |
+| 500 Hz | 2300 Hz | 480 | 189 / 189 | 0 / 0 |
+| 500 Hz | 500 Hz | 480 | 480 / 480 | 0 / 0 |
+
+All 80 points came out identical under both rules: the new rule adds no false detection here.
+A frame of a kind the receiving air does not look for (the other air's middle or fast kinds) is
+not "right" for it, which is why the cross-air rows count fewer right detections. The one false
+detection, under both rules, is a 500 Hz frame read by the 2300 Hz detector on Good at 20 dB.
 
 ## 5. Not done
 
