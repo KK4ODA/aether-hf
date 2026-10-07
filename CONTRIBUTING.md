@@ -98,10 +98,10 @@ the rules above: model first, a curve for every claim.
 
 ## Reporting
 
-- **Bugs**: use the bug-report issue template and attach the diagnostic bundle (Log tab →
-  *Copy diagnostic bundle*), or the exact command and output for the model.
-- **On-air reports**: use the on-air template — *Contribute the last test session* on the
-  Session tab opens it filled in — and, if you can, attach the session recording (48 kHz mono
+- **Bugs**: use the bug-report issue template and attach the zip from the panel's Log tab →
+  *Send files…* (logs, diagnostic bundle, sessions), or the exact command and output for the model.
+- **On-air reports**: use the on-air template — Log tab → *Send files…* → *Report my last test
+  as a GitHub issue* opens it filled in — and, if you can, attach the session recording (48 kHz mono
   WAV plus its sidecar) — recordings become regression tests. Say both stations' versions:
   stations on different link protocols cannot connect.
 - **Files for the other station**: Log tab → *Send files…* writes one zip of your logs,

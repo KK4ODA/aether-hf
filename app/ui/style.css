@@ -1921,11 +1921,6 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   color: var(--text-2);
 }
 
-.contrib-row {
-  padding-top: var(--s2);
-  border-top: 1px solid var(--border);
-}
-
 /* a checkbox with its words, beside the buttons it goes with (Chime, Enter sends, Sound) */
 .check {
   display: inline-flex;

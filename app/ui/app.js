@@ -538,7 +538,6 @@ async function refreshStatus() {
   applyRecording(status.recording ?? null);
   applyFaults(status);
   applyRecordingsDir(status.recordings_dir ?? null);
-  applyLastSession(status);
   // a fresh call must not leave the last probe's or test's outcome on the panel: a
   // stale "no answer" sitting through a session that then succeeds is exactly the
   // confusion reported after the first radio-to-radio test
@@ -4829,10 +4828,7 @@ function wire() {
     if (panelShown("stations")) renderHeard();
     if (socket && socket.readyState === WebSocket.OPEN) refreshStatus();
   }, 5000);
-  $("btn-diagnostics").addEventListener("click", copyDiagnostics);
   wireShare();
-  $("btn-contribute").addEventListener("click", contributeTestSession);
-  $("contribute-link").addEventListener("click", openContributeLink);
   $("wz-profile").addEventListener("change", applyProfile);
   // a field set by hand is the operator's own setup: the list follows it
   for (const id of ["dev-in", "dev-out", "dev-ptt", "ptt-line", "ptt-protocol", "ptt-baud", "ptt-civ", "ptt-gpio", "ptt-address"]) {
@@ -4959,48 +4955,34 @@ function contributeUrl(results, status, operator) {
   return `https://github.com/KK4ODA/aether-hf/issues/new?${params}`;
 }
 
-async function contributeTestSession() {
-  const line = $("contribute-note");
-  const link = $("contribute-link");
-  link.hidden = true;
+// *Report my last test as a GitHub issue* (Log › Send files…): the last Test session's numbers
+// in a pre-filled issue for the project — no upload code needed, so any volunteer can send one.
+// The issue opens in the browser; under the desktop shell that is the opener's to do, and the link
+// goes to the clipboard when it cannot.
+async function reportTestSession() {
+  const note = $("share-note");
   try {
     const [test, status] = await Promise.all([call("test.status"), call("status")]);
     if (!test.results) {
-      line.textContent = "No test session has run yet: Session › Test session, with the other station's callsign in Call.";
+      note.textContent = "No test session has run yet: Session › Test session, with the other station's callsign in Call.";
       return;
     }
     const url = contributeUrl(test.results, status, liveConfig?.operator ?? {});
-    link.href = url;
-    link.hidden = false;
+    const opener = window.__TAURI__?.opener;
     try {
-      await navigator.clipboard.writeText(url);
-      line.textContent = "A link to the pre-filled report is on the clipboard and beside the button: open it, attach the .json, and send. Thank you.";
+      if (opener?.openUrl) await opener.openUrl(url);
+      else if (!window.open(url, "_blank", "noopener")) throw new Error("blocked");
+      note.textContent = `The report for the test with ${test.results.remote} is open in your browser: attach the .json from the recordings folder (Session › Recording › Open folder), and submit. Thank you.`;
     } catch {
-      line.textContent = "The pre-filled report is beside the button: open it, attach the .json, and send. Thank you.";
+      try {
+        await navigator.clipboard.writeText(url);
+        note.textContent = "The browser could not be opened from here — the link to the pre-filled report is on the clipboard: paste it into your browser, attach the .json, and submit. Thank you.";
+      } catch {
+        note.textContent = `Open this in your browser: ${url}`;
+      }
     }
   } catch (error) {
-    line.textContent = `Could not prepare the report: ${error.message ?? error}`;
-  }
-}
-
-// The report opens in the browser. Under the desktop shell a new-window link is the
-// opener's to open, and a shell that may not open it (before beta.62) did nothing at all
-// when it was clicked: this asks it, and says where the link is when it cannot.
-async function openContributeLink(event) {
-  const opener = window.__TAURI__?.opener;
-  if (!opener?.openUrl) return; // a browser opens it itself
-  event.preventDefault();
-  const url = $("contribute-link").href;
-  try {
-    await opener.openUrl(url);
-  } catch {
-    try {
-      await navigator.clipboard.writeText(url);
-      $("contribute-note").textContent =
-        "This version of the application cannot open the browser for you — the link is on the clipboard: paste it into your browser, attach the .json, and send. Thank you.";
-    } catch {
-      $("contribute-note").textContent = `Open this in your browser: ${url}`;
-    }
+    note.textContent = `Could not prepare the report: ${error.message ?? error}`;
   }
 }
 
@@ -5019,25 +5001,6 @@ async function act(operation, description) {
 }
 
 // ── panes ───────────────────────────────────────────────────────────
-
-async function copyDiagnostics() {
-  const note = $("diagnostics-note");
-  note.textContent = "Collecting…";
-  try {
-    const bundle = await call("diagnostics");
-    const text = JSON.stringify(bundle, null, 2);
-    try {
-      await navigator.clipboard.writeText(text);
-      note.textContent = `Copied ${(text.length / 1024).toFixed(0)} kB to the clipboard.`;
-    } catch {
-      // no clipboard (a plain http page in some browsers): show it, so it can be selected
-      log(text, "info", "bundle");
-      note.textContent = "The clipboard is not available here; the bundle is in the log below.";
-    }
-  } catch (error) {
-    note.textContent = error.message;
-  }
-}
 
 // ── files for another operator ──────────────────────────────────────
 //
@@ -5098,13 +5061,21 @@ function uploadDestination() {
 }
 
 function shareMode() {
-  return $("share-mode").value === "ask" ? "ask" : "send";
+  const mode = $("share-mode").value;
+  return mode === "ask" || mode === "report" ? mode : "send";
 }
 
 // The form's words follow what it does: in *send* the address is where the files go; in
 // *ask* it is this operator's own, where the other station's files are to come back to.
 function applyShareMode() {
-  const ask = shareMode() === "ask";
+  const mode = shareMode();
+  const ask = mode === "ask";
+  // the report needs none of the fields: it is the last Test session, whoever it was with
+  const report = mode === "report";
+  for (const id of ["share-email-label", "share-email", "share-station-label", "share-station",
+    "share-hours-label", "share-hours", "share-audio-row"]) {
+    $(id).hidden = report;
+  }
   const email = $("share-email");
   $("share-email-label").textContent = ask ? "reply to" : "to";
   email.placeholder = ask ? "your@email" : "their@email";
@@ -5124,7 +5095,7 @@ function applyShareMode() {
   $("share-audio").title = audio;
   // the upload row: in *ask*, this station's script, for the link; in *send*, any script to
   // upload to — unless a request link already named the place
-  $("share-upload-row").hidden = !ask && uploadTarget != null;
+  $("share-upload-row").hidden = report || (!ask && uploadTarget != null);
   $("share-upload-url").value ||= remembered(UPLOAD_URL_KEY);
   // the code is another station's when asking and this station's own when sending: one mode's
   // never carries into the other, where it would go into a request link or a wrong upload
@@ -5138,16 +5109,23 @@ function applyShareMode() {
   // a request that named an upload script, or a script and code typed in: one button sends
   // there, and email is the fallback
   updateUploadButton();
-  $("btn-share").textContent = ask ? "Write request" : uploadDestination() ? "Email instead" : "Prepare email";
-  $("btn-share").title = ask
-    ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
-    : "Write the zip and open an email to attach it to";
+  $("btn-share").textContent = report
+    ? "Open the report"
+    : ask ? "Write request" : uploadDestination() ? "Email instead" : "Prepare email";
+  $("btn-share").title = report
+    ? "Open a pre-filled GitHub issue with your last Test session's numbers, for the project"
+    : ask
+      ? "Open an email to the other operator asking for their files, with a link that fills this form in on their side"
+      : "Write the zip and open an email to attach it to";
+  if (report) {
+    $("share-note").textContent = "A GitHub issue for the project, pre-filled with your last Test session: a free GitHub account is needed. Attach the test's .json from the recordings folder.";
+  }
   $("share-upload-progress").hidden = true;
 }
 
 // The Upload button follows the form: shown in *send* when there is somewhere to upload to.
 function updateUploadButton() {
-  const ask = shareMode() === "ask";
+  const ask = shareMode() !== "send";
   const target = ask ? null : uploadDestination();
   const send = $("btn-share-upload");
   send.hidden = target == null;
@@ -5237,6 +5215,10 @@ async function showSharedFile(path) {
 }
 
 async function prepareShare() {
+  if (shareMode() === "report") {
+    await reportTestSession();
+    return;
+  }
   const note = $("share-note");
   const email = $("share-email").value.trim();
   const station = $("share-station").value.trim().toUpperCase();
@@ -5500,18 +5482,6 @@ function applyRecordingsDir(dir) {
   const have = Boolean(dir);
   $("btn-open-recordings").disabled = !have;
   $("btn-copy-recordings").disabled = !have;
-}
-
-// The current session, or the last one this panel saw, in a word: who and how it ended.
-let lastSessionText = null;
-function applyLastSession(status) {
-  const line = $("last-session");
-  if (status.state === "connected" && status.remote) {
-    lastSessionText = `${status.remote} — connected${status.role === "iss" ? ", sending" : status.role === "irs" ? ", receiving" : ""}`;
-  } else if (status.state === "connecting" && status.remote) {
-    lastSessionText = `${status.remote} — calling`;
-  }
-  if (lastSessionText) line.textContent = lastSessionText;
 }
 
 // The Session tab's help is a small ? whose note opens over the page (details.help-pop): it

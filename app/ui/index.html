@@ -73,7 +73,7 @@
       <button class="tab" role="tab" id="tab-stations" title="Every station heard, with when and how well" data-panel="stations" aria-selected="false" aria-controls="panel-stations" tabindex="-1">Stations <span class="tab-count" id="heard-count" title="Stations heard" hidden>0</span></button>
       <button class="tab" role="tab" id="tab-diagnostics" title="Signal analysis — constellation, spectrum and waterfall — the receiver's readings, the rules and every frame" data-panel="diagnostics" aria-selected="false" aria-controls="panel-diagnostics" tabindex="-1">Diagnostics</button>
       <button class="tab" role="tab" id="tab-setup" title="Callsign and rules, radio interface, receive level, modem and application settings" data-panel="setup" aria-selected="false" aria-controls="panel-setup" tabindex="-1">Setup</button>
-      <button class="tab" role="tab" id="tab-log" title="The modem's log and the diagnostic bundle for a bug report" data-panel="log" aria-selected="false" aria-controls="panel-log" tabindex="-1">Log</button>
+      <button class="tab" role="tab" id="tab-log" title="The modem's log, and sending your files or a test report" data-panel="log" aria-selected="false" aria-controls="panel-log" tabindex="-1">Log</button>
       <button class="tab" role="tab" id="tab-help" title="About Aether HF and its updates, getting on the air, test sessions and where to read more" data-panel="help" aria-selected="false" aria-controls="panel-help" tabindex="-1">Help / About</button>
     </nav>
 
@@ -449,7 +449,7 @@
         <!-- 5. what is kept of it: the recording, the last session, the test's report -->
         <section class="card console-card rec-card" id="session-recording" aria-labelledby="recording-title">
           <div class="card-head">
-            <h3 class="card-title" id="recording-title" title="Recordings, the last session and the test report">Recording and last session</h3>
+            <h3 class="card-title" id="recording-title" title="Recording the radio's audio and what the modem makes of it, and where recordings go">Recording</h3>
             <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
             <details class="help-pop push-right" id="recording-help" title="What a recording is">
               <summary title="What a recording is" aria-label="What a recording is">?</summary>
@@ -465,11 +465,7 @@
             <button id="btn-record" title="Record the radio's audio and what the modem makes of it, until pressed again">Record</button>
             <input id="record-notes" title="Notes kept with the recording: band, frequency, the other station, distance" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
           </div>
-          <dl class="rec-facts" title="The last session and where recordings go">
-            <div class="rec-fact">
-              <dt>Last session</dt>
-              <dd id="last-session" class="numerals" title="The station and outcome of the current or most recent session">no session yet</dd>
-            </div>
+          <dl class="rec-facts" title="Where recordings go">
             <div class="rec-fact">
               <dt>Folder</dt>
               <dd class="path-row">
@@ -481,11 +477,6 @@
               </dd>
             </div>
           </dl>
-          <div class="tool-row contrib-row">
-            <button id="btn-contribute" class="small quiet" title="Open a pre-filled GitHub issue reporting the last test session (a free GitHub account is needed; attach the .json it names)">Contribute last test session as GitHub issue</button>
-            <a id="contribute-link" title="Open the pre-filled report" class="numerals" href="#" target="_blank" rel="noopener" hidden>open the report</a>
-            <span class="sub" id="contribute-note" title="What the last contribute did" role="status" aria-live="polite"></span>
-          </div>
         </section>
       </section>
 
@@ -1217,16 +1208,12 @@
             <div class="toolbar-end">
               <button id="btn-clear-log" class="small quiet" title="Clear the panel's log; the modem's own file is untouched">Clear</button>
               <button id="btn-share-open" class="small" title="Send your logs and session files to another operator — by email, or straight to the station that asked — or ask a station for theirs" aria-controls="share-form" aria-expanded="false">Send files…</button>
-              <button id="btn-diagnostics" class="small" title="Copy the diagnostic bundle for a bug report: version, settings without the token, the link, the devices and the last log lines">Copy diagnostic bundle</button>
               <details class="help-pop" id="log-help" title="What the log and the bundle hold">
                 <summary title="What the log and the bundle hold" aria-label="What the log and the bundle hold">?</summary>
                 <p>
                   The log is what the modem and this panel reported since the panel opened, newest
                   last: sessions, beacons sent and heard, probes and tests, what the rules decided, and
-                  anything that went wrong, in its colour. The <strong>diagnostic bundle</strong> is
-                  what to paste into a bug report: version, platform, settings with the token taken out,
-                  the state of the link, the devices this machine reports, and the daemon's last few
-                  hundred log lines. It never contains your traffic.
+                  anything that went wrong, in its colour.
                 </p>
                 <p>
                   <strong>Send files…</strong> is for a contact that failed: it writes one zip with
@@ -1244,7 +1231,10 @@
                   callsign, or another operator's — and <strong>Upload</strong> sends the zip there
                   instead of an email. Tick <em>audio</em> when asking to have the recordings
                   sent too. Nothing is sent without you: the zip waits in the <code>shared</code> folder
-                  beside your settings until you press a button.
+                  beside your settings until you press a button. <em>Report my last test as a GitHub
+                  issue</em> opens a pre-filled issue for the project with your last Test session's
+                  numbers; attach its <code>.json</code> from the recordings folder (a free GitHub
+                  account is needed).
                 </p>
               </details>
             </div>
@@ -1253,16 +1243,17 @@
                was not heard cannot be read from here (KE4QCM, 2026-10-05) -->
           <div class="share-form" id="share-form" title="Send your files to another operator, by email or to the upload folder of the station that asked, or ask a station for theirs" hidden>
             <div class="tool-row inset-row">
-              <select id="share-mode" title="Send your own files, or write to a station asking for theirs" aria-label="What to do">
+              <select id="share-mode" title="Send your own files, write to a station asking for theirs, or report your last test session to the project" aria-label="What to do">
                 <option value="send">Send my files</option>
                 <option value="ask">Ask a station for its files</option>
+                <option value="report">Report my last test as a GitHub issue</option>
               </select>
               <label for="share-email" id="share-email-label" title="Who the files go to">to</label>
               <input id="share-email" type="email" class="prose" placeholder="their@email" autocomplete="email" title="Who the files go to: the operator who asked for them" aria-labelledby="share-email-label" />
-              <label for="share-station" title="Only the sessions with this station; empty for every session">sessions with</label>
+              <label for="share-station" id="share-station-label" title="Only the sessions with this station; empty for every session">sessions with</label>
               <input id="share-station" type="text" class="call" list="share-stations" placeholder="any station" autocomplete="off" spellcheck="false" title="Only the sessions with this station (its other SSIDs too); empty for every session" aria-label="Sessions with" />
               <datalist id="share-stations"></datalist>
-              <label for="share-hours" title="How far back">from the last</label>
+              <label for="share-hours" id="share-hours-label" title="How far back">from the last</label>
               <select id="share-hours" title="How far back the sessions and logs go" aria-label="How far back">
                 <option value="1">hour</option>
                 <option value="3" selected>3 hours</option>
@@ -1292,7 +1283,7 @@
           </div>
           <div id="log" title="What the modem reported, newest last" class="log" role="log" aria-label="Log" tabindex="0"></div>
           <div class="pane-foot">
-            <span class="sub" id="diagnostics-note" title="What the last copy did" role="status" aria-live="polite">Newest last.</span>
+            <span class="sub" id="diagnostics-note" title="How the log is ordered" role="status" aria-live="polite">Newest last.</span>
           </div>
         </section>
       </section>
@@ -1411,8 +1402,9 @@
               <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
             </dl>
             <p class="sub">
-              A bug report about the air should carry the diagnostic bundle from the Log tab and, if
-              there is one, the session's recording.
+              A bug report about the air should carry the zip from the Log tab's <em>Send files…</em>
+              (the logs, the diagnostic bundle and the sessions), with the recording's audio if there is
+              one. A Test session goes to the project as a GitHub issue from the same form.
             </p>
           </section>
         </div>
