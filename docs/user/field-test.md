@@ -150,7 +150,7 @@ tab when it ends: when and how long, who called, what crossed each way, the fast
 each way, how the other station heard you, how it ended, and the recording's name.
 **Sessions** on a station's row shows only that station's.
 
-**Contribute it**: *Contribute the last test session*, at the foot of the Session tab's
+**Contribute it**: *Contribute last test session as GitHub issue*, at the foot of the Session tab's
 **Recording and last session** box, opens a pre-filled GitHub issue (in a plain browser it
 copies the link instead); attach the sidecar — the `.json` beside the `.wav` in the
 recordings folder, which *Open folder* in the same box shows you — and send. The audio is yours to attach or not.
