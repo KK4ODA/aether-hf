@@ -104,10 +104,10 @@ the rules above: model first, a curve for every claim.
   as a GitHub issue* opens it filled in — and, if you can, attach the session recording (48 kHz mono
   WAV plus its sidecar) — recordings become regression tests. Say both stations' versions:
   stations on different link protocols cannot connect.
-- **Files for the other station**: Log tab → *Send files…* writes one zip of your logs,
-  session history and sidecars; when the station that asked sent a request link with an
-  upload address, *Send to <call>* puts it straight into their folder
-  ([`tools/drive_upload/`](tools/drive_upload/README.md)).
+- **Files for the project**: Log tab → *Send files…* → *Send my files to the Aether project*
+  → **Send** uploads one zip of your logs, session history and sidecars to the project's
+  folder, no email needed ([`tools/drive_upload/`](tools/drive_upload/README.md)); *Email my
+  files to someone* is there for anybody else.
 - **Security**: see [`SECURITY.md`](SECURITY.md).
 
 ## Code of conduct

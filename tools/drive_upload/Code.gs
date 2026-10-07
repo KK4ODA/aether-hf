@@ -1,15 +1,18 @@
 /**
- * Aether HF — the upload script: where other stations' files land when you ask for them.
+ * Aether HF — the upload script: where stations' files land when they press *Send to the
+ * Aether project*.
  *
  * It runs in your own Google account as a web app (README.md beside this file says how to set
- * it up). An Aether HF station that opens your request link and presses Send asks it for a
- * place to put one zip (`begin`); it answers with a Google Drive resumable upload session for
- * one file in your folder, made with your account's authority; the station sends the zip
- * there in pieces; and tells it it is done (`finish`), which emails you a link to the file.
+ * it up). A station asks it for a place to put one zip (`begin`); it answers with a Google Drive
+ * resumable upload session for one file in your folder, made with your account's authority; the
+ * station sends the zip there in pieces; and tells it it is done (`finish`), which emails you a
+ * link to the file.
  *
- * Nothing secret is in the Aether program or in the link: the script's address is no use
- * without a code, and a code is one you made here for one station — good for a number of
- * uploads you choose, up to a size, and revoked by deleting it.
+ * The script's address is built into the Aether program, so it is public. What keeps it in
+ * bounds is here: a size limit per file and a limit per day on uploads and bytes, counted
+ * whoever sends; an email to you for every file; and a new deployment (a new address) whenever
+ * you want one. Codes — one per station, from makeCodes — are no longer needed; one that a
+ * station still has from an earlier request link is accepted and counted as before.
  *
  * Protocol: the station POSTs JSON as text; the answer is JSON, {ok: true, …} or
  * {ok: false, error: "a sentence the panel shows"}.
@@ -25,6 +28,10 @@ const UPLOADS_PER_CODE = 3;
 /** The largest file accepted, bytes: a day of recordings with their audio is well under it. */
 const MAX_BYTES = 400 * 1024 * 1024;
 
+/** Uploads and bytes accepted a day (UTC), all stations together: the bound on a public address. */
+const DAILY_UPLOADS = 20;
+const DAILY_BYTES = 2 * 1024 * 1024 * 1024;
+
 const PROPS = PropertiesService.getScriptProperties();
 
 // ── run these from the editor ─────────────────────────────────────────
@@ -38,13 +45,19 @@ function setup() {
   }
   Logger.log('Files will land in https://drive.google.com/drive/folders/' + id);
   Logger.log('Emails go to ' + Session.getEffectiveUser().getEmail());
-  Logger.log('Next: run makeCodes, then Deploy > New deployment > Web app, ' +
-      'Execute as: Me, Who has access: Anyone.');
+  Logger.log('Next: Deploy > New deployment > Web app, Execute as: Me, Who has access: Anyone.');
 }
 
 /** A code for each station in STATIONS, each good for UPLOADS_PER_CODE uploads. */
 function makeCodes() {
   STATIONS.forEach((station) => Logger.log(station + ': ' + newCode(station, UPLOADS_PER_CODE)));
+}
+
+/** Today's uploads and bytes against the daily limits. */
+function today() {
+  const used = dayUse();
+  Logger.log(dayKey() + ': ' + used.uploads + ' of ' + DAILY_UPLOADS + ' uploads, ' +
+      Math.round(used.bytes / 1048576) + ' of ' + Math.round(DAILY_BYTES / 1048576) + ' MB');
 }
 
 /** Every code, who it is for and how many uploads it has left. */
@@ -100,9 +113,10 @@ function doPost(e) {
 /** A place for one file: a Drive resumable upload session in the folder. */
 function begin(asked) {
   const code = String(asked.code || '');
-  const known = codeOf(code);
-  if (!known) return {ok: false, error: 'This upload code is not known: ask ' + OWNER_CALL + ' for a new request link.'};
-  if (known.left <= 0) return {ok: false, error: 'This upload code has been used up: ask ' + OWNER_CALL + ' for a new request link.'};
+  // a code is no longer needed; one still held from an earlier request link must be good
+  const known = code ? codeOf(code) : null;
+  if (code && !known) return {ok: false, error: 'This upload code is not known: send without it (update Aether HF), or ask ' + OWNER_CALL + ' for a new request link.'};
+  if (known && known.left <= 0) return {ok: false, error: 'This upload code has been used up: send without it (update Aether HF).'};
   const size = Number(asked.size);
   if (!(size > 0 && size <= MAX_BYTES)) {
     return {ok: false, error: 'The file is ' + size + ' bytes; ' + OWNER_CALL + ' takes up to ' +
@@ -111,7 +125,23 @@ function begin(asked) {
   const folderId = PROPS.getProperty('FOLDER_ID');
   if (!folderId) return {ok: false, error: 'The upload script is not set up yet (run setup).'};
   DriveApp.getFolderById(folderId); // fails plainly if the folder is gone
-  const name = stamp() + ' ' + known.station + ' ' + safe(asked.name);
+  // the day's limits, counted when an upload begins, whoever sends it
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const used = dayUse();
+    if (used.uploads >= DAILY_UPLOADS || used.bytes + size > DAILY_BYTES) {
+      return {ok: false, error: OWNER_CALL + '\'s upload folder has taken all it takes today: ' +
+          'try again tomorrow, or use Email instead.'};
+    }
+    used.uploads += 1;
+    used.bytes += size;
+    PROPS.setProperty('day:' + dayKey(), JSON.stringify(used));
+  } finally {
+    lock.releaseLock();
+  }
+  const sender = known ? known.station : safe(asked.callsign);
+  const name = stamp() + ' ' + sender + ' ' + safe(asked.name);
   const response = UrlFetchApp.fetch(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id', {
         method: 'post',
@@ -124,8 +154,8 @@ function begin(asked) {
         payload: JSON.stringify({
           name: name,
           parents: [folderId],
-          description: 'From ' + safe(asked.callsign) + ' (code ' + code + '), Aether HF ' +
-              safe(asked.version),
+          description: 'From ' + safe(asked.callsign) + (code ? ' (code ' + code + ')' : '') +
+              ', Aether HF ' + safe(asked.version),
         }),
         muteHttpExceptions: true,
       });
@@ -137,22 +167,24 @@ function begin(asked) {
   return {ok: true, upload_url: session, to: OWNER_CALL};
 }
 
-/** The file is there: count the upload against the code, and email the owner. */
+/** The file is there: count the upload against its code if it had one, and email the owner. */
 function finish(asked) {
   const code = String(asked.code || '');
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    const known = codeOf(code);
-    if (!known) return {ok: false, error: 'This upload code is not known.'};
+    const known = code ? codeOf(code) : null;
+    if (code && !known) return {ok: false, error: 'This upload code is not known.'};
     const file = DriveApp.getFileById(String(asked.file_id || ''));
     const folderId = PROPS.getProperty('FOLDER_ID');
     let inFolder = false;
     const parents = file.getParents();
     while (parents.hasNext()) inFolder = inFolder || parents.next().getId() === folderId;
     if (!inFolder) return {ok: false, error: 'That file is not one of this script\'s uploads.'};
-    known.left -= 1;
-    PROPS.setProperty('code:' + code, JSON.stringify(known));
+    if (known) {
+      known.left -= 1;
+      PROPS.setProperty('code:' + code, JSON.stringify(known));
+    }
     const size = file.getSize();
     const note = String(asked.note || '').slice(0, 2000);
     MailApp.sendEmail(
@@ -161,8 +193,9 @@ function finish(asked) {
         safe(asked.callsign) + ' sent ' + file.getName() + ', ' + size + ' bytes' +
             (size === Number(asked.size) ? '' : ' (they said ' + asked.size + ')') + '.\n\n' +
             (note ? 'Their note:\n' + note + '\n\n' : '') +
-            file.getUrl() + '\n\nCode ' + code + ' (' + known.station + ') has ' + known.left +
-            ' upload(s) left.');
+            file.getUrl() + '\n\n' +
+            (known ? 'Code ' + code + ' (' + known.station + ') has ' + known.left + ' upload(s) left.\n' : '') +
+            'Today: ' + dayUse().uploads + ' of ' + DAILY_UPLOADS + ' uploads.');
     return {ok: true, link: file.getUrl()};
   } finally {
     lock.releaseLock();
@@ -175,6 +208,15 @@ function codeOf(code) {
   if (!/^[A-Za-z0-9_-]{4,64}$/.test(code)) return null;
   const raw = PROPS.getProperty('code:' + code);
   return raw ? JSON.parse(raw) : null;
+}
+
+function dayKey() {
+  return Utilities.formatDate(new Date(), 'UTC', 'yyyyMMdd');
+}
+
+function dayUse() {
+  const raw = PROPS.getProperty('day:' + dayKey());
+  return raw ? JSON.parse(raw) : {uploads: 0, bytes: 0};
 }
 
 function safe(text) {

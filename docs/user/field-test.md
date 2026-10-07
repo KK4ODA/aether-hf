@@ -154,9 +154,9 @@ each way, how the other station heard you, how it ended, and the recording's nam
 **Open the report** opens a pre-filled GitHub issue (when the browser cannot be opened, the link
 goes to the clipboard); attach the sidecar — the `.json` beside the `.wav` in the recordings
 folder, which *Open folder* on the Session tab's **Recording** box shows you — and submit. The audio is yours to attach or not.
-When the author has asked you for a session's files with a request link, it is simpler
-still: open the link and press **Send to <call>** (§5a). The recording, the sidecar and your
-logs go to their upload folder in one press, audio included if they asked for it. `tools/field_ingest.py` folds what
+Simpler still: **Send files…** → *Send my files to the Aether project* → **Send** (§5a). The
+recording, the sidecar and your logs go to the project's folder in one press, audio included if
+you tick it; a request link from the author opens the form ready. `tools/field_ingest.py` folds what
 arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
 <sidecar>` runs the model's engines against what the path did.
 
@@ -191,29 +191,29 @@ WAV and the sidecar into `field/sessions/`, commit them together, and from then 
 ## 5a. When a contact fails: both sides' files
 
 A contact that did not get through has two sides, and the side that was not heard cannot be
-read from yours. In the Log tab, **Send files…** does both halves:
+read from yours. In the Log tab, **Send files…** has four choices, each showing only its own
+fields:
 
-* **Send my files** writes one zip — your logs (this run, the one before and the earlier runs
-  kept), the session history, the stations heard, the diagnostic bundle (your settings
-  without their secrets) and the summaries of the recordings from the period you choose, with
-  one station or with anybody — and opens an email to the address you give, with the zip's
-  folder open to drag it in. The audio is left out unless you tick it: a summary lists every
-  frame with its SNR and is a few kB, a recording is megabytes. Nothing is sent without you;
-  the zip waits in the `shared` folder beside your settings.
-* **Ask a station for its files** writes the request: an email with a link that, opened on
-  their computer with Aether HF running, fills their *Send files…* form in with your address
-  and your callsign. The Stations tab's session history has an **Ask for files** button on
-  each row that opens it for that station and that session's time.
-* **With an upload script** ([`tools/drive_upload/`](../../tools/drive_upload/README.md), set up
-  once in your own Google account), the request also carries your script's address and a code
-  you made for that station. Their panel then shows **Send to <your call>**: one press, and the
-  zip goes straight into a folder in your Google Drive, in pieces, picking up after a dropped
-  connection. There is nothing for them to attach, and no limit at email's 25 MB, which a Test
-  session's recording passes. You get an email with a link to it. *Email instead* stays there
-  as the way round.
-* **Uploading your own files** works the same way: in *Send my files*, put an upload address and
-  a code made for your callsign in the **upload to** / **code** row (your own script, or one
-  another operator gave you), and **Upload** sends the zip there instead of opening an email.
+* **Send my files to the Aether project** — the first choice, and the one to use when in doubt.
+  It writes one zip — your logs (this run, the one before and the earlier runs kept), the
+  session history, the stations heard, the diagnostic bundle (your settings without their
+  secrets) and the summaries of the recordings from the period you choose, with one station or
+  with anybody — and **Send** uploads it to the project's Google Drive folder, in pieces,
+  picking up after a dropped connection. No address, no code, nothing to attach, and no limit at
+  email's 25 MB, which a Test session's recording passes. The audio is left out unless you tick
+  it: a summary lists every frame with its SNR and is a few kB, a recording is megabytes.
+* **Email my files to someone** writes the same zip and opens an email to the address you give,
+  with the zip's folder open to drag it in.
+* **Ask a station to send me its files** writes the request: an email with a link that, opened
+  on their computer with Aether HF running, opens their *Send files…* form ready — to the
+  project's folder when the author asks, to your email address otherwise. The Stations tab's
+  session history has an **Ask for files** button on each row that opens it for that station
+  and that session's time.
+* **Report my last test as a GitHub issue** (§3).
+
+Nothing is sent without you; every zip waits in the `shared` folder beside your settings. The
+project's folder takes a limited number of uploads a day ([`tools/drive_upload/`](../../tools/drive_upload/README.md)); when
+it is full, email is the way round.
 
 Neither holds what was said: the logs record how much was sent, never what.
 

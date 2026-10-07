@@ -46,10 +46,10 @@ Setup has changes that are not saved. The tabs, each a set of titled boxes:
 * **Log** — one entry a row with filters (problems, rules, sessions, beacons) and *Send files…*,
   the one place anything leaves the station: it writes one zip of the logs, the diagnostic bundle
   (`diagnostics` in `docs/spec/control-api.md` §4.6), the session history and the sidecars, and
-  opens an email, uploads it to a Drive upload script (an address and code in the form), or opens
-  a pre-filled GitHub issue for the last Test session — or, when the request link
-  carries the asking station's upload address and code, sends it straight to their Google
-  Drive (*Send to <call>*, `share.upload`, `tools/drive_upload/`).
+  sends it to the project's Google Drive folder (*Send my files to the Aether project*: the
+  script's address is built in, `PROJECT_UPLOAD_URL`; `share.upload`, `tools/drive_upload/`),
+  opens an email, writes a request link for another station, or opens a pre-filled GitHub issue
+  for the last Test session.
 * **Help / About** — the version and its update channel, *Check for Updates*, getting on the
   air, beacons, running a test session, reading the panel, and where to read more.
 

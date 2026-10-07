@@ -1115,21 +1115,23 @@ and began before the station's last transmission starts no burst (`answered_alre
 `tx_started`). To A/B an engine default on the harness: build the daemon twice with the
 default flipped in the source, copy each binary out, and run both through the same scenario
 seeds (a scenario file with `seed = N` and a `-sN` name per seed).
-**Files by upload (beta.85, the author's request):** the request link (`#share?…&up=<script>&code=<code>&audio=1`)
-can name the asking station's upload script (`tools/drive_upload/`: a Google Apps Script web app in
-its own account — `begin` hands out a Drive resumable upload session for one file, `finish` counts
-the code and emails the owner; codes made with `makeCodes`, kept in Script Properties); the other
-panel's **Send to <call>** has the daemon upload the zip (`share.upload`, `upload.rs`: `ureq` with
-rustls, 8 MB pieces, resumes after a dropped connection, its own thread, `status.upload`). Only
-`https://script.google.com/…/exec` addresses are accepted; nothing secret is in the program.
-`tools/drive_upload/try_upload.py` checks a deployment. The author deploys the script himself.
-*Send my files* uploads too (beta.87): an address and a code typed into the same row
-(`uploadFromFields`; the own code kept as `aether.uploadCode`, never carried into *ask*) show an
-**Upload** button. The same day the reporting paths were brought into that one form: the
-Session tab's card is just **Recording** (Record, notes, folder; the *Last session* line went —
-the banner and the Stations tab's Sessions say it), the GitHub issue for a Test is *Send files…*
-→ *Report my last test as a GitHub issue* (`reportTestSession`, `contributeUrl`), and *Copy
-diagnostic bundle* is gone (the bundle is in every zip; the `diagnostics` method stays).
+**Files by upload (beta.85; no codes since beta.88, the author's choice):** `tools/drive_upload/` is a
+Google Apps Script web app in the author's account — `begin` checks the day's limits
+(`DAILY_UPLOADS` 20, `DAILY_BYTES` 2 GB, under a script lock; `today` logs them) and hands out a
+Drive resumable upload session for one file, `finish` emails the owner; the daemon uploads the
+zip (`share.upload`, `upload.rs`: `ureq` with rustls, 8 MB pieces, resumes after a dropped
+connection, its own thread, `status.upload`; the code is optional). Only
+`https://script.google.com/…/exec` addresses are accepted; nothing secret is in the program. The
+address is built into the panel (`PROJECT_UPLOAD_URL`, `PROJECT_CALL` in `app.js`), so the
+script is changed by *Manage deployments → New version* (same address), never a new deployment.
+**Send files…** is four choices, each showing only its own fields (`shareMode`, `SHARE_FIELDS`):
+*Send my files to the Aether project* (the default once the address is set), *Email my files to
+someone*, *Ask a station to send me its files* (the link carries `&project=1` from the owner's
+station, `&to=<email>` otherwise; an older link's `&up=…&code=…` still works, `uploadTarget`), and
+*Report my last test as a GitHub issue* (`reportTestSession`, `contributeUrl`). Codes
+(`makeCodes`) remain in the script, optional, for old links. `try_upload.py` checks a deployment.
+The Session tab's card is just **Recording** (Record, notes, folder), and *Copy diagnostic
+bundle* is gone (the bundle is in every zip; the `diagnostics` method stays).
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 **WC4Y's two Tests (2026-10-05, issues #2 and #3; beta.86).** Read from both stations' sidecars
