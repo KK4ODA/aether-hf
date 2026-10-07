@@ -31,16 +31,16 @@
         <div class="versions" id="versions">
           <div class="version">
             <span class="label">You have</span>
-            <span class="numerals" id="current">—</span>
+            <span class="numerals" id="current" title="The version running now">—</span>
           </div>
           <div class="version-arrow" id="arrow" hidden aria-hidden="true">→</div>
           <div class="version" id="offered-box" hidden>
             <span class="label" id="offered-label">Available</span>
-            <span class="numerals" id="offered">—</span>
+            <span class="numerals" id="offered" title="The version the release channel offers">—</span>
           </div>
         </div>
 
-        <div class="progress" id="progress" hidden role="progressbar" aria-label="Download" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress" id="progress" title="How much of the update has downloaded" hidden role="progressbar" aria-label="Download" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill" id="progress-fill"></div>
           <span class="progress-text numerals" id="progress-text"></span>
         </div>
@@ -55,14 +55,14 @@
     </main>
 
     <footer class="updater-actions" id="actions">
-      <button id="btn-releases" class="ghost">Releases on GitHub</button>
+      <button id="btn-releases" class="ghost" title="Open the project's releases page, with every version's installers and notes">Releases on GitHub</button>
       <span class="push-right"></span>
-      <button id="btn-restore" hidden>Restore the previous version…</button>
-      <button id="btn-check" hidden>Check again</button>
-      <button id="btn-later" hidden>Not now</button>
-      <button id="btn-install" class="primary" hidden>Install and restart</button>
-      <button id="btn-restart" class="primary" hidden>Restart now</button>
-      <button id="btn-close" hidden>Close</button>
+      <button id="btn-restore" title="Put back the version installed before this one; your settings are kept" hidden>Restore the previous version…</button>
+      <button id="btn-check" title="Ask the release channel again for a newer version" hidden>Check again</button>
+      <button id="btn-later" title="Close without installing; the next check offers it again" hidden>Not now</button>
+      <button id="btn-install" class="primary" title="Stop the modem, install this version and start Aether HF again on it; your settings are kept" hidden>Install and restart</button>
+      <button id="btn-restart" class="primary" title="Start Aether HF again on the version just installed" hidden>Restart now</button>
+      <button id="btn-close" title="Close this window" hidden>Close</button>
     </footer>
 
     <script src="update.js"></script>

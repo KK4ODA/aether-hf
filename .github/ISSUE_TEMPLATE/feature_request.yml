@@ -17,4 +17,4 @@ body:
     id: roadmap
     attributes:
       label: Roadmap fit
-      placeholder: e.g. Phase 3 / P3-8, or "not on the roadmap"
+      placeholder: e.g. Phase 9 / P9-3, or "not on the roadmap"

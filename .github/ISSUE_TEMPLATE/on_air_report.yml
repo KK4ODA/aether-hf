@@ -5,7 +5,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: Version
+      label: Versions (both stations)
+      description: Help / About shows it. Stations on different link protocols cannot connect.
+      placeholder: "0.2.0-beta.85 ↔ 0.2.0-beta.85"
     validations:
       required: true
   - type: input
@@ -19,7 +21,8 @@ body:
     id: stations
     attributes:
       label: Equipment
-      placeholder: "IC-7300 + Digirig, 50 W dipole ↔ FT-891 + SignaLink, 100 W vertical"
+      description: Radio, interface, power and antenna at each end, and how each keys (CAT / rigctld / FLRig / VOX / the host program) — for VOX, the Answer gap set.
+      placeholder: "IC-7300 + Digirig (CAT), 50 W dipole ↔ FT-891 + SignaLink (VOX, answer gap 600 ms), 100 W vertical"
   - type: textarea
     id: outcome
     attributes:
@@ -31,4 +34,4 @@ body:
     id: recording
     attributes:
       label: Recording
-      description: Attach the session's sidecar (the .json beside the .wav in the recordings folder — the Session tab's Open folder) and, zipped, the 48 kHz mono WAV of the received audio if you are happy to share it — it becomes a regression test. A Test session's report is filled in by Contribute the last test session on the Session tab.
+      description: Attach the session's sidecar (the .json beside the .wav in the recordings folder — the Session tab's Open folder) and, zipped, the 48 kHz mono WAV of the received audio if you are happy to share it — it becomes a regression test. A Test session's report is filled in by Contribute the last test session on the Session tab. Or attach the zip from Log → Send files…, which carries the logs and sidecars. A failure we can reproduce becomes a scenario in bench/scenarios/.

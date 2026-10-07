@@ -529,6 +529,21 @@ the −12 dB slow fade on ITU Good — lines lost 61 → 35, a line's time uncha
 SNR, keyed time +1.4–2.1 % at 0 dB. `answer_unread_link.csv` is `bench_link.py --fading
 --floor-cap`: identical in all 600 sessions. ADR-0034 has the tables.
 
+## Whole sessions on the scenario harness (ADR-0042 … ADR-0047)
+
+The chat sections above call `base` "today's turn-taking": that was so when they were written.
+Since ADR-0044 the turn request is in every session, and `bench_chat.py`'s `base` is the engine
+before it (`chat` off); since ADR-0047 (protocol 7) the default is `request+offer`, and
+`request-without-offer` is the engine before that.
+
+What the link bench cannot charge — the keying of a transmitter, a radio slow to come back to
+receive, QRM, a card's clock — the scenario harness measures: two release daemons through a
+band condition in lockstep (`tools/session_matrix.py`, `bench/scenarios/`; its README says
+how). Its results are per run under `--out`, not committed baselines (the nightly job keeps
+them as an artifact). ADR-0047 §5 has the measurement that decided the turn offered at the
+end of a burst: the Winlink-shaped exchanges, 40 m 437 → 378 s (−13.5 %) and 80 m at 500 Hz
+3 571 → 3 216 s (−10 %) over 16 sessions, no collisions with the release build.
+
 ## PAPR (`papr.csv`, P2-4 / ADR-0004)
 
 Raw OFDM measures 9–10 dB PAPR. Because an SSB transmitter is driven at a fixed peak,

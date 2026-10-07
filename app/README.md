@@ -39,12 +39,16 @@ Setup has changes that are not saved. The tabs, each a set of titled boxes:
 * **Setup** — the profile bar, then one numbered flow: 1 callsign and rules (and the field log's
   grid, rig, power and antenna), 2 radio interface, 3 receive level, 4 modem settings (the
   bandwidth — 2300 Hz, or 500 Hz for peer-to-peer contacts — answer only, the fastest mode,
-  compression, the busy channel, the longest key, the Morse identifier, band edges and
+  compression, the busy channel, the answer gap for a VOX-keyed radio, the longest key, the
+  Morse identifier, band edges and
   band-plan guidance), 5 application settings (updates, recording, host programs, KISS
   programs), 6 save. Nothing changes until it is saved, and the tab says what is not.
 * **Log** — one entry a row with filters (problems, rules, sessions, beacons) and the
   *Copy diagnostic bundle* button: that bundle (`diagnostics` in `docs/spec/control-api.md`
-  §4.6) is what to paste into a bug report.
+  §4.6) is what to paste into a bug report. *Send files…* writes one zip of the logs, session
+  history and sidecars for another operator and opens an email — or, when the request link
+  carries the asking station's upload address and code, sends it straight to their Google
+  Drive (*Send to <call>*, `share.upload`, `tools/drive_upload/`).
 * **Help / About** — the version and its update channel, *Check for Updates*, getting on the
   air, beacons, running a test session, reading the panel, and where to read more.
 
@@ -125,3 +129,7 @@ the update did not install rather than nothing. The page talks to the shell thro
 IPC (`withGlobalTauri`, the `updater` window's capability in `src-tauri/capabilities/`),
 which the panel's window — served by the daemon — does not have. Opened in a browser
 instead, `update.html?demo=<phase>` shows what each phase looks like.
+
+An update that changes the link protocol is titled *Update required*: stations on different
+protocols cannot connect. `LINK_PROTOCOL` in `src-tauri/src/update.rs` says which this build
+speaks, and a test holds it to the core's `PROTOCOL_VERSION`.

@@ -8,7 +8,8 @@
 
 <!-- Required for any change under model/aether_model, core/aether-phy, core/aether-link
      or the air interface. Paste the rows from tools/bench_phy.py, bench_tone.py,
-     bench_link.py or bench_calls.py that moved, or say "no change expected — refactor only" and how you
+     bench_link.py or bench_calls.py that moved — or, for a link or timing change, the scenarios
+     from tools/session_matrix.py before and after — or say "no change expected — refactor only" and how you
      verified that (the vectors and both suites unchanged is the usual answer). -->
 
 | Mode | Channel | Metric | Before | After |
@@ -21,6 +22,8 @@
 - [ ] No test threshold relaxed; no `xfail` removed without its defect fixed, none added without an audit/ADR reference
 - [ ] `uv run pytest`, `ruff check`, `ruff format --check`, `mypy` green; `cargo test --release --workspace` and `cargo clippy … -D warnings` green
 - [ ] An ADR in `docs/adr/` and `python tools/make_spec.py` if anything over the air changed
+- [ ] A link-protocol change bumps `PROTOCOL_VERSION` (`core/aether-link/src/frames.rs`) and the shell's `LINK_PROTOCOL` together, and says the release is *Update required*
+- [ ] `uv run python tools/session_matrix.py --tag quick` green; a fix for a field report adds its scenario to `bench/scenarios/`
 - [ ] A new configuration key: `schema_version` bumped, a migration step, a fixture and a `SCHEMA_HISTORY` line
 - [ ] A new way to key the radio or start an exchange goes through the regulatory gate, and a test says so
 - [ ] A change to `app/ui/`: every new control and indicator has a `title` tooltip, and the panel was loaded against a daemon with a clean console

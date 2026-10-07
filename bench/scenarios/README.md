@@ -18,12 +18,15 @@ callsign = "W4ODA"
 tx_level = 0.25             # [audio] tx_level; the channel's SNR is against it
 answer_gap_ms = 0           # [radio] answer_gap_ms
 wait_for_clear = true
+max_mode = 19               # [radio] max_mode (default 19 at 2300 Hz, 14 at 500 Hz)
 [stations.a.radio]          # the radio, as the channel server models it
 tx_delay_ms = 20            # the start of each transmission that never radiates
 rx_recovery_ms = 280        # silence from the receiver after the key comes up
 vox_hold_ms = 0             # a VOX interface's hold after the audio stops
 agc = "off"                 # off, fast, auto or slow: the receiver's AGC on the passband
 agc_threshold_db = 12.0     # where it acts, above the noise the station hears
+agc_hang_ms = 100           # how long a gain cut holds before it recovers
+agc_decay_db_s = 40.0       # how fast it recovers
 
 [stations.b]                # the called station, the same keys
 callsign = "KK4XYZ"
@@ -38,6 +41,8 @@ sro_ppm = 0.0               # the receiving card's clock against the sender's
 level = [[90, 0], [95, -30], [135, -30], [140, 0]]  # [seconds, dB]: QSB, the band closing
 [path.a_to_b]               # … each overridable
 snr_db = 8.0
+[path.b_to_a]
+snr_db = 4.0
 
 [[qrm]]                     # another station, heard at "a", "b" or "both"
 kind = "ofdm-arq"           # ofdm-arq (VARA-class), pactor, rtty
@@ -51,6 +56,7 @@ profile = "moderate"        # its own path's fading
 at = "both"
 rate_per_s = 0.5
 peak_db = 25.0              # above the noise floor
+spread_db = 6.0             # how much the crashes' peaks vary
 
 [script]
 steps = ["probe", "connect", "message 2000", "disconnect", "test"]
@@ -70,6 +76,25 @@ mode ladder, file and disconnect, so it starts from idle), `wait S` (S seconds o
 `disconnect`. `transfer_s` and `connect_within_s` set how much air a message or a call may
 take (300 and 180). Each message step's rate is in the result's `transfers`.
 
-Tags: `quick` (CI), `nightly` (the nightly job), `stress` (conditions chosen to break things —
-run by hand, `--tag stress --jobs 4`; not every one is expected to pass). `[test]` passes `test.start`'s parameters (`message_bytes`, `file_bytes`,
+Tags: `quick` (CI runs these: `--tag quick`); the nightly job runs every scenario, the stress set
+included, and `nightly` marks the ones expected to pass there; `stress` (conditions chosen to
+break things — `--tag stress --jobs 4` by hand; not every one is expected to pass: on
+`80m-asymmetric-500` a file transfer after the Test's ladder stalls about one run in three, an
+open item); `40m` and `80m` the band; `winlink` the Winlink-shaped exchanges (ADR-0044's and
+ADR-0047's measurements). `[test]` passes `test.start`'s parameters (`message_bytes`, `file_bytes`,
 `budget_s`, …).
+
+## Running them
+
+```
+uv run python tools/session_matrix.py [scenarios…] [--tag T] [--jobs N] [--daemon PATH]
+                                      [--daemon-b PATH] [--out runs/] [--csv FILE]
+```
+
+The daemon is `core/target/release/aetherd` unless `--daemon` names another; `--daemon-b` runs
+the called station on another build (a release against this tree). Each run leaves
+`result.json`, `channel.json` (when each station was keyed, and every collision) and both
+daemons' logs and recordings under `--out`; `--csv` appends one line per scenario. Runs of one
+build are not identical (the daemons' threads), so judge a single difference against a second
+run, and an A/B on the same seeds; a scenario's `seed = N` and a `-sN` in its name make a
+variant.

@@ -1,7 +1,11 @@
 """The channel between two daemons in a scenario, in lockstep (ADR-0042).
 
-    python tools/channel_server.py --scenario bench/scenarios/80m-evening.toml --port 0
+    python tools/channel_server.py --scenario bench/scenarios/80m-nvis-evening-500.toml --port 0
                                    --port-file port.txt --report channel.json
+                                   [--max-seconds S] [--progress-file F]
+
+``tools/session_matrix.py`` starts it for each scenario; ``bench/scenarios/README.md`` lists the
+scenario's keys.
 
 Two ``aetherd --channel HOST:PORT`` daemons connect here. Every tick (20 ms of audio) each
 station's queue plays on the shared sample clock; what it radiates goes through the

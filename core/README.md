@@ -8,7 +8,7 @@ these crates are the implementation, and the two are required to agree bit-for-b
 | `aether-fec` | TS 38.212 CRCs, LDPC (BG1/BG2) encode and layered decode, rate matching with incremental redundancy |
 | `aether-phy` | the waveforms of both airs (2 300 and 500 Hz): constellations, the ladders of rungs, the frame codec, OFDM, the preamble, peak reduction (ADR-0004), the tone frames — the tone floor, fast tones and the 500 Hz middle kinds (ADR-0013–0015) — the transmitter, acquisition, the receiver, the 48 kHz audio front end, the impulse blanker and the streaming receiver |
 | `aether-link` | frame formats, rate control, the ARQ engine (sessions, HARQ, probes, datagrams, the regulatory ceiling) and a two-station simulator over a lossy pipe (the fading pipe of the link bench is the model's) |
-| `aetherd` | the daemon: audio (cpal) and keying (serial, CAT, CM108, `rigctld`), the key watchdog, the busy detector, the regulatory gate (`data/regulatory/`, `data/occupancy.json`), the control API and the panel's files, the VARA-compatible host interface, the KISS port, profiles, recordings and replay, the simulated channel |
+| `aetherd` | the daemon: audio (cpal) and keying (serial, CAT, CM108, `rigctld`, FLRig, the host program), the key watchdog, the busy detector, the regulatory gate (`data/regulatory/`, `data/occupancy.json`), the control API and the panel's files, the VARA-compatible host interface, the KISS port, profiles, recordings and replay, the simulated channel and the scenario harness's (`--channel HOST:PORT`), and file sharing (`share.prepare`, and `share.upload` over HTTPS with ureq and rustls) |
 
 All four are done and in every release; `docs/ROADMAP.md` says what is next.
 
@@ -48,3 +48,9 @@ shipped crate carries no JSON parser and both implementations provably use the s
 `aetherd/tests/two_daemons.rs` runs two real daemons through sessions over the simulated
 channel, and `aetherd/tests/field.rs` replays every recorded session in `field/sessions/`
 through the receiver and fails if fewer frames decode than did on the day.
+`tools/session_matrix.py` runs whole sessions between two release daemons through
+`tools/channel_server.py` for each `bench/scenarios/*.toml` (ADR-0042): `--tag quick` in CI,
+all of them nightly.
+
+`aether-link/src/frames.rs`'s `PROTOCOL_VERSION` moves with the shell's `LINK_PROTOCOL`, and a
+bump is an *Update required* release: stations on different protocols cannot connect.
