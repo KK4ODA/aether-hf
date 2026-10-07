@@ -43,10 +43,11 @@ Setup has changes that are not saved. The tabs, each a set of titled boxes:
   Morse identifier, band edges and
   band-plan guidance), 5 application settings (updates, recording, host programs, KISS
   programs), 6 save. Nothing changes until it is saved, and the tab says what is not.
-* **Log** — one entry a row with filters (problems, rules, sessions, beacons) and the
-  *Copy diagnostic bundle* button: that bundle (`diagnostics` in `docs/spec/control-api.md`
-  §4.6) is what to paste into a bug report. *Send files…* writes one zip of the logs, session
-  history and sidecars for another operator and opens an email — or, when the request link
+* **Log** — one entry a row with filters (problems, rules, sessions, beacons) and *Send files…*,
+  the one place anything leaves the station: it writes one zip of the logs, the diagnostic bundle
+  (`diagnostics` in `docs/spec/control-api.md` §4.6), the session history and the sidecars, and
+  opens an email, uploads it to a Drive upload script (an address and code in the form), or opens
+  a pre-filled GitHub issue for the last Test session — or, when the request link
   carries the asking station's upload address and code, sends it straight to their Google
   Drive (*Send to <call>*, `share.upload`, `tools/drive_upload/`).
 * **Help / About** — the version and its update channel, *Check for Updates*, getting on the

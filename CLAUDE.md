@@ -1125,7 +1125,11 @@ rustls, 8 MB pieces, resumes after a dropped connection, its own thread, `status
 `tools/drive_upload/try_upload.py` checks a deployment. The author deploys the script himself.
 *Send my files* uploads too (beta.87): an address and a code typed into the same row
 (`uploadFromFields`; the own code kept as `aether.uploadCode`, never carried into *ask*) show an
-**Upload** button.
+**Upload** button. The same day the reporting paths were brought into that one form: the
+Session tab's card is just **Recording** (Record, notes, folder; the *Last session* line went —
+the banner and the Stations tab's Sessions say it), the GitHub issue for a Test is *Send files…*
+→ *Report my last test as a GitHub issue* (`reportTestSession`, `contributeUrl`), and *Copy
+diagnostic bundle* is gone (the bundle is in every zip; the `diagnostics` method stays).
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
 **WC4Y's two Tests (2026-10-05, issues #2 and #3; beta.86).** Read from both stations' sidecars

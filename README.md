@@ -37,7 +37,7 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 > shorter). Every performance figure in this repository comes from a committed
 > benchmark curve in `bench/baselines/`. A **Test session** (Session → *Test session*) runs a
 > fixed sequence against any listening station — a probe, a message, a burst at every mode, a
-> file — records it, and *Contribute last test session as GitHub issue*, on the same tab, turns the
+> file — records it, and *Report my last test as a GitHub issue* (Log → **Send files…**) turns the
 > recording into a report the project can replay: how every volunteer contact becomes a
 > measurement. When a contact fails, **Send files…** on the Log tab asks the other station for
 > its side; with an upload script ([`tools/drive_upload/`](tools/drive_upload/README.md)) their

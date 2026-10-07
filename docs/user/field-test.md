@@ -150,10 +150,10 @@ tab when it ends: when and how long, who called, what crossed each way, the fast
 each way, how the other station heard you, how it ended, and the recording's name.
 **Sessions** on a station's row shows only that station's.
 
-**Contribute it**: *Contribute last test session as GitHub issue*, at the foot of the Session tab's
-**Recording and last session** box, opens a pre-filled GitHub issue (in a plain browser it
-copies the link instead); attach the sidecar — the `.json` beside the `.wav` in the
-recordings folder, which *Open folder* in the same box shows you — and send. The audio is yours to attach or not.
+**Contribute it**: on the Log tab, **Send files…** → *Report my last test as a GitHub issue* →
+**Open the report** opens a pre-filled GitHub issue (when the browser cannot be opened, the link
+goes to the clipboard); attach the sidecar — the `.json` beside the `.wav` in the recordings
+folder, which *Open folder* on the Session tab's **Recording** box shows you — and submit. The audio is yours to attach or not.
 When the author has asked you for a session's files with a request link, it is simpler
 still: open the link and press **Send to <call>** (§5a). The recording, the sidecar and your
 logs go to their upload folder in one press, audio included if they asked for it. `tools/field_ingest.py` folds what
