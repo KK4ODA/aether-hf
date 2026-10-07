@@ -155,6 +155,12 @@ sudo systemctl enable --now aetherd
 journalctl -u aetherd -f
 ```
 
+**Updating.** A gateway has no updates window: install a new release by hand (the `aetherd`
+tarball from Releases, or the package) and `sudo systemctl restart aetherd`. Watch for a
+release whose notes open with *Update required*: it changes the link protocol, the rules
+the modems speak on the air, and a station on the new release cannot connect to a gateway on
+the old one (beta 85 is protocol 7). Update the gateway when your users update, not after.
+
 ---
 
 ## 5. Checking on it
