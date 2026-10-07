@@ -54,7 +54,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.85` on 2026-09-14…10-06, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.86` on 2026-09-14…10-07, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
 other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
@@ -1124,6 +1124,19 @@ rustls, 8 MB pieces, resumes after a dropped connection, its own thread, `status
 `tools/drive_upload/try_upload.py` checks a deployment. The author deploys the script himself.
 A/B: `git worktree add <dir> HEAD`, build with its own `CARGO_TARGET_DIR`, and
 `session_matrix.py --daemon <that>/release/aetherd`.
+**WC4Y's two Tests (2026-10-05, issues #2 and #3; beta.86).** Read from both stations' sidecars
+and his audio (`field/LOG.md`): KK4ODA-1's acceptances reached him clean but *slipped* — about
+40 ms more audio inside the frame, so the end sync block sat a symbol late and its own tones
+counted as contradictions. **ADR-0048:** a caller that reads an acknowledgement of its own
+session is accepted when it offered no compression (`_accepted_unread` / `accepted_unread`,
+stat `acceptances_inferred`, event `accepted`). **ADR-0049:** a tone frame whose two best sync
+blocks each have 7 of 8 hits and no contradiction stands whatever the third holds
+(`CLEAN_BLOCK_HITS`, `clean_block_hits` through `preamble_tables.json`); the fixed daemon
+decodes both acceptances in his recording, and a 1 920-frame false-detection run found no
+difference between the rules. Rejected the same day: a per-family fading margin. The model puts
+rung 3 (tone4x100-75) several dB *below* OFDM rung 4 on ground+NVIS and Moderate alike, so the
+air's reversal is not the channel. Slips are the suspect: 1 of 28 frames in his 01:02 audio. No
+wire change: beta.85 and beta.86 interoperate.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
