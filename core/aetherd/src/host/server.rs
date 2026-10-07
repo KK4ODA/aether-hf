@@ -1219,7 +1219,9 @@ mod tests {
         client.send("VERSION");
         assert!(
             client
-                .expect(|l| l.starts_with("VERSION") || l == "PENDING" || l.starts_with("CONNECTED"))
+                .expect(|l| l.starts_with("VERSION")
+                    || l == "PENDING"
+                    || l.starts_with("CONNECTED"))
                 .starts_with("VERSION"),
             "a CONNECTED must not reach a host that is not listening",
         );
