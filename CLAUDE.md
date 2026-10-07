@@ -54,7 +54,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
-`beta.87` on 2026-09-14…10-07, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
+`beta.88` on 2026-09-14…10-07, signed: `TAURI_SIGNING_PRIVATE_KEY` is set; the author runs
 the beta channel and updates in place), and **Phase 6 (field validation) is in progress** —
 its tooling is built (P6-1…P6-5), Pat and Winlink Express pass the bench, and sessions with
 other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives the work now
@@ -1152,6 +1152,23 @@ engine arms the acknowledgement only from decoded frames, and a simulated rerun 
 Slips are real but rare (1 of 28 frames in his 01:02 audio). No wire change: beta.85 and beta.86
 interoperate. A shared Drive file over the Drive tool's 10 MB limit downloads directly with
 `curl -L "https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t"`.
+
+**Debug mode (ADR-0050, beta.89; the author's decision: on by default, said once, audio
+included).** For the coming trials of Winlink through the author's RMS gateway on Aether:
+`[record] send_to_project` (default `true`, live, `Scope::Machine` — never in a profile; schema
+11, `debug_mode`, a no-op step; fixture `0.2.0-beta.88-gateway.toml`) records every session a
+host program runs (`Session.host`: a program attached when it came up; `record_host_sessions`,
+`recording_session`) and a minute after it ends (`debug::QUIET_MS`, idle, not over the
+operator's own upload, six a zip) uploads its recording *with the audio*, the logs and the
+diagnostic bundle to `upload::PROJECT_ENDPOINT` (the panel's `PROJECT_UPLOAD_URL`; a test holds
+them equal), the zip written on the upload's thread (`upload::Job.zip`); retried after 30 and 60
+min, then left in the recordings folder; `status.debug`, `debug` log lines; not the panel's own
+sessions nor Tests. The panel says so once (`#debug-banner`, *Keep it on* / *Turn it off*,
+`aether.debugNoticeSeen`); Setup step 5 *Debug mode*; a headless daemon logs it at start. The
+script's day is 80 uploads / 8 GB and a refused email no longer fails an upload — **the author
+pastes `Code.gs` and deploys a New version** for that. Next: RMS Trimode + RMS Relay against two
+`[sim]` daemons, from a local session on the author's machine (scratch copies; channel
+reporting off).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

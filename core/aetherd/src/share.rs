@@ -34,6 +34,9 @@ pub struct Request {
     pub remote: Option<String>,
     /// The recordings' audio as well as their sidecars.
     pub audio: bool,
+    /// Only these recordings, by file stem — debug mode sends the sessions that ended, not
+    /// the period's (ADR-0050). `None` takes every recording of the period.
+    pub recordings: Option<Vec<String>>,
 }
 
 /// Where the files are on this machine.
@@ -133,6 +136,7 @@ pub fn gather(places: &Places, request: &Request) -> Gathered {
             })
             .filter(|p| began_since(p, request.since_ms))
             .filter(|p| with_station(p, request.remote.as_deref()))
+            .filter(|p| named(p, request.recordings.as_deref()))
             .collect();
         sidecars.sort();
         for sidecar in sidecars {
@@ -314,6 +318,15 @@ fn began_since(path: &Path, since_ms: u64) -> bool {
         Some(began) => began >= since_ms,
         None => written_since(path, since_ms),
     }
+}
+
+/// Whether a sidecar is one of `stems`, or any when `None`.
+fn named(sidecar: &Path, stems: Option<&[String]>) -> bool {
+    let Some(stems) = stems else {
+        return true;
+    };
+    let stem = sidecar.file_stem().unwrap_or_default().to_string_lossy();
+    stems.iter().any(|s| *s == stem)
 }
 
 /// Whether a sidecar is of a session with `remote` (by base callsign), or any when `None`.
@@ -516,6 +529,7 @@ mod tests {
                 since_ms: since,
                 remote: Some("ke4qcm".into()),
                 audio: false,
+                recordings: None,
             },
         );
         assert_eq!(got.sessions, 2);
@@ -535,6 +549,7 @@ mod tests {
                 since_ms: since,
                 remote: None,
                 audio: true,
+                recordings: None,
             },
         );
         assert_eq!(got.sessions, 3);
@@ -546,6 +561,29 @@ mod tests {
                     .is_some_and(|e| e.eq_ignore_ascii_case("wav")))
                 .count(),
             3
+        );
+        // debug mode's: the one session that ended, its audio with it, whoever it was with
+        let got = gather(
+            &places,
+            &Request {
+                since_ms: since,
+                remote: None,
+                audio: true,
+                recordings: Some(vec!["20261005-004737_KK4ODA-1_KE4QCM-1".into()]),
+            },
+        );
+        assert_eq!(got.sessions, 1);
+        assert!(
+            names(&got)
+                .iter()
+                .filter(|n| n.starts_with("recordings/"))
+                .eq([
+                    "recordings/20261005-004737_KK4ODA-1_KE4QCM-1.json",
+                    "recordings/20261005-004737_KK4ODA-1_KE4QCM-1.wav"
+                ]
+                .iter()),
+            "{:?}",
+            names(&got)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

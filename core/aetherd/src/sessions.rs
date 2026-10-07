@@ -67,6 +67,10 @@ pub struct Session {
     pub top_rung_heard: Option<usize>,
     /// Whether the session was a Test session's.
     pub test: bool,
+    /// Whether a host program was attached when it came up — Winlink Express, Pat, `VarAC`: its
+    /// session, as far as the station can tell. Older files say nothing, read as not.
+    #[serde(default)]
+    pub host: bool,
     /// The recording it went into, by file name, when it was recorded.
     pub recording: Option<String>,
 }
@@ -188,6 +192,7 @@ mod tests {
             top_rung_sent: Some(3),
             top_rung_heard: Some(7),
             test: true,
+            host: false,
             recording: Some("20260925-015107_KK4ODA-1_ND1J_test".to_owned()),
         }
     }

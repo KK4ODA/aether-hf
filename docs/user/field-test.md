@@ -211,11 +211,20 @@ fields:
   and that session's time.
 * **Report my last test as a GitHub issue** (§3).
 
-Nothing is sent without you; every zip waits in the `shared` folder beside your settings. The
-project's folder takes a limited number of uploads a day ([`tools/drive_upload/`](../../tools/drive_upload/README.md)); when
-it is full, email is the way round.
+Every zip waits in the `shared` folder beside your settings. The project's folder takes a
+limited number of uploads a day ([`tools/drive_upload/`](../../tools/drive_upload/README.md));
+when it is full, email is the way round.
 
-Neither holds what was said: the logs record how much was sent, never what.
+**Debug mode** (Setup step 5, on by default during the field trials; ADR-0050) does the first
+choice by itself for every session a host program runs — Winlink Express, Pat or VarAC, P2P or
+through a gateway: the session is recorded, and a minute after it ends its recording, the logs
+and the diagnostic bundle go to the project, while the station is idle. The panel says so once
+when it is on, with *Turn it off*; the Log tab shows each upload (`debug`). The panel's own
+sessions and Test sessions are not sent.
+
+The logs record how much was sent, never what. A recording's audio is different: Aether can
+decode what was sent from it, which is why it is left out of a zip unless you tick it — and why
+debug mode, which includes it, says so.
 
 **Your calls are heard, your answers are not.** When the other station keeps calling after you
 accepted, or its probes report no answer while yours get through, the start of your answers

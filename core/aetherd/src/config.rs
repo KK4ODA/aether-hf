@@ -597,7 +597,7 @@ fn default_sim_snr() -> f64 {
 }
 
 /// Session recordings, for field validation and for finding out what happened.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordSection {
     /// Where recordings go. Unset means `recordings/` beside the configuration file.
@@ -616,6 +616,27 @@ pub struct RecordSection {
     /// or the rig's scope against, and it writes a file per burst.
     #[serde(default)]
     pub tx_audio: bool,
+    /// Debug mode: every session a host program runs (Winlink Express, Pat, `VarAC` — P2P or
+    /// through a gateway) is recorded, and a minute after it ends its recording, audio
+    /// included, the logs and the settings without their secrets go to the Aether project's
+    /// upload folder (`tools/drive_upload/`). On by default while Aether is in its field
+    /// trials: what a session did on a real path is what the project needs most, and asking
+    /// for it after the fact found the logs gone (ADR-0050). The panel says so once, with
+    /// the switch to turn it off; the audio carries what was sent.
+    #[serde(default = "default_true")]
+    pub send_to_project: bool,
+}
+
+impl Default for RecordSection {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            auto: false,
+            notes: String::new(),
+            tx_audio: false,
+            send_to_project: true,
+        }
+    }
 }
 
 /// Panel preferences: choices the desktop panel makes that are not the modem's to keep,
@@ -884,7 +905,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -906,6 +927,7 @@ pub const MIGRATIONS: &[Migration] = &[
     host_keying,
     flrig_keying,
     answer_gap,
+    debug_mode,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1039,6 +1061,10 @@ fn flrig_keying(_table: &mut toml::Table) {}
 /// key with a default that answers as before, and the step is for going back
 /// (`<name>.bak-v9`).
 fn answer_gap(_table: &mut toml::Table) {}
+
+/// Schema 10 → 11, debug mode (ADR-0050): nothing moves — `record.send_to_project` is a new
+/// key, and the step is for going back (`<name>.bak-v10`).
+fn debug_mode(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1438,6 +1464,7 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.cw_id_interval_s",
     "record.auto",
     "record.notes",
+    "record.send_to_project",
     "operator.grid",
     "operator.rig",
     "operator.power_w",
@@ -1640,7 +1667,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 10
+schema_version = 11
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1783,6 +1810,11 @@ notes = ""
 # Every transmission's exact audio too, under tx/ with an envelope sidecar: for chasing a
 # problem in the transmitted signal, not for everyday use.
 # tx_audio = false
+# Debug mode: record every session a host program runs (Winlink Express, Pat, VarAC) and,
+# a minute after it ends, send its recording — audio included, so what was sent with it —
+# the logs and the settings without their secrets to the Aether project's upload folder.
+# On while Aether is in its field trials; false keeps everything on this computer.
+send_to_project = true
 
 # [panel]
 # The desktop panel keeps its own choices here; it writes this itself.

@@ -181,6 +181,8 @@ pub struct DaemonState {
     pub upload: crate::upload::Upload,
     /// How the upload reaches the network: a function, so the tests can stand in for Google.
     pub upload_http: fn() -> Box<dyn crate::upload::Http>,
+    /// Debug mode's queue: the host program's sessions on their way to the project.
+    pub debug: crate::debug::DebugUploads,
 }
 
 /// The network, for an upload.
@@ -222,6 +224,7 @@ impl DaemonState {
             devices: device_inventory,
             upload: crate::upload::Upload::default(),
             upload_http: web,
+            debug: crate::debug::DebugUploads::default(),
             device_list: crate::devices::DeviceList::default(),
             devices_told: 0,
             devices_last_told: None,
@@ -529,6 +532,12 @@ fn daemon_status<P: Ptt>(station: &mut Station<P>, daemon: Option<&DaemonState>)
     result["audio_fault"] = json!(daemon.and_then(|d| d.audio_fault.clone()));
     result["config_note"] = json!(daemon.and_then(|d| d.config_note.clone()));
     result["upload"] = json!(daemon.map(|d| d.upload.progress()));
+    // debug mode (ADR-0050): whether it is on, what waits, what went
+    result["debug"] = daemon.map_or(Value::Null, |d| {
+        let mut debug = json!(d.debug);
+        debug["on"] = json!(d.config.record.send_to_project);
+        debug
+    });
     // which installation this daemon runs from: a shell that finds one already
     // listening decides from this whether it is its own to stop
     result["binary"] = json!(
@@ -643,6 +652,7 @@ fn share_prepare<P: Ptt>(
         since_ms,
         remote: remote.clone(),
         audio,
+        recordings: None,
     };
     let mut gathered = crate::share::gather(&places, &request);
     // the settings without their secrets, the devices, the status: the diagnostic bundle
@@ -761,6 +771,7 @@ fn share_upload<P: Ptt>(
             .map(|n| n.chars().take(2000).collect())
             .unwrap_or_default(),
         callsign: station.engine().my_call.clone(),
+        zip: None,
     };
     if let Err(error) = daemon.upload.start(job, (daemon.upload_http)()) {
         return Response::failed(id, ApiError::new("busy", error, true));
@@ -772,6 +783,87 @@ fn share_upload<P: Ptt>(
         &format!("{:?}", station.state()),
     );
     Response::ok(id, json!({ "started": true, "name": name, "bytes": bytes }))
+}
+
+/// Debug mode (ADR-0050): send the sessions `pending` names — their recordings with the audio,
+/// the logs, the session history and the diagnostic bundle — to the Aether project. The zip
+/// is gathered here, which only lists files, and written and uploaded on the upload's thread.
+/// Returns the zip's name.
+///
+/// # Errors
+/// Another upload is under way, or its thread would not start.
+pub fn start_debug_upload<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: &mut DaemonState,
+    pending: &[crate::debug::Pending],
+) -> Result<String, String> {
+    let now = unix_ms(std::time::SystemTime::now());
+    let since_ms = pending
+        .iter()
+        .map(|p| p.started_ms)
+        .min()
+        .unwrap_or(now)
+        .saturating_sub(10 * 60_000);
+    let places = crate::share::Places {
+        config: daemon.path.clone(),
+        recordings: station.record_dir().map(std::path::Path::to_path_buf),
+        log_file: daemon.config.log.file.clone(),
+    };
+    let request = crate::share::Request {
+        since_ms,
+        remote: None,
+        audio: true,
+        recordings: Some(pending.iter().map(|p| p.recording.clone()).collect()),
+    };
+    let mut gathered = crate::share::gather(&places, &request);
+    let callsign = station.engine().my_call.clone();
+    let bundle = diagnostics(station, Some(&mut *daemon), None)
+        .result
+        .unwrap_or(Value::Null);
+    gathered.entries.push((
+        "diagnostics.json".into(),
+        crate::share::Entry::Bytes(serde_json::to_vec_pretty(&bundle).unwrap_or_default()),
+    ));
+    let remotes: Vec<&str> = pending.iter().map(|p| p.remote.as_str()).collect();
+    let readme = format!(
+        "Aether HF {} at {callsign}\nSent by debug mode {} UTC\nSessions a host program ran: {} \
+         ({} recorded)\nAudio: included\n",
+        env!("CARGO_PKG_VERSION"),
+        crate::share::stamp(now),
+        remotes.join(", "),
+        gathered.sessions,
+    );
+    gathered.entries.push((
+        "README.txt".into(),
+        crate::share::Entry::Bytes(readme.into_bytes()),
+    ));
+    let safe_call: String = callsign
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let name = format!("aether-{safe_call}-{}-debug.zip", crate::share::stamp(now));
+    let job = crate::upload::Job {
+        file: crate::share::shared_dir(&daemon.path).join(&name),
+        name: name.clone(),
+        endpoint: crate::upload::PROJECT_ENDPOINT.to_owned(),
+        code: String::new(),
+        note: format!(
+            "Debug mode: {} session{} with {}.",
+            pending.len(),
+            if pending.len() == 1 { "" } else { "s" },
+            remotes.join(", ")
+        ),
+        callsign,
+        zip: Some((gathered.entries, now)),
+    };
+    daemon.upload.start(job, (daemon.upload_http)())?;
+    Ok(name)
 }
 
 /// What `share.prepare` was asked for: the hours back, the station, the audio.
@@ -2602,6 +2694,126 @@ mod tests {
     }
 
     #[test]
+    fn debug_mode_sends_the_sessions_recording_with_its_audio_to_the_project() {
+        // what the script was asked and sent, for the test to read: the fake is a plain
+        // function, so it keeps them here
+        static SEEN: std::sync::Mutex<Vec<(String, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+        struct Script;
+        impl crate::upload::Http for Script {
+            fn post(&self, url: &str, body: &str) -> Result<crate::upload::Reply, String> {
+                SEEN.lock()
+                    .expect("seen")
+                    .push((url.to_owned(), body.as_bytes().to_vec()));
+                let asked: Value = serde_json::from_str(body).expect("json");
+                let answer = if asked["action"] == "begin" {
+                    json!({"ok": true, "upload_url": "https://www.googleapis.com/upload/s", "to": "KK4ODA"})
+                } else {
+                    json!({"ok": true, "link": "https://drive.google.com/file/d/F/view"})
+                };
+                Ok(crate::upload::Reply {
+                    status: 200,
+                    body: answer.to_string(),
+                    ..crate::upload::Reply::default()
+                })
+            }
+            fn get(&self, _: &str) -> Result<crate::upload::Reply, String> {
+                Err("not asked".into())
+            }
+            fn put(&self, url: &str, _: &str, body: &[u8]) -> Result<crate::upload::Reply, String> {
+                SEEN.lock()
+                    .expect("seen")
+                    .push((url.to_owned(), body.to_vec()));
+                Ok(crate::upload::Reply {
+                    status: 201,
+                    body: json!({"id": "F"}).to_string(),
+                    ..crate::upload::Reply::default()
+                })
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("aether-debug-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let recordings = dir.join("recordings");
+        std::fs::create_dir_all(&recordings).expect("temp dir");
+        let stem = "20261007-140000_KK4ODA-10_ND1J";
+        std::fs::write(
+            recordings.join(format!("{stem}.json")),
+            r#"{"session":{"remote":"ND1J"}}"#,
+        )
+        .expect("sidecar");
+        std::fs::write(recordings.join(format!("{stem}.wav")), b"RIFF-the-audio").expect("wav");
+        // another session's recording stays out of it
+        std::fs::write(
+            recordings.join("20261007-130000_KK4ODA-10_W4TGA.json"),
+            r#"{"session":{"remote":"W4TGA"}}"#,
+        )
+        .expect("sidecar");
+        let mut station = station();
+        station.set_recording(Some(recordings.clone()), false, "");
+        let mut daemon = daemon();
+        daemon.path = dir.join("station.toml");
+        daemon.upload_http = || Box::new(Script);
+        let pending = [crate::debug::Pending {
+            recording: stem.into(),
+            remote: "ND1J".into(),
+            started_ms: 1_791_381_600_000,
+        }];
+        let name = start_debug_upload(&mut station, &mut daemon, &pending).expect("started");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while daemon.upload.busy() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let progress = daemon.upload.progress();
+        assert_eq!(progress.state, "done", "{progress:?}");
+        assert_eq!(progress.name.as_deref(), Some(name.as_str()));
+        let seen = SEEN.lock().expect("seen").clone();
+        // to the project's script, with no code
+        let begin: Value = serde_json::from_slice(&seen[0].1).expect("begin");
+        assert_eq!(seen[0].0, crate::upload::PROJECT_ENDPOINT);
+        assert_eq!(begin["code"], "");
+        // the zip went up whole: the session's sidecar and audio, not the other session's
+        let zip: Vec<u8> = seen
+            .iter()
+            .filter(|(url, _)| url.starts_with("https://www.googleapis.com/"))
+            .flat_map(|(_, body)| body.clone())
+            .collect();
+        let has = |needle: &[u8]| zip.windows(needle.len()).any(|w| w == needle);
+        assert!(has(format!("recordings/{stem}.wav").as_bytes()));
+        assert!(has(b"RIFF-the-audio"), "the audio is stored, not deflated");
+        assert!(has(format!("recordings/{stem}.json").as_bytes()));
+        assert!(!has(b"W4TGA.json"));
+        assert!(has(b"diagnostics.json") && has(b"README.txt"));
+        // and the status says it is on
+        let status = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &Request {
+                id: Some("1".into()),
+                method: "status".to_owned(),
+                params: json!({}),
+            },
+        )
+        .result
+        .expect("status");
+        assert_eq!(status["debug"]["on"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_panel_sends_to_the_same_project_address_as_debug_mode() {
+        let panel = include_str!("../../../../app/ui/app.js");
+        assert!(
+            panel.contains(&format!(
+                "const PROJECT_UPLOAD_URL = \"{}\";",
+                crate::upload::PROJECT_ENDPOINT
+            )),
+            "app/ui/app.js's PROJECT_UPLOAD_URL and upload::PROJECT_ENDPOINT differ"
+        );
+        assert!(crate::upload::endpoint_allowed(
+            crate::upload::PROJECT_ENDPOINT
+        ));
+    }
+
+    #[test]
     fn the_stations_heard_are_listed_and_forgotten() {
         let mut station = station();
         let mut daemon = daemon();
@@ -2713,6 +2925,7 @@ mod tests {
             top_rung_sent: Some(5),
             top_rung_heard: Some(7),
             test: true,
+            host: false,
             recording: None,
         };
         let response = dispatch_with(

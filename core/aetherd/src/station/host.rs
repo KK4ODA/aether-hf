@@ -65,6 +65,12 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// Whether a host program holds the command port now.
+    #[must_use]
+    pub fn host_attached(&self) -> bool {
+        self.host.presence.attached
+    }
+
     /// Whether calls to this station are answered now.
     #[must_use]
     pub fn answering(&self) -> bool {
