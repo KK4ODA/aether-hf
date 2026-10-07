@@ -370,6 +370,15 @@ fn serve_commands(
     // a call this host placed that has neither come up nor been said to have ended: a host
     // waits for CONNECTED or DISCONNECTED after its CONNECT, and would wait for ever on neither
     let mut calling = false;
+    // A `connected` the station formed while the host's LISTEN was off, held until it is on
+    // again. A scanning RMS (Trimode) toggles LISTEN off for the fraction of a second it is
+    // deaf between scan steps, and ignores a CONNECTED that lands in that window ("Ignoring
+    // CONNECTED while LISTEN=FALSE"); answering a call takes a second or two over the air, so
+    // the CONNECTED can arrive in a later deaf blip than the listening window the call was
+    // answered in. The session is up on both modems — only the host has to hear of it while it
+    // is listening, so the notification waits for the next LISTEN on (ADR-0051, the RMS Trimode
+    // bench 2026-10-07).
+    let mut pending_connected: Option<serde_json::Value> = None;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -434,6 +443,23 @@ fn serve_commands(
             }
         }
 
+        // ── a connection held for the host's LISTEN to come back ───────
+        // The command just read may have been the LISTEN on that lets a scanning host hear the
+        // CONNECTED it would otherwise ignore; emit it now that it is listening.
+        if host.listening && pending_connected.is_some() {
+            let data = pending_connected.take().unwrap_or_default();
+            if !report_state(
+                &data,
+                &host,
+                &mut connected_to,
+                &mut calling,
+                &mut writer,
+                &say,
+            ) {
+                return;
+            }
+        }
+
         // ── payload the host wrote on the data port ───────────────────
         // What the program wrote goes into its own session: written with none up, it waits
         // in the pipe for the next — never into a session the panel started, whose other end
@@ -470,6 +496,25 @@ fn serve_commands(
                     }
                 }
                 "state" => {
+                    let name = event.data["name"].as_str().unwrap_or("");
+                    // A call the station answered while the host was not listening: hold its
+                    // CONNECTED until LISTEN comes back rather than have it ignored. Only the
+                    // answering (IRS) side is gated by LISTEN — a call this host placed is never
+                    // held, LISTEN or no.
+                    let detail = event.data["detail"].as_str().unwrap_or("");
+                    let called = detail.split_whitespace().nth(1) == Some("(irs)");
+                    if name == "connected" && called && !host.listening {
+                        if trace {
+                            eprintln!("host (held CONNECTED until LISTEN on)");
+                        }
+                        pending_connected = Some(event.data.clone());
+                        continue;
+                    }
+                    // A disconnection cancels a connection still held for LISTEN: the host was
+                    // never told of it, so it is told of neither.
+                    if name == "disconnected" {
+                        pending_connected = None;
+                    }
                     if !report_state(
                         &event.data,
                         &host,
@@ -1147,6 +1192,53 @@ mod tests {
         worker.join().expect("worker");
     }
 
+    #[test]
+    fn a_connected_waits_for_a_scanning_host_to_be_listening_again() {
+        // A scanning RMS (Trimode) toggles LISTEN off for the fraction of a second it is deaf
+        // between scan steps, and ignores a CONNECTED that lands then ("Ignoring CONNECTED while
+        // LISTEN=FALSE"). The station answered the call during a listening window, but the
+        // over-the-air acceptance takes long enough that the CONNECTED can arrive in a later
+        // deaf blip. The adapter holds it for the next LISTEN on (ADR-0051, the RMS Trimode
+        // bench 2026-10-07).
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // the host goes deaf for its scan step
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // the station forms the session for the host while it is not listening
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (irs)", "callsign": "W4ODA"}),
+        );
+        // nothing of it reaches the host yet: a VERSION asked now is answered before any CONNECTED
+        std::thread::sleep(Duration::from_millis(200));
+        client.send("VERSION");
+        assert!(
+            client
+                .expect(|l| l.starts_with("VERSION") || l == "PENDING" || l.starts_with("CONNECTED"))
+                .starts_with("VERSION"),
+            "a CONNECTED must not reach a host that is not listening",
+        );
+        // the scan comes back round to listening, and now the host hears the session
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
+            "PENDING",
+            "the called side hears PENDING first"
+        );
+        assert_eq!(
+            client.expect(|l| l.starts_with("CONNECTED")),
+            "CONNECTED KK4XYZ W4ODA 2300"
+        );
+        drop(client);
+        drop(modem);
+    }
+
     /// A stub modem the test scripts: `answer` gives each request's result, and publishes
     /// what the request set in motion before that — the order the daemon keeps — and the test
     /// publishes events of its own whenever it likes.
@@ -1662,6 +1754,9 @@ mod tests {
         });
         let mut client = Client::connect(&server);
         client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // a station that answers a call is listening, so the CONNECTED is delivered at once
+        client.send("LISTEN ON");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
         client.send("BW500");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
