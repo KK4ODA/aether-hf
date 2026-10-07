@@ -1457,6 +1457,73 @@ fn a_repeated_acceptance_says_how_its_request_arrived() {
     assert_eq!(modes[4], fresh.first_mode(18.0), "{modes:?}");
 }
 
+/// WC4Y's call of 2026-10-05 (ADR-0048): the caller hears none of the called station's DATA
+/// frames — its acceptances — and every try after the first arrives unreadable, so the called
+/// station, connected, answers them with acknowledgements of the session.
+fn acceptances_lost(capabilities: u8, message: &[u8]) -> TwoStationSim {
+    use aether_link::frames::decode_data;
+    let t = timing(false);
+    let config = LinkConfig {
+        capabilities,
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    a.connect("KK4XYZ").expect("idle");
+    a.send(message);
+    a.disconnect();
+    let requests = std::cell::Cell::new(0usize);
+    TwoStationSim::new(a, b, 15.0, 31)
+        .with_unheard(Box::new(|rx, container, _| {
+            rx == 0 && container == Container::Data
+        }))
+        .with_frame_snr_offset(Box::new(move |frame| {
+            let request = frame.container == Container::Data
+                && decode_data(&frame.payload)
+                    .is_ok_and(|(header, _)| header.kind == aether_link::DataKind::ConnectReq);
+            if !request {
+                return 0.0;
+            }
+            requests.set(requests.get() + 1);
+            if requests.get() == 1 { 0.0 } else { -40.0 }
+        }))
+}
+
+#[test]
+fn an_acknowledgement_of_the_callers_session_is_its_acceptance() {
+    // A caller that reads an acknowledgement of its own session has been accepted: only a
+    // station that accepted the request takes its session number. WC4Y read one while all
+    // four of KK4ODA-1's acceptances were lost, kept calling, and gave up (ADR-0048). It
+    // offered nothing beyond its bandwidth, so the acceptance it missed held nothing it did
+    // not know
+    use aether_link::frames::with_bandwidth;
+    let message: Vec<u8> = (0..=255u8).chain(0..=255u8).collect();
+    let mut sim = acceptances_lost(with_bandwidth(0, 2300), &message);
+    sim.run(400.0, 3.0);
+    let caller = sim.engine(0);
+    assert_eq!(caller.stats.acceptances_inferred, 1, "{:?}", caller.stats);
+    assert_eq!(caller.peer_capabilities(), with_bandwidth(0, 2300));
+    assert!(
+        sim.events(0)
+            .iter()
+            .any(|e| e.starts_with("accepted:KK4XYZ")),
+        "{:?}",
+        sim.events(0)
+    );
+    assert_eq!(sim.delivered(1), message.as_slice());
+}
+
+#[test]
+fn a_caller_that_offered_compression_waits_for_the_acceptance() {
+    // Compression is used only when both offer it, and only the acceptance says whether the
+    // other did: a caller that offered it does not take an acknowledgement for the acceptance
+    use aether_link::frames::{CAP_COMPRESSION, with_bandwidth};
+    let mut sim = acceptances_lost(with_bandwidth(CAP_COMPRESSION, 2300), &[0u8; 100]);
+    sim.run(400.0, 3.0);
+    let caller = sim.engine(0);
+    assert_eq!(caller.stats.acceptances_inferred, 0, "{:?}", caller.stats);
+    assert_eq!(sim.delivered(1), b"");
+}
+
 #[test]
 fn a_request_heard_again_is_answered_and_nothing_else() {
     // The acceptance again is the whole answer to a request heard again. The request had also

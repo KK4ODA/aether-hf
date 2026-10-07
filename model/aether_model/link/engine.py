@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from aether_model.link.frames import (
+    CAP_BANDWIDTH_MASK,
     CONNECT_BODY_BYTES,
     MAX_BURST,
     PROTOCOL_VERSION,
@@ -330,6 +331,9 @@ class LinkStats:
     """Bursts that ended with the turn on offer (ADR-0047)."""
     turns_taken: int = 0
     """Acknowledgements that took the turn offered, this station's burst after them (ADR-0047)."""
+    acceptances_inferred: int = 0
+    """Calls this station took as accepted from an acknowledgement of its own session, the
+    acceptance itself not read (ADR-0048)."""
 
 
 @dataclass(frozen=True)
@@ -1929,11 +1933,11 @@ class LinkEngine:
                 self._turn_unread = True  # it may be the answer to the TURN (ADR-0029)
             return
         self._note_peer_frame(frame)
-        if (
-            self.state is State.IDLE
-            or self.state is State.CONNECTING
-            or ctl.session != self.session
-        ):
+        if self.state is State.CONNECTING:
+            if ctl.kind is ControlKind.ACK and ctl.session == self.session:
+                self._accepted_unread(frame, ctl)
+            return
+        if self.state is State.IDLE or ctl.session != self.session:
             return
         self._last_peer_frame = self.now
         self._heard_peer_db = frame.snr_db
@@ -2250,6 +2254,47 @@ class LinkEngine:
             self._send_burst()
         else:
             self._send_poll()  # confirms the handshake and fetches the first ACK
+
+    def _accepted_unread(self, frame: SoftFrame, ctl: ControlFrame) -> None:
+        """A caller that reads an acknowledgement of its own session has been accepted: the
+        called station takes the session number only from a request it accepted, and
+        answers the tries it cannot read with acknowledgements (ADR-0016). WC4Y's call of
+        2026-10-05 read one of those while all four acceptances were lost, and kept calling
+        until it gave up (ADR-0048).
+
+        The acceptance's body says three things — bandwidth, link protocol and capabilities
+        — and an acknowledgement says the first two: a station accepts only a request in its
+        own bandwidth and protocol. Capabilities are settled only when this station offered
+        none beyond the bandwidth: what the two agree is then nothing, whatever the other
+        offered. A caller that offered compression keeps calling for the acceptance itself."""
+        if self.cfg.capabilities & ~CAP_BANDWIDTH_MASK & 0xFF:
+            return
+        self._disarm("connect")
+        self.peer_capabilities = self.cfg.capabilities
+        self.state = State.CONNECTED
+        self.role = Role.ISS
+        self._caller = True
+        self._confirmed = True
+        self._last_peer_frame = self.now
+        self._heard_peer_db = frame.snr_db
+        self._arm("link", self._link_timeout())
+        self.stats.acceptances_inferred += 1
+        self.actions.append(
+            Event(
+                "accepted",
+                f"{self.remote_call}: its acceptance was not read; an acknowledgement of "
+                f"session {self.session} was",
+            )
+        )
+        self.actions.append(Event("connected", f"{self.remote_call} (iss)"))
+        self.rate.seed(frame.snr_db, lower_bound=self._peer_floor)
+        self._recommended = self.cfg.initial_mode
+        if ctl.snr_db is not None:
+            self._recommended = max(self.cfg.initial_mode, self.rate.first_mode(ctl.snr_db))
+        if self._has_work():
+            self._send_burst()
+        else:
+            self._send_poll()
 
     def _rate_controller(self) -> RateController:
         """A fresh controller for the PHY's mode table: its thresholds when the timing

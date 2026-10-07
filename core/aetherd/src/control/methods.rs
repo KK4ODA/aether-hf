@@ -1856,6 +1856,7 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         // the turn offered at the end of a burst, and taken with an acknowledgement (ADR-0047)
         "turn_offers": stats.turn_offers,
         "turns_taken": stats.turns_taken,
+        "acceptances_inferred": stats.acceptances_inferred,
     })
 }
 
