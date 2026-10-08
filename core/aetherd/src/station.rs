@@ -8435,6 +8435,7 @@ mod tests {
         assert_eq!(station.datagram_status()["incomplete_dropped"], 0);
         station.feed_datagram(heard_at + datagrams::REASSEMBLY_TIMEOUT_S + 1.0);
         assert_eq!(station.datagram_status()["incomplete_dropped"], 1);
-        assert!(station.take_received_datagrams().is_empty());
+        let received = station.take_received_datagrams();
+        assert!(received.is_empty(), "{received:?}");
     }
 }
