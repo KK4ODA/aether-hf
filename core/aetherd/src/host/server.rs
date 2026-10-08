@@ -1688,18 +1688,27 @@ mod tests {
     fn a_taken_data_port_is_reported_rather_than_quietly_moved() {
         // a client that found the command port and then could not find the data port would
         // connect and hang; the operator has to be told which port is in the way
-        // take a known-free pair, release it, then put something on the data port only
-        let (command, data) = bind_pair("127.0.0.1:0").expect("a free pair");
-        let command_port = command.local_addr().expect("addr").port();
-        let data_port = data.local_addr().expect("addr").port();
-        drop(command);
-        drop(data);
-        let _squatter = TcpListener::bind(("127.0.0.1", data_port)).expect("squatter");
-
-        let Err(error) = bind_pair(&format!("127.0.0.1:{command_port}")) else {
-            panic!("binding over an occupied data port should fail");
-        };
-        let HostError::Bind(message) = error;
+        // take a known-free pair and release only the command port: the data port's own
+        // listener stays as the squatter. Releasing both and binding the data port again let a
+        // test running beside this one take it in between (macOS CI, 2026-10-08); and the
+        // command port, released, can be taken the same way, so a pair is tried again until
+        // the command port is still free when the bind comes
+        let (data_port, message) = (0..20)
+            .find_map(|_| {
+                let (command, data) = bind_pair("127.0.0.1:0").expect("a free pair");
+                let command_port = command.local_addr().expect("addr").port();
+                let data_port = data.local_addr().expect("addr").port();
+                drop(command);
+                let _squatter = data;
+                let Err(HostError::Bind(message)) = bind_pair(&format!("127.0.0.1:{command_port}"))
+                else {
+                    panic!("binding over an occupied data port should fail");
+                };
+                message
+                    .contains("data port")
+                    .then_some((data_port, message))
+            })
+            .expect("a command port that stays free for a moment");
         assert!(
             message.contains("consecutive"),
             "the message does not explain the problem: {message}"
