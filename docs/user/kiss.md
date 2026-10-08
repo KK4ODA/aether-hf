@@ -101,9 +101,11 @@ station* from the outbox, off the calling frequency; the other copy's *Parking* 
 but VarAC sends the notification only when it *hears the addressee's beacon*, and VarAC's own
 *Send beacons* sends nothing to Aether — no command on the host port, no KISS frame, on or off
 the calling frequency — while its *Call CQ* sends `CQFRAME` and works. A `CQFRAME` without a
-slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. The likely cause is VarAC
-gating its beacon on the VARA version it parses from `VERSION`, which Aether answers with its
-own name; that is untested. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS
+slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. It is not the modem's
+version: a daemon answering `VERSION VARA HF 4.8.8` (VarAC 15.0.18 refuses anything below
+4.8.8 and says so in its log; Aether's own name skips that check) changed nothing — VarAC still
+logged "Sending beacon" and wrote nothing to the command port, the data port or the KISS port.
+The cause is inside VarAC. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS
 packet it sends in hex; Aether's `trace` shows type, length and fate only.
 
 ### APRS programs
