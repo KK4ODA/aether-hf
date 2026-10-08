@@ -420,6 +420,8 @@ class LinkEngine:
         """This station, receiving, was offered the turn at the end of the burst (ADR-0047)."""
         self._offer_out = False
         """The last burst this station sent offered the turn, and nothing has answered it."""
+        self._poll_offer = False
+        """The caller's first poll offered the turn, and nothing has answered it (ADR-0053)."""
         self._offer_unheard = False
         """The last acknowledgement of a burst that offered the turn measured none of its data:
         the other station heard the offer and not the frames before it. The next burst goes
@@ -1087,8 +1089,11 @@ class LinkEngine:
             self._tx_busy_until - self.now + self._response_wait(response_s, responder_delay),
         )
 
-    def _send_poll(self) -> None:
-        poll = self._control(ControlKind.POLL)
+    def _send_poll(self, offer: bool = False) -> None:
+        poll = self._control(
+            ControlKind.POLL, flags=ControlFlags.OFFER if offer else ControlFlags.NONE
+        )
+        self._poll_offer = offer
         self._poll_floor = poll.floor
         self._transmit([poll])
         self._wait_for("poll", self._reply_control_s(), self._unread_poll_delay())
@@ -1552,6 +1557,7 @@ class LinkEngine:
         elif ack.snr_db is not None:
             self._offer_unheard = False
         self._offer_out = False
+        self._poll_offer = False
         if ack.flags & ControlFlags.TAKEN:
             # the other station took the turn this one offered: its burst follows (ADR-0047)
             self._take_irs()
@@ -2019,6 +2025,8 @@ class LinkEngine:
         elif ctl.kind is ControlKind.POLL:
             if self.role is Role.IRS or self._waiting_for == "turn":
                 self._take_irs()
+                # the caller's first poll may offer the turn (ADR-0053), as a burst's end does
+                self._offered = bool(ctl.flags & ControlFlags.OFFER)
                 self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
             elif self.role is Role.ISS and not self._caller:
                 # Both stations hold the turn: the other missed this one's answer to its TURN,
@@ -2058,9 +2066,11 @@ class LinkEngine:
         layer trusts, in the family of the session's ordinary frames, is that burst. Waiting
         for an acknowledgement that will not come, the sender sent its burst again over the
         other station's (the scenario harness, 80 m at 500 Hz)."""
+        offered = (self._offer_out and self._waiting_for == "ack") or (
+            self._poll_offer and self._waiting_for == "poll"
+        )
         return (
-            self._offer_out
-            and self._waiting_for == "ack"
+            offered
             and frame.trusted
             and not frame.floor
             and frame.floor == self.timing.is_floor(frame.mode)
@@ -2068,6 +2078,7 @@ class LinkEngine:
 
     def _take_irs(self) -> None:
         self._offer_out = False
+        self._poll_offer = False
         if self.role is not Role.IRS:
             self.actions.append(Event("role", "irs"))
         self.role = Role.IRS
@@ -2274,7 +2285,13 @@ class LinkEngine:
         if self._has_work():
             self._send_burst()
         else:
-            self._send_poll()  # confirms the handshake and fetches the first ACK
+            # confirms the handshake and fetches the first ACK — and, with nothing to send,
+            # offers the turn: a called station with something to say (a gateway's greeting)
+            # takes it in that acknowledgement and sends at once, where a poll answered "I have
+            # data" and a TURN after it cost two more frames — three floor frames, 12 s of a
+            # 23 s reply, on a weak path (ADR-0053). A station that knows no offer on a poll
+            # answers it as a poll.
+            self._send_poll(offer=self.cfg.offer_turn)
 
     def _accepted_unread(self, frame: SoftFrame, ctl: ControlFrame) -> None:
         """A caller that reads an acknowledgement of its own session has been accepted: the

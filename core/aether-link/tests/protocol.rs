@@ -3264,6 +3264,47 @@ fn the_turn_on_offer_is_taken_in_the_acknowledgement() {
     }
 }
 
+/// ADR-0053: a caller with nothing to send polls to confirm the session, and the poll offers
+/// the turn; a called station with something to say — a gateway's greeting — takes it in its
+/// acknowledgement and sends at once. Without the offer the acknowledgement says `WANT_TX` and a
+/// TURN follows: two more frames, on a weak path two more floor frames (the three-clients
+/// scenario: a 120-byte greeting in 23 s).
+#[test]
+fn a_callers_first_poll_offers_the_turn() {
+    let greeting: Vec<u8> = "[RMS Trimode-1.3.3.0-B2FHM$]\r".repeat(4).into_bytes();
+    for snr in [-4.0, 12.0] {
+        let mut when = [0.0; 2];
+        for offer in [false, true] {
+            let t = timing(false);
+            let config = LinkConfig {
+                offer_turn: offer,
+                ..LinkConfig::default()
+            };
+            let (mut a, mut b) = pair(&t, &config);
+            b.send(&greeting);
+            a.connect("KK4XYZ").expect("idle");
+            let mut sim = TwoStationSim::new(a, b, snr, 3);
+            let mut at = 0.0;
+            while at < 200.0 && sim.delivered(0) != greeting.as_slice() {
+                at += 0.5;
+                sim.run(at, 1e9);
+            }
+            assert!(
+                at < 200.0,
+                "the greeting never arrived, offer {offer} at {snr} dB"
+            );
+            when[usize::from(offer)] = at;
+            let (a, b) = (&sim.engine(0).stats, &sim.engine(1).stats);
+            if offer {
+                assert_eq!((b.turns_taken, a.turns), (1, 0), "at {snr} dB");
+            } else {
+                assert_eq!((b.turns_taken, a.turns), (0, 1), "at {snr} dB");
+            }
+        }
+        assert!(when[1] < when[0], "no time saved at {snr} dB: {when:?}");
+    }
+}
+
 /// ADR-0047: the acknowledgement that takes the turn offered goes unread, and so do the first
 /// frames of the burst behind it. The sender must not wait out its acknowledgement and send its
 /// burst again over the other station's: a trusted data frame of the session's family arriving
