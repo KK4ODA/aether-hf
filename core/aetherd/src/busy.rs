@@ -1639,7 +1639,10 @@ mod tests {
         assert!(matches!(detector.reason(), Some(BusyReason::Level { .. })));
         detector.mark_frame(now, 2.0);
         let now = feed(&mut detector, 0.1, 0.01, 3, now);
-        assert!(detector.busy(now), "the frame holds the channel for its hold");
+        assert!(
+            detector.busy(now),
+            "the frame holds the channel for its hold"
+        );
         assert!(
             matches!(detector.reason(), Some(BusyReason::Frame { .. })),
             "the frame's own blocks named it energy again: {:?}",
