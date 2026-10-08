@@ -1212,9 +1212,10 @@ calling frequency; one addressed to the connected station is delivered to it ins
 notifies only on hearing the addressee's *beacon*, and VarAC's *Send beacons* sends Aether nothing
 (no host command, no KISS frame, on or off the CF) while *Call CQ* sends `CQFRAME`; a `CQFRAME`
 without a slot suffix, `-0` or `-0I` is read as a CQ. Tested with a throwaway daemon whose
-`VERSION` reply follows `AETHER_VERSION_OVERRIDE` (release build at
-`C:\Dev\AetherBench\scratch-version\aetherd-release.exe`, not in the tree; the author launches it —
-the session's permission classifier refuses to): VarAC 15.0.18 refuses `VARA HF 4.8.7` ("requires
+`VERSION` reply follows `AETHER_VERSION_OVERRIDE` (a release build with `version_string()` in
+`host/vara.rs` reading the variable, deleted afterwards and never in the tree; the author launches
+such a thing — the session's permission classifier refuses to): VarAC 15.0.18 refuses `VARA HF
+4.8.7` ("requires
 VARA 4.8.8 or higher"; Aether's unparsable name skips the check), and with `4.8.8` accepted its
 beacon still writes nothing to the command, data or KISS port — the silent beacon is VarAC's own,
 and no reason to claim a VARA version. A debug build is useless for this (passes of 30–100 s). Also: the
