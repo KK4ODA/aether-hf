@@ -81,6 +81,9 @@ pub struct LinkConfig {
     pub disc_patience_exchanges: f64,
     /// See `disc_patience_exchanges`.
     pub disc_patience_s: f64,
+    /// How many more times an abort's DISC is said, on the floor, while the other station
+    /// has not answered it (ADR-0052).
+    pub leave_repeats: u32,
     /// An idle sender polls the receiver this often.
     pub keepalive_s: f64,
     /// No valid frame from the peer for this long ends the session — or longer where the
@@ -172,6 +175,7 @@ impl Default for LinkConfig {
             disc_retries: 3,
             disc_patience_exchanges: 2.0,
             disc_patience_s: 20.0,
+            leave_repeats: 3,
             keepalive_s: 10.0,
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
@@ -285,6 +289,8 @@ pub struct LinkStats {
     /// Calls this station took as accepted from an acknowledgement of its own session, the
     /// acceptance itself not read (ADR-0048).
     pub acceptances_inferred: usize,
+    /// Frames of a session this station had left unheard, answered with a DISC (ADR-0052).
+    pub left_answered: usize,
 }
 
 /// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
@@ -382,6 +388,15 @@ const SELF_DECODABLE_RVS: [u8; 2] = [0, 3];
 /// old 0, 1, 2, 3 a frame whose first copy was missed could not decode until its fourth.
 const RV_SEQUENCE: [u8; 4] = [0, 0, 2, 3];
 
+/// How a session ends without the other station's word that it is over: frames of it heard
+/// afterwards are answered with a DISC (ADR-0052).
+const LEFT_UNHEARD: [&str; 4] = [
+    "aborted",
+    "closed (no DISC_ACK)",
+    "no response",
+    "link timeout",
+];
+
 #[derive(Debug, Clone)]
 struct AckSnapshot {
     /// Unreceived sequence numbers between the base and the highest seen, ascending.
@@ -400,6 +415,8 @@ enum Timer {
     Probe,
     /// A chat's request for the turn, waiting for the channel to be quiet (ADR-0027).
     Request,
+    /// The parting DISC of a session left unheard, said again or owed (ADR-0052).
+    Leave,
 }
 
 /// What the receiving station has asked for in its last acknowledgement.
@@ -483,6 +500,13 @@ pub struct LinkEngine {
     /// When this station's last transmission began, as far as the engine knows: no later than
     /// it went on the air.
     tx_started: f64,
+    /// A session this station left without the other's word that it heard (an abort, a DISC
+    /// never answered, a timeout): its number, and until when frames of it are answered with
+    /// a DISC (ADR-0052).
+    left: Option<(u8, f64)>,
+    leave_repeats: u32,
+    /// A burst of the left session was heard: a DISC answers it once it has ended.
+    leave_owed: bool,
     // sending side
     tx_queue: Vec<u8>,
     records: Vec<TxRecord>,
@@ -636,6 +660,9 @@ impl LinkEngine {
             deadlines: Vec::new(),
             tx_busy_until: 0.0,
             tx_started: f64::NEG_INFINITY,
+            left: None,
+            leave_repeats: 0,
+            leave_owed: false,
             tx_queue: Vec::new(),
             records: Vec::new(),
             tx_base: 0,
@@ -832,6 +859,19 @@ impl LinkEngine {
     /// one up. A frame acknowledged past a hole still counts — the receiving station hands
     /// the stream on in order, so its bytes wait with the hole — which is where this differs
     /// from [`tx_pending_bytes`](Self::tx_pending_bytes). What a session's `send` calls were
+    /// Whether a transmission this engine asked for is still on the air, by its own clock.
+    #[must_use]
+    pub fn transmitting(&self) -> bool {
+        self.now < self.tx_busy_until
+    }
+
+    /// Frames of a session this station left unheard are answered for this long from now,
+    /// were it to leave one: the link timeout the other station would otherwise wait out.
+    #[must_use]
+    pub fn link_timeout_s(&self) -> f64 {
+        self.link_timeout()
+    }
+
     /// given, less this, has arrived: a panel marks a message delivered from it.
     #[must_use]
     pub fn tx_undelivered_bytes(&self) -> usize {
@@ -1289,6 +1329,7 @@ impl LinkEngine {
                 }
             }
             Timer::Request => self.maybe_request_turn(),
+            Timer::Leave => self.repeat_leave(),
         }
     }
 
@@ -2336,6 +2377,9 @@ impl LinkEngine {
         if matches!(self.state, State::Idle | State::Connecting) {
             let (payload, _) = frame.decode(None);
             if let Some(payload) = payload {
+                if self.state == State::Idle && self.left_data(&payload, frame.mode()) {
+                    return;
+                }
                 self.note_peer_data(frame.mode());
                 self.on_connect_payload(&payload, frame.snr_db());
             }
@@ -2848,7 +2892,11 @@ impl LinkEngine {
             }
             return;
         }
-        if self.state == State::Idle || control.session != self.session {
+        if self.state == State::Idle {
+            self.answer_left(frame, &control);
+            return;
+        }
+        if control.session != self.session {
             return;
         }
         self.last_peer_frame = self.now;
@@ -3309,6 +3357,9 @@ impl LinkEngine {
     }
 
     fn reset_transfer_state(&mut self) {
+        // a session starting, here or in reply to a call, is done with the one left before
+        self.left = None;
+        self.disarm(Timer::Leave);
         self.records.clear();
         self.tx_base = 0;
         self.tx_next = 0;
@@ -3351,11 +3402,136 @@ impl LinkEngine {
         }
     }
 
+    fn arm_leave(&mut self) {
+        let answer = self.timing.control_frame_s_for(true);
+        let busy = (self.tx_busy_until - self.now).max(0.0);
+        self.arm(Timer::Leave, busy + self.response_wait(answer, 0.0));
+    }
+
+    /// A DISC of the session left unheard, for the left session's number, on the floor.
+    fn left_frame(session: u8, kind: ControlKind, floor: bool) -> TxFrame {
+        let frame = ControlFrame {
+            kind,
+            session,
+            flags: 0,
+            base: 0,
+            bitmap: 0,
+            snr_db: None,
+            recommended_mode: 0,
+            counter: 0,
+        };
+        TxFrame {
+            container: Container::Control,
+            payload: frame.encode().to_vec(),
+            mode: 0,
+            rv: 0,
+            floor,
+            follows: 0,
+        }
+    }
+
+    /// A data frame of the session this station left unheard: the other station is still
+    /// sending in it. Its burst is answered with a DISC once it has ended — the frame's length
+    /// and a turnaround after the last frame of it heard (ADR-0052).
+    fn left_data(&mut self, payload: &[u8], mode: usize) -> bool {
+        let Some((session, until)) = self.left else {
+            return false;
+        };
+        if self.now > until {
+            return false;
+        }
+        let Ok((header, _)) = decode_data(payload) else {
+            return false;
+        };
+        if header.session != session || header.kind.outside_sessions() {
+            return false;
+        }
+        self.leave_owed = true;
+        let wait = self.timing.data_frame_s_for(mode) + self.timing.turnaround_s;
+        self.arm(Timer::Leave, wait);
+        true
+    }
+
+    fn repeat_leave(&mut self) {
+        let owed = std::mem::take(&mut self.leave_owed);
+        let Some((session, until)) = self.left else {
+            return;
+        };
+        if self.state != State::Idle || (self.leave_repeats == 0 && !owed) {
+            return;
+        }
+        if self.now > until {
+            self.left = None;
+            return;
+        }
+        if owed {
+            self.stats.left_answered += 1;
+        } else {
+            self.leave_repeats -= 1;
+        }
+        self.transmit(vec![Self::left_frame(session, ControlKind::Disc, true)]);
+        if self.leave_repeats > 0 {
+            self.arm_leave();
+        }
+    }
+
+    /// An idle station hears a control frame of the session it left unheard: the other
+    /// station is still in it. A DISC is answered with its `DISC_ACK`, anything else with a
+    /// DISC, in the family it was heard in (ADR-0052).
+    fn answer_left<F: SoftFrame>(&mut self, frame: &F, control: &ControlFrame) {
+        let Some((session, until)) = self.left else {
+            return;
+        };
+        if self.now > until {
+            self.left = None;
+            return;
+        }
+        if control.session != session {
+            return;
+        }
+        if control.kind == ControlKind::DiscAck {
+            // the other station heard the parting DISC: the session is over at both ends
+            self.left = None;
+            self.disarm(Timer::Leave);
+            return;
+        }
+        let kind = if control.kind == ControlKind::Disc {
+            ControlKind::DiscAck
+        } else {
+            ControlKind::Disc
+        };
+        self.stats.left_answered += 1;
+        self.transmit(vec![Self::left_frame(session, kind, frame.floor())]);
+        if kind == ControlKind::DiscAck {
+            self.left = None;
+            self.disarm(Timer::Leave);
+        }
+    }
+
     fn end_session(&mut self, reason: &str) {
+        // Left without the other station's word: it may still think the session up, and
+        // would hold it until its own link timed out — minutes of a gateway kept busy by a
+        // client that aborted, because the abort's one DISC met its acknowledgement (the
+        // scenario harness, 2026-10-08). Frames of this session heard from now until that
+        // timeout could run out are answered with a DISC (ADR-0052).
+        let left = (LEFT_UNHEARD.contains(&reason) && self.state != State::Connecting)
+            .then(|| (self.session, self.now + self.link_timeout()));
         self.ended_peer_snr_db = self.peer_snr_db;
         self.state = State::Idle;
         self.role = Role::None;
         self.reset_transfer_state();
+        // what the session did not carry ends with it: left queued, it opened the next
+        // session — to anybody — ahead of what that one was given (the scenario harness,
+        // 2026-10-08). VARA clears its buffer at DISCONNECTED too.
+        self.tx_queue.clear();
+        self.left = left;
+        if left.is_some() && reason == "aborted" {
+            // an abort's one DISC is said again, on the floor, until the other station
+            // answers it or LEAVE_REPEATS more have gone: a receiving station that missed it
+            // hears nothing more and stays silent until its link times out
+            self.leave_repeats = self.config.leave_repeats;
+            self.arm_leave();
+        }
         self.disarm(Timer::Connect);
         self.actions.push(Action::Event {
             name: "disconnected",

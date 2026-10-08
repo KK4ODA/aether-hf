@@ -104,6 +104,9 @@ class LinkConfig:
     always comes first; any progress starts the count again."""
     disc_patience_s: float = 20.0
     """See :attr:`disc_patience_exchanges`."""
+    leave_repeats: int = 3
+    """How many more times an abort's DISC is said, on the floor, while the other station has
+    not answered it (ADR-0052)."""
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
     link_timeout_s: float = 45.0
@@ -282,6 +285,10 @@ modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path,
 against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
 
 RV_SEQUENCE = (0, 0, 2, 3)
+
+LEFT_UNHEARD = frozenset({"aborted", "closed (no DISC_ACK)", "no response", "link timeout"})
+"""How a session ends without the other station's word that it is over: frames of it heard
+afterwards are answered with a DISC (ADR-0052)."""
 """The redundancy version of a frame's first, second, third and fourth transmission under one
 codeword, then round again (ADR-0043). On HF a retransmission is as often of a frame the
 receiver never detected — a fade, a collision, a burst's faded end — as of one it detected and
@@ -332,6 +339,8 @@ class LinkStats:
     turns_taken: int = 0
     """Acknowledgements that took the turn offered, this station's burst after them (ADR-0047)."""
     acceptances_inferred: int = 0
+    left_answered: int = 0
+    """Frames of a session this station had left unheard, answered with a DISC (ADR-0052)."""
     """Calls this station took as accepted from an acknowledgement of its own session, the
     acceptance itself not read (ADR-0048)."""
 
@@ -395,6 +404,12 @@ class LinkEngine:
         self._deadlines: dict[str, float] = {}
         self._tx_busy_until = 0.0
         self._last_peer_frame = 0.0
+        # a session this station left without the other's word that it heard (an abort, a
+        # DISC never answered, a timeout): its number, and until when frames of it are
+        # answered with a DISC (ADR-0052)
+        self._left: tuple[int, float] | None = None
+        self._leave_repeats = 0
+        self._leave_owed = False  # a burst of the left session heard: a DISC answers it
         # sending side
         self._tx_queue = bytearray()
         self._records: dict[int, _TxRecord] = {}
@@ -857,6 +872,8 @@ class LinkEngine:
             self._send_poll()
         elif name == "request":
             self._maybe_request_turn()
+        elif name == "leave":
+            self._repeat_leave()
 
     def _tx_busy(self) -> bool:
         return self.now < self._tx_busy_until
@@ -1555,7 +1572,8 @@ class LinkEngine:
     def _on_data(self, frame: SoftFrame) -> None:
         if self.state is State.IDLE or self.state is State.CONNECTING:
             payload, _ = frame.decode(None)
-            if payload is not None:
+            left = payload is not None and self.state is State.IDLE
+            if payload is not None and not (left and self._left_data(payload, frame)):
                 self._on_data_payload(payload, frame)
             return
         if self.role is Role.ISS and self._waiting_for in ("ack", "poll", None):
@@ -1937,7 +1955,10 @@ class LinkEngine:
             if ctl.kind is ControlKind.ACK and ctl.session == self.session:
                 self._accepted_unread(frame, ctl)
             return
-        if self.state is State.IDLE or ctl.session != self.session:
+        if self.state is State.IDLE:
+            self._answer_left(frame, ctl)
+            return
+        if ctl.session != self.session:
             return
         self._last_peer_frame = self.now
         self._heard_peer_db = frame.snr_db
@@ -2316,6 +2337,9 @@ class LinkEngine:
         )
 
     def _reset_transfer_state(self) -> None:
+        # a session starting, here or in reply to a call, is done with the one left before
+        self._left = None
+        self._disarm("leave")
         self._records.clear()
         self._tx_base = self._tx_next = 0
         self._burst_seqs = []
@@ -2349,10 +2373,97 @@ class LinkEngine:
         for name in ("ack", "wait", "keepalive", "link", "request"):
             self._disarm(name)
 
+    def _arm_leave(self) -> None:
+        disc = TxFrame(Container.CONTROL, b"", floor=True)
+        answer = self.timing.frame_s(disc)
+        self._arm("leave", max(self._tx_busy_until - self.now, 0.0) + self._response_wait(answer))
+
+    def _left_data(self, payload: bytes, frame: SoftFrame) -> bool:
+        """A data frame of the session this station left unheard: the other station is
+        still sending in it. Its burst is answered with a DISC once it has ended — the frame's
+        length and a turnaround after the last frame of it heard (ADR-0052)."""
+        if self._left is None or self.now > self._left[1]:
+            return False
+        try:
+            header, _ = decode_data(payload)
+        except ValueError:
+            return False
+        if header.session != self._left[0] or header.kind in OUTSIDE_SESSIONS:
+            return False
+        self._leave_owed = True
+        self._arm(
+            "leave",
+            self.timing.data_frame_s_for(frame.mode) + self.timing.turnaround_s,
+        )
+        return True
+
+    def _repeat_leave(self) -> None:
+        owed, self._leave_owed = self._leave_owed, False
+        if self._left is None or self.state is not State.IDLE:
+            return
+        if self._leave_repeats <= 0 and not owed:
+            return
+        session, until = self._left
+        if self.now > until:
+            self._left = None
+            return
+        if owed:
+            self.stats.left_answered += 1
+        else:
+            self._leave_repeats -= 1
+        payload = ControlFrame(ControlKind.DISC, session).encode()
+        self._transmit([TxFrame(Container.CONTROL, payload, floor=True)])
+        if self._leave_repeats > 0:
+            self._arm_leave()
+
+    def _answer_left(self, frame: SoftFrame, ctl: ControlFrame) -> None:
+        """An idle station hears a control frame of the session it left unheard: the other
+        station is still in it. A DISC is answered with its DISC_ACK, anything else with a
+        DISC, in the family it was heard in (ADR-0052)."""
+        if self._left is None:
+            return
+        session, until = self._left
+        if self.now > until:
+            self._left = None
+            return
+        if ctl.session != session:
+            return
+        if ctl.kind is ControlKind.DISC_ACK:
+            # the other station heard the parting DISC: the session is over at both ends
+            self._left = None
+            self._disarm("leave")
+            return
+        kind = ControlKind.DISC_ACK if ctl.kind is ControlKind.DISC else ControlKind.DISC
+        payload = ControlFrame(kind, session).encode()
+        self.stats.left_answered += 1
+        self._transmit([TxFrame(Container.CONTROL, payload, floor=frame.floor)])
+        if kind is ControlKind.DISC_ACK:
+            self._left = None  # it has heard: the session is over at both ends
+            self._disarm("leave")
+
     def _end_session(self, reason: str) -> None:
+        # Left without the other station's word: it may still think the session up, and
+        # would hold it until its own link timed out — minutes of a gateway kept busy by a
+        # client that aborted, because the abort's one DISC met its acknowledgement (the
+        # scenario harness, 2026-10-08). Frames of this session heard from now until that
+        # timeout could run out are answered with a DISC (ADR-0052).
+        left = None
+        if reason in LEFT_UNHEARD and self.state is not State.CONNECTING:
+            left = (self.session, self.now + self._link_timeout())
         self.ended_peer_snr_db = self.peer_snr_db
         self.state = State.IDLE
         self.role = Role.NONE
         self._reset_transfer_state()
+        self._left = left
+        if left is not None and reason == "aborted":
+            # an abort's one DISC is said again, on the floor, until the other station
+            # answers it or LEAVE_REPEATS more have gone: a receiving station that missed it
+            # hears nothing more and stays silent until its link times out
+            self._leave_repeats = self.cfg.leave_repeats
+            self._arm_leave()
+        # what the session did not carry ends with it: left queued, it opened the next
+        # session — to anybody — ahead of what that one was given (the scenario harness,
+        # 2026-10-08). VARA clears its buffer at DISCONNECTED too.
+        self._tx_queue = bytearray()
         self._disarm("connect")
         self.actions.append(Event("disconnected", reason))
