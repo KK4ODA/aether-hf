@@ -212,7 +212,8 @@ Pat, Winlink Express, VarAC and BPQ32 can use the station without being modified
 
 **On the bench, not yet on the air.** Pat 1.0.0 and Winlink Express 1.8.5.0 each complete a
 peer-to-peer B2F session with an attachment over two daemons joined by the simulated channel,
-and two VarAC copies ping and connect at 500 Hz; BPQ32 and RMS Trimode have not been run.
+two VarAC copies ping and connect at 500 Hz, and a Winlink Express client completes a B2F
+session through RMS Trimode with RMS Relay fed by an Aether station; BPQ32 is not planned.
 §7 of that document is the verification table and it is honest about what has and has not
 been run. If you try one, please report what happened — that table is the compatibility
 claim, and it should reflect what people have actually done.
@@ -228,9 +229,10 @@ on the air as a datagram outside any session, judged by the same rules.
 "varahf": { "host": "localhost", "cmdPort": 8300, "dataPort": 8301, "bandwidth": "2300" }
 ```
 
-### RMS Trimode and BPQ32
+### RMS Trimode
 
-Both expect a VARA modem on the same two ports. Point them at 8300 and they should find it.
+It expects a VARA modem on the same two ports. Point it at 8300 and it finds it; the bench's
+notes, Trimode's scanning `LISTEN` included, are in `docs/spec/host-interfaces.md` §7.
 
 **Do not list an Aether gateway as a VARA gateway.** A real-VARA client that called it would
 find something it cannot talk to, and would blame VARA. The compatibility is in the host

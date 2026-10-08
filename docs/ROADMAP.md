@@ -653,8 +653,8 @@ anything else. Every item is model first, benchmark curve second, port third; th
 | — | **P6-6** the air | continuous; P7-0 is out, VarAC on the air not yet |
 
 Small things for the gaps between: ~~CM108/GPIO keying~~ (done 2026-09-16: `[ptt] kind =
-"cm108"`, the DRA/URI/RA-40 class by their USB ids, untested on hardware), BPQ32 over
-`[sim]` (human), three hams through the wizard
+"cm108"`, the DRA/URI/RA-40 class by their USB ids, untested on hardware), ~~BPQ32 over
+`[sim]`~~ (dropped 2026-10-07 by decision: not to be tested), three hams through the wizard
 (human), Authenticode signing (needs a certificate) and Apple signing/notarization (needs a
 developer account; the macOS dmg ships unsigned and untested on hardware), ~~the panel's SNR
 history surviving a reload~~ (done 2026-09-16, beta.23). **Host benches (human, scratch copies
@@ -665,8 +665,8 @@ program's session; Winlink Express proposes nothing to an SSID, so the two ends 
 names); ~~**RMS Trimode with RMS Relay over `[sim]`**~~ (§7: a Winlink Express client completes
 a B2F session through an Aether-fed Trimode; ADR-0051 came out of it). Still true: a *public*
 RMS gateway on Aether is the Winlink Development Team's call, not ours — the bench proves the
-modem side; the policy conversation is separate. BPQ32 is the open-source gateway route and
-reaches AX.25 as well. **Back burner:** Phase
+modem side; the policy conversation is separate. BPQ32 is not on the plan (dropped
+2026-10-07 by decision). **Back burner:** Phase
 10 (Aether FM) and Phase 8 (the phone).
 
 ### The weak-signal plan from 2026-09-23 — what is left, in order
@@ -873,7 +873,7 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     Winlink priority and `IGNOREKISSDCD` from the host interface. On the air each frame is a
     **datagram** — a new DATA kind outside sessions, at the tone floor's tone-36 by default so
     stations of both bandwidths hear it, through the regulatory gate. Owed: VarAC, Winlink
-    Express Packet, BPQ32 and the APRS programs on the bench, then the air.
+    Express Packet and the APRS programs on the bench, then the air (BPQ32 dropped 2026-10-07).
 15. **Rate control on a real path** (done 2026-09-25, ADR-0020, beta.63): from ND1J's 7.082 MHz Test,
     where the link ran at a quarter of what the path carried — the receiving station now learns
     only from frames that could tell it something: SNRs of frames that decoded or were acquired
@@ -954,7 +954,7 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     10 → 2, none of the six two-sender sessions left; latency and keying unchanged. The handover
     candidates are overtaken by ADR-0047: the turn offered at the end of a burst, the default
     since protocol 7. FLRig keying, the dial and tuning shipped in beta.70 (schema 9; item 24). **Needs the author:** `DRIVELEVEL`'s scale and
-    whether VarAC sends `CLEANTXBUFFER` (a VarAC command log), gateways (BPQ32 on the bench).
+    whether VarAC sends `CLEANTXBUFFER` (a VarAC command log).
 24. **From the air, the bench, and the turnaround** (2026-09-26 … 10-07, betas .70–.85). FLRig
     keying (schema 9); the host program told only of its own sessions; the devices listed off the
     run loop; files from the other side (`share.prepare`, the Log tab's *Send files…*); the answer

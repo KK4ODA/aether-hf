@@ -79,10 +79,10 @@ needed:
   [`docs/user/field-test.md`](docs/user/field-test.md) describes (Session → *Test session*,
   then *Contribute the last test session*) — every one becomes a measurement the bench
   replays, and a recording becomes a regression test.
-* **Host programs on the bench**: BPQ32 over the simulated channel (Pat, Winlink Express and
-  VarAC are done — `docs/spec/host-interfaces.md` §7 says how), and the KISS programs of
-  [`docs/user/kiss.md`](docs/user/kiss.md) — VarAC's broadcasts, APRS clients, BPQ32's KISS
-  port — none of which has been tried yet.
+* **Host programs on the bench**: Pat, Winlink Express, VarAC and RMS Trimode are done
+  (`docs/spec/host-interfaces.md` §7 says how; BPQ32 is not planned), and the KISS programs of
+  [`docs/user/kiss.md`](docs/user/kiss.md) — VarAC's broadcasts, APRS clients, QtTermTCP —
+  none of which has been tried yet.
 * **Setup on hardware we do not have**: CM108 GPIO keying (DRA, URI and similar boards —
   built, untested on hardware), radios whose CAT keying is untested, FLRig keying
   (`[ptt] kind = "flrig"`), VOX interfaces such as the SignaLink with Setup's *Answer gap*
