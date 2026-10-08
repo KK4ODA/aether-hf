@@ -951,8 +951,9 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     sessions 72 → 17 and 66 → 18 of 1 800; with ADR-0030 on master the drop run's "no response"
     10 → 2, none of the six two-sender sessions left; latency and keying unchanged. The handover
     candidates are overtaken by ADR-0047: the turn offered at the end of a burst, the default
-    since protocol 7. FLRig keying, the dial and tuning shipped in beta.70 (schema 9; item 24). **Needs the author:** `DRIVELEVEL`'s scale and
-    whether VarAC sends `CLEANTXBUFFER` (a VarAC command log).
+    since protocol 7. FLRig keying, the dial and tuning shipped in beta.70 (schema 9; item 24). Answered by VarAC's own command logs
+    (2026-10-07, both benches, 16 connects): it never sends `CLEANTXBUFFER` or `DRIVELEVEL`, so
+    `DRIVELEVEL`'s scale is moot; its vocabulary is in `host-interfaces.md` §7.
 24. **From the air, the bench, and the turnaround** (2026-09-26 … 10-07, betas .70–.85). FLRig
     keying (schema 9); the host program told only of its own sessions; the devices listed off the
     run loop; files from the other side (`share.prepare`, the Log tab's *Send files…*); the answer
