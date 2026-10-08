@@ -1167,9 +1167,31 @@ min, then left in the recordings folder; `status.debug`, `debug` log lines; not 
 sessions nor Tests. The panel says so once (`#debug-banner`, *Keep it on* / *Turn it off*,
 `aether.debugNoticeSeen`); Setup step 5 *Debug mode*; a headless daemon logs it at start. The
 script's day is 80 uploads / 8 GB and a refused email no longer fails an upload — **the author
-pastes `Code.gs` and deploys a New version** for that. Next: RMS Trimode + RMS Relay against two
-`[sim]` daemons, from a local session on the author's machine (scratch copies; channel
-reporting off).
+pastes `Code.gs` and deploys a New version** for that.
+
+**The host benches of 2026-10-07 (beta.90 and after; `host-interfaces.md` §7 has every number).**
+*RMS Trimode + RMS Relay over `[sim]`* (`C:\Dev\AetherBench\trimode\`, README there): a scratch
+Winlink Express client completes a B2F session through an Aether-fed Trimode; Trimode scans
+(`LISTEN` on/off every ~3.5 s, ~0.5 s deaf, on one channel too) and ignores a `CONNECTED` that
+lands while its `LISTEN` is off, so the adapter holds an answered call's `CONNECTED` until the
+host listens again (ADR-0051, beta.90); the scratch pair is firewalled off the Internet so it
+cannot re-publish the real gateway's channels. *Winlink Express P2P at 500 Hz on the current
+engine* (`wlx-p2p-500\`): `BW500` from its session setting comes back `OK` after its opening
+`BW2750`, three 6 kB messages crossed byte-identical at rungs 11 → 14, and a daemon whose own
+bandwidth was set to 2300 Hz live (`config.set`) moved to 500 for the program's session and back
+when its window closed. Winlink Express takes a registered callsign or a tactical address as its
+own and **proposes nothing to an SSID** (an ini-edited `KK4ODA-2` connects, the SIDs cross, `FF`/`FQ`,
+the message stays in the outbox), so the two ends were KK4ODA and the club callsign WD5EMA; its
+1.8.6.0 autoupdate installs on its own after a countdown (*Remind Me Later*). *VarAC at 500 Hz
+on the current engine* (`varac-500\`): ping, a chat session with the turn handed over at every
+line, a 6 121-byte file at rung 14, and a CQ that goes out as a beacon under `WD5EMA-11` and
+reaches the other copy as `CQFRAME`; a VarAC copy keeps the callsign of its last run and the
+modem answers only to what `MYCALL` named; VarAC never sends `CLEANTXBUFFER` or `DRIVELEVEL`.
+Driving the scratch copies from a session: the computer-use grant for "Winlink Express"
+resolves to the *real* install — grant the running scratch copies by exe basename
+(`rms express.exe`), and never print a program's message headers or ini sections (they hold the
+author's address and phone). **BPQ32 is out of scope by the author's decision (2026-10-07).**
+Owed on the bench: VarAC's broadcasts over KISS. Owed on the air: all of them.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
