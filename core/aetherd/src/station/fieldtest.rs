@@ -289,6 +289,22 @@ pub fn file_reserve_s(message_bps: f64, ceiling: usize) -> f64 {
     (1024.min(ceiling) as f64 * 8.0 / message_bps).min(FILE_TARGET_S) + 60.0 + 30.0
 }
 
+/// The rate the file is sized by: the message's, scaled down by how much less a second of air
+/// carries at the rung the link runs at now than at the rung it ran the message at — never up,
+/// since a rung the ladder has just reached has carried no transfer yet. The message is sent
+/// before the ladder, and a failure in the ladder below the rung the receiver had asked for is
+/// news of the path: on the 40 m crashes scenario (seed 9) the message went at rungs 9–11 at
+/// 502 bit/s, a static crash took one frame of rung 8, the link came out of the ladder at rung
+/// 7, and a file sized at the message's rate for two minutes needed four and ran the budget out
+/// (the scenario harness, 2026-10-08). `then` is `None` when the message's rung is not known.
+#[must_use]
+pub fn file_rate_bps(message_bps: f64, then: Option<f64>, now: f64) -> f64 {
+    match then {
+        Some(then) if then > 0.0 && now > 0.0 => message_bps * (now / then).min(1.0),
+        _ => message_bps,
+    }
+}
+
 /// A Test session in progress, or the last one run.
 #[derive(Debug, Clone)]
 pub struct TestRun {
@@ -325,6 +341,9 @@ pub struct TestRun {
     file_size: usize,
     /// The engine's acknowledged-bytes count when the transfer now running began.
     acked_at_step: usize,
+    /// The bytes a second of air carried at the rung the link ran at when the message was
+    /// acknowledged: what [`file_rate_bps`] compares the rung after the ladder with.
+    message_rung_rate: Option<f64>,
     /// The fastest rung that passed, once one has.
     highest_passed: Option<usize>,
     /// What was shortened or skipped, and why, for the report.
@@ -360,6 +379,7 @@ impl TestRun {
             message_size: 0,
             file_size: 0,
             acked_at_step: 0,
+            message_rung_rate: None,
             highest_passed: None,
             adjustments: Vec::new(),
         }
@@ -446,6 +466,12 @@ const CONNECT_TIMEOUT_S: f64 = 120.0;
 const DISCONNECT_TIMEOUT_S: f64 = 90.0;
 
 impl<P: Ptt> Station<P> {
+    /// Payload bytes a second of air carries at `rung`: what [`file_rate_bps`] compares.
+    fn rung_rate(&self, rung: usize) -> f64 {
+        let timing = self.engine.timing();
+        timing.capacity(rung) as f64 / timing.data_frame_s_for(rung)
+    }
+
     /// Begin a Test session with another station. Refused on an answer-only station,
     /// during a session or a probe, and while a Test session is running.
     ///
@@ -734,6 +760,7 @@ impl<P: Ptt> Station<P> {
                     );
                     if run.step == Step::Message {
                         run.message = Some(transfer);
+                        run.message_rung_rate = Some(self.rung_rate(self.engine.current_mode()));
                     } else {
                         run.file = Some(transfer);
                     }
@@ -751,7 +778,11 @@ impl<P: Ptt> Station<P> {
             Step::Ladder => {
                 // a rung is started only with the file's time still in hand; one under way is
                 // seen through
-                let bps = run.message.map_or(0.0, |m| m.bps());
+                let bps = file_rate_bps(
+                    run.message.map_or(0.0, |m| m.bps()),
+                    run.message_rung_rate,
+                    self.rung_rate(self.engine.current_mode()),
+                );
                 let reserve = file_reserve_s(bps, run.plan.file_bytes).max(30.0);
                 let out_of_time = !run.entered && run.remaining_s(now) < reserve;
                 if !run.plan.ladder
@@ -963,6 +994,24 @@ mod tests {
         let sized = file_size_for(70.0, 16_384, left);
         assert_eq!(sized, 768); // a kilobyte's time, rounded down to 256 bytes
         assert!(sized as f64 * 8.0 / 70.0 <= left - 60.0);
+    }
+
+    #[test]
+    fn the_file_is_sized_at_the_rung_the_ladder_left() {
+        // the 40 m crashes scenario: the message at rung 9 (95 bytes a frame), the link at rung
+        // 7 (46) after the ladder
+        let then = 95.0 / 1.054;
+        let now = 46.0 / 1.054;
+        assert!((file_rate_bps(502.0, Some(then), now) - 502.0 * 46.0 / 95.0).abs() < 1e-9);
+        // never up: a faster rung has carried no transfer yet
+        assert!((file_rate_bps(502.0, Some(now), then) - 502.0).abs() < f64::EPSILON);
+        // nothing known of the message's rung: its rate as measured
+        assert!((file_rate_bps(502.0, None, now) - 502.0).abs() < f64::EPSILON);
+        // and the file that leaves fits two minutes at that rate
+        assert_eq!(
+            file_size_for(file_rate_bps(502.0, Some(then), now), 16_384, 254.0),
+            3584
+        );
     }
 
     #[test]
