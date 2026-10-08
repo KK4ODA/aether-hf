@@ -57,8 +57,8 @@ opens.
 
 Menu names differ between programs and versions; the setting to look for is always a KISS TNC
 reached over **TCP/IP** — the choice a program offers for Dire Wolf or a soundmodem — with the
-host `127.0.0.1` and the port `8100`. None of these has been tried against Aether yet (see
-*Status*).
+host `127.0.0.1` and the port `8100`. Of these, VarAC has been tried against Aether on the
+bench; the others have not (see *Status*).
 
 ### VarAC
 
@@ -70,13 +70,33 @@ and its **broadcast messages** through the KISS port (8100).
 2. In VarAC's VARA HF modem settings: the command port 8300 and the KISS port 8100 — its
    defaults. Leave VarAC's *launch VARA* option off; Aether is started by its own application.
 3. VarAC says `CHAT ON` when it starts, which is what allows the KISS port to transmit while it
-   holds the host interface (see *Winlink priority* below), and `IGNOREKISSDCD ON` when its
-   *Ignore DCD* option is ticked, which sends broadcasts without waiting for a clear channel.
+   holds the host interface (see *Winlink priority* below), and `IGNOREKISSDCD ON` — at every
+   start, whatever its *Ignore DCD* box says. VarAC senses the channel itself from the `BUSY`
+   lines Aether sends it: with the box clear it keeps a broadcast in its own queue until the
+   channel has been clear for a few seconds ("Broadcast remains in the queue until the frequency
+   is cleared" in its log), and with the box ticked it hands the frame over at once and Aether
+   keys at once, over whatever is on the air — VarAC's choice, as with VARA. Ticking the box
+   sends nothing to the modem.
 
 VarAC's broadcasts are AX.25-shaped frames with eight-byte address fields, sent as KISS frame
-type 1; Aether sends them back to the receiving VarAC as type 1, byte for byte, which is what it
-reads. The SNR VarAC shows beside a broadcast comes from the `SN` line Aether sends on the host
-interface for every frame it decodes.
+type 1: the destination (`ALL`, or a callsign for a reply) and the sender as eight-byte address
+fields, a control byte, a PID and the text — 18 bytes before the message, so its 81-character
+dialog limit makes a frame of up to 99 bytes, four fragments and 21 s of air at tone-36 (a
+short one is two fragments and 11 s). Aether sends them to the receiving VarAC as type 1, byte
+for byte, which is what it reads. The SNR VarAC shows beside a broadcast comes from the `SN`
+line Aether sends on the host interface for every frame it decodes — one per fragment.
+
+**Verified on the bench (2026-10-07, two VarAC 15.0.18 copies over two daemons joined by the
+simulated channel at 500 Hz, 15 dB):** broadcasts to *ALL* both ways, a *Broadcast reply* to a
+callsign with *Ask for SNR report* ticked and the receiving VarAC's automatic `<R+13>` report
+back, every one shown intact at the other end with its SNR (+13); a frame written to the port
+while a session was up waited in the queue and went out four seconds after the session ended
+(VarAC itself greys its *Broadcast* button during a session); with *Ignore DCD* clear VarAC held a
+broadcast through the other station's 21 s transmission and handed it over five seconds after
+`BUSY OFF`; with it ticked, both stations transmitted at once and both broadcasts were lost, as
+the setting asks. Not tried: *Re-Broadcast* (the same frame again) and the relay and VMail
+notifications, which need a VMail flow. VarAC's own debug log (`DebugMode=ON` in its INI) shows
+every KISS packet it sends in hex; Aether's `trace` shows type, length and fate only.
 
 ### APRS programs
 
@@ -183,9 +203,9 @@ parameters are told apart from VARA's frame types by their length:
 * **One port.** A frame for KISS port 1–15 is refused.
 * **A one-byte type-2 frame** is read as the P parameter — the price of serving VARA's frame types
   and standard KISS on one port.
-* **Not verified on the air yet**, and not yet with VarAC, Winlink Express Packet or the
-  APRS programs on the bench: the test suite's own clients and `kiss_test_client.py` between two
-  daemons are what the claim rests on so far.
+* **Not verified on the air yet.** On the bench: VarAC's broadcasts (2026-10-07), the test
+  suite's own clients and `kiss_test_client.py` between two daemons; not yet Winlink Express
+  Packet or the APRS programs.
 
 ## Status
 
@@ -193,6 +213,7 @@ parameters are told apart from VARA's frame types by their length:
 |---|---|
 | Aether's test suite (framing, escapes, partial and joined reads, the type bytes, ACKMODE, backpressure, several clients, a stress run of four clients at once, Winlink priority, two daemons over `[sim]`) | passing |
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
-| VarAC, Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
+| VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07) |
+| Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

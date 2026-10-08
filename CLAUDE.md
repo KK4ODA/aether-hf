@@ -1191,7 +1191,21 @@ Driving the scratch copies from a session: the computer-use grant for "Winlink E
 resolves to the *real* install — grant the running scratch copies by exe basename
 (`rms express.exe`), and never print a program's message headers or ini sections (they hold the
 author's address and phone). **BPQ32 is out of scope by the author's decision (2026-10-07).**
-Owed on the bench: VarAC's broadcasts over KISS. Owed on the air: all of them.
+*VarAC's broadcasts over KISS* (the same pair, `[kiss] enabled = true` at 8100/8101,
+`VarahfEnableKissInterface=ON` in each copy's INI): ten type-1 datagrams both ways — to `ALL`, a
+*Broadcast reply* to a callsign with the automatic `<R+13>` SNR report back, one written to the
+port during a session and held until it ended, two long ones to make the channel busy — every
+one delivered shown intact in the other VarAC with its SNR (+13); nothing to fix in the port or
+the frames' path. One counter was: `status.datagrams.incomplete_dropped` stood at 0 three
+minutes after the collision, because the reassembler expired stale pieces only when the next
+piece of anything arrived — `feed_datagram` now calls `Reassembler::expire` every pass (a
+station test). Learned: VarAC says `IGNOREKISSDCD ON` at *every* start whatever its *Ignore
+DCD* box says, and senses the channel itself from the `BUSY` lines (box clear: holds a broadcast
+until 5 s after `BUSY OFF`; ticked: hands over at once, the port keys over the other station and
+both frames are lost) — kiss.md had tied the command to the box. VarAC greys *Broadcast* during a
+session; its `DebugMode=ON` log shows every KISS packet in hex. The computer-use grant for a
+scratch copy is by the exe's *full path* (`C:\Dev\AetherBench\varac-a\VarAC.exe`); the bare name
+resolves to the real install, and the two copies need a grant each. Owed on the air: all of them.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
