@@ -3,7 +3,7 @@ description = """40 m at 2300 Hz: a second Winlink client calls the Trimode gate
 another client's session. The gateway answers no call during a session, the caller hears the
 channel busy and its calls must not break the session under way; once that session ends, the
 second client's call gets through and its exchange completes."""
-tags = ["40m", "host", "gateway", "multi"]
+tags = ["40m", "host", "gateway", "multi", "quick"]
 bandwidth = 2300
 seconds = 1500
 seed = 62
