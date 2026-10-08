@@ -1,6 +1,6 @@
 //! The VARA-compatible command protocol, as a state machine with no sockets in it.
 //!
-//! Winlink Express, Pat, `VarAC` and BPQ32 all speak the same published TCP interface: a
+//! Winlink Express, Pat and `VarAC` all speak the same published TCP interface: a
 //! line-oriented command port and a binary data port beside it. Speaking it is what lets an
 //! Aether station be used by software people already run, which — per
 //! `docs/COMMUNITY-CONCERNS.md` — matters more to adoption than the waveform does.

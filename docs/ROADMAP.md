@@ -30,8 +30,8 @@ done since.*
   (2) picking waveform parameters without a calibrated simulator; (3) building a GUI before
   a headless modem works; (4) FEC and sync — the two hardest DSP pieces — being under-scoped.
 - **Biggest opportunities:** a *public* air-interface specification (also an FCC §97.309(a)(4)
-  requirement in the US), a VARA-compatible host API that lets Winlink Express / Pat / VarAC /
-  BPQ32 work day one, real HARQ-IR via 5G-NR rate matching, and a web-technology UI that
+  requirement in the US), a VARA-compatible host API that lets Winlink Express / Pat / VarAC
+  work day one, real HARQ-IR via 5G-NR rate matching, and a web-technology UI that
   serves both the desktop app and remote/headless operation.
 
 ---
@@ -121,7 +121,7 @@ flowchart TB
 
   subgraph APPS["External applications"]
     WE["Winlink Express / RMS Trimode"]
-    PAT["Pat / VarAC / BPQ32"]
+    PAT["Pat / VarAC"]
     WEB["Browser (remote monitor)"]
     GUI["Aether desktop GUI"]
   end
@@ -315,7 +315,7 @@ Three independently versioned documents, each with its own conformance vectors:
 | `docs/spec/air-interface.md` | PHY (waveform, preamble, pilots, modes), frame formats, FEC/rate matching, ARQ state machines, timers. **Public** (FCC §97.309(a)(4)). | other implementers, regulators |
 | `docs/spec/control-api.md` | Aether-native JSON over WebSocket (+ REST for one-shots): `status`, `config get/set`, `connect`, `disconnect`, `send`, `metrics` stream (SNR, CFO, constellation, spectrum), `devices list`, `ptt test`, `audio calibrate`, auth token for non-loopback binds. PHY-agnostic; HF/FM differ only in the mode table. | GUI, remote web UI, third-party tools, tests |
 | `docs/spec/host-interfaces.md` | Adapters: **VARA-compatible TCP** (command + data ports; full public command set: `MYCALL`, `LISTEN`, `CONNECT src dst [via]`, `DISCONNECT`, `ABORT`, `COMPRESSION`, `BW500/2300/2750`, `VERSION`, `PUBLIC`, `CWID`, `CHAT`, `CQFRAME`, `TUNE`, `WINLINK SESSION`, `P2P SESSION`; events `OK/WRONG/BUFFER n/CONNECTED/DISCONNECTED/PENDING/CANCELPENDING/PTT ON|OFF/BUSY ON|OFF/IAMALIVE/REGISTERED`), the **KISS** port (§8; ADR-0019, beta.61), and later **AGWPE** for the FM/packet use-case
-(no `PING`: VARA publishes none — P7-1; `BW2750` refused until P9-3). | Winlink Express, RMS Trimode, Pat, VarAC, BPQ32 |
+(no `PING`: VARA publishes none — P7-1; `BW2750` refused until P9-3). | Winlink Express, RMS Trimode, Pat, VarAC |
 
 Rig control is *not* an application-facing API; it is a HAL backend (Hamlib `rigctld`
 client, `flrig` XML-RPC, native CAT for a few very common radios, serial RTS/DTR, CM108,
@@ -552,10 +552,10 @@ Acceptance: §7.4 Poor-channel and protocol gates met; ADR-0004 recorded; specs 
 | P3-2 ✅ | Port PHY + frame codec + ARQ to core, cross-validated against the model. `aether-phy`: waveform, constellations, mode table, frame codec, OFDM, preamble, transmitter, receiver and acquisition — a frame can be built, found in a stream, demodulated and decoded entirely in Rust. `aether-link`: frame formats, rate control, the ARQ engine and session state machine, plus a lossy-pipe two-station simulator that exercises the protocol without DSP. Cross-validation found one real interoperability bug (SNR tie-rounding differs between Python and Rust), now fixed in both and pinned in the public spec | P3-1 |
 | P3-3 ✅ | `aetherd`: audio via cpal (bounded queues, so a modem that falls behind drops audio rather than the machine), PTT via serial RTS/DTR or Hamlib's `rigctld` over TCP, the key-time watchdog (a trip latches until the key is released), a busy detector that learns the noise floor by minimum statistics, and the run loop that ties them to the link engine. Two stations complete a session over real 48 kHz audio in the test suite. Deferred then: CM108 keying, flrig and native CAT — CAT keying came in beta.11 and tuning over it in beta.26, CM108 keying in beta.23 (untested on hardware); flrig is still not built. The busy detector is now a median over quiet, steady blocks with a passband-shape path (betas .17, .37–.40, .46) | P3-2 |
 | P3-4 ✅ | Native control API to `control-api.md` v0.1: JSON over WebSocket at `ws://127.0.0.1:8515/v1`, `POST /v1/<method>` for one-shots, `status`, `capabilities`, `connect`, `disconnect`, `abort`, `send`, `listen`, `devices.list`, and `state` / `metrics` / `data` / `ptt` / `log` events. Loopback needs no token; any other bind requires one and the daemon refuses to start without it rather than leaving a transmitter open. No async runtime: one thread per connection, commands passed to the modem over a channel so its single-threadedness stays a fact. Since: `config.get`/`config.set` (P4-2), `ptt.test` and `audio.level` (P4-4); constellation and spectrum are polled methods by decision (beta.14). What v1.0 still lacks is `control-api.md` §7 | P3-3 |
-| P3-5 ✅ (unverified in the field) | VARA-compatible TCP adapter: command port and the data port beside it, the published command set, and the session notifications, built as a *client of the control API* so it has no privileged access to the modem. `VERSION` answers with Aether's name, not VARA's, and `BW2750` is refused; `BW500`/`BW2300` are `OK` only for the bandwidth the station runs (P7-0, beta.15). Off by default. Verified against the test suite's own host client, by hand against the running daemon, and — in Phase 6 — **with Pat 1.0.0 at both ends over the simulated channel**: a P2P B2F session with a 6 kB incompressible attachment, byte-identical on arrival, which found and fixed the called side's `CONNECTED` order. Winlink Express 1.8.5.0 has passed the same bench (2026-09-14) and VarAC 15.0.18 at 500 Hz (P7-0d); BPQ32, and every program on the air, are tracked in `docs/spec/host-interfaces.md` §7 | P3-4 |
+| P3-5 ✅ (unverified in the field) | VARA-compatible TCP adapter: command port and the data port beside it, the published command set, and the session notifications, built as a *client of the control API* so it has no privileged access to the modem. `VERSION` answers with Aether's name, not VARA's, and `BW2750` is refused; `BW500`/`BW2300` are `OK` only for the bandwidth the station runs (P7-0, beta.15). Off by default. Verified against the test suite's own host client, by hand against the running daemon, and — in Phase 6 — **with Pat 1.0.0 at both ends over the simulated channel**: a P2P B2F session with a 6 kB incompressible attachment, byte-identical on arrival, which found and fixed the called side's `CONNECTED` order. Winlink Express 1.8.5.0 has passed the same bench (2026-09-14) and VarAC 15.0.18 at 500 Hz (P7-0d); every program on the air is tracked in `docs/spec/host-interfaces.md` §7 | P3-4 |
 | P3-6 ✅ | **Compression**: deflate on the payload byte stream above the ARQ (not per frame — a 26-byte frame with no history gets *bigger*), negotiated by the connect handshake's capability byte, used only if both stations offer it. Measured 27 % off a short message, 44 % off a 1.5 kB one. **Morse identification**: raised-cosine keying so it does not click, PARIS timing, off by default because only the operator knows what their licence requires. **Beacon**: a `BEACON` unproto frame carrying one callsign, sent at the most robust mode, reported with its SNR and never answered on the air. Since: compression off by default (beta.28 — one lost frame desyncs the session's stream; an integrity check is open); beacons on the tone floor (ADR-0016) and on a timer (`beacon.every`, 10–240 min, beta.67); the end of every session identified (ADR-0017), at most 20 wpm under the US profile, said since beta.67 | P3-5 |
 | P3-7 ✅ | `docs/spec/host-interfaces.md` v0.1: the transport, the command set, the notifications, and an explicit table of what is accepted, what is merely recorded and what is refused — so a client can tell the three apart. Says plainly that this is software compatibility only and that an Aether gateway must not be advertised as a VARA gateway | P3-5 |
-| P3-8 🔁 | **Adoption & ecosystem track** (from `COMMUNITY-CONCERNS.md`). Done: the daemon releases the transmitter on `SIGTERM` — a gateway killed mid-burst would otherwise stay keyed; a hardened systemd unit (`deploy/aetherd.service`); `docs/user/gateway-kit.md` (headless build, cross-compiling for ARM64, install, checking on it over SSH, Pat/RMS Trimode/BPQ32 notes, and the instruction not to list an Aether gateway as a VARA one); `docs/user/frequency-plan.md` (coexistence rules, suggested calling frequencies marked explicitly as a proposal rather than a standard, and an honest note that the busy detector does not yet recognise VARA or ARDOP specifically). Open: bundled Hamlib with an override path, the public gateway registry page, and contacting the Winlink Development Team once there is field data to show them | P3-3, P3-5 |
+| P3-8 🔁 | **Adoption & ecosystem track** (from `COMMUNITY-CONCERNS.md`). Done: the daemon releases the transmitter on `SIGTERM` — a gateway killed mid-burst would otherwise stay keyed; a hardened systemd unit (`deploy/aetherd.service`); `docs/user/gateway-kit.md` (headless build, cross-compiling for ARM64, install, checking on it over SSH, Pat/RMS Trimode notes, and the instruction not to list an Aether gateway as a VARA one); `docs/user/frequency-plan.md` (coexistence rules, suggested calling frequencies marked explicitly as a proposal rather than a standard, and an honest note that the busy detector does not yet recognise VARA or ARDOP specifically). Open: bundled Hamlib with an override path, the public gateway registry page, and contacting the Winlink Development Team once there is field data to show them | P3-3, P3-5 |
 
 Risks: Winlink Express quirks (auto-launch path, `REGISTERED`, timing); a gateway advertised
 as "VARA" but running Aether would strand real-VARA clients, so listing/coordination with
@@ -653,8 +653,7 @@ anything else. Every item is model first, benchmark curve second, port third; th
 | — | **P6-6** the air | continuous; P7-0 is out, VarAC on the air not yet |
 
 Small things for the gaps between: ~~CM108/GPIO keying~~ (done 2026-09-16: `[ptt] kind =
-"cm108"`, the DRA/URI/RA-40 class by their USB ids, untested on hardware), ~~BPQ32 over
-`[sim]`~~ (dropped 2026-10-07 by decision: not to be tested), three hams through the wizard
+"cm108"`, the DRA/URI/RA-40 class by their USB ids, untested on hardware), three hams through the wizard
 (human), Authenticode signing (needs a certificate) and Apple signing/notarization (needs a
 developer account; the macOS dmg ships unsigned and untested on hardware), ~~the panel's SNR
 history surviving a reload~~ (done 2026-09-16, beta.23). **Host benches (human, scratch copies
@@ -665,8 +664,7 @@ program's session; Winlink Express proposes nothing to an SSID, so the two ends 
 names); ~~**RMS Trimode with RMS Relay over `[sim]`**~~ (§7: a Winlink Express client completes
 a B2F session through an Aether-fed Trimode; ADR-0051 came out of it). Still true: a *public*
 RMS gateway on Aether is the Winlink Development Team's call, not ours — the bench proves the
-modem side; the policy conversation is separate. BPQ32 is not on the plan (dropped
-2026-10-07 by decision). **Back burner:** Phase
+modem side; the policy conversation is separate. **Back burner:** Phase
 10 (Aether FM) and Phase 8 (the phone).
 
 ### The weak-signal plan from 2026-09-23 — what is left, in order
@@ -873,7 +871,7 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     Winlink priority and `IGNOREKISSDCD` from the host interface. On the air each frame is a
     **datagram** — a new DATA kind outside sessions, at the tone floor's tone-36 by default so
     stations of both bandwidths hear it, through the regulatory gate. Owed: VarAC, Winlink
-    Express Packet and the APRS programs on the bench, then the air (BPQ32 dropped 2026-10-07).
+    Express Packet and the APRS programs on the bench, then the air.
 15. **Rate control on a real path** (done 2026-09-25, ADR-0020, beta.63): from ND1J's 7.082 MHz Test,
     where the link ran at a quarter of what the path carried — the receiving station now learns
     only from frames that could tell it something: SNRs of frames that decoded or were acquired

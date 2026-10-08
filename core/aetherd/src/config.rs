@@ -1761,7 +1761,7 @@ bind = "127.0.0.1:8515"
 # ui_dir = "/usr/share/aetherd/ui"
 
 [host]
-# The VARA-compatible host interface, so Winlink Express, Pat, VarAC and BPQ32 can use this
+# The VARA-compatible host interface, so Winlink Express, Pat and VarAC can use this
 # station. Off unless asked for. The data port is the command port plus one, and both have to
 # be free. `VERSION` answers with Aether's name, not VARA's — see docs/spec/host-interfaces.md.
 enabled = false

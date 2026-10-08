@@ -36,8 +36,8 @@ pub mod command {
     pub const FULL_DUPLEX: u8 = 0x05;
     /// Hardware-specific settings.
     pub const SET_HARDWARE: u8 = 0x06;
-    /// A data frame the TNC acknowledges once sent (the ACKMODE extension, used by BPQ32 and
-    /// others): two bytes of the client's identifier, then the frame.
+    /// A data frame the TNC acknowledges once sent (the ACKMODE extension, used by
+    /// QtTermTCP and Winlink Express): two bytes of the client's identifier, then the frame.
     pub const ACK_MODE: u8 = 0x0C;
     /// The whole type byte `0xFF`: leave KISS mode.
     pub const RETURN: u8 = 0xFF;
