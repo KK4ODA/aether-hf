@@ -1211,7 +1211,9 @@ the VMail parks at the relay (from the outbox, *Relay now through connected stat
 calling frequency; one addressed to the connected station is delivered to it instead), but VarAC
 notifies only on hearing the addressee's *beacon*, and VarAC's *Send beacons* sends Aether nothing
 (no host command, no KISS frame, on or off the CF) while *Call CQ* sends `CQFRAME`; a `CQFRAME`
-without a slot suffix, `-0` or `-0I` is read as a CQ. Also: the
+without a slot suffix, `-0` or `-0I` is read as a CQ; the beacon writes nothing to the command,
+data or KISS port — the silent beacon is VarAC's own. A debug build is useless for
+host-program benches (passes of 30–100 s). Also: the
 scratch VarAC copies had `PSKReporterUpload=ON`/`SelfReport=ON` from the real install and spotted
 KK4ODA and WD5EMA on 14.105 MHz during the benches — both INIs now say OFF. Owed on the air: all
 of them.

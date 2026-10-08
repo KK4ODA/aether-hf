@@ -101,8 +101,10 @@ station* from the outbox, off the calling frequency; the other copy's *Parking* 
 but VarAC sends the notification only when it *hears the addressee's beacon*, and VarAC's own
 *Send beacons* sends nothing to Aether — no command on the host port, no KISS frame, on or off
 the calling frequency — while its *Call CQ* sends `CQFRAME` and works. A `CQFRAME` without a
-slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS
-packet it sends in hex; Aether's `trace` shows type, length and fate only.
+slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. VarAC logs "Sending beacon"
+and writes nothing to the command port, the data port or the KISS port: the cause is inside
+VarAC. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS packet it sends in
+hex; Aether's `trace` shows type, length and fate only.
 
 ### APRS programs
 
