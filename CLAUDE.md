@@ -1248,7 +1248,12 @@ are answered with a DISC (`_answer_left`, `_left_data` after a burst), and an ab
 said again on the floor up to `LinkConfig.leave_repeats` (3) times (`Timer::Leave`; stat
 `left_answered`). Harness faults found on the way: a 10 s socket timeout in the emulator, and
 calls made inside an outage. Lesson for scenario writing: a dozen QRM sources at the session's
-level clip the simulated card — calibrate against what a radio's AGC would allow.
+level clip the simulated card — calibrate against what a radio's AGC would allow. Full set after
+ADR-0052: 35 of 36 pass; soak seed 1, 24 of 24 hold every invariant. **Open:**
+`40m-good-2300-rtty-crashes` (tagged `nightly`) fails about three runs in four on the build
+before ADR-0052 as well as after — the Test's file runs out of budget because, after the
+ladder, the receiver's recommendation walks down (rung 9 → 7) while nearly every frame decodes;
+the reading is that static-crash-hit SNR readings drag its estimate. Not yet fixed.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
