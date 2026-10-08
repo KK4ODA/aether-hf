@@ -94,9 +94,17 @@ while a session was up waited in the queue and went out four seconds after the s
 (VarAC itself greys its *Broadcast* button during a session); with *Ignore DCD* clear VarAC held a
 broadcast through the other station's 21 s transmission and handed it over five seconds after
 `BUSY OFF`; with it ticked, both stations transmitted at once and both broadcasts were lost, as
-the setting asks. Not tried: *Re-Broadcast* (the same frame again) and the relay and VMail
-notifications, which need a VMail flow. VarAC's own debug log (`DebugMode=ON` in its INI) shows
-every KISS packet it sends in hex; Aether's `trace` shows type, length and fate only.
+the setting asks. **The next morning (2026-10-08):** *Re-Broadcast* sends the same frame again,
+byte for byte, and the other VarAC shows it twice. **Relay notifications could not be reached:**
+a VMail relayed through the connected station does park there (*Relay now through connected
+station* from the outbox, off the calling frequency; the other copy's *Parking* count went to 1),
+but VarAC sends the notification only when it *hears the addressee's beacon*, and VarAC's own
+*Send beacons* sends nothing to Aether — no command on the host port, no KISS frame, on or off
+the calling frequency — while its *Call CQ* sends `CQFRAME` and works. A `CQFRAME` without a
+slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. The likely cause is VarAC
+gating its beacon on the VARA version it parses from `VERSION`, which Aether answers with its
+own name; that is untested. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS
+packet it sends in hex; Aether's `trace` shows type, length and fate only.
 
 ### APRS programs
 
@@ -213,7 +221,8 @@ parameters are told apart from VARA's frame types by their length:
 |---|---|
 | Aether's test suite (framing, escapes, partial and joined reads, the type bytes, ACKMODE, backpressure, several clients, a stress run of four clients at once, Winlink priority, two daemons over `[sim]`) | passing |
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
-| VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07) |
+| VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, *Re-Broadcast*, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07/08) |
+| VarAC 15.0.18 relay notifications | not reachable: VarAC's beacon sends nothing to Aether, and the notification follows a heard beacon (2026-10-08) |
 | Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

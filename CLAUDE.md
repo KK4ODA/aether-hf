@@ -1205,7 +1205,19 @@ until 5 s after `BUSY OFF`; ticked: hands over at once, the port keys over the o
 both frames are lost) — kiss.md had tied the command to the box. VarAC greys *Broadcast* during a
 session; its `DebugMode=ON` log shows every KISS packet in hex. The computer-use grant for a
 scratch copy is by the exe's *full path* (`C:\Dev\AetherBench\varac-a\VarAC.exe`); the bare name
-resolves to the real install, and the two copies need a grant each. Owed on the air: all of them.
+resolves to the real install, and the two copies need a grant each. **The next morning:**
+*Re-Broadcast* passes (the identical frame again). *Relay notifications* could not be reached:
+the VMail parks at the relay (from the outbox, *Relay now through connected station*, off the
+calling frequency; one addressed to the connected station is delivered to it instead), but VarAC
+notifies only on hearing the addressee's *beacon*, and VarAC's *Send beacons* sends Aether nothing
+(no host command, no KISS frame, on or off the CF) while *Call CQ* sends `CQFRAME`; a `CQFRAME`
+without a slot suffix, `-0` or `-0I` is read as a CQ. Suspect: VarAC gates its beacon on the VARA
+version it parses from `VERSION` (Aether answers with its own name, by decision). A throwaway
+debug daemon honouring `AETHER_VERSION_OVERRIDE` sits at `C:\Dev\AetherBench\scratch-version\`
+(not in the tree) to test it; the session's permission classifier refused to launch it. Also: the
+scratch VarAC copies had `PSKReporterUpload=ON`/`SelfReport=ON` from the real install and spotted
+KK4ODA and WD5EMA on 14.105 MHz during the benches — both INIs now say OFF. Owed on the air: all
+of them.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
