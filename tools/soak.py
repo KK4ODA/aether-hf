@@ -16,6 +16,8 @@ judged is what no path excuses (``session_matrix.judge``): a daemon that exits o
 key held past the watchdog, a host program told ``CONNECTED`` while it was not listening, and
 — after the script has disconnected and waited — a station not back to idle. Each failing
 scenario's TOML is kept beside its run, so ``session_matrix.py <that file>`` reproduces it.
+A passing run's audio is deleted as it ends (``--keep-passing`` keeps it): a run records both
+stations at 48 kHz, and a night of them filled the disk on 2026-10-08.
 """
 
 from __future__ import annotations
@@ -211,6 +213,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--out", type=Path, default=ROOT / "runs" / "soak")
     ap.add_argument("--daemon", type=Path, default=DEFAULT_DAEMON)
+    ap.add_argument("--keep-passing", action="store_true", help="keep a passing run's audio")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     r = random.Random(args.seed)
@@ -223,6 +226,9 @@ def main() -> int:
 
     def one(p: Path) -> dict:
         result = run_one(p, args.out, args.daemon, args.daemon)
+        if result["pass"] and not args.keep_passing:
+            for wav in (args.out / result["scenario"]).rglob("*.wav"):
+                wav.unlink(missing_ok=True)
         print(
             f"{'pass' if result['pass'] else 'FAIL'}  {result['scenario']}  {result['why']}",
             flush=True,
