@@ -3671,3 +3671,62 @@ def test_a_burst_nothing_of_which_decoded_goes_by_its_failed_frames_counts(
     b._burst = [heard(0.0, 2, True), heard(1.0, 0, False)]
     assert b._burst_end() == 1.0 + 4 * 1.0
     assert not b._burst_closed()
+
+
+def test_what_a_session_did_not_carry_does_not_go_in_the_next(timing: PhyTiming) -> None:
+    """The scenario harness (2026-10-08): a client vanished mid-transfer, both stations timed
+    out, and its next session — to the same gateway, or to anybody — opened by sending the 18 kB
+    the dead one had left queued, ahead of what was asked. A session's data is that session's:
+    a call that fails, and a session that ends, take what they did not carry with them, as
+    VARA clears its buffer at DISCONNECTED."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=31)
+    # a call nobody answers, with a message waiting for it
+    a.connect("N0BODY")
+    a.send(b"for N0BODY only")
+    sim.run(until=200)
+    assert a.state is State.IDLE
+    assert a.tx_undelivered_bytes == 0
+    # a session cut short in the middle of a transfer
+    a.connect("KK4XYZ")
+    sim.run(until=sim.t + 60)
+    assert a.state is State.CONNECTED
+    a.send(bytes(range(256)) * 40)
+    sim.run(until=sim.t + 8)
+    a.abort()
+    sim.run(until=sim.t + 120)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert a.tx_undelivered_bytes == 0
+    carried = len(sim.delivered(1))
+    # the next session carries what it was given, and nothing else
+    a.connect("KK4XYZ")
+    sim.run(until=sim.t + 60)
+    a.send(b"the next message")
+    a.disconnect()
+    sim.run(until=sim.t + 200)
+    assert sim.delivered(1)[carried:] == b"the next message"
+
+
+def test_a_station_that_left_answers_its_old_session_with_a_disc(timing: PhyTiming) -> None:
+    """ADR-0052. A receiving station aborts in the middle of the other's burst: its DISC goes
+    while the sender is transmitting and is never heard. With no repeats of it, what ends the
+    sender's session early is the left station answering the sender's next poll or burst-end
+    with a DISC — not the sender's link timeout, minutes later."""
+    a, b = _pair(timing, LinkConfig(leave_repeats=0))
+    sim = TwoStationSim(a, b, snr_db=15.0, seed=32)
+    a.connect("KK4XYZ")
+    sim.run(until=40)
+    assert b.state is State.CONNECTED
+    b.send(bytes(range(256)) * 60)  # b takes the turn and sends a long burst
+    for step in range(2000):
+        sim.run(until=40 + 0.1 * (step + 1))
+        if b.role is Role.ISS and b._tx_busy():
+            break
+    assert b.role is Role.ISS and b._tx_busy()
+    a.abort()  # a's DISC goes while b transmits
+    started = sim.t
+    sim.run(until=sim.t + 90)
+    assert b.state is State.IDLE, sim.events(1)
+    assert any(e == "disconnected:peer disconnected" for e in sim.events(1)), sim.events(1)
+    assert a.stats.left_answered >= 1
+    assert sim.t - started < b._link_timeout()

@@ -3336,3 +3336,83 @@ fn an_offer_is_not_answered_into_a_receiver_still_coming_back() {
         assert_eq!(sim.delivered(1), message.as_slice(), "{size} bytes");
     }
 }
+
+#[test]
+fn what_a_session_did_not_carry_does_not_go_in_the_next() {
+    // the scenario harness (2026-10-08): a client vanished mid-transfer, both stations timed
+    // out, and its next session opened by sending the 18 kB the dead one had left queued. A
+    // call that fails, and a session that ends, take what they did not carry with them.
+    let t = timing(false);
+    let (mut a, b) = pair(&t, &LinkConfig::default());
+    a.connect("N0BODY").expect("idle");
+    a.send(b"for N0BODY only");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 31);
+    sim.run(200.0, 1e9);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(0).tx_undelivered_bytes(), 0);
+    // a session cut short in the middle of a transfer
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    let now = sim.t;
+    sim.run(now + 60.0, 1e9);
+    assert_eq!(sim.engine(0).state(), State::Connected);
+    let block: Vec<u8> = (0..=255u8).cycle().take(256 * 40).collect();
+    sim.engine_mut(0).send(&block);
+    let now = sim.t;
+    sim.run(now + 8.0, 1e9);
+    sim.engine_mut(0).abort();
+    let now = sim.t;
+    sim.run(now + 120.0, 1e9);
+    assert_eq!(sim.engine(0).state(), State::Idle);
+    assert_eq!(sim.engine(1).state(), State::Idle, "{:?}", sim.events(1));
+    assert_eq!(sim.engine(0).tx_undelivered_bytes(), 0);
+    let carried = sim.delivered(1).len();
+    // the next session carries what it was given, and nothing else
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    let now = sim.t;
+    sim.run(now + 60.0, 1e9);
+    sim.engine_mut(0).send(b"the next message");
+    sim.engine_mut(0).disconnect();
+    let now = sim.t;
+    sim.run(now + 200.0, 1e9);
+    assert_eq!(&sim.delivered(1)[carried..], b"the next message");
+}
+
+#[test]
+fn a_station_that_left_answers_its_old_session_with_a_disc() {
+    // ADR-0052: a receiving station aborts in the middle of the other's burst, its DISC goes
+    // while the sender transmits and is never heard. With no repeats of it, the left station
+    // answering the sender's next burst with a DISC ends the session long before the
+    // sender's link timeout.
+    let t = timing(false);
+    let config = LinkConfig {
+        leave_repeats: 0,
+        ..LinkConfig::default()
+    };
+    let (mut a, b) = pair(&t, &config);
+    a.connect("KK4XYZ").expect("idle");
+    let mut sim = TwoStationSim::new(a, b, 15.0, 32);
+    sim.run(40.0, 1e9);
+    assert_eq!(sim.engine(1).state(), State::Connected);
+    let block: Vec<u8> = (0..=255u8).cycle().take(256 * 60).collect();
+    sim.engine_mut(1).send(&block);
+    for step in 0..2000 {
+        sim.run(40.0 + 0.1 * f64::from(step + 1), 1e9);
+        if sim.engine(1).role() == Role::Iss && sim.engine(1).transmitting() {
+            break;
+        }
+    }
+    assert!(sim.engine(1).role() == Role::Iss && sim.engine(1).transmitting());
+    sim.engine_mut(0).abort();
+    let started = sim.t;
+    sim.run(started + 90.0, 1e9);
+    assert_eq!(sim.engine(1).state(), State::Idle, "{:?}", sim.events(1));
+    assert!(
+        sim.events(1)
+            .iter()
+            .any(|e| e == "disconnected:peer disconnected"),
+        "{:?}",
+        sim.events(1)
+    );
+    assert!(sim.engine(0).stats.left_answered >= 1);
+    assert!(sim.t - started < sim.engine(1).link_timeout_s());
+}
