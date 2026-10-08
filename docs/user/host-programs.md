@@ -82,8 +82,10 @@ PTT **off**.
 
 ## Winlink Express
 
-* A **Vara HF P2P** session, with another Aether station. Aether cannot reach a VARA RMS
-  gateway — and an Aether gateway must never be listed as a VARA one.
+* A **Vara HF P2P** session, with another Aether station; or a **Vara HF Winlink** session to an
+  RMS gateway that runs Aether, its callsign and dial entered by hand. Aether cannot reach a
+  VARA RMS gateway — and an Aether gateway must never be listed as a VARA one.
+* **A plain registered callsign**: Winlink Express proposes nothing to an SSID.
 * *Vara HF* setup: the TNC path is Aether's application (above), with or without auto-launch;
   host `127.0.0.1`, port `8300`.
 * The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
