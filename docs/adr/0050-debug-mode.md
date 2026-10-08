@@ -65,6 +65,9 @@ the fact, for the right hours.
 * The audio of a Winlink session can be decoded by anyone with Aether: the messages it carried
   are in it. Amateur traffic is not private (§97.113(a)(4)), but the notice says so plainly.
 * No wire change: beta.88 and this build interoperate.
+* A station whose audio is simulated (`[sim]`, `--channel`) or a dry run never sends its
+  sessions, whatever the setting (`DaemonState::simulated`, 2026-10-08): the bench, the
+  scenario harness and CI's two-daemon tests would otherwise fill the project's folder.
 
 ## 4. Not done
 

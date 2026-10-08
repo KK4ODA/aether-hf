@@ -267,6 +267,7 @@ fn run() -> Result<Exit, String> {
     let sim = config.sim_config();
     // a harness's channel server is a simulated channel too (ADR-0042)
     let simulated = sim.is_some() || args.channel.is_some();
+    daemon.simulated = simulated || args.dry_run;
     let ptt = keying(&config, args.dry_run || simulated, &mut daemon);
     let mut station = Station::new(
         station_config(&config, &daemon.path, simulated),
@@ -1398,7 +1399,15 @@ fn report_frames(
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
 /// every start, as the panel does once on screen.
 fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
-    if config.record.send_to_project {
+    if config.record.send_to_project && daemon.simulated {
+        daemon.log.record(
+            Level::Info,
+            "debug",
+            "debug mode is on, but this station's audio is simulated (or a dry run): its sessions \
+             are a bench's and are not sent to the Aether project",
+            "Idle",
+        );
+    } else if config.record.send_to_project {
         daemon.log.record(
             Level::Info,
             "debug",
@@ -1530,6 +1539,7 @@ fn note_sessions(
         }
         // debug mode (ADR-0050): a host program's session, recorded, goes to the project
         if daemon.config.record.send_to_project
+            && !daemon.simulated
             && session.host
             && !session.test
             && let Some(recording) = session.recording.clone()
