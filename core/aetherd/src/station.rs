@@ -8419,4 +8419,22 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn a_datagram_whose_pieces_stop_coming_is_given_up_on_without_waiting_for_another() {
+        // Two broadcasts lost to a collision on the VarAC bench (2026-10-07) were still not
+        // counted dropped three minutes later: the reassembler expired them only when the
+        // next piece of anything arrived. The pass itself gives up on them now.
+        let mut station = lone_station(crate::regulatory::Settings::unchecked());
+        let carried = aether_link::datagram::body("KK4XYZ", 1, &[0x5A; 70]).expect("body");
+        let pieces = aether_link::datagram::fragments(&carried, 7, 36).expect("fits");
+        assert!(pieces.len() > 1);
+        let heard_at = 10.0;
+        station.heard_datagram_piece(&pieces[0], 3.5, 1, heard_at);
+        station.feed_datagram(heard_at + 1.0);
+        assert_eq!(station.datagram_status()["incomplete_dropped"], 0);
+        station.feed_datagram(heard_at + datagrams::REASSEMBLY_TIMEOUT_S + 1.0);
+        assert_eq!(station.datagram_status()["incomplete_dropped"], 1);
+        assert!(station.take_received_datagrams().is_empty());
+    }
 }
