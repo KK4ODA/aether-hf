@@ -1266,6 +1266,17 @@ arrived. The adapter now learns a scanning host's beat from its own `LISTEN` com
 `host/server.rs`: two windows make a beat) and holds an answered call's `CONNECTED` in the last
 quarter of a listening window for the next `LISTEN ON`. `soak.py` deletes a passing run's audio
 (`--keep-passing` keeps it): a run records both stations, and the first wide soak filled the disk.
+**Several clients through one gateway (same day):** the channel server runs any number of
+stations (`[stations.c]`, …; each receiver hears its main peer through the noisy path and the rest
+through noise-free paths at their own SNR over the same floor), and the host steps name the client
+(`host-connect c`, `host-call c` / `host-wait c`); `40m-gateway-three-clients-2300` and
+`40m-gateway-busy-when-called-2300` (`quick`). **ADR-0053:** the three-clients runs showed a weak
+client's first reply at exactly 23 s — three tone-floor control frames to change direction
+before the gateway's greeting. A caller with nothing to send now offers the turn in its first poll
+(`OFFER`, no version change), and the gateway takes it with its first burst. On the way:
+`BusyDetector::mark_frame` now clears the attack votes — the decoded frame's own blocks had named
+the channel energy again, and a `DISC_ACK` waited out the hangover of the `DISC` it answered,
+into the `DISC`'s retry (beta.93 too). Three clients: first replies 4.6/7.9/19.9 → 4.0/5.9/14.0 s.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
