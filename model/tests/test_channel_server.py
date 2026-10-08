@@ -55,7 +55,7 @@ def server(radios: dict[str, dict], snr_db: float = 60.0) -> tuple[cs.Server, Fa
         fake.station.tx_delay = round(radio.get("tx_delay_ms", 0) * RATE / 1000)
         fake.station.vox_hold = round(radio.get("vox_hold_ms", 0) * RATE / 1000)
         fake.station.recovery = round(radio.get("rx_recovery_ms", 0) * RATE / 1000)
-    return cs.Server(scenario, a.station, b.station), a, b
+    return cs.Server(scenario, {"a": a.station, "b": b.station}), a, b
 
 
 def run(srv: cs.Server, a: Fake, b: Fake, seconds: float, plays: dict | None = None) -> None:
@@ -153,3 +153,39 @@ def test_the_agc_steps_down_on_a_peak_holds_then_ramps_back() -> None:
     for _ in range(10):  # 200 ms more: 20 ms of hang left, then 180 ms at 50 dB/s
         agc.process(quiet)
     assert -12.0 < agc.gain_db < -10.0
+
+
+def test_a_third_station_is_heard_at_its_own_path_over_one_noise_floor() -> None:
+    # a gateway b and two clients: a on the main path at +20 dB, c on its own at +8 dB; a
+    # receiver has one floor, so b hears c 12 dB under a and the noise is not counted twice
+    scenario = {
+        "seed": 4,
+        "path": {"profile": "awgn", "snr_db": 20.0, "c_to_b": {"snr_db": 8.0}},
+        "stations": {"a": {}, "b": {}, "c": {}},
+    }
+    assert cs.stations_of(scenario) == ["a", "b", "c"]
+    fakes = {who: Fake() for who in "abc"}
+    srv = cs.Server(scenario, {who: f.station for who, f in fakes.items()})
+    plays = {5: [("a", tone(1.0))], 100: [("c", tone(1.0))]}
+    for k in range(round(4.0 * RATE / cs.TICK)):
+        for who, samples in plays.get(k, []):
+            fakes[who].play(samples)
+        for f in fakes.values():
+            f.ready()
+        srv.tick()
+        for f in fakes.values():
+            f.take_block()
+    at_b = envelope(fakes["b"].heard)
+    quiet = float(np.median(at_b[150:190]))  # 1.5–1.9 s: nobody on the air
+    from_a = float(np.median(at_b[45:125]))  # a on the air 0.35–1.35 s
+    from_c = float(np.median(at_b[245:325]))  # c on the air 2.25–3.25 s
+
+    def snr(rms: float) -> float:
+        return float(20 * np.log10(np.sqrt(max(rms**2 - quiet**2, 1e-20)) / quiet))
+
+    # the 3 kHz SNR reads ~2.5 dB high over the 3.4 kHz audio band: compare the two
+    assert abs((snr(from_a) - snr(from_c)) - 12.0) < 1.5
+    # the floor under c's signal is the floor under a's
+    assert abs(20 * np.log10(quiet) - 20 * np.log10(float(np.median(at_b[350:390])))) < 1.0
+    # the clients hear each other too
+    assert np.flatnonzero(envelope(fakes["c"].heard) > 2 * quiet).size > 0
