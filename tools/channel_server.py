@@ -172,7 +172,7 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
             continue
         offset = float(q.get("audio_hz", CENTRE_HZ)) - CENTRE_HZ
         common = {
-            "seed": seed * 1000 + i + (500 if at == "b" else 0),
+            "seed": seed * 1000 + i + STATION_SEED.get(at, 0),
             "profile": q.get("profile"),
         }
         power = float(q.get("power_db", 0.0))
@@ -219,14 +219,36 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
                 rate_per_s=float(crashes.get("rate_per_s", 0.5)),
                 peak_db=float(crashes.get("peak_db", 25.0)),
                 spread_db=float(crashes.get("spread_db", 6.0)),
-                seed=seed * 1000 + 900 + (1 if at == "b" else 0),
+                seed=seed * 1000 + 900 + CRASH_SEED.get(at, 0),
             )
         )
     return out
 
 
+STATION_SEED = {"a": 0, "b": 500, "c": 200, "d": 300, "e": 400, "f": 600}
+"""Each station's offset into a scenario's seeds: ``a`` and ``b`` keep the two-station
+numbers, so a two-station scenario draws exactly what it did before more were possible."""
+CRASH_SEED = {"a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5}
+"""Each station's offset into the static's seeds, ``a`` and ``b`` as before."""
+
+
+def stations_of(scenario: dict) -> list[str]:
+    """The stations on the air: ``a`` and ``b``, then any more the scenario names (``c``,
+    ``d``, …: other clients of one gateway, say)."""
+    named = scenario.get("stations", {})
+    return ["a", "b", *sorted(k for k in named if k not in ("a", "b") and len(k) == 1)]
+
+
+def main_peer(who: str) -> str:
+    """The station whose path to ``who`` carries the noise ``who`` hears: the gateway ``b``
+    for every other station, and ``a`` for ``b``. A receiver has one noise floor; the other
+    stations reach it through noise-free paths of their own on top of it."""
+    return "a" if who == "b" else "b"
+
+
 def path_for(scenario: dict, direction: str) -> dict:
-    """The path ``a_to_b`` or ``b_to_a``: ``[path]`` with the direction's overrides."""
+    """The path ``a_to_b``, ``b_to_a``, ``c_to_b``, …: ``[path]`` with the direction's
+    overrides."""
     base = {k: v for k, v in scenario.get("path", {}).items() if not isinstance(v, dict)}
     base.update(scenario.get("path", {}).get(direction, {}))
     return base
@@ -348,33 +370,56 @@ class Station:
 
 
 class Server:
-    def __init__(self, scenario: dict, a: Station, b: Station) -> None:
+    """The air between the stations. Each receiver hears its main peer (:func:`main_peer`)
+    through a path with the noise, the other signals and the static it hears; with more than
+    two stations, every other station reaches it through a fading path of its own with no
+    noise, its level set by that path's ``snr_db`` against the same floor — so the noise is
+    counted once, as a receiver has one floor however many stations it hears."""
+
+    def __init__(self, scenario: dict, stations: dict[str, Station]) -> None:
         self.scenario = scenario
-        self.a, self.b = a, b
+        self.stations = stations
+        self.a, self.b = stations["a"], stations["b"]
         seed = int(scenario.get("seed", 1))
-        self.channels = {}
-        for tx, rx, direction in (("a", "b", "a_to_b"), ("b", "a", "b_to_a")):
-            path = path_for(scenario, direction)
-            snr = path.get("snr_db", 10.0)
-            self.channels[tx] = ScenarioChannel(
-                extras_for(scenario, rx, snr, seed),
-                channel=path.get("profile", "awgn"),
-                snr_db=snr,
-                signal_dbfs=signal_dbfs(scenario, tx),
-                cfo_hz=float(path.get("cfo_hz", 0.0)),
-                cfo_drift_hz_per_s=float(path.get("cfo_drift_hz_per_s", 0.0)),
-                sro_ppm=float(path.get("sro_ppm", 0.0)),
-                level=path.get("level"),
-                delay_ms=float(path.get("delay_ms", 0.0)),
-                echo=path.get("echo"),
-                seed=seed * 10 + (1 if tx == "a" else 2),
-            )
-        for st, who, tx in ((a, "a", "b"), (b, "b", "a")):
+        # (sender, receiver) → the path, and its gain against the receiver's floor
+        self.paths: dict[tuple[str, str], ScenarioChannel] = {}
+        self.gains: dict[tuple[str, str], float] = {}
+        names = list(stations)
+        for rx in names:
+            main = main_peer(rx)
+            main_snr = path_for(scenario, f"{main}_to_{rx}").get("snr_db", 10.0)
+            for tx in names:
+                if tx == rx:
+                    continue
+                path = path_for(scenario, f"{tx}_to_{rx}")
+                snr = path.get("snr_db", 10.0)
+                noisy = tx == main
+                pair_seed = (
+                    seed * 10 + (1 if tx == "a" else 2)
+                    if noisy and rx in ("a", "b") and tx in ("a", "b")
+                    else seed * 10 + 100 * (names.index(tx) + 1) + names.index(rx)
+                )
+                self.paths[(tx, rx)] = ScenarioChannel(
+                    extras_for(scenario, rx, snr, seed) if noisy else [],
+                    channel=path.get("profile", "awgn"),
+                    snr_db=snr if noisy else None,
+                    signal_dbfs=signal_dbfs(scenario, tx),
+                    cfo_hz=float(path.get("cfo_hz", 0.0)),
+                    cfo_drift_hz_per_s=float(path.get("cfo_drift_hz_per_s", 0.0)),
+                    sro_ppm=float(path.get("sro_ppm", 0.0)),
+                    level=path.get("level"),
+                    delay_ms=float(path.get("delay_ms", 0.0)),
+                    echo=path.get("echo"),
+                    seed=pair_seed,
+                )
+                self.gains[(tx, rx)] = 1.0 if noisy else 10.0 ** ((snr - main_snr) / 20.0)
+        for who, st in stations.items():
             radio = scenario.get("stations", {}).get(who, {}).get("radio", {})
             if radio.get("agc", "off") == "off":
                 continue
             # the threshold sits above the noise the station hears, as a rig's does
-            noise_rms = 10.0 ** ((self.channels[tx].noise_dbfs_3k or -60.0) / 20.0)
+            floor = self.paths[(main_peer(who), who)].noise_dbfs_3k
+            noise_rms = 10.0 ** ((floor or -60.0) / 20.0)
             hang, decay = {"fast": (20.0, 200.0), "auto": (100.0, 50.0), "slow": (400.0, 15.0)}[
                 radio["agc"]
             ]
@@ -384,7 +429,7 @@ class Server:
                 float(radio.get("agc_decay_db_s", decay)),
             )
         self.latency = round(DEVICE_LATENCY_S * AUDIO_RATE)
-        for st in (a, b):
+        for st in stations.values():
             st.air = np.zeros(self.latency, dtype=np.float32)
             st.air_keyed = np.zeros(self.latency, dtype=bool)
         self.t = 0  # the air clock: samples since the start
@@ -429,22 +474,27 @@ class Server:
         return keyed | recovering
 
     def tick(self) -> None:
-        for st in (self.a, self.b):
+        for st in self.stations.values():
             st.until_ready()
-        audio_a, keyed_a = self._radiate(self.a)
-        audio_b, keyed_b = self._radiate(self.b)
-        if self.t < self.outage_until:
-            audio_a = np.zeros_like(audio_a)
-            audio_b = np.zeros_like(audio_b)
-        heard_b = self.channels["a"].process(audio_a)
-        heard_a = self.channels["b"].process(audio_b)
-        heard_a[self._deaf(self.a, keyed_a)] = 0.0
-        heard_b[self._deaf(self.b, keyed_b)] = 0.0
-        if self.a.agc is not None:
-            heard_a = self.a.agc.process(heard_a)
-        if self.b.agc is not None:
-            heard_b = self.b.agc.process(heard_b)
-        both = keyed_a & keyed_b
+        audio: dict[str, np.ndarray] = {}
+        keyed: dict[str, np.ndarray] = {}
+        for who, st in self.stations.items():
+            audio[who], keyed[who] = self._radiate(st)
+            if self.t < self.outage_until:
+                audio[who] = np.zeros_like(audio[who])
+        heard: dict[str, np.ndarray] = {}
+        for rx, st in self.stations.items():
+            main = main_peer(rx)
+            out = self.paths[(main, rx)].process(audio[main])
+            for tx in self.stations:
+                if tx not in (rx, main):
+                    out = out + self.paths[(tx, rx)].process(audio[tx] * self.gains[(tx, rx)])
+            out[self._deaf(st, keyed[rx])] = 0.0
+            if st.agc is not None:
+                out = st.agc.process(out)
+            heard[rx] = out
+        # two or more transmitters keyed at once
+        both = np.sum(np.stack(list(keyed.values())), axis=0) >= 2
         if self.t < self.outage_until:
             both[:] = False  # neither hears the other: not a collision on this path
         self.both_keyed += int(both.sum())
@@ -454,8 +504,8 @@ class Server:
                 self.collisions.append([t / AUDIO_RATE, (t + 1) / AUDIO_RATE])
             self.collisions[-1][1] = (t + 1) / AUDIO_RATE
             self._colliding_since = t
-        self.a.send_block(self.t + TICK, heard_a)
-        self.b.send_block(self.t + TICK, heard_b)
+        for who, st in self.stations.items():
+            st.send_block(self.t + TICK, heard[who])
         self.t += TICK
 
     def report(self) -> dict:
@@ -464,7 +514,7 @@ class Server:
             "seconds": self.t / AUDIO_RATE,
             "stations": {
                 st.name: {"keyed": [[round(x, 3) for x in iv] for iv in st.intervals]}
-                for st in (self.a, self.b)
+                for st in self.stations.values()
             },
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
@@ -504,25 +554,26 @@ def main() -> int:
     args = ap.parse_args()
     scenario = tomllib.loads(args.scenario.read_text(encoding="utf-8"))
     stations = scenario.get("stations", {})
-    callsign = {who: stations.get(who, {}).get("callsign", who) for who in ("a", "b")}
+    names = stations_of(scenario)
+    callsign = {who: stations.get(who, {}).get("callsign", who) for who in names}
 
     listener = socket.create_server(("127.0.0.1", args.port))
     port = listener.getsockname()[1]
     if args.port_file:
         args.port_file.write_text(str(port), encoding="utf-8")
     print(f"channel server on 127.0.0.1:{port}", flush=True)
-    joined = [accept_station(listener, stations), accept_station(listener, stations)]
+    joined = [accept_station(listener, stations) for _ in names]
     by_name = {st.name: st for st in joined}
     try:
-        a, b = by_name[callsign["a"]], by_name[callsign["b"]]
+        on_air = {who: by_name[callsign[who]] for who in names}
     except KeyError:
-        a, b = joined
-    for who, st in (("a", a), ("b", b)):
+        on_air = dict(zip(names, joined, strict=True))
+    for who, st in on_air.items():
         radio = stations.get(who, {}).get("radio", {})
         st.tx_delay = round(float(radio.get("tx_delay_ms", 0)) * AUDIO_RATE / 1000)
         st.vox_hold = round(float(radio.get("vox_hold_ms", 0)) * AUDIO_RATE / 1000)
         st.recovery = round(float(radio.get("rx_recovery_ms", 0)) * AUDIO_RATE / 1000)
-    server = Server(scenario, a, b)
+    server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
     commands_done = 0
     try:
@@ -546,7 +597,7 @@ def main() -> int:
     finally:
         if args.report:
             args.report.write_text(json.dumps(server.report(), indent=1), encoding="utf-8")
-        for st in (a, b):
+        for st in on_air.values():
             st.sock.close()
     return 0
 
