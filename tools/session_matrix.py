@@ -248,6 +248,7 @@ class Host:
         self.data.settimeout(None)
         self.lines: list[str] = []
         self.received = 0
+        self.calls_from = 0  # CONNECTEDs heard before a `host-call`
         self.listening = False
         self.connected = False
         self.problems: list[str] = []
@@ -365,10 +366,13 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         time.sleep(0.05)
     channel = f"127.0.0.1:{port_file.read_text().strip()}"
     stations = sc.get("stations", {})
-    ports = reserve_ports(2)
-    for i, (who, binary) in enumerate((("a", daemon_a), ("b", daemon_b))):
+    names = stations_of(sc)
+    ports = reserve_ports(len(names))
+    for i, who in enumerate(names):
+        # the called station runs --daemon-b; every client, --daemon
+        binary = daemon_b if who == "b" else daemon_a
         cfg = stations.get(who, {})
-        callsign = cfg.get("callsign", "W4ODA" if who == "a" else "KK4XYZ")
+        callsign = cfg.get("callsign", DEFAULT_CALLSIGNS.get(who, f"N4{who.upper()}AA"))
         control, host_port = ports[2 * i], ports[2 * i + 1]
         record = (run.dir / who / "recordings").resolve()
         record.mkdir(parents=True, exist_ok=True)
@@ -408,6 +412,19 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 break
             except OSError:
                 time.sleep(0.1)
+
+
+def stations_of(scenario: dict) -> list[str]:
+    """``a``, ``b``, then any more stations the scenario names — the channel server's order."""
+    named = scenario.get("stations", {})
+    return ["a", "b", *sorted(k for k in named if k not in ("a", "b") and len(k) == 1)]
+
+
+DEFAULT_CALLSIGNS = {"a": "W4ODA", "b": "KK4XYZ", "c": "N4CCC", "d": "N4DDD", "e": "N4EEE"}
+
+
+def all_idle(run: Run) -> bool:
+    return all(st.status()["state"] == "idle" for st in run.stations.values())
 
 
 def step(run: Run, text: str) -> bool:
@@ -474,18 +491,37 @@ def step(run: Run, text: str) -> bool:
         run.wait("host attached", lambda: False, 2, note=False)
         return True
     if word == "host-connect":
-        ha, hb = run.hosts["a"], run.hosts["b"]
+        # `host-connect [c]`: a client (a unless named) calls the gateway, b
+        who = arg or "a"
+        ha, hb = run.hosts[who], run.hosts["b"]
         was_a, was_b = ha.heard("CONNECTED"), hb.heard("CONNECTED")
-        ha.send(f"CONNECT {a.callsign} {b.callsign}")
+        ha.send(f"CONNECT {run.stations[who].callsign} {b.callsign}")
         run.connected = run.wait(
             "host connected",
             lambda: ha.heard("CONNECTED") > was_a and hb.heard("CONNECTED") > was_b,
             float(run.scenario.get("connect_within_s", 180)),
         )
         return run.connected
+    if word == "host-call":
+        # `host-call c`: the client calls the gateway and the script goes on — a call made
+        # into a gateway busy with another client's session; `host-wait c` sees it through
+        ha = run.hosts[arg]
+        ha.calls_from = ha.heard("CONNECTED")
+        ha.send(f"CONNECT {run.stations[arg].callsign} {b.callsign}")
+        return True
+    if word == "host-wait":
+        ha = run.hosts[arg]
+        run.connected = run.wait(
+            f"{arg} connected",
+            lambda: ha.heard("CONNECTED") > ha.calls_from,
+            float(run.scenario.get("connect_within_s", 180)),
+        )
+        return run.connected
     if word in ("host-send", "host-reply"):
-        n = int(arg)
-        tx, rx = (run.hosts["a"], run.hosts["b"])
+        # `host-send N [c]`: the client (a unless named) to the gateway; host-reply back
+        size, _, who = arg.partition(" ")
+        n = int(size)
+        tx, rx = (run.hosts[who or "a"], run.hosts["b"])
         if word == "host-reply":
             tx, rx = rx, tx
         before = rx.received
@@ -503,7 +539,7 @@ def step(run: Run, text: str) -> bool:
         run.delivered_ok &= ok
         return ok
     if word == "host-disconnect":
-        ha, hb = run.hosts["a"], run.hosts["b"]
+        ha, hb = run.hosts[arg or "a"], run.hosts["b"]
         was_a, was_b = ha.heard("DISCONNECTED"), hb.heard("DISCONNECTED")
         ha.send("DISCONNECT")
         return run.wait(
@@ -540,27 +576,15 @@ def step(run: Run, text: str) -> bool:
         return True
     if word == "wait_idle":
         # both stations back to idle by themselves — the link timeout, after an outage
-        return run.wait(
-            "back to idle",
-            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
-            float(arg),
-        )
+        return run.wait("back to idle", lambda: all_idle(run), float(arg))
     if word == "abort":
         call(a.control, "abort")
-        return run.wait(
-            "aborted",
-            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
-            120,
-        )
+        return run.wait("aborted", lambda: all_idle(run), 120)
     if word == "disconnect":
         leaving = {"": (a,), "a": (a,), "b": (b,), "both": (a, b)}[arg]
         for st in leaving:
             call(st.control, "disconnect")
-        return run.wait(
-            "disconnected",
-            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
-            120,
-        )
+        return run.wait("disconnected", lambda: all_idle(run), 120)
     raise SystemExit(f"unknown step {text!r}")
 
 
@@ -648,13 +672,7 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
                 break
         # the last frames and the sessions' history settle: an abort's DISC goes out after
         # the burst it cut, and the other station needs to hear it
-        a, b = run.stations["a"], run.stations["b"]
-        run.wait(
-            "settle",
-            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
-            30,
-            note=False,
-        )
+        run.wait("settle", lambda: all_idle(run), 30, note=False)
         run.wait("settle", lambda: False, 2, note=False)
         ends = session_ends(run)
         for st in run.stations.values():

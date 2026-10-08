@@ -1,0 +1,45 @@
+name = "40m-gateway-busy-when-called-2300"
+description = """40 m at 2300 Hz: a second Winlink client calls the Trimode gateway while it is in
+another client's session. The gateway answers no call during a session, the caller hears the
+channel busy and its calls must not break the session under way; once that session ends, the
+second client's call gets through and its exchange completes."""
+tags = ["40m", "host", "gateway", "multi"]
+bandwidth = 2300
+seconds = 1500
+seed = 62
+
+[stations.a]
+callsign = "KE4QCM"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+[stations.c]
+callsign = "ND1J"
+host = true
+
+[path]
+profile = "good"
+snr_db = 10.0
+cfo_hz = 2.0
+[path.c_to_b]
+profile = "moderate"
+snr_db = 6.0
+[path.b_to_c]
+profile = "moderate"
+snr_db = 8.0
+
+[script]
+steps = [
+  "host a client", "host c client", "host b trimode",
+  "host-connect a", "host-reply 120 a",
+  "host-call c",
+  "host-send 6000 a", "host-reply 40 a", "host-disconnect a",
+  "host-wait c", "host-reply 120 c", "host-send 400 c", "host-reply 40 c", "host-disconnect c",
+]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+max_collisions = 8
