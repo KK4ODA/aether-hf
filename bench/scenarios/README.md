@@ -95,6 +95,16 @@ and a `CONNECTED` it is told while not listening is a failure (ADR-0051). Then `
 (a's program calls b), `host-send N` / `host-reply N` (bytes over the data ports, a → b and
 b → a) and `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`).
 
+**More stations** (`[stations.c]`, `[stations.d]`, …: other clients of the gateway `b`). Each
+receiver hears its main peer — `b` for a client, `a` for `b` — through the path with its noise,
+static and other signals, and every other station through a noise-free fading path of its own
+(`[path.c_to_a]`, …, `[path]` by default) at that path's SNR against the same floor: one noise
+floor per receiver, however many it hears. A two-station scenario draws exactly what it did
+before. The host steps name the client: `host-connect c`, `host-send N c`, `host-reply N c`,
+`host-disconnect c` (`a` when none is named); `host-call c` places a call the script does not
+wait for, `host-wait c` waits for it to come up — a call into a gateway busy with another
+client (`40m-gateway-busy-when-called-2300`). Every client runs `--daemon`, `b` `--daemon-b`.
+
 **Always judged**, whatever `[expect]` says: a daemon that exits or panics, a station keyed
 longer than 32 s at once (a stuck key), a host told `CONNECTED` while not listening.
 `tools/soak.py` draws random scenarios — every fading profile, offsets, drift, echoes, QSB, the
