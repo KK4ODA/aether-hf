@@ -657,16 +657,16 @@ Small things for the gaps between: ~~CM108/GPIO keying~~ (done 2026-09-16: `[ptt
 `[sim]` (human), three hams through the wizard
 (human), Authenticode signing (needs a certificate) and Apple signing/notarization (needs a
 developer account; the macOS dmg ships unsigned and untested on hardware), ~~the panel's SNR
-history surviving a reload~~ (done 2026-09-16, beta.23). **Host benches still owed (human, scratch copies under `C:\Dev\AetherBench`):**
-Winlink Express P2P again at 500 Hz and on the engine as it is now (its 2300 Hz pass
-predates the faster start and climb; `BW500` from its bandwidth setting must come back
-`OK`) — a `host-interfaces.md` §7 row; and **RMS Trimode with RMS Relay over `[sim]`**, a
-Winlink Express client calling an Aether-fed Trimode as a gateway, which speaks the same
-VARA TCP port (`LISTEN ON`, `PUBLIC ON`, `CWID`, several `MYCALL`s, `CONNECTED` for
-incoming calls). Two things to know before that one: Trimode needs a Winlink sysop
-account to run, and a *public* RMS gateway on Aether is the Winlink Development Team's
-call, not ours — the bench proves the modem side; the policy conversation is separate.
-BPQ32 is the open-source gateway route and reaches AX.25 as well. **Back burner:** Phase
+history surviving a reload~~ (done 2026-09-16, beta.23). **Host benches (human, scratch copies
+under `C:\Dev\AetherBench`), both done 2026-10-07:** ~~Winlink Express P2P again at 500 Hz and
+on the engine as it is now~~ (`host-interfaces.md` §7: `BW500` from its bandwidth setting
+comes back `OK`, three 6 kB messages byte-identical, a 2300 Hz station moved to 500 for the
+program's session; Winlink Express proposes nothing to an SSID, so the two ends need two plain
+names); ~~**RMS Trimode with RMS Relay over `[sim]`**~~ (§7: a Winlink Express client completes
+a B2F session through an Aether-fed Trimode; ADR-0051 came out of it). Still true: a *public*
+RMS gateway on Aether is the Winlink Development Team's call, not ours — the bench proves the
+modem side; the policy conversation is separate. BPQ32 is the open-source gateway route and
+reaches AX.25 as well. **Back burner:** Phase
 10 (Aether FM) and Phase 8 (the phone).
 
 ### The weak-signal plan from 2026-09-23 — what is left, in order
@@ -838,8 +838,8 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     2026-09-24 (item 12).
 11. Between any two of the above: ~~CM108 keying; the panel's SNR history across a reload~~
     (both done 2026-09-16);
-    whatever the air finds. Host benches owed: Winlink Express P2P at 500 Hz, RMS Trimode
-    + Relay as a gateway over `[sim]` (both human; see the small-things paragraph above).
+    whatever the air finds. ~~Host benches owed: Winlink Express P2P at 500 Hz, RMS Trimode
+    + Relay as a gateway over `[sim]`~~ (both done 2026-10-07; `host-interfaces.md` §7).
 12. **The weak-signal plan** (from 2026-09-23; its section above Phase 7 has the evidence and
     the gates): ~~**P9-6** trustworthy benches~~ (done 2026-09-23), ~~**P9-7**~~ (done
     2026-09-24: holding the link, ADR-0012), ~~**P9-8**~~ (done 2026-09-24: the tone floor,
