@@ -384,9 +384,16 @@ impl BusyDetector {
     /// A decoded frame is there whatever the power measurement says, and it works below the
     /// threshold, which is the case that matters for politeness. An acquisition alone is
     /// not called here: see the module notes.
+    ///
+    /// The attack's votes go: they are the frame's own blocks, now explained. Kept, the next
+    /// block found a majority of them over the threshold and named the busy channel energy
+    /// again, and an answer that waits only for energy no frame accounts for — a `DISC_ACK` —
+    /// waited out the hangover of the very `DISC` it answered, into its retry (the
+    /// three-clients scenario, 2–3 s at a client's leaving; ADR-0053).
     pub fn mark_frame(&mut self, now: f64, detect_confidence: f64) {
         self.busy_until = self.busy_until.max(now + self.config.frame_hold_s);
         self.reason = Some(BusyReason::Frame { detect_confidence });
+        self.over.clear();
     }
 
     /// Discard audio captured while this station was transmitting.
@@ -1618,6 +1625,25 @@ mod tests {
         assert!(
             !detector.settled(),
             "a detector that has heard nothing must not claim to know the floor"
+        );
+    }
+
+    #[test]
+    fn a_decoded_frame_explains_the_energy_that_was_its_own() {
+        // A frame loud enough to make the channel busy by its energy is decoded as it ends.
+        // The quiet after it is the frame's hangover, not energy of something unknown: an
+        // answer that waits only for unexplained energy (a DISC_ACK) must not wait it out.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let now = feed(&mut detector, 6.0, 0.01, 1, 0.0);
+        let now = feed(&mut detector, 0.5, 0.05, 2, now);
+        assert!(matches!(detector.reason(), Some(BusyReason::Level { .. })));
+        detector.mark_frame(now, 2.0);
+        let now = feed(&mut detector, 0.1, 0.01, 3, now);
+        assert!(detector.busy(now), "the frame holds the channel for its hold");
+        assert!(
+            matches!(detector.reason(), Some(BusyReason::Frame { .. })),
+            "the frame's own blocks named it energy again: {:?}",
+            detector.reason()
         );
     }
 
