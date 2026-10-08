@@ -650,7 +650,7 @@ CONTROL container:
 | 6 | recommended mode (5 bits) \| counter (3 bits) |
 
 Kinds: `ACK` (0), `POLL` (1), `TURN` (2), `DISC` (3), `DISC_ACK` (4). Flags, in an ACK:
-`WANT_TX` (0x1), `BREAK` (0x2) and `TAKEN` (0x8); in a `TURN`, `OFFER` (0x4). The base, bitmap, recommended mode and counter are an
+`WANT_TX` (0x1), `BREAK` (0x2) and `TAKEN` (0x8); in a `TURN` or a caller's first `POLL`, `OFFER` (0x4). The base, bitmap, recommended mode and counter are an
 ACK's; the other kinds send them as zero. The recommended mode is a rung of the air's ladder;
 the counter numbers a station's acknowledgements modulo 8, for logs. Protocol version 2 split
 the byte four and four; the fast kinds (ADR-0014) took the 2 300 Hz ladder to twenty rungs.
@@ -739,6 +739,12 @@ sender's wait for the acknowledgement covers two of its frames more than its bur
 receiver that lost the offer and took the last data frame's count at its word. An offer
 replaces the request for the turn and the `TURN` that answered it: one keying of each
 transmitter a change of direction instead of two.
+
+A caller with nothing to send confirms a new session with a `POLL`; that poll carries `OFFER`
+(ADR-0053), and the called station answers it as it answers an offering `TURN` — with `TAKEN`
+and its first burst when it has data (a gateway's greeting), with the `ACK` alone otherwise. A
+station that knows no offer on a poll answers it as a plain poll, so the flag needs no new
+version.
 
 When two
 stations call each other at once, the one whose callsign sorts higher keeps calling and ignores

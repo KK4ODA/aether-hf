@@ -3528,6 +3528,42 @@ def test_the_turn_on_offer_is_taken_in_the_acknowledgement(timing: PhyTiming, of
         assert a.stats.turns == 1
 
 
+@pytest.mark.parametrize("snr_db", [-4.0, 12.0])
+@pytest.mark.parametrize("offer", [False, True])
+def test_a_callers_first_poll_offers_the_turn(
+    timing: PhyTiming, offer: bool, snr_db: float
+) -> None:
+    """ADR-0053: a caller with nothing to send polls to confirm the session, and the poll offers
+    the turn; a called station with something to say — a gateway's greeting — takes it in its
+    acknowledgement and sends at once. Without the offer the acknowledgement says WANT_TX and a
+    TURN follows: two more frames, on a weak path two more floor frames (the three-clients
+    scenario: a 120-byte greeting in 23 s)."""
+    a, b = _pair(timing, LinkConfig(offer_turn=offer))
+    greeting = b"[RMS Trimode-1.3.3.0-B2FHM$]\r" * 4
+    b.send(greeting)
+
+    def delivered_at() -> float:
+        sim = TwoStationSim(a, b, snr_db=snr_db, seed=3)
+        a.connect("KK4XYZ")
+        t = 0.0
+        while t < 200.0 and sim.delivered(0) != greeting:
+            t += 0.5
+            sim.run(until=t, idle_gap=1e9)
+        return t
+
+    when = delivered_at()
+    assert when < 200.0
+    if offer:
+        assert b.stats.turns_taken == 1 and a.stats.turns == 0
+    else:
+        assert b.stats.turns_taken == 0 and a.stats.turns == 1
+    # the same session without the offer, for the time it saves
+    if offer:
+        a, b = _pair(timing, LinkConfig(offer_turn=False))
+        b.send(greeting)
+        assert when < delivered_at()
+
+
 @pytest.mark.parametrize("taken_heard", [False, True])
 def test_a_lost_acceptance_of_the_turn_is_read_from_the_burst_after_it(
     timing: PhyTiming, taken_heard: bool

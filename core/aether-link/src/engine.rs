@@ -548,6 +548,8 @@ pub struct LinkEngine {
     offered: bool,
     /// The last burst this station sent offered the turn, and nothing has answered it.
     offer_out: bool,
+    /// The caller's first poll offered the turn, and nothing has answered it (ADR-0053).
+    poll_offer: bool,
     /// The last acknowledgement of a burst that offered the turn measured none of its data:
     /// the other station heard the offer and not the frames before it. The next burst goes
     /// without the offer, so that nothing answers it at once (ADR-0047).
@@ -681,6 +683,7 @@ impl LinkEngine {
             disc_requested: false,
             offered: false,
             offer_out: false,
+            poll_offer: false,
             offer_unheard: false,
             disc_patience_until: None,
             caller: false,
@@ -1760,7 +1763,15 @@ impl LinkEngine {
     }
 
     fn send_poll(&mut self) {
-        let frame = self.control(ControlKind::Poll, 0, 0, 0, None, 0);
+        self.send_poll_offering(false);
+    }
+
+    /// A poll, offering the turn or not: the caller's first poll offers it when it has nothing
+    /// to send (ADR-0053).
+    fn send_poll_offering(&mut self, offer: bool) {
+        let flags = if offer { control_flags::OFFER } else { 0 };
+        let frame = self.control(ControlKind::Poll, flags, 0, 0, None, 0);
+        self.poll_offer = offer;
         self.poll_floor = frame.floor;
         self.transmit(vec![frame]);
         self.wait_for(
@@ -2347,6 +2358,7 @@ impl LinkEngine {
             self.offer_unheard = false;
         }
         self.offer_out = false;
+        self.poll_offer = false;
         if ack.flags & control_flags::TAKEN != 0 {
             // the other station took the turn this one offered: its burst follows (ADR-0047)
             self.take_irs();
@@ -2981,7 +2993,13 @@ impl LinkEngine {
                     || self.waiting_for == Some(Waiting::Turn)
                     || (self.role == Role::Iss && !self.caller)
                 {
+                    // the caller's first poll may offer the turn (ADR-0053), as a burst's end
+                    // does — to a receiving station, not one yielding a turn it held
+                    let offered = (self.role == Role::Irs
+                        || self.waiting_for == Some(Waiting::Turn))
+                        && control.flags & control_flags::OFFER != 0;
                     self.take_irs();
+                    self.offered = offered;
                     let delay = self.timing.turnaround_s + (frame.t_end() - self.now).max(0.0);
                     self.arm(Timer::Ack, delay);
                 }
@@ -3023,15 +3041,14 @@ impl LinkEngine {
     /// acknowledgement that would not come, the sender sent its burst again over the other
     /// station's (the scenario harness, 80 m at 500 Hz).
     fn turn_taken_unread<F: SoftFrame>(&self, frame: &F) -> bool {
-        self.offer_out
-            && self.waiting_for == Some(Waiting::Ack)
-            && frame.trusted()
-            && !frame.floor()
-            && !self.timing.is_floor(frame.mode())
+        let offered = (self.offer_out && self.waiting_for == Some(Waiting::Ack))
+            || (self.poll_offer && self.waiting_for == Some(Waiting::Poll));
+        offered && frame.trusted() && !frame.floor() && !self.timing.is_floor(frame.mode())
     }
 
     fn take_irs(&mut self) {
         self.offer_out = false;
+        self.poll_offer = false;
         if self.role != Role::Irs {
             self.actions.push(Action::Event {
                 name: "role",
@@ -3297,7 +3314,13 @@ impl LinkEngine {
         if self.has_work() {
             self.send_burst();
         } else {
-            self.send_poll(); // confirms the handshake and fetches the first acknowledgement
+            // confirms the handshake and fetches the first acknowledgement — and, with nothing
+            // to send, offers the turn: a called station with something to say (a gateway's
+            // greeting) takes it in that acknowledgement and sends at once, where a poll
+            // answered "I have data" and a TURN after it cost two more frames — three floor
+            // frames, 12 s of a 23 s reply, on a weak path (ADR-0053). A station that knows no
+            // offer on a poll answers it as a poll.
+            self.send_poll_offering(self.config.offer_turn);
         }
     }
 
