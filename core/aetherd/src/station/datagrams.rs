@@ -28,7 +28,7 @@ const MAX_UNTAKEN: usize = 256;
 /// How long a datagram's pieces are waited for once the first has arrived. Bursts of one
 /// datagram follow each other within a key's length and a channel's wait; two minutes covers
 /// both with room, and a piece lost for good is not waited for longer.
-const REASSEMBLY_TIMEOUT_S: f64 = 120.0;
+pub(super) const REASSEMBLY_TIMEOUT_S: f64 = 120.0;
 
 /// What a client asks to send.
 #[derive(Debug, Clone, PartialEq)]
@@ -281,6 +281,11 @@ impl<P: Ptt> Station<P> {
     /// Put the next datagram burst on the transmit queue, when nothing else is on it, no
     /// session is up, and the channel access allows. Called from `start_pending`.
     pub(super) fn feed_datagram(&mut self, now: f64) {
+        // The reassembler drops a datagram whose pieces stopped coming only when it is next
+        // asked to add one, so `incomplete_dropped` stood at 0 three minutes after two
+        // broadcasts were lost to a collision on the VarAC bench (2026-10-07). Every pass
+        // gives up on what has waited too long, and the status says so at once.
+        self.datagrams.reassembler.expire(now);
         if !self.pending.is_empty()
             || self.transmitting
             || self.engine.state() != State::Idle
