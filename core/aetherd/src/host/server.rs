@@ -18,7 +18,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::json;
@@ -165,6 +165,65 @@ impl HostServer {
 /// one, so they have to be taken together. Asking for port zero means "any free pair", which
 /// needs a search: the operating system hands out one ephemeral port at a time and has no
 /// notion of a consecutive pair, so a candidate is probed and retried until both are free.
+/// A scanning host's beat, learned from its own `LISTEN` commands, so that a `CONNECTED` is
+/// not written in the last moments of a listening window. RMS Trimode turns LISTEN off for the
+/// half second it is deaf between scan steps and ignores a CONNECTED that arrives then
+/// (ADR-0051). Held for a LISTEN that is already off, the CONNECTED still raced one written just
+/// before the host's LISTEN OFF: each end sent its line before reading the other's, the adapter
+/// believed the host listening and the host believed itself deaf — found by the soak runner
+/// (`soak-40022`, 2026-10-08). Near the end of a window the two cross; so there the CONNECTED
+/// waits for the next LISTEN on, as it would in the deaf blip.
+#[derive(Debug, Default, Clone)]
+struct Scan {
+    /// When LISTEN last went on.
+    on_since: Option<Instant>,
+    /// The last few listening windows, LISTEN on to LISTEN off.
+    windows: Vec<Duration>,
+}
+
+impl Scan {
+    /// How many windows are kept, and how many make a beat.
+    const KEEP: usize = 4;
+    const BEAT: usize = 2;
+    /// The least of the end of a window kept clear.
+    const LEAST_GUARD: Duration = Duration::from_millis(50);
+
+    /// LISTEN went from `was` to `now_on` at `at`.
+    fn listen(&mut self, was: bool, now_on: bool, at: Instant) {
+        match (was, now_on) {
+            (false, true) => self.on_since = Some(at),
+            (true, false) => {
+                if let Some(since) = self.on_since.take() {
+                    self.windows.push(at.saturating_duration_since(since));
+                    if self.windows.len() > Self::KEEP {
+                        self.windows.remove(0);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether a CONNECTED written at `at` could cross the host's next LISTEN OFF: the host
+    /// scans (two windows seen), and `at` lies in the last quarter of the shortest of them.
+    /// A host that has stopped scanning — its window run well past the beat with no LISTEN OFF
+    /// — is listening, not late.
+    fn late(&self, at: Instant) -> bool {
+        let Some(since) = self.on_since else {
+            return false;
+        };
+        if self.windows.len() < Self::BEAT {
+            return false;
+        }
+        let Some(&window) = self.windows.iter().min() else {
+            return false;
+        };
+        let guard = (window / 4).max(Self::LEAST_GUARD);
+        let open = at.saturating_duration_since(since);
+        open + guard >= window && open < window * 2
+    }
+}
+
 fn bind_pair(address: &str) -> Result<(TcpListener, TcpListener), HostError> {
     let wanted: std::net::SocketAddr = address
         .parse()
@@ -379,6 +438,7 @@ fn serve_commands(
     // is listening, so the notification waits for the next LISTEN on (ADR-0051, the RMS Trimode
     // bench 2026-10-07).
     let mut pending_connected: Option<serde_json::Value> = None;
+    let mut scan = Scan::default();
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -417,7 +477,9 @@ fn serve_commands(
                 if trace {
                     eprintln!("host <- {}", text.trim());
                 }
+                let was_listening = host.listening;
                 let outcome = host.command(&text);
+                scan.listen(was_listening, host.listening, Instant::now());
                 // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here,
                 // and `LISTEN` whether the station answers calls
                 flags.chat.store(host.recorded.chat, Ordering::SeqCst);
@@ -446,7 +508,7 @@ fn serve_commands(
         // ── a connection held for the host's LISTEN to come back ───────
         // The command just read may have been the LISTEN on that lets a scanning host hear the
         // CONNECTED it would otherwise ignore; emit it now that it is listening.
-        if host.listening && pending_connected.is_some() {
+        if host.listening && pending_connected.is_some() && !scan.late(Instant::now()) {
             let data = pending_connected.take().unwrap_or_default();
             if !report_state(
                 &data,
@@ -503,7 +565,10 @@ fn serve_commands(
                     // held, LISTEN or no.
                     let detail = event.data["detail"].as_str().unwrap_or("");
                     let called = detail.split_whitespace().nth(1) == Some("(irs)");
-                    if name == "connected" && called && !host.listening {
+                    if name == "connected"
+                        && called
+                        && (!host.listening || scan.late(Instant::now()))
+                    {
                         if trace {
                             eprintln!("host (held CONNECTED until LISTEN on)");
                         }
@@ -1190,6 +1255,30 @@ mod tests {
         assert_eq!(connected, "CONNECTED KK4XYZ W4ODA 2300");
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");
+    }
+
+    #[test]
+    fn a_scanning_hosts_beat_keeps_the_end_of_its_window_clear() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut scan = Scan::default();
+        // a host that has not scanned is never late
+        scan.listen(false, true, at(0));
+        assert!(!scan.late(at(2900)));
+        // Trimode's beat: three seconds listening, half a second deaf
+        scan.listen(true, false, at(3000));
+        scan.listen(false, true, at(3500));
+        assert!(!scan.late(at(6400)), "one window is not a beat");
+        scan.listen(true, false, at(6500));
+        scan.listen(false, true, at(7000));
+        // early in the window: written at once
+        assert!(!scan.late(at(7100)));
+        assert!(!scan.late(at(9200)));
+        // the last quarter of it: held for the next LISTEN on
+        assert!(scan.late(at(9300)));
+        assert!(scan.late(at(9990)));
+        // a window run well past the beat: the host has stopped scanning
+        assert!(!scan.late(at(13_100)));
     }
 
     #[test]
