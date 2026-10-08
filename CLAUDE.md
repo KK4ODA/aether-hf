@@ -1249,11 +1249,16 @@ said again on the floor up to `LinkConfig.leave_repeats` (3) times (`Timer::Leav
 `left_answered`). Harness faults found on the way: a 10 s socket timeout in the emulator, and
 calls made inside an outage. Lesson for scenario writing: a dozen QRM sources at the session's
 level clip the simulated card — calibrate against what a radio's AGC would allow. Full set after
-ADR-0052: 35 of 36 pass; soak seed 1, 24 of 24 hold every invariant. **Open:**
-`40m-good-2300-rtty-crashes` (tagged `nightly`) fails about three runs in four on the build
-before ADR-0052 as well as after — the Test's file runs out of budget because, after the
-ladder, the receiver's recommendation walks down (rung 9 → 7) while nearly every frame decodes;
-the reading is that static-crash-hit SNR readings drag its estimate. Not yet fixed.
+ADR-0052: 35 of 36 pass; soak seed 1, 24 of 24 hold every invariant. **The 36th**
+(`40m-good-2300-rtty-crashes`, fixed after beta.91): the Test sized its file from the message's
+rate, measured before the ladder (502 bit/s at rungs 9–11); a static crash took a frame of a
+ladder rung below the one the receiver had asked for — a real loss (ADR-0020), so the margin
+widened — the link left the ladder at rung 7, and a file sized for two minutes needed four.
+`file_rate_bps` now scales the message's rate by the bytes a second of air carries at the rung
+the link runs at after the ladder against the message's (`message_rung_rate`), never up. Eight
+seeds 5/8 → 8/8; `80m-asymmetric-500` six seeds 4/6 → 5/6 — its remaining failure (seed 4) is
+the path: a 1 kB file at 0 dB Moderate 500 Hz went at under half the message's rate, with the
+four tone-floor rungs of the ladder taking 106 s of the 600 s budget.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
