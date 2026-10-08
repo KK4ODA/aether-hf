@@ -351,8 +351,20 @@ fn a_kiss_frame_crosses_from_one_daemons_kiss_port_to_the_others() {
         [(0, aprs), (1, varac)],
         "both frames, in order, as sent"
     );
-    assert_eq!(a.status()["datagrams"]["sent"], 2);
-    assert_eq!(b.status()["datagrams"]["heard"], 2);
+    // A counts a datagram sent when its transmission has played out of the card, which can be
+    // after B has decoded it: B's copy arrives the card's latency early (macOS CI, 2026-10-08)
+    let counted = |daemon: &Daemon, key: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let n = daemon.status()["datagrams"][key].clone();
+            if n == 2 || Instant::now() > deadline {
+                return n;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    assert_eq!(counted(&a, "sent"), 2);
+    assert_eq!(counted(&b, "heard"), 2);
     // and B heard W4ODA as a station sending datagrams
     let heard = b.call("heard.list", &json!({}));
     assert!(
