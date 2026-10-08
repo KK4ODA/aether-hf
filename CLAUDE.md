@@ -317,8 +317,9 @@ method and panel button, sidecar fields for grid/rig/power/antenna/path, *Contri
 session* (GitHub issue or email; audio opt-in), `tools/field_ingest.py`, and
 `bench_link --replay <sidecar>` — every volunteer contact becomes a sidecar the bench
 replays; per-class penalties and the SNR estimator get checked on real paths. Human
-items still open: BPQ32 over `[sim]`, three
-external hams through the wizard, Authenticode signing. Small: CM108 keying, the panel's
+items still open: three
+external hams through the wizard, Authenticode signing (BPQ32 over `[sim]` was dropped
+2026-10-07 by decision). Small: CM108 keying, the panel's
 SNR history across a reload.
 
 **Betas .21 and .22 (2026-09-16 afternoon).** The author's panel fixes: Setup steps 4 and 5
