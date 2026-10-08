@@ -183,6 +183,9 @@ pub struct DaemonState {
     pub upload_http: fn() -> Box<dyn crate::upload::Http>,
     /// Debug mode's queue: the host program's sessions on their way to the project.
     pub debug: crate::debug::DebugUploads,
+    /// The audio is a simulated channel (`[sim]`, `--channel`) or a dry run: its sessions are
+    /// a bench's, never sent to the project — CI and the harness would fill its folder.
+    pub simulated: bool,
 }
 
 /// The network, for an upload.
@@ -225,6 +228,7 @@ impl DaemonState {
             upload: crate::upload::Upload::default(),
             upload_http: web,
             debug: crate::debug::DebugUploads::default(),
+            simulated: false,
             device_list: crate::devices::DeviceList::default(),
             devices_told: 0,
             devices_last_told: None,

@@ -66,7 +66,7 @@ impl Daemon {
                 "schema_version = {schema}\ncallsign = \"{callsign}\"\n\
                  [radio]\nwait_for_clear = false\n{radio}\n\
                  [control]\nbind = \"127.0.0.1:0\"\n\
-                 [record]\nauto = true\n\
+                 [record]\nauto = true\nsend_to_project = false\n\
                  [sim]\n{sim}\nsnr_db = 25.0\n",
                 // the current schema, so the settings a test names mean what they say today
                 schema = aetherd::config::SCHEMA_VERSION,
