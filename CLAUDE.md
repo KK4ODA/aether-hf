@@ -1259,6 +1259,13 @@ the link runs at after the ladder against the message's (`message_rung_rate`), n
 seeds 5/8 → 8/8; `80m-asymmetric-500` six seeds 4/6 → 5/6 — its remaining failure (seed 4) is
 the path: a 1 kB file at 0 dB Moderate 500 Hz went at under half the message's rate, with the
 four tone-floor rungs of the ladder taking 106 s of the 600 s budget.
+**The wider soak (same day):** seeds 2–4, 72 scenarios, 71 held every invariant; the one
+(`soak-40022`) was a race the ADR-0051 hold left open — a `CONNECTED` written just before a
+scanning host's `LISTEN OFF` crossed it on the wire, so the host took itself to be deaf when it
+arrived. The adapter now learns a scanning host's beat from its own `LISTEN` commands (`Scan` in
+`host/server.rs`: two windows make a beat) and holds an answered call's `CONNECTED` in the last
+quarter of a listening window for the next `LISTEN ON`. `soak.py` deletes a passing run's audio
+(`--keep-passing` keeps it): a run records both stations, and the first wide soak filled the disk.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
