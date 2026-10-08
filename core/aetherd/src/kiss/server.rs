@@ -1144,9 +1144,14 @@ mod tests {
                 "client {tag}'s frames, once each, in order"
             );
         }
+        // a frame is counted once the modem's answer is back, a moment after the modem took
+        // it: on a loaded runner the count was read in between (396 of 400, macOS CI)
+        wait_for(
+            || server.status().frames_in == total as u64,
+            "four hundred frames counted",
+        );
         let status = server.status();
         assert_eq!(status.malformed, 0);
-        assert_eq!(status.frames_in, total as u64);
         assert!(status.clients.iter().all(|c| c.dropped == 0));
     }
 
