@@ -119,7 +119,7 @@ send_to_project = true    # debug mode (ADR-0050): host-program sessions go to t
 ```
 
 **Debug mode** is on by default during the field trials: a minute after each session a host
-program (RMS Trimode, BPQ32, Pat) runs, its recording — the audio, from which what was sent
+program (RMS Trimode, Pat) runs, its recording — the audio, from which what was sent
 can be decoded — the logs and the settings without their secrets are uploaded to the Aether
 project, while the station is idle. The daemon says so in its log at every start. Set
 `send_to_project = false` to keep everything on the gateway.
@@ -208,12 +208,12 @@ configuration to start and warn about.
 ## 6. Winlink software
 
 The host interface (`docs/spec/host-interfaces.md`) speaks the published VARA TCP protocol, so
-Pat, Winlink Express, VarAC and BPQ32 can use the station without being modified.
+Pat, Winlink Express and VarAC can use the station without being modified.
 
 **On the bench, not yet on the air.** Pat 1.0.0 and Winlink Express 1.8.5.0 each complete a
 peer-to-peer B2F session with an attachment over two daemons joined by the simulated channel,
 two VarAC copies ping and connect at 500 Hz, and a Winlink Express client completes a B2F
-session through RMS Trimode with RMS Relay fed by an Aether station; BPQ32 is not planned.
+session through RMS Trimode with RMS Relay fed by an Aether station.
 §7 of that document is the verification table and it is honest about what has and has not
 been run. If you try one, please report what happened — that table is the compatibility
 claim, and it should reflect what people have actually done.

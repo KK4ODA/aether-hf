@@ -6,7 +6,7 @@ Every frame the program hands over goes out on the air as its own transmission, 
 Aether hears from another station goes to every program connected to the port.
 
 This is for programs that send **frames**, not sessions: APRS clients, packet programs, and
-VarAC's broadcast messages. Winlink Express and VarAC **sessions**, Pat and BPQ32's VARA driver
+VarAC's broadcast messages. Winlink Express and VarAC **sessions** and Pat
 use the VARA-compatible *host* interface instead (Setup → *Host programs*; port 8300), which is
 Aether's ARQ link with retransmissions and rate control. A packet program *can* run its own
 AX.25 connected sessions over the KISS port, but at HF datagram speeds that is slow — see
@@ -109,23 +109,10 @@ Winlink Express's **Packet** sessions only if you want to try them:
    the radio: the acknowledgement comes back after the last burst carrying the frame has been
    played, so its AX.25 timers start from the real end of the transmission.
 
-### BPQ32 and QtTermTCP
+### QtTermTCP
 
-A KISS port over TCP in BPQ32's `bpq32.cfg`:
-
-```
-PORT
- ID=Aether HF KISS
- TYPE=ASYNC
- PROTOCOL=KISS
- IPADDR=127.0.0.1
- TCPPORT=8100
- CHANNEL=A
-ENDPORT
-```
-
-QtTermTCP's KISS ports take the same host and port. Both may use ACKMODE, which Aether honours.
-BPQ32's *VARA* driver is the host interface (port 8300), not this.
+QtTermTCP's KISS ports take the same host and port, `127.0.0.1` and `8100`. It may use ACKMODE,
+which Aether honours.
 
 ## What Aether does with a frame
 
@@ -196,7 +183,7 @@ parameters are told apart from VARA's frame types by their length:
 * **One port.** A frame for KISS port 1–15 is refused.
 * **A one-byte type-2 frame** is read as the P parameter — the price of serving VARA's frame types
   and standard KISS on one port.
-* **Not verified on the air yet**, and not yet with VarAC, Winlink Express Packet, BPQ32 or the
+* **Not verified on the air yet**, and not yet with VarAC, Winlink Express Packet or the
   APRS programs on the bench: the test suite's own clients and `kiss_test_client.py` between two
   daemons are what the claim rests on so far.
 
@@ -206,6 +193,6 @@ parameters are told apart from VARA's frame types by their length:
 |---|---|
 | Aether's test suite (framing, escapes, partial and joined reads, the type bytes, ACKMODE, backpressure, several clients, a stress run of four clients at once, Winlink priority, two daemons over `[sim]`) | passing |
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
-| VarAC, Winlink Express Packet, BPQ32, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
+| VarAC, Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

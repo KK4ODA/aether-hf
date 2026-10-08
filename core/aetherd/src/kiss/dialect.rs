@@ -11,7 +11,7 @@
 //! practice for type 2. A one-byte type-2 payload would be read as P; that is the price.
 //!
 //! Also honoured: ACKMODE (0x0C: a two-byte identifier, then an AX.25 frame; the identifier is
-//! sent back once the frame has gone out — BPQ32, `QtTermTCP` and Winlink Express use it to
+//! sent back once the frame has gone out — `QtTermTCP` and Winlink Express use it to
 //! pace their own AX.25 retries on a slow modem), P and SLOTTIME (they set the client's channel
 //! access). TXDELAY, TXTAIL, FULLDUPLEX, SETHARDWARE and RETURN are accepted and ignored: the
 //! modem keys the radio with its own lead and tail, is half duplex, and is a TCP port, not a
