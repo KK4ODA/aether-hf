@@ -94,6 +94,9 @@ spectrum and the waterfall, and the receiver's readings:
   runs, how it is controlled and the licence class; then every transmission is checked against
   them at the dial the radio is on, and one they do not allow is not sent
   ([ADR-0018](docs/adr/0018-the-regulatory-gate.md)). The operator stays responsible.
+* **Testing on the air:** [`docs/user/tester-guide.md`](docs/user/tester-guide.md) is the one
+  page a tester needs: install, set up, connect through Winlink Express, Pat or VarAC, and what
+  debug mode sends.
 * **Where to operate:** [`docs/user/frequency-plan.md`](docs/user/frequency-plan.md) proposes a
   calling frequency on every band from 80 m to 6 m; the panel offers them as dial memories.
 * **Gateway:** the `aetherd-…` archive and [`docs/user/gateway-kit.md`](docs/user/gateway-kit.md)
