@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from aether_model.channel import noise_power_for_snr
-from aether_model.qrm import AtmosphericCrashes, OfdmArqStation, PactorStation, RttyStation
+from aether_model.qrm import (
+    AtmosphericCrashes,
+    Ft8Station,
+    OfdmArqStation,
+    PactorStation,
+    RttyStation,
+)
 
 FS = 8000.0
 
@@ -17,10 +23,11 @@ def sources() -> list[object]:
         PactorStation(FS, -600.0, 0.0, seed=2, profile="moderate"),
         RttyStation(FS, 900.0, 3.0, seed=3),
         AtmosphericCrashes(FS, noise_power_for_snr(0.0, 1.0, FS), rate_per_s=2.0, seed=4),
+        Ft8Station(FS, -1100.0, 0.0, seed=9),
     ]
 
 
-@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("index", range(5))
 def test_a_source_is_the_same_however_the_stream_is_cut(index: int) -> None:
     whole = sources()[index].next(40_000)  # type: ignore[attr-defined]
     cut = sources()[index]
@@ -50,6 +57,7 @@ def _occupied(x: np.ndarray, fraction: float = 0.99) -> tuple[float, float]:
         (lambda: OfdmArqStation(FS, 200.0, 0.0, seed=5), 200.0, 1300.0),
         (lambda: PactorStation(FS, -600.0, 0.0, seed=6), -600.0, 330.0),
         (lambda: RttyStation(FS, 900.0, 0.0, seed=7), 900.0, 160.0),
+        (lambda: Ft8Station(FS, -1100.0, 0.0, duty=0.6, seed=10), -1100.0, 40.0),
     ],
 )
 def test_a_station_sits_where_it_is_put_with_the_power_it_is_given(
@@ -83,3 +91,12 @@ def test_crashes_arrive_at_their_rate_well_above_the_floor() -> None:
     starts = 1 + int(np.sum(np.diff(idx) > 0.1 * FS)) if len(idx) else 0
     assert 450 < starts < 750, f"{starts} crashes in 600 s at 1 a second"
     assert np.mean(np.abs(x) ** 2) < floor * 10, "between crashes there is nothing"
+
+
+def test_an_ft8_station_keeps_to_its_slots() -> None:
+    # every transmission starts half a second into a 15 s slot and lasts 12.64 s
+    x = Ft8Station(FS, 0.0, 0.0, duty=1.0, seed=11).next(int(61 * FS))
+    on = np.abs(x) > 0.5
+    starts = np.flatnonzero(on[1:] & ~on[:-1]) + 1
+    assert [round(s / FS, 2) for s in starts] == [0.5, 15.5, 30.5, 45.5, 60.5][: len(starts)]
+    assert abs(on[: int(15 * FS)].sum() / FS - 12.64) < 0.05

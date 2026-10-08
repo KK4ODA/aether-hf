@@ -1,0 +1,31 @@
+name = "20m-dx-moderate-2300"
+description = """20m at 2300 Hz, a 2 000 km one-hop path: ITU Moderate fading, 40 ms of travel
+each way (ten times a local path's), and a rig 1.3 ppm off that is still warming up — 18 Hz at
+14 MHz, drifting 0.1 Hz/s. A Winlink-shaped exchange, then a Test."""
+tags = ["20m", "band"]
+bandwidth = 2300
+seconds = 1800
+seed = 51
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "N7XYZ"
+
+[path]
+profile = "moderate"
+snr_db = 8.0
+cfo_hz = 18.0
+cfo_drift_hz_per_s = 0.1
+delay_ms = 40.0
+
+[script]
+steps = ["probe", "connect", "message 60", "reply 80", "message 1500", "reply 2000", "message 40", "disconnect", "test"]
+
+[expect]
+connected = true
+delivered = true
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 4

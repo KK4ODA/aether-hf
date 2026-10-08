@@ -1,0 +1,28 @@
+name = "80m-leave-together-500"
+description = """80m at 500 Hz, both operators press Disconnect at the same moment in the middle
+of a transfer; then they call again at once. Both sessions must end, both stations must be idle,
+and the second call must connect and carry its message."""
+tags = ["80m", "robustness"]
+bandwidth = 500
+seconds = 1200
+seed = 42
+
+[stations.a]
+callsign = "ND1J"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "nvis"
+snr_db = 8.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "send 6000", "wait 20", "disconnect both", "connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

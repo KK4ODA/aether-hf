@@ -1,0 +1,31 @@
+name = "20m-polar-path-2300"
+description = """20m at 2300 Hz across the auroral zone (to Europe or the Pacific Northwest over
+the north): ITU-R F.1487 high-latitude moderate, 3 ms spread and 10 Hz Doppler. The fast OFDM
+rungs cannot live here; what is judged is that the link finds the rungs that can, carries the
+message, and ends cleanly."""
+tags = ["20m", "band", "stress"]
+bandwidth = 2300
+seconds = 1800
+seed = 52
+transfer_s = 600
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "G4XYZ"
+
+[path]
+profile = "high-moderate"
+snr_db = 12.0
+cfo_hz = 12.0
+delay_ms = 25.0
+
+[script]
+steps = ["probe", "connect", "message 2000", "reply 500", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

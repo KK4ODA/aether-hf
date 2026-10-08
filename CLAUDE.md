@@ -1223,6 +1223,33 @@ scratch VarAC copies had `PSKReporterUpload=ON`/`SelfReport=ON` from the real in
 KK4ODA and WD5EMA on 14.105 MHz during the benches — both INIs now say OFF. Owed on the air: all
 of them.
 
+**The harness, made hostile (2026-10-08, ADR-0052; the author: "I'd rather discover them here
+than on the air").** `tools/session_matrix.py` now judges every run on invariants whatever
+`[expect]` says (a daemon that exits or panics, a key held over 32 s, a host told `CONNECTED`
+while not listening), reserves all ports at once (`reserve_ports`), never lets a bench daemon
+upload (`send_to_project = false`; the daemon itself never sends a simulated or dry-run
+station's sessions: `DaemonState::simulated`), and has steps for what goes wrong mid-session —
+`send`, `message?`, `outage S` (the channel server's `--command-file`), `wait_idle`,
+`wait_clear`, `abort`, `disconnect b|both`, `continue_on_failure` — and a host-program
+emulator (`Host`: `host a client`, `host b trimode` scanning LISTEN in air time, `host-connect`,
+`host-send/-reply`, `host-disconnect`). The channel server has `delay_ms` (DX travel time),
+`echo` (long path behind short) and an `ft8` QRM kind (`aether_model.qrm.Ft8Station`, slot-timed
+8-FSK; `count`, `spread_hz`). New scenarios: the gateway/robustness set (`*-gateway-*`,
+`*-abort-*`, `*-leave-*`, `*-long-attachment-cwid-*`, `*-trimode-*`; the Trimode one is `quick`)
+and the 20 m/15 m `band` set (DX offset and drift, polar Doppler, a 90 ms long-path echo,
+equatorial flutter, an opening closing, FT8 beside the passband, a 70 Hz old-rig offset at
+500 Hz). `tools/soak.py` draws seeded random scenarios judged on the invariants alone (nightly,
+24 a night, seeded by the run number). **Found and fixed (ADR-0052, model first):** the engine's
+send queue outlived its session — a vanished client's next call opened with the dead session's
+18 kB, to whoever it called — and an abort's one DISC, lost to the other's acknowledgement, left
+the other station in the session until its link timeout (144 s); now `_end_session` clears the
+queue, a session left unheard (`LEFT_UNHEARD`) is remembered for a link timeout and its frames
+are answered with a DISC (`_answer_left`, `_left_data` after a burst), and an abort's DISC is
+said again on the floor up to `LinkConfig.leave_repeats` (3) times (`Timer::Leave`; stat
+`left_answered`). Harness faults found on the way: a 10 s socket timeout in the emulator, and
+calls made inside an outage. Lesson for scenario writing: a dozen QRM sources at the session's
+level clip the simulated card — calibrate against what a radio's AGC would allow.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

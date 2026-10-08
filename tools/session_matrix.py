@@ -33,6 +33,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import urllib.error
@@ -45,6 +46,8 @@ DEFAULT_DAEMON = (
     ROOT / "core" / "target" / "release" / ("aetherd.exe" if os.name == "nt" else "aetherd")
 )
 SCENARIOS = ROOT / "bench" / "scenarios"
+STUCK_KEY_S = 32.0
+"""Longer keyed at once than this is a stuck key: the watchdog's 30 s, and its release."""
 POLL_S = 0.02
 """How often the runner looks: a host program answers within milliseconds of a delivery, and
 at several times real time a quarter second of wall clock was a second of air."""
@@ -54,6 +57,38 @@ def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def reserve_ports(count: int) -> list[int]:
+    """``count`` control ports and as many host-port pairs (the data port is the command
+    port's next), all free at once: chosen one at a time, a station's data port could be the
+    next station's control port, and a host's data then went to the wrong daemon."""
+    held: list[socket.socket] = []
+    controls: list[int] = []
+    hosts: list[int] = []
+    try:
+        while len(controls) < count:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            held.append(s)
+            controls.append(int(s.getsockname()[1]))
+        while len(hosts) < count:
+            s = socket.socket()
+            s.bind(("127.0.0.1", 0))
+            port = int(s.getsockname()[1])
+            nxt = socket.socket()
+            try:
+                nxt.bind(("127.0.0.1", port + 1))
+            except OSError:
+                s.close()
+                nxt.close()
+                continue
+            held += [s, nxt]
+            hosts.append(port)
+    finally:
+        for s in held:
+            s.close()
+    return [p for pair in zip(controls, hosts, strict=True) for p in pair]
 
 
 def call(port: int, method: str, params: dict | None = None, timeout: float = 15.0) -> dict:
@@ -84,7 +119,7 @@ def incompressible(n: int, salt: int) -> bytes:
 
 
 STATION_TOML = """\
-schema_version = 10
+schema_version = 11
 callsign = "{callsign}"
 
 [audio]
@@ -99,6 +134,13 @@ bandwidth = {bandwidth}
 wait_for_clear = {wait_for_clear}
 answer_gap_ms = {answer_gap_ms}
 max_mode = {max_mode}
+cw_id = {cw_id}
+cw_id_interval_s = {cw_id_interval_s}
+
+[host]
+enabled = {host}
+bind = "127.0.0.1:{host_port}"
+trace = true
 
 [control]
 enabled = true
@@ -110,6 +152,8 @@ check = false
 [record]
 auto = true
 dir = "{record}"
+# never the project's upload folder from a bench (debug mode, ADR-0050)
+send_to_project = false
 """
 
 
@@ -120,6 +164,7 @@ class Station:
     control: int
     process: subprocess.Popen[bytes]
     log: Path
+    host_port: int = 0
 
     def status(self) -> dict:
         return dict(call(self.control, "status")["result"])
@@ -142,6 +187,14 @@ class Run:
     probe: str | None = None
     transfers: list[str] = field(default_factory=list)
     final_states: list[str] = field(default_factory=list)
+    exited: list[str] = field(default_factory=list)
+    hosts: dict[str, Host] = field(default_factory=dict)
+    outage_until: float = 0.0
+
+    def command(self, line: str) -> None:
+        """Tell the channel server something, at the air time it next reads (each second)."""
+        with (self.dir / "channel.cmd").open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     def air_s(self) -> float:
         try:
@@ -177,6 +230,114 @@ class Run:
             time.sleep(POLL_S)
 
 
+class Host:
+    """A host program on a station's VARA-compatible ports, as the programs on the bench were
+    seen to speak them (``host-interfaces.md`` §7): the command port's lines and the data
+    port's bytes, read on threads of their own, and — for ``trimode`` — RMS Trimode's
+    scanning, ``LISTEN`` off for half a second in every three and a half of air, which is
+    what ADR-0051 was found by. A ``CONNECTED`` it is told while not listening is a fault, as
+    Trimode ignores one."""
+
+    def __init__(self, run: Run, station: Station, kind: str) -> None:
+        self.run, self.station, self.kind = run, station, kind
+        self.cmd = socket.create_connection(("127.0.0.1", station.host_port), timeout=10)
+        self.data = socket.create_connection(("127.0.0.1", station.host_port + 1), timeout=10)
+        # connected: from now on a read waits as long as the session does (a reader that
+        # timed out after 10 s quit, and a slow path's reply was never counted)
+        self.cmd.settimeout(None)
+        self.data.settimeout(None)
+        self.lines: list[str] = []
+        self.received = 0
+        self.listening = False
+        self.connected = False
+        self.problems: list[str] = []
+        self.lock = threading.Lock()
+        self.closed = False
+        threading.Thread(target=self._read_cmd, daemon=True).start()
+        threading.Thread(target=self._read_data, daemon=True).start()
+        bw = "BW500" if run.scenario.get("bandwidth") == 500 else "BW2300"
+        if kind == "trimode":
+            opening = [f"MYCALL {station.callsign}", bw, "PUBLIC ON", "CWID ON", "LISTEN ON"]
+        else:  # a Winlink Express client
+            opening = [
+                "PUBLIC ON",
+                "CWID ON",
+                "COMPRESSION TEXT",
+                bw,
+                f"MYCALL {station.callsign}",
+                "LISTEN ON",
+            ]
+        for line in opening:
+            self.send(line)
+        if kind == "trimode":
+            threading.Thread(target=self._scan, daemon=True).start()
+
+    def send(self, line: str) -> None:
+        if line.startswith("LISTEN"):
+            self.listening = line == "LISTEN ON"
+        self.cmd.sendall((line + "\r").encode())
+
+    def _read_cmd(self) -> None:
+        buffer = b""
+        while not self.closed:
+            try:
+                chunk = self.cmd.recv(4096)
+            except OSError:
+                return
+            if not chunk:
+                return
+            buffer += chunk
+            while b"\r" in buffer:
+                raw, buffer = buffer.split(b"\r", 1)
+                line = raw.decode(errors="replace").strip()
+                with self.lock:
+                    self.lines.append(line)
+                if line.startswith("CONNECTED"):
+                    if not self.listening and self.kind == "trimode":
+                        self.problems.append(
+                            f"{self.station.who}: CONNECTED while LISTEN OFF at "
+                            f"{self.run.air_s():.1f} s"
+                        )
+                    self.connected = True
+                elif line.startswith("DISCONNECTED"):
+                    self.connected = False
+
+    def _read_data(self) -> None:
+        while not self.closed:
+            try:
+                chunk = self.data.recv(65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            self.received += len(chunk)
+
+    def _scan(self) -> None:
+        """Trimode's scan: dwell 3 s, deaf 0.5 s, in air time; it stops while connected."""
+        while not self.closed:
+            began = self.run.air_s()
+            while not self.closed and self.run.air_s() < began + 3.0:
+                time.sleep(POLL_S)
+            if self.closed or self.connected:
+                continue
+            self.send("LISTEN OFF")
+            began = self.run.air_s()
+            while not self.closed and self.run.air_s() < began + 0.5:
+                time.sleep(POLL_S)
+            if not self.closed:
+                self.send("LISTEN ON")
+
+    def heard(self, prefix: str) -> int:
+        with self.lock:
+            return sum(1 for line in self.lines if line.startswith(prefix))
+
+    def close(self) -> None:
+        self.closed = True
+        for sock in (self.cmd, self.data):
+            with contextlib.suppress(OSError):
+                sock.close()
+
+
 def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
     sc = run.scenario
     port_file = run.dir / "channel.port"
@@ -192,6 +353,8 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
             str(run.dir / "channel.json"),
             "--progress-file",
             str(run.progress),
+            "--command-file",
+            str(run.dir / "channel.cmd"),
         ],
         stdout=(run.dir / "channel.log").open("wb"),
         stderr=subprocess.STDOUT,
@@ -202,10 +365,11 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         time.sleep(0.05)
     channel = f"127.0.0.1:{port_file.read_text().strip()}"
     stations = sc.get("stations", {})
-    for who, binary in (("a", daemon_a), ("b", daemon_b)):
+    ports = reserve_ports(2)
+    for i, (who, binary) in enumerate((("a", daemon_a), ("b", daemon_b))):
         cfg = stations.get(who, {})
         callsign = cfg.get("callsign", "W4ODA" if who == "a" else "KK4XYZ")
-        control = free_port()
+        control, host_port = ports[2 * i], ports[2 * i + 1]
         record = (run.dir / who / "recordings").resolve()
         record.mkdir(parents=True, exist_ok=True)
         config = run.dir / who / "station.toml"
@@ -223,6 +387,10 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 ),
                 control=control,
                 record=record.as_posix(),
+                cw_id=str(cfg.get("cw_id", False)).lower(),
+                cw_id_interval_s=float(cfg.get("cw_id_interval_s", 600.0)),
+                host=str(bool(cfg.get("host", False))).lower(),
+                host_port=host_port,
             ),
             encoding="utf-8",
         )
@@ -232,7 +400,7 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
             stdout=log.open("wb"),
             stderr=subprocess.STDOUT,
         )
-        run.stations[who] = Station(who, callsign, control, process, log)
+        run.stations[who] = Station(who, callsign, control, process, log, host_port)
     for st in run.stations.values():
         for _ in range(200):
             try:
@@ -299,8 +467,95 @@ def step(run: Run, text: str) -> bool:
         )
         run.test = call(a.control, "test.status")["result"].get("results") or {}
         return True
+    if word == "host":
+        # `host a client` / `host b trimode`: a program attaches to the station's host port
+        who, _, kind = arg.partition(" ")
+        run.hosts[who] = Host(run, run.stations[who], kind or "client")
+        run.wait("host attached", lambda: False, 2, note=False)
+        return True
+    if word == "host-connect":
+        ha, hb = run.hosts["a"], run.hosts["b"]
+        was_a, was_b = ha.heard("CONNECTED"), hb.heard("CONNECTED")
+        ha.send(f"CONNECT {a.callsign} {b.callsign}")
+        run.connected = run.wait(
+            "host connected",
+            lambda: ha.heard("CONNECTED") > was_a and hb.heard("CONNECTED") > was_b,
+            float(run.scenario.get("connect_within_s", 180)),
+        )
+        return run.connected
+    if word in ("host-send", "host-reply"):
+        n = int(arg)
+        tx, rx = (run.hosts["a"], run.hosts["b"])
+        if word == "host-reply":
+            tx, rx = rx, tx
+        before = rx.received
+        began = run.air_s()
+        tx.data.sendall(incompressible(n, salt=n + len(run.transfers)))
+        ok = run.wait(
+            f"{word} {n}",
+            lambda: rx.received - before >= n,
+            float(run.scenario.get("transfer_s", 300)),
+        )
+        took = max(run.air_s() - began, 0.1)
+        run.transfers.append(
+            f"{word} {n} B {took:.0f} s {8 * n / took:.0f} bps" if ok else f"{word} {n} B lost"
+        )
+        run.delivered_ok &= ok
+        return ok
+    if word == "host-disconnect":
+        ha, hb = run.hosts["a"], run.hosts["b"]
+        was_a, was_b = ha.heard("DISCONNECTED"), hb.heard("DISCONNECTED")
+        ha.send("DISCONNECT")
+        return run.wait(
+            "host disconnected",
+            lambda: ha.heard("DISCONNECTED") > was_a and hb.heard("DISCONNECTED") > was_b,
+            120,
+        )
+    if word == "send":
+        # queued and left to go: what happens to it is for the steps after to see
+        call(a.control, "send", {"data": base64.b64encode(incompressible(int(arg), 7)).decode()})
+        return True
+    if word == "message?":
+        # a message that may fail — through an outage, say: reported, not judged
+        n = int(arg)
+        before = b.counter("bytes_delivered")
+        call(a.control, "send", {"data": base64.b64encode(incompressible(n, 11)).decode()})
+        ok = run.wait(
+            text,
+            lambda: b.counter("bytes_delivered") - before >= n,
+            float(run.scenario.get("transfer_s", 300)),
+            note=False,
+        )
+        run.transfers.append(f"{text} {'arrived' if ok else 'lost (allowed)'}")
+        return True
+    if word == "outage":
+        # the channel reads its commands once a second of air: the outage ends a second late
+        run.outage_until = run.air_s() + float(arg) + 1.0
+        run.command(f"outage {arg}")
+        return True
+    if word == "wait_clear":
+        # until the outage is over: a call made in it is heard by nobody
+        until = run.outage_until
+        run.wait("outage over", lambda: run.air_s() >= until, max(until - run.air_s(), 0) + 5)
+        return True
+    if word == "wait_idle":
+        # both stations back to idle by themselves — the link timeout, after an outage
+        return run.wait(
+            "back to idle",
+            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
+            float(arg),
+        )
+    if word == "abort":
+        call(a.control, "abort")
+        return run.wait(
+            "aborted",
+            lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
+            120,
+        )
     if word == "disconnect":
-        call(a.control, "disconnect")
+        leaving = {"": (a,), "a": (a,), "b": (b,), "both": (a, b)}[arg]
+        for st in leaving:
+            call(st.control, "disconnect")
         return run.wait(
             "disconnected",
             lambda: a.status()["state"] == "idle" and b.status()["state"] == "idle",
@@ -328,9 +583,21 @@ def judge(run: Run, ends: list[str]) -> dict:
     with contextlib.suppress(OSError, ValueError):
         report = json.loads((run.dir / "channel.json").read_text(encoding="utf-8"))
     collisions = len(report.get("collisions", []))
+    # always judged, whatever the scenario expects: what must never happen
+    invariants = list(run.exited)
+    for st in run.stations.values():
+        with contextlib.suppress(OSError):
+            if "panicked" in st.log.read_text(encoding="utf-8", errors="replace"):
+                invariants.append(f"{st.who} panicked")
+    for name, keyed in report.get("stations", {}).items():
+        longest = max((iv[1] - iv[0] for iv in keyed.get("keyed", [])), default=0.0)
+        if longest > STUCK_KEY_S:
+            invariants.append(f"{name} keyed {longest:.0f} s at once")
     clean = all("timeout" not in e and e not in ("none", "unknown") for e in ends)
     idle = all(s == "idle" for s in run.final_states)
-    failures = []
+    failures = invariants
+    for host in run.hosts.values():
+        failures += host.problems
     if expect.get("connected") and not run.connected:
         failures.append("did not connect")
     if expect.get("delivered") and not run.delivered_ok:
@@ -375,8 +642,9 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
     ends: list[str] = []
     try:
         start(run, daemon_a, daemon_b)
+        keep_going = bool(scenario.get("script", {}).get("continue_on_failure", False))
         for text in scenario.get("script", {}).get("steps", []):
-            if not step(run, text):
+            if not step(run, text) and not keep_going:
                 break
         # the last frames and the sessions' history settle: an abort's DISC goes out after
         # the burst it cut, and the other station needs to hear it
@@ -395,7 +663,11 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
             except (OSError, KeyError, ValueError):
                 run.final_states.append("unknown")
     finally:
+        for host in run.hosts.values():
+            host.close()
         for st in run.stations.values():
+            if st.process.poll() is not None:
+                run.exited.append(f"{st.who} exited ({st.process.returncode})")
             st.process.terminate()
         if run.channel:
             try:

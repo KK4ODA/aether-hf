@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.channel import HfChannel, SampleRateOffset, noise_power_for_snr
 from aether_model.qrm import (
     AtmosphericCrashes,
+    Ft8Station,
     OfdmArqStation,
     PactorStation,
     RttyStation,
@@ -96,7 +97,12 @@ class ScenarioChannel(CableChannel):
       session (the noise and the other signals stay where they are);
     * ``cfo_drift_hz_per_s`` — the offset moving, as a rig warming up does;
     * ``sro_ppm`` — the receiving card's clock against the sender's: the whole stream it
-      hears is resampled, so a frame's timing walks across a long frame."""
+      hears is resampled, so a frame's timing walks across a long frame;
+    * ``delay_ms`` — the path's travel time: 10–60 ms on a DX path (ten times a local one),
+      added to every turnaround;
+    * ``echo`` — ``{delay_ms, db}``: a second arrival of the same signal that much later and
+      weaker, long path behind short path (20 m), far past the OFDM prefix; it fades with the
+      first."""
 
     def __init__(
         self,
@@ -104,11 +110,20 @@ class ScenarioChannel(CableChannel):
         level: list[list[float]] | None = None,
         cfo_drift_hz_per_s: float = 0.0,
         sro_ppm: float = 0.0,
+        delay_ms: float = 0.0,
+        echo: dict | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
         self.extras = extras
         self.level = level or []
+        self._delay = np.zeros(round(delay_ms * BASEBAND_RATE / 1000), dtype=np.complex128)
+        echo = echo or {}
+        self._echo_gain = 10.0 ** (float(echo.get("db", -6.0)) / 20.0) if echo else 0.0
+        self._echo = np.zeros(
+            round(float(echo.get("delay_ms", 0.0)) * BASEBAND_RATE / 1000) if echo else 0,
+            dtype=np.complex128,
+        )
         self._n = 0  # baseband samples processed
         if cfo_drift_hz_per_s or sro_ppm:
             cfg = self.hf.config
@@ -125,6 +140,13 @@ class ScenarioChannel(CableChannel):
             t = (self._n + np.arange(n)) / BASEBAND_RATE
             baseband = baseband * 10.0 ** (level_at(self.level, t) / 20.0)
         self._n += n
+        if len(self._delay):
+            line = np.concatenate((self._delay, baseband))
+            baseband, self._delay = line[:n], line[n:]
+        if len(self._echo):
+            line = np.concatenate((self._echo, baseband))
+            late, self._echo = line[:n], line[n:]
+            baseband = baseband + self._echo_gain * late
         impaired = self.hf.process(baseband / scale)
         for extra in self.extras:
             impaired = impaired + extra.next(len(impaired))  # type: ignore[attr-defined]
@@ -169,8 +191,25 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
             )
         elif kind == "rtty":
             out.append(RttyStation(BASEBAND_RATE, offset, power, **common))
+        elif kind == "ft8":
+            # a band of FT8 stations: `count` of them spread over `spread_hz` around the
+            # centre, each at its own level within `power_db` ± 6 dB and its own duty
+            rng = np.random.default_rng(common["seed"])
+            count = int(q.get("count", 10))
+            spread = float(q.get("spread_hz", 400.0))
+            for k in range(count):
+                out.append(
+                    Ft8Station(
+                        BASEBAND_RATE,
+                        offset + float(rng.uniform(-spread / 2, spread / 2)),
+                        power + float(rng.uniform(-6.0, 6.0)),
+                        duty=float(rng.uniform(0.4, 0.9)),
+                        seed=int(common["seed"]) * 100 + k,  # type: ignore[call-overload]
+                        profile=common["profile"],  # type: ignore[arg-type]
+                    )
+                )
         else:
-            raise SystemExit(f"unknown qrm kind {kind!r}: ofdm-arq, pactor or rtty")
+            raise SystemExit(f"unknown qrm kind {kind!r}: ofdm-arq, pactor, rtty or ft8")
     crashes = scenario.get("crashes")
     if crashes and crashes.get("at", "both") in (at, "both") and snr_db is not None:
         out.append(
@@ -326,6 +365,8 @@ class Server:
                 cfo_drift_hz_per_s=float(path.get("cfo_drift_hz_per_s", 0.0)),
                 sro_ppm=float(path.get("sro_ppm", 0.0)),
                 level=path.get("level"),
+                delay_ms=float(path.get("delay_ms", 0.0)),
+                echo=path.get("echo"),
                 seed=seed * 10 + (1 if tx == "a" else 2),
             )
         for st, who, tx in ((a, "a", "b"), (b, "b", "a")):
@@ -347,6 +388,10 @@ class Server:
             st.air = np.zeros(self.latency, dtype=np.float32)
             st.air_keyed = np.zeros(self.latency, dtype=bool)
         self.t = 0  # the air clock: samples since the start
+        # an outage: until this sample neither station's signal reaches the other — a station
+        # switched off, or a band gone dead — while both keep running (``outage S`` commands)
+        self.outage_until = 0
+        self.outages: list[list[float]] = []
         self.both_keyed = 0
         self.collisions: list[list[float]] = []
         self._colliding_since: int | None = None
@@ -388,6 +433,9 @@ class Server:
             st.until_ready()
         audio_a, keyed_a = self._radiate(self.a)
         audio_b, keyed_b = self._radiate(self.b)
+        if self.t < self.outage_until:
+            audio_a = np.zeros_like(audio_a)
+            audio_b = np.zeros_like(audio_b)
         heard_b = self.channels["a"].process(audio_a)
         heard_a = self.channels["b"].process(audio_b)
         heard_a[self._deaf(self.a, keyed_a)] = 0.0
@@ -397,6 +445,8 @@ class Server:
         if self.b.agc is not None:
             heard_b = self.b.agc.process(heard_b)
         both = keyed_a & keyed_b
+        if self.t < self.outage_until:
+            both[:] = False  # neither hears the other: not a collision on this path
         self.both_keyed += int(both.sum())
         for i in np.flatnonzero(both):
             t = self.t + int(i)
@@ -418,6 +468,7 @@ class Server:
             },
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
+            "outages": self.outages,
         }
 
 
@@ -445,6 +496,11 @@ def main() -> int:
     ap.add_argument(
         "--progress-file", type=Path, help="kept at the air time reached, every second of it"
     )
+    ap.add_argument(
+        "--command-file",
+        type=Path,
+        help="read every second of air for new lines: `outage S` cuts the path both ways for S s",
+    )
     args = ap.parse_args()
     scenario = tomllib.loads(args.scenario.read_text(encoding="utf-8"))
     stations = scenario.get("stations", {})
@@ -468,11 +524,23 @@ def main() -> int:
         st.recovery = round(float(radio.get("rx_recovery_ms", 0)) * AUDIO_RATE / 1000)
     server = Server(scenario, a, b)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
+    commands_done = 0
     try:
         while server.t / AUDIO_RATE < limit:
             server.tick()
-            if args.progress_file and server.t % AUDIO_RATE < TICK:
-                args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
+            if server.t % AUDIO_RATE < TICK:
+                if args.progress_file:
+                    args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
+                if args.command_file and args.command_file.exists():
+                    lines = args.command_file.read_text(encoding="utf-8").splitlines()
+                    for line in lines[commands_done:]:
+                        word, _, arg = line.partition(" ")
+                        if word == "outage":
+                            server.outage_until = server.t + round(float(arg) * AUDIO_RATE)
+                            server.outages.append(
+                                [server.t / AUDIO_RATE, server.outage_until / AUDIO_RATE]
+                            )
+                    commands_done = len(lines)
     except (ConnectionError, OSError):
         pass
     finally:

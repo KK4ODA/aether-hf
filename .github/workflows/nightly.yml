@@ -45,10 +45,20 @@ jobs:
         run: >-
           uv run python tools/session_matrix.py --jobs 2
           --out "${{ runner.temp }}/scenarios" --csv "${{ runner.temp }}/scenarios/results.csv"
+      # Random sessions nobody scripted, judged only on what must never happen: a daemon
+      # that dies, a stuck key, a host told CONNECTED while deaf, a station not back to idle
+      # (tools/soak.py). A new seed every night, from the run number, so the set grows.
+      - name: Soak
+        if: always()
+        run: >-
+          uv run python tools/soak.py --count 24 --jobs 2 --seed ${{ github.run_number }}
+          --out "${{ runner.temp }}/soak"
       - name: Keep the runs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: scenarios-nightly
-          path: ${{ runner.temp }}/scenarios
+          path: |
+            ${{ runner.temp }}/scenarios
+            ${{ runner.temp }}/soak
           retention-days: 14

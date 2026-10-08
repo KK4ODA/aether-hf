@@ -1,0 +1,32 @@
+name = "20m-long-path-echo-2300"
+description = """20m at 2300 Hz with long path and short path open together: the same signal
+arrives again 90 ms later and 6 dB down — eighteen times the OFDM prefix — over a quiet
+mid-latitude path with 60 ms of travel. The echo is interference the equaliser cannot remove;
+the link has to settle on rungs that survive it."""
+tags = ["20m", "band", "stress"]
+bandwidth = 2300
+seconds = 1500
+seed = 53
+transfer_s = 600
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "VK2XYZ"
+
+[path]
+profile = "good"
+snr_db = 12.0
+cfo_hz = 8.0
+delay_ms = 60.0
+echo = { delay_ms = 90.0, db = -6.0 }
+
+[script]
+steps = ["connect", "message 4000", "reply 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

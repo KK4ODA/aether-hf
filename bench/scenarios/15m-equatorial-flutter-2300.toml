@@ -1,0 +1,31 @@
+name = "15m-equatorial-flutter-2300"
+description = """15m at 2300 Hz to South America across the equator in the evening: flutter
+fading at 10 Hz on a short spread, and a rig 1.2 ppm off — 25 Hz at 21 MHz. The OFDM rungs'
+pilots cannot follow 10 Hz; the tone floor can. What is judged is a message across and a clean
+end."""
+tags = ["15m", "band", "stress"]
+bandwidth = 2300
+seconds = 1500
+seed = 54
+transfer_s = 600
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "LU1XYZ"
+
+[path]
+profile = "flutter"
+snr_db = 10.0
+cfo_hz = 25.0
+delay_ms = 30.0
+
+[script]
+steps = ["probe", "connect", "message 1500", "reply 300", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

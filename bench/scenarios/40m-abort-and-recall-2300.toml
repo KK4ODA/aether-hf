@@ -1,0 +1,28 @@
+name = "40m-abort-and-recall-2300"
+description = """40m at 2300 Hz, the caller aborts a transfer and calls again at once — the
+"wrong file, start over" press. The other station must let the first session go and take the
+second call."""
+tags = ["40m", "robustness"]
+bandwidth = 2300
+seconds = 1000
+seed = 43
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 9.0
+cfo_hz = 2.0
+
+[script]
+steps = ["connect", "send 12000", "wait 15", "abort", "connect", "message 2000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4
