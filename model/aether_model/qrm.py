@@ -25,6 +25,9 @@ any program's internals:
   the 1.25 s cycle (0.96 s packet, 0.12 s control signal from the other station);
 * :class:`RttyStation` — 45.45 Bd, 170 Hz shift FSK, continuous phase, Baudot characters,
   sent in overs of tens of seconds;
+* :class:`Ft8Station` — an FT8-class weak-signal station: 8-FSK at 6.25 Bd, 6.25 Hz apart
+  (50 Hz occupied), 79 symbols (12.64 s) starting half a second into a 15 s slot, sent in
+  some slots and not others — on 20 and 15 m a dozen of them sit beside the data segment;
 * :class:`AtmosphericCrashes` — the impulsive noise of distant thunderstorms: crashes arriving
   at random (Poisson), each a cluster of impulses under a decaying envelope tens of
   milliseconds long, its peak a log-normal number of decibels above the noise floor — a
@@ -306,6 +309,56 @@ class RttyStation(_Source):
     def _waveform(self, n: int) -> ComplexArray:
         while len(self._pending) < n:
             self._pending = np.concatenate((self._pending, self._next_character()))
+        freq, self._pending = self._pending[:n], self._pending[n:]
+        phase = self._phase + 2 * np.pi * np.cumsum(freq) / self.fs
+        self._phase = float(phase[-1] % (2 * np.pi)) if n else self._phase
+        return np.exp(1j * phase)
+
+
+class Ft8Station(_Source):
+    """FT8 as its public description gives it: 8-tone FSK, 6.25 Hz spacing and symbol rate,
+    continuous phase, 79 symbols in 12.64 s, starting 0.5 s after a 15 s boundary. A station
+    transmits in ``duty`` of its slots — a QSO is every other one, a CQ caller most — and is
+    silent in the rest. The tones are random: what matters to Aether is the energy and its
+    rhythm, not the message."""
+
+    BAUD = 6.25
+    SPACING_HZ = 6.25
+    SYMBOLS = 79
+    SLOT_S = 15.0
+    START_S = 0.5
+
+    def __init__(
+        self,
+        fs: float,
+        offset_hz: float,
+        power_db: float,
+        *,
+        duty: float = 0.5,
+        seed: int = 0,
+        profile: str | None = None,
+    ) -> None:
+        self.duty = duty
+        self.symbol = fs / self.BAUD
+        self._phase = 0.0
+        self._pending: FloatArray = np.zeros(0)
+        self._carry = 0.0
+        super().__init__(fs, offset_hz, power_db, seed, profile)
+
+    def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
+        on = self.SYMBOLS / self.BAUD
+        if rng.random() < self.duty:
+            return [(self.START_S, 0.0), (on, 1.0), (self.SLOT_S - self.START_S - on, 0.0)]
+        return [(self.SLOT_S, 0.0)]
+
+    def _waveform(self, n: int) -> ComplexArray:
+        while len(self._pending) < n:
+            exact = self.symbol + self._carry
+            count = int(exact)
+            self._carry = exact - count
+            tone = int(self._rng_wave.integers(0, 8))
+            hz = (tone - 3.5) * self.SPACING_HZ
+            self._pending = np.concatenate((self._pending, np.full(count, hz)))
         freq, self._pending = self._pending[:n], self._pending[n:]
         phase = self._phase + 2 * np.pi * np.cumsum(freq) / self.fs
         self._phase = float(phase[-1] % (2 * np.pi)) if n else self._phase

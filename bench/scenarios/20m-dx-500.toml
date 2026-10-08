@@ -1,0 +1,30 @@
+name = "20m-dx-500"
+description = """20m at 500 Hz on a VarAC calling-frequency-style contact: a one-hop Moderate
+path with 40 ms of travel, a 14 Hz offset, chat lines both ways and a file."""
+tags = ["20m", "band"]
+bandwidth = 500
+seconds = 1500
+seed = 58
+transfer_s = 600
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "K0XYZ"
+
+[path]
+profile = "moderate"
+snr_db = 6.0
+cfo_hz = 14.0
+cfo_drift_hz_per_s = 0.05
+delay_ms = 40.0
+
+[script]
+steps = ["probe", "connect", "message 120", "reply 90", "message 60", "reply 150", "message 6000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

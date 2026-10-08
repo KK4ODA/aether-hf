@@ -1,0 +1,31 @@
+name = "40m-trimode-gateway-2300"
+description = """40m at 2300 Hz, a Winlink Express client through an RMS Trimode gateway, both on
+the host port as the bench saw them (host-interfaces.md §7): the gateway scans, LISTEN off half a
+second in every three and a half, and ignores a CONNECTED it is told while not listening
+(ADR-0051). A B2F-shaped exchange over the data ports, then the client's DISCONNECT."""
+tags = ["40m", "host", "gateway", "quick"]
+bandwidth = 2300
+seconds = 900
+seed = 45
+
+[stations.a]
+callsign = "KE4QCM"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+
+[path]
+profile = "good"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a client", "host b trimode", "host-connect", "host-reply 120", "host-send 80", "host-reply 200", "host-send 1500", "host-reply 40", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

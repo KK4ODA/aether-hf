@@ -1,0 +1,30 @@
+name = "15m-old-rig-offset-500"
+description = """15m at 500 Hz with an older rig at one end, no TCXO: 3.3 ppm off — 70 Hz at
+21 MHz — and drifting 0.3 Hz/s as it warms. 70 Hz is a seventh of the 500 Hz waveform; the
+other station's receiver has to find it and follow it for a whole VarAC-sized chat and file."""
+tags = ["15m", "band", "stress"]
+bandwidth = 500
+seconds = 1500
+seed = 57
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "PY2XYZ"
+
+[path]
+profile = "good"
+snr_db = 8.0
+cfo_hz = 70.0
+cfo_drift_hz_per_s = 0.3
+delay_ms = 35.0
+
+[script]
+steps = ["probe", "connect", "message 200", "reply 200", "message 3000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

@@ -1,0 +1,30 @@
+name = "15m-opening-closes-2300"
+description = """15m at 2300 Hz in a short opening: a good path at first, then the band closing
+over four minutes in deepening QSB until nothing is heard. The transfer cannot finish; what is
+judged is that both stations notice, give up cleanly, and are left idle — not keyed, not stuck
+waiting."""
+tags = ["15m", "band", "robustness"]
+bandwidth = 2300
+seconds = 1500
+seed = 55
+transfer_s = 700
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "EA8XYZ"
+
+[path]
+profile = "good"
+snr_db = 14.0
+cfo_hz = 15.0
+delay_ms = 30.0
+level = [[0, 0], [90, 0], [110, -8], [130, -2], [150, -14], [170, -6], [190, -20], [210, -12], [240, -30], [330, -45]]
+
+[script]
+steps = ["connect", "message? 40000", "wait_idle 500"]
+
+[expect]
+connected = true
+idle = true
+max_collisions = 6

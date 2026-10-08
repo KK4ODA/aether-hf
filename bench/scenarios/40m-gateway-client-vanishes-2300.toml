@@ -1,0 +1,29 @@
+name = "40m-gateway-client-vanishes-2300"
+description = """40m at 2300 Hz, a gateway's day: a client sending a long message vanishes
+mid-transfer (switched off, or the band gone) for four minutes; both stations must give up on
+their own and come back to idle, and the next call must go through as if nothing happened."""
+tags = ["40m", "gateway", "robustness"]
+bandwidth = 2300
+seconds = 1500
+seed = 41
+transfer_s = 400
+
+[stations.a]
+callsign = "KE4QCM"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 10.0
+cfo_hz = 3.0
+
+[script]
+steps = ["connect", "send 20000", "wait 25", "outage 240", "wait_idle 420", "wait_clear", "wait 20", "connect", "message 2000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

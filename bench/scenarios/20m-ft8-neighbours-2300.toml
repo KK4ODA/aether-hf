@@ -1,0 +1,44 @@
+name = "20m-ft8-neighbours-2300"
+description = """20m at 2300 Hz just below a busy FT8 segment: twelve FT8 stations spread over
+600 Hz from the top edge of Aether's passband up, a few inside it, each 6 dB under the session's
+signal ± 6 dB, keyed on their 15 s slots, on their own fading paths, and the radio's AGC on. A
+Winlink-shaped exchange beside them. (At fifteen stations each at the session's level, the sum
+drove the simulated sound card into clipping, which no radio's AGC would allow.)"""
+tags = ["20m", "band", "qrm"]
+bandwidth = 2300
+seconds = 1500
+seed = 56
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.a.radio]
+agc = "auto"
+[stations.b]
+callsign = "W5XYZ"
+[stations.b.radio]
+agc = "auto"
+
+[path]
+profile = "moderate"
+snr_db = 9.0
+cfo_hz = 10.0
+delay_ms = 15.0
+
+[[qrm]]
+kind = "ft8"
+at = "both"
+audio_hz = 2900
+spread_hz = 600
+count = 12
+power_db = -6.0
+profile = "moderate"
+
+[script]
+steps = ["connect", "message 60", "reply 80", "message 1500", "reply 2000", "message 40", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4

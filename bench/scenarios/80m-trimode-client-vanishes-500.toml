@@ -1,0 +1,32 @@
+name = "80m-trimode-gateway-client-vanishes-500"
+description = """80m at 500 Hz through a scanning Trimode gateway: the client vanishes mid-
+transfer, the gateway's session times out and Trimode is told DISCONNECTED; then the same
+client calls again and completes an exchange. A gateway that stays stuck after one bad client
+is the failure that would end an RMS trial."""
+tags = ["80m", "host", "gateway", "robustness"]
+bandwidth = 500
+seconds = 1800
+seed = 46
+transfer_s = 400
+
+[stations.a]
+callsign = "ND1J"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+
+[path]
+profile = "nvis"
+snr_db = 8.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a client", "host b trimode", "host-connect", "host-reply 120", "outage 240", "wait_idle 420", "wait_clear", "wait 10", "host-connect", "host-reply 120", "host-send 1000", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 4
