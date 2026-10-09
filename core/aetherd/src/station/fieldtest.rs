@@ -253,6 +253,14 @@ pub fn message_snr(probe: Option<(Option<f64>, f64)>) -> Option<f64> {
     probe.map(|(there, here)| there.unwrap_or(here))
 }
 
+/// The SNR a message travels at when the probe went unanswered, from the call: how the other
+/// station said it hears this one, or — when nothing of the session has said — how this one
+/// heard the acceptance.
+#[must_use]
+pub fn message_snr_after_call(heard_there: Option<f64>, heard_here: Option<f64>) -> Option<f64> {
+    heard_there.or(heard_here)
+}
+
 /// The least file worth sending, bytes.
 const FILE_MIN: usize = 256;
 
@@ -721,6 +729,27 @@ impl<P: Ptt> Station<P> {
                     }
                 } else if self.engine.state() == State::Connected {
                     self.note("test", "connected");
+                    // A probe that went unanswered left the message at a kilobyte, sized for
+                    // nothing; the call has measured the path since. KE4QCM's Test of
+                    // 2026-10-09: no probe answer, the acceptance read at −7 dB, and a
+                    // kilobyte at the tone floor's 20 bit/s ran the message out of time.
+                    if run.probe.is_none() {
+                        let call = message_snr_after_call(
+                            self.engine.peer_snr_db(),
+                            self.engine.rate_readings().0,
+                        );
+                        let size = message_size_for(call, run.plan.message_bytes);
+                        if let Some(snr) = call
+                            && size != run.message_size
+                        {
+                            run.adjustments.retain(|a| !a.starts_with("message "));
+                            run.adjustments.push(format!(
+                                "message {size} bytes: the probe went unanswered, \
+                                 the call measured {snr:.0} dB"
+                            ));
+                            run.message_size = size;
+                        }
+                    }
                     run.enter(Step::Message, now);
                 } else if self.engine.state() == State::Idle && since > 2.0 {
                     self.finish_test(run, "aborted: the call was not answered");
@@ -958,6 +987,13 @@ mod tests {
         assert_eq!(message_size_for(Some(3.0), 2048), 1024);
         assert_eq!(message_size_for(Some(-4.0), 2048), 512);
         assert_eq!(message_size_for(None, 2048), 1024);
+        // the probe unanswered, the call measures the path: KE4QCM's acceptance read at -7 dB
+        assert_eq!(
+            message_size_for(message_snr_after_call(None, Some(-6.7)), 1024),
+            512
+        );
+        assert_eq!(message_snr_after_call(Some(-2.0), Some(-6.7)), Some(-2.0));
+        assert_eq!(message_snr_after_call(None, None), None);
         assert_eq!(message_size_for(Some(-4.0), 300), 300);
         // the message travels to the other station: its reading of this one sizes it — ND1J
         // heard KK4ODA at -1 dB and was heard at +5, and a kilobyte took five minutes
