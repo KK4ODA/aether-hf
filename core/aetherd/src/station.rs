@@ -24,6 +24,7 @@ mod bandwidth;
 mod beacons;
 mod datagrams;
 mod fieldtest;
+mod gaps;
 mod host;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
@@ -34,6 +35,7 @@ pub use datagrams::{
     ReceivedDatagram,
 };
 pub use fieldtest::{Rung, Step, TestPlan, TestRun, Transfer};
+pub use gaps::Learned as LearnedGap;
 pub use host::HostPresence;
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
@@ -964,6 +966,8 @@ pub struct Station<P: Ptt> {
     beacons: beacons::Beacons,
     /// The bandwidth the station should run, and why it runs what it does (ADR-0026).
     bandwidth: bandwidth::Bandwidth,
+    /// The answer gap each station has shown it needs (ADR-0054).
+    gaps: gaps::LearnedGaps,
     /// Where the receiver's sample count starts in the station's: the receiver is built again
     /// when the station moves to another bandwidth, and counts from there.
     rx_origin: usize,
@@ -990,6 +994,8 @@ impl<P: Ptt> Station<P> {
     /// # Panics
     /// If the configured maximum key time is not positive.
     #[must_use]
+    // a field a line: the station's state is long, and its constructor says so
+    #[allow(clippy::too_many_lines)]
     pub fn new(mut config: StationConfig, ptt: P, seed: u64) -> Self {
         // The key is released when this station's queue runs dry, and at that moment the
         // sound card still holds a playback lead's worth of what was queued last. Unless
@@ -1097,6 +1103,7 @@ impl<P: Ptt> Station<P> {
             datagrams: datagrams::Datagrams::new(seed),
             beacons: beacons::Beacons::default(),
             bandwidth: bandwidth::Bandwidth::new(params.bandwidth.hz()),
+            gaps: gaps::LearnedGaps::default(),
             rx_origin: 0,
             host: host::Host::default(),
             stats: StationStats::default(),
@@ -2737,6 +2744,7 @@ impl<P: Ptt> Station<P> {
                 self.move_to(500, BandwidthWhy::Call(caller));
                 rung = decoded.frame.rung(&self.air()).unwrap_or(rung);
             }
+            let asked = asked_by(decoded.payload.as_deref(), &self.engine.callsigns);
             let frame = PhyFrame {
                 container,
                 t_start: start,
@@ -2746,11 +2754,103 @@ impl<P: Ptt> Station<P> {
                 modem: Rc::clone(&self.decoder),
                 trusted,
             };
-            self.engine.on_frame(&frame, now);
+            self.hand_over(&frame, asked, decoded_ok, now);
         }
 
         self.heed_preambles(&preambles, origin, now);
         self.pump();
+    }
+
+    /// The answer gap now: the operator's, or the one learned for the station this one would
+    /// answer — the other end of the session, or the last to call or probe it — when that is
+    /// longer (ADR-0054).
+    #[must_use]
+    pub fn answer_gap_s(&self) -> f64 {
+        let whom = if self.engine.state() == State::Idle {
+            self.gaps.last_asker()
+        } else {
+            Some(self.engine.remote_call.as_str())
+        };
+        let learned = whom.and_then(|call| self.gaps.gap_s(call)).unwrap_or(0.0);
+        self.config.answer_gap_s.max(learned)
+    }
+
+    /// A gap the stations-heard list kept from an earlier run (ADR-0054).
+    pub fn remember_gap(&mut self, callsign: &str, gap_s: f64) {
+        self.gaps.remember(callsign, gap_s);
+    }
+
+    /// The learned gaps that changed since the last call, for the stations-heard list.
+    pub fn take_gap_changes(&mut self) -> Vec<LearnedGap> {
+        self.gaps.take_changes()
+    }
+
+    /// Give a frame to the engine, and learn from what it did with it (ADR-0054).
+    fn hand_over(
+        &mut self,
+        frame: &PhyFrame,
+        asked: Option<(Asked, String)>,
+        decoded: bool,
+        now: f64,
+    ) {
+        let was_connected = self.engine.connected();
+        let probes_answered = self.engine.stats.probes_answered;
+        self.engine.on_frame(frame, now);
+        self.learn_gap(asked, was_connected, probes_answered, decoded, now);
+    }
+
+    /// What a frame just given to the engine says about the answers this station gives
+    /// (ADR-0054): a call or probe from a station whose last one was answered says the answer
+    /// was lost; one the engine has just answered is watched; a frame of a session the station
+    /// accepted says the acceptance was heard.
+    fn learn_gap(
+        &mut self,
+        asked: Option<(Asked, String)>,
+        was_connected: bool,
+        probes_answered: usize,
+        decoded: bool,
+        now: f64,
+    ) {
+        let mut changed = Vec::new();
+        match asked {
+            Some((Asked::Call, from)) => {
+                changed.extend(self.gaps.called(&from, now));
+                // a first call accepted, or a call heard again in the session it opened, which
+                // the engine answers with its acceptance again: each is watched, and each one
+                // the caller does not hear is a sign of its own
+                if self.engine.connected() {
+                    let ours = self.engine.remote_call.eq_ignore_ascii_case(&from);
+                    if !was_connected || ours {
+                        self.gaps.accepted(&from, now);
+                    }
+                }
+                self.gaps.asked_by(from);
+            }
+            Some((Asked::Probe, from)) => {
+                changed.extend(self.gaps.probed(&from, now));
+                if self.engine.stats.probes_answered > probes_answered {
+                    self.gaps.probe_answered(&from, now);
+                }
+                self.gaps.asked_by(from);
+            }
+            None if decoded && self.engine.connected() => {
+                let remote = self.engine.remote_call.clone();
+                changed.extend(self.gaps.session_went_on(&remote));
+            }
+            None => {}
+        }
+        for learned in changed {
+            self.note(
+                "gap",
+                &format!(
+                    "answer gap for {} now {:.0} ms: {}",
+                    learned.callsign,
+                    learned.gap_s * 1000.0,
+                    learned.why
+                ),
+            );
+            self.gaps.changed(learned);
+        }
     }
 
     /// The air interface this station runs, for the numbers that only mean something
@@ -3188,7 +3288,7 @@ impl<P: Ptt> Station<P> {
         // Nothing keys inside the answer gap after another station's frame, whatever it is: a
         // station keyed by VOX is still transmitting for its hold after the frame ends, and
         // an acceptance sent into that hold was never heard (KE4QCM, 2026-10-05; ADR-0036).
-        let settling = now < self.heard_end + self.config.answer_gap_s;
+        let settling = now < self.heard_end + self.answer_gap_s();
         if radiates && (waits_out || polite || settling) {
             if waits_out || polite {
                 self.stats.deferred_for_busy += 1;
@@ -4338,6 +4438,30 @@ pub(crate) mod tests_support {
         assert!(air.a.connected(), "the test fixture could not connect");
         air.a
     }
+}
+
+/// What a frame asks of this station, for the gaps it learns (ADR-0054).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    Call,
+    Probe,
+}
+
+/// Whether a decoded frame is a call or probe to one of `ours`, and from whom.
+fn asked_by(payload: Option<&[u8]>, ours: &[String]) -> Option<(Asked, String)> {
+    let (header, body) = decode_data(payload?).ok()?;
+    let (asked, src, dst) = match header.kind {
+        DataKind::ConnectReq => {
+            let call = ConnectBody::decode(&body).ok()?;
+            (Asked::Call, call.src, call.dst)
+        }
+        DataKind::Probe => {
+            let probe = ProbeBody::decode(&body).ok()?;
+            (Asked::Probe, probe.src, probe.dst)
+        }
+        _ => return None,
+    };
+    ours.contains(&dst).then_some((asked, src))
 }
 
 #[cfg(test)]
