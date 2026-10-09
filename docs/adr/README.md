@@ -58,3 +58,4 @@ context → decision → alternatives considered → consequences.
 | [0051](0051-a-connection-waits-for-a-scanning-host-to-listen.md) | A connection the station answered waits for a scanning host (RMS Trimode) to be listening again before its CONNECTED is sent | accepted |
 | [0052](0052-a-session-ends-at-both-ends.md) | A session ends at both ends, and takes its data with it | accepted |
 | [0053](0053-the-callers-first-poll-offers-the-turn.md) | The caller's first poll offers the turn | accepted |
+| [0054](0054-each-stations-answer-gap-is-learned.md) | Each station's answer gap is learned from its asking again | accepted |
