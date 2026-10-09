@@ -32,8 +32,11 @@ pub const STEP_S: f64 = 0.25;
 /// The most a station's gap is raised to, seconds: the longest DLY a VOX interface is set to
 /// in practice, and the answer gap's own ceiling is 2 s.
 pub const MOST_S: f64 = 2.0;
-/// How much a session that went on after its acceptance lowers the gap, seconds.
-pub const EASE_S: f64 = 0.1;
+/// How much a session that went on after its acceptance lowers the gap, seconds: a tenth of a
+/// step, so ten clean sessions undo one raise. At a third of a step the gap learned from a
+/// 900 ms VOX hold fell under the hold within three sessions, and the fourth lost its message
+/// (the scenario harness, `80m-vox-caller-learned-gap-500`, three seeds of four).
+pub const EASE_S: f64 = 0.025;
 /// How long after a probe was answered a second probe from the same station says the answer
 /// was lost: a Test probes once, and an operator probing again is asking why there was none.
 pub const PROBE_AGAIN_S: f64 = 60.0;
@@ -179,7 +182,12 @@ impl LearnedGaps {
             return None;
         }
         let gap = self.gaps.get_mut(&call)?;
-        *gap = (*gap - EASE_S).max(0.0);
+        // under a millisecond is none: the eases do not sum to a raise exactly in floating point
+        *gap = if *gap - EASE_S < 0.001 {
+            0.0
+        } else {
+            *gap - EASE_S
+        };
         let gap_s = *gap;
         if gap_s <= 0.0 {
             self.gaps.remove(&call);
@@ -279,7 +287,13 @@ mod tests {
         gaps.accepted("KE4QCM-1", 0.0);
         gaps.called("KE4QCM", 5.0);
         assert_eq!(gaps.gap_s("ke4qcm-7"), Some(STEP_S));
-        for i in 0..5 {
+        // ten clean sessions undo one raise (the first, after the raise, eases nothing)
+        for i in 0..9 {
+            gaps.accepted("KE4QCM", 100.0 * f64::from(i + 1));
+            gaps.session_went_on("KE4QCM");
+        }
+        assert!(gaps.gap_s("KE4QCM").is_some_and(|gap| gap > 0.0));
+        for i in 9..11 {
             gaps.accepted("KE4QCM", 100.0 * f64::from(i + 1));
             gaps.session_went_on("KE4QCM");
         }
