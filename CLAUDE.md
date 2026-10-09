@@ -1277,6 +1277,15 @@ before the gateway's greeting. A caller with nothing to send now offers the turn
 `BusyDetector::mark_frame` now clears the attack votes — the decoded frame's own blocks had named
 the channel energy again, and a `DISC_ACK` waited out the hangover of the `DISC` it answered,
 into the `DISC`'s retry (beta.93 too). Three clients: first replies 4.6/7.9/19.9 → 4.0/5.9/14.0 s.
+**KE4QCM's three sessions (2026-10-09, beta.94 → beta.95/96).** 3.590 MHz, 500 Hz, −2…−13 dB both
+ways, his FT-100 keyed by VOX: both Tests' probes went unanswered (no audio dropped then — not his
+PC), an acceptance was lost, and the first Test's kilobyte message timed out. beta.95: a Test whose
+probe went unanswered sizes its message from the call (`message_snr_after_call`), and a slow pass of
+the run loop is logged with how late a thread that only sleeps woke (`Heartbeat`; diagnostics
+`loop.machine_late_ms`, `platform.cpus`) — his station fell 0.3–27 s behind where the receiver costs
+0.08–0.10× real time here on noise and every QRM model. **ADR-0054:** each station's answer gap is
+learned from its asking again after an answer (`station/gaps.rs`; 250 ms a step to 2 s, eased 25 ms a
+clean session, kept in `heard.json` as `answer_gap_ms`); `80m-vox-caller-learned-gap-500` 0/4 → 4/4.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

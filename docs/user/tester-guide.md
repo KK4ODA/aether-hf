@@ -45,6 +45,9 @@ it is done. Nothing changes until you press **Save** at the bottom.
    there for its session, so either is fine. If your interface is a **SignaLink** (or anything
    keyed by VOX), set *Answer gap* to **500–800 ms**: its DLY knob holds the key after the audio
    stops, and Aether's answers would otherwise start while your radio is still transmitting.
+   Aether also learns each station's gap by itself: when a station calls or probes again after
+   being answered, its gap grows (the Log tab says so), and it is remembered. The setting is the
+   least it uses.
 5. **Application settings.** *Host programs* on (port 8300). *KISS programs* on (port 8100)
    only for VarAC's broadcasts. **Debug mode** — leave it on (§6).
 
