@@ -123,6 +123,10 @@ pub struct DaemonState {
     /// used to be kept ahead by — the stalls that put holes in bursts before a whole
     /// burst was queued at once.
     pub loop_stalls: u64,
+    /// The latest the run loop's heartbeat — a thread that only sleeps — woke during a slow
+    /// pass, in milliseconds: near the pass's own time, the machine was starving every
+    /// thread; near nothing, the time was the modem's.
+    pub loop_machine_late_ms: f64,
     /// Why the sound card could not be opened, when it could not. The station runs on
     /// silence until the devices are corrected, and the panel says so.
     pub audio_fault: Option<String>,
@@ -222,6 +226,7 @@ impl DaemonState {
             loop_slowest_ms: 0.0,
             loop_slowest_phase: String::new(),
             loop_stalls: 0,
+            loop_machine_late_ms: 0.0,
             audio_fault: None,
             config_note: None,
             devices: device_inventory,
@@ -974,6 +979,7 @@ fn diagnostics<P: Ptt>(
         "platform": {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
+            "cpus": std::thread::available_parallelism().map_or(0, std::num::NonZero::get),
         },
         "generated": crate::log::rfc3339(unix_ms(std::time::SystemTime::now())),
         // what `status` answers, the daemon's own part with it: whether a host program or a
@@ -1011,6 +1017,7 @@ fn diagnostics<P: Ptt>(
                 "slowest_ms": (daemon.loop_slowest_ms * 10.0).round() / 10.0,
                 "slowest_phase": daemon.loop_slowest_phase,
                 "stalls": daemon.loop_stalls,
+                "machine_late_ms": (daemon.loop_machine_late_ms * 10.0).round() / 10.0,
             }),
         );
         object.insert("log".into(), json!(daemon.log.recent()));

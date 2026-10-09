@@ -472,13 +472,13 @@ operator can paste the result into an issue from wherever they are:
 
 | Key | Contents |
 |---|---|
-| `version`, `platform` | the daemon's version; `os` and `arch` |
+| `version`, `platform` | the daemon's version; `os`, `arch`, and `cpus` (the threads the machine can run at once) |
 | `generated`, `started` | RFC 3339 UTC timestamps for the bundle and for the daemon's start |
 | `config`, `path` | the running configuration (secrets redacted) and the file it came from |
 | `status`, `capabilities` | `status` and `capabilities` as the methods return them — the daemon's own fields (`host`, `kiss`, `supervised`, `audio_fault`, `config_note`, `binary`) included, since whether a host program or a KISS program was attached is often the first question a report raises |
 | `devices` | the audio devices and serial ports the machine reports |
 | `audio` | how the sound card described itself; `dropped_samples`, captured samples the modem has dropped for falling behind; `starved_samples`, samples of silence the card had to play *inside a transmission* because the modem had not handed it the next ones — holes on the air, which the log also reports as they happen |
-| `loop` | the run loop's slowest pass so far (`slowest_ms`), which phase it spent the time in (`slowest_phase`: `commands`, `capture` — the receiver — or `playback`), and `stalls`, how many passes exceeded a quarter second. A whole burst is queued at the sound card the moment it is rendered (ADR-0010), so a slow pass no longer puts a hole in a transmission; it still says the modem is slow, which is the receiver's cost per block |
+| `loop` | the run loop's slowest pass so far (`slowest_ms`), which phase it spent the time in (`slowest_phase`: `commands`, `capture` — the receiver — or `playback`), `stalls`, how many passes exceeded a quarter second, and `machine_late_ms`, the latest a thread that only sleeps woke during such a pass — near the pass's own time the machine was starving every thread, near nothing the time was the modem's. A whole burst is queued at the sound card the moment it is rendered (ADR-0010), so a slow pass no longer puts a hole in a transmission; it still says the modem is slow, which is the receiver's cost per block |
 | `log`, `log_forgotten` | the most recent log entries (§4.7), oldest first, and how many older ones have scrolled off |
 
 It contains no traffic: a `send` is logged with the *length* of its payload, never the bytes.

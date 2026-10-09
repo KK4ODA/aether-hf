@@ -13,6 +13,10 @@
 
 use std::{
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -38,6 +42,54 @@ use serde_json::json;
 const LOOP_STALL_MS: f64 = 250.0;
 /// How often at most a slow pass is logged, so a slow machine does not fill its own log.
 const LOOP_STALL_LOG_INTERVAL: Duration = Duration::from_secs(10);
+/// How long the [`Heartbeat`] sleeps at a time.
+const HEARTBEAT: Duration = Duration::from_millis(20);
+
+/// A thread that only sleeps and notes how late it wakes: what the machine is doing to every
+/// thread, not what the modem is doing on its own. A slow pass of the run loop with the
+/// heartbeat on time is the modem's own work; one with the heartbeat as late is the machine —
+/// another program, power saving, a stalled driver. KE4QCM's station (2026-10-09) took 0.3–4 s
+/// a pass while idle and 27 s once, where the receiver costs a hundredth of a second for the
+/// same audio on the bench, and its files could not say which of the two it was.
+struct Heartbeat {
+    /// The latest the heartbeat woke since it was last asked, in microseconds.
+    worst_us: Arc<AtomicU64>,
+}
+
+impl Heartbeat {
+    fn start() -> Self {
+        let worst_us = Arc::new(AtomicU64::new(0));
+        let shared = Arc::clone(&worst_us);
+        let spawned = std::thread::Builder::new()
+            .name("heartbeat".into())
+            .spawn(move || {
+                loop {
+                    let began = std::time::Instant::now();
+                    std::thread::sleep(HEARTBEAT);
+                    let late = began.elapsed().saturating_sub(HEARTBEAT);
+                    let late_us = u64::try_from(late.as_micros()).unwrap_or(u64::MAX);
+                    shared.fetch_max(late_us, Ordering::Relaxed);
+                }
+            });
+        if spawned.is_err() {
+            // no heartbeat: a slow pass is logged without it, as before
+            worst_us.store(u64::MAX, Ordering::Relaxed);
+        }
+        Self { worst_us }
+    }
+
+    /// How late the heartbeat woke at worst since the last call, in milliseconds; `None`
+    /// when there is no heartbeat.
+    fn take_ms(&self) -> Option<f64> {
+        let us = self.worst_us.swap(0, Ordering::Relaxed);
+        if us == u64::MAX {
+            self.worst_us.store(u64::MAX, Ordering::Relaxed);
+            return None;
+        }
+        Some(us as f64 / 1000.0)
+    }
+}
+
 /// How long to wait when there is nothing to do. Short enough that a burst is never late by
 /// an audible amount; long enough that an idle station does not spin a core.
 const IDLE_SLEEP: Duration = Duration::from_millis(5);
@@ -819,6 +871,7 @@ fn note_pass(
     last_logged: &mut Option<std::time::Instant>,
     station: &Station<Box<dyn Ptt>>,
     [commands_ms, capture_ms, playback_ms]: [f64; 3],
+    machine_late_ms: Option<f64>,
 ) {
     let total_ms = commands_ms + capture_ms + playback_ms;
     let phase = if capture_ms >= commands_ms && capture_ms >= playback_ms {
@@ -836,6 +889,9 @@ fn note_pass(
         return;
     }
     daemon.loop_stalls += 1;
+    if let Some(late) = machine_late_ms {
+        daemon.loop_machine_late_ms = daemon.loop_machine_late_ms.max(late);
+    }
     let due = last_logged.is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL);
     if !due {
         return;
@@ -846,12 +902,20 @@ fn note_pass(
         "loop",
         &format!(
             "a pass took {total_ms:.0} ms (commands {commands_ms:.0}, capture {capture_ms:.0}, \
-             playback {playback_ms:.0}){}; {} such passes so far",
+             playback {playback_ms:.0}){}{}; {} such passes so far",
             if station.transmitting() {
                 " while transmitting"
             } else {
                 ""
             },
+            machine_late_ms.map_or(String::new(), |late| format!(
+                "; meanwhile a thread that only sleeps woke {late:.0} ms late ({})",
+                if late * 2.0 >= total_ms {
+                    "the machine is slow, not the modem"
+                } else {
+                    "the modem's own work"
+                }
+            )),
             daemon.loop_stalls
         ),
         &state_name(station),
@@ -974,6 +1038,7 @@ fn serve(
     let mut last_metrics = std::time::Instant::now();
     let mut last_keyed = false;
     let mut last_stall_logged: Option<std::time::Instant> = None;
+    let heartbeat = Heartbeat::start();
     let mut last_ptt_fault: Option<std::time::Instant> = None;
     let mut heard_changed_at: Option<std::time::Instant> = None;
     let mut last_audio = std::time::Instant::now();
@@ -1032,6 +1097,7 @@ fn serve(
             &mut last_stall_logged,
             station,
             [commands_ms, capture_ms, playback_ms],
+            heartbeat.take_ms(),
         );
 
         // frames before the state they produced: a host learns the SNR of the frame that
@@ -1764,6 +1830,17 @@ fn seed_from_callsign(call: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_heartbeat_says_how_late_the_machine_lets_a_sleeper_wake() {
+        let heartbeat = Heartbeat::start();
+        std::thread::sleep(Duration::from_millis(120));
+        let late = heartbeat.take_ms().expect("a heartbeat thread");
+        assert!(late.is_finite() && late >= 0.0, "{late}");
+        // what was reported is gone: the next reading covers only the time since
+        let again = heartbeat.take_ms().expect("a heartbeat thread");
+        assert!(again <= late.max(1000.0), "{again}");
+    }
 
     #[test]
     fn different_callsigns_get_different_backoff_seeds() {
