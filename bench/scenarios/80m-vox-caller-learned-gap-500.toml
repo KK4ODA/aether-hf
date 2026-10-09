@@ -1,0 +1,40 @@
+name = "80m-vox-caller-learned-gap-500"
+description = """80 m at 500 Hz: the caller's radio is keyed by VOX and holds its transmitter for
+900 ms after its audio stops, deaf (KE4QCM's FT-100, 2026-10-09); the called station has no
+answer gap set. Its first acceptances go into the hold and are lost, the caller calls again, and
+the called station learns the caller's gap from that (ADR-0054): the later calls connect on the
+first acceptance. Five sessions, each a call, a message and the caller's disconnect."""
+tags = ["80m", "vox", "multi-session"]
+bandwidth = 500
+seconds = 2400
+seed = 71
+connect_within_s = 240
+
+[stations.a]
+callsign = "KE4QCM"
+[stations.a.radio]
+vox_hold_ms = 900
+rx_recovery_ms = 100
+[stations.b]
+callsign = "KK4ODA"
+answer_gap_ms = 0
+
+[path]
+profile = "moderate"
+snr_db = 4.0
+cfo_hz = 3.0
+
+[script]
+steps = [
+  "connect", "message 200", "disconnect", "wait 15",
+  "connect", "message 200", "disconnect", "wait 15",
+  "connect", "message 200", "disconnect", "wait 15",
+  "connect", "message 200", "disconnect", "wait 15",
+  "connect", "message 200", "disconnect",
+]
+continue_on_failure = true
+
+[expect]
+connected = true
+delivered = true
+idle = true

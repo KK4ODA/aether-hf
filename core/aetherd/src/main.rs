@@ -326,13 +326,7 @@ fn run() -> Result<Exit, String> {
         ptt,
         seed_from_callsign(&config.callsign),
     );
-    // what the stations heard were last heard to run, so a call to one known to run 500 Hz
-    // is made at 500 Hz from the first minute (ADR-0035); oldest first, so the newest wins
-    for heard in daemon.heard.stations().iter().rev() {
-        if let Some(hz) = heard.bandwidth_hz {
-            station.learn_bandwidth(&heard.callsign, hz as usize);
-        }
-    }
+    seed_from_heard(&mut station, &daemon.heard);
     daemon.log.record(
         Level::Info,
         "ptt",
@@ -859,6 +853,20 @@ fn note_audio_losses(
         );
         reported.starved = starved;
         daemon.starved_audio = starved as u64;
+    }
+}
+
+/// What the stations heard were last heard to run, so a call to one known to run 500 Hz is
+/// made at 500 Hz from the first minute (ADR-0035), and the answer gap each has shown it needs
+/// (ADR-0054); oldest first, so the newest wins.
+fn seed_from_heard(station: &mut Station<Box<dyn Ptt>>, heard: &aetherd::heard::HeardList) {
+    for heard in heard.stations().iter().rev() {
+        if let Some(hz) = heard.bandwidth_hz {
+            station.learn_bandwidth(&heard.callsign, hz as usize);
+        }
+        if let Some(ms) = heard.answer_gap_ms {
+            station.remember_gap(&heard.callsign, f64::from(ms) / 1000.0);
+        }
     }
 }
 
@@ -1445,6 +1453,13 @@ fn report_frames(
                     serde_json::to_value(&entry).unwrap_or(serde_json::Value::Null),
                 ));
             }
+        }
+    }
+    // the answer gaps learned (ADR-0054) are kept with the stations heard
+    for learned in station.take_gap_changes() {
+        let gap_ms = (learned.gap_s > 0.0).then(|| (learned.gap_s * 1000.0).round() as u32);
+        if daemon.heard.set_answer_gap(&learned.callsign, gap_ms) {
+            heard_changed_at.get_or_insert_with(std::time::Instant::now);
         }
     }
     if heard_changed_at.is_some_and(|at| at.elapsed() >= HEARD_SAVE_DELAY) {

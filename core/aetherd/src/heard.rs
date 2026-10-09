@@ -73,6 +73,11 @@ pub struct HeardStation {
     /// before that has none, and a station heard only in frames that state none has none.
     #[serde(default)]
     pub bandwidth_hz: Option<u32>,
+    /// The answer gap this station has shown it needs, milliseconds: learned from its asking
+    /// again after an answer (ADR-0054). None when nothing has been learned, and in a list
+    /// written before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_gap_ms: Option<u32>,
 }
 
 /// One frame with a callsign in it.
@@ -175,6 +180,7 @@ impl HeardList {
                 beacons: u32::from(sighting.activity == Activity::Beacon),
                 last_beacon_ms: (sighting.activity == Activity::Beacon).then_some(sighting.at_ms),
                 bandwidth_hz: sighting.bandwidth_hz,
+                answer_gap_ms: None,
             };
             self.stations.push(entry.clone());
             entry
@@ -184,6 +190,24 @@ impl HeardList {
         self.stations.truncate(LIMIT);
         self.dirty = true;
         entry
+    }
+
+    /// Keep the answer gap learned for a station (ADR-0054), under its base callsign's every
+    /// entry: the gap belongs to the radio, and the radio answers to each of its names. None
+    /// forgets it. Returns whether anything changed.
+    pub fn set_answer_gap(&mut self, callsign: &str, gap_ms: Option<u32>) -> bool {
+        let base = crate::station::base_callsign(callsign).to_ascii_uppercase();
+        let mut changed = false;
+        for entry in &mut self.stations {
+            if crate::station::base_callsign(&entry.callsign).eq_ignore_ascii_case(&base)
+                && entry.answer_gap_ms != gap_ms
+            {
+                entry.answer_gap_ms = gap_ms;
+                changed = true;
+            }
+        }
+        self.dirty |= changed;
+        changed
     }
 
     /// The stations, most recently heard first.
