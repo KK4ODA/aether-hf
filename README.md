@@ -50,18 +50,20 @@ Raspberry Pi gateway as happily as on a Windows desktop.
 ## Screenshots
 
 The station panel during a Test session on the bench — two daemons on one machine over
-the simulated channel at 12 dB. The caller's Session tab: the dial and the rules' verdict, the
-call with the Test's progress through the rung ladder, keying and drive, and the conversation:
+the simulated channel at 12 dB. The header's display strip shows, on every tab, what the station
+is doing, the rung and its rate, the SNR and the TX, RX and Busy lamps. The caller's Session tab:
+the dial and the rules' verdict, the call with the Test's progress up the rung ladder, keying and
+drive, and the conversation:
 
 ![The Session tab of the calling station during a Test session](docs/images/panel-session.png)
 
-Its Status tab a couple of minutes later: the link and the channel at a glance, the speed over
+Its Status tab as the Test sends its file: the link and the channel at a glance, the speed over
 the last ten minutes against the rate of the rung in use, the channel's rhythm of bursts and
 acknowledgements, and the counters:
 
 ![The Status tab of the calling station during a Test session](docs/images/panel-status.png)
 
-The other station's Diagnostics tab: the last frame's constellation (a 64-QAM rung), the
+The other station's Diagnostics tab: the last frame's constellation (a 16-QAM rung), the
 spectrum and the waterfall, and the receiver's readings:
 
 ![The Diagnostics tab of the receiving station](docs/images/panel-diagnostics.png)
