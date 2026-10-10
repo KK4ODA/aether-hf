@@ -3876,3 +3876,40 @@ def test_a_call_moved_to_the_narrow_air_is_answered_by_a_narrow_station() -> Non
     a.send(b"moved")
     sim.run(until=600)
     assert sim.delivered(1) == b"moved"
+
+
+def _lopsided_acks(frame: TxFrame) -> float:
+    """The receiving station's short ordinary control frames 8 dB under the channel: WC4Y's
+    path of 2026-10-10, where KK4ODA-1's ordinary acknowledgements arrived 4 dB worse than his
+    data and half of them were lost (ADR-0059)."""
+    return -8.0 if frame.container is Container.CONTROL and not frame.floor else 0.0
+
+
+def test_acknowledgements_go_on_the_floor_once_one_was_lost() -> None:
+    """A burst of nothing but blocks already acknowledged says the acknowledgement was lost;
+    the receiver's acknowledgements go on the tone floor from then on, and the transfer
+    finishes sooner than with every acknowledgement a coin toss (ADR-0059). 500 Hz at 0 dB,
+    as WC4Y's path was."""
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500
+
+    timing = phy_timing(NARROW_500)
+    msg = bytes(range(256)) * 8
+
+    def run(rule: bool) -> tuple[float, int, list[str]]:
+        a, b = _pair(timing)
+        if not rule:
+            b._note_ack_lost = lambda decoded: None  # type: ignore[method-assign]
+        sim = TwoStationSim(a, b, snr_db=0.0, seed=59, frame_snr_offset=_lopsided_acks)
+        a.connect("KK4XYZ")
+        a.send(msg)
+        a.disconnect()
+        end = sim.run(until=3000)
+        assert sim.delivered(1) == msg
+        return end, a.stats.ack_timeouts, sim.events(1)
+
+    with_rule, timeouts_with, events = run(True)
+    without, timeouts_without, _ = run(False)
+    assert any(e.startswith("acks") for e in events), events
+    assert timeouts_with < timeouts_without, (timeouts_with, timeouts_without)
+    assert with_rule < without, (with_rule, without)

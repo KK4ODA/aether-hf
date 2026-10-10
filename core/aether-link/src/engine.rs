@@ -352,6 +352,7 @@ impl TxRecord {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 struct RxRecord {
     slot: usize,
     mode: usize,
@@ -377,6 +378,10 @@ struct RxRecord {
     /// The latest its burst may end by its countdown — its own end and the most frames the
     /// count says may follow (ADR-0041, ADR-0046) — or none when the count cannot be believed.
     announced_end: Option<f64>,
+    /// It decoded and brought a block this station did not have: a burst of nothing but
+    /// blocks it already had is the sender's answer to an acknowledgement it missed
+    /// (ADR-0059).
+    new: bool,
     /// Where it ended, when it said, believably, that none of its burst follow it (ADR-0041's
     /// countdown at 0): the burst is over there (ADR-0045).
     closes_at: Option<f64>,
@@ -601,6 +606,9 @@ pub struct LinkEngine {
     burst: Vec<RxRecord>,
     burst_t0: Option<f64>,
     ack_history: Vec<AckSnapshot>,
+    /// An acknowledgement of this session's was lost: the rest go on the tone floor
+    /// (ADR-0059).
+    acks_on_floor: bool,
     ack_counter: u8,
     /// The fastest rung this station has recommended to the sender in this session: a burst
     /// faster than any of them is the sender's choice (ADR-0020).
@@ -714,6 +722,7 @@ impl LinkEngine {
             burst: Vec::new(),
             burst_t0: None,
             ack_history: Vec::new(),
+            acks_on_floor: false,
             ack_counter: 0,
             asked: None,
             break_requested: false,
@@ -1397,7 +1406,7 @@ impl LinkEngine {
             payload: frame.encode().to_vec(),
             mode: 0,
             rv: 0,
-            floor: self.control_floor(),
+            floor: self.control_floor() || (kind == ControlKind::Ack && self.acks_on_floor),
             follows: 0,
         }
     }
@@ -2531,6 +2540,7 @@ impl LinkEngine {
             combined: false,
             outside: false,
             payload_outside: None,
+            new: false,
             t_end: frame.t_end(),
             announced_end: None,
             closes_at: None,
@@ -2830,6 +2840,7 @@ impl LinkEngine {
         }
         if !self.rx_buffer.iter().any(|(seq, _)| *seq == header.seq) {
             self.rx_buffer.push((header.seq, body));
+            record.new = true;
         }
         self.harq.retain(|(seq, _, _, _)| *seq != header.seq);
 
@@ -2854,11 +2865,43 @@ impl LinkEngine {
         true
     }
 
+    /// A burst whose decoded frames are all blocks this station already had — a frame it
+    /// acknowledged, sent again — says its last acknowledgement was lost (`repeated`). From
+    /// then on its acknowledgements go on the tone floor for the rest of the session
+    /// (ADR-0059): on WC4Y's path of 2026-10-10 the short ordinary ones reached him 7 times in
+    /// 15, the floor ones 14 in 14, and each lost one cost a burst sent again and a step down
+    /// the ladder.
+    fn note_ack_lost(&mut self, repeated: bool) {
+        if !repeated
+            || self.acks_on_floor
+            || self.ack_history.is_empty()
+            || self.timing.floor_modes == 0
+        {
+            return;
+        }
+        self.acks_on_floor = true;
+        self.actions.push(Action::Event {
+            name: "acks",
+            detail: format!(
+                "on the floor: {} missed an acknowledgement",
+                self.remote_call
+            ),
+        });
+    }
+
     fn send_ack(&mut self) {
         if !matches!(self.state, State::Connected | State::Disconnecting) {
             return;
         }
         let ok = self.burst.iter().filter(|r| r.payload.is_some()).count();
+        self.note_ack_lost(
+            ok > 0
+                && self
+                    .burst
+                    .iter()
+                    .filter(|r| r.payload.is_some())
+                    .all(|r| !r.new),
+        );
         // A failure is news of the path when the frame could have decoded (ADR-0020): a real
         // frame (the PHY trusts it), at a redundancy version that decodes on its own or
         // combined with an earlier transmission of its block. A retransmission at RV 1 or 2
@@ -3510,6 +3553,7 @@ impl LinkEngine {
         self.burst.clear();
         self.burst_t0 = None;
         self.ack_history.clear();
+        self.acks_on_floor = false;
         self.ack_counter = 0;
         self.asked = None;
         self.break_requested = false;
@@ -3746,6 +3790,7 @@ mod tests {
             combined: false,
             outside: false,
             payload_outside: None,
+            new: false,
             t_end: 0.0,
             announced_end: None,
             closes_at: None,
@@ -4806,6 +4851,7 @@ mod tests {
                 combined: false,
                 outside: false,
                 payload_outside: None,
+                new: false,
                 t_end,
                 announced_end: Some(
                     t_end + f64::from(crate::frames::most_following(follows)) * 1.0,

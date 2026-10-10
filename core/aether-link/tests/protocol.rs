@@ -3630,3 +3630,35 @@ fn a_call_moved_to_the_narrow_air_is_answered_by_a_narrow_station() {
     sim.run(600.0, 1000.0);
     assert_eq!(sim.delivered(1), b"moved", "{:?}", sim.events(1));
 }
+
+#[test]
+fn acknowledgements_go_on_the_floor_once_one_was_lost() {
+    // a burst of nothing but blocks already acknowledged says the acknowledgement was lost;
+    // the receiver's acknowledgements go on the tone floor from then on (ADR-0059). 500 Hz at
+    // 0 dB with the receiver's short ordinary control frames 8 dB under the channel, as
+    // KK4ODA-1's were at WC4Y on 2026-10-10
+    let t = air_timing(NARROW_500, false);
+    let config = LinkConfig::default();
+    let a = LinkEngine::new("W4ODA", t.clone(), config.clone(), 1);
+    let b = LinkEngine::new("KK4XYZ", t, config, 2);
+    let mut sim = TwoStationSim::new(a, b, 0.0, 59).with_frame_snr_offset(Box::new(|frame| {
+        if frame.container == aether_link::Container::Control && !frame.floor {
+            -8.0
+        } else {
+            0.0
+        }
+    }));
+    let message: Vec<u8> = (0..2048u32).map(|i| (i % 251) as u8).collect();
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    sim.engine_mut(0).send(&message);
+    sim.engine_mut(0).disconnect();
+    sim.run(3000.0, 3.0);
+    assert_eq!(sim.delivered(1), message.as_slice());
+    assert!(
+        sim.events(1)
+            .iter()
+            .any(|e| e == "acks:on the floor: W4ODA missed an acknowledgement"),
+        "{:?}",
+        sim.events(1)
+    );
+}
