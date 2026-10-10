@@ -3457,3 +3457,137 @@ fn a_station_that_left_answers_its_old_session_with_a_disc() {
     assert!(sim.engine(0).stats.left_answered >= 1);
     assert!(sim.t - started < sim.engine(1).link_timeout_s());
 }
+
+/// A connect request handed straight to an engine, heard at `snr_db` at `t`.
+struct Called {
+    payload: Vec<u8>,
+    mode: usize,
+    snr_db: f64,
+    t: f64,
+}
+
+impl aether_link::SoftFrame for Called {
+    fn container(&self) -> aether_link::Container {
+        aether_link::Container::Data
+    }
+    fn mode(&self) -> usize {
+        self.mode
+    }
+    fn floor(&self) -> bool {
+        false
+    }
+    fn rv(&self) -> u8 {
+        0
+    }
+    fn snr_db(&self) -> f64 {
+        self.snr_db
+    }
+    fn t_start(&self) -> f64 {
+        self.t
+    }
+    fn t_end(&self) -> f64 {
+        self.t + 0.5
+    }
+    fn decode(
+        &self,
+        _buffer: Option<&aether_link::HarqBuffer>,
+    ) -> (Option<Vec<u8>>, aether_link::HarqBuffer) {
+        (Some(self.payload.clone()), Vec::new())
+    }
+}
+
+/// A call from `caller` to `called` in the ordinary family under `session`.
+fn call_frame(
+    t: &PhyTiming,
+    caller: &str,
+    called: &str,
+    session: u8,
+    snr_db: f64,
+    at: f64,
+) -> Called {
+    use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
+    let mode = air_interface(WIDE_2300).control_rung();
+    let body = ConnectBody {
+        src: caller.into(),
+        dst: called.into(),
+        caps: LinkConfig::default().capabilities,
+        version: PROTOCOL_VERSION,
+        snr_db: None,
+    }
+    .encode()
+    .expect("body");
+    let header = DataHeader {
+        kind: DataKind::ConnectReq,
+        seq: 0,
+        session,
+    };
+    let payload = encode_data(&header, &body, t.capacity(mode)).expect("frame");
+    Called {
+        payload,
+        mode,
+        snr_db,
+        t: at,
+    }
+}
+
+fn modes_transmitted(engine: &mut LinkEngine) -> Vec<usize> {
+    engine
+        .drain()
+        .into_iter()
+        .filter_map(|action| match action {
+            aether_link::Action::Transmit { frames, .. } => Some(frames),
+            _ => None,
+        })
+        .flatten()
+        .map(|frame| frame.mode)
+        .collect()
+}
+
+#[test]
+fn a_weak_call_is_accepted_on_the_floor() {
+    // a call heard in the ordinary family near its threshold is accepted on the tone floor:
+    // the acceptance is the frame a session cannot do without, and KE4QCM's ordinary ones,
+    // answering calls heard at +1…+6.5 dB, never reached him (ADR-0056); a strong call is
+    // answered in its own family, as before
+    let t = timing(false);
+    for (snr_db, floor) in [(2.0, true), (6.5, true), (20.0, false)] {
+        let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
+        b.on_frame(&call_frame(&t, "W4ODA", "KK4XYZ", 7, snr_db, 1.0), 2.0);
+        assert_eq!(b.state(), State::Connected);
+        let sent = modes_transmitted(&mut b);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(t.is_floor(sent[0]), floor, "{snr_db} dB: {sent:?}");
+    }
+}
+
+#[test]
+fn a_new_call_from_the_peer_replaces_its_dead_session() {
+    // a station that calls again under a new session number has given up the one this station
+    // accepted — one station is in one session — so the session ends and the new call is
+    // answered; taken for another session's frame, KE4QCM's second call went unanswered while
+    // this station waited out the first session's link timeout (ADR-0056)
+    let t = timing(false);
+    let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
+    b.on_frame(&call_frame(&t, "W4ODA", "KK4XYZ", 7, 20.0, 1.0), 2.0);
+    assert_eq!((b.state(), b.session()), (State::Connected, 7));
+    b.drain();
+    b.on_frame(&call_frame(&t, "W4ODA", "KK4XYZ", 9, 20.0, 20.0), 21.0);
+    assert_eq!((b.state(), b.session()), (State::Connected, 9));
+    let actions = b.drain();
+    assert!(
+        actions.iter().any(|action| matches!(action,
+            aether_link::Action::Event { name, detail } if *name == "disconnected" && detail == "W4ODA called again")),
+        "{actions:?}"
+    );
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| matches!(action, aether_link::Action::Transmit { .. }))
+            .count(),
+        1
+    );
+    // a call from anybody else under another session number is no business of this one
+    b.on_frame(&call_frame(&t, "N0CALL", "KK4XYZ", 11, 20.0, 40.0), 41.0);
+    assert_eq!((b.state(), b.session()), (State::Connected, 9));
+    assert_eq!(b.remote_call, "W4ODA");
+}

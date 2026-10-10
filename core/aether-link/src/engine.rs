@@ -84,6 +84,11 @@ pub struct LinkConfig {
     /// How many more times an abort's DISC is said, on the floor, while the other station
     /// has not answered it (ADR-0052).
     pub leave_repeats: u32,
+    /// A call heard in the ordinary family less than this above the ordinary control frame's
+    /// AWGN threshold is accepted on the tone floor (ADR-0056): the path is not reciprocal
+    /// enough to bet the session on the ordinary frame making it back. KE4QCM's calls of
+    /// 2026-10-10 decoded at +1…+6.5 dB, and the ordinary acceptances never reached him.
+    pub floor_answer_margin_db: f64,
     /// An idle sender polls the receiver this often.
     pub keepalive_s: f64,
     /// No valid frame from the peer for this long ends the session — or longer where the
@@ -176,6 +181,7 @@ impl Default for LinkConfig {
             disc_patience_exchanges: 2.0,
             disc_patience_s: 20.0,
             leave_repeats: 3,
+            floor_answer_margin_db: 12.0,
             keepalive_s: 10.0,
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
@@ -363,6 +369,9 @@ struct RxRecord {
     /// It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
     /// session's — and is no part of the burst (ADR-0038).
     outside: bool,
+    /// What such a frame carried: a call from the session's own peer under a new session
+    /// number ends the session (ADR-0056).
+    payload_outside: Option<Vec<u8>>,
     /// Where it ended.
     t_end: f64,
     /// The latest its burst may end by its countdown — its own end and the most frames the
@@ -1664,6 +1673,22 @@ impl LinkEngine {
     /// # Panics
     /// If the slowest mode cannot hold a connect body, which would make the protocol
     /// unusable. The waveform tables satisfy this by a wide margin.
+    /// Whether a call that arrived in the ordinary family was weak enough that its acceptance
+    /// goes on the tone floor (ADR-0056). The acceptance is the one frame a session cannot do
+    /// without, the caller hears this station no better than this station hears it on a
+    /// lopsided path (ND1J 0/+5 dB, KE4QCM worse), and the floor reaches 14 dB lower for 2.6 s
+    /// more on the air — once a session, and only on a path where the ordinary acceptance was
+    /// a gamble.
+    fn weak_call(&self, snr_db: Option<f64>) -> bool {
+        let Some(snr_db) = snr_db else { return false };
+        if self.timing.floor_modes == 0 {
+            return false;
+        }
+        self.rate
+            .threshold_db(self.robust_mode(false))
+            .is_some_and(|threshold| snr_db < threshold + self.config.floor_answer_margin_db)
+    }
+
     fn send_connect(&mut self, kind: DataKind) {
         self.send_connect_with(kind, None);
     }
@@ -1683,7 +1708,7 @@ impl LinkEngine {
         let floor = if kind == DataKind::ConnectReq {
             self.connect_floor()
         } else {
-            self.peer_floor || self.floor_only()
+            self.peer_floor || self.floor_only() || self.weak_call(snr_db)
         };
         let mode = self.robust_mode(floor);
         let capacity = self.timing.capacity(mode);
@@ -2413,6 +2438,7 @@ impl LinkEngine {
                         return;
                     };
                     if header.session != self.session {
+                        self.called_again(&payload, frame.snr_db());
                         return;
                     }
                     if header.kind == DataKind::ConnectAck {
@@ -2459,6 +2485,7 @@ impl LinkEngine {
             trusted: frame.trusted(),
             combined: false,
             outside: false,
+            payload_outside: None,
             t_end: frame.t_end(),
             announced_end: None,
             closes_at: None,
@@ -2483,10 +2510,39 @@ impl LinkEngine {
             };
             let delay = (self.burst_end() - self.now).max(0.0) + reply;
             self.arm(Timer::Ack, delay);
-        } else if record.outside && self.burst.is_empty() {
-            // nothing of a burst arrived: the acknowledgement its preamble armed answers nobody
-            self.disarm(Timer::Ack);
+        } else if record.outside {
+            if self.burst.is_empty() {
+                // nothing of a burst arrived: the acknowledgement its preamble armed answers
+                // nobody
+                self.disarm(Timer::Ack);
+            }
+            if let Some(payload) = record.payload_outside.take() {
+                self.called_again(&payload, record.snr_db);
+            }
         }
+    }
+
+    /// A call from the station this one is in session with, under a new session number: that
+    /// station has given the session up — one station is in one session — and calls again.
+    /// The session is ended and the call answered as from idle (ADR-0056). Ignored as another
+    /// session's frame, KE4QCM's second call of 2026-10-10 went unanswered while this station
+    /// waited out the link timeout of a session whose acceptance he never heard.
+    fn called_again(&mut self, payload: &[u8], snr_db: f64) -> bool {
+        let Ok((header, body)) = decode_data(payload) else {
+            return false;
+        };
+        if header.kind != DataKind::ConnectReq || header.session == self.session {
+            return false;
+        }
+        let Ok(request) = ConnectBody::decode(&body) else {
+            return false;
+        };
+        if request.src != self.remote_call || !self.callsigns.contains(&request.dst) {
+            return false;
+        }
+        self.end_session(&format!("{} called again", request.src));
+        self.handle_connect_req(header, &body, snr_db);
+        true
     }
 
     /// Whether a frame that did not decode belongs to a burst this station has answered: it
@@ -2682,6 +2738,7 @@ impl LinkEngine {
             // margin, and the acknowledgement its preamble armed answered nobody — ND1J's
             // beacon in the middle of a session drew one (2026-10-05)
             record.outside = true;
+            record.payload_outside = Some(payload.to_vec());
             return false;
         }
         record.payload = Some(payload.to_vec());
@@ -3643,6 +3700,7 @@ mod tests {
             trusted,
             combined: false,
             outside: false,
+            payload_outside: None,
             t_end: 0.0,
             announced_end: None,
             closes_at: None,
@@ -4702,6 +4760,7 @@ mod tests {
                 trusted: true,
                 combined: false,
                 outside: false,
+                payload_outside: None,
                 t_end,
                 announced_end: Some(
                     t_end + f64::from(crate::frames::most_following(follows)) * 1.0,

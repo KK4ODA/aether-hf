@@ -3766,3 +3766,88 @@ def test_a_station_that_left_answers_its_old_session_with_a_disc(timing: PhyTimi
     assert any(e == "disconnected:peer disconnected" for e in sim.events(1)), sim.events(1)
     assert a.stats.left_answered >= 1
     assert sim.t - started < b._link_timeout()
+
+
+def _call_frame(
+    timing: PhyTiming, caller: str, called: str, session: int, snr_db: float, t: float
+) -> SoftFrame:
+    """A connect request from ``caller`` in the ordinary family, as heard at ``snr_db``."""
+    from aether_model.link.frames import ConnectBody, DataHeader, encode_data
+
+    mode = WIDE.control_rung
+    body = ConnectBody(caller, called).encode()
+    payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, session), body, timing.capacity(mode))
+    sim = TwoStationSim(
+        LinkEngine(caller, timing, None, seed=1), LinkEngine(called, timing, None, seed=2)
+    )
+    frame = sim._synthetic_frame(TxFrame(Container.DATA, payload, mode=mode), snr_db, t, t + 1.0)
+    assert frame is not None
+    return frame
+
+
+@pytest.mark.parametrize(("snr_db", "floor"), [(2.0, True), (6.5, True), (20.0, False)])
+def test_a_weak_call_is_accepted_on_the_floor(
+    timing: PhyTiming, snr_db: float, floor: bool
+) -> None:
+    """A call heard in the ordinary family near its threshold is accepted on the tone floor:
+    the acceptance is the frame a session cannot do without, and KE4QCM's ordinary ones,
+    answering calls heard at +1…+6.5 dB, never reached him (ADR-0056). A strong call is
+    answered in its own family, as before."""
+    b = LinkEngine("KK4XYZ", timing, None, seed=2)
+    sent = _modes_sent(b)
+    b.on_frame(_call_frame(timing, "W4ODA", "KK4XYZ", 7, snr_db, 1.0), 2.0)
+    assert b.connected
+    assert len(sent) == 1 and timing.is_floor(sent[0]) is floor, sent
+
+
+def test_a_new_call_from_the_peer_replaces_its_dead_session(timing: PhyTiming) -> None:
+    """A station that calls again under a new session number has given up the one this
+    station accepted — one station is in one session — so the session ends and the new call
+    is answered. Taken for another session's frame, KE4QCM's second call went unanswered
+    while this station waited out the first session's link timeout (ADR-0056)."""
+    b = LinkEngine("KK4XYZ", timing, None, seed=2)
+    b.on_frame(_call_frame(timing, "W4ODA", "KK4XYZ", 7, 20.0, 1.0), 2.0)
+    assert b.connected and b.session == 7
+    b.actions.clear()
+    sent = _modes_sent(b)
+    b.on_frame(_call_frame(timing, "W4ODA", "KK4XYZ", 9, 20.0, 20.0), 21.0)
+    assert b.connected and b.session == 9
+    assert any(e == Event("disconnected", "W4ODA called again") for e in b.actions), b.actions
+    assert len(sent) == 1
+    # a call from anybody else under another session number is no business of this one
+    b.on_frame(_call_frame(timing, "N0CALL", "KK4XYZ", 11, 20.0, 40.0), 41.0)
+    assert b.connected and b.session == 9 and b.remote_call == "W4ODA"
+
+
+def test_a_called_again_session_completes(timing: PhyTiming) -> None:
+    """End to end: the first acceptance is lost and the caller gives up and calls again under
+    a new session; the called station, still waiting in the first, answers the second, and the
+    message crosses (ADR-0056)."""
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=31)
+    lost = [True]
+    original = b._transmit
+
+    def drop_first_acceptance(frames: list[TxFrame]) -> None:
+        if lost[0] and frames and frames[0].container is Container.DATA:
+            lost[0] = False
+            b._tx_busy_until = b.now + sum(timing.frame_s(f) for f in frames)
+            return
+        original(frames)
+
+    b._transmit = drop_first_acceptance  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    t = 0.0
+    while not b.connected and t < 30.0:
+        t += 0.1
+        sim.run(until=t)
+    assert b.connected and not a.connected
+    first = b.session
+    a._end_session("connect failed")  # the caller gives up, saying nothing
+    a.connect("KK4XYZ")
+    assert a.session != first
+    a.send(b"called again")
+    a.disconnect()
+    sim.run(until=600)
+    assert sim.delivered(1) == b"called again", sim.events(1)
+    assert any("called again" in str(e) for e in sim.events(1)), sim.events(1)
