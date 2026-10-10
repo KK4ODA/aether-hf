@@ -55,10 +55,24 @@ Every run delivered. The cost where the rule fires without need is a floor ackno
 2.8 s more air an exchange; the gain where acknowledgements are a coin toss is the bursts not sent
 again and the ladder not abandoned.
 
-The scenario harness: see §4.
-
 ## 4. Harness
 
 `80m-lopsided-acks-500` (WC4Y's path: the caller heard at +1 dB, hearing the other at −4 dB,
 Moderate, a Test), six seeds, and four other 500/2300 Hz scenarios, beta.96 against this build:
-RESULTS
+
+| `80m-lopsided-acks-500`, 6 seeds (means) | beta.96 | this build |
+|---|---|---|
+| Tests complete | 6/6 | 6/6 |
+| the caller's acknowledgement timeouts | 12.3 | **3.5** |
+| frames sent again | 66 | **43** |
+| message, bit/s | 49.0 | 51.6 |
+| file, bit/s | 47.5 | 53.6 |
+| highest ladder rung passed | 7.5 | 8.0 |
+| collisions | 1.3 | 1.7 |
+
+A Test runs to its budget whatever happens, so its air time says nothing; the rates are what move,
+and the single-seed spread of the harness (daemon threads) is as large as the difference, so the
+timeouts and the repeats are the signal. `80m-asymmetric-500` (lopsided the other way: the
+called station's acknowledgements go the good way) passes on both, Test rates 66.9/63.4 →
+66.9/56.3 bit/s; `80m-winlink-exchange-500`, `40m-winlink-exchange-2300` and
+`40m-good-throughput-2300` are identical to the tenth of a second.

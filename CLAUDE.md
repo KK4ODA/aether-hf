@@ -1303,6 +1303,12 @@ kin callsign heard within `KIN_HEARD_S` (`suggest`, *Call …*). ADR-0058 (model
 not known to run 2 300 Hz goes on at 500 Hz just before its next try (`Why::Unanswered`);
 `40m-wide-calls-narrow-unprobed` 0/4 → 4/4. Panel: tone frames' constellation caption, the speed
 chart on a log scale, the dial list's *Radio at X MHz — not in the list* line.
+**ADR-0059 (after beta.96, model first), from WC4Y's Test:** KK4ODA-1's short ordinary
+acknowledgements reached him 7 in 15, its floor ones 14 in 14 (a lopsided path). A burst whose decoded
+frames are all blocks already had (`_RxRecord.new`/`RxRecord::new` false) says the acknowledgement was
+lost, and the receiver's acknowledgements go on the floor for the rest of the session
+(`_note_ack_lost`, `acks_on_floor`, event `acks`). Harness `80m-lopsided-acks-500`: acknowledgement
+timeouts 12.3 → 3.5 a run.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
