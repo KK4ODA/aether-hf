@@ -330,16 +330,31 @@ fn named(sidecar: &Path, stems: Option<&[String]>) -> bool {
 }
 
 /// Whether a sidecar is of a session with `remote` (by base callsign), or any when `None`.
+///
+/// The other station is `session.remote`, or for a Test `session.test.remote` — a Test's
+/// sidecar is written when the station is idle again, and its `session.remote` is null, so
+/// every Test was left out of a request for the files of the sessions with a station: WC4Y's
+/// two uploads of 2026-10-10 carried no recording at all. A sidecar that names nobody is
+/// matched by its file name, `<start>_<this station>_<other station>[_test]`.
 fn with_station(sidecar: &Path, remote: Option<&str>) -> bool {
     let Some(remote) = remote else {
         return true;
     };
     let wanted = base(remote);
-    std::fs::read_to_string(sidecar)
+    let doc = std::fs::read_to_string(sidecar)
         .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|doc| doc["session"]["remote"].as_str().map(base))
-        .is_some_and(|theirs| theirs == wanted)
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let named = doc.as_ref().and_then(|doc| {
+        doc["session"]["remote"]
+            .as_str()
+            .or_else(|| doc["session"]["test"]["remote"].as_str())
+            .map(base)
+    });
+    let theirs = named.or_else(|| {
+        let stem = sidecar.file_stem()?.to_string_lossy().into_owned();
+        stem.split('_').nth(2).map(base)
+    });
+    theirs.is_some_and(|theirs| theirs == wanted)
 }
 
 fn base(call: &str) -> String {
@@ -515,6 +530,12 @@ mod tests {
         sidecar("20261005-004737_KK4ODA-1_KE4QCM-1", "KE4QCM-1");
         sidecar("20261005-003000_KK4ODA-1_ND1J", "ND1J");
         sidecar("20261004-120000_KK4ODA-1_KE4QCM", "KE4QCM");
+        // a Test's sidecar names the other station only in its report (WC4Y's, 2026-10-10)
+        std::fs::write(
+            recordings.join("20261005-002500_KK4ODA-1_KE4QCM_test.json"),
+            r#"{"session":{"remote":null,"test":{"remote":"KE4QCM"}}}"#,
+        )
+        .expect("write");
         let places = Places {
             config,
             recordings: Some(recordings),
@@ -532,13 +553,14 @@ mod tests {
                 recordings: None,
             },
         );
-        assert_eq!(got.sessions, 2);
+        assert_eq!(got.sessions, 3);
         assert_eq!(
             names(&got),
             [
                 "aetherd.log",
                 "sessions.json",
                 "recordings/20261005-001622_KK4ODA-1_KE4QCM.json",
+                "recordings/20261005-002500_KK4ODA-1_KE4QCM_test.json",
                 "recordings/20261005-004737_KK4ODA-1_KE4QCM-1.json",
             ]
         );
@@ -552,7 +574,7 @@ mod tests {
                 recordings: None,
             },
         );
-        assert_eq!(got.sessions, 3);
+        assert_eq!(got.sessions, 4, "the Test's sidecar too");
         assert_eq!(
             got.entries
                 .iter()

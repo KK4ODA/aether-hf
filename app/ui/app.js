@@ -5255,7 +5255,7 @@ function applyShareMode() {
     : "Only the sessions with this station (its other SSIDs too); empty for every session";
   const audio = mode === "ask"
     ? "Ask for the recordings' audio too: what a test session's analysis needs, megabytes a minute"
-    : "The recordings' audio too: megabytes a minute, so leave it out unless it was asked for";
+    : "The recordings' audio too, which a session's analysis needs: megabytes a minute; untick to leave it out";
   $("share-audio-row").title = audio;
   $("share-audio").title = audio;
   const target = uploadDestination();
@@ -5393,7 +5393,9 @@ async function prepareShare() {
     if (!toProject) remember(MY_EMAIL_KEY, email);
     const audio = $("share-audio").checked;
     let link = `${PANEL_URL}#share?station=${encodeURIComponent(me)}&hours=${hours}`;
-    if (audio) link += "&audio=1";
+    // the audio is on unless the link says otherwise (the author, 2026-10-10: WC4Y's files
+    // came without it); `&audio=1` is still written, for a panel from before that
+    link += audio ? "&audio=1" : "&audio=0";
     link += toProject ? "&project=1" : `&to=${encodeURIComponent(email)}`;
     const period = hours === 1 ? "hour" : `${hours} hours`;
     const what = audio
@@ -5483,7 +5485,9 @@ function shareFromLink() {
   uploadTarget = isUploadAddress(endpoint) && /^[A-Za-z0-9_-]{4,64}$/.test(code)
     ? { endpoint, code, to: station }
     : null;
-  const audio = params.get("audio") === "1";
+  // on unless the link says `audio=0`: an older link without the key asked for no audio, but
+  // a recording without it cannot be analysed, so the box starts ticked either way
+  const audio = params.get("audio") !== "0";
   const upload = uploadTarget != null || (params.get("project") === "1" && projectOpen());
   const asked = `${station || "A station"} asked for your files from your sessions with them${audio ? ", with the recordings" : ""}.`;
   openShareForm(upload ? "project" : "email", {
