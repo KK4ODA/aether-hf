@@ -403,8 +403,8 @@ data a client can show.
   the operator), `sideband`, `control`, `license`, `itu_region`, `margin_hz`, `band_plan`,
   `power_w`; `direction`: who would begin the exchange of a transmission now;
 * `indicator`: the decision for the station's widest transmission — every rung up to its
-  fastest mode with its control frames — at the dial it is on: what the panel shows as LEGAL,
-  WARNING or TX BLOCKED. When the link is held to its narrower rungs here it is a `warning` that
+  fastest mode with its control frames — at the dial it is on: what the panel shows as Legal,
+  Warning or TX blocked. When the link is held to its narrower rungs here it is a `warning` that
   says which;
 * `ceiling`: `rung` (the fastest rung the rules allow; null when none is), `name`, `of` (the
   ladder's length) and `limit` (the decision that stops the next rung);

@@ -42,8 +42,8 @@ appropriate for Aether.
 | Speed level / mode | speed level | — | **Mode** with name and net bit rate; the rate controller's smoothed SNR and margin on Diagnostics | E — done |
 | Throughput | `BITRATE`* / host's own | file progress* | **Throughput** over 30 s from bytes acknowledged or delivered, and the session's bytes each way | H — done |
 | Session timer | host's own | — | **Session** duration with the remote and the role | H — done |
-| TX / RX / busy indication | PTT and busy lamps | — | TX, **RX**, BUSY, LINK lamps and a two-minute TX/RX strip | E — done |
-| Retries, buffer, counters | `BUFFER`; host's own | — | Queued bytes; counters as pills (retransmitted, missed ACKs, HARQ rescues, held for busy…) | H — done |
+| TX / RX / busy indication | PTT and busy lamps | — | TX, **RX** and Busy lamps in the header's display strip, a Modem lamp, and a two-minute TX/RX strip | E — done |
+| Retries, buffer, counters | `BUFFER`; host's own | — | Queued bytes; counters as a ledger (retransmitted, missed ACKs, HARQ rescues, held for busy…) | H — done |
 | Tuning / frequency offset | — | — | **Tuning** (carrier offset of the last frame, with "the other station is high/low") | H — done; Aether has it, VARA does not show it |
 | Constellation | — | — | Diagnostics: the last frame's equalised symbols | N — done |
 | Stations heard | monitor mode; FM 4.01 lists "station IDs using the channel" | heard list* | **Stations** tab: beacons, calls, answers and session partners, first/last heard, SNR, dial, mode, activity, count; sortable; kept in `heard.json`, bounded at 200 | H — done |
@@ -117,7 +117,7 @@ The matrix above is the snapshot of 2026-09-15. What has changed in its rows sin
 * **KISS** — a KISS port that answers as VARA HF's does, for APRS and packet programs and
   VarAC's broadcasts (ADR-0019, beta.61).
 * **The rules** — nothing VARA has: every transmission is judged against Part 97 at the dial
-  the radio is on, with a LEGAL / WARNING / TX BLOCKED badge and its reasoning (ADR-0018,
+  the radio is on, with a Legal / Warning / TX blocked badge and its reasoning (ADR-0018,
   beta.60).
 * **The panel** — redesigned in betas .60–.68, the signal card undockable into its own
   window.

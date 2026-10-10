@@ -39,7 +39,7 @@ request meets the rules the first time.
    what it does or shows, in plain words. Add one with anything you add.
 9. **The panel loads clean.** A change to `app/ui/` is not done until the panel has been
    loaded against a running daemon and the browser console shows **no errors**, with the
-   LINK lamp lit and the readings populated. `node --check` proves syntax, not that the
+   Modem lamp quiet (not red) and the readings populated. `node --check` proves syntax, not that the
    page works: a beta once shipped with an infinitely recursive redraw that passed
    `node --check`, threw on every tick, and left the Status page blank and reading
    "Not connected to a modem". A tab is built of titled boxes from the design system at the
