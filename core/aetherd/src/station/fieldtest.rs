@@ -363,10 +363,7 @@ pub struct TestRun {
     /// The bytes a second of air carried at the rung the link ran at when the message was
     /// acknowledged: what [`file_rate_bps`] compares the rung after the ladder with.
     message_rung_rate: Option<f64>,
-    /// The rung the link ran at when the message was acknowledged: the ladder starts there,
-    /// since the message has just shown every rung under it carrying data.
-    message_rung: Option<usize>,
-    /// The ladder's rungs left out under the message's rung, once the ladder has begun.
+    /// The ladder's rungs left out under the rung the message ran at, once it has run.
     ladder_skipped: Option<usize>,
     /// The fastest rung that passed, once one has.
     highest_passed: Option<usize>,
@@ -404,7 +401,6 @@ impl TestRun {
             file_size: 0,
             acked_at_step: 0,
             message_rung_rate: None,
-            message_rung: None,
             ladder_skipped: None,
             highest_passed: None,
             adjustments: Vec::new(),
@@ -808,7 +804,22 @@ impl<P: Ptt> Station<P> {
                     if run.step == Step::Message {
                         run.message = Some(transfer);
                         run.message_rung_rate = Some(self.rung_rate(self.engine.current_mode()));
-                        run.message_rung = Some(self.engine.current_mode());
+                        // the ladder starts at the rung the message ran at: the rungs under
+                        // it have just carried the message, and climbing them again cost
+                        // WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth of
+                        // its budget, before the ladder learned anything new
+                        let skip = skipped_rungs(&run.modes, self.engine.current_mode());
+                        run.ladder_skipped = Some(skip);
+                        run.ladder_next = skip;
+                        if skip > 0 {
+                            let from = run.modes[skip];
+                            run.adjustments
+                                .push(format!("ladder from rung {from}: the message ran there"));
+                            self.note(
+                                "test",
+                                &format!("ladder: from rung {from}, where the message ran"),
+                            );
+                        }
                     } else {
                         run.file = Some(transfer);
                     }
@@ -824,25 +835,6 @@ impl<P: Ptt> Station<P> {
                 self.sync_test_report(run);
             }
             Step::Ladder => {
-                // the rungs under the one the message ran at have just carried the message:
-                // climbing them again cost WC4Y's Test of 2026-10-10 four tone rungs of 26 s
-                // each, a sixth of its budget, before the ladder learned anything new
-                if run.ladder_skipped.is_none() {
-                    let skip = run
-                        .message_rung
-                        .map_or(0, |rung| skipped_rungs(&run.modes, rung));
-                    run.ladder_skipped = Some(skip);
-                    run.ladder_next = skip;
-                    if skip > 0 {
-                        let from = run.modes[skip.min(run.modes.len() - 1)];
-                        run.adjustments
-                            .push(format!("ladder from rung {from}: the message ran there"));
-                        self.note(
-                            "test",
-                            &format!("ladder: from rung {from}, where the message ran"),
-                        );
-                    }
-                }
                 // a rung is started only with the file's time still in hand; one under way is
                 // seen through
                 let bps = file_rate_bps(
@@ -1152,7 +1144,10 @@ mod tests {
             {
                 steps.push(step.to_owned());
             }
-            if brief["step"] == "ladder" && brief["ladder"]["testing"].as_u64() == Some(3) {
+            if brief["step"] == "ladder"
+                && during_ladder.is_null()
+                && brief["ladder"]["testing"].is_u64()
+            {
                 during_ladder = brief.clone();
             }
             if brief["step"] == "message" && !brief["transfer"].is_null() {
@@ -1172,10 +1167,18 @@ mod tests {
             ],
             "{steps:?}"
         );
+        // the ladder's first rung is the one the message ran at — on this clean wire well up
+        // the ladder — and the rungs under it count as done on the panel
         assert_eq!(during_ladder["ladder"]["total"], 20, "{during_ladder}");
-        assert_eq!(during_ladder["ladder"]["testing_name"], "tone50-75");
-        assert_eq!(during_ladder["ladder"]["done"], 3);
-        assert_eq!(during_ladder["ladder"]["highest_passed"], 2);
+        let first = during_ladder["ladder"]["testing"]
+            .as_u64()
+            .expect("a rung under test");
+        assert!(
+            first > 0,
+            "the message ran above the floor: {during_ladder}"
+        );
+        assert_eq!(during_ladder["ladder"]["done"], first, "{during_ladder}");
+        assert!(during_ladder["ladder"]["testing_name"].is_string());
         assert_eq!(during_ladder["ladder"]["failures_allowed"], 3);
         assert!(
             during_ladder["link"]["rung_name"].is_string(),
@@ -1219,7 +1222,16 @@ mod tests {
         // here: it is the reason the top two rungs are excused, and the excuse goes when the
         // modem does.
         let ladder = results["ladder"].as_array().expect("rungs");
-        assert_eq!(ladder.len(), 20, "{results}");
+        let modes: Vec<u64> = ladder.iter().filter_map(|r| r["mode"].as_u64()).collect();
+        assert_eq!(modes, (first..20).collect::<Vec<u64>>(), "{results}");
+        assert!(
+            results["adjustments"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(
+                    |x| x == format!("ladder from rung {first}: the message ran there")
+                ))),
+            "{results}"
+        );
         let short: Vec<&Value> = ladder
             .iter()
             .filter(|r| r["decoded"] != r["frames"] && r["mode"].as_u64().is_some_and(|m| m < 18))
@@ -1232,7 +1244,9 @@ mod tests {
         // as a mode numbered on some other table
         let events = air.a.take_events();
         assert!(
-            events.iter().any(|e| e.starts_with("test:rung 0: ")),
+            events
+                .iter()
+                .any(|e| e.starts_with(&format!("test:rung {first}: "))),
             "{events:?}"
         );
         assert!(
