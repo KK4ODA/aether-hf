@@ -1287,6 +1287,23 @@ the run loop is logged with how late a thread that only sleeps woke (`Heartbeat`
 learned from its asking again after an answer (`station/gaps.rs`; 250 ms a step to 2 s, eased 25 ms a
 clean session, kept in `heard.json` as `answer_gap_ms`); `80m-vox-caller-learned-gap-500` 0/4 → 4/4.
 
+**The sessions of 2026-10-10 (WC4Y, KE4QCM, KO4WX; after beta.95).** KO4WX's panel had saved
+`max_mode = 0` (a save while the mode list was refilled took the browser's first option —
+`configuredMaxMode` in `app.js` now holds it). ADR-0055: no call, acceptance, probe or probe answer
+carries the Morse identifier (`sets_up_contact`); the ten minutes count from a communication's first
+transmission (`communication_began`), and a setup that led nowhere is identified on its own after
+`SETUP_ID_WAIT_S` (30 s) idle (`advance_identifier`). ADR-0056 (model first): an ordinary call under
+`floor_answer_margin_db` (12 dB) above the control threshold is accepted on the floor, and a call from
+the session's own peer under a new session number ends the session and is answered
+(`_called_again`/`called_again`, reason "<call> called again"). ADR-0057: a call or probe to another
+SSID of the station's callsigns is a mismatch `what` = `callsign` (`called`; the banner's *Answer as
+… too* → `callsigns.set`), the bandwidth warning covers those names, and an unanswered call suggests a
+kin callsign heard within `KIN_HEARD_S` (`suggest`, *Call …*). ADR-0058 (model first: `move_call`,
+`connect_tries`, `connect_due`): a 2 300 Hz call unanswered after `NARROW_AFTER_TRIES` (4) to a station
+not known to run 2 300 Hz goes on at 500 Hz just before its next try (`Why::Unanswered`);
+`40m-wide-calls-narrow-unprobed` 0/4 → 4/4. Panel: tone frames' constellation caption, the speed
+chart on a log scale, the dial list's *Radio at X MHz — not in the list* line.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
