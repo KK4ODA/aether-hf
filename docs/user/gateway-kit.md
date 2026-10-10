@@ -256,7 +256,8 @@ interface, not on the air: an Aether station cannot decode a VARA signal and nev
 * If your licence requires identification in a particular form, turn on `cw_id`. Aether's
   frames carry both callsigns, but whether that satisfies your licence conditions is your
   call, not the modem's. With it on, every session's end is identified once, and a long
-  session at least every `cw_id_interval_s` (ten minutes); under the US rules the identifier
+  session at least every `cw_id_interval_s` (ten minutes) counted from its call; a call, an
+  acceptance, a probe or a probe's answer never carries one (ADR-0055); under the US rules the identifier
   goes at 20 wpm at most (§97.119(b)(1)) whatever `cw_id_wpm` asks for, and the log says so.
 * Leave a gateway **unattended only where the rules allow it** — the daemon enforces the
   sub-bands, but whether your station may run under automatic control at all, and on which

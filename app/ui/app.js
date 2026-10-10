@@ -3723,9 +3723,21 @@ function renderMismatch(mismatch) {
   banner.dataset.at = String(mismatch.at_ms);
   // a station on another link protocol (ADR-0041): the fix is an update, not the bandwidth
   const version = mismatch.what === "version";
-  $("btn-mismatch-setup").hidden = version;
+  // a call to another SSID of this station's in its own bandwidth, or a suggestion after an
+  // unanswered call (ADR-0057): the fix is a callsign, not the bandwidth
+  const callsign = mismatch.what === "callsign";
+  const suggest = mismatch.what === "suggest";
+  $("btn-mismatch-setup").hidden = version || callsign || suggest;
   // the update button only when this station's version is the older one
   $("btn-mismatch-update").hidden = !version || theirsOlder(mismatch) !== false;
+  const called = mismatch.called ?? "";
+  banner.dataset.called = called;
+  const answer = $("btn-mismatch-answer");
+  answer.hidden = !called || suggest || (lastStatus?.callsigns ?? []).includes(called);
+  answer.textContent = `Answer as ${called} too`;
+  const callIt = $("btn-mismatch-call");
+  callIt.hidden = !suggest || !called;
+  callIt.textContent = `Call ${called}`;
   banner.hidden = false;
 }
 
@@ -3793,15 +3805,34 @@ function wireMismatch() {
     document.querySelector('.step[data-step="4"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
     $("radio-bandwidth").focus({ preventScroll: true });
   });
-  $("btn-mismatch-dismiss").addEventListener("click", () => {
-    const banner = $("mismatch-banner");
-    try {
-      localStorage.setItem(MISMATCH_DISMISSED_KEY, banner.dataset.at ?? "0");
-    } catch {
-      // private window: dismissed for this page's life only
-    }
-    banner.hidden = true;
+  $("btn-mismatch-dismiss").addEventListener("click", dismissMismatch);
+  $("btn-mismatch-answer").addEventListener("click", async () => {
+    const called = $("mismatch-banner").dataset.called;
+    if (!called) return;
+    const callsigns = [...(lastStatus?.callsigns ?? []), called];
+    const ok = await act(
+      () => call("callsigns.set", { callsigns }),
+      `answering as ${callsigns.join(", ")} until the modem restarts`,
+    );
+    if (ok) dismissMismatch();
   });
+  $("btn-mismatch-call").addEventListener("click", () => {
+    const called = $("mismatch-banner").dataset.called;
+    if (!called) return;
+    $("remote").value = called;
+    dismissMismatch();
+    $("btn-connect").click();
+  });
+}
+
+function dismissMismatch() {
+  const banner = $("mismatch-banner");
+  try {
+    localStorage.setItem(MISMATCH_DISMISSED_KEY, banner.dataset.at ?? "0");
+  } catch {
+    // private window: dismissed for this page's life only
+  }
+  banner.hidden = true;
 }
 
 function renderKissClients(clients) {

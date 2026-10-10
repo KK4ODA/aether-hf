@@ -3851,3 +3851,28 @@ def test_a_called_again_session_completes(timing: PhyTiming) -> None:
     sim.run(until=600)
     assert sim.delivered(1) == b"called again", sim.events(1)
     assert any("called again" in str(e) for e in sim.events(1)), sim.events(1)
+
+
+def test_a_call_moved_to_the_narrow_air_is_answered_by_a_narrow_station() -> None:
+    """A 2 300 Hz call is ignored by a 500 Hz station; the caller that moves its call to the
+    narrow air after unanswered tries is answered, and the session runs there (ADR-0058)."""
+    from aether_model.link.frames import with_bandwidth
+    from aether_model.link.harness import phy_timing
+    from aether_model.waveform import NARROW_500, WIDE_2300
+
+    wide, narrow = phy_timing(WIDE_2300), phy_timing(NARROW_500)
+    a = LinkEngine("W4ODA", wide, LinkConfig(capabilities=with_bandwidth(0, 2300)), seed=1)
+    b = LinkEngine("KK4XYZ", narrow, LinkConfig(capabilities=with_bandwidth(0, 500)), seed=2)
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=41)
+    a.connect("KK4XYZ")
+    t = 0.0
+    while a.connect_tries < 2 and t < 120.0:
+        t += 0.5
+        sim.run(until=t)
+    assert not b.connected
+    with pytest.raises(RuntimeError):
+        b.move_call(wide, with_bandwidth(0, 2300))
+    a.move_call(narrow, with_bandwidth(0, 500))
+    a.send(b"moved")
+    sim.run(until=600)
+    assert sim.delivered(1) == b"moved"

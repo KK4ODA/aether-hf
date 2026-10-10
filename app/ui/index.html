@@ -93,10 +93,12 @@
       </div>
       <!-- a call or probe to this station in a bandwidth whose calls it does not answer
            (ADR-0035): on every tab, with both bandwidths and the fix -->
-      <div class="note warn unsaved-banner mismatch-banner" id="mismatch-banner" title="A station called or probed this one in another bandwidth, or called or answered in another version of the link protocol: the two cannot connect until one of them changes bandwidth or updates" role="alert" hidden>
+      <div class="note warn unsaved-banner mismatch-banner" id="mismatch-banner" title="A station called or probed this one in another bandwidth or under another of its callsigns, or called or answered in another version of the link protocol — or a call of this station's went unanswered while the same operator was heard under another SSID" role="alert" hidden>
         <span id="mismatch-banner-text" title="Who, in which bandwidth or version, and what to do"></span>
         <button class="small" id="btn-mismatch-setup" title="Open Setup step 4, where the bandwidth is set">Setup step 4</button>
         <button class="small" id="btn-mismatch-update" title="Check for a newer version of Aether HF: this station's is the older one" hidden>Check for Updates</button>
+        <button class="small" id="btn-mismatch-answer" title="Answer calls to this callsign too, from now until the modem restarts or a host program names its own callsigns; to keep it, add it in Setup step 1" hidden>Answer as it too</button>
+        <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
         <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
       </div>
       <!-- debug mode (ADR-0050), said once: what goes to the project, and the switch -->
