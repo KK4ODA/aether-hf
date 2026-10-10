@@ -148,13 +148,13 @@ function onEvent(frame) {
       if (data.name === "connected") {
         resetReceived();
         markSession(data.remote || data.detail);
-        showBanner("connected", `CONNECTED — ${data.remote || data.detail}`);
+        showBanner("connected", `Connected to ${data.remote || data.detail}`);
         chime("up");
         focusComposer();
       } else if (data.name === "disconnected") {
-        const left = leftBehind ? ` — ${leftBehind}` : "";
+        const left = leftBehind ? `. ${leftBehind}` : "";
         leftBehind = "";
-        showBanner("ended", `SESSION ENDED — ${data.detail}${left}`, 15000);
+        showBanner("ended", `Session ended: ${data.detail}${left}`, 15000);
         chime("down");
       }
       refreshStatus();
@@ -401,30 +401,30 @@ function bannerFor(status) {
   const who = status.remote || "";
   const test = status.test;
   if (status.state === "connecting") {
-    return ["calling", test ? `TEST SESSION — calling ${who}…` : `CALLING ${who}…`];
+    return ["calling", test ? `Test session: calling ${who}…` : `Calling ${who}…`];
   }
   if (status.state === "disconnecting") {
-    return ["closing", `DISCONNECTING — ${who}: waiting for the answer…`];
+    return ["closing", `Disconnecting from ${who}: waiting for the answer…`];
   }
   if (status.state === "connected" && status.closing) {
     return [
       "closing",
       status.role === "iss"
-        ? `DISCONNECTING — ${who}: sending what is still queued first… Abort closes now`
-        : `DISCONNECTING — ${who}: after the burst now arriving…`,
+        ? `Disconnecting from ${who}: sending what is still queued first. Abort closes now.`
+        : `Disconnecting from ${who} after the burst now arriving…`,
     ];
   }
   if (status.state === "connected") {
     const role = { iss: ", sending", irs: ", receiving" }[status.role] ?? "";
-    if (test) return ["connected", `TEST SESSION — ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
-    return ["connected", `CONNECTED — ${who || "?"}${role}`];
+    if (test) return ["connected", `Test session with ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
+    return ["connected", `Connected to ${who || "?"}${role}`];
   }
-  if (test) return ["working", `TEST SESSION — ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
-  if (status.probing) return ["working", probeTarget ? `PROBING ${probeTarget}…` : "PROBING…"];
+  if (test) return ["working", `Test session with ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
+  if (status.probing) return ["working", probeTarget ? `Probing ${probeTarget}…` : "Probing…"];
   if (status.beacon?.waiting) {
-    return ["working", status.beacon.waiting_for_clear ? "BEACON WAITING — the channel is busy" : "SENDING BEACON…"];
+    return ["working", status.beacon.waiting_for_clear ? "Beacon waiting: the channel is busy" : "Sending a beacon…"];
   }
-  if (status.transmitting) return ["working", "TRANSMITTING…"];
+  if (status.transmitting) return ["working", "Transmitting…"];
   return null;
 }
 
@@ -459,6 +459,11 @@ function setState(key, name, detail) {
   $("state-strip").dataset.state = key;
   $("state-name").textContent = name;
   $("state-detail").textContent = detail;
+  // the header's display well carries the same state on every tab
+  const strip = $("strip-state");
+  strip.dataset.state = key;
+  strip.textContent = name;
+  strip.title = detail ? `${name}. ${detail}` : name;
 }
 
 // The status the panel last saw: whether a restart is something it can do for the operator.
@@ -646,6 +651,9 @@ function applyMetrics(metrics) {
     $("v-mode-name").textContent = entry
       ? `${entry.name}${entry.floor ? " (floor)" : ""} · ${Math.round(entry.net_bit_rate)} bit/s`
       : "";
+    const rung = $("strip-rung");
+    rung.textContent = entry ? `Rung ${mode}  ${Math.round(entry.net_bit_rate)} bit/s` : `Rung ${mode}`;
+    rung.hidden = false;
   }
   if (metrics.queued_bytes !== undefined) {
     $("v-queued").textContent = String(metrics.queued_bytes);
@@ -658,6 +666,8 @@ function applyMetrics(metrics) {
     const snr = metrics.snr_db;
     const peer = metrics.peer_snr_db;
     $("v-snr").textContent = snr === null ? "—" : `${snr.toFixed(1)} dB`;
+    $("strip-snr").textContent = snr === null ? "" : `SNR ${snr >= 0 ? "+" : ""}${snr.toFixed(1)} dB`;
+    $("strip-snr").hidden = snr === null;
     $("v-snr-sub").textContent =
       peer !== null && peer !== undefined
         ? `they hear you at ${peer.toFixed(1)} dB`
@@ -1159,10 +1169,10 @@ function drawSpeedChart() {
     ctx.fillText(tick >= 1000 ? `${tick / 1000}k` : String(tick), CHART_LEFT - 6, y(tick));
   }
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
-  drawLegend(f, [[c.ink, "bit/s"], [withAlpha(c.tx, 0.9), "mode rate"], [c.accent, "goodput"]]);
+  drawLegend(f, [[c.ink, "bit/s"], [c.ink2, "mode rate"], [c.accent, "goodput"]]);
 
   // the mode's on-air rate: a faint dashed step, the ceiling the goodput works under
-  ctx.strokeStyle = withAlpha(c.tx, 0.8);
+  ctx.strokeStyle = withAlpha(c.ink2, 0.8);
   ctx.lineWidth = 1;
   ctx.setLineDash([2, 3]);
   ctx.beginPath();
@@ -2167,7 +2177,13 @@ const BUSY_BAND = 4;
 function drawChart() {
   const now = Date.now();
   if (history.length < 2) {
-    surface("chart", 450, chartHeight("chart")).ctx.clearRect(0, 0, 4096, 4096);
+    // nothing measured yet: the scale and the time axis still, and a word for why it is empty
+    const f = chartFrame("chart", 450, chartHeight("chart"), -90, -30);
+    drawValueAxis(f, -90, -30, 10);
+    drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
+    f.ctx.fillStyle = f.c.ink;
+    f.ctx.textAlign = "center";
+    f.ctx.fillText("no audio measured yet", CHART_LEFT + f.plotWidth / 2, (f.top + f.bottom) / 2);
     return;
   }
   let low = Infinity;
@@ -4083,10 +4099,10 @@ let regulatory = null;
 let regRefreshTimer = null;
 
 const VERDICT_WORD = {
-  legal: "LEGAL",
-  warning: "WARNING",
-  blocked: "TX BLOCKED",
-  none: "NO RULES",
+  legal: "Legal",
+  warning: "Warning",
+  blocked: "TX blocked",
+  none: "No rules",
   unknown: "—",
 };
 

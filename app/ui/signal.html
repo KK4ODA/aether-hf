@@ -12,13 +12,13 @@
   <body class="signal-window">
     <header class="bar">
       <h1 class="brand">
-        <img class="brand-mark" src="mark.png" alt="" width="22" height="22" />
-        <span>Aether <span class="brand-hf">HF</span></span>
+        <img class="brand-mark" src="mark.png" alt="" width="20" height="20" />
+        <span class="brand-name">Aether <span class="brand-hf">HF</span></span>
       </h1>
       <span class="bar-title" title="The constellation, spectrum and waterfall, undocked from the panel's Diagnostics tab">Signal analysis</span>
       <span class="live" id="signal-live" data-live="false" title="Whether the scopes are drawing: they pause while this window is minimised or the modem is out of reach">paused</span>
       <div class="head-right">
-        <span class="lamp" id="lamp-link" title="Link: this window's connection to the modem" role="status" aria-label="Not connected to the modem">LINK</span>
+        <span class="lamp modem-lamp" id="lamp-link" title="Modem: this window's connection to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
         <label class="check" id="on-top-box" title="Keep this window above the others, the panel included" hidden><input type="checkbox" id="on-top" title="Keep this window above the others, the panel included" /> Keep on top</label>
         <button class="small" id="btn-dock" title="Put the card back on the panel's Diagnostics tab and close this window">Dock</button>
       </div>

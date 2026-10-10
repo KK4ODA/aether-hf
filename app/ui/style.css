@@ -1,72 +1,86 @@
 /* Aether HF — the station panel.
  *
- * Dark is the panel's own appearance, not a courtesy to the operating system: this is an
- * instrument looked at in a shack at night as often as at a desk, and one that turns white
+ * The panel is the front panel of a radio instrument, not a web dashboard. It is graphite,
+ * like the cabinet of a transceiver and the bench it sits on, and dark by design: it is
+ * looked at in a shack at night as often as at a desk, and an instrument that turns white
  * because Windows did is the wrong instrument. A light variant exists for the operator who
  * asks for it (`<html data-theme="light">`) and for nobody else.
  *
- * Everything is a token, so a change of mind is one edit. Semantic tokens carry meaning —
- * a lit LINK lamp is green because a link is up, not because green was available — and
- * the accent is spent on the one thing the operator acts on, never on decoration.
+ * Colour is spent on state and on nothing else. Green is a frame arriving, red is the
+ * transmitter keyed or something wrong, amber is a busy channel or a caution, blue is a
+ * session up. A control is never coloured to be noticed: the one primary action of a box
+ * is the light key among dark ones, the way a rig's TX button is the one with a different
+ * cap. Plots draw measurement in a pale neutral and state on top of it in the state colours.
+ *
+ * One bold thing: the strip across the top, a recessed display well holding what an
+ * operator reads at a glance — the state, the dial, the bandwidth and rung, the SNR and the
+ * lamps. Everything below it is quiet: flat panels on a rule, sentence-case names, numbers
+ * set in the interface face with tabular figures. Monospace is kept for what is read
+ * character by character: callsigns (0 against O), the log, the configuration, paths.
  *
  * The design system, in one place:
  *
- *   type      10.5 caps labels and badges · 11 section labels · 12 secondary · 13.5 body ·
- *             15 compact state · 18 state · 26 readings · 28 the dial
+ *   type      11 small · 12 secondary · 13.5 body and names · 15 compact state ·
+ *             18 state · 26 readings · 30 the dial — sentence case throughout, no tracking
  *   spacing   4 / 8 / 12 / 16 / 24 / 32
- *   radii     4 controls · 6 cards and plots · pill for badges, chips and lamps' dots
- *   controls  30 px tall, 24 px for .small; the same height for a button, a field and a
- *             select, so a row of them lines up
- *   cards     12 px × 16 px padding, 8 px between their parts; a head row carries the title,
- *             a meta reading and the card's actions
- *   states    hover lifts the surface, focus draws the accent ring, disabled fades to 45 %
- *   motion    120–180 ms, and none at all when the operator has asked for none */
+ *   radii     3 controls · 5 panels and plots · pill only for a lamp's dot and a count
+ *   controls  30 px tall, 24 px for .small; a button, a field and a select line up
+ *   panels    12 × 16 px padding; a head row carries the name, a reading and the actions;
+ *             separated by a hairline and a step of surface, never by a shadow
+ *   states    hover lifts the surface, focus draws a neutral ring, disabled fades to 45 %
+ *   motion    120–180 ms, answering the operator's own action; none at all when asked */
 
 :root {
   color-scheme: dark;
 
-  /* ground and surfaces, deepest to nearest */
-  --bg: #0b0f14;
-  --bg-2: #0f151c;
-  --surface: #141c24;
-  --surface-2: #18212b;
-  --surface-3: #1c2631;
-  --border: #273241;
-  --border-strong: #344253;
+  /* graphite, deepest to nearest: the bench, the cabinet, a panel, a raised key */
+  --bg: #16181b;
+  --bg-2: #1b1d21;
+  --surface: #1f2226;
+  --surface-2: #25292e;
+  --surface-3: #2c3036;
+  --border: #2d3136;
+  --border-strong: #3d4248;
 
-  /* text */
-  --text: #e6edf3;
-  --text-2: #94a3b3;
-  --text-3: #6f7c8a;
+  /* the display well: readouts and plots sit in it, darker than the cabinet */
+  --well: #101214;
+  --well-edge: #070809;
 
-  /* the one accent, and the ink that sits on it */
-  --accent: #2dd4bf;
-  --accent-ink: #062a26;
-  --accent-dim: rgba(45, 212, 191, 0.14);
+  /* text: the engraving, the legend, the faint scale */
+  --text: #dde0e3;
+  --text-2: #969da4;
+  --text-3: #666d74;
+
+  /* the light key: the one primary action of a box, and focus. Not a hue — a cap. */
+  --accent: #dde0e3;
+  --accent-ink: #16181b;
+  --accent-dim: rgba(221, 224, 227, 0.1);
+  --focus: #b7c3cf;
 
   /* states: these mean something, and are never used for looks */
-  --status-link: #34d399;
-  --status-tx: #f59e0b;
-  --status-rx: #22d3ee;
-  --status-busy: #fb923c;
-  --status-warning: #f59e0b;
-  --status-error: #f87171;
-  --status-idle: #4b5866;
-  --on-status: #0b0f14;
+  --status-link: #6aa9e9;
+  --status-tx: #e5544b;
+  --status-rx: #73cf8a;
+  --status-busy: #d9a441;
+  --status-warning: #d9a441;
+  --status-error: #e5544b;
+  --status-idle: #464c53;
+  --on-status: #101214;
 
-  /* the plotting surface and its grid */
-  --plot-bg: #0b1117;
-  --plot-grid: #1e2833;
+  /* the plotting surface, its grid, and the trace a measurement is drawn with */
+  --plot-bg: var(--well);
+  --plot-grid: #22262a;
+  --trace: #c9d2da;
 
   /* type */
-  --fs-2xs: 10.5px;
-  --fs-xs: 11px;
+  --fs-2xs: 11px;
+  --fs-xs: 11.5px;
   --fs-sm: 12px;
   --fs-md: 13.5px;
   --fs-lg: 15px;
   --fs-xl: 18px;
   --fs-2xl: 26px;
-  --fs-3xl: 28px;
+  --fs-3xl: 30px;
 
   /* space */
   --s1: 4px;
@@ -77,11 +91,11 @@
   --s6: 32px;
 
   /* shape */
-  --r-sm: 4px;
-  --r-md: 6px;
+  --r-sm: 3px;
+  --r-md: 5px;
   --r-pill: 999px;
 
-  /* controls and cards */
+  /* controls and panels */
   --control-h: 30px;
   --control-h-sm: 24px;
   --card-pad-y: 12px;
@@ -92,10 +106,15 @@
   --t-fast: 120ms;
   --t-slow: 180ms;
 
-  --face: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --numerals: "Cascadia Mono", "JetBrains Mono", "Roboto Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* the interface face; on Windows its Display cut sets the readouts */
+  --face: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", "Liberation Sans", Arial, sans-serif;
+  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", "Liberation Sans", Arial, sans-serif;
+  /* numbers are the interface face with tabular figures; the charts read this for their axes */
+  --numerals: var(--face);
+  /* what is read character by character: callsigns, the log, the configuration, paths */
+  --mono: "Cascadia Mono", "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+  --shadow: none;
+  --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.5);
 
   /* names the script reads; kept as aliases of the tokens above */
   --ink: var(--text);
@@ -104,37 +123,39 @@
   --edge: var(--border);
   --hot: var(--status-error);
   --warn: var(--status-warning);
-  --live: var(--status-link);
+  --live: var(--status-rx);
   --idle: var(--status-idle);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #eef1f4;
-  --bg-2: #f5f7f9;
-  --surface: #ffffff;
-  --surface-2: #f7f9fb;
-  --surface-3: #eef2f6;
-  --border: #d5dce4;
-  --border-strong: #b9c3ce;
-  --text: #16202a;
-  --text-2: #4d5c6b;
-  --text-3: #74838f;
-  --accent: #0f8f80;
-  --accent-ink: #ffffff;
-  --accent-dim: rgba(15, 143, 128, 0.12);
-  --status-link: #1c8f52;
-  --status-tx: #b45309;
-  --status-rx: #0e7490;
-  --status-busy: #c2410c;
-  --status-warning: #a16207;
-  --status-error: #b91c1c;
-  --status-idle: #9aa6b2;
+  --bg: #e9eaeb;
+  --bg-2: #f1f2f3;
+  --surface: #f7f7f8;
+  --surface-2: #ffffff;
+  --surface-3: #e4e6e8;
+  --border: #d3d6d9;
+  --border-strong: #b6bbc0;
+  --well: #fbfbfc;
+  --well-edge: #c9cdd1;
+  --text: #1c1f22;
+  --text-2: #50575e;
+  --text-3: #7d848b;
+  --accent: #1c1f22;
+  --accent-ink: #f7f7f8;
+  --accent-dim: rgba(28, 31, 34, 0.08);
+  --focus: #4b5a69;
+  --status-link: #1f6fbf;
+  --status-tx: #c2342b;
+  --status-rx: #23874a;
+  --status-busy: #a8700d;
+  --status-warning: #a8700d;
+  --status-error: #c2342b;
+  --status-idle: #a7adb3;
   --on-status: #ffffff;
-  --plot-bg: #fbfcfd;
-  --plot-grid: #e3e8ee;
-  --shadow: 0 1px 2px rgba(20, 30, 40, 0.08);
-  --shadow-pop: 0 12px 32px rgba(20, 30, 40, 0.18);
+  --plot-grid: #e3e6e9;
+  --trace: #3a4651;
+  --shadow-pop: 0 10px 28px rgba(20, 24, 28, 0.18);
 }
 
 * {
@@ -185,15 +206,17 @@ body {
 }
 
 a {
-  color: var(--accent);
-  text-decoration: none;
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
 }
 
 a:hover {
-  text-decoration: underline;
+  text-decoration-color: currentColor;
 }
 
-/* ── the top bar: brand, lamps, the rules, the dial, callsign ───── */
+/* ── the top bar: the name, the display well, the rules and the callsign ── */
 
 .bar {
   display: flex;
@@ -206,64 +229,120 @@ a:hover {
 }
 
 header.bar {
-  min-height: 48px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  flex-wrap: nowrap;
+  min-height: 52px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  gap: var(--s3);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font: 600 var(--fs-md) / 1 var(--face);
   color: var(--text);
   white-space: nowrap;
+  flex: none;
 }
 
 .brand-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
   display: block;
 }
 
 .brand .brand-hf {
-  color: var(--accent);
-  font-weight: 500;
-}
-
-/* a whisper of the signal in the brand, and nowhere else */
-.brand-wave {
-  width: 46px;
-  height: 14px;
-  color: var(--accent);
-  opacity: 0.55;
-  margin-left: 2px;
+  color: var(--text-2);
+  font-weight: 400;
 }
 
 .bar-title {
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--text);
+  padding-left: var(--s3);
+  border-left: 1px solid var(--border);
+}
+
+/* The display well: the one bold thing on the panel. Recessed into the cabinet like a
+ * transceiver's display, it carries the state, the dial, the rung, the SNR and the lamps,
+ * and nothing in it is a control. Its parts are separated by space and a hairline, and it
+ * gives up its readings, right to left, before it wraps. */
+.strip {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 36px;
+  padding: 0 4px 0 14px;
+  background: var(--well);
+  border: 1px solid var(--well-edge);
+  border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.strip > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+.strip-state {
+  font: 600 var(--fs-md) / 1 var(--face);
+  color: var(--text);
+  padding-right: 16px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip-state[data-state="connected"] {
+  color: var(--status-link);
+}
+
+.strip-state[data-state="connecting"],
+.strip-state[data-state="disconnecting"] {
+  color: var(--status-warning);
+}
+
+.strip-state[data-state="disconnected"] {
+  color: var(--status-error);
+}
+
+/* the dial, read like a rig's display: the largest figures on the panel */
+.dial {
+  font: 300 21px / 1 var(--display);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  padding: 0 16px;
+  border-left: 1px solid var(--border);
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.strip-reading {
+  font: 400 var(--fs-sm) / 1 var(--face);
+  font-variant-numeric: tabular-nums;
   color: var(--text-2);
+  padding: 0 14px;
+  border-left: 1px solid var(--border);
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  white-space: pre;
 }
 
 .callsign {
-  font: 600 14px/1 var(--numerals);
-  letter-spacing: 0.08em;
+  font: 600 var(--fs-md) / 1 var(--mono);
+  letter-spacing: 0.02em;
   color: var(--text);
-  padding: 0 10px;
-  height: var(--control-h-sm);
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface);
+  padding: 0 2px;
   white-space: nowrap;
 }
 
@@ -271,23 +350,20 @@ header.bar {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: var(--s2);
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: var(--s2) var(--s3);
+  flex: none;
 }
 
-/* the dial frequency, when the radio can say: read like a rig's display */
 /* the programs using this station now: a host program, KISS programs */
 .apps-chip {
-  font: 500 var(--fs-sm)/1 var(--numerals);
-  color: var(--accent);
+  font: 500 var(--fs-sm) / 1 var(--face);
+  color: var(--text);
   padding: 0 8px;
   height: var(--control-h-sm);
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--accent-dim);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
-  background: var(--accent-dim);
   white-space: nowrap;
 }
 
@@ -295,80 +371,83 @@ header.bar {
   display: none;
 }
 
-.dial {
-  font: 500 13px/1 var(--numerals);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-  color: var(--text-2);
-  padding: 0 8px;
-  height: var(--control-h-sm);
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  white-space: nowrap;
-}
-
-/* ── lamps: operational state, filled when lit and named always ──── */
+/* ── lamps: an LED and its legend; the legend lights with it ──────── */
 
 .indicators {
   display: flex;
-  gap: 6px;
-  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  height: 22px;
 }
 
 .lamp {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: var(--control-h-sm);
-  font: 600 var(--fs-2xs) / 1 var(--numerals);
-  letter-spacing: 0.12em;
-  padding: 0 9px 0 7px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
+  height: 24px;
+  font: 600 var(--fs-sm) / 1 var(--face);
+  padding: 0 8px;
   color: var(--text-3);
-  background: var(--surface);
-  transition:
-    background var(--t-fast),
-    color var(--t-fast),
-    border-color var(--t-fast);
+  transition: color var(--t-fast);
 }
 
 .lamp::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--status-idle);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.5);
   transition: background var(--t-fast), box-shadow var(--t-fast);
 }
 
 .lamp.on {
-  color: var(--on-status);
-  border-color: transparent;
+  --lit: var(--text);
+  color: var(--lit);
 }
 
 .lamp.on::before {
-  background: var(--on-status);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  background: var(--lit);
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--lit) 55%, transparent);
 }
 
 #lamp-ptt.on {
-  background: var(--status-tx);
+  --lit: var(--status-tx);
 }
 
 #lamp-busy.on {
-  background: var(--status-busy);
+  --lit: var(--status-busy);
 }
 
 #lamp-rx.on {
-  background: var(--status-rx);
+  --lit: var(--status-rx);
+}
+
+/* The modem lamp is the panel's own connection, not the radio link: settled when it is up,
+ * so it says nothing, and red when it is down, which is the only time it matters. */
+.modem-lamp {
+  padding: 0 4px;
+  font-weight: 400;
 }
 
 #lamp-link.on {
-  background: var(--status-link);
+  --lit: var(--text-3);
+  color: var(--text-3);
+}
+
+#lamp-link.on::before {
+  box-shadow: none;
+}
+
+#lamp-link:not(.on) {
+  color: var(--status-error);
+}
+
+#lamp-link:not(.on)::before {
+  background: var(--status-error);
 }
 
 /* read by a screen reader, seen by nobody */
@@ -392,20 +471,18 @@ header.bar {
   --tone: var(--text-3);
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   height: 20px;
-  padding: 0 8px;
-  border-radius: var(--r-pill);
-  font: 700 var(--fs-2xs) / 1 var(--numerals);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  font: 600 var(--fs-2xs) / 1 var(--face);
   white-space: nowrap;
   color: var(--tone);
-  background: color-mix(in srgb, var(--tone) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent);
 }
 
 [data-verdict="legal"] {
-  --tone: var(--status-link);
+  --tone: var(--status-rx);
 }
 
 [data-verdict="warning"] {
@@ -421,45 +498,43 @@ header.bar {
   --tone: var(--text-3);
 }
 
-/* the verdict in the header: a lamp-sized button that opens the reasoning */
+/* the verdict in the header: a small button that opens the reasoning */
 .reg-badge {
   height: var(--control-h-sm);
   min-height: 0;
-  padding: 0 10px 0 8px;
+  padding: 0 9px 0 7px;
   gap: 6px;
   border-radius: var(--r-sm);
-  font: 700 var(--fs-2xs) / 1 var(--numerals);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font: 600 var(--fs-sm) / 1 var(--face);
   color: var(--tone);
-  background: color-mix(in srgb, var(--tone) 12%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--tone) 50%, var(--border));
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border));
   white-space: nowrap;
 }
 
 .reg-badge:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--tone) 22%, var(--surface));
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
   border-color: var(--tone);
 }
 
 .reg-badge[data-verdict="blocked"] {
-  color: var(--on-status);
-  background: var(--status-error);
-  border-color: transparent;
+  color: var(--status-error);
+  background: color-mix(in srgb, var(--status-error) 12%, transparent);
+  border-color: var(--status-error);
 }
 
 .reg-badge[data-verdict="blocked"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--status-error) 85%, white 15%);
+  background: color-mix(in srgb, var(--status-error) 20%, transparent);
 }
 
 /* the chip beside the dial on the Session tab: the verdict and its sentence */
 .reg-chip {
   min-height: var(--control-h-sm);
-  padding: 2px 10px 2px 4px;
+  padding: 2px 10px 2px 3px;
   gap: 8px;
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--border));
-  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   color: var(--text-2);
   font-size: var(--fs-sm);
   max-width: 100%;
@@ -467,8 +542,13 @@ header.bar {
 }
 
 .reg-chip:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--tone) 10%, transparent);
-  border-color: var(--tone);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.reg-chip .badge {
+  border: 0;
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
 }
 
 .reg-chip-text {
@@ -478,33 +558,43 @@ header.bar {
   min-width: 0;
 }
 
-/* chips: a small group of toggles, one of them pressed (the log's filters) */
+/* chips: a small group of toggles, one of them pressed (the log's filters). A segmented
+ * switch, like a rig's band buttons: the pressed one is the lit one. */
 .chips {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 
 .chip {
   min-height: var(--control-h-sm);
   padding: 0 10px;
-  border-radius: var(--r-pill);
+  border-radius: 0;
   font-size: var(--fs-sm);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 0;
+  border-left: 1px solid var(--border);
   color: var(--text-2);
+}
+
+.chip:first-child {
+  border-left: 0;
 }
 
 .chip:hover:not(:disabled) {
   background: var(--surface-2);
-  border-color: var(--border-strong);
+  border-color: var(--border);
   color: var(--text);
 }
 
 .chip[aria-pressed="true"] {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--text-2);
 }
 
 /* "live": a dot that breathes while the thing beside it is drawing or following */
@@ -512,33 +602,31 @@ header.bar {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 600 var(--fs-2xs) / 1 var(--numerals);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font: 500 var(--fs-2xs) / 1 var(--face);
   color: var(--text-3);
   white-space: nowrap;
 }
 
 .live::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--status-idle);
 }
 
 .live[data-live="true"] {
-  color: var(--status-link);
+  color: var(--text-2);
 }
 
 .live[data-live="true"]::before {
-  background: var(--status-link);
+  background: var(--status-rx);
   animation: breathe-dot 1.8s ease-in-out infinite;
 }
 
 @keyframes breathe-dot {
   50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-link) 20%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-rx) 22%, transparent);
   }
 }
 
@@ -589,13 +677,13 @@ header.bar {
   margin-top: var(--s1);
 }
 
-/* ── tabs: one row; a narrow window scrolls them rather than stacking ── */
+/* ── tabs: one row of names; the open one is underlined, like a selected band ── */
 
 .tabs {
   display: flex;
   flex-wrap: nowrap;
-  gap: 2px;
-  padding: 0 var(--s4);
+  gap: 4px;
+  padding: 0 var(--s3);
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
@@ -617,7 +705,7 @@ header.bar {
   color: var(--text-2);
   font: inherit;
   font-weight: 500;
-  padding: 10px 14px 9px;
+  padding: 9px 10px 8px;
   min-height: 0;
   border-radius: 0;
   cursor: pointer;
@@ -633,24 +721,24 @@ header.bar {
 .tab-count {
   display: inline-block;
   min-width: 18px;
-  padding: 1px 5px;
-  margin-left: 4px;
-  border-radius: 9px;
+  padding: 0 5px;
+  margin-left: 5px;
+  border-radius: var(--r-pill);
   background: var(--surface-3);
   color: var(--text-2);
-  font: 600 10px/14px var(--numerals);
+  font: 600 10.5px/16px var(--face);
+  font-variant-numeric: tabular-nums;
   text-align: center;
   vertical-align: 1px;
 }
 
 .tab[aria-selected="true"] .tab-count {
-  background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--text);
 }
 
 .tab[aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--text);
 }
 
 .tab:focus-visible,
@@ -661,7 +749,7 @@ textarea:focus-visible,
 summary:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -669,7 +757,7 @@ a:focus-visible,
 
 main {
   padding: var(--s4) var(--s4) var(--s5);
-  max-width: 1120px;
+  max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
@@ -686,13 +774,11 @@ main {
   display: none;
 }
 
-/* a section's label: small capitals, quiet — it names, the content speaks */
+/* a section's name: sentence case, quiet — it names, the content speaks */
 h2 {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-md);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
+  color: var(--text);
   margin: var(--s4) 0 var(--s1);
 }
 
@@ -705,17 +791,14 @@ h3 {
   margin: 0;
   font-size: var(--fs-md);
   font-weight: 600;
-  letter-spacing: 0.01em;
   color: var(--text);
 }
 
 .sub-heading {
   margin: var(--s3) 0 2px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .note {
@@ -754,7 +837,7 @@ h3 {
 }
 
 code {
-  font-family: var(--numerals);
+  font-family: var(--mono);
   font-size: 0.92em;
   color: var(--text-2);
   background: var(--surface-2);
@@ -812,37 +895,31 @@ details.hint > p {
   align-items: center;
   gap: var(--s3);
   flex-wrap: wrap;
+  margin-bottom: var(--s3);
 }
 
 .reg-banner > span {
   flex: 1 1 320px;
 }
 
-/* ── the state panel: the one thing readable from across the room ── */
+/* ── the state line on Status: the header's state, with its reason in words ── */
 
 .state-strip {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: var(--s3);
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  padding: var(--s3) var(--s4);
-  box-shadow: inset 4px 0 0 var(--state, var(--status-idle));
   --state: var(--status-idle);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--s3);
+  padding: 0 0 var(--s1);
 }
 
 .state-strip::before {
   content: "";
-  grid-row: 1 / span 2;
-  width: 10px;
-  height: 10px;
+  align-self: center;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--state);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state) 22%, transparent);
-  margin-left: 2px;
 }
 
 .state-strip[data-state="connected"],
@@ -864,6 +941,7 @@ details.hint > p {
   --state: var(--status-rx);
 }
 
+.state-strip[data-state="disconnected"],
 .state-strip[data-state="offline"],
 .state-strip[data-state="error"] {
   --state: var(--status-error);
@@ -878,42 +956,51 @@ details.hint > p {
 
 @keyframes breathe {
   50% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--state) 12%, transparent);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--state) 14%, transparent);
   }
 }
 
+/* while the session bar is up it says the same thing, larger: one is enough */
+main:has(> #session-banner:not([hidden])) .state-strip {
+  display: none;
+}
+
 .state-name {
-  font-size: var(--fs-xl);
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  line-height: 1.25;
+  font: 400 var(--fs-xl) / 1.25 var(--display);
 }
 
 .state-detail {
   color: var(--text-2);
-  font-size: 12.5px;
-  grid-column: 2;
+  font-size: var(--fs-md);
 }
 
-/* The session, unmissably: a banner across every tab when it comes up, is being called, or
-   has ended. The state strip is small and lives on one tab; a glance at the wrong one
-   missed the whole session on the air. */
+/* The session, unmissably: a bar across every tab when it comes up, is being called, or
+   has ended. The state line is small and lives on one tab; a glance at the wrong one
+   missed the whole session on the air. Large type, the state's colour as a solid edge and
+   a wash, and nothing else. */
 .session-banner {
   --state: var(--status-idle);
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--s3);
   margin-bottom: var(--s3);
-  padding: var(--s3) var(--s4);
-  border: 2px solid var(--state);
+  padding: 10px var(--s4);
+  border: 1px solid color-mix(in srgb, var(--state) 45%, var(--border));
+  border-left: 4px solid var(--state);
   border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--state) 20%, var(--surface));
+  background: color-mix(in srgb, var(--state) 13%, var(--surface));
   color: var(--text);
-  font-size: 1.4rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-align: center;
+  font: 500 1.3rem / 1.3 var(--display);
   text-wrap: balance;
+}
+
+.session-banner::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--state);
 }
 
 .session-banner[hidden] {
@@ -943,14 +1030,14 @@ details.hint > p {
 
 @keyframes session-banner-pulse {
   from {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--state) 70%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--state) 60%, transparent);
   }
   to {
-    box-shadow: 0 0 0 22px transparent;
+    box-shadow: 0 0 0 18px transparent;
   }
 }
 
-/* ── readings: the number first, the name second, the rest third ── */
+/* ── readings: the name, then the number, then the rest ─────────── */
 
 .grid {
   display: grid;
@@ -958,34 +1045,28 @@ details.hint > p {
   gap: 10px;
 }
 
-/* A reading's number scales with its card (a container query) rather than being cut off:
- * eleven characters — "2.28 kbit/s" — always fit, from a compact window's quarter-width
- * card to a wide screen's. */
+/* A reading is a cell of a meter bridge, not a card: no box of its own, a hairline between
+ * it and its neighbour. Its number scales with its cell (a container query) rather than
+ * being cut off: eleven characters — "2.28 kbit/s" — always fit. */
 .reading {
   container-type: inline-size;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--s2) var(--s3);
+  padding: var(--s1) 0;
   min-width: 0;
 }
 
 .reading .label {
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .reading .value {
-  font: 500 var(--fs-2xl) / 1.2 var(--numerals);
+  font: 300 var(--fs-2xl) / 1.15 var(--display);
   font-size: clamp(15px, 15cqi, var(--fs-2xl));
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
   margin-top: 2px;
   color: var(--text);
   white-space: nowrap;
@@ -1001,8 +1082,11 @@ details.hint > p {
   text-overflow: ellipsis;
 }
 
-/* ── cards ──────────────────────────────────────────────────────── */
+/* ── panels ─────────────────────────────────────────────────────── */
 
+/* A panel is a plate on the cabinet: one step of surface and a hairline, square-ish
+ * corners, no shadow. Nothing inside it is boxed again unless it is a window of its own
+ * (a pane, a plot, a field). */
 .card,
 .step {
   background: var(--surface);
@@ -1103,7 +1187,6 @@ details.hint > p {
    anything else, and it is the one setup that most decides whether they are decoded. */
 .drive-guide {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
   border-radius: var(--r-sm);
   background: var(--bg-2);
   padding: var(--s2) var(--s3);
@@ -1112,7 +1195,7 @@ details.hint > p {
 .drive-guide > summary {
   cursor: pointer;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text);
 }
 
 .drive-guide ol {
@@ -1129,8 +1212,8 @@ details.hint > p {
 /* The two numbers an operator sets drive by — the transmit level and the last transmission's
    peak — large enough to read from across the shack or over a remote desktop. */
 .drive-reading {
-  font-size: 1.2rem;
-  font-weight: 700;
+  font: 300 1.35rem / 1.2 var(--display);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
@@ -1193,21 +1276,18 @@ details.hint > p {
   display: flex;
   align-items: baseline;
   gap: var(--s2);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
   margin-bottom: 6px;
   white-space: nowrap;
   min-width: 0;
 }
 
 .plot-meta {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 500;
-  color: var(--text-2);
+  font-weight: 400;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
@@ -1216,32 +1296,39 @@ details.hint > p {
 /* the Speed/SNR switch, in the History card's head */
 .chart-tabs {
   display: flex;
-  gap: 4px;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 
 .chart-tab {
   min-height: 22px;
   padding: 0 10px;
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.chart-tab:first-child {
+  border-left: 0;
 }
 
 .chart-tab:hover:not(:disabled) {
-  color: var(--text-2);
-  background: transparent;
-  border-color: transparent;
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
 }
 
 .chart-tab[aria-selected="true"] {
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--surface-3);
   border-color: var(--border);
+  box-shadow: inset 0 -2px 0 var(--text-2);
 }
 
 canvas {
@@ -1249,7 +1336,7 @@ canvas {
   width: 100%;
   height: 180px;
   background: var(--plot-bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--well-edge);
   border-radius: var(--r-sm);
 }
 
@@ -1432,11 +1519,9 @@ table {
 caption,
 thead th {
   text-align: left;
-  font-size: var(--fs-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-3);
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  font-weight: 500;
 }
 
 caption {
@@ -1457,13 +1542,15 @@ td {
   padding: 5px var(--s3);
   border-top: 1px solid var(--border);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 thead th {
   border-top: 0;
+  border-bottom: 1px solid var(--border-strong);
   padding-top: var(--s2);
   padding-bottom: 6px;
-  background: var(--surface-2);
+  background: var(--surface);
 }
 
 td.num,
@@ -1533,12 +1620,12 @@ button.sort::after {
 }
 
 button.sort[aria-sort="descending"]::after {
-  border-top: 5px solid var(--accent);
+  border-top: 5px solid var(--text-2);
   opacity: 1;
 }
 
 button.sort[aria-sort="ascending"]::after {
-  border-bottom: 5px solid var(--accent);
+  border-bottom: 5px solid var(--text-2);
   opacity: 1;
 }
 
@@ -1548,7 +1635,7 @@ button.sort:focus-visible {
 }
 
 button.sort:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -1567,8 +1654,7 @@ button.sort:focus-visible {
 }
 
 .heard .call {
-  font: 600 12.5px/1.3 var(--numerals);
-  letter-spacing: 0.06em;
+  font: 600 12.5px/1.3 var(--mono);
   color: var(--text);
 }
 
@@ -1581,20 +1667,25 @@ button.sort:focus-visible {
 
 /* activity, colour-coded like the lamps and named in words as well */
 .act {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 9px;
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: var(--surface-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   color: var(--text-2);
 }
 
+.act::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
 .act[data-activity="connected"] {
-  background: var(--accent-dim);
-  color: var(--accent);
+  color: var(--status-link);
 }
 
 .act[data-activity="calling"] {
@@ -1648,11 +1739,9 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 /* the name every box on the tab carries, at its top left, inside the box */
 .card-title {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-md);
   font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-2);
+  color: var(--text);
   white-space: nowrap;
 }
 
@@ -1708,9 +1797,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 .dial-hero-hz {
-  font-size: var(--fs-3xl);
-  font-weight: 600;
-  line-height: 1.05;
+  font: 300 var(--fs-3xl) / 1.05 var(--display);
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
@@ -1770,9 +1857,9 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--border);
+  width: 20px;
+  height: 20px;
+  border: 1px solid transparent;
   border-radius: var(--r-pill);
   color: var(--text-3);
   font: 600 var(--fs-xs) / 1 var(--face);
@@ -1827,7 +1914,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--plot-bg);
+  background: var(--well);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   overflow: hidden;
@@ -1835,8 +1922,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 #send-pane:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+  border-color: var(--border-strong);
 }
 
 .pane-head {
@@ -1847,7 +1933,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   min-height: 36px;
   padding: 0 var(--s2) 0 var(--s3);
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--well-edge);
 }
 
 .pane-foot {
@@ -1910,8 +1996,6 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   flex: none;
   color: var(--text-3);
   font-size: var(--fs-xs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .rec-fact dd {
@@ -1941,7 +2025,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 .path {
-  font-family: var(--numerals);
+  font-family: var(--mono);
   font-size: var(--fs-sm);
   color: var(--text-2);
   word-break: break-all;
@@ -1958,16 +2042,21 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 .tiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s2);
+  gap: 0;
 }
 
+/* cells of one meter bridge: a hairline between neighbours, none round the outside */
 .tile {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  background: var(--bg-2);
-  border-color: var(--border);
-  border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3);
+  border-left: 1px solid var(--border);
+}
+
+.tiles > .tile:nth-child(4n + 1) {
+  border-left: 0;
+  padding-left: 0;
 }
 
 /* a window of rows: a table with its name and tools in a head strip, scrolling inside */
@@ -2046,6 +2135,20 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   grid-auto-rows: 1fr;
 }
 
+.status-readings .tiles > .tile {
+  border-left: 1px solid var(--border);
+  padding-left: var(--s3);
+}
+
+.status-readings .tiles > .tile:nth-child(odd) {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.status-readings .tiles > .tile:nth-child(n + 3) {
+  border-top: 1px solid var(--border);
+}
+
 .history-card .charts {
   flex: 1 1 auto;
   grid-template-columns: minmax(0, 1fr);
@@ -2095,6 +2198,22 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   margin: 0 0 0 calc(8.5rem + 10px);
 }
 
+/* a field is as wide as what it holds, not as wide as the window: a long select reads as a
+   form, a short one beside its label as a setting */
+.setup .steps .row > select:not(.narrow):not(.compact) {
+  flex: 0 1 34rem;
+}
+
+.step-link-n {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.step-link[data-done="true"] .step-link-n,
+.step-link:hover .step-link-n {
+  color: var(--text-2);
+}
+
 .setup .sub-heading {
   margin-top: var(--s2);
 }
@@ -2111,7 +2230,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   min-height: var(--control-h-sm);
   padding: 0 10px;
   gap: 5px;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   font-size: var(--fs-sm);
   background: transparent;
   border: 1px solid var(--border);
@@ -2126,12 +2245,11 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 
 .step-link[data-done="true"] {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--status-link) 45%, var(--border));
 }
 
 .step-link[data-done="true"]::before {
   content: "✓";
-  color: var(--status-link);
+  color: var(--status-rx);
   font-weight: 700;
 }
 
@@ -2160,12 +2278,15 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 /* step 6 stays at the foot of the window while the steps scroll past it */
+/* the save is a bar fixed to the foot of the tab, not a seventh plate floating over the
+   sixth: it has the cabinet's colour, a strong rule above it and room under the last step */
 .save-step {
   position: sticky;
   bottom: 30px;
   z-index: 4;
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.35);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  box-shadow: 0 -12px 20px -8px rgba(0, 0, 0, 0.55);
 }
 
 .save-rest {
@@ -2236,7 +2357,7 @@ details.fold-card > summary:hover .card-title {
 
 /* debug mode, said once: information, not a warning */
 #debug-banner {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--status-link);
   padding-left: 10px;
 }
 
@@ -2316,10 +2437,11 @@ td.bw-other {
 
 /* ── counters ───────────────────────────────────────────────────── */
 
+/* counters as a ledger: name and figure on one line, a hairline under each, no boxes */
 .pills {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0 var(--s5);
 }
 
 .pill {
@@ -2327,15 +2449,13 @@ td.bw-other {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--s2);
-  padding: 4px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
   min-width: 0;
 }
 
 .pill .k {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2349,8 +2469,8 @@ td.bw-other {
   flex: none;
 }
 
-.pill[data-state="error"] {
-  border-color: var(--status-error);
+.pill[data-state="error"] .k {
+  color: var(--status-error);
 }
 
 .pill[data-state="error"] .v {
@@ -2390,21 +2510,21 @@ td.bw-other {
   flex: none;
   border-radius: 50%;
   border: 1px solid var(--border-strong);
-  background: var(--surface-3);
-  color: var(--text);
+  background: transparent;
+  color: var(--text-2);
   font: 600 var(--fs-xs) / 1 var(--numerals);
-  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .step[data-done="true"] .step-num {
-  background: var(--status-link);
-  border-color: transparent;
-  color: var(--on-status);
+  background: transparent;
+  border-color: var(--status-rx);
+  color: var(--status-rx);
 }
 
 .step[data-done="true"] .step-title::after {
   content: "✓";
-  color: var(--status-link);
+  color: var(--status-rx);
   font-weight: 700;
 }
 
@@ -2419,8 +2539,8 @@ td.bw-other {
   position: relative;
   height: 12px;
   border-radius: 3px;
-  background: var(--plot-bg);
-  border: 1px solid var(--border);
+  background: var(--well);
+  border: 1px solid var(--well-edge);
   overflow: hidden;
   max-width: 520px;
 }
@@ -2429,7 +2549,7 @@ td.bw-other {
   position: absolute;
   inset: 0 auto 0 0;
   width: 0%;
-  background: var(--status-link);
+  background: var(--status-rx);
   transition: width var(--t-fast) linear;
 }
 
@@ -2459,7 +2579,7 @@ td.bw-other {
 /* ── the profile bar at the top of Setup ── */
 
 .profile-bar {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-color: var(--border-strong);
 }
 
 .profile-bar > .row > label {
@@ -2519,7 +2639,7 @@ details.menu > summary:hover {
 }
 
 details.menu[open] > summary {
-  border-color: var(--accent);
+  border-color: var(--text-2);
 }
 
 details.menu > .menu-list {
@@ -2565,7 +2685,7 @@ details.menu > .menu-list > button:hover:not(:disabled) {
 .row > label {
   min-width: 96px;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
 }
 
 .row > label.label-inline,
@@ -2602,7 +2722,7 @@ input[type="email"],
 input[type="url"],
 select,
 textarea {
-  background: var(--bg-2);
+  background: var(--well);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -2632,9 +2752,8 @@ input[type="email"]:focus,
 input[type="url"]:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--accent);
+  border-color: var(--focus);
   outline: none;
-  box-shadow: 0 0 0 2px var(--accent-dim);
 }
 
 input:disabled,
@@ -2649,9 +2768,7 @@ textarea::placeholder {
 }
 
 input[type="text"] {
-  font-family: var(--numerals);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-family: var(--mono);
   width: 11ch;
 }
 
@@ -2659,7 +2776,7 @@ select {
   flex: 1 1 240px;
   appearance: none;
   padding-right: 28px;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%2394a3b3' stroke-width='1.5'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23969da4' stroke-width='1.5'/></svg>");
   background-repeat: no-repeat;
   background-position: right 10px center;
   cursor: pointer;
@@ -2685,7 +2802,7 @@ select option {
 
 input[type="checkbox"],
 input[type="radio"] {
-  accent-color: var(--accent);
+  accent-color: var(--text-2);
   width: 14px;
   height: 14px;
   margin: 0;
@@ -2694,7 +2811,7 @@ input[type="radio"] {
 
 input[type="range"] {
   flex: 1 1 240px;
-  accent-color: var(--accent);
+  accent-color: var(--text-2);
   min-width: 0;
   height: 18px;
 }
@@ -2706,21 +2823,21 @@ input[type="range"] {
 }
 
 input.port {
-  font-family: var(--numerals);
+  font-family: var(--mono);
   width: 7ch;
   text-transform: none;
   letter-spacing: normal;
 }
 
 input.mhz {
-  font-family: var(--numerals);
+  font-family: var(--mono);
   width: 10ch;
   text-transform: none;
   letter-spacing: normal;
 }
 
 input.address {
-  font-family: var(--numerals);
+  font-family: var(--mono);
   width: 16ch;
   text-transform: none;
   letter-spacing: normal;
@@ -2773,7 +2890,7 @@ input.prose {
 textarea {
   width: 100%;
   resize: vertical;
-  font-family: var(--numerals);
+  font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -2822,21 +2939,23 @@ button.small {
   font-size: var(--fs-sm);
 }
 
+/* the light key: the one action a box is for — Connect, Send, Save */
 button.primary {
   background: var(--accent);
   color: var(--accent-ink);
-  border-color: transparent;
+  border-color: var(--accent);
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, white 12%);
+  background: color-mix(in srgb, var(--accent) 86%, var(--bg) 14%);
   border-color: transparent;
 }
 
 button.danger {
   color: var(--status-error);
-  border-color: color-mix(in srgb, var(--status-error) 45%, var(--border-strong));
+  background: transparent;
+  border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-strong));
 }
 
 button.danger:hover:not(:disabled) {
@@ -2846,12 +2965,10 @@ button.danger:hover:not(:disabled) {
 button.ghost {
   background: transparent;
   border-color: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   min-height: var(--control-h-sm);
   padding: 0 8px;
-  font-size: var(--fs-xs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--fs-sm);
 }
 
 button.ghost:hover:not(:disabled) {
@@ -2861,9 +2978,9 @@ button.ghost:hover:not(:disabled) {
 }
 
 button.ghost[aria-pressed="true"] {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 /* a utility beside the actions that matter: Add, Remove, Cancel, Open folder */
@@ -2895,7 +3012,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border-radius: var(--r-md);
   padding: 10px var(--s3);
   margin: 0;
-  font: 12.5px/1.55 var(--numerals);
+  font: 12.5px/1.55 var(--mono);
   white-space: pre-wrap;
   word-break: break-word;
   min-height: 8em;
@@ -2922,7 +3039,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 10px var(--s3);
-  font: 12.5px/1.55 var(--numerals);
+  font: 12.5px/1.55 var(--mono);
   color: var(--text);
   cursor: text;
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
@@ -2933,8 +3050,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
 }
 
 .composer:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-dim);
+  border-color: var(--focus);
 }
 
 .composer-log {
@@ -3079,7 +3195,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   height: clamp(320px, calc(100vh - 300px), 1000px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  font: 12.5px/1.5 var(--numerals);
+  font: 12.5px/1.5 var(--mono);
   user-select: text;
   -webkit-user-select: text;
 }
@@ -3116,8 +3232,6 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border-radius: var(--r-sm);
   font-size: var(--fs-2xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--text-2);
   background: var(--surface-3);
 }
@@ -3218,7 +3332,6 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
 .about-title {
   font-size: var(--fs-xl);
   font-weight: 650;
-  letter-spacing: 0.02em;
 }
 
 .about-tagline {
@@ -3254,7 +3367,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
 
 .about-update[data-state="available"],
 .about-update[data-state="complete"] {
-  --tone: var(--accent);
+  --tone: var(--status-link);
 }
 
 .about-update[data-state="busy"] {
@@ -3262,7 +3375,7 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
 }
 
 .about-update[data-state="current"] {
-  --tone: var(--status-link);
+  --tone: var(--status-rx);
 }
 
 .about-update[data-state="error"] {
@@ -3308,15 +3421,30 @@ footer.bar {
   position: sticky;
   bottom: 0;
   z-index: 5;
-  background: var(--bg);
+  background: var(--bg-2);
   border-bottom: 0;
   border-top: 1px solid var(--border);
   margin-top: auto;
   color: var(--text-3);
   font: 11.5px/1.4 var(--numerals);
+  font-variant-numeric: tabular-nums;
   justify-content: space-between;
   padding-top: 6px;
   padding-bottom: 6px;
+}
+
+footer.bar {
+  flex-wrap: nowrap;
+}
+
+/* the path gives way first: the version and the address are what a screenshot needs */
+#footer-version,
+#footer-endpoint {
+  flex: none;
+}
+
+#footer-config {
+  flex: 0 1 auto;
 }
 
 footer.bar > span {
@@ -3347,7 +3475,6 @@ footer.bar > span {
   margin: 4px 0 0;
   color: #d8dde6;
   font-size: 1.05rem;
-  letter-spacing: 0.06em;
 }
 
 .splash-thanks {
@@ -3390,12 +3517,12 @@ footer.bar > span {
   background: var(--text-3);
 }
 
-/* ── compact: the state and four readings, deliberately laid out ─── */
+/* ── compact: a small front panel ─────────────────────────────────── */
 /*
- * The desktop shell sizes the window to the page (up to 520 px wide). The header keeps the
- * mark, the lamps, the rules' verdict and the callsign — the dial and the brand's words go —
- * and wraps as two deliberate rows when it must; the four readings sit in one row where they
- * fit and two by two where they do not, their numbers scaling with the card. */
+ * The desktop shell sizes the window to the page (up to 520 px wide). Compact is not the
+ * full panel shrunk: it is the display well on a row of its own — the state and the lamps —
+ * and under it one meter bridge of the four readings that matter (rung, SNR, throughput,
+ * the other station), with the mark, the verdict and the callsign above. Nothing else. */
 
 body.compact {
   min-height: 0;
@@ -3409,33 +3536,38 @@ body.compact #counters-card,
 body.compact #link-card > .card-head,
 body.compact .panel:not(#panel-status),
 body.compact .brand-name,
-body.compact .brand-wave,
 body.compact #dial,
+body.compact #strip-rung,
+body.compact #strip-snr,
+body.compact .state-strip,
 body.compact #rx-passband-note {
   display: none;
 }
 
 body.compact header.bar {
+  flex-wrap: wrap;
   gap: 6px var(--s2);
-  padding: 6px var(--s3);
+  padding: 8px var(--s3) 6px;
   min-height: 0;
+  border-bottom: 0;
 }
 
-body.compact .indicators {
-  gap: 4px;
+body.compact .strip {
+  order: 3;
+  flex: 1 0 100%;
+  height: 34px;
 }
 
-body.compact .lamp {
-  padding: 0 7px 0 6px;
-  gap: 5px;
+body.compact .strip-state {
+  font-size: var(--fs-lg);
 }
 
 body.compact .head-right {
-  gap: 6px;
+  gap: var(--s2);
 }
 
 body.compact main {
-  padding: var(--s2) var(--s3) var(--s3);
+  padding: 0 var(--s3) var(--s3);
 }
 
 body.compact #panel-status {
@@ -3446,7 +3578,7 @@ body.compact .session-banner {
   font-size: var(--fs-md);
   padding: 6px var(--s3);
   margin-bottom: var(--s2);
-  border-width: 1px;
+  border-left-width: 3px;
 }
 
 body.compact .note.warn,
@@ -3454,18 +3586,6 @@ body.compact .reg-banner {
   font-size: var(--fs-sm);
   margin-top: 0;
   margin-bottom: var(--s2);
-}
-
-body.compact .state-strip {
-  padding: var(--s2) var(--s3);
-}
-
-body.compact .state-name {
-  font-size: var(--fs-lg);
-}
-
-body.compact .state-detail {
-  font-size: var(--fs-sm);
 }
 
 body.compact .status-body {
@@ -3481,15 +3601,21 @@ body.compact #link-card {
 
 body.compact #readings-link {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
 }
 
-body.compact .reading {
-  padding: 6px var(--s2);
+body.compact .status-readings .tiles > .tile {
+  padding: 4px var(--s2);
+  border-top: 0;
+  border-left: 1px solid var(--border);
+}
+
+body.compact .status-readings .tiles > .tile:first-child {
+  border-left: 0;
+  padding-left: 2px;
 }
 
 body.compact .reading .value {
-  font-size: clamp(14px, 16cqi, 20px);
+  font-size: clamp(14px, 17cqi, 22px);
 }
 
 body.compact .reading .sub {
@@ -3500,9 +3626,44 @@ body.compact .reading .sub {
   body.compact #readings-link {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  body.compact .status-readings .tiles > .tile:nth-child(odd) {
+    border-left: 0;
+    padding-left: 2px;
+  }
+
+  body.compact .status-readings .tiles > .tile:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
 }
 
 /* ── narrower windows ───────────────────────────────────────────── */
+
+/* the display well gives up its readings before it wraps: the rung first, then the SNR and
+   the dial (both are on the Status and Session tabs), and on a phone it takes a row */
+@media (max-width: 1180px) {
+  #strip-rung {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  #strip-snr,
+  header.bar .dial {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  header.bar {
+    flex-wrap: wrap;
+  }
+
+  header.bar .strip {
+    order: 3;
+    flex: 1 0 100%;
+  }
+}
 
 @media (max-width: 1000px) {
   .status-body {
@@ -3512,6 +3673,18 @@ body.compact .reading .sub {
   .status-readings .tiles {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-auto-rows: auto;
+  }
+
+  .status-readings .tiles > .tile,
+  .status-readings .tiles > .tile:nth-child(odd) {
+    border-left: 1px solid var(--border);
+    border-top: 0;
+    padding-left: var(--s3);
+  }
+
+  .status-readings .tiles > .tile:first-child {
+    border-left: 0;
+    padding-left: 0;
   }
 
   .history-card .charts {
@@ -3560,10 +3733,6 @@ body.compact .reading .sub {
   .bar {
     padding-left: var(--s3);
     padding-right: var(--s3);
-  }
-
-  .brand-wave {
-    display: none;
   }
 
   .signal-body {
