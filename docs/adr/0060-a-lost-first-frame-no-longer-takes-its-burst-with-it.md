@@ -68,5 +68,9 @@ of the burst was decoded; now every frame but the truncated one.
 * **The rate**: at −3 dB rungs 4–6 decoded 4/4 and rungs 7–9 0/4, as the 500 Hz table says
   (rung 6 needs −3.6 dB, rung 7 −2.1). The link ran at rungs 2–4 with its 3 dB margin — the
   designed price of a Moderate path.
-* **The Test ladder** sends a failed rung's frames again at that rung (HARQ), and a few of them
-  were still being resent during the file step. Test-only; left as it is.
+* **The Test ladder** sends a failed rung's frames again at that rung (HARQ: rung 7 and 8 went
+  twice, rung 9 three times with the stall), and its four tone rungs take 26 s each though the
+  message had already shown them working. Test-only; left as it is. The odd rungs read during
+  the file step (9, 11) were noise detections (confidence 1.0, untrusted), not frames.
+* **The phantom itself** is still taken and reported as a failed frame (confidence 24.7, read at
+  −7.7 dB) before the real frame wins; it reaches the rate controller as one trusted failure.
