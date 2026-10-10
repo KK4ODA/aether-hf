@@ -149,7 +149,17 @@ other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives 
   Record button land in `%APPDATA%\aether-hf\recordings\` on the author's machine.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
   independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
-  colours carry meaning only. The artwork is in `Logos/`; `tools/make_icons.py` writes the
+  colours carry meaning only. **Since the 2026-10-10 redesign** it is a radio instrument in
+  graphite: colour only for state (green RX/OK, red TX/error, amber busy/caution, blue session
+  up), the primary action a light neutral key (`--accent` is no hue), plots drawn in `--trace`
+  with state colours on top, sentence case everywhere (no `text-transform: uppercase`, no
+  tracking), numbers in the interface face with tabular figures (`--numerals`, `--display` for
+  readouts) and `--mono` only for callsigns, the log, the configuration and paths; panels are
+  flat plates, readings are meter-bridge cells with hairlines, not boxes in boxes. The one
+  bold element is the header's display well (`#strip`: `#strip-state`, `#dial`, `#strip-rung`,
+  `#strip-snr`, the TX/RX/Busy lamps), filled by `setState`/`applyMetrics`; `#lamp-link` is the
+  *Modem* lamp, quiet when up and red when down. Compact is the well on its own row over the
+  four link readings. The artwork is in `Logos/`; `tools/make_icons.py` writes the
   bundler's icons and the panel's mark, favicon and splash logo from it. The shell starts
   the daemon `CREATE_NO_WINDOW` and asks Tauri for a dark title bar. The panel's tabs are
   Status (readings, chart, counters as pills), Session (call, keying and drive, record,

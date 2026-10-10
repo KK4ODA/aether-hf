@@ -10,10 +10,11 @@
 
 export const SPECTRUM_TOP_HZ = 4000;
 
-// The waterfall's colours: black, the accent, white is the panel's own; the others are the
-// ones operators know from other waterfalls.
+// The waterfall's colours: the panel's own runs from the display well through a cold steel
+// to a warm white, so a weak signal reads as a shape and a strong one as heat; the others are
+// the ones operators know from other waterfalls.
 export const PALETTES = {
-  aether: null,
+  aether: [[16, 18, 20], [28, 44, 66], [52, 98, 136], [128, 170, 190], [226, 222, 196], [255, 250, 236]],
   blue: [[0, 0, 0], [0, 0, 110], [0, 70, 255], [0, 220, 255], [255, 255, 255]],
   turbo: [[48, 18, 59], [70, 107, 227], [26, 228, 182], [164, 252, 60], [251, 190, 26], [227, 72, 6], [122, 4, 3]],
   viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
@@ -29,7 +30,8 @@ export function tokens() {
   return {
     ink: read("--text-3", "#888"),
     ink2: read("--text-2", "#aaa"),
-    accent: read("--accent", "#2dd4bf"),
+    // the trace a measurement is drawn with; state colours go on top of it
+    accent: read("--trace", "#c9d2da"),
     grid: read("--plot-grid", "#223"),
     tx: read("--status-tx", "#f59e0b"),
     rx: read("--status-rx", "#22d3ee"),
@@ -250,39 +252,47 @@ export function createScopes(host) {
     ctx.clearRect(0, 0, width, height);
     const bins = spectrum.bins_db ?? [];
     const caption = $("spectrum-caption");
-    if (bins.length === 0) {
-      caption.textContent = "waiting for audio";
-      return;
-    }
     const binHz = spectrum.bin_hz;
     const low = -110;
     const high = 0;
     const x = (hz) => (hz / SPECTRUM_TOP_HZ) * width;
-    const y = (db) => (1 - (Math.max(low, Math.min(high, db)) - low) / (high - low)) * (height - 12) + 2;
+    const y = (db) => (1 - (Math.max(low, Math.min(high, db)) - low) / (high - low)) * (height - 14) + 2;
     // the modem's passband, marked
     const [lo, hi] = spectrum.passband_hz ?? [0, 0];
-    ctx.fillStyle = c.accent;
-    ctx.globalAlpha = 0.08;
-    ctx.fillRect(x(lo), 0, x(hi) - x(lo), height);
-    ctx.globalAlpha = 1;
+    if (hi > lo) {
+      ctx.fillStyle = c.accent;
+      ctx.globalAlpha = 0.06;
+      ctx.fillRect(x(lo), 0, x(hi) - x(lo), height - 14);
+      ctx.globalAlpha = 1;
+    }
+    // the graticule is drawn whether or not there is a trace: an instrument with nothing to
+    // show still shows its scale
     ctx.strokeStyle = c.grid;
     ctx.lineWidth = 1;
-    ctx.font = `9px ${c.numerals}`;
+    ctx.font = `10px ${c.numerals}`;
     ctx.textBaseline = "top";
     ctx.textAlign = "center";
     for (let hz = 500; hz < SPECTRUM_TOP_HZ; hz += 500) {
       ctx.beginPath();
       ctx.moveTo(x(hz), 0);
-      ctx.lineTo(x(hz), height - 12);
+      ctx.lineTo(x(hz), height - 14);
       ctx.stroke();
       ctx.fillStyle = c.ink;
-      ctx.fillText(hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz), x(hz), height - 10);
+      ctx.fillText(hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz), x(hz), height - 12);
     }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
     for (const db of [-20, -40, -60, -80, -100]) {
       ctx.beginPath();
       ctx.moveTo(0, y(db));
       ctx.lineTo(width, y(db));
       ctx.stroke();
+      ctx.fillStyle = c.ink;
+      ctx.fillText(`${db}`, 4, y(db) - 6);
+    }
+    if (bins.length === 0) {
+      caption.textContent = "waiting for audio";
+      return;
     }
     ctx.strokeStyle = spectrum.transmitting ? c.tx : c.accent;
     ctx.lineWidth = 1.25;

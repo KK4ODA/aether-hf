@@ -25,17 +25,20 @@
 
     <header class="bar">
       <h1 class="brand">
-        <img class="brand-mark" src="mark.png" alt="" width="22" height="22" />
+        <img class="brand-mark" src="mark.png" alt="" width="20" height="20" />
         <span class="brand-name">Aether <span class="brand-hf">HF</span></span>
-        <svg class="brand-wave" viewBox="0 0 46 14" aria-hidden="true" focusable="false">
-          <path d="M0 7h8l3-5 3 10 3-9 3 8 3-6 2 4h21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
-        </svg>
       </h1>
-      <div class="indicators" role="group" aria-label="Indicators">
-        <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
-        <span class="lamp" id="lamp-rx" title="Receive: lit while a burst is arriving" role="img" aria-label="Nothing arriving">RX</span>
-        <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">BUSY</span>
-        <span class="lamp" id="lamp-link" title="Link: the panel's connection to the modem" role="status" aria-label="Not connected to the modem">LINK</span>
+      <!-- the display well: what an operator reads at a glance, on every tab -->
+      <div class="strip" id="strip" title="The station at a glance: what it is doing, the dial, the rung and the signal">
+        <span class="strip-state" id="strip-state" data-state="disconnected" title="What the modem is doing now">Not connected</span>
+        <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
+        <span class="strip-reading" id="strip-rung" title="The rung the sender is using and its rate on the air" hidden></span>
+        <span class="strip-reading" id="strip-snr" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz" hidden></span>
+        <div class="indicators" role="group" aria-label="Indicators">
+          <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
+          <span class="lamp" id="lamp-rx" title="Receive: lit while a burst is arriving" role="img" aria-label="Nothing arriving">RX</span>
+          <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">Busy</span>
+        </div>
       </div>
       <div class="head-right">
         <button class="reg-badge" id="reg-badge" data-verdict="unknown" aria-expanded="false" aria-controls="reg-detail" title="Whether this station may transmit here under the rules it operates under; click for the reasoning" hidden>
@@ -44,7 +47,7 @@
         </button>
         <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
         <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
-        <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
+        <span class="lamp modem-lamp" id="lamp-link" title="Modem: whether this panel is connected to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
         <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
       </div>
@@ -798,12 +801,12 @@
             </div>
             <p class="sub" id="profile-note" title="What the last profile action did" role="status" aria-live="polite"></p>
             <nav class="stepper" id="setup-stepper" aria-label="Setup steps" title="The six steps: a tick means nothing in the step is wrong; click one to go to it">
-              <button class="step-link" data-step="1" title="Step 1: your callsign, the rules the station operates under, and the field log">1 · Callsign and rules</button>
-              <button class="step-link" data-step="2" title="Step 2: the sound card and how the radio is keyed">2 · Radio interface</button>
-              <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card">3 · Receive level</button>
-              <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges">4 · Modem</button>
-              <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port">5 · Application</button>
-              <button class="step-link" data-step="6" title="Step 6: write the settings to the modem's configuration">6 · Save</button>
+              <button class="step-link" data-step="1" title="Step 1: your callsign, the rules the station operates under, and the field log"><span class="step-link-n">1</span>Callsign and rules</button>
+              <button class="step-link" data-step="2" title="Step 2: the sound card and how the radio is keyed"><span class="step-link-n">2</span>Radio interface</button>
+              <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card"><span class="step-link-n">3</span>Receive level</button>
+              <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges"><span class="step-link-n">4</span>Modem</button>
+              <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port"><span class="step-link-n">5</span>Application</button>
+              <button class="step-link" data-step="6" title="Step 6: write the settings to the modem's configuration"><span class="step-link-n">6</span>Save</button>
             </nav>
           </section>
 
