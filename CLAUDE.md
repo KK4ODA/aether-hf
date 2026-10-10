@@ -1328,6 +1328,16 @@ CAT keying now runs on a thread of its own (`ptt::ThreadedPtt`: bounds 1.2 s key
 0.3 s dial — the last reading after —, 2.5 s tune; a release is always queued; `fault()` while
 stuck), and a slow pass names what it waited on outside the modem (`waits.rs`: radio, recording,
 sound card).
+**ADR-0060 (after beta.99, model first), from both sides of that Test with WC4Y's audio:** WC4Y's
+second message burst (five tone4x100-75 frames at −2 dB) was announced and never decoded — a weak
+phantom whose last block was the first frame's first block was taken and kept it out, the first
+frame's middle block was then announced as a frame, and each frame's middle block refused the next
+(`announced_inside`). Any burst whose first frame starts under the receiver's mute (`deaf_for`
+0.75 s) lost the whole burst this way, every tone kind on both airs. Now a candidate whose own
+first block stands (`first_stands`) is not refused by an arrival at its own middle or end block,
+and a stronger frame overlapping a weaker taken one by at most a sync block wins
+(`overlaps(span, statistic)`); the replay recovers 4 of the 5. That Test's one stall (20 s, keyed,
+in RFI) is the CAT hang beta.98's `ThreadedPtt` answers.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

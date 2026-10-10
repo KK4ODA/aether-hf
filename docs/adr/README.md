@@ -64,3 +64,4 @@ context → decision → alternatives considered → consequences.
 | [0057](0057-a-call-to-another-ssid-is-shown.md) | A call to another SSID of the station's callsign is shown, and an unanswered call suggests one | accepted |
 | [0058](0058-an-unanswered-wide-call-goes-on-at-500-hz.md) | An unanswered wide call goes on at 500 Hz | accepted |
 | [0059](0059-acknowledgements-go-on-the-floor-once-one-was-lost.md) | Acknowledgements go on the tone floor once one was lost | accepted |
+| [0060](0060-a-lost-first-frame-no-longer-takes-its-burst-with-it.md) | A lost first frame no longer takes its burst with it | accepted |
