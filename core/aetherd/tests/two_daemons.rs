@@ -720,8 +720,8 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
     let dir = std::env::temp_dir().join(format!("aether-two-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    // the ladder stops at the operator's fastest mode: six rungs, every one a tone kind — the
-    // floor's two and the fast four (ADR-0014) — at a frame a rung and small transfers, so
+    // the ladder stops at the operator's fastest mode: at most six rungs, every one a tone kind
+    // — the floor's two and the fast four (ADR-0014) — at a frame a rung and small transfers, so
     // the five-second frames keep the test inside its deadline
     let mut a = Daemon::start_with(
         &dir,
@@ -763,8 +763,12 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
                 results["file"]["bps"].as_f64().is_some_and(|b| b > 0.0),
                 "{results}"
             );
+            // the ladder starts at the rung the message ran at and climbs, without a gap, to
+            // the operator's fastest mode
             let ladder = results["ladder"].as_array().expect("rungs");
-            assert_eq!(ladder.len(), 6, "{results}");
+            let modes: Vec<u64> = ladder.iter().filter_map(|r| r["mode"].as_u64()).collect();
+            assert!(!modes.is_empty() && modes.last() == Some(&5), "{results}");
+            assert!(modes.windows(2).all(|w| w[1] == w[0] + 1), "{results}");
             assert!(
                 ladder.iter().all(|r| r["decoded"] == r["frames"]),
                 "{results}"
