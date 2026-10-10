@@ -2098,6 +2098,48 @@ async function fitShellWindow(on) {
   }
 }
 
+// The window the shell opens is a fixed size, and the Status tab's height depends on the fonts,
+// the scaling and the banners showing, so at the first open the panel sizes the window's height
+// itself: the History card's two plots end where the window does, and the counters are a scroll
+// below. Once per launch (a restart's reload keeps the operator's size), never in Compact or
+// maximised, and never taller than the screen.
+async function fitWindowToCharts() {
+  const tauri = window.__TAURI__;
+  const getWindow = tauri?.window?.getCurrentWindow;
+  const LogicalSize = tauri?.dpi?.LogicalSize ?? tauri?.window?.LogicalSize;
+  if (!getWindow || !LogicalSize) return;
+  try {
+    if (sessionStorage.getItem("aether-fitted") === "1") return;
+    sessionStorage.setItem("aether-fitted", "1");
+  } catch {
+    // storage may be unavailable: fit anyway, at worst on a reload too
+  }
+  try {
+    const win = getWindow();
+    if (await win.isMaximized()) return;
+    const scale = await win.scaleFactor();
+    // two passes: the History card stretches with the window, so the first resize can leave
+    // it a little long or short of where it settles
+    for (let pass = 0; pass < 2; pass++) {
+      if (document.body.classList.contains("compact") || !panelShown("status")) return;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const plots = document.querySelector(".history-card")?.getBoundingClientRect();
+      const footer = document.querySelector("footer.bar")?.getBoundingClientRect();
+      if (!plots || !footer) return;
+      const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--s3")) || 12;
+      const diff = Math.round(plots.bottom + gap - footer.top);
+      if (Math.abs(diff) < 4) return;
+      const size = await win.innerSize();
+      const chrome = Math.max(0, window.outerHeight - window.innerHeight);
+      const room = (window.screen?.availHeight || 10000) - chrome;
+      const height = Math.max(300, Math.min(room, size.height / scale + diff));
+      await win.setSize(new LogicalSize(size.width / scale, height));
+    }
+  } catch {
+    // an older shell without the panel's window capability, or a refusal: keep its size
+  }
+}
+
 function setCompact(on) {
   document.body.classList.toggle("compact", on);
   $("btn-compact").setAttribute("aria-pressed", String(on));
@@ -6180,3 +6222,5 @@ splash();
 wire();
 setLink(false);
 connect();
+// under the splash, once the first status has laid the tab out
+setTimeout(fitWindowToCharts, 1500);
