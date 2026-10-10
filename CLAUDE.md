@@ -1309,6 +1309,15 @@ frames are all blocks already had (`_RxRecord.new`/`RxRecord::new` false) says t
 lost, and the receiver's acknowledgements go on the floor for the rest of the session
 (`_note_ack_lost`, `acks_on_floor`, event `acks`). Harness `80m-lopsided-acks-500`: acknowledgement
 timeouts 12.3 → 3.5 a run.
+**After beta.97 (WC4Y's Test of 2026-10-10 13:30Z).** A request for files "of the sessions with"
+a station left out every Test sidecar (`session.remote` is null there; `share::with_station` now
+reads `session.test.remote` and the file name), and the panel's audio box starts ticked (links
+carry `audio=0` only when unticked). KK4ODA-1's loop took 17.5 s in one capture pass during
+broadband RFI (15.5 s of audio dropped; the replay of the same audio runs at 0.08× real time):
+CAT keying now runs on a thread of its own (`ptt::ThreadedPtt`: bounds 1.2 s key/release,
+0.3 s dial — the last reading after —, 2.5 s tune; a release is always queued; `fault()` while
+stuck), and a slow pass names what it waited on outside the modem (`waits.rs`: radio, recording,
+sound card).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
