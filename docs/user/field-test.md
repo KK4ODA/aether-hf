@@ -118,7 +118,8 @@ message ran at rung M*), each one's acknowledgement kept as a rung, until three 
 disconnect. About five minutes of transmitting, ten at most: the message and the file
 are sized to what the path can do (how the other station hears you, from the probe's
 answer, sizes the message; the message's measured rate sizes the file to about two
-minutes' worth of what is left), the run keeps to a time budget, and **Stop test** — the
+minutes' worth of what is left; a file the path slows under ends when the budget does, and the
+report gives the bytes it carried), the run keeps to a time budget, and **Stop test** — the
 same button while it runs — ends it at once, keeping what was learned. The ladder runs
 before the file: with the file first, three tests with ND1J on a slow path spent the whole
 budget on the transfers and never reached a rung (2026-09-25). And the ladder leaves the file

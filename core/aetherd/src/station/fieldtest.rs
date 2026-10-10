@@ -827,8 +827,33 @@ impl<P: Ptt> Station<P> {
                 } else if since > transfer_timeout_s(bytes).min(run.remaining_s(now) + 60.0) {
                     // a crawl: end it now, keeping what was learned, rather than wait for
                     // an orderly close that would first deliver the rest of the transfer
-                    let why = format!("aborted: the {} timed out", run.step.name());
+                    let acked = self
+                        .engine
+                        .stats
+                        .bytes_acked
+                        .saturating_sub(run.acked_at_step)
+                        .min(bytes);
                     self.abort();
+                    if run.step == Step::File && acked > 0 {
+                        // the file is the last thing measured and is sized to what the budget
+                        // has left; a path that slows under it (a burst of RTTY in the
+                        // harness's contest scenario) still gave its rate, and the run, its
+                        // ladder above all, is not a failure for it
+                        let transfer = Transfer {
+                            bytes: acked,
+                            seconds: since,
+                        };
+                        let what = format!(
+                            "file: {acked} of {bytes} bytes before the budget ran out ({:.0} bit/s)",
+                            transfer.bps()
+                        );
+                        self.note("test", &what);
+                        run.adjustments.push(what);
+                        run.file = Some(transfer);
+                        self.finish_test(run, "complete");
+                        return;
+                    }
+                    let why = format!("aborted: the {} timed out", run.step.name());
                     self.finish_test(run, &why);
                     return;
                 }
