@@ -282,6 +282,9 @@ class _RxRecord:
     """It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
     session's — and is no part of the burst (ADR-0038)."""
     payload_outside: bytes | None = None
+    new: bool = False
+    """It decoded and brought a block this station did not have: a burst of nothing but blocks
+    it already had is the sender's answer to an acknowledgement it missed (ADR-0059)."""
     """What such a frame carried: a call from the session's own peer under a new session
     number ends the session (ADR-0056)."""
 
@@ -507,6 +510,7 @@ class LinkEngine:
         self._burst: list[_RxRecord] = []
         self._burst_t0: float | None = None
         self._ack_history: list[_AckSnapshot] = []
+        self._acks_on_floor = False
         self._ack_counter = 0
         self._asked: int | None = None
         """The fastest rung this station has recommended to the sender in this session: a
@@ -914,7 +918,8 @@ class LinkEngine:
             # was never acknowledged, still learns how it was heard
             kw.setdefault("snr_db", self._heard_peer_db)
         payload = ControlFrame(kind, self.session, **kw).encode()  # type: ignore[arg-type]
-        return TxFrame(Container.CONTROL, payload, floor=self._control_floor())
+        floor = self._control_floor() or (kind is ControlKind.ACK and self._acks_on_floor)
+        return TxFrame(Container.CONTROL, payload, floor=floor)
 
     def _note_peer_frame(self, frame: SoftFrame) -> None:
         """Learn the family (and, for data, the mode) the peer sends in — from frames that
@@ -1903,6 +1908,7 @@ class LinkEngine:
                 self._max_seen = header.seq
             if header.seq not in self._rx_buf:
                 self._rx_buf[header.seq] = body
+                rec.new = True
             self._harq.pop(header.seq, None)
             while self._rx_base in self._rx_buf:
                 data = self._rx_buf.pop(self._rx_base)
@@ -1946,6 +1952,7 @@ class LinkEngine:
         # its SNR an estimate of that noise: on ND1J's 40 m path one read -11 dB between frames
         # decoding at +5 to +8, and that number took the recommendation from rung 4 to rung 1
         # (2026-09-25). A burst with none reports no SNR; its failure is what is learned from.
+        self._note_ack_lost(decoded)
         snrs = [r.frame.snr_db for r in self._burst if r.payload is not None or r.frame.trusted]
         snr = sum(snrs) / len(snrs) if snrs else None
         modes = [r.frame.mode for r in self._burst]
@@ -2006,6 +2013,25 @@ class LinkEngine:
             self._send_burst(prefix=(ack,))
             return
         self._transmit([ack])
+
+    def _note_ack_lost(self, decoded: list[_RxRecord]) -> None:
+        """A burst whose decoded frames are all blocks this station already had — a frame it
+        acknowledged, sent again — says its last acknowledgement was lost. From then on its
+        acknowledgements go on the tone floor for the rest of the session (ADR-0059): on WC4Y's
+        path of 2026-10-10 the short ordinary ones reached him 7 times in 15, the floor ones 14
+        in 14, and each lost one cost a burst sent again and a step down the ladder."""
+        if (
+            self._acks_on_floor
+            or not decoded
+            or not self._ack_history
+            or self.timing.floor_modes <= 0
+            or any(r.new for r in decoded)
+        ):
+            return
+        self._acks_on_floor = True
+        self.actions.append(
+            Event("acks", f"on the floor: {self.remote_call} missed an acknowledgement")
+        )
 
     def _receive_window(self) -> tuple[int, list[int], int]:
         """What an acknowledgement says has arrived: the bitmap of the window from the base,
@@ -2456,6 +2482,7 @@ class LinkEngine:
         self._burst.clear()
         self._burst_t0 = None
         self._ack_history = []
+        self._acks_on_floor = False
         self._ack_counter = 0
         self._asked = None
         self._break_requested = False

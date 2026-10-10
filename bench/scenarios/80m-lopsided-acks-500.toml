@@ -1,0 +1,30 @@
+name = "80m-lopsided-acks-500"
+description = """80 m at 500 Hz on WC4Y's path of 2026-10-10: the caller is heard at about +1 dB
+on a Moderate path and hears the other station 5 dB worse, so the called station's short
+ordinary acknowledgements are a coin toss (ADR-0059). A Test session."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 59
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = 1.0
+[path.b_to_a]
+snr_db = -4.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5
