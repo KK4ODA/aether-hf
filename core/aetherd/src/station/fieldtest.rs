@@ -220,13 +220,14 @@ impl Rung {
     }
 }
 
-/// How many of the ladder's `modes` lie under `rung`, the rung the message ran at: the
-/// ladder skips them. A message that ran at the floor, or above every rung, skips nothing and
-/// everything but the top respectively.
+/// How many of the ladder's `modes` it skips when the message ran at `rung`: those under the
+/// rung below it. The ladder starts a rung under the message's so its first rung is one the
+/// path has just carried: started at the message's own rung, a burst of RTTY in the harness
+/// failed it and the two above, and the ladder stopped having passed nothing.
 pub fn skipped_rungs(modes: &[usize], rung: usize) -> usize {
     modes
         .iter()
-        .take_while(|&&m| m < rung)
+        .take_while(|&&m| m + 1 < rung)
         .count()
         .min(modes.len().saturating_sub(1))
 }
@@ -804,21 +805,20 @@ impl<P: Ptt> Station<P> {
                     if run.step == Step::Message {
                         run.message = Some(transfer);
                         run.message_rung_rate = Some(self.rung_rate(self.engine.current_mode()));
-                        // the ladder starts at the rung the message ran at: the rungs under
-                        // it have just carried the message, and climbing them again cost
-                        // WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth of
-                        // its budget, before the ladder learned anything new
-                        let skip = skipped_rungs(&run.modes, self.engine.current_mode());
+                        // the ladder starts a rung under the one the message ran at: the
+                        // rungs below have just carried the message, and climbing them again
+                        // cost WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth
+                        // of its budget, before the ladder learned anything new
+                        let rung = self.engine.current_mode();
+                        let skip = skipped_rungs(&run.modes, rung);
                         run.ladder_skipped = Some(skip);
                         run.ladder_next = skip;
                         if skip > 0 {
                             let from = run.modes[skip];
-                            run.adjustments
-                                .push(format!("ladder from rung {from}: the message ran there"));
-                            self.note(
-                                "test",
-                                &format!("ladder: from rung {from}, where the message ran"),
-                            );
+                            let why =
+                                format!("ladder from rung {from}: the message ran at rung {rung}");
+                            self.note("test", &why);
+                            run.adjustments.push(why);
                         }
                     } else {
                         run.file = Some(transfer);
@@ -1014,10 +1014,12 @@ mod tests {
     #[test]
     fn the_ladder_starts_where_the_message_ran() {
         let modes: Vec<usize> = (0..15).collect();
-        // WC4Y's Test: the message ran at rung 3, so rungs 0-2 are skipped
-        assert_eq!(skipped_rungs(&modes, 3), 3);
-        // a message on the floor skips nothing; one above every rung still tries the top
+        // WC4Y's Test: the message ran at rung 3, so the ladder starts at 2 and skips 0-1
+        assert_eq!(skipped_rungs(&modes, 3), 2);
+        // a message on the floor or a rung above it skips nothing; one above every rung still
+        // tries the top
         assert_eq!(skipped_rungs(&modes, 0), 0);
+        assert_eq!(skipped_rungs(&modes, 1), 0);
         assert_eq!(skipped_rungs(&modes, 40), 14);
         // a ladder the rules cut short (ADR-0018) skips only the rungs it has
         assert_eq!(skipped_rungs(&[0, 1, 2], 9), 2);
@@ -1227,9 +1229,9 @@ mod tests {
         assert!(
             results["adjustments"]
                 .as_array()
-                .is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(
-                    |x| x == format!("ladder from rung {first}: the message ran there")
-                ))),
+                .is_some_and(|a| a.iter().any(|x| x
+                    .as_str()
+                    .is_some_and(|x| x.starts_with(&format!("ladder from rung {first}: "))))),
             "{results}"
         );
         let short: Vec<&Value> = ladder
