@@ -1408,6 +1408,35 @@ class LinkEngine:
         self._peer_floor = False
         self._peer_mode = None
 
+    def move_call(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
+        """Carry a call that has not been answered on to another air interface (ADR-0058): its
+        next tries go out there, stating its bandwidth, and its try count and timers stand. A
+        2 300 Hz caller nobody has answered moves to 500 Hz, where a 500 Hz station that
+        ignores a wider call hears it, and a 2 300 Hz one answers it by moving too. Refused
+        but while calling."""
+        if self.state is not State.CONNECTING:
+            raise RuntimeError("no call is going out")
+        self.timing = timing
+        self.cfg.capabilities = capabilities
+        if max_mode is not None:
+            self.cfg.max_mode = max_mode
+        self.rate = self._rate_controller()
+        self._recommended = self.cfg.initial_mode
+        self._peer_floor = False
+        self._peer_mode = None
+
+    @property
+    def connect_tries(self) -> int:
+        """How many tries the call going out has made."""
+        return self._connect_tries
+
+    @property
+    def connect_due(self) -> float | None:
+        """When the call going out makes its next try, if one is due: the end of the wait for
+        an answer to the last. A move to another air (:meth:`move_call`) is made just before
+        it, when any answer to the tries before has had its time to arrive."""
+        return self._deadlines.get("connect")
+
     def _cap(self) -> int:
         """The fastest rung this station may send at: the operator's ceiling, and the
         rules' when they set one."""

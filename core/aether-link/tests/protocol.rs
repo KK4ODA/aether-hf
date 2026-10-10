@@ -3591,3 +3591,42 @@ fn a_new_call_from_the_peer_replaces_its_dead_session() {
     assert_eq!((b.state(), b.session()), (State::Connected, 9));
     assert_eq!(b.remote_call, "W4ODA");
 }
+
+#[test]
+fn a_call_moved_to_the_narrow_air_is_answered_by_a_narrow_station() {
+    // a 2 300 Hz call is ignored by a 500 Hz station; the caller that moves its call to the
+    // narrow air after unanswered tries is answered, and the session runs there (ADR-0058)
+    let wide = LinkConfig {
+        capabilities: aether_link::frames::with_bandwidth(0, 2300),
+        ..LinkConfig::default()
+    };
+    let narrow = LinkConfig {
+        capabilities: aether_link::frames::with_bandwidth(0, 500),
+        ..LinkConfig::default()
+    };
+    let a = LinkEngine::new("W4ODA", timing(false), wide.clone(), 1);
+    let b = LinkEngine::new("KK4XYZ", air_timing(NARROW_500, false), narrow, 2);
+    let mut sim = TwoStationSim::new(a, b, 6.0, 41);
+    sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+    let mut t = 0.0;
+    while sim.engine(0).connect_tries() < 2 && t < 120.0 {
+        t += 0.5;
+        sim.run(t, 1000.0);
+    }
+    assert_eq!(sim.engine(1).state(), State::Idle);
+    assert!(
+        sim.engine_mut(1)
+            .move_call(timing(false), wide.capabilities, None)
+            .is_err()
+    );
+    sim.engine_mut(0)
+        .move_call(
+            air_timing(NARROW_500, false),
+            aether_link::frames::with_bandwidth(0, 500),
+            None,
+        )
+        .expect("calling");
+    sim.engine_mut(0).send(b"moved");
+    sim.run(600.0, 1000.0);
+    assert_eq!(sim.delivered(1), b"moved", "{:?}", sim.events(1));
+}

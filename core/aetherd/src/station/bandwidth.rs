@@ -90,7 +90,26 @@ pub struct Mismatch {
     /// See [`Mismatch::theirs_protocol`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ours_protocol: Option<u8>,
+    /// For `what` = `callsign`: the callsign the other station called — one of this station's
+    /// with another SSID or none, which the panel offers to answer to as well. For `what` =
+    /// `suggest`: the callsign heard lately under the base of one this station called and got
+    /// no answer from, which the panel offers to call (ADR-0057).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub called: Option<String>,
 }
+
+/// How recently a station must have been heard for a call to another of its operator's
+/// callsigns, unanswered, to suggest it (ADR-0057).
+pub const KIN_HEARD_S: f64 = 30.0 * 60.0;
+
+/// Unanswered tries at 2 300 Hz before a call to a station whose bandwidth is not known goes on
+/// at 500 Hz (ADR-0058): two on the floor and two ordinary — the half of a call
+/// (`connect_retries` 8) a station that hears it answers in.
+pub const NARROW_AFTER_TRIES: usize = 4;
+
+/// How long before its next try a call is carried on to the narrow air (ADR-0058): a few of the
+/// run loop's passes.
+const MOVE_BEFORE_TRY_S: f64 = 0.25;
 
 /// The waveform of a bandwidth this version runs.
 #[must_use]
@@ -114,6 +133,9 @@ pub enum Why {
     Call(String),
     /// This station called one it knows runs it (ADR-0035); the callsign called.
     Calling(String),
+    /// This station's wider call went unanswered, and goes on in it (ADR-0058); the callsign
+    /// called.
+    Unanswered(String),
 }
 
 impl Why {
@@ -122,7 +144,7 @@ impl Why {
             Self::Configured => "configured",
             Self::Host => "host",
             Self::Call(_) => "call",
-            Self::Calling(_) => "calling",
+            Self::Calling(_) | Self::Unanswered(_) => "calling",
         }
     }
 }
@@ -145,6 +167,10 @@ pub(super) struct Bandwidth {
     known: VecDeque<(String, usize)>,
     /// The last call or probe to this station in a bandwidth whose calls it does not answer.
     mismatch: Option<Mismatch>,
+    /// The callsigns frames have named as their sender, with the station time each was last
+    /// heard, the most recently heard last: what a call nobody answered is checked against
+    /// (ADR-0057).
+    heard_at: VecDeque<(String, f64)>,
 }
 
 impl Bandwidth {
@@ -157,6 +183,7 @@ impl Bandwidth {
             moves: 0,
             known: VecDeque::new(),
             mismatch: None,
+            heard_at: VecDeque::new(),
         }
     }
 
@@ -218,7 +245,7 @@ impl<P: Ptt> Station<P> {
                 _ => None,
             },
             "callee": match &self.bandwidth.why {
-                Why::Calling(call) => Some(call.as_str()),
+                Why::Calling(call) | Why::Unanswered(call) => Some(call.as_str()),
                 _ => None,
             },
             "moves": self.bandwidth.moves,
@@ -247,6 +274,80 @@ impl<P: Ptt> Station<P> {
         while known.len() > KNOWN_LIMIT {
             known.pop_front();
         }
+    }
+
+    /// Note that a frame named `callsign` as its sender at station time `now`.
+    pub(super) fn note_sender(&mut self, callsign: &str, now: f64) {
+        let callsign = callsign.trim().to_ascii_uppercase();
+        let heard = &mut self.bandwidth.heard_at;
+        heard.retain(|(call, _)| *call != callsign);
+        heard.push_back((callsign, now));
+        while heard.len() > KNOWN_LIMIT {
+            heard.pop_front();
+        }
+    }
+
+    /// Whether `callsign` is another name of one of this station's: the same base callsign
+    /// ([`base_callsign`]) with another SSID or none — KO4WX called KK4ODA, and the station
+    /// answered as KK4ODA-1 only (2026-10-10).
+    fn kin_of_ours(&self, callsign: &str) -> bool {
+        let base = base_callsign(callsign).to_ascii_uppercase();
+        !self
+            .engine
+            .callsigns
+            .iter()
+            .any(|ours| ours.eq_ignore_ascii_case(callsign))
+            && self
+                .engine
+                .callsigns
+                .iter()
+                .any(|ours| base_callsign(ours).eq_ignore_ascii_case(&base))
+    }
+
+    /// A call this station made went unanswered: if a station under the same base callsign as
+    /// the one called, but another SSID, has been heard within [`KIN_HEARD_S`], the panel
+    /// suggests calling that one (ADR-0057). Calling KK4ODA when only KK4ODA-1 listens is the
+    /// mistake KO4WX made the other way round.
+    pub(super) fn suggest_kin(&mut self, called: &str, now: f64) {
+        let called = called.trim().to_ascii_uppercase();
+        let base = base_callsign(&called).to_owned();
+        let Some((kin, at)) = self
+            .bandwidth
+            .heard_at
+            .iter()
+            .rev()
+            .find(|(call, at)| {
+                *call != called && base_callsign(call) == base && now - at <= KIN_HEARD_S
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let minutes = ((now - at) / 60.0).round();
+        let when = if minutes < 1.0 {
+            "just now".to_owned()
+        } else if minutes < 1.5 {
+            "a minute ago".to_owned()
+        } else {
+            format!("{minutes:.0} minutes ago")
+        };
+        let sentence = format!(
+            "No answer from {called}. {kin} was heard {when}: if that is the station you meant, \
+             call {kin}."
+        );
+        self.note("mismatch", &sentence);
+        let hz = self.bandwidth_hz();
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: called,
+            what: "suggest",
+            theirs_hz: hz,
+            ours_hz: hz,
+            at_ms: super::beacons::unix_ms(),
+            sentence,
+            theirs_protocol: None,
+            ours_protocol: None,
+            called: Some(kin),
+        });
     }
 
     /// The bandwidth a station was last heard to run, if it has been.
@@ -317,12 +418,18 @@ impl<P: Ptt> Station<P> {
             return;
         };
         let theirs = if theirs == 2750 { 2300 } else { theirs };
-        if !self.engine.callsigns.contains(&dst)
-            || theirs == ours
-            || (ours == 2300 && theirs == 500)
-        {
+        // a call or probe to another name of this station's — its base callsign, another SSID
+        // — is warned of too (ADR-0057): KO4WX called KK4ODA, at 2 300 Hz, of a station that
+        // answers as KK4ODA-1 at 500 Hz, and nothing said either
+        let kin = self.kin_of_ours(&dst);
+        if !kin && !self.engine.callsigns.contains(&dst) {
             return;
         }
+        let bandwidths_agree = theirs == ours || (ours == 2300 && theirs == 500);
+        if bandwidths_agree && !kin {
+            return;
+        }
+        let what = if bandwidths_agree { "callsign" } else { what };
         let now_ms = super::beacons::unix_ms();
         // a caller tries again and again: one warning a minute per station and kind is plenty
         if self.bandwidth.mismatch.as_ref().is_some_and(|m| {
@@ -330,7 +437,18 @@ impl<P: Ptt> Station<P> {
         }) {
             return;
         }
-        let happened = if what == "call" {
+        if bandwidths_agree {
+            self.note_kin_call(src, dst, (theirs, ours), now_ms);
+            return;
+        }
+        let answering = self.engine.callsigns.join(", ");
+        let happened = if kin {
+            format!(
+                "{src} {} {dst} at {theirs} Hz — this station answers as {answering}, and runs \
+                 {ours} Hz.",
+                if what == "call" { "called" } else { "probed" }
+            )
+        } else if what == "call" {
             format!(
                 "{src} called this station at {theirs} Hz and was not answered: it runs {ours} Hz."
             )
@@ -362,6 +480,36 @@ impl<P: Ptt> Station<P> {
             sentence,
             theirs_protocol: None,
             ours_protocol: None,
+            called: kin.then_some(dst),
+        });
+    }
+
+    /// A call or probe from `src`, in a bandwidth this station answers, to `dst` — another name
+    /// of one of its callsigns, which it does not answer to (ADR-0057).
+    fn note_kin_call(
+        &mut self,
+        src: String,
+        dst: String,
+        (theirs, ours): (usize, usize),
+        at_ms: u64,
+    ) {
+        let sentence = format!(
+            "{src} is calling {dst}, which this station does not answer to: it answers as \
+             {}. Answer as {dst} too, or ask {src} to call {}.",
+            self.engine.callsigns.join(", "),
+            self.engine.callsigns.first().map_or("", String::as_str)
+        );
+        self.note("mismatch", &sentence);
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: src,
+            what: "callsign",
+            theirs_hz: theirs,
+            ours_hz: ours,
+            at_ms,
+            sentence,
+            theirs_protocol: None,
+            ours_protocol: None,
+            called: Some(dst),
         });
     }
 
@@ -425,7 +573,40 @@ impl<P: Ptt> Station<P> {
             sentence,
             theirs_protocol: Some(theirs),
             ours_protocol: Some(ours),
+            called: None,
         });
+    }
+
+    /// A 2 300 Hz call that [`NARROW_AFTER_TRIES`] tries have not had answered, to a station
+    /// not known to run 2 300 Hz, goes on at 500 Hz (ADR-0058): a 500 Hz station ignores a wider
+    /// call, and a 2 300 Hz one answers a narrower call by moving to it. KO4WX called this
+    /// station at 2 300 Hz for minutes while it ran 500 Hz (2026-10-10). Not when a host program
+    /// chose the bandwidth, and only between tries.
+    pub(super) fn advance_call_bandwidth(&mut self, now: f64) {
+        // just before the next try, when an answer to the last has had its time — a 2 300 Hz
+        // acceptance arriving after the move would be read at 500 Hz — and with nothing
+        // arriving now
+        let due = self
+            .engine
+            .connect_due()
+            .is_some_and(|at| at - now <= MOVE_BEFORE_TRY_S);
+        if self.engine.state() != State::Connecting
+            || self.bandwidth_hz() != 2300
+            || self.bandwidth.host_hz.is_some()
+            || self.engine.connect_tries() < NARROW_AFTER_TRIES
+            || !due
+            || self.receiving()
+            || self.transmitting
+            || !self.pending.is_empty()
+            || !self.playback.is_empty()
+        {
+            return;
+        }
+        let remote = self.engine.remote_call.trim().to_ascii_uppercase();
+        if self.known_bandwidth(&remote) == Some(2300) {
+            return;
+        }
+        self.move_to(500, Why::Unanswered(remote));
     }
 
     /// Whether the station could move to another bandwidth now.
@@ -463,8 +644,10 @@ impl<P: Ptt> Station<P> {
             self.bandwidth.stirred_s = now;
             return;
         }
-        if matches!(self.bandwidth.why, Why::Call(_) | Why::Calling(_))
-            && now - self.bandwidth.stirred_s < RETURN_QUIET_S
+        if matches!(
+            self.bandwidth.why,
+            Why::Call(_) | Why::Calling(_) | Why::Unanswered(_)
+        ) && now - self.bandwidth.stirred_s < RETURN_QUIET_S
         {
             return;
         }
@@ -529,9 +712,16 @@ impl<P: Ptt> Station<P> {
         self.occupancy = crate::regulatory::occupancy::air(hz).ok();
         let top = self.top_rung();
         self.config.link.max_mode = top;
-        self.engine
-            .set_air(self.air_timing(), self.offered_capabilities(), Some(top))
-            .expect("moved only while idle");
+        if self.engine.state() == State::Connecting {
+            // a call carried on to the other air (ADR-0058): its tries and timers stand
+            self.engine
+                .move_call(self.air_timing(), self.offered_capabilities(), Some(top))
+                .expect("calling");
+        } else {
+            self.engine
+                .set_air(self.air_timing(), self.offered_capabilities(), Some(top))
+                .expect("moved only while idle");
+        }
         self.refresh_ceiling(true);
         self.refresh_burst_cap(now);
         self.bandwidth.moves += 1;
@@ -540,6 +730,10 @@ impl<P: Ptt> Station<P> {
             Why::Configured => "the station's own".to_owned(),
             Why::Host => "the host program asked for it".to_owned(),
             Why::Call(call) => format!("{call} called in it; back to {from} Hz after the session"),
+            Why::Unanswered(call) => format!(
+                "{call} has not answered at {from} Hz, and a {hz} Hz station ignores a wider call; \
+                 back to {from} Hz after the session"
+            ),
             Why::Calling(call) => {
                 format!("calling {call}, which runs it; back to {from} Hz after the session")
             }

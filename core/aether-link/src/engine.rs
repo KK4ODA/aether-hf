@@ -1603,6 +1603,51 @@ impl LinkEngine {
         Ok(())
     }
 
+    /// Carry a call that has not been answered on to another air interface (ADR-0058): its
+    /// next tries go out there, stating its bandwidth, and its try count and timers stand. A
+    /// 2 300 Hz caller nobody has answered moves to 500 Hz, where a 500 Hz station that ignores
+    /// a wider call hears it, and a 2 300 Hz one answers it by moving too.
+    ///
+    /// # Errors
+    /// When no call is going out.
+    pub fn move_call(
+        &mut self,
+        timing: PhyTiming,
+        capabilities: u8,
+        max_mode: Option<usize>,
+    ) -> Result<(), &'static str> {
+        if self.state != State::Connecting {
+            return Err("no call is going out");
+        }
+        self.timing = timing;
+        self.config.capabilities = capabilities;
+        if let Some(rung) = max_mode {
+            self.config.max_mode = rung;
+        }
+        self.rate = rate_controller_for(&self.timing);
+        self.recommended = self.config.initial_mode;
+        self.peer_floor = false;
+        self.peer_mode = None;
+        Ok(())
+    }
+
+    /// How many tries the call going out has made.
+    #[must_use]
+    pub fn connect_tries(&self) -> usize {
+        self.connect_tries
+    }
+
+    /// When the call going out makes its next try, if one is due: the end of the wait for an
+    /// answer to the last. A move to another air (`move_call`) is made just before it, when
+    /// any answer to the tries before has had its time to arrive.
+    #[must_use]
+    pub fn connect_due(&self) -> Option<f64> {
+        self.deadlines
+            .iter()
+            .find(|&&(timer, _)| timer == Timer::Connect)
+            .map(|&(_, at)| at)
+    }
+
     /// The longest DATA frame the peer may send next: the family of what we recommended
     /// or of what it last sent, whichever is longer.
     fn peer_data_frame_s(&self) -> f64 {

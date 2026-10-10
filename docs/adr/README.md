@@ -59,3 +59,7 @@ context → decision → alternatives considered → consequences.
 | [0052](0052-a-session-ends-at-both-ends.md) | A session ends at both ends, and takes its data with it | accepted |
 | [0053](0053-the-callers-first-poll-offers-the-turn.md) | The caller's first poll offers the turn | accepted |
 | [0054](0054-each-stations-answer-gap-is-learned.md) | Each station's answer gap is learned from its asking again | accepted |
+| [0055](0055-nothing-that-sets-up-a-contact-carries-the-identifier.md) | Nothing that sets up a contact carries the Morse identifier: it goes at the end of each communication and every ten minutes during one | accepted |
+| [0056](0056-weak-calls-are-accepted-on-the-floor-and-a-repeat-call-ends-a-dead-session.md) | A weak call is accepted on the floor, and a station that calls again ends its dead session | accepted |
+| [0057](0057-a-call-to-another-ssid-is-shown.md) | A call to another SSID of the station's callsign is shown, and an unanswered call suggests one | accepted |
+| [0058](0058-an-unanswered-wide-call-goes-on-at-500-hz.md) | An unanswered wide call goes on at 500 Hz | accepted |

@@ -671,7 +671,25 @@ struct IdentifierState {
     /// A session ended after transmitting since the last identifier: the next transmission
     /// carries one whatever the interval says, or one goes out on its own.
     final_due: bool,
+    /// When the communication under way — a call, and the session it opens — first
+    /// transmitted, in station time: its ten minutes count from there, not from an identifier
+    /// an hour before it (§97.119(a): at the end of each communication and at least every ten
+    /// minutes during it). Counted from the last identifier, the first try of a call after a
+    /// quiet spell carried one, and the other station's answer waited it out (KK4ODA calling
+    /// KO4WX, 2026-10-09).
+    communication_began: Option<f64>,
+    /// When this station last sent something that sets up a contact — a call, an acceptance, a
+    /// probe or its answer — which carries no identifier (ADR-0055). A contact that goes no
+    /// further — a probe answered and no call, a call never answered — is identified on its own
+    /// once the station has been idle [`SETUP_ID_WAIT_S`] since.
+    setup_at: Option<f64>,
 }
+
+/// How long after a contact-setup transmission that led to no session the station waits,
+/// idle, before identifying on its own (ADR-0055): long enough for the call a probe is the
+/// prelude to — the Test calls at once, an operator within seconds — so the identifier goes at
+/// the end of the session instead.
+pub const SETUP_ID_WAIT_S: f64 = 30.0;
 
 /// A "what if" for the regulatory policy: the station's facts, any of them replaced.
 #[derive(Debug, Clone, Default)]
@@ -2363,8 +2381,10 @@ impl<P: Ptt> Station<P> {
             self.note("watchdog", "key time exceeded");
         }
         self.pump();
+        self.advance_identifier(now);
         self.advance_test();
         self.advance_beacons(now);
+        self.advance_call_bandwidth(now);
         self.advance_bandwidth(now);
         Ok(())
     }
@@ -2930,10 +2950,7 @@ impl<P: Ptt> Station<P> {
                 DataKind::Datagram => report.kind = "datagram",
             }
         }
-        // what the frame says its sender runs is what a call to it should be made in
-        if let (Some(from), Some(hz)) = (report.from.clone(), report.bandwidth_hz) {
-            self.learn_bandwidth(&from, hz as usize);
-        }
+        self.learn_from(&report, now);
         // a piece of somebody's datagram: joined with the others, and named by the first
         if report.kind == "datagram"
             && let Some(piece) = payload
@@ -3089,6 +3106,13 @@ impl<P: Ptt> Station<P> {
         // the end of a communication is identified, whatever ended it
         if self.config.cw_id.is_some() && self.identifier.transmitted_since {
             self.identifier.final_due = true;
+        }
+        self.identifier.communication_began = None;
+        self.identifier.setup_at = None;
+        if detail == "no answer" {
+            let called = self.engine.remote_call.clone();
+            let now = self.now();
+            self.suggest_kin(&called, now);
         }
         self.finish_session(detail);
         // what the other station did not have all of when the session ended never will: the
@@ -3414,9 +3438,23 @@ impl<P: Ptt> Station<P> {
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         self.playback.extend(rendered);
-        self.append_cw_id(now, audio_rate);
+        self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
+    }
+
+    /// What a frame says of its sender: the bandwidth it runs, which is what a call to it
+    /// should be made in, and — when it decoded — that it was heard now (ADR-0057).
+    fn learn_from(&mut self, report: &FrameReport, now: f64) {
+        let Some(from) = report.from.clone() else {
+            return;
+        };
+        if let Some(hz) = report.bandwidth_hz {
+            self.learn_bandwidth(&from, hz as usize);
+        }
+        if report.decoded {
+            self.note_sender(&from, now);
+        }
     }
 
     /// The Morse identifier on its own, inside the keying's lead and tail: the end of a
@@ -3427,7 +3465,7 @@ impl<P: Ptt> Station<P> {
         let tail = (self.tail_s() * audio_rate) as usize;
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         self.identifier.final_due = true;
-        self.append_cw_id(now, audio_rate);
+        self.append_cw_id(now, audio_rate, false);
         if self.playback.len() == lead {
             // nothing to say after all — no identifier set any more, or none that fits the
             // key: key nothing, and owe nothing, or the next pass would queue it again
@@ -3674,14 +3712,25 @@ impl<P: Ptt> Station<P> {
     /// identifier is: part of the transmission it identifies. That also means it counts
     /// against the key-time watchdog like everything else, which is correct — a station is
     /// transmitting either way.
-    fn append_cw_id(&mut self, now: f64, audio_rate: f64) {
+    ///
+    /// `setup`: the transmission sets up a contact — a call, an acceptance, a probe or its
+    /// answer — and carries none (ADR-0055): §97.119(a) asks for an identifier at the end of
+    /// each communication and every ten minutes during it, and one on a call or an answer is one
+    /// the other station has to wait out before it can reply. KK4ODA-1's first transmission
+    /// after a restart was a probe's answer, and it carried the identifier (2026-10-10).
+    fn append_cw_id(&mut self, now: f64, audio_rate: f64, setup: bool) {
         let Some(cw) = self.config.cw_id else { return };
-        let due = self.identifier.final_due
-            || self
-                .identifier
-                .last
-                .is_none_or(|last| now - last >= self.config.cw_id_interval_s);
-        if !due {
+        if (setup || self.engine.state() != State::Idle)
+            && self.identifier.communication_began.is_none()
+        {
+            self.identifier.communication_began = Some(now);
+        }
+        if setup {
+            self.identifier.setup_at = Some(now);
+            self.identifier.transmitted_since = true;
+            return;
+        }
+        if !self.id_due_by(now) {
             self.identifier.transmitted_since = true;
             return;
         }
@@ -3738,16 +3787,50 @@ impl<P: Ptt> Station<P> {
         self.stats.cw_ids += 1;
         self.identifier.transmitted_since = false;
         self.identifier.final_due = false;
+        self.identifier.setup_at = None;
+        if self.engine.state() == State::Idle {
+            // the communication it ends is over
+            self.identifier.communication_began = None;
+        }
     }
 
-    /// Whether a Morse identifier will be due by station time `t`.
+    /// A contact that went no further than its setup — a probe answered and no call after it,
+    /// a call never answered, a probe this station answered and no call came — is identified
+    /// on its own once the station has been idle [`SETUP_ID_WAIT_S`] (ADR-0055).
+    fn advance_identifier(&mut self, now: f64) {
+        let Some(at) = self.identifier.setup_at else {
+            return;
+        };
+        if self.config.cw_id.is_none() || !self.identifier.transmitted_since {
+            self.identifier.setup_at = None;
+            return;
+        }
+        if self.engine.state() != State::Idle
+            || self.engine.probing()
+            || self.transmitting
+            || !self.pending.is_empty()
+            || now - at < SETUP_ID_WAIT_S
+        {
+            return;
+        }
+        self.identifier.setup_at = None;
+        self.pending.push_back(Outgoing::Identifier);
+    }
+
+    /// Whether a Morse identifier will be due by station time `t`: the end of a session, or
+    /// ten minutes into a communication — a call and its session counted from their first
+    /// transmission, so neither a call nor its acceptance carries one; a transmission of no
+    /// session (a beacon, a probe or its answer, a datagram) from the last identifier, as each
+    /// is a communication of its own.
     fn id_due_by(&self, t: f64) -> bool {
+        let interval = self.config.cw_id_interval_s;
+        let since = match (self.identifier.communication_began, self.identifier.last) {
+            (Some(began), Some(last)) => Some(began.max(last)),
+            (Some(began), None) => Some(began),
+            (None, last) => last,
+        };
         self.config.cw_id.is_some()
-            && (self.identifier.final_due
-                || self
-                    .identifier
-                    .last
-                    .is_none_or(|last| t - last >= self.config.cw_id_interval_s))
+            && (self.identifier.final_due || since.is_none_or(|since| t - since >= interval))
     }
 
     /// Size the engine's bursts to the key: with room for the identifier when it falls due
@@ -4299,6 +4382,23 @@ impl<P: Ptt> Station<P> {
 }
 
 /// Whether a queued burst is a beacon: one data frame of kind `Beacon`.
+/// Whether a transmission sets up a contact — a call, an acceptance, a probe or its answer —
+/// and so carries no identifier (ADR-0055).
+fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
+    frames.iter().any(|frame| {
+        frame.container == Container::Data
+            && decode_data(&frame.payload).is_ok_and(|(header, _)| {
+                matches!(
+                    header.kind,
+                    DataKind::ConnectReq
+                        | DataKind::ConnectAck
+                        | DataKind::Probe
+                        | DataKind::ProbeAck
+                )
+            })
+    })
+}
+
 fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
     frames.len() == 1
         && frames[0].container == Container::Data
@@ -6325,9 +6425,11 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        lawful.connect("KK4XYZ").expect("idle");
-        run_alone(&mut lawful, 3.0, |s| s.stats.cw_ids > 0);
-        assert_eq!(lawful.stats.cw_ids, 1, "the call carries the identifier");
+        // a beacon is a communication of its own and carries the identifier; a call no longer
+        // does (ADR-0055)
+        lawful.beacon(None).expect("idle");
+        run_alone(&mut lawful, 8.0, |s| s.stats.cw_ids > 0);
+        assert_eq!(lawful.stats.cw_ids, 1, "the beacon carries the identifier");
 
         let mut profile =
             crate::regulatory::profile::load("us-fcc-part97").expect("the profile reads");
@@ -6342,11 +6444,11 @@ mod tests {
             1,
         );
         station.set_policy(Policy::Rules(std::sync::Arc::new(profile)));
-        station.connect("KK4XYZ").expect("idle");
-        run_alone(&mut station, 3.0, Station::transmitting);
+        station.beacon(None).expect("idle");
+        run_alone(&mut station, 8.0, Station::transmitting);
         assert!(
             station.transmitting(),
-            "the call itself is lawful and keyed"
+            "the beacon itself is lawful and keyed"
         );
         assert_eq!(station.stats.cw_ids, 0, "but it carries no identifier");
         assert!(
@@ -6555,8 +6657,9 @@ mod tests {
             ..config
         };
 
-        // an orderly close: the first transmission identifies, the end once more — twice in
-        // all, however long the session ran inside the interval
+        // an orderly close: the end identifies, once — the call does not (ADR-0055: §97.119(a)
+        // asks for the end of a communication and every ten minutes during it, and an
+        // identifier on a call is one the other station's answer has to wait out)
         let mut air = Air::with(1.0, 0.0005, identifying);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
@@ -6566,7 +6669,7 @@ mod tests {
             a.state() == State::Idle && b.state() == State::Idle && a.quiescent()
         });
         air.run(10.0, |_, _| false);
-        assert_eq!(air.a.stats.cw_ids, 2, "one to start and one to end");
+        assert_eq!(air.a.stats.cw_ids, 1, "one at the end, none on the call");
         assert_eq!(air.b.stats.cw_ids, 0, "the other station does not identify");
 
         // the peer goes silent mid-session: the link times out, and the identifier goes
@@ -6622,8 +6725,10 @@ mod tests {
         air.run(3.0, |a, _| !a.transmitting() && a.pending.is_empty());
         air.a.take_events();
         if a_identifies_on_disc {
-            // the interval has run out: the DISC carries the identifier
+            // the interval has run out — the session has been going ten minutes and more since
+            // the last identifier: the DISC carries one
             air.a.identifier.last = Some(-1.0e6);
+            air.a.identifier.communication_began = Some(-1.0e6);
         }
         air.a.disconnect();
         let (mut overlap, mut a_keyings, mut was_keyed) = (0usize, 0usize, false);
@@ -6723,7 +6828,7 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        station.connect("KK4XYZ").expect("idle");
+        station.beacon(None).expect("idle");
         let mut out = vec![0.0f32; 4096];
         for _ in 0..400 {
             station.playback(&mut out).expect("playback");
@@ -6733,6 +6838,36 @@ mod tests {
             }
         }
         assert_eq!(station.stats.cw_ids, 1, "the identifier never went out");
+    }
+
+    #[test]
+    fn a_probe_carries_no_identifier_and_one_follows_when_nothing_else_does() {
+        // ADR-0055: a probe sets up a contact and carries none — the first transmission after a
+        // start had, an answer to WC4Y's probe (2026-10-10) — and a probe that leads to no
+        // call is identified on its own once the station has been idle SETUP_ID_WAIT_S
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId::default()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.probe("KK4XYZ", None).expect("idle");
+        run_alone(&mut station, 10.0, Station::transmitting);
+        assert!(station.transmitting(), "the probe went out");
+        let probed_at = station.now();
+        run_alone(&mut station, 10.0, |s| !s.transmitting());
+        assert_eq!(station.stats.cw_ids, 0, "the probe carried the identifier");
+        run_alone(&mut station, SETUP_ID_WAIT_S + 20.0, |s| s.stats.cw_ids > 0);
+        assert_eq!(station.stats.cw_ids, 1, "no identifier after the probe");
+        assert!(
+            station.now() - probed_at >= SETUP_ID_WAIT_S,
+            "the identifier came {:.1} s after the probe",
+            station.now() - probed_at
+        );
     }
 
     #[test]
@@ -6750,9 +6885,11 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        station.connect("KK4XYZ").expect("idle");
+        // beacons one after another: each a communication of its own, identified by the
+        // interval (a call no longer carries one, ADR-0055)
         let mut out = vec![0.0f32; 4096];
         for _ in 0..1200 {
+            let _ = station.beacon(None);
             station.playback(&mut out).expect("playback");
             station.capture(&vec![0.0f32; 4096]).expect("capture");
         }
@@ -7608,6 +7745,119 @@ mod tests {
             air.b.bandwidth_status()["mismatch"]["theirs_protocol"],
             PROTOCOL_VERSION - 1
         );
+    }
+
+    #[test]
+    fn a_call_to_another_ssid_of_ours_is_shown_and_can_be_answered() {
+        // ADR-0057, from the air: KO4WX called KK4ODA, and the station, answering as KK4ODA-1,
+        // ignored every try without a word. The call is shown with the callsign it named,
+        // and a station told to answer to that name too answers the next try
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ-1").expect("idle");
+        air.run(60.0, |_, b| b.mismatch().is_some());
+        assert!(!air.b.connected());
+        let mismatch = air.b.mismatch().expect("the call was noticed").clone();
+        assert_eq!(
+            (
+                mismatch.callsign.as_str(),
+                mismatch.what,
+                mismatch.called.as_deref()
+            ),
+            ("W4ODA", "callsign", Some("KK4XYZ-1"))
+        );
+        assert!(
+            mismatch.sentence.contains("W4ODA is calling KK4XYZ-1")
+                && mismatch.sentence.contains("answers as KK4XYZ"),
+            "{}",
+            mismatch.sentence
+        );
+        air.b
+            .set_callsigns(&["KK4XYZ".to_owned(), "KK4XYZ-1".to_owned()])
+            .expect("idle");
+        air.run(120.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        assert_eq!(air.b.engine().my_call, "KK4XYZ-1");
+    }
+
+    #[test]
+    fn an_unanswered_call_suggests_another_ssid_heard_lately() {
+        // ADR-0057: a call to KK4XYZ-5 that nobody answers, from a station that heard KK4XYZ
+        // beacon minutes ago, suggests calling KK4XYZ
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.beacon(None).expect("idle");
+        air.run(30.0, |a, _| a.stats.beacons_heard > 0);
+        assert_eq!(air.a.stats.beacons_heard, 1);
+        air.a.connect("KK4XYZ-5").expect("idle");
+        air.run(600.0, |a, _| {
+            a.mismatch().is_some_and(|m| m.what == "suggest")
+        });
+        let mismatch = air.a.mismatch().expect("a suggestion").clone();
+        assert_eq!(
+            (mismatch.callsign.as_str(), mismatch.called.as_deref()),
+            ("KK4XYZ-5", Some("KK4XYZ"))
+        );
+        assert!(
+            mismatch
+                .sentence
+                .starts_with("No answer from KK4XYZ-5. KK4XYZ was heard"),
+            "{}",
+            mismatch.sentence
+        );
+    }
+
+    #[test]
+    fn a_wide_call_to_another_ssid_of_a_narrow_station_is_shown() {
+        // ADR-0057: KO4WX called KK4ODA at 2 300 Hz of a station answering as KK4ODA-1 at
+        // 500 Hz; the bandwidth warning now covers a call to another name of the station's
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
+        air.a.connect("KK4XYZ-1").expect("idle");
+        air.run(60.0, |_, b| b.mismatch().is_some());
+        let mismatch = air.b.mismatch().expect("the call was noticed").clone();
+        assert_eq!(
+            (
+                mismatch.what,
+                mismatch.theirs_hz,
+                mismatch.called.as_deref()
+            ),
+            ("call", 2300, Some("KK4XYZ-1"))
+        );
+        assert!(
+            mismatch
+                .sentence
+                .starts_with("W4ODA called KK4XYZ-1 at 2300 Hz"),
+            "{}",
+            mismatch.sentence
+        );
+    }
+
+    #[test]
+    fn a_wide_call_nobody_answers_goes_on_at_500_hz_and_a_narrow_station_answers() {
+        // ADR-0058, from the air: KO4WX called this station at 2 300 Hz for minutes while it
+        // ran 500 Hz. A 2 300 Hz call to a station of unknown bandwidth that four tries have
+        // not had answered goes on at 500 Hz, where the narrow station answers it
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(400.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.a.take_events()
+        );
+        assert_eq!(air.a.bandwidth_hz(), 500);
+        assert_eq!(air.a.bandwidth_status()["why"], "calling");
+        assert!(air.a.engine().connect_tries() > super::bandwidth::NARROW_AFTER_TRIES);
+        let message = b"carried on at 500 Hz";
+        air.a.send(message);
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.take_received(), message);
     }
 
     #[test]
