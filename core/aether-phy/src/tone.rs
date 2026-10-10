@@ -1808,7 +1808,7 @@ impl ToneStream {
                 .filter(|x| (x.0 - h).abs() <= lookahead)
                 .map(|x| x.1)
                 .fold(f64::NEG_INFINITY, f64::max);
-            if v < near || self.overlaps((start, start + kind.samples()), v) {
+            if v < near || self.overlaps((start, start + kind.samples()), f64::NEG_INFINITY) {
                 continue;
             }
             let inside = |a: &ToneArrival| {
@@ -1840,7 +1840,8 @@ impl ToneStream {
         self.arriving = arriving
             .into_iter()
             .filter(|a| {
-                a.end() + hop > now && !self.overlaps((a.start + hop, a.end() - hop), a.statistic)
+                a.end() + hop > now
+                    && !self.overlaps((a.start + hop, a.end() - hop), f64::NEG_INFINITY)
             })
             .collect();
     }
@@ -1892,6 +1893,9 @@ impl ToneStream {
     /// A frame taken at a lower `statistic` than this one's that overlaps it by no more than
     /// a sync block does not count (ADR-0060): a phantom whose last block is a real frame's
     /// first, read before that frame's first block was in, must not keep the real frame out.
+    /// Only a whole candidate settles that way (`f64::NEG_INFINITY` elsewhere): an announcement is
+    /// one block, and the last frame of a burst repeats its first block at its end — announced
+    /// past the frame, it held the acknowledgement for a frame that never came.
     fn overlaps(&self, span: (usize, usize), statistic: f64) -> bool {
         let tol = TONE.hop_div / 2 * self.det.hop();
         let block = SYNC_SYMBOLS * TONE.symbol_samples + tol;
