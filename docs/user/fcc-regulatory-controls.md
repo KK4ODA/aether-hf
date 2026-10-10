@@ -192,16 +192,16 @@ station times out. The link's ceiling is recomputed at once.
 The rules settings take effect when Setup is saved: a change made on the Setup tab and not saved
 is not in force, and the panel says so on every tab until it is saved or discarded.
 
-## LEGAL, WARNING, TX BLOCKED
+## Legal, Warning, TX blocked
 
 The badge in the header (and beside the dial on the Session tab) is the verdict for your
 station's **widest** transmission at the dial it is on now:
 
-* **LEGAL** — allowed, and nothing to add.
-* **WARNING** — allowed, with something you should know: outside the band plan's digital areas,
+* **Legal** — allowed, and nothing to add.
+* **Warning** — allowed, with something you should know: outside the band plan's digital areas,
   on a beacon frequency, a power limit, or the link held to its narrower rungs near an edge.
-* **TX BLOCKED** — not allowed; nothing will be transmitted. The reason says what to change.
-* **NO RULES** — you chose no profile; Aether checks nothing.
+* **TX blocked** — not allowed; nothing will be transmitted. The reason says what to change.
+* **No rules** — you chose no profile; Aether checks nothing.
 
 Click it for the reasoning: the RF range, the segment and its rule (linked to the e-CFR), your
 control and class, and the band-plan note. The Diagnostics tab's **Rules** card shows everything

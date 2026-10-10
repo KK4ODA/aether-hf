@@ -122,7 +122,7 @@ Every one of these has cost the project a day at some point; none is decoration.
     "the panel's appearance"); one built in `app.js` sets `.title` the same way. A PR
     that adds one without is asked for it.
 12. **The panel was actually loaded.** A PR touching `app/ui/` says it was opened against a
-    running daemon with a clean browser console, the LINK lamp lit and the readings
+    running daemon with a clean browser console, the Modem lamp quiet (not red) and the readings
     populated. `node --check` catches syntax and nothing else.
 13. **Nothing reaches the transmitter around the regulatory gate** (ADR-0018). A new kind of
     transmission is queued as an `Outgoing` and judged in `Station::gate`, or judged by the

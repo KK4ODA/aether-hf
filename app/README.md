@@ -12,19 +12,21 @@ Two pieces:
   backend. If a daemon is already running it attaches to that one instead of starting a
   second.
 
-The header carries the lamps (TX, RX, BUSY, LINK), the rules' verdict for the dial the radio is
-on (**LEGAL**, **WARNING** or **TX BLOCKED**; click it for the reasoning), a chip while a host or
-KISS program uses the station, the dial and the callsign. A banner across every tab says, in
+The header is the station at a glance. A recessed display strip carries what the modem is doing,
+the dial, the rung in use and its rate, the last frame's SNR, and the TX, RX and Busy lamps. Beside
+it are the rules' verdict for the dial the radio is on (**Legal**, **Warning** or **TX blocked**;
+click it for the reasoning), a chip while a host or KISS program uses the station, the *Modem*
+lamp (quiet while the panel reaches the modem, red when it does not) and the callsign. A banner across every tab says, in
 large type, when a session is up, being called or how the last one ended, and another when
 Setup has changes that are not saved. The tabs, each a set of titled boxes:
 
 * **Status** — the link (mode, SNR, throughput, the session) and the channel (signal above
-  noise, tuning, receive level, queued) as tiles; the history of every frame's speed or SNR
+  noise, tuning, receive level, queued) as readings; the history of every frame's speed or SNR
   and of the channel and activity; the counters.
 * **Session** — the radio's dial (the rules' chip, the dial list with *Tune*, *Add* and
   *Remove*, and *Dial is at* for a radio that cannot report it); the call (Connect, Disconnect —
   *Stop calling* while a call is being made — Abort, Probe, Beacon with its *Repeat* interval,
-  Test session and its progress, the chime); keying and drive (*Key 1 s*, *Tune tone*,
+  Test session and its progress, the chime); keying and drive (*Key 1 s*, *Tuner tone*,
   *Set drive*, the transmit level, the drive guide); the conversation (Send, where a message
   gets its ✓ when the other station has all of it, and Received); the recording and the last
   session (Record, notes, the folder, *Contribute the last test session*).
@@ -53,8 +55,9 @@ Setup has changes that are not saved. The tabs, each a set of titled boxes:
 * **Help / About** — the version and its update channel, *Check for Updates*, getting on the
   air, beacons, running a test session, reading the panel, and where to read more.
 
-**Compact**, in the header, shrinks the panel to the state and four readings for a small window
-beside a logging program. Every control and indicator carries a tooltip (`title`), and a new one
+**Compact**, in the header, turns the panel into a small front panel for a window beside a
+logging program: the display strip with the state and the lamps, and under it the four link
+readings. Every control and indicator carries a tooltip (`title`), and a new one
 without one is not done (`CONTRIBUTING.md` §8).
 
 Every reading is the modem's own (`metrics` and `frame` events, and the `spectrum`,
@@ -95,19 +98,26 @@ the daemon's own output for the last run is in `aetherd.log` beside the configur
 
 ## Appearance
 
-The panel is dark by design — an instrument for a shack at night — and does not follow the
-operating system's theme. Everything is a token at the top of `ui/style.css` (`--bg`,
-`--surface`, `--text`, `--accent`, `--status-tx`, `--status-link`, …), so a change of palette
-is one edit; the semantic status colours carry meaning and are never used for decoration. The
-stylesheet opens with the design system — the type scale, spacing, radii, the 30/24 px control
-heights — and the pieces every tab is built from: `.card` with its `.card-title` inside the
-box, `.tiles`, `.badge`, `.chip`, the `?` that opens an explanation (`details.help-pop`), the
-folding card and the sticky save bar. The constellation, spectrum and waterfall are one card
-built by `ui/scopes.js`, used by the Diagnostics tab and by the undocked window
-(`signal.html`, `signal.js`). A
-light variant exists for whoever asks for it: set `data-theme="light"` on `<html>`. The
-window's title bar is asked to be dark in `tauri.conf.json` (`theme`). Numbers are set in
-the monospace stack, prose in the system UI face; no fonts are bundled or fetched.
+The panel is the front panel of a radio instrument, in graphite, and dark by design — an
+instrument for a shack at night — so it does not follow the operating system's theme.
+Everything is a token at the top of `ui/style.css` (`--bg`, `--surface`, `--well`, `--text`,
+`--trace`, `--status-tx`, `--status-rx`, …), so a change of palette is one edit. Colour is spent
+on state only: green for receive and all well, red for transmit and faults, amber for a busy
+channel and cautions, blue for a session up. The primary action of a box is a light neutral key
+rather than a coloured one (`--accent` is no hue), and plots draw what they measure in a pale
+`--trace` with state colours on top. Labels are in sentence case. The one bold element is the
+header's display strip (`#strip`); everything under it is flat plates on hairline rules, with
+readings set side by side like a meter bridge rather than boxed. The stylesheet opens with the
+design system — the type scale, spacing, radii, the 30/24 px control heights — and the pieces
+every tab is built from: `.card` with its `.card-title` inside the box, `.tiles`, `.badge`,
+`.chip`, the `?` that opens an explanation (`details.help-pop`), the folding card and the sticky
+save bar. The constellation, spectrum and waterfall are one card built by `ui/scopes.js`, used
+by the Diagnostics tab and by the undocked window (`signal.html`, `signal.js`). A light variant
+exists for whoever asks for it: set `data-theme="light"` on `<html>`. The window's title bar is
+asked to be dark in `tauri.conf.json` (`theme`). Numbers are set in the system UI face with
+tabular figures (its Display cut for the large readouts); monospace is kept for what is read
+character by character — callsigns, the log, the configuration and paths. No fonts are bundled
+or fetched.
 
 The logo shows for about a second when the panel first opens in a session and then gets out
 of the way (`.splash` in the stylesheet, `splash()` in `app.js`). The artwork lives in
