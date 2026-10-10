@@ -928,8 +928,15 @@ mod tests {
         assert!(keyed.load(std::sync::atomic::Ordering::SeqCst));
         *hang.lock().expect("lock") = std::time::Duration::from_secs(3);
         let began = std::time::Instant::now();
-        assert!(ptt.unkey().is_err(), "the release was not confirmed in time");
-        assert_eq!(ptt.frequency_hz(), Some(3_590_000), "the last reading, at once");
+        assert!(
+            ptt.unkey().is_err(),
+            "the release was not confirmed in time"
+        );
+        assert_eq!(
+            ptt.frequency_hz(),
+            Some(3_590_000),
+            "the last reading, at once"
+        );
         assert!(ptt.key().is_err(), "no key while the port is stuck");
         assert!(ptt.fault().is_some());
         assert!(
