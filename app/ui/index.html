@@ -877,12 +877,16 @@
               </div>
               <div class="row">
                 <label for="op-rig">Rig</label>
-                <input id="op-rig" title="The radio, for the field log" type="text" placeholder="FTDX10" autocomplete="off" />
-                <label for="op-power" class="label-inline">Power</label>
+                <input id="op-rig" title="The radio, for the field log" type="text" class="prose" placeholder="FTDX10" autocomplete="off" />
+              </div>
+              <div class="row">
+                <label for="op-power">Power</label>
                 <input id="op-power" title="Transmit power in watts, for the field log and the power limits the rules set on some bands" type="text" inputmode="decimal" class="port" placeholder="30" autocomplete="off" />
                 <span class="sub">watts</span>
-                <label for="op-antenna" class="label-inline">Antenna</label>
-                <input id="op-antenna" title="The antenna, for the field log" type="text" placeholder="EFHW at 10 m" autocomplete="off" />
+              </div>
+              <div class="row">
+                <label for="op-antenna">Antenna</label>
+                <input id="op-antenna" title="The antenna, for the field log" type="text" class="prose" placeholder="EFHW at 10 m" autocomplete="off" />
               </div>
             </li>
 
@@ -1000,6 +1004,7 @@
                 </details>
               </div>
               <div class="level-row">
+                <span class="label-like" title="The receive level from the sound card">Level</span>
                 <div class="meter" id="wz-meter" title="Receive level from the sound card; aim for Good" role="meter" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60" aria-label="Receive level">
                   <div class="meter-fill" id="wz-meter-fill"></div>
                   <div class="meter-peak" id="wz-meter-peak"></div>
@@ -1329,82 +1334,87 @@
         </section>
 
         <div class="help-grid">
-          <!-- 2. from nothing to a session -->
-          <section class="card console-card" id="help-air" aria-labelledby="help-air-title" title="From a new installation to a session">
-            <div class="card-head"><h2 class="card-title" id="help-air-title" title="From a new installation to a session">Getting on the air</h2></div>
-            <ol class="help-steps">
-              <li><strong>Setup</strong>: callsign, the rules you operate under, the control and your license class, the radio interface and its devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
-              <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in.</li>
-              <li><strong>The rules</strong>: the badge beside the dial says <em>LEGAL</em>, <em>WARNING</em> or <em>TX BLOCKED</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
-              <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not the tune tone) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
-              <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>
-              <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
-              <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change.</li>
-            </ol>
-          </section>
+          <!-- two columns of their own, so a short card never leaves a gap under it -->
+          <div class="help-col">
+            <!-- 2. from nothing to a session -->
+            <section class="card console-card" id="help-air" aria-labelledby="help-air-title" title="From a new installation to a session">
+              <div class="card-head"><h2 class="card-title" id="help-air-title" title="From a new installation to a session">Getting on the air</h2></div>
+              <ol class="help-steps">
+                <li><strong>Setup</strong>: callsign, the rules you operate under, the control and your license class, the radio interface and its devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
+                <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in.</li>
+                <li><strong>The rules</strong>: the badge beside the dial says <em>Legal</em>, <em>Warning</em> or <em>TX blocked</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
+                <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not <em>Tuner tone</em>) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
+                <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>
+                <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
+                <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change.</li>
+              </ol>
+            </section>
 
-          <!-- 3. beacons: sent, heard and repeated -->
-          <section class="card console-card" id="help-beacons" aria-labelledby="help-beacons-title" title="Where beacons show, and how to repeat one">
-            <div class="card-head"><h2 class="card-title" id="help-beacons-title" title="Where beacons show, and how to repeat one">Beacons</h2></div>
-            <ul class="help-steps">
-              <li><strong>Sending one</strong>: <em>Beacon</em> on the Session tab puts this station's callsign on the air once, on the tone floor, addressed to nobody — so anyone listening, on either bandwidth, can say they heard you.</li>
-              <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. It needs you at the station — local or remote control: a beacon may be automatically controlled only in the few segments of §97.203(d) (28.20–28.30 MHz and a handful above), and Aether does not beacon unattended.</li>
-              <li><strong>What you sent</strong>: every beacon that goes on the air is in the <em>Log</em> (the <em>Beacons</em> filter), counted under <em>Beacons sent</em> on the Status tab, and the line under the Session tab's buttons says when the last went and when the next is due.</li>
-              <li><strong>What you heard</strong>: a beacon heard is in the Log with its callsign and SNR, in <em>Stations</em> — the <em>Beacons</em> column counts them per station and says when the last one was, and the <em>Beacons</em> filter lists only those stations — and among the Diagnostics tab's frames. A beacon is never answered: a channel where every beacon drew a reply would be unusable.</li>
-            </ul>
-          </section>
+            <!-- 4. a contact made into a measurement -->
+            <section class="card console-card" id="help-test" aria-labelledby="help-test-title" title="Running a test session and contributing it">
+              <div class="card-head"><h2 class="card-title" id="help-test-title" title="Running a test session and contributing it">Running a test session</h2></div>
+              <p class="sub">
+                A test session is how a contact becomes a measurement the project can use: a probe, a
+                call, a message, a short burst at every mode from just under the one the message ran at,
+                and a file sized to what about two minutes at the measured rate carry (as little as 256
+                bytes on a slow path) — recorded, in about five minutes (ten at most). The other
+                station only has to be listening — a person at the panel or an unattended station set to
+                answer only.
+              </p>
+              <ol class="help-steps">
+                <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one) — and the same link protocol: if either panel says <em>Update required</em>, update first, since a test, like any call, does not connect across it.</li>
+                <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
+                <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The whole run stops at ten minutes on its own; <em>Stop test</em> ends it earlier, keeping what was learned.</li>
+                <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder — the Session tab's <em>Open folder</em> — as two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
+                <li><strong>Contribute it</strong>: the Log tab's <em>Send files…</em>, then <em>Report my last test as a GitHub issue</em>, opens a pre-filled GitHub issue. A GitHub account is needed (free); drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
+              </ol>
+            </section>
+          </div>
 
-          <!-- 4. a contact made into a measurement -->
-          <section class="card console-card" id="help-test" aria-labelledby="help-test-title" title="Running a test session and contributing it">
-            <div class="card-head"><h2 class="card-title" id="help-test-title" title="Running a test session and contributing it">Running a test session</h2></div>
-            <p class="sub">
-              A test session is how a contact becomes a measurement the project can use: a probe, a
-              message, a burst at every mode and a file — the file what about two minutes at the
-              measured rate carry, as little as 256 bytes on a slow path — recorded, in about five
-              minutes (ten at most). The other
-              station only has to be listening — a person at the panel or an unattended station set to
-              answer only.
-            </p>
-            <ol class="help-steps">
-              <li><strong>Agree the contact</strong>: a frequency, a time, and the bandwidth (Setup step 4; both stations must run the same one) — and the same link protocol: if either panel says <em>Update required</em>, update first, since a test, like any call, does not connect across it.</li>
-              <li><strong>Setup step 1</strong>, once: your grid, rig, power and antenna. They go into every recording, so the report needs no follow-up.</li>
-              <li><strong>Session</strong>: the other callsign in <em>Call</em>, then <em>Test session</em>. The line under the buttons follows each step; the log shows what each one found. The whole run stops at ten minutes on its own; <em>Stop test</em> ends it earlier, keeping what was learned.</li>
-              <li><strong>Wait for <em>complete</em></strong>. The recording is in the recordings folder — the Session tab's <em>Open folder</em> — as two files whose names end in <code>_test</code>: the <code>.json</code> is the report, the <code>.wav</code> the audio.</li>
-              <li><strong>Contribute it</strong>: <em>Contribute last test session as GitHub issue</em> on the Session tab opens a pre-filled GitHub issue. A GitHub account is needed (free); drag the <code>.json</code> into the text box, add the <code>.wav</code> zipped if you are happy to share the audio, and <em>Submit</em>.</li>
-            </ol>
-          </section>
+          <div class="help-col">
+            <!-- 3. beacons: sent, heard and repeated -->
+            <section class="card console-card" id="help-beacons" aria-labelledby="help-beacons-title" title="Where beacons show, and how to repeat one">
+              <div class="card-head"><h2 class="card-title" id="help-beacons-title" title="Where beacons show, and how to repeat one">Beacons</h2></div>
+              <ul class="help-steps">
+                <li><strong>Sending one</strong>: <em>Beacon</em> on the Session tab puts this station's callsign on the air once, on the tone floor, addressed to nobody — so anyone listening, on either bandwidth, can say they heard you.</li>
+                <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. It needs you at the station — local or remote control: a beacon may be automatically controlled only in the few segments of §97.203(d) (28.20–28.30 MHz and a handful above), and Aether does not beacon unattended.</li>
+                <li><strong>What you sent</strong>: every beacon that goes on the air is in the <em>Log</em> (the <em>Beacons</em> filter), counted under <em>Beacons sent</em> on the Status tab, and the line under the Session tab's buttons says when the last went and when the next is due.</li>
+                <li><strong>What you heard</strong>: a beacon heard is in the Log with its callsign and SNR, in <em>Stations</em> — the <em>Beacons</em> column counts them per station and says when the last one was, and the <em>Beacons</em> filter lists only those stations — and among the Diagnostics tab's frames. A beacon is never answered: a channel where every beacon drew a reply would be unusable.</li>
+              </ul>
+            </section>
 
-          <!-- 5. what the numbers mean -->
-          <section class="card console-card" id="help-read" aria-labelledby="help-read-title" title="What the panel's readings mean">
-            <div class="card-head"><h2 class="card-title" id="help-read-title" title="What the panel's readings mean">Reading the panel</h2></div>
-            <ul class="help-steps">
-              <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
-              <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
-              <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
-              <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
-              <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Every <strong>?</strong> opens the explanation for the box it sits in.</li>
-            </ul>
-          </section>
+            <!-- 5. what the numbers mean -->
+            <section class="card console-card" id="help-read" aria-labelledby="help-read-title" title="What the panel's readings mean">
+              <div class="card-head"><h2 class="card-title" id="help-read-title" title="What the panel's readings mean">Reading the panel</h2></div>
+              <ul class="help-steps">
+                <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
+                <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
+                <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
+                <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
+                <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Every <strong>?</strong> opens the explanation for the box it sits in.</li>
+              </ul>
+            </section>
 
-          <!-- 6. the documents -->
-          <section class="card console-card" id="help-more" aria-labelledby="help-more-title" title="The documents, the releases and where to report a bug">
-            <div class="card-head"><h2 class="card-title" id="help-more-title" title="The documents, the releases and where to report a bug">Where to read more</h2></div>
-            <dl class="kv">
-              <dt>Releases and installers</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/releases" target="_blank" rel="noopener" title="Every release, with its installers and notes">github.com/KK4ODA/aether-hf/releases</a></dd>
-              <dt>Installing and setting up</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/install.md" target="_blank" rel="noopener" title="Installing Aether HF and setting it up">docs/user/install.md</a></dd>
-              <dt>Where to operate</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener" title="The frequency plan">docs/user/frequency-plan.md</a></dd>
-              <dt>The rules Aether checks</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="FCC regulatory controls: how Aether reads Part 97, with links to the e-CFR">docs/user/fcc-regulatory-controls.md</a></dd>
-              <dt>The field-test protocol</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener" title="How a field test is run and reported">docs/user/field-test.md</a></dd>
-              <dt>Host programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener" title="The VARA-compatible host interface">docs/spec/host-interfaces.md</a></dd>
-              <dt>A gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener" title="Running Aether HF as an unattended gateway">docs/user/gateway-kit.md</a></dd>
-              <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
-            </dl>
-            <p class="sub">
-              A bug report about the air should carry the zip from the Log tab's <em>Send files…</em>
-              (the logs, the diagnostic bundle and the sessions), with the recording's audio if there is
-              one. A Test session goes to the project as a GitHub issue from the same form.
-            </p>
-          </section>
+            <!-- 6. the documents -->
+            <section class="card console-card" id="help-more" aria-labelledby="help-more-title" title="The documents, the releases and where to report a bug">
+              <div class="card-head"><h2 class="card-title" id="help-more-title" title="The documents, the releases and where to report a bug">Where to read more</h2></div>
+              <dl class="kv">
+                <dt>Releases and installers</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/releases" target="_blank" rel="noopener" title="Every release, with its installers and notes">github.com/KK4ODA/aether-hf/releases</a></dd>
+                <dt>Installing and setting up</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/install.md" target="_blank" rel="noopener" title="Installing Aether HF and setting it up">docs/user/install.md</a></dd>
+                <dt>Where to operate</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener" title="The frequency plan">docs/user/frequency-plan.md</a></dd>
+                <dt>The rules Aether checks</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="FCC regulatory controls: how Aether reads Part 97, with links to the e-CFR">docs/user/fcc-regulatory-controls.md</a></dd>
+                <dt>The field-test protocol</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener" title="How a field test is run and reported">docs/user/field-test.md</a></dd>
+                <dt>Host programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener" title="The VARA-compatible host interface">docs/spec/host-interfaces.md</a></dd>
+                <dt>A gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener" title="Running Aether HF as an unattended gateway">docs/user/gateway-kit.md</a></dd>
+                <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
+              </dl>
+              <p class="sub">
+                A bug report about the air should carry the zip from the Log tab's <em>Send files…</em>
+                (the logs, the diagnostic bundle and the sessions), with the recording's audio if there is
+                one. A Test session goes to the project as a GitHub issue from the same form.
+              </p>
+            </section>
+          </div>
         </div>
       </section>
     </main>

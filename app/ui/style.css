@@ -2189,9 +2189,31 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 /* 4 · Setup: labels in one column, the steps at a glance, the save in reach */
-.setup .steps .row > label:not(.check):not(.label-inline) {
+.setup .steps .row > label:not(.check):not(.label-inline),
+.setup .steps :is(.row, .level-row) > .label-like {
   flex: 0 0 8.5rem;
   min-width: 0;
+}
+
+/* a reading that stands where a label would is a label: same face, size and colour */
+.setup .steps :is(.row, .level-row) > .label-like {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+
+/* every row is a control's height, so a row of a checkbox alone keeps the cards' rhythm */
+.setup .steps :is(.row, .level-row) {
+  min-height: var(--control-h);
+}
+
+/* a prose field ends where the selects end, so every card's right edge lines up */
+.setup .steps .row > input.prose {
+  flex: 0 1 34rem;
+}
+
+/* the meter starts in the controls' column and is as wide as a select */
+.setup .steps .level-row .meter {
+  flex: 0 1 34rem;
 }
 
 .setup .field-note {
@@ -2339,6 +2361,14 @@ details.fold-card > summary:hover .card-title {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s3);
   align-items: start;
+}
+
+/* each column stacks its own cards, so a short card leaves no gap beside a long one */
+.help-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
 }
 
 /* ── unsaved Setup changes: said where they are, and on every other tab ── */
@@ -2827,6 +2857,11 @@ input.port {
   width: 7ch;
   text-transform: none;
   letter-spacing: normal;
+}
+
+/* a six-character locator shown whole, padding and all */
+input#op-grid {
+  width: 10ch;
 }
 
 input.mhz {
@@ -3392,6 +3427,11 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   border-top: 1px solid var(--border);
 }
 
+/* the About card's two lists share one label column, the widest label's */
+.about .kv {
+  grid-template-columns: 9.5rem minmax(0, 1fr);
+}
+
 .help-steps {
   margin: 0;
   padding-left: 20px;
@@ -3676,7 +3716,8 @@ body.compact .reading .sub {
   }
 
   .status-readings .tiles > .tile,
-  .status-readings .tiles > .tile:nth-child(odd) {
+  .status-readings .tiles > .tile:nth-child(odd),
+  .status-readings .tiles > .tile:nth-child(n + 3) {
     border-left: 1px solid var(--border);
     border-top: 0;
     padding-left: var(--s3);
