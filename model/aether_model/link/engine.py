@@ -107,6 +107,11 @@ class LinkConfig:
     leave_repeats: int = 3
     """How many more times an abort's DISC is said, on the floor, while the other station has
     not answered it (ADR-0052)."""
+    floor_answer_margin_db: float = 12.0
+    """A call heard in the ordinary family less than this above the ordinary control frame's
+    AWGN threshold is accepted on the tone floor (ADR-0056): the path is not reciprocal enough
+    to bet the session on the ordinary frame making it back. KE4QCM's calls of 2026-10-10
+    decoded at +1…+6.5 dB, and the ordinary acceptances never reached him."""
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
     link_timeout_s: float = 45.0
@@ -276,6 +281,9 @@ class _RxRecord:
     outside: bool = False
     """It decoded as a frame of nobody's session — a beacon, a probe, a datagram, another
     session's — and is no part of the burst (ADR-0038)."""
+    payload_outside: bytes | None = None
+    """What such a frame carried: a call from the session's own peer under a new session
+    number ends the session (ADR-0056)."""
 
 
 SELF_DECODABLE_RVS = frozenset({0, 3})
@@ -1046,7 +1054,7 @@ class LinkEngine:
         floor = (
             self._connect_floor()
             if kind is DataKind.CONNECT_REQ
-            else self._peer_floor or self._floor_only()
+            else self._peer_floor or self._floor_only() or self._weak_call(snr_db)
         )
         mode = self._robust_mode(floor)
         cap = self.timing.capacity(mode)
@@ -1060,6 +1068,20 @@ class LinkEngine:
             span = (1 + self._connect_tries) * frame_s
             wait = self._response_wait(frame_s) + self.rng.uniform(0.0, span)
             self._arm("connect", self._tx_busy_until - self.now + wait)
+
+    def _weak_call(self, snr_db: float | None) -> bool:
+        """Whether a call that arrived in the ordinary family was weak enough that its
+        acceptance goes on the tone floor (ADR-0056). The acceptance is the one frame a session
+        cannot do without, the caller hears this station no better than this station hears it
+        on a lopsided path (ND1J 0/+5 dB, KE4QCM worse), and the floor reaches 14 dB lower for
+        2.6 s more on the air — once a session, and only on a path where the ordinary
+        acceptance was a gamble."""
+        if snr_db is None or self.timing.floor_modes <= 0:
+            return False
+        threshold = self.rate.thresholds.get(self._robust_mode(False))
+        if threshold is None:
+            return False
+        return snr_db < threshold + self.cfg.floor_answer_margin_db
 
     def _send_probe(
         self, kind: DataKind, remote: str, snr_db: float | None, *, floor: bool
@@ -1597,6 +1619,7 @@ class LinkEngine:
                 except ValueError:
                     return
                 if header.session != self.session:
+                    self._called_again(payload, frame)
                     return
                 if header.kind is DataKind.CONNECT_ACK:
                     return  # repeated accept: our confirmation is on its way
@@ -1639,6 +1662,30 @@ class LinkEngine:
             self._burst.remove(rec)
             if not self._burst:
                 self._disarm("ack")
+            if rec.payload_outside is not None:
+                self._called_again(rec.payload_outside, rec.frame)
+
+    def _called_again(self, payload: bytes, frame: SoftFrame) -> bool:
+        """A call from the station this one is in session with, under a new session number:
+        that station has given the session up — one station is in one session — and calls
+        again. The session is ended and the call answered as from idle (ADR-0056). Ignored as
+        another session's frame, KE4QCM's second call of 2026-10-10 went unanswered while this
+        station waited out the link timeout of a session whose acceptance he never heard."""
+        try:
+            header, body = decode_data(payload)
+        except ValueError:
+            return False
+        if header.kind is not DataKind.CONNECT_REQ or header.session == self.session:
+            return False
+        try:
+            req = ConnectBody.decode(body)
+        except ValueError:
+            return False
+        if req.src != self.remote_call or req.dst not in self.callsigns:
+            return False
+        self._end_session(f"{req.src} called again")
+        self._handle_connect_req(header, body, frame.snr_db)
+        return True
 
     def _answered_already(self, rec: _RxRecord) -> bool:
         """Whether a frame that did not decode belongs to a burst this station has answered:
@@ -1794,6 +1841,7 @@ class LinkEngine:
             # no frame of a burst (ADR-0038): counted, it was a failure that widened the
             # margin, and the acknowledgement its preamble armed answered nobody — ND1J's
             # beacon in the middle of a session drew one (2026-10-05)
+            rec.payload_outside = payload
             rec.payload = None
             rec.outside = True
             return False
