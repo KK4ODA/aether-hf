@@ -1124,17 +1124,40 @@ function selectStatusChart(which, chosen = false) {
 // is running — so a curve well under the mode line means the link is the limit, not the
 // modem, and a curve near it means the mode is working as fast as it can.
 
+// The scale is logarithmic: a session runs from the tone floor's 22 bit/s to OFDM's
+// thousands, and on a linear scale everything under a few hundred was a line on the floor
+// (the author, 2026-10-10). Nothing is drawn under SPEED_FLOOR_BPS.
+const SPEED_FLOOR_BPS = 10;
+const SPEED_TICKS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+
 function drawSpeedChart() {
   const now = Date.now();
-  let high = 200;
+  let high = 1000;
   for (const point of throughputHistory) {
     high = Math.max(high, point.bps, point.rate ?? 0);
   }
-  const step = high > 4000 ? 1000 : high > 1500 ? 500 : 100;
-  high = Math.ceil(high / step) * step;
-  const f = chartFrame("chart-speed", 450, chartHeight("chart-speed"), 0, high);
+  high = SPEED_TICKS.find((tick) => tick >= high) ?? high;
+  const f = chartFrame(
+    "chart-speed",
+    450,
+    chartHeight("chart-speed"),
+    Math.log10(SPEED_FLOOR_BPS),
+    Math.log10(high),
+  );
   const { ctx, c } = f;
-  drawValueAxis(f, 0, high, step);
+  const y = (bps) => f.y(Math.log10(Math.max(SPEED_FLOOR_BPS, bps)));
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  for (const tick of SPEED_TICKS) {
+    if (tick > high) break;
+    ctx.strokeStyle = c.grid;
+    ctx.beginPath();
+    ctx.moveTo(CHART_LEFT, y(tick));
+    ctx.lineTo(CHART_LEFT + f.plotWidth, y(tick));
+    ctx.stroke();
+    ctx.fillStyle = c.ink;
+    ctx.fillText(tick >= 1000 ? `${tick / 1000}k` : String(tick), CHART_LEFT - 6, y(tick));
+  }
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
   drawLegend(f, [[c.ink, "bit/s"], [withAlpha(c.tx, 0.9), "mode rate"], [c.accent, "goodput"]]);
 
@@ -1149,21 +1172,31 @@ function drawSpeedChart() {
       started = false;
       continue;
     }
-    if (started) ctx.lineTo(x(point.at), f.y(point.rate));
-    else ctx.moveTo(x(point.at), f.y(point.rate));
+    if (started) ctx.lineTo(x(point.at), y(point.rate));
+    else ctx.moveTo(x(point.at), y(point.rate));
     started = true;
   }
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // the goodput itself: the solid accent line, the reading that matters
+  // the goodput itself, the reading that matters: a filled area under a thick accent line
+  if (throughputHistory.length === 0) return;
+  const first = throughputHistory[0];
+  const last = throughputHistory[throughputHistory.length - 1];
+  ctx.beginPath();
+  ctx.moveTo(x(first.at), f.bottom);
+  for (const point of throughputHistory) ctx.lineTo(x(point.at), y(point.bps));
+  ctx.lineTo(x(last.at), f.bottom);
+  ctx.closePath();
+  ctx.fillStyle = withAlpha(c.accent, 0.18);
+  ctx.fill();
   ctx.strokeStyle = c.accent;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2.5;
   ctx.lineJoin = "round";
   ctx.beginPath();
   throughputHistory.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(x(point.at), f.y(point.bps));
-    else ctx.lineTo(x(point.at), f.y(point.bps));
+    if (index === 0) ctx.moveTo(x(point.at), y(point.bps));
+    else ctx.lineTo(x(point.at), y(point.bps));
   });
   ctx.stroke();
 }
@@ -1325,11 +1358,27 @@ function memoryLabel(entry) {
   return entry.name ? `${mhz} MHz — ${entry.name}` : `${mhz} MHz`;
 }
 
-function renderMemories(selectHz = null) {
+// The remembered dial the radio is on, if it is on one.
+function memoryAtRadio() {
+  return lastDialHz ? memories.find((m) => Math.abs(m.hz - lastDialHz) <= 10) ?? null : null;
+}
+
+// Rebuild the list. `followRadio` selects where the radio is — its entry, or, when it is on
+// none, a first line that says so: the list showed its first entry while the radio sat
+// elsewhere, and picking that entry changed nothing, so the dial only moved when the pick
+// was a change (the author, 2026-10-10). The radio is not retuned to match at start.
+function renderMemories(selectHz = null, followRadio = false) {
   const select = $("memory");
-  const chosen = selectHz ?? Number(select.value) ?? null;
+  const chosen = followRadio ? null : selectHz ?? (Number(select.value) || null);
   select.replaceChildren();
-  if (memories.length === 0) {
+  const atRadio = memoryAtRadio();
+  if (lastDialHz && !atRadio) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = `Radio at ${(lastDialHz / 1e6).toFixed(lastDialHz % 1000 === 0 ? 3 : 4)} MHz — not in the list`;
+    option.title = "The radio's dial is on none of the remembered frequencies: pick one to tune there, or Add this one";
+    select.append(option);
+  } else if (memories.length === 0) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "no dial remembered yet — Add one";
@@ -1342,6 +1391,8 @@ function renderMemories(selectHz = null) {
     select.append(option);
   }
   if (chosen && memories.some((m) => m.hz === chosen)) select.value = String(chosen);
+  else if (atRadio) select.value = String(atRadio.hz);
+  else select.value = "";
   $("btn-memory-remove").disabled = memories.length === 0;
   updateDialList();
 }
@@ -1408,8 +1459,7 @@ function applyDial(status) {
     if (status.frequency_hz !== lastDialHz) {
       lastDialHz = status.frequency_hz;
       // not over a pick waiting to be tuned: the pick is what the operator wants next
-      const match = memories.find((m) => Math.abs(m.hz - status.frequency_hz) <= 10);
-      if (match && dialPickTimer === null) $("memory").value = String(match.hz);
+      if (dialPickTimer === null) renderMemories(null, true);
     }
   } else if (hostOwnsTheDial(status)) {
     reading.textContent = "";
@@ -1511,12 +1561,12 @@ async function tuneToMemory() {
     $("dial-reading").textContent = `radio: ${formatHz(hz)} Hz`;
     $("dial-hero").textContent = `${formatHz(hz)} Hz`;
     lastDialHz = hz;
+    renderMemories(hz);
     return;
   }
   // refused or failed: the list goes back to where the radio is, so it never shows a dial the
   // radio is not on (the reason is in the log and the note)
-  const where = lastDialHz ? memories.find((m) => Math.abs(m.hz - lastDialHz) <= 10) : null;
-  if (where) $("memory").value = String(where.hz);
+  renderMemories(null, true);
 }
 
 function noteHeard(entry) {

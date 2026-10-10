@@ -395,8 +395,19 @@ export function createScopes(host) {
     ctx.moveTo(0, half);
     ctx.lineTo(width, half);
     ctx.stroke();
-    if (points.length === 0 || !frame) {
+    if (!frame) {
       caption.textContent = "no frame yet";
+      return;
+    }
+    const name = host.modeName(frame.mode);
+    const about =
+      `${frame.kind} · mode ${frame.mode}${name ? ` ${name}` : ""} · ` +
+      `${Number(frame.snr_db).toFixed(1)} dB · ${frame.decoded ? "decoded" : "not decoded"}`;
+    if (points.length === 0) {
+      // a tone frame (the floor and the middle kinds) is one tone at a time, detected by
+      // energy: it has no constellation to draw, and an empty square read as "nothing heard"
+      // (the author, 2026-10-10)
+      caption.textContent = `tone frame — no constellation · ${about}`;
       return;
     }
     let reach = 1.5;
@@ -411,10 +422,7 @@ export function createScopes(host) {
       ctx.fillRect(half + i * scale - 1.5, half - q * scale - 1.5, 3, 3);
     }
     ctx.globalAlpha = 1;
-    const name = host.modeName(frame.mode);
-    caption.textContent =
-      `${frame.kind} · mode ${frame.mode}${name ? ` ${name}` : ""} · ` +
-      `${Number(frame.snr_db).toFixed(1)} dB · ${frame.decoded ? "decoded" : "not decoded"}`;
+    caption.textContent = about;
   }
 
   return {
