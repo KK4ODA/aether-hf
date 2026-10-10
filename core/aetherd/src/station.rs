@@ -2309,7 +2309,8 @@ impl<P: Ptt> Station<P> {
         self.meter.push(audio);
         self.spectrum.push(audio);
         if let Some(recording) = &mut self.recording
-            && let Err(error) = recording.captured(audio)
+            && let Err(error) =
+                crate::waits::timed(crate::waits::Wait::Recording, || recording.captured(audio))
         {
             // a full disk must not stop the modem; the recording is what is lost
             self.note("error", &format!("recording stopped: {error}"));
