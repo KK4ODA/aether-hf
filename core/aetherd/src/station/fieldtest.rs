@@ -220,6 +220,17 @@ impl Rung {
     }
 }
 
+/// How many of the ladder's `modes` lie under `rung`, the rung the message ran at: the
+/// ladder skips them. A message that ran at the floor, or above every rung, skips nothing and
+/// everything but the top respectively.
+pub fn skipped_rungs(modes: &[usize], rung: usize) -> usize {
+    modes
+        .iter()
+        .take_while(|&&m| m < rung)
+        .count()
+        .min(modes.len().saturating_sub(1))
+}
+
 /// Rungs in a row that may fail before the ladder stops.
 const LADDER_FAILS: usize = 3;
 
@@ -352,6 +363,11 @@ pub struct TestRun {
     /// The bytes a second of air carried at the rung the link ran at when the message was
     /// acknowledged: what [`file_rate_bps`] compares the rung after the ladder with.
     message_rung_rate: Option<f64>,
+    /// The rung the link ran at when the message was acknowledged: the ladder starts there,
+    /// since the message has just shown every rung under it carrying data.
+    message_rung: Option<usize>,
+    /// The ladder's rungs left out under the message's rung, once the ladder has begun.
+    ladder_skipped: Option<usize>,
     /// The fastest rung that passed, once one has.
     highest_passed: Option<usize>,
     /// What was shortened or skipped, and why, for the report.
@@ -388,6 +404,8 @@ impl TestRun {
             file_size: 0,
             acked_at_step: 0,
             message_rung_rate: None,
+            message_rung: None,
+            ladder_skipped: None,
             highest_passed: None,
             adjustments: Vec::new(),
         }
@@ -640,7 +658,7 @@ impl<P: Ptt> Station<P> {
             "transfer": transfer,
             "ladder": {
                 "total": run.modes.len(),
-                "done": run.rungs.len(),
+                "done": run.ladder_skipped.unwrap_or(0) + run.rungs.len(),
                 "testing": testing,
                 "testing_name": testing.and_then(name),
                 "frames": run.plan.rung_frames,
@@ -790,6 +808,7 @@ impl<P: Ptt> Station<P> {
                     if run.step == Step::Message {
                         run.message = Some(transfer);
                         run.message_rung_rate = Some(self.rung_rate(self.engine.current_mode()));
+                        run.message_rung = Some(self.engine.current_mode());
                     } else {
                         run.file = Some(transfer);
                     }
@@ -805,6 +824,25 @@ impl<P: Ptt> Station<P> {
                 self.sync_test_report(run);
             }
             Step::Ladder => {
+                // the rungs under the one the message ran at have just carried the message:
+                // climbing them again cost WC4Y's Test of 2026-10-10 four tone rungs of 26 s
+                // each, a sixth of its budget, before the ladder learned anything new
+                if run.ladder_skipped.is_none() {
+                    let skip = run
+                        .message_rung
+                        .map_or(0, |rung| skipped_rungs(&run.modes, rung));
+                    run.ladder_skipped = Some(skip);
+                    run.ladder_next = skip;
+                    if skip > 0 {
+                        let from = run.modes[skip.min(run.modes.len() - 1)];
+                        run.adjustments
+                            .push(format!("ladder from rung {from}: the message ran there"));
+                        self.note(
+                            "test",
+                            &format!("ladder: from rung {from}, where the message ran"),
+                        );
+                    }
+                }
                 // a rung is started only with the file's time still in hand; one under way is
                 // seen through
                 let bps = file_rate_bps(
@@ -979,6 +1017,19 @@ mod tests {
                 .is_err()
         );
         assert!(TestPlan::from_params(&json!({ "remote": "KK4XYZ", "file_bytes": -1 })).is_err());
+    }
+
+    #[test]
+    fn the_ladder_starts_where_the_message_ran() {
+        let modes: Vec<usize> = (0..15).collect();
+        // WC4Y's Test: the message ran at rung 3, so rungs 0-2 are skipped
+        assert_eq!(skipped_rungs(&modes, 3), 3);
+        // a message on the floor skips nothing; one above every rung still tries the top
+        assert_eq!(skipped_rungs(&modes, 0), 0);
+        assert_eq!(skipped_rungs(&modes, 40), 14);
+        // a ladder the rules cut short (ADR-0018) skips only the rungs it has
+        assert_eq!(skipped_rungs(&[0, 1, 2], 9), 2);
+        assert_eq!(skipped_rungs(&[], 3), 0);
     }
 
     #[test]
