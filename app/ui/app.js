@@ -555,6 +555,11 @@ async function refreshStatus() {
 }
 
 let modeTable = [];
+// The fastest mode the configuration holds, kept until the mode list it is chosen from has
+// arrived: the configuration and the capabilities come back in either order, and a list
+// filled after the configuration showed its first entry — rung 0 — which the next Save
+// wrote. KO4WX ran a whole evening at 22 bit/s on a path carrying rungs 3–5 (2026-10-10).
+let configuredMaxMode = null;
 
 // The Disconnect button says what it will do now, and the line under it what a close waits
 // for: in five sessions with KE4QCM (2026-09-25) Disconnect seemed to do nothing, and each
@@ -2234,7 +2239,7 @@ document.addEventListener("visibilitychange", scopesWanted);
 function fillModes() {
   const select = $("radio-max-mode");
   if (select.options.length === modeTable.length && modeTable.length > 0) return;
-  const before = select.value;
+  const before = select.value || (configuredMaxMode == null ? "" : String(configuredMaxMode));
   select.replaceChildren();
   for (const mode of modeTable) {
     const option = document.createElement("option");
@@ -2242,7 +2247,10 @@ function fillModes() {
     option.textContent = `${mode.index} — ${mode.name}`;
     select.append(option);
   }
-  if (before) select.value = before;
+  // the one the configuration holds, or the ladder's top when it is past this ladder — never
+  // whatever the browser shows first
+  if (before && [...select.options].some((o) => o.value === before)) select.value = before;
+  else if (select.options.length > 0) select.value = select.options[select.options.length - 1].value;
 }
 
 async function loadCapabilities() {
@@ -2434,6 +2442,7 @@ async function loadConfig() {
   fillModes();
   select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
   $("radio-answer-only").checked = radio.answer_only === true;
+  configuredMaxMode = radio.max_mode ?? null;
   select($("radio-max-mode"), String(radio.max_mode ?? 19));
   $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
@@ -2779,7 +2788,11 @@ function formChanges() {
   changes["operator.antenna"] = $("op-antenna").value.trim();
   changes["radio.bandwidth"] = Number($("radio-bandwidth").value);
   changes["radio.answer_only"] = $("radio-answer-only").checked;
-  changes["radio.max_mode"] = Number($("radio-max-mode").value);
+  // an empty list says nothing about the fastest mode: Number("") is 0, rung 0, and saving it
+  // held a station at the bottom of the ladder for good
+  if ($("radio-max-mode").value !== "") {
+    changes["radio.max_mode"] = Number($("radio-max-mode").value);
+  }
   changes["radio.compress"] = $("radio-compress").checked;
   changes["radio.wait_for_clear"] = $("radio-wait").checked;
   for (const [id, key] of [
