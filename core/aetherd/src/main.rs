@@ -881,6 +881,8 @@ fn note_pass(
     [commands_ms, capture_ms, playback_ms]: [f64; 3],
     machine_late_ms: Option<f64>,
 ) {
+    // what the pass waited on outside the modem: taken every pass, said when it was slow
+    let [radio_ms, recording_ms, card_ms] = aetherd::waits::take();
     let total_ms = commands_ms + capture_ms + playback_ms;
     let phase = if capture_ms >= commands_ms && capture_ms >= playback_ms {
         "capture"
@@ -910,12 +912,13 @@ fn note_pass(
         "loop",
         &format!(
             "a pass took {total_ms:.0} ms (commands {commands_ms:.0}, capture {capture_ms:.0}, \
-             playback {playback_ms:.0}){}{}; {} such passes so far",
+             playback {playback_ms:.0}){}{}{}; {} such passes so far",
             if station.transmitting() {
                 " while transmitting"
             } else {
                 ""
             },
+            waited_on(radio_ms, recording_ms, card_ms, total_ms),
             machine_late_ms.map_or(String::new(), |late| format!(
                 "; meanwhile a thread that only sleeps woke {late:.0} ms late ({})",
                 if late * 2.0 >= total_ms {
@@ -928,6 +931,27 @@ fn note_pass(
         ),
         &state_name(station),
     );
+}
+
+/// What a slow pass waited on outside the modem, when that was most of it: the radio's keying
+/// interface (CAT, a serial line, `rigctld`, `FLRig`), the recording on disk, or the sound card —
+/// the rest is the modem's own work. Empty when nothing outside took a tenth of the pass.
+fn waited_on(radio_ms: f64, recording_ms: f64, card_ms: f64, total_ms: f64) -> String {
+    let named = [
+        ("the radio's keying interface", radio_ms),
+        ("writing the recording", recording_ms),
+        ("the sound card", card_ms),
+    ];
+    let parts: Vec<String> = named
+        .iter()
+        .filter(|(_, ms)| *ms >= 0.1 * total_ms && *ms >= 20.0)
+        .map(|(what, ms)| format!("{what} {ms:.0} ms"))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("; it waited on {}", parts.join(", "))
+    }
 }
 
 /// Hand the sound card everything the station has rendered, up to the backlog, tell the
@@ -1072,7 +1096,7 @@ fn serve(
         // station's own transmission is muted only up to where the transmission ended
         station.device_played(audio.played());
         station.device_latency(audio.output_latency_s());
-        let captured = audio.capture();
+        let captured = aetherd::waits::timed(aetherd::waits::Wait::Card, || audio.capture());
         let idle = captured.is_empty();
         if !idle {
             last_audio = std::time::Instant::now();
@@ -1821,7 +1845,11 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
                     address: civ_address.unwrap_or(0x00),
                 },
             };
-            Box::new(aetherd::ptt::CatPtt::open(port, *baud, protocol)?)
+            // on a thread of its own: a USB serial port that stops answering under RFI must
+            // not stop the modem (2026-10-10)
+            Box::new(aetherd::ptt::ThreadedPtt::spawn(
+                aetherd::ptt::CatPtt::open(port, *baud, protocol)?,
+            ))
         }
         PttConfig::Cm108 { device, gpio } => {
             Box::new(aetherd::ptt::GpioPtt::open(device.as_deref(), *gpio)?)

@@ -127,6 +127,213 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
     }
 }
 
+/// How long the run loop waits for the radio to take a keying command.
+const KEY_BOUND: std::time::Duration = std::time::Duration::from_millis(1200);
+/// How long the run loop waits for a dial reading before it goes on with the last one.
+const READ_BOUND: std::time::Duration = std::time::Duration::from_millis(300);
+/// How long the run loop waits for the radio to be tuned and read back.
+const TUNE_BOUND: std::time::Duration = std::time::Duration::from_millis(2500);
+
+enum Request {
+    Key,
+    Unkey,
+    Read,
+    Tune(u64),
+}
+
+enum Reply {
+    Done(Result<(), PttError>),
+    Read(Option<u64>),
+}
+
+/// A keying interface on a thread of its own, the run loop waiting for each answer no longer
+/// than a bound: [`KEY_BOUND`] to key or release, [`READ_BOUND`] for the dial (the last reading
+/// after that), [`TUNE_BOUND`] to tune.
+///
+/// The CAT port is a USB serial device on the radio's own cable, and on 2026-10-10 a pass of
+/// KK4ODA-1's run loop took 17.5 s during broadband RFI on 80 m — the receiver was cheap on the
+/// same audio, and the station keyed the moment the pass ended. Called on the loop, an
+/// interface that stops answering stops the modem: no audio is read, 15 s of it is dropped, and
+/// no frame is heard. Here it costs a key that is refused (the burst goes later) or a dial
+/// reading a few seconds old. A release is always queued, whatever is stuck before it: the key
+/// comes up as soon as the port answers again.
+pub struct ThreadedPtt {
+    describe: String,
+    can_tune: bool,
+    requests: std::sync::mpsc::Sender<Request>,
+    replies: std::sync::mpsc::Receiver<Reply>,
+    /// Requests sent whose replies have not been taken.
+    pending: usize,
+    /// The last dial reading the worker returned.
+    dial: Option<u64>,
+    /// What the port is doing wrong, while it is.
+    stuck: Option<String>,
+}
+
+impl std::fmt::Debug for ThreadedPtt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadedPtt")
+            .field("describe", &self.describe)
+            .field("pending", &self.pending)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ThreadedPtt {
+    /// Move `inner` to a thread of its own.
+    #[must_use]
+    pub fn spawn<P: Ptt + 'static>(mut inner: P) -> Self {
+        let describe = inner.describe();
+        let can_tune = inner.can_tune();
+        let (requests, work) = std::sync::mpsc::channel::<Request>();
+        let (answer, replies) = std::sync::mpsc::channel::<Reply>();
+        let spawned = std::thread::Builder::new()
+            .name("keying".into())
+            .spawn(move || {
+                for request in work {
+                    let reply = match request {
+                        Request::Key => Reply::Done(inner.key()),
+                        Request::Unkey => Reply::Done(inner.unkey()),
+                        Request::Read => Reply::Read(inner.frequency_hz()),
+                        Request::Tune(hz) => Reply::Done(inner.set_frequency_hz(hz)),
+                    };
+                    if answer.send(reply).is_err() {
+                        break;
+                    }
+                }
+            });
+        let stuck = spawned
+            .err()
+            .map(|e| format!("cannot start the keying thread: {e}"));
+        Self {
+            describe,
+            can_tune,
+            requests,
+            replies,
+            pending: 0,
+            dial: None,
+            stuck,
+        }
+    }
+
+    /// Take a reply that has arrived; the dial from a late reading is kept.
+    fn take(&mut self, reply: Reply) -> Reply {
+        self.pending = self.pending.saturating_sub(1);
+        if self.pending == 0 {
+            self.stuck = None;
+        }
+        if let Reply::Read(Some(hz)) = reply {
+            self.dial = Some(hz);
+        }
+        reply
+    }
+
+    /// Take the replies to requests that outlived their bound.
+    fn drain(&mut self) {
+        while self.pending > 0 {
+            match self.replies.try_recv() {
+                Ok(reply) => {
+                    let _ = self.take(reply);
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Send `request` and wait for its reply up to `bound`. `None` when the reply did not come,
+    /// or the port is still busy with an earlier request (then nothing is sent, unless `always`).
+    fn exchange(
+        &mut self,
+        request: Request,
+        bound: std::time::Duration,
+        always: bool,
+    ) -> Option<Reply> {
+        self.drain();
+        if self.pending > 0 && !always {
+            return None;
+        }
+        if self.requests.send(request).is_err() {
+            self.stuck = Some("the keying thread has stopped".into());
+            return None;
+        }
+        self.pending += 1;
+        // replies come in order: everything still owed before this one is taken first
+        let deadline = std::time::Instant::now() + bound;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(reply) = self.replies.recv_timeout(left) else {
+                self.stuck = Some(format!(
+                    "{} has not answered for {:.1} s",
+                    self.describe,
+                    bound.as_secs_f64()
+                ));
+                return None;
+            };
+            let last = self.pending == 1;
+            let reply = self.take(reply);
+            if last {
+                return Some(reply);
+            }
+        }
+    }
+
+    fn done(reply: Option<Reply>, what: &str, stuck: Option<&String>) -> Result<(), PttError> {
+        match reply {
+            Some(Reply::Done(result)) => result,
+            Some(Reply::Read(_)) => Ok(()),
+            None => Err(PttError::Backend(stuck.cloned().unwrap_or_else(|| {
+                format!("the radio did not answer the {what} in time")
+            }))),
+        }
+    }
+}
+
+impl Ptt for ThreadedPtt {
+    fn key(&mut self) -> Result<(), PttError> {
+        let reply = crate::waits::timed(crate::waits::Wait::Radio, || {
+            self.exchange(Request::Key, KEY_BOUND, false)
+        });
+        Self::done(reply, "keying command", self.stuck.as_ref())
+    }
+
+    fn unkey(&mut self) -> Result<(), PttError> {
+        // queued whatever is stuck before it: the key must come up when the port answers
+        let reply = crate::waits::timed(crate::waits::Wait::Radio, || {
+            self.exchange(Request::Unkey, KEY_BOUND, true)
+        });
+        Self::done(reply, "release", self.stuck.as_ref())
+    }
+
+    fn describe(&self) -> String {
+        self.describe.clone()
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        let reply = crate::waits::timed(crate::waits::Wait::Radio, || {
+            self.exchange(Request::Read, READ_BOUND, false)
+        });
+        match reply {
+            Some(Reply::Read(hz)) => hz,
+            _ => self.dial,
+        }
+    }
+
+    fn fault(&self) -> Option<String> {
+        self.stuck.clone()
+    }
+
+    fn can_tune(&self) -> bool {
+        self.can_tune
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
+        let reply = crate::waits::timed(crate::waits::Wait::Radio, || {
+            self.exchange(Request::Tune(hz), TUNE_BOUND, false)
+        });
+        Self::done(reply, "tuning command", self.stuck.as_ref())
+    }
+}
+
 /// No keying at all: for VOX, for a receive-only station, and for tests.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullPtt {
@@ -669,6 +876,75 @@ impl<P: Ptt> PttWatchdog<P> {
 
 #[cfg(test)]
 mod tests {
+    /// A radio that answers at once, or after `hang` while told to.
+    struct Slow {
+        hang: std::sync::Arc<std::sync::Mutex<std::time::Duration>>,
+        keyed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Slow {
+        fn wait(&self) {
+            let hang = *self.hang.lock().expect("lock");
+            std::thread::sleep(hang);
+        }
+    }
+
+    impl Ptt for Slow {
+        fn key(&mut self) -> Result<(), PttError> {
+            self.wait();
+            self.keyed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn unkey(&mut self) -> Result<(), PttError> {
+            self.wait();
+            self.keyed.store(false, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            "a slow radio".into()
+        }
+        fn frequency_hz(&mut self) -> Option<u64> {
+            self.wait();
+            Some(3_590_000)
+        }
+        fn can_tune(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_keying_interface_that_stops_answering_does_not_stop_the_loop() {
+        // 2026-10-10: a 17.5 s pass during broadband RFI, the CAT port on the radio's USB
+        // cable the likely culprit. The loop waits a bound for each answer, goes on with the
+        // last dial reading, refuses the key, and queues the release
+        let hang = std::sync::Arc::new(std::sync::Mutex::new(std::time::Duration::ZERO));
+        let keyed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut ptt = ThreadedPtt::spawn(Slow {
+            hang: hang.clone(),
+            keyed: keyed.clone(),
+        });
+        assert_eq!(ptt.frequency_hz(), Some(3_590_000));
+        ptt.key().expect("answers at once");
+        assert!(keyed.load(std::sync::atomic::Ordering::SeqCst));
+        *hang.lock().expect("lock") = std::time::Duration::from_secs(3);
+        let began = std::time::Instant::now();
+        assert!(ptt.unkey().is_err(), "the release was not confirmed in time");
+        assert_eq!(ptt.frequency_hz(), Some(3_590_000), "the last reading, at once");
+        assert!(ptt.key().is_err(), "no key while the port is stuck");
+        assert!(ptt.fault().is_some());
+        assert!(
+            began.elapsed() < std::time::Duration::from_millis(2000),
+            "the loop waited {:?}",
+            began.elapsed()
+        );
+        // the port answers again: the queued release went through, and keying works
+        *hang.lock().expect("lock") = std::time::Duration::ZERO;
+        std::thread::sleep(std::time::Duration::from_millis(3500));
+        assert!(!keyed.load(std::sync::atomic::Ordering::SeqCst), "released");
+        ptt.key().expect("answers again");
+        assert!(ptt.fault().is_none());
+    }
+
     use super::*;
 
     #[test]
