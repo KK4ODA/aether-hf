@@ -42,9 +42,13 @@ of the burst was decoded; now every frame but the truncated one.
    ADR-0014's reading a block-spacing early, its first block in the silence, its middle block
    on the real frame's first.
 2. **A frame taken at a lower statistic that overlaps a candidate by no more than a sync block
-   does not keep it out** (`overlaps(span, statistic)`, also for announcements and for
-   dropping arrivals). Frames of a half-duplex burst never overlap; a stronger frame whose
-   first block is a weaker frame's last is the real one.
+   does not keep it out** (`overlaps(span, statistic)`). Frames of a half-duplex burst never
+   overlap; a stronger frame whose first block is a weaker frame's last is the real one. This is
+   for whole candidates only, which must also pass confirmation: announcements and the dropping
+   of arrivals keep the strict rule. A first draft applied it to them too, and the harness's
+   `80m-weak-500` fell from 4/4 seeds to 1/4 — every burst's last frame repeats its first block
+   at its end, that block was announced as a frame arriving past the burst, and the receiver
+   held its acknowledgement 5.4 s for it, into the sender's retry.
 
 ## 3. Measured
 

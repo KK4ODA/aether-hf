@@ -819,7 +819,7 @@ class ToneStream:
             kind, rv = self.det.hypotheses[i]
             start = h * hop
             near = [x[1] for x in self._firsts if abs(x[0] - h) <= self.ANNOUNCE_LOOKAHEAD]
-            if v < max(near) or self._overlaps((start, start + kind.samples), v):
+            if v < max(near) or self._overlaps((start, start + kind.samples)):
                 continue
             inside = [a for a in self.arriving if a.start - hop < start < a.end - hop]
             if any(self._own_block(a, start) or v <= a.statistic for a in inside):
@@ -836,7 +836,7 @@ class ToneStream:
         self.arriving = [
             a
             for a in self.arriving
-            if a.end > now - hop and not self._overlaps((a.start + hop, a.end - hop), a.statistic)
+            if a.end > now - hop and not self._overlaps((a.start + hop, a.end - hop))
         ]
 
     def _own_block(self, arrival: ToneArrival, start: int) -> bool:
@@ -875,14 +875,16 @@ class ToneStream:
             for a in self.arriving
         )
 
-    def _overlaps(self, span: tuple[int, int], statistic: float = np.inf) -> bool:
+    def _overlaps(self, span: tuple[int, int], statistic: float = -np.inf) -> bool:
         """Whether ``span`` overlaps a frame taken, by more than the hop or two a coarse
         start is off by — back-to-back frames of a burst touch.
 
         A frame taken at a lower ``statistic`` than this one's that overlaps it by no more
         than a sync block does not count (ADR-0060): a phantom whose last block is a real
         frame's first, read before that frame's first block was in, must not keep the real
-        frame out."""
+        frame out. Only a whole candidate settles that way: an announcement is one block, and
+        the last frame of a burst repeats its first block at its end — announced past the
+        frame, it held the acknowledgement for a frame that never came."""
         tol = self.det.HOP_DIV // 2 * self.det.hop
         block = SYNC_SYMBOLS * self.det.num.symbol_samples + tol
         for a, b, taken_at in self._taken:
