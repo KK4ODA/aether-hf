@@ -657,6 +657,11 @@ pub struct Delivery {
     pub reason: Option<String>,
 }
 
+/// Seconds of what was heard before a recording that the recording starts with: the probe and
+/// the call that brought a session, which a session's recording, started when it comes up,
+/// otherwise misses.
+pub const PREROLL_S: f64 = 30.0;
+
 /// The most deliveries kept for `status` — a panel that was closed or reloaded while one
 /// resolved looks its messages up there — and held between two calls of `take_deliveries`.
 const RECENT_DELIVERIES: usize = 32;
@@ -896,6 +901,10 @@ pub struct Station<P: Ptt> {
     meter: LevelMeter,
     /// The session recording in progress, if one is.
     recording: Option<crate::record::Recording>,
+    /// The last [`PREROLL_S`] of captured audio while nothing records, and the frames found
+    /// in it: what a recording starts with (`Recording::prepend`).
+    preroll: std::collections::VecDeque<f32>,
+    preroll_frames: std::collections::VecDeque<crate::record::FrameRecord>,
     /// Notes the operator gave for the next automatic recording, if any.
     record_notes: Option<String>,
     /// The Test session running, or the last one run (P6-7).
@@ -1077,6 +1086,8 @@ impl<P: Ptt> Station<P> {
             pending: VecDeque::new(),
             meter: LevelMeter::new(params.audio_rate as f64, 3.0),
             recording: None,
+            preroll: std::collections::VecDeque::new(),
+            preroll_frames: std::collections::VecDeque::new(),
             record_notes: None,
             test: None,
             pending_callsigns: None,
@@ -2207,6 +2218,15 @@ impl<P: Ptt> Station<P> {
             meta,
         )
         .map_err(|e| format!("cannot write to {}: {e}", dir.display()))?;
+        let mut recording = recording;
+        let preroll: Vec<f32> = std::mem::take(&mut self.preroll).into();
+        let frames: Vec<_> = std::mem::take(&mut self.preroll_frames).into();
+        if let Err(error) = recording.prepend(&preroll, frames) {
+            self.note(
+                "error",
+                &format!("the recording's first seconds were lost: {error}"),
+            );
+        }
         let path = recording.path().to_path_buf();
         self.recording = Some(recording);
         self.note("recording", &format!("started {}", path.display()));
@@ -2308,6 +2328,12 @@ impl<P: Ptt> Station<P> {
         self.audio_seen += audio.len();
         self.meter.push(audio);
         self.spectrum.push(audio);
+        if self.recording.is_none() {
+            let keep = (PREROLL_S * self.config.params.audio_rate as f64) as usize;
+            self.preroll.extend(audio.iter().copied());
+            let excess = self.preroll.len().saturating_sub(keep);
+            self.preroll.drain(..excess);
+        }
         if let Some(recording) = &mut self.recording
             && let Err(error) =
                 crate::waits::timed(crate::waits::Wait::Recording, || recording.captured(audio))
@@ -2685,36 +2711,35 @@ impl<P: Ptt> Station<P> {
             let detected = decoded.frame.detect_confidence(&air);
             let span_start = (origin + decoded.frame.start()) as f64 / fs;
             let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
-            if let Some(recording) = &mut self.recording {
-                recording.frame(crate::record::FrameRecord {
-                    t_s: now,
-                    start_s: Some(span_start),
-                    end_s: Some(span_end),
-                    follows: decoded.frame.follows(),
-                    kind: if control { "control" } else { "data" }.into(),
-                    mode: rung,
-                    rv: decoded.frame.rv(),
-                    snr_3k_db: decoded.frame.snr_3k_db(),
-                    cfo_hz: reported_cfo(
-                        decoded.ok(),
-                        decoded.frame.mode_confidence(),
-                        detected,
-                        decoded.frame.cfo_hz(),
-                    ),
-                    confidence: decoded.frame.mode_confidence(),
-                    detect_confidence: detected,
-                    decoded: decoded.ok(),
-                    bytes: decoded.payload.as_ref().map_or(0, Vec::len),
-                    control: if control {
-                        decoded
-                            .payload
-                            .as_deref()
-                            .and_then(crate::record::describe_control)
-                    } else {
-                        None
-                    },
-                });
-            }
+            let record = crate::record::FrameRecord {
+                t_s: now,
+                start_s: Some(span_start),
+                end_s: Some(span_end),
+                follows: decoded.frame.follows(),
+                kind: if control { "control" } else { "data" }.into(),
+                mode: rung,
+                rv: decoded.frame.rv(),
+                snr_3k_db: decoded.frame.snr_3k_db(),
+                cfo_hz: reported_cfo(
+                    decoded.ok(),
+                    decoded.frame.mode_confidence(),
+                    detected,
+                    decoded.frame.cfo_hz(),
+                ),
+                confidence: decoded.frame.mode_confidence(),
+                detect_confidence: detected,
+                decoded: decoded.ok(),
+                bytes: decoded.payload.as_ref().map_or(0, Vec::len),
+                control: if control {
+                    decoded
+                        .payload
+                        .as_deref()
+                        .and_then(crate::record::describe_control)
+                } else {
+                    None
+                },
+            };
+            self.keep_frame(record, now);
             // A beacon belongs to no session, so it is handled before anything the engine
             // would do with it. It is reported and never answered: a channel where every
             // beacon drew a reply would be unusable.
@@ -3444,6 +3469,22 @@ impl<P: Ptt> Station<P> {
         self.playing_test = cuttable;
     }
 
+    /// A frame found: into the recording, or kept for the next one's first seconds.
+    fn keep_frame(&mut self, record: crate::record::FrameRecord, now: f64) {
+        if let Some(recording) = &mut self.recording {
+            recording.frame(record);
+            return;
+        }
+        self.preroll_frames.push_back(record);
+        while self
+            .preroll_frames
+            .front()
+            .is_some_and(|f| f.t_s < now - PREROLL_S)
+        {
+            self.preroll_frames.pop_front();
+        }
+    }
+
     /// What a frame says of its sender: the bandwidth it runs, which is what a call to it
     /// should be made in, and — when it decoded — that it was heard now (ADR-0057).
     fn learn_from(&mut self, report: &FrameReport, now: f64) {
@@ -3455,6 +3496,29 @@ impl<P: Ptt> Station<P> {
         }
         if report.decoded {
             self.note_sender(&from, now);
+        }
+        // a call or probe to this station is said, heard or not answered: WC4Y's probe of
+        // 2026-10-10 went unanswered, and nothing in KK4ODA-1's files said whether it had been
+        // heard at all (the engine's own event says when one is answered)
+        if report.decoded
+            && matches!(report.kind, "connect" | "probe")
+            && report
+                .to
+                .as_ref()
+                .is_some_and(|to| self.engine.callsigns.contains(to))
+        {
+            let what = if report.kind == "probe" {
+                "probe"
+            } else {
+                "call"
+            };
+            let detail = format!(
+                "{what} from {} to {} at {:.1} dB",
+                report.from.as_deref().unwrap_or("?"),
+                report.to.as_deref().unwrap_or("?"),
+                report.snr_db
+            );
+            self.note("heard", &detail);
         }
     }
 
@@ -5873,6 +5937,44 @@ mod tests {
             standing[0]["session"]["frequency_hz"].is_null(),
             "a keying line cannot know the frequency, and must not pretend to"
         );
+    }
+
+    #[test]
+    fn a_called_stations_recording_starts_with_the_call_that_brought_it() {
+        // WC4Y's probe of 2026-10-10 went unanswered, and KK4ODA-1's recording began when the
+        // session came up: nothing said whether the probe had been heard. A recording now starts
+        // with the last PREROLL_S heard, and the frames found in it; the call is in the log too
+        let dir = std::env::temp_dir().join(format!("aether-preroll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.set_recording(Some(dir.clone()), true, "");
+        air.run(5.0, |_, _| false);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |_, b| b.recording().is_some());
+        let events = air.b.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("heard:call from W4ODA to KK4XYZ at")),
+            "{events:?}"
+        );
+        air.a.disconnect();
+        air.run(60.0, |a, b| !a.connected() && !b.connected());
+        let sidecar: serde_json::Value = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "json"))
+            .map(|p| serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap())
+            .expect("a sidecar");
+        let preroll = sidecar["session"]["preroll_s"].as_f64().expect("preroll_s");
+        assert!(preroll > 5.0 && preroll <= PREROLL_S + 0.1, "{preroll}");
+        let first = &sidecar["frames"][0];
+        assert!(
+            first["start_s"].as_f64().expect("start_s") < preroll && first["decoded"] == true,
+            "the call is the recording's first frame, before the session: {first}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

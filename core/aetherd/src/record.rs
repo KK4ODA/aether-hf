@@ -234,6 +234,35 @@ impl Recording {
         Ok(())
     }
 
+    /// Put what the station heard just before the recording began at its front: the audio and
+    /// the frames found in it, the recording's clock moved back by its length. A recording of a
+    /// session starts when the session comes up, so the call that brought it — and a probe
+    /// before it — were not in it: WC4Y's probe of 2026-10-10 went unanswered, and neither
+    /// station's files could say whether KK4ODA-1 had heard it. Only before any audio.
+    ///
+    /// # Errors
+    /// If the file cannot be written.
+    pub fn prepend(&mut self, audio: &[f32], frames: Vec<FrameRecord>) -> std::io::Result<()> {
+        if self.samples > 0 || audio.is_empty() {
+            return Ok(());
+        }
+        let seconds = audio.len() as f64 / f64::from(self.sample_rate);
+        self.t0 -= seconds;
+        self.captured(audio)?;
+        for frame in frames {
+            if frame.t_s >= self.t0 {
+                self.frame(frame);
+            }
+        }
+        if let Value::Object(meta) = &mut self.meta {
+            meta.insert(
+                "preroll_s".into(),
+                json!((seconds * 1000.0).round() / 1000.0),
+            );
+        }
+        self.write_sidecar(None)
+    }
+
     /// A frame the receiver found.
     pub fn frame(&mut self, mut record: FrameRecord) {
         record.t_s -= self.t0;
