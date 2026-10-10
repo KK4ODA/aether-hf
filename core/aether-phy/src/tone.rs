@@ -1570,7 +1570,8 @@ pub struct ToneStream {
     first_hops: i64,
     candidates: Vec<Candidate>,
     firsts: Vec<Candidate>,
-    taken: std::collections::VecDeque<(usize, usize)>,
+    /// Frames taken: start, end and the statistic they were taken at.
+    taken: std::collections::VecDeque<(usize, usize, f64)>,
     /// Frames announced and not yet final.
     pub arriving: Vec<ToneArrival>,
 }
@@ -1757,10 +1758,10 @@ impl ToneStream {
                 .filter(|x| (x.0 - h).abs() <= lookahead)
                 .map(|x| x.1)
                 .fold(f64::NEG_INFINITY, f64::max);
-            if v < near || self.overlaps((start, start + kind.samples())) || start < abs0 {
+            if v < near || self.overlaps((start, start + kind.samples()), v) || start < abs0 {
                 continue;
             }
-            if self.announced_inside(start, start + kind.samples(), v) {
+            if self.announced_inside(start, kind, v, self.first_stands(h, i)) {
                 continue;
             }
             let sync =
@@ -1774,7 +1775,7 @@ impl ToneStream {
                 ..sync
             };
             self.taken
-                .push_back((sync.start, sync.start + kind.samples()));
+                .push_back((sync.start, sync.start + kind.samples(), v));
             if self.taken.len() > 16 {
                 self.taken.pop_front();
             }
@@ -1807,7 +1808,7 @@ impl ToneStream {
                 .filter(|x| (x.0 - h).abs() <= lookahead)
                 .map(|x| x.1)
                 .fold(f64::NEG_INFINITY, f64::max);
-            if v < near || self.overlaps((start, start + kind.samples())) {
+            if v < near || self.overlaps((start, start + kind.samples()), v) {
                 continue;
             }
             let inside = |a: &ToneArrival| {
@@ -1838,7 +1839,9 @@ impl ToneStream {
         let arriving = std::mem::take(&mut self.arriving);
         self.arriving = arriving
             .into_iter()
-            .filter(|a| a.end() + hop > now && !self.overlaps((a.start + hop, a.end() - hop)))
+            .filter(|a| {
+                a.end() + hop > now && !self.overlaps((a.start + hop, a.end() - hop), a.statistic)
+            })
             .collect();
     }
 
@@ -1850,24 +1853,53 @@ impl ToneStream {
             .any(|&o| start.abs_diff(arrival.start + o * n) <= n)
     }
 
-    /// Whether a frame announced as arriving starts inside `start`–`end` — more than a symbol
-    /// after its start — with a first block at least `statistic`: two frames of a half-duplex
-    /// burst never overlap, and the candidate is then the hypothesis read a block-spacing
-    /// early, its middle block on that frame's first (ADR-0014).
-    fn announced_inside(&self, start: usize, end: usize, statistic: f64) -> bool {
+    /// Whether hypothesis `i`'s first block at hop `h` passes on its own — the hits an
+    /// announcement needs, a silent symbol counting for nothing.
+    fn first_stands(&self, h: i64, i: usize) -> bool {
+        self.det
+            .best(&|r| self.row(r as i64), h as usize, &[i], true)
+            .is_some_and(|(v, _, _)| v >= TONE.announce_threshold)
+    }
+
+    /// Whether a frame announced as arriving starts inside a `kind` frame at `start` — more
+    /// than a symbol after its start — with a first block at least `statistic`: two frames of
+    /// a half-duplex burst never overlap, and the candidate is then the hypothesis read a
+    /// block-spacing early, its middle block on that frame's first (ADR-0014).
+    ///
+    /// With `first` — the candidate's own first block stands — an arrival at one of its
+    /// middle or end blocks is not one (ADR-0060): it is the candidate's own block read as a
+    /// first block, as happens whenever the frame's real start went unannounced, and counting
+    /// it let one lost frame take every later frame of its burst with it, each frame's middle
+    /// block refusing the next.
+    fn announced_inside(&self, start: usize, kind: &ToneKind, statistic: f64, first: bool) -> bool {
         let n = TONE.symbol_samples;
-        self.arriving
-            .iter()
-            .any(|a| start + n < a.start && a.start + n < end && a.statistic >= statistic)
+        let end = start + kind.samples();
+        let offsets = kind.block_offsets();
+        let own = |at: usize| {
+            first
+                && offsets[1..]
+                    .iter()
+                    .any(|&o| at.abs_diff(start + o * n) <= n)
+        };
+        self.arriving.iter().any(|a| {
+            start + n < a.start && a.start + n < end && a.statistic >= statistic && !own(a.start)
+        })
     }
 
     /// Whether `span` overlaps a frame taken by more than the hop or two a coarse start is
     /// off by — back-to-back frames of a burst touch.
-    fn overlaps(&self, span: (usize, usize)) -> bool {
+    ///
+    /// A frame taken at a lower `statistic` than this one's that overlaps it by no more than
+    /// a sync block does not count (ADR-0060): a phantom whose last block is a real frame's
+    /// first, read before that frame's first block was in, must not keep the real frame out.
+    fn overlaps(&self, span: (usize, usize), statistic: f64) -> bool {
         let tol = TONE.hop_div / 2 * self.det.hop();
-        self.taken
-            .iter()
-            .any(|&(a, b)| span.0 + tol < b && a + tol < span.1)
+        let block = SYNC_SYMBOLS * TONE.symbol_samples + tol;
+        self.taken.iter().any(|&(a, b, taken_at)| {
+            let over = span.0 + tol < b && a + tol < span.1;
+            let slight = b.min(span.1).saturating_sub(a.max(span.0)) <= block;
+            over && !(taken_at < statistic && slight)
+        })
     }
 }
 
@@ -2197,13 +2229,65 @@ mod tests {
             statistic: 10.0,
         });
         let early = 20_000 - kind.block_offsets()[1] * n;
-        assert!(stream.announced_inside(early, early + kind.samples(), 4.2));
+        assert!(stream.announced_inside(early, kind, 4.2, false));
         // a candidate at least as strong as that first block is taken
-        assert!(!stream.announced_inside(early, early + kind.samples(), 10.0 + 1e-9));
+        assert!(!stream.announced_inside(early, kind, 10.0 + 1e-9, false));
         // the arrival of the candidate's own start, or of the next frame of its burst, is not
         // inside it
-        assert!(!stream.announced_inside(20_000 - 80, 20_000 - 80 + kind.samples(), 4.2));
-        assert!(!stream.announced_inside(20_000 - kind.samples(), 20_000, 4.2));
+        assert!(!stream.announced_inside(20_000 - 80, kind, 4.2, false));
+        assert!(!stream.announced_inside(20_000 - kind.samples(), kind, 4.2, false));
+        // ADR-0060: a candidate whose own first block stands is not refused by an arrival at
+        // its middle block — that arrival is its own block, announced because its start was not
+        assert!(!stream.announced_inside(early, kind, 4.2, true));
+    }
+
+    #[test]
+    fn a_burst_whose_first_frame_began_under_the_mute_is_not_lost_with_it() {
+        // WC4Y's Test of 2026-10-10 (ADR-0060): with its first frame's start under the
+        // receiver's mute, that frame's middle block was announced as a frame, and every
+        // later frame was refused for an arrival — its own middle block — starting inside it
+        let kind = &data_kinds()[1];
+        let lead = 8000;
+        let mut y: Vec<Complex> = vec![(0.0, 0.0); lead];
+        let mut starts = Vec::new();
+        for seed in 0..3 {
+            starts.push(y.len());
+            y.extend(burst(&codec(kind), &payload(kind, seed + 1), 0).expect("burst"));
+        }
+        y.extend(std::iter::repeat_n((0.0, 0.0), 8000));
+        let noise = hiss(y.len(), 0.35, 0x9e37_79b9_7f4a_7c15);
+        for (s, h) in y.iter_mut().zip(noise) {
+            s.0 += h.0;
+            s.1 += h.1;
+        }
+        // the first half-second of the burst under the receiver's own mute
+        for s in &mut y[..lead + 4000] {
+            *s = (0.0, 0.0);
+        }
+        let mut stream = ToneStream::new();
+        let mut found = Vec::new();
+        for end in (160..=y.len()).step_by(160) {
+            found.extend(stream.feed(&y[..end], 0));
+        }
+        let heard: Vec<bool> = starts
+            .iter()
+            .map(|&x| found.iter().any(|f| f.start.abs_diff(x) <= 8))
+            .collect();
+        assert_eq!(heard, [false, true, true], "{found:?}");
+    }
+
+    #[test]
+    fn a_frame_taken_by_one_block_of_a_stronger_one_gives_way() {
+        // ADR-0060: a weak phantom whose last block is a real frame's first keeps that
+        // frame out no longer; a weaker frame, or a wider overlap, is still kept out
+        let kind = &narrow_kinds()[1];
+        let mut stream = ToneStream::new();
+        stream.taken.push_back((0, kind.samples(), 4.4));
+        let block = SYNC_SYMBOLS * TONE.symbol_samples;
+        let after = (kind.samples() - block, 2 * kind.samples() - block);
+        assert!(!stream.overlaps(after, 10.0));
+        assert!(stream.overlaps(after, 4.0));
+        assert!(stream.overlaps((kind.samples() - 3 * block, 2 * kind.samples()), 10.0));
     }
 
     #[test]

@@ -706,7 +706,8 @@ class ToneStream:
         """Starts before this hop have had their first block evaluated."""
         self._candidates: list[tuple[int, float, int, int]] = []
         self._firsts: list[tuple[int, float, int, int]] = []
-        self._taken: list[tuple[int, int]] = []
+        self._taken: list[tuple[int, int, float]] = []
+        """Frames taken: start, end and the statistic they were taken at."""
         self.arriving: list[ToneArrival] = []
 
     def feed(self, buf: ComplexArray, abs0: int) -> list[ToneSync]:
@@ -794,15 +795,15 @@ class ToneStream:
                 continue
             start = h * self.det.hop
             near = [x[1] for x in self._candidates if abs(x[0] - h) <= self.LOOKAHEAD]
-            if v < max(near) or self._overlaps((start, start + kind.samples)):
+            if v < max(near) or self._overlaps((start, start + kind.samples), v):
                 continue
-            if self._announced_inside(start, start + kind.samples, v):
+            if self._announced_inside(start, kind, v, first=self._first_stands(h, i)):
                 continue
             sync = self.det.refine(buf, kind, rv, start - abs0, c * self.det.bin_hz)
             if not self.det.confirmed(buf, sync):
                 continue
             sync = ToneSync(sync.start + abs0, sync.cfo_hz, kind, rv, sync.statistic)
-            self._taken = [*self._taken, (sync.start, sync.start + kind.samples)][-16:]
+            self._taken = [*self._taken, (sync.start, sync.start + kind.samples, v)][-16:]
             found.append(sync)
         self._candidates = keep
         return found
@@ -818,7 +819,7 @@ class ToneStream:
             kind, rv = self.det.hypotheses[i]
             start = h * hop
             near = [x[1] for x in self._firsts if abs(x[0] - h) <= self.ANNOUNCE_LOOKAHEAD]
-            if v < max(near) or self._overlaps((start, start + kind.samples)):
+            if v < max(near) or self._overlaps((start, start + kind.samples), v):
                 continue
             inside = [a for a in self.arriving if a.start - hop < start < a.end - hop]
             if any(self._own_block(a, start) or v <= a.statistic for a in inside):
@@ -835,7 +836,7 @@ class ToneStream:
         self.arriving = [
             a
             for a in self.arriving
-            if a.end > now - hop and not self._overlaps((a.start + hop, a.end - hop))
+            if a.end > now - hop and not self._overlaps((a.start + hop, a.end - hop), a.statistic)
         ]
 
     def _own_block(self, arrival: ToneArrival, start: int) -> bool:
@@ -846,16 +847,49 @@ class ToneStream:
             abs(start - (arrival.start + o * n)) <= n for o in arrival.kind.block_offsets[1:]
         )
 
-    def _announced_inside(self, start: int, end: int, statistic: float) -> bool:
-        """Whether a frame announced as arriving starts inside ``start``–``end`` — more than a
-        symbol after its start — with a first block at least ``statistic``."""
+    def _first_stands(self, h: int, i: int) -> bool:
+        """Whether hypothesis ``i``'s first block at hop ``h`` passes on its own — the hits
+        an announcement needs, a silent symbol counting for nothing."""
+        v, _, _ = self._best(h, [i], first_only=True)
+        return v >= self.announce_threshold
+
+    def _announced_inside(
+        self, start: int, kind: ToneKind, statistic: float, *, first: bool = False
+    ) -> bool:
+        """Whether a frame announced as arriving starts inside a ``kind`` frame at ``start`` —
+        more than a symbol after its start — with a first block at least ``statistic``.
+
+        With ``first`` — the candidate's own first block stands — an arrival at one of its
+        middle or end blocks is not one (ADR-0060): it is the candidate's own block read as a
+        first block, as happens whenever the frame's real start went unannounced, and counting
+        it let one lost frame take every later frame of its burst with it, each frame's
+        middle block refusing the next. Without it, such an arrival is the real frame and the
+        candidate the reading a block-spacing early (ADR-0014)."""
         n = self.det.num.symbol_samples
+        end = start + kind.samples
+        own = [start + o * n for o in kind.block_offsets[1:]] if first else []
         return any(
-            start + n < a.start < end - n and a.statistic >= statistic for a in self.arriving
+            start + n < a.start < end - n
+            and a.statistic >= statistic
+            and all(abs(a.start - b) > n for b in own)
+            for a in self.arriving
         )
 
-    def _overlaps(self, span: tuple[int, int]) -> bool:
+    def _overlaps(self, span: tuple[int, int], statistic: float = np.inf) -> bool:
         """Whether ``span`` overlaps a frame taken, by more than the hop or two a coarse
-        start is off by — back-to-back frames of a burst touch."""
+        start is off by — back-to-back frames of a burst touch.
+
+        A frame taken at a lower ``statistic`` than this one's that overlaps it by no more
+        than a sync block does not count (ADR-0060): a phantom whose last block is a real
+        frame's first, read before that frame's first block was in, must not keep the real
+        frame out."""
         tol = self.det.HOP_DIV // 2 * self.det.hop
-        return any(span[0] < b - tol and a + tol < span[1] for a, b in self._taken)
+        block = SYNC_SYMBOLS * self.det.num.symbol_samples + tol
+        for a, b, taken_at in self._taken:
+            if not (span[0] < b - tol and a + tol < span[1]):
+                continue
+            overlap = min(b, span[1]) - max(a, span[0])
+            if taken_at < statistic and overlap <= block:
+                continue
+            return True
+        return False

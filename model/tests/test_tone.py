@@ -505,9 +505,8 @@ def test_a_fast_frame_after_silence_is_not_taken_for_its_early_reading() -> None
     for i in range(0, start + 12 * kind.num.symbol_samples, 160):
         stream.feed(y[: i + 160], 0)
     arrival = next(a for a in stream.arriving if abs(a.start - start) <= 160)
-    span = (early, early + kind.samples)
-    assert stream._announced_inside(*span, arrival.statistic)
-    assert not stream._announced_inside(*span, arrival.statistic + 1e-9)
+    assert stream._announced_inside(early, kind, arrival.statistic)
+    assert not stream._announced_inside(early, kind, arrival.statistic + 1e-9)
     for found in (det.detect(y), _streamed(y)):
         assert [(s.kind, s.rv) for s in found] == [(kind, 0)], found
         assert abs(found[0].start - start) <= 4
@@ -538,6 +537,43 @@ def test_a_frame_that_slipped_a_symbol_stands_on_its_two_clean_blocks() -> None:
         assert [(f.kind, f.rv) for f in found] == [(kind, 0)], found
         assert abs(found[0].start - start) <= det.hop
         assert T.demodulate(y, kind, 0, found[0].start, found[0].cfo_hz).decode()[0] == payload
+
+
+def test_a_burst_whose_first_frame_began_under_the_mute_is_not_lost_with_it() -> None:
+    """WC4Y's Test of 2026-10-10 (ADR-0060): a peer's burst that begins while the receiver is
+    still muted after its own transmission has no first block for its first frame. That
+    frame's middle block was then announced as a frame of its own; the second frame's first
+    block, inside that false arrival, was refused as weaker; and the second frame itself was
+    refused because an arrival — its own middle block — started inside it. Each frame's
+    middle block refused the next, and five tone frames at -2 dB were lost to the end of the
+    burst. A candidate whose own first block stands is not refused by its own blocks."""
+    kind = M.TONE_DATA[1]
+    rng = np.random.default_rng(0)
+    frames = [T.burst(kind, _payload(rng, kind), 0) for _ in range(3)]
+    lead = 8000
+    y = np.concatenate([np.zeros(lead, complex), *frames, np.zeros(8000, complex)])
+    y += 0.3 * (rng.normal(size=len(y)) + 1j * rng.normal(size=len(y)))
+    y[: lead + 4000] = 0  # the first half-second of the burst under the receiver's mute
+    starts = [lead + i * kind.samples for i in range(3)]
+    found = _streamed(y)
+    assert [any(abs(f.start - x) <= 8 for f in found) for x in starts] == [False, True, True]
+
+
+def test_a_frame_taken_by_one_block_of_a_stronger_one_gives_way() -> None:
+    """ADR-0060: a weak hypothesis whose last block is a real frame's first — its first and
+    middle blocks on noise and on the silence of the receiver's own transmission — was taken
+    before that frame's first block was even announced, and the real frame, overlapping it by
+    that block, was kept out. A stronger frame overlapping a taken one by no more than a sync
+    block is not overlapping it; by more, or weaker, it still is."""
+    kind = M.TONE_NARROW[1]
+    stream = T.ToneStream()
+    n = kind.num.symbol_samples
+    stream._taken = [(0, kind.samples, 4.4)]
+    block = T.SYNC_SYMBOLS * n
+    after = (kind.samples - block, 2 * kind.samples - block)
+    assert not stream._overlaps(after, 10.0)
+    assert stream._overlaps(after, 4.0)
+    assert stream._overlaps((kind.samples - 3 * block, 2 * kind.samples), 10.0)
 
 
 def test_a_false_arrival_gives_way_to_a_frame_announced_inside_it() -> None:
