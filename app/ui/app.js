@@ -478,7 +478,9 @@ async function refreshStatus() {
   }
   lastStatus = status;
   const [name, detail] = STATE_TEXT[status.state] ?? ["Unknown", ""];
-  const who = status.remote ? ` with ${status.remote}` : "";
+  // the engine keeps the last session's callsign after it ends: name it only while there is a
+  // call or a session to name
+  const who = status.remote && status.state !== "idle" ? ` with ${status.remote}` : "";
   const role = { iss: " — sending", irs: " — receiving" }[status.role] ?? "";
   setState(status.state, name + who, detail + role);
   syncBanner(status);
