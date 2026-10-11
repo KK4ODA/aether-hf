@@ -3,7 +3,7 @@ description = """40m at 2300 Hz, a Winlink Express client through an RMS Trimode
 the host port as the bench saw them (host-interfaces.md §7): the gateway scans, LISTEN off half a
 second in every three and a half, and ignores a CONNECTED it is told while not listening
 (ADR-0051). A B2F-shaped exchange over the data ports, then the client's DISCONNECT."""
-tags = ["40m", "host", "gateway", "quick"]
+tags = ["40m", "host", "gateway", "quick", "mixed"]
 bandwidth = 2300
 seconds = 900
 seed = 45

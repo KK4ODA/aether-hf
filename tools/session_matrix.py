@@ -2,7 +2,8 @@
 
     python tools/session_matrix.py [scenarios…] [--tag quick] [--jobs 2]
                                    [--daemon core/target/release/aetherd] [--daemon-b PATH]
-                                   [--out runs/] [--csv results.csv]
+                                   [--out runs/] [--csv results.csv] [--seeds 1]
+                                   [--variant K] [--drop-passing-audio]
 
 Every scenario (``bench/scenarios/*.toml`` unless named; the format is the README there) is
 one on-air situation: the path, the other signals and the static each station hears, the
@@ -12,6 +13,13 @@ script over the control API, as the panel would, and judges the outcome: whether
 connected, whether every message arrived whole, how the Test ended, whether the session ended
 by its DISC, and how often both radios were keyed at once — which no recording at either end
 can show, and which the channel server sees directly.
+
+``--seeds N`` runs every scenario under N seeds: its own, then ``seed + 1000``, ``+ 2000``…, the
+variants named ``<name>-s<seed>``; ``--variant K`` runs only the K-th (the nightly job runs
+them side by side). One run of a scenario is one draw of its fading and its
+neighbours, and a night's single failure says little; several draws say whether it is the path
+or the build. The CSV's ``base`` column names the scenario a variant came from
+(``scenario_trend.py`` groups by it).
 
 ``--daemon-b`` runs the called station on another build: an old release against this tree is
 how a change is checked for working with the stations already on the air.
@@ -29,6 +37,7 @@ import contextlib
 import csv
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -172,6 +181,23 @@ class Station:
     def counter(self, name: str) -> int:
         return int(self.status().get("counters", {}).get(name, 0))
 
+    def resources(self) -> tuple[float, int, int] | None:
+        """Resident memory (MB), open files and threads, from ``/proc`` (Linux only): what a
+        gateway running for days would run out of."""
+        proc = Path(f"/proc/{self.process.pid}")
+        try:
+            status = (proc / "status").read_text(encoding="utf-8")
+            fds = len(os.listdir(proc / "fd"))
+        except OSError:
+            return None
+        fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+        try:
+            rss_mb = int(fields["VmRSS"].split()[0]) / 1024
+            threads = int(fields["Threads"])
+        except (KeyError, ValueError):
+            return None
+        return round(rss_mb, 1), fds, threads
+
 
 @dataclass
 class Run:
@@ -190,6 +216,14 @@ class Run:
     exited: list[str] = field(default_factory=list)
     hosts: dict[str, Host] = field(default_factory=dict)
     outage_until: float = 0.0
+    resources: dict[str, list[tuple[float, int, int]]] = field(default_factory=dict)
+
+    def sample(self) -> None:
+        """Note each daemon's memory, files and threads (after each round of a script)."""
+        for who, st in self.stations.items():
+            got = st.resources()
+            if got is not None:
+                self.resources.setdefault(who, []).append(got)
 
     def command(self, line: str) -> None:
         """Tell the channel server something, at the air time it next reads (each second)."""
@@ -569,6 +603,10 @@ def step(run: Run, text: str) -> bool:
         run.outage_until = run.air_s() + float(arg) + 1.0
         run.command(f"outage {arg}")
         return True
+    if word == "stall":
+        # one station's loop stops for S s of air (``stall b 4``): a slow or busy computer
+        run.command(f"stall {arg}")
+        return True
     if word == "wait_clear":
         # until the outage is over: a call made in it is heard by nobody
         until = run.outage_until
@@ -636,6 +674,19 @@ def judge(run: Run, ends: list[str]) -> dict:
         failures.append(f"left {'/'.join(run.final_states)}")
     if "max_collisions" in expect and collisions > int(expect["max_collisions"]):
         failures.append(f"{collisions} collisions")
+    # from the first round's end to the last: growth that a long run would turn into a crash
+    grew = []
+    for who, samples in run.resources.items():
+        (rss0, fd0, th0), (rss1, fd1, th1) = samples[0], samples[-1]
+        grew.append(f"{who} {rss0:.0f}→{rss1:.0f} MB {fd0}→{fd1} files {th0}→{th1} threads")
+        if len(samples) < 2:
+            continue
+        if "max_rss_growth_mb" in expect and rss1 - rss0 > float(expect["max_rss_growth_mb"]):
+            failures.append(f"{who} memory grew {rss1 - rss0:.0f} MB")
+        if "max_fd_growth" in expect and fd1 - fd0 > int(expect["max_fd_growth"]):
+            failures.append(f"{who} open files grew {fd0}→{fd1}")
+        if "max_thread_growth" in expect and th1 - th0 > int(expect["max_thread_growth"]):
+            failures.append(f"{who} threads grew {th0}→{th1}")
     test = run.test or {}
     return {
         "scenario": sc.get("name"),
@@ -651,24 +702,70 @@ def judge(run: Run, ends: list[str]) -> dict:
         "highest_rung": test.get("highest_passed"),
         "ends": " / ".join(ends),
         "transfers": "; ".join(run.transfers),
+        "resources": "; ".join(grew),
     }
 
 
-def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
-    scenario = tomllib.loads(path.read_text(encoding="utf-8"))
+SEED_STEP = 1000
+"""How far apart a scenario's ``--seeds`` variants are: the channel server derives the other
+signals' and the static's seeds as ``seed * 1000 + i``, so neighbouring seeds would share
+draws."""
+
+
+def with_seed(text: str, seed: int) -> str:
+    """The scenario's text with its top-level ``seed`` and ``name`` changed for a variant —
+    edited as text, not rewritten, so the file kept beside the run reads as the original."""
+    scenario = tomllib.loads(text)
+    name = f"{scenario['name']}-s{seed}"
+    out = re.sub(r"(?m)^seed\s*=.*$", f"seed = {seed}", text, count=1)
+    if out == text and "seed" not in scenario:
+        out = f"seed = {seed}\n" + text
+    out = re.sub(r"(?m)^name\s*=.*$", f"name = {json.dumps(name)}", out, count=1)
+    variant = tomllib.loads(out)
+    if variant.get("seed") != seed or variant.get("name") != name:
+        raise ValueError(f"{scenario['name']}: could not set the seed")
+    return out
+
+
+def variants(path: Path, ks: list[int]) -> list[tuple[Path, int | None]]:
+    """``(path, seed)`` for variants ``ks`` of a scenario: variant 0 is the scenario as written
+    (seed ``None``), variant ``k`` its seed plus ``k * SEED_STEP``."""
+    base = int(tomllib.loads(path.read_text(encoding="utf-8")).get("seed", 1))
+    return [(path, base + SEED_STEP * k if k else None) for k in ks]
+
+
+def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | None = None) -> dict:
+    text = path.read_text(encoding="utf-8")
+    base = tomllib.loads(text).get("name", path.stem)
+    if seed is not None:
+        text = with_seed(text, seed)
+    scenario = tomllib.loads(text)
     name = scenario.get("name", path.stem)
     run_dir = out / name
     shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True)
-    shutil.copy(path, run_dir / "scenario.toml")
+    (run_dir / "scenario.toml").write_text(text, encoding="utf-8")
     run = Run(scenario, run_dir, run_dir / "channel.progress")
     t0 = time.monotonic()
     ends: list[str] = []
     try:
         start(run, daemon_a, daemon_b)
-        keep_going = bool(scenario.get("script", {}).get("continue_on_failure", False))
-        for text in scenario.get("script", {}).get("steps", []):
-            if not step(run, text) and not keep_going:
+        script = scenario.get("script", {})
+        keep_going = bool(script.get("continue_on_failure", False))
+        # ``setup`` once, then ``steps`` ``repeat`` times — a gateway's day is the same
+        # sessions over and over, and the resources are sampled after every round
+        rounds = [script.get("setup", [])] + [script.get("steps", [])] * int(
+            script.get("repeat", 1)
+        )
+        stopped = False
+        for i, steps in enumerate(rounds):
+            for text in steps:
+                if not step(run, text) and not keep_going:
+                    stopped = True
+                    break
+            if i:
+                run.sample()
+            if stopped:
                 break
         # the last frames and the sessions' history settle: an abort's DISC goes out after
         # the burst it cut, and the other station needs to hear it
@@ -699,6 +796,8 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path) -> dict:
                 st.process.kill()
     # the channel writes its account when the stations leave it
     result = judge(run, ends)
+    result["base"] = base
+    result["seed"] = scenario.get("seed", 1)
     result["wall_s"] = round(time.monotonic() - t0, 1)
     (run_dir / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
@@ -713,6 +812,15 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=ROOT / "runs")
     ap.add_argument("--csv", type=Path, help="append one line per scenario here")
     ap.add_argument("--jobs", type=int, default=1)
+    ap.add_argument("--seeds", type=int, default=1, help="runs of each scenario, seeds apart")
+    ap.add_argument(
+        "--variant", type=int, help="run only this variant of each (0 = as written; CI's matrix)"
+    )
+    ap.add_argument(
+        "--drop-passing-audio",
+        action="store_true",
+        help="delete a passing run's recordings (a night of three seeds is gigabytes of WAV)",
+    )
     args = ap.parse_args()
     paths = args.scenarios or sorted(SCENARIOS.glob("*.toml"))
     if args.tag:
@@ -729,15 +837,25 @@ def main() -> int:
         return 2
     args.out.mkdir(parents=True, exist_ok=True)
     daemon_b = args.daemon_b or args.daemon
+
+    def one(v: tuple[Path, int | None]) -> dict:
+        result = run_one(v[0], args.out, args.daemon, daemon_b, v[1])
+        if result["pass"] and args.drop_passing_audio:
+            for wav in (args.out / str(result["scenario"])).rglob("*.wav"):
+                wav.unlink(missing_ok=True)
+        return result
+
+    ks = [args.variant] if args.variant is not None else list(range(max(args.seeds, 1)))
+    runs = [v for p in paths for v in variants(p, ks)]
     results = []
     if args.jobs > 1:
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(args.jobs) as pool:
-            results = list(pool.map(lambda p: run_one(p, args.out, args.daemon, daemon_b), paths))
+            results = list(pool.map(one, runs))
     else:
-        for p in paths:
-            results.append(run_one(p, args.out, args.daemon, daemon_b))
+        for v in runs:
+            results.append(one(v))
             r = results[-1]
             print(f"{'PASS' if r['pass'] else 'FAIL'}  {r['scenario']}  {r['why']}", flush=True)
     columns = list(results[0])

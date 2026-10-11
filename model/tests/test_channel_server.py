@@ -29,8 +29,8 @@ class Fake:
         self.mine.sendall(struct.pack("<BI", cs.MSG_PLAY, len(samples)))
         self.mine.sendall(samples.astype("<f4").tobytes())
 
-    def ready(self) -> None:
-        self.mine.sendall(bytes([cs.MSG_READY]))
+    def ready(self, n: int = 1) -> None:
+        self.mine.sendall(bytes([cs.MSG_READY]) * n)  # one write: a socketpair counts writes
 
     def take_block(self) -> None:
         head = b""
@@ -189,3 +189,70 @@ def test_a_third_station_is_heard_at_its_own_path_over_one_noise_floor() -> None
     assert abs(20 * np.log10(quiet) - 20 * np.log10(float(np.median(at_b[350:390])))) < 1.0
     # the clients hear each other too
     assert np.flatnonzero(envelope(fakes["c"].heard) > 2 * quiet).size > 0
+
+
+def run_stalling(srv: cs.Server, a: Fake, b: Fake, seconds: float, plays: dict) -> list[int]:
+    """Tick like :func:`run`, but each fake answers only the blocks it was sent — none while
+    its station is stalled, the whole pile after. Returns how many blocks ``b`` got a tick."""
+    import select
+    import threading
+
+    owed = {"a": 1, "b": 1}
+    got = []
+    for k in range(round(seconds * RATE / cs.TICK)):
+        for who, samples in plays.get(k, []):
+            (a if who == "a" else b).play(samples)
+        for who, fake in (("a", a), ("b", b)):
+            fake.ready(owed[who])
+            owed[who] = 0
+        # a pile is more than a socket buffer holds: the server sends while the fakes read
+        ticking = threading.Thread(target=srv.tick)
+        ticking.start()
+        while ticking.is_alive() or any(select.select([f.mine], [], [], 0)[0] for f in (a, b)):
+            for who, fake in (("a", a), ("b", b)):
+                if select.select([fake.mine], [], [], 0.001)[0]:
+                    fake.take_block()
+                    owed[who] += 1
+        ticking.join()
+        got.append(owed["b"])
+    return got
+
+
+def test_a_stalled_station_plays_on_hears_nothing_new_then_catches_up() -> None:
+    srv, a, b = server({})
+    # a second of b, handed over in two halves (a socket holds less than a second)
+    plays = {5: [("b", tone(0.5))], 6: [("b", tone(0.5))], 60: [("a", tone(0.5))]}
+    srv.b.stall(10 * cs.TICK, round(1.0 * RATE))  # ticks 10–59: while b's tone plays out
+    blocks = run_stalling(srv, a, b, 2.0, plays)
+    assert blocks[9] == 1 and blocks[10:59] == [0] * 49, "a stalled station is sent nothing"
+    assert blocks[60] == 51, "the pile and the block after it, all at once"
+    # what b queued before the stall played through it: a heard all of b's second
+    on_a = np.flatnonzero(envelope(a.heard) > 0.05)
+    assert abs((on_a[-1] - on_a[0] + 1) * 0.01 - 1.0) < 0.03
+    # and b heard everything: nothing dropped from a pile under the 2 s backlog
+    assert len(np.concatenate(b.heard)) == len(np.concatenate(a.heard))
+    report = srv.report()["stations"]["?"]
+    assert report["stall_dropped_s"] == 0.0
+
+
+def test_a_stall_longer_than_the_backlog_drops_the_oldest_audio() -> None:
+    srv, a, b = server({})
+    srv.b.stall(10 * cs.TICK, round(3.0 * RATE))
+    run_stalling(srv, a, b, 4.0, {})
+    heard = len(np.concatenate(b.heard))
+    assert heard == len(np.concatenate(a.heard)) - round(1.02 * RATE)
+    assert srv.b.stall_dropped == round(1.02 * RATE)  # 3 s stalled and the block after, kept 2
+
+
+def test_a_machine_draws_its_stalls_from_the_seed() -> None:
+    def draws(seed: int) -> list[list[float]]:
+        st = cs.Station("?", None, 0, 0, 0)  # type: ignore[arg-type]
+        cs.machine(st, {"stall_every_s": 5.0, "stall_s": [0.5, 2.0]}, seed, "b")
+        for t in range(0, 120 * RATE, cs.TICK):
+            st.stalled(t)
+        return st.stalls
+
+    first = draws(1)
+    assert first == draws(1) and first != draws(2)
+    assert 10 <= len(first) <= 40
+    assert all(0.49 <= end - start <= 2.01 for start, end in first)

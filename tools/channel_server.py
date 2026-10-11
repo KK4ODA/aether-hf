@@ -30,6 +30,16 @@ The radios are modelled at both ends, from what the field recordings showed (ADR
 * ``agc`` — ``off``, ``fast``, ``auto`` or ``slow``: the receiver's AGC (:class:`Agc`), with
   ``agc_threshold_db`` above the noise it hears (12) and the hang and decay overridable.
 
+And the computer: ``[stations.<who>.machine]`` makes the station's run loop stall, as a slow or
+busy PC's does (KE4QCM's fell 0.3–27 s behind, 2026-10-09). A stall of ``S`` seconds is ``S``
+of air the station neither hears nor answers in: what it queued before plays on (a sound card
+plays what it was handed), what it hears piles up — the newest ``backlog_s`` (2 s, the
+daemon's ``max_backlog_s``) kept and the rest dropped, as its capture queue does — and when it
+ends the station is handed the pile and processes it before the clock moves on, as a loop that
+has fallen behind catches up. ``stall_every_s`` is the mean time between stalls (drawn,
+seeded), ``stall_s`` a length or a ``[shortest, longest]`` range; the command file's
+``stall <who> S`` stalls one now.
+
 The report says when each station was keyed on the air, and every stretch both were — a
 collision, which no recording at either end can show.
 """
@@ -313,6 +323,19 @@ class Station:
     last_keyed: int = -(10**12)
     intervals: list[list[float]] = field(default_factory=list)
     agc: Agc | None = None
+    # the computer (``machine``): blocks sent and not yet answered by a READY, the air sample
+    # a stall lasts until, the blocks heard during it, and what was dropped from them
+    owed: int = 1  # the first READY comes before the first block
+    stall_from: int = 0
+    stall_until: int = 0
+    backlog: list[np.ndarray] = field(default_factory=list)
+    backlog_limit: int = 2 * AUDIO_RATE
+    stalls: list[list[float]] = field(default_factory=list)
+    stall_dropped: int = 0
+    next_stall: int | None = None
+    stall_every: float = 0.0
+    stall_range: tuple[float, float] = (0.0, 0.0)
+    rng: np.random.Generator | None = None
 
     def read_exact(self, n: int) -> bytes:
         data = b""
@@ -339,6 +362,50 @@ class Station:
                 self.queued = 0
             else:
                 raise ConnectionError(f"{self.name} sent message {kind}")
+
+    def stall(self, t: int, samples: int) -> None:
+        """Stall from air sample ``t`` for ``samples``: a loop that stopped for that long."""
+        until = t + samples
+        if until > self.stall_until:
+            if self.stall_from <= t < self.stall_until:
+                self.stalls[-1][1] = until / AUDIO_RATE
+            else:
+                self.stalls.append([t / AUDIO_RATE, until / AUDIO_RATE])
+                self.stall_from = t
+            self.stall_until = until
+
+    def stalled(self, t: int) -> bool:
+        """Whether the station's loop stands still at air sample ``t``, drawing the next
+        stall from its ``machine`` when the last has passed."""
+        if self.rng is not None and self.stall_every > 0:
+            if self.next_stall is None:
+                self.next_stall = t + round(self.rng.exponential(self.stall_every) * AUDIO_RATE)
+            if t >= self.next_stall:
+                lo, hi = self.stall_range
+                self.stall(t, round(self.rng.uniform(lo, hi) * AUDIO_RATE))
+                self.next_stall = self.stall_until + round(
+                    self.rng.exponential(self.stall_every) * AUDIO_RATE
+                )
+        return self.stall_from <= t < self.stall_until
+
+    def deliver(self, clock: int, samples: np.ndarray, stalled: bool) -> None:
+        """Send the block heard — or, stalled, keep it; the first block after a stall carries
+        the pile, the newest ``backlog_limit`` of it, as the capture queue keeps it."""
+        if stalled:
+            self.backlog.append(samples)
+            return
+        if self.backlog:
+            pile = np.concatenate([*self.backlog, samples])
+            self.backlog.clear()
+            if len(pile) > self.backlog_limit:
+                self.stall_dropped += len(pile) - self.backlog_limit
+                pile = pile[-self.backlog_limit :]
+            for i in range(0, len(pile), TICK):
+                self.send_block(clock, pile[i : i + TICK])
+                self.owed += 1
+            return
+        self.send_block(clock, samples)
+        self.owed += 1
 
     def take(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         """``n`` samples of what it plays, and which of them were its own (not idle)."""
@@ -474,8 +541,13 @@ class Server:
         return keyed | recovering
 
     def tick(self) -> None:
+        # every block sent has been processed — the pile after a stall included, so a station
+        # that fell behind catches up before the air moves on — unless it is stalled now
+        stalled = {who: st.stalled(self.t) for who, st in self.stations.items()}
         for st in self.stations.values():
-            st.until_ready()
+            while st.owed > 0:
+                st.until_ready()
+                st.owed -= 1
         audio: dict[str, np.ndarray] = {}
         keyed: dict[str, np.ndarray] = {}
         for who, st in self.stations.items():
@@ -505,7 +577,7 @@ class Server:
             self.collisions[-1][1] = (t + 1) / AUDIO_RATE
             self._colliding_since = t
         for who, st in self.stations.items():
-            st.send_block(self.t + TICK, heard[who])
+            st.deliver(self.t + TICK, heard[who], stalled[who])
         self.t += TICK
 
     def report(self) -> dict:
@@ -513,13 +585,32 @@ class Server:
             "scenario": self.scenario.get("name"),
             "seconds": self.t / AUDIO_RATE,
             "stations": {
-                st.name: {"keyed": [[round(x, 3) for x in iv] for iv in st.intervals]}
+                st.name: {
+                    "keyed": [[round(x, 3) for x in iv] for iv in st.intervals],
+                    "stalls": [[round(x, 3) for x in iv] for iv in st.stalls],
+                    "stall_dropped_s": round(st.stall_dropped / AUDIO_RATE, 3),
+                }
                 for st in self.stations.values()
             },
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
             "outages": self.outages,
         }
+
+
+MACHINE_SEED = 7919
+"""Offset of the stalls' seeds from the scenario's: the channel's draws stay as they were."""
+
+
+def machine(st: Station, spec: dict, seed: int, who: str) -> None:
+    """Set the station's computer from its scenario's ``machine`` table."""
+    st.backlog_limit = round(float(spec.get("backlog_s", 2.0)) * AUDIO_RATE)
+    st.stall_every = float(spec.get("stall_every_s", 0.0))
+    length = spec.get("stall_s", [0.5, 3.0])
+    lo, hi = (length, length) if isinstance(length, int | float) else length
+    st.stall_range = (float(lo), float(hi))
+    if st.stall_every > 0:
+        st.rng = np.random.default_rng([seed, MACHINE_SEED, sum(map(ord, who))])
 
 
 def accept_station(listener: socket.socket, radios: dict) -> Station:
@@ -549,7 +640,10 @@ def main() -> int:
     ap.add_argument(
         "--command-file",
         type=Path,
-        help="read every second of air for new lines: `outage S` cuts the path both ways for S s",
+        help=(
+            "read every second of air for new lines: `outage S` cuts the path both ways for "
+            "S s, `stall WHO S` stops a station's loop for S s"
+        ),
     )
     args = ap.parse_args()
     scenario = tomllib.loads(args.scenario.read_text(encoding="utf-8"))
@@ -573,6 +667,7 @@ def main() -> int:
         st.tx_delay = round(float(radio.get("tx_delay_ms", 0)) * AUDIO_RATE / 1000)
         st.vox_hold = round(float(radio.get("vox_hold_ms", 0)) * AUDIO_RATE / 1000)
         st.recovery = round(float(radio.get("rx_recovery_ms", 0)) * AUDIO_RATE / 1000)
+        machine(st, stations.get(who, {}).get("machine", {}), int(scenario.get("seed", 1)), who)
     server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
     commands_done = 0
@@ -586,6 +681,10 @@ def main() -> int:
                     lines = args.command_file.read_text(encoding="utf-8").splitlines()
                     for line in lines[commands_done:]:
                         word, _, arg = line.partition(" ")
+                        if word == "stall":
+                            who, _, length = arg.partition(" ")
+                            if who in on_air:
+                                on_air[who].stall(server.t, round(float(length) * AUDIO_RATE))
                         if word == "outage":
                             server.outage_until = server.t + round(float(arg) * AUDIO_RATE)
                             server.outages.append(
