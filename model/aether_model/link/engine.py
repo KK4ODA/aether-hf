@@ -112,10 +112,6 @@ class LinkConfig:
     AWGN threshold is accepted on the tone floor (ADR-0056): the path is not reciprocal enough
     to bet the session on the ordinary frame making it back. KE4QCM's calls of 2026-10-10
     decoded at +1…+6.5 dB, and the ordinary acceptances never reached him."""
-    ack_floor_margin_db: float | None = None
-    """A receiving station whose peer hears it less than this above the ordinary control
-    frame's AWGN threshold sends its acknowledgements on the tone floor from the start, not
-    only after one was lost (ADR-0059, ADR-0062). ``None``: only after one was lost."""
     keepalive_s: float = 10.0
     """Idle ISS polls the IRS this often."""
     link_timeout_s: float = 45.0
@@ -934,9 +930,7 @@ class LinkEngine:
             # was never acknowledged, still learns how it was heard
             kw.setdefault("snr_db", self._heard_peer_db)
         payload = ControlFrame(kind, self.session, **kw).encode()  # type: ignore[arg-type]
-        floor = self._control_floor() or (
-            kind is ControlKind.ACK and (self._acks_on_floor or self._weak_return())
-        )
+        floor = self._control_floor() or (kind is ControlKind.ACK and self._acks_on_floor)
         return TxFrame(Container.CONTROL, payload, floor=floor)
 
     def _note_peer_frame(self, frame: SoftFrame) -> None:
@@ -1092,17 +1086,7 @@ class LinkEngine:
             wait = self._response_wait(frame_s) + self.rng.uniform(0.0, span)
             self._arm("connect", self._tx_busy_until - self.now + wait)
 
-    def _weak_return(self) -> bool:
-        """Whether the other station hears this one too faintly to bet an acknowledgement on
-        the ordinary family (ADR-0062): what it last said it heard this station at or, before
-        it has said, what this station hears it at."""
-        margin = self.cfg.ack_floor_margin_db
-        if margin is None:
-            return False
-        snr_db = self.peer_snr_db if self.peer_snr_db is not None else self._heard_peer_db
-        return self._weak_call(snr_db, margin)
-
-    def _weak_call(self, snr_db: float | None, margin: float | None = None) -> bool:
+    def _weak_call(self, snr_db: float | None) -> bool:
         """Whether a call that arrived in the ordinary family was weak enough that its
         acceptance goes on the tone floor (ADR-0056). The acceptance is the one frame a session
         cannot do without, the caller hears this station no better than this station hears it
@@ -1114,9 +1098,7 @@ class LinkEngine:
         threshold = self.rate.thresholds.get(self._robust_mode(False))
         if threshold is None:
             return False
-        if margin is None:
-            margin = self.cfg.floor_answer_margin_db
-        return snr_db < threshold + margin
+        return snr_db < threshold + self.cfg.floor_answer_margin_db
 
     def _send_probe(
         self, kind: DataKind, remote: str, snr_db: float | None, *, floor: bool
