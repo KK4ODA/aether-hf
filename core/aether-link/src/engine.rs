@@ -89,10 +89,6 @@ pub struct LinkConfig {
     /// enough to bet the session on the ordinary frame making it back. KE4QCM's calls of
     /// 2026-10-10 decoded at +1…+6.5 dB, and the ordinary acceptances never reached him.
     pub floor_answer_margin_db: f64,
-    /// A receiving station whose peer hears it less than this above the ordinary control
-    /// frame's AWGN threshold sends its acknowledgements on the tone floor from the start, not
-    /// only after one was lost (ADR-0059, ADR-0062). `None`: only after one was lost.
-    pub ack_floor_margin_db: Option<f64>,
     /// An idle sender polls the receiver this often.
     pub keepalive_s: f64,
     /// No valid frame from the peer for this long ends the session — or longer where the
@@ -186,7 +182,6 @@ impl Default for LinkConfig {
             disc_patience_s: 20.0,
             leave_repeats: 3,
             floor_answer_margin_db: 12.0,
-            ack_floor_margin_db: None,
             keepalive_s: 10.0,
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
@@ -1433,8 +1428,7 @@ impl LinkEngine {
             payload: frame.encode().to_vec(),
             mode: 0,
             rv: 0,
-            floor: self.control_floor()
-                || (kind == ControlKind::Ack && (self.acks_on_floor || self.weak_return())),
+            floor: self.control_floor() || (kind == ControlKind::Ack && self.acks_on_floor),
             follows: 0,
         }
     }
@@ -1762,27 +1756,13 @@ impl LinkEngine {
     /// more on the air — once a session, and only on a path where the ordinary acceptance was
     /// a gamble.
     fn weak_call(&self, snr_db: Option<f64>) -> bool {
-        self.weak_at(snr_db, self.config.floor_answer_margin_db)
-    }
-
-    /// Whether the other station hears this one too faintly to bet an acknowledgement on the
-    /// ordinary family (ADR-0062): what it last said it heard this station at or, before it
-    /// has said, what this station hears it at.
-    fn weak_return(&self) -> bool {
-        let Some(margin) = self.config.ack_floor_margin_db else {
-            return false;
-        };
-        self.weak_at(self.peer_snr_db.or(self.heard_peer_db), margin)
-    }
-
-    fn weak_at(&self, snr_db: Option<f64>, margin: f64) -> bool {
         let Some(snr_db) = snr_db else { return false };
         if self.timing.floor_modes == 0 {
             return false;
         }
         self.rate
             .threshold_db(self.robust_mode(false))
-            .is_some_and(|threshold| snr_db < threshold + margin)
+            .is_some_and(|threshold| snr_db < threshold + self.config.floor_answer_margin_db)
     }
 
     fn send_connect(&mut self, kind: DataKind) {
