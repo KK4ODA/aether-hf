@@ -54,6 +54,12 @@ SITES: list[tuple[Path, str]] = [
         ROOT / "model" / "aether_model" / "__init__.py",
         r'(?m)^(?P<pre>__version__ = ")(?P<v>[^"]+)(?P<post>")',
     ),
+    # the operator's manual names the release it describes, and moves with every release
+    # (CONTRIBUTING rule 12): a bump that left it behind would describe the last one
+    (
+        ROOT / "docs" / "user" / "manual.md",
+        r"(?m)^(?P<pre>It describes \*\*)(?P<v>[^*]+)(?P<post>\*\*)",
+    ),
 ]
 
 

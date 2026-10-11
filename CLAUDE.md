@@ -51,6 +51,13 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
   daemon, the panel, the shell, the link or the PHY), cut a beta release — `tools/release.py bump`
   to the next `-beta.N`, commit, tag, push `master` and the tag (see *Cutting a release* below).
   Checks green first, always.
+- **The manual is part of the application (the author's rule, 2026-10-11).**
+  `docs/user/manual.md` is the operator's manual, tab by tab. Any change to what an operator
+  sees or sets — a tab, a box, a button, a setting or its default, a banner, a reading, what a
+  host program is told — updates the manual (and the `docs/user/` guide covering it) in the
+  same commit; the version it names is a `tools/release.py` site, so `bump` moves it and
+  `check` (CI) holds it. Write user-facing prose plainly: short sentences, no filler, the operator's words
+  (the author asked for it to read as written by a person, through a humanizer pass).
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
