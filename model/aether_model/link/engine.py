@@ -522,6 +522,9 @@ class LinkEngine:
         end): the burst is not over before they are (ADR-0061)."""
         self._ack_history: list[_AckSnapshot] = []
         self._acks_on_floor = False
+        self._took_unread = False
+        """This station became the receiver on a frame it could not read after offering the
+        turn (:meth:`_turn_taken_unread`), not on the other station's word (ADR-0063)."""
         self._ack_counter = 0
         self._asked: int | None = None
         """The fastest rung this station has recommended to the sender in this session: a
@@ -1687,6 +1690,7 @@ class LinkEngine:
                     return  # repeated accept: our confirmation is on its way
             self._offer_out = False
             self.role = Role.IRS
+            self._took_unread = payload is None
             self._waiting_for = None
             self._unread_there = False
             self._disarm("wait")
@@ -1710,6 +1714,8 @@ class LinkEngine:
         rec = _RxRecord(frame, self._slot_of(frame))
         self._burst.append(rec)
         decoded = self._decode_record(rec)
+        if rec.payload is not None:
+            self._took_unread = False
         if decoded and self._answered_already(rec):
             # what it carried for combining is kept (`_decode_record`); it starts no burst
             self._burst.remove(rec)
@@ -2141,6 +2147,8 @@ class LinkEngine:
                 # link timed out (ADR-0034).
                 unread_poll = frame.floor and not self._poll_floor
                 self._unread_there = unread_poll
+            if self.role is Role.IRS and self._took_unread and not ctl.flags & ControlFlags.TAKEN:
+                self._give_back_turn()
             if self.role is Role.ISS and (
                 self._waiting_for in ("ack", "poll")
                 or (
@@ -2243,9 +2251,26 @@ class LinkEngine:
         self._become_iss()
         self._answer_turn()
 
+    def _give_back_turn(self) -> None:
+        """This station took the turn it offered as taken on a frame it could not read
+        (ADR-0047), and the other station's acknowledgement says it was not: that frame was
+        noise. The turn is this station's again, and the acknowledgement is the answer to its
+        burst. Left receiving, both stations waited for the other until the link timed out (the
+        scenario harness, 80 m at 500 Hz: a detection 40 Hz off the session's offset at its
+        threshold; ADR-0063)."""
+        self._took_unread = False
+        self.role = Role.ISS
+        self._burst.clear()
+        self._arriving.clear()
+        self._burst_t0 = None
+        self._disarm("ack")
+        self._waiting_for = "ack"
+        self.actions.append(Event("role", "iss"))
+
     def _become_iss(self) -> None:
         self.role = Role.ISS
         self._unread_there = False
+        self._took_unread = False
         # the first burst of a turn goes out where this station's own measurements of the
         # peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
         # it (P9-2), not at the slowest rung of the ladder: that is the tone floor
@@ -2534,6 +2559,7 @@ class LinkEngine:
         self._burst_t0 = None
         self._ack_history = []
         self._acks_on_floor = False
+        self._took_unread = False
         self._ack_counter = 0
         self._asked = None
         self._break_requested = False

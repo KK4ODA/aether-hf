@@ -619,6 +619,10 @@ pub struct LinkEngine {
     /// An acknowledgement of this session's was lost: the rest go on the tone floor
     /// (ADR-0059).
     acks_on_floor: bool,
+    /// This station became the receiver on a frame it could not read after offering the turn
+    /// ([`turn_taken_unread`](Self::turn_taken_unread)), not on the other station's word
+    /// (ADR-0063).
+    took_unread: bool,
     ack_counter: u8,
     /// The fastest rung this station has recommended to the sender in this session: a burst
     /// faster than any of them is the sender's choice (ADR-0020).
@@ -735,6 +739,7 @@ impl LinkEngine {
             ack_history: Vec::new(),
             top_acked_mode: None,
             acks_on_floor: false,
+            took_unread: false,
             ack_counter: 0,
             asked: None,
             break_requested: false,
@@ -2525,6 +2530,7 @@ impl LinkEngine {
             // burst that offered the turn, one that does not decode: the acknowledgement that
             // took the turn was lost (ADR-0047).
             let (payload, _) = frame.decode(None);
+            let unread = payload.is_none();
             match payload {
                 None if !self.turn_taken_unread(frame) => return,
                 None => {}
@@ -2543,6 +2549,7 @@ impl LinkEngine {
             }
             self.offer_out = false;
             self.role = Role::Irs;
+            self.took_unread = unread;
             self.waiting_for = None;
             self.unread_there = false;
             self.disarm(Timer::Wait);
@@ -2586,7 +2593,11 @@ impl LinkEngine {
             announced_end: None,
             closes_at: None,
         };
-        if self.decode_record(frame, &mut record) {
+        let part_of_burst = self.decode_record(frame, &mut record);
+        if record.payload.is_some() {
+            self.took_unread = false;
+        }
+        if part_of_burst {
             if self.answered_already(frame, &record) {
                 // what it carried for combining is kept (`decode_record`); it starts no burst
                 self.burst_t0 = None;
@@ -3137,11 +3148,10 @@ impl LinkEngine {
                 self.transmit(vec![reply]);
                 self.end_session("peer disconnected");
             }
-            ControlKind::DiscAck => {
-                if self.state == State::Disconnecting {
-                    self.end_session("closed");
-                }
+            ControlKind::DiscAck if self.state == State::Disconnecting => {
+                self.end_session("closed");
             }
+            ControlKind::DiscAck => {}
             ControlKind::Ack => {
                 let mut unread_poll = false;
                 if self.waiting_for == Some(Waiting::Poll) {
@@ -3153,6 +3163,7 @@ impl LinkEngine {
                     unread_poll = frame.floor() && !self.poll_floor;
                     self.unread_there = unread_poll;
                 }
+                self.give_back_turn(control.flags);
                 if self.role == Role::Iss
                     && (matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
                         // an idle sender in a chat takes the other station's request for the
@@ -3276,9 +3287,33 @@ impl LinkEngine {
         self.answer_turn();
     }
 
+    /// An acknowledgement read while receiving: if this station took the turn it offered as
+    /// taken on a frame it could not read (ADR-0047), and the acknowledgement says it was not: that frame was noise. The turn
+    /// is this station's again, and the acknowledgement is the answer to its burst. Left
+    /// receiving, both stations waited for the other until the link timed out (the scenario
+    /// harness, 80 m at 500 Hz: a detection 40 Hz off the session's offset at its threshold;
+    /// ADR-0063).
+    fn give_back_turn(&mut self, flags: u8) {
+        if self.role != Role::Irs || !self.took_unread || flags & control_flags::TAKEN != 0 {
+            return;
+        }
+        self.took_unread = false;
+        self.role = Role::Iss;
+        self.burst.clear();
+        self.arriving.clear();
+        self.burst_t0 = None;
+        self.disarm(Timer::Ack);
+        self.waiting_for = Some(Waiting::Ack);
+        self.actions.push(Action::Event {
+            name: "role",
+            detail: "iss".into(),
+        });
+    }
+
     fn become_iss(&mut self) {
         self.role = Role::Iss;
         self.unread_there = false;
+        self.took_unread = false;
         // the first burst of a turn goes out where this station's own measurements of the
         // peer put it — HF is reciprocal — as a caller's goes out where the acceptance puts
         // it (P9-2), not at the slowest rung of the ladder: that is the tone floor
@@ -3620,6 +3655,7 @@ impl LinkEngine {
         self.burst_t0 = None;
         self.ack_history.clear();
         self.acks_on_floor = false;
+        self.took_unread = false;
         self.ack_counter = 0;
         self.asked = None;
         self.break_requested = false;
@@ -4353,6 +4389,80 @@ mod tests {
         );
         assert_eq!(e.arriving, [] as [(f64, f64); 0], "an arrival left over");
     }
+    /// A detection at its threshold that the physical layer trusts and that decodes to
+    /// nothing.
+    struct TrustedNoise {
+        t_start: f64,
+        t_end: f64,
+    }
+
+    impl SoftFrame for TrustedNoise {
+        fn container(&self) -> Container {
+            Container::Data
+        }
+        fn mode(&self) -> usize {
+            8
+        }
+        fn floor(&self) -> bool {
+            false
+        }
+        fn rv(&self) -> u8 {
+            1
+        }
+        fn snr_db(&self) -> f64 {
+            -14.7
+        }
+        fn t_start(&self) -> f64 {
+            self.t_start
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            (None, vec![0.0])
+        }
+    }
+
+    #[test]
+    fn a_turn_taken_on_noise_is_given_back_by_the_acknowledgement() {
+        // the scenario harness, 80 m at 500 Hz (ADR-0063): after a burst that offered the
+        // turn, a detection at its threshold was taken for the other station's burst
+        // arriving, and this station became the receiver; the other station's
+        // acknowledgement, not taking the turn, then reached a station receiving too, and
+        // both waited for the other until the link timed out
+        let timing = wide();
+        let a = LinkEngine::new("W4ODA", timing.clone(), LinkConfig::default(), 1);
+        let b = LinkEngine::new("KK4XYZ", timing, LinkConfig::default(), 2);
+        let mut sim = crate::sim::TwoStationSim::new(a, b, 12.0, 5);
+        sim.engine_mut(0).connect("KK4XYZ").expect("idle");
+        sim.engine_mut(0).send(&[0u8; 300]);
+        // run until the other station's acknowledgement of the offering burst is on the air,
+        // and put the noise just before it, where the harness found it
+        let mut t = 0.0;
+        while sim.frames_sent(1).len() < 2 {
+            t += 0.05;
+            sim.run(t, 3.0);
+            assert!(t < 200.0, "no acknowledgement went out");
+        }
+        let a = sim.engine(0);
+        assert!(a.role == Role::Iss && a.offer_out && a.waiting_for == Some(Waiting::Ack));
+        let ack_start = sim.frames_sent(1)[1].t_start;
+        sim.engine_mut(0).on_frame(
+            &TrustedNoise {
+                t_start: ack_start - 1.1,
+                t_end: ack_start - 0.05,
+            },
+            ack_start,
+        );
+        assert_eq!(sim.engine(0).role, Role::Irs);
+        let more = b"MORE AFTER THE NOISE. ".repeat(10);
+        sim.engine_mut(0).send(&more);
+        sim.run(t + 300.0, 3.0);
+        let mut expected = vec![0u8; 300];
+        expected.extend_from_slice(&more);
+        assert_eq!(sim.delivered(1), expected.as_slice());
+    }
+
     /// A detection that decodes to nothing: noise, or a Morse identifier, whose chips named
     /// a data mode.
     struct Junk {
