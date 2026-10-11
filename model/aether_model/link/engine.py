@@ -509,6 +509,13 @@ class LinkEngine:
         codeword, which cannot be combined with it."""
         self._burst: list[_RxRecord] = []
         self._burst_t0: float | None = None
+        self.top_acked_mode: int | None = None
+        """The fastest rung a frame of this session's was acknowledged at: a rung the path has
+        carried, where the current recommendation may have stepped down after one bad burst.
+        The Test starts its ladder under it."""
+        self._arriving: list[tuple[float, float]] = []
+        """Frames of the burst announced by their preambles and not yet reported, as (start,
+        end): the burst is not over before they are (ADR-0061)."""
         self._ack_history: list[_AckSnapshot] = []
         self._acks_on_floor = False
         self._ack_counter = 0
@@ -753,6 +760,7 @@ class LinkEngine:
 
     def on_frame(self, frame: SoftFrame, now: float) -> None:
         self.now = max(self.now, now)
+        self._account_for(frame)
         if frame.container is Container.CONTROL:
             self._on_control(frame)
         elif not (self.state is State.DISCONNECTING and self.role is Role.ISS):
@@ -820,6 +828,7 @@ class LinkEngine:
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
         deadline = t_start + length + self._irs_reply_delay()
         self._deadlines["ack"] = max(self._deadlines.get("ack", 0.0), deadline)
+        self._arriving.append((t_start, t_start + length))
 
     # ── timers ────────────────────────────────────────────────────────
 
@@ -1586,6 +1595,7 @@ class LinkEngine:
         for s, rec in list(self._records.items()):
             if not rec.acked and rec.sent and ack.received(s):
                 rec.acked = True
+                self.top_acked_mode = max(self.top_acked_mode or 0, rec.mode)
                 self.stats.bytes_acked += len(rec.body)
                 if self._disc_patience_until is not None:
                     # progress: a sender leaving waits its patience again from here
@@ -1752,6 +1762,18 @@ class LinkEngine:
             return None
         return frame.t_end + most_following(frame.follows) * max(0.0, frame.t_end - frame.t_start)
 
+    def _account_for(self, frame: SoftFrame) -> None:
+        """A frame reported: the arrival announced at its start is that frame, and one that
+        ended before it began has passed unreported. What is left is still on the air."""
+        length = max(0.0, frame.t_end - frame.t_start)
+
+        def accounted(arrival: tuple[float, float]) -> bool:
+            start, end = arrival
+            tolerance = 0.5 * min(length, end - start)
+            return abs(start - frame.t_start) <= tolerance or end <= frame.t_start + 1e-9
+
+        self._arriving = [a for a in self._arriving if not accounted(a)]
+
     def _burst_closed(self) -> bool:
         """Whether the burst is known to be over at :meth:`_burst_end`: the frame that ends
         latest said, believably, that none follow it (a countdown of 0 is exact). Without it
@@ -1789,7 +1811,13 @@ class LinkEngine:
             if b is not None
         ]
         bounds = decoded or bounds
-        return max(heard, min(bounds)) if bounds else heard
+        end = max(heard, min(bounds)) if bounds else heard
+        # A frame announced and not yet reported is still on the air: a frame reported inside
+        # it — a false detection in its middle — is no end of the burst. Taken for one, it set
+        # the answer for its own end over the deadline the arrival had set, and the
+        # acknowledgement went out over the last 0.3 s of WC4Y's burst on 2026-10-11, then
+        # again when that frame decoded, in the same keying (ADR-0061).
+        return max([end, *(e for _, e in self._arriving)])
 
     def _decode_record(self, rec: _RxRecord) -> bool:
         """Decode a frame of the burst, alone or combined with an earlier transmission of its
@@ -1894,6 +1922,7 @@ class LinkEngine:
             # and by nothing else: an acknowledgement a burst's quiet after the request went
             # out over the caller's first burst, which follows the acceptance at once
             self._burst.clear()
+            self._arriving.clear()
             self._burst_t0 = None
             self._disarm("ack")
             return False
@@ -1926,6 +1955,7 @@ class LinkEngine:
         """End of a burst: HARQ buffers were already stored per frame in
         :meth:`_decode_record`, so just clear the burst accumulator."""
         self._burst.clear()
+        self._arriving.clear()
         self._burst_t0 = None
 
     def _send_ack(self) -> None:
@@ -2210,6 +2240,7 @@ class LinkEngine:
         self._disarm("ack")
         self._disarm("request")
         self._burst.clear()
+        self._arriving.clear()
         self._burst_t0 = None
         self._break_requested = False
         self._stated_want = False
@@ -2459,6 +2490,7 @@ class LinkEngine:
     def _reset_transfer_state(self) -> None:
         # a session starting, here or in reply to a call, is done with the one left before
         self._left = None
+        self.top_acked_mode = None
         self._disarm("leave")
         self._records.clear()
         self._tx_base = self._tx_next = 0
@@ -2480,6 +2512,7 @@ class LinkEngine:
         self._max_seen = None
         self._harq.clear()
         self._burst.clear()
+        self._arriving.clear()
         self._burst_t0 = None
         self._ack_history = []
         self._acks_on_floor = False
