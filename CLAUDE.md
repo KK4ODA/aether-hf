@@ -1370,6 +1370,25 @@ announcements in 30 min against 3, no false frame; 4/4 seeds pass. The nightly h
 the peer's offset is the open step. beta.104 also fixed SIGTERM (ctrlc `termination` feature) and
 the systemd unit (hidraw, ttyACM, plugdev, `ReadWritePaths=/etc/aetherd`).
 
+**The nightly, made to notice (2026-10-11, after beta.104; the author's "yes, start").** Three
+draws of every scenario side by side (`session_matrix.py --seeds N` / `--variant K`: the
+scenario's seed, +1000, +2000, named `-s<seed>`; `--drop-passing-audio`); `tools/scenario_trend.py`
+compares their medians (air time, Test rates over passing runs, pass count) with
+`bench/baselines/scenarios.csv` and fails on a step (30 % and 30 s slower, a rate 30 % down, a
+third fewer passing) — `--update` rewrites the baseline when a change is meant to alter timing;
+the nightly's `mixed` job runs the scenarios tagged `mixed` between this build and the newest
+release's daemon both ways round (`tools/mixed_pair.py`, downloaded from the public release page;
+skipped with a note when the link protocol differs); a failing night opens or comments on the
+issue labelled `nightly` and a passing one closes it (`tools/nightly_report.py`). The channel
+server models a slow computer (`[stations.<who>.machine]`: `stall_every_s`, `stall_s`,
+`backlog_s`; the step `stall WHO S`): the station neither hears nor answers, its queued audio
+plays on, the newest 2 s it heard are kept and it catches up after — `80m-slow-machine-500`
+completes its Test at about two-thirds of the rate without stalls, and a stall over the DISC
+leaves that station in the session until its link timeout. `[script] setup`/`repeat` and the
+`resources` column (memory, open files, threads from `/proc`; `max_rss_growth_mb`,
+`max_fd_growth`, `max_thread_growth`) serve `bench/scenarios/long/`, which `weekly.yml` runs
+(a gateway's day, ~5 h of air) and the nightly's glob does not reach.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

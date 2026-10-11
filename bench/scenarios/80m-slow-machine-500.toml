@@ -1,0 +1,34 @@
+name = "80m-slow-machine-500"
+description = """80 m at 500 Hz on a Moderate path at +4 dB, with KE4QCM's computer of
+2026-10-09: the called station's run loop stalls about every 40 s for 0.3–5 s, as his fell
+0.3–27 s behind. A stall is air the station neither hears nor answers in; what it had queued
+plays on, the newest 2 s of what it heard are kept, and it catches up when the stall ends. A Test
+session: it should complete, slower (median rates about two-thirds of the same path without the
+stalls). A stall over the closing DISC leaves the stalled station in the session until its link
+timeout — nothing else can tell it — so the end is judged on being idle afterwards, not on a
+clean DISC exchange."""
+tags = ["80m", "robustness", "machine"]
+bandwidth = 500
+seconds = 1500
+seed = 81
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "KE4QCM"
+[stations.b.machine]
+stall_every_s = 40
+stall_s = [0.3, 5.0]
+
+[path]
+profile = "moderate"
+snr_db = 4.0
+cfo_hz = 4.0
+
+[script]
+steps = ["test", "wait_idle 300"]
+
+[expect]
+test = "complete"
+idle = true
+max_collisions = 8

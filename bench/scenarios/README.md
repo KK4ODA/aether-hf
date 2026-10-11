@@ -83,10 +83,21 @@ mode ladder, file and disconnect, so it starts from idle), `wait S` (S seconds o
 moment), `abort`. For what goes wrong mid-session: `send N` (queued, not waited for),
 `message? N` (a message that may fail — reported, not judged), `outage S` (from now neither
 station hears the other for S seconds: a station switched off, a band gone), `wait_idle S`
-(both back to idle by themselves within S seconds of air). With `continue_on_failure = true` in
-`[script]` a failed step does not end the script. `transfer_s` and `connect_within_s` set how
+(both back to idle by themselves within S seconds of air). `stall WHO S` (that station's
+computer stops for S seconds of air). With `continue_on_failure = true` in `[script]` a failed
+step does not end the script. `setup = [...]` runs once before `steps`, and `repeat = N` runs
+`steps` N times; each daemon's memory, open files and threads are sampled after every round
+(the result's `resources`, from `/proc`, Linux only), and `[expect]`'s `max_rss_growth_mb`,
+`max_fd_growth` and `max_thread_growth` judge their growth from the first round's end to the
+last. `transfer_s` and `connect_within_s` set how
 much air a message or a call may take (300 and 180). Each message step's rate is in the
 result's `transfers`.
+
+**A slow computer** (`[stations.<who>.machine]`): `stall_every_s` (mean seconds between
+stalls, drawn from the seed), `stall_s` (a length, or `[shortest, longest]`), `backlog_s` (2, the
+daemon's capture queue). In a stall the station neither hears nor answers; what it queued plays
+on, the newest `backlog_s` of what it heard is kept, and it catches up when the stall ends
+(`channel.json` lists each station's `stalls` and `stall_dropped_s`).
 
 **Host programs** (`host = true` at a station): `host a client` attaches a Winlink Express-like
 program to a's host port (its opening line as the bench recorded it), `host b trimode` an RMS
@@ -112,7 +123,11 @@ other signals, AGCs, VOX, both bandwidths, aborts, outages, host programs — an
 these alone, plus being back to idle after the script has left (`--count`, `--seed`, `--jobs`;
 each scenario's TOML is kept beside its run).
 
-Tags: `quick` (CI runs these: `--tag quick`); the nightly job runs every scenario, the stress set
+`long/` holds runs of hours (a gateway's day) that the weekly workflow runs and the nightly's
+glob does not reach.
+
+Tags: `mixed` (the nightly runs these between this build and the last release, both ways round:
+`tools/mixed_pair.py`); `quick` (CI runs these: `--tag quick`); the nightly job runs every scenario, the stress set
 included, and `nightly` marks the ones expected to pass there; `stress` (conditions chosen to
 break things — `--tag stress --jobs 4` by hand; not every one is expected to pass: on
 `80m-asymmetric-500` a file transfer after the Test's ladder stalls about one run in three, an
@@ -138,3 +153,12 @@ daemons' logs and recordings under `--out`; `--csv` appends one line per scenari
 build are not identical (the daemons' threads), so judge a single difference against a second
 run, and an A/B on the same seeds; a scenario's `seed = N` and a `-sN` in its name make a
 variant.
+
+`--seeds N` runs each scenario under N seeds (its own, then +1000, +2000, named `-s<seed>`) and
+`--variant K` only the K-th; the nightly runs variants 0–2 side by side. `--drop-passing-audio`
+deletes a passing run's recordings. `tools/scenario_trend.py` compares a night's CSVs with
+`bench/baselines/scenarios.csv` — each scenario's median air time and Test rates over its
+passing runs, and its pass count — and fails on a step (30 % and 30 s slower, a rate 30 % down,
+a third fewer passing); `--update` rewrites the baseline when a change is meant to alter the
+timing. A failing night opens or comments on the issue labelled `nightly`
+(`tools/nightly_report.py`); a passing one closes it.

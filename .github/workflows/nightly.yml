@@ -21,11 +21,7 @@ jobs:
       # they measured, so they run at commit 8874dae — the last tree with those modules —
       # and nowhere later; a step that ran them here failed every night from the start.
 
-  # Whole sessions between two real daemons through simulated 80 m and 40 m conditions —
-  # fading, static crashes, VARA-, PACTOR- and RTTY-class neighbours, the radios' own
-  # switching — judged on connecting, delivering, the Test's outcome, a clean end and
-  # collisions (ADR-0042, bench/scenarios/).
-  scenarios:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -37,28 +33,163 @@ jobs:
       - name: Build the daemon
         working-directory: core
         run: cargo build --release -p aetherd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aetherd-nightly
+          path: core/target/release/aetherd
+          retention-days: 2
+
+  # Whole sessions between two real daemons through simulated 80 m to 15 m conditions —
+  # fading, static crashes, VARA-, PACTOR-, RTTY- and FT8-class neighbours, the radios' own
+  # switching, slow computers — judged on connecting, delivering, the Test's outcome, a clean
+  # end and collisions (ADR-0042, bench/scenarios/). Three draws of each scenario, side by
+  # side: the scenario's own seed and two more (`--variant`), so one unlucky fade is told from
+  # a build that broke something.
+  scenarios:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: aetherd-nightly
+          path: bin
+      - run: chmod +x bin/aetherd
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
       - run: uv sync --locked
       - name: Scenarios
         run: >-
-          uv run python tools/session_matrix.py --jobs 2
+          uv run python tools/session_matrix.py --jobs 2 --variant ${{ matrix.variant }}
+          --drop-passing-audio --daemon bin/aetherd
           --out "${{ runner.temp }}/scenarios" --csv "${{ runner.temp }}/scenarios/results.csv"
-      # Random sessions nobody scripted, judged only on what must never happen: a daemon
-      # that dies, a stuck key, a host told CONNECTED while deaf, a station not back to idle
-      # (tools/soak.py). A new seed every night, from the run number, so the set grows.
-      - name: Soak
-        if: always()
-        run: >-
-          uv run python tools/soak.py --count 24 --jobs 2 --seed ${{ github.run_number }}
-          --out "${{ runner.temp }}/soak"
       - name: Keep the runs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: scenarios-nightly
-          path: |
-            ${{ runner.temp }}/scenarios
-            ${{ runner.temp }}/soak
+          name: scenarios-${{ matrix.variant }}
+          path: ${{ runner.temp }}/scenarios
           retention-days: 14
+
+  # How fast the sessions were against the committed baseline (tools/scenario_trend.py,
+  # bench/baselines/scenarios.csv): a change that makes every session a third slower passes
+  # every judgement above, and this is where it shows. The table goes in the run's summary.
+  trend:
+    needs: scenarios
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: scenarios-*
+          path: runs
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Against the baseline
+        run: >-
+          uv run python tools/scenario_trend.py runs/scenarios-*/results.csv
+          --summary "$GITHUB_STEP_SUMMARY" --out trend.md
+      - name: Keep the table
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trend
+          path: trend.md
+          retention-days: 14
+
+  # Random sessions nobody scripted, judged only on what must never happen: a daemon that
+  # dies, a stuck key, a host told CONNECTED while deaf, a station not back to idle
+  # (tools/soak.py). A new seed every night, from the run number, so the set grows.
+  soak:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: aetherd-nightly
+          path: bin
+      - run: chmod +x bin/aetherd
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Soak
+        run: >-
+          uv run python tools/soak.py --count 24 --jobs 2 --seed ${{ github.run_number }}
+          --daemon bin/aetherd --out "${{ runner.temp }}/soak"
+      - name: Keep the runs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak
+          path: ${{ runner.temp }}/soak
+          retention-days: 14
+
+  # The stations on the air run the last release, not this tree: this build calls the newest
+  # v* release's daemon and is called by it (tools/mixed_pair.py). Skipped, and said so, when
+  # the link protocol changed since that release — the two cannot connect by design, and the
+  # release notes will say "Update required".
+  mixed:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: aetherd-nightly
+          path: bin
+      - run: chmod +x bin/aetherd
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: This build against the last release
+        run: uv run python tools/mixed_pair.py --daemon bin/aetherd --out "${{ runner.temp }}/mixed"
+      - name: Keep the runs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mixed
+          path: ${{ runner.temp }}/mixed
+          retention-days: 14
+
+  # A failing night opens an issue labelled `nightly` — or comments on the one already open —
+  # with what failed and why; a passing night closes it. The email GitHub sends says only
+  # that the run failed.
+  report:
+    needs: [full, scenarios, trend, soak, mixed]
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          path: runs
+      - name: Open, update or close the nightly issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: >-
+            full=${{ needs.full.result }}
+            scenarios=${{ needs.scenarios.result }}
+            trend=${{ needs.trend.result }}
+            soak=${{ needs.soak.result }}
+            mixed=${{ needs.mixed.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 tools/nightly_report.py --runs runs --results "$RESULTS"
+          --run-url "$RUN_URL" --sha "${{ github.sha }}" --repo "${{ github.repository }}"

@@ -1,6 +1,6 @@
 name = "quick-awgn-2300"
 description = "The smoke test: a clean wire at 2300 Hz, a call, a message each way, a disconnect."
-tags = ["quick"]
+tags = ["quick", "mixed"]
 bandwidth = 2300
 seconds = 240
 seed = 1

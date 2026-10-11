@@ -2,7 +2,7 @@ name = "40m-winlink-exchange-2300"
 description = """40m at 2300 Hz, a Winlink-shaped exchange: B2F's handshake and proposals, a
 message each way, the answers between them — eight changes of direction, each a reply the host
 sends the moment the last line arrived. How long the turnarounds take is most of the session."""
-tags = ["40m", "stress", "winlink"]
+tags = ["40m", "stress", "winlink", "mixed"]
 bandwidth = 2300
 seconds = 900
 seed = 31

@@ -1,0 +1,48 @@
+name: Weekly
+
+on:
+  schedule:
+    - cron: "41 2 * * 0"   # Sundays, 02:41 UTC
+  workflow_dispatch:
+
+jobs:
+  # A gateway's day, compressed (bench/scenarios/long/): one gateway and three clients calling
+  # it round after round for about five hours of air, judged on what a gateway left running
+  # for days needs — every round's sessions ending, both ends idle, and the daemons' memory,
+  # open files and threads flat from the first round's end to the last.
+  long:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build the daemon
+        working-directory: core
+        run: cargo build --release -p aetherd
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Long runs
+        run: >-
+          uv run python tools/session_matrix.py bench/scenarios/long/*.toml
+          --drop-passing-audio
+          --out "${{ runner.temp }}/long" --csv "${{ runner.temp }}/long/results.csv"
+      - name: What grew
+        if: always()
+        run: >-
+          python3 -c "import csv,sys;
+          [print(r['scenario'], r['pass'], r['why'], '|', r['resources'])
+          for r in csv.DictReader(open(sys.argv[1]))]" "${{ runner.temp }}/long/results.csv"
+          | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the runs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: long
+          path: ${{ runner.temp }}/long
+          retention-days: 30
