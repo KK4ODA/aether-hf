@@ -1025,7 +1025,7 @@
    "hop_div": 4,
    "bin_div": 4,
    "clip": 10.0,
-   "max_cfo_hz": 100.0,
+   "max_cfo_hz": 150.0,
    "threshold": 3.0,
    "min_hits": 12,
    "min_block_hits": 4,

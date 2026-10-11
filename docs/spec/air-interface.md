@@ -225,7 +225,7 @@ symbols there and is contradicted in the rest.
 | 4-tone data, 100 Bd, 500 Hz air | 80 samples (10 ms), 100 Hz apart, span 400 Hz | 4 data symbols a slot; tone change 32 samples, the shorter glide at a boundary with a sync symbol |
 | Level | +5.5 dB | over an OFDM frame's average power at the same transmit level |
 | Sync blocks | 3 x 8 symbols | start, middle, end; 45 % of the data slots before the middle one; the same for every kind |
-| Detector | hop 80 samples, bin 6.25 Hz | offset search +/-100 Hz |
+| Detector | hop 80 samples, bin 6.25 Hz | offset search +/-150 Hz |
 | Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence; at most 2 contradicted (another tone strongest, 12x the noise, not steady), unless the two best blocks each have 7 of 8 and none contradicted |
 | Arrival threshold | 4.8 | first block's mean ratio; 5 of 8 strongest |
 
@@ -487,7 +487,7 @@ A conforming receiver is not required to use any particular algorithm, but must 
   robust OFDM mode's threshold — the reference receiver's partial-matched-filter/FFT bank
   searches ±300 Hz over both preamble sequences and acquires 100 % of frames at −5 dB and
   87 % at −7 dB — and of a tone frame at the tone floor's own threshold over at least
-  ±100 Hz, which is what the reference detector searches (§2.4).
+  ±150 Hz, which is what the reference detector searches (§2.4; ADR-0064).
 * **Sample-rate offset** of at least ±50 ppm between the two stations' clocks.
 * **Residual carrier offset** estimation from the comb pilots; 64-QAM needs the frame's
   residual well below 0.1 Hz.

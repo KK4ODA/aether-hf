@@ -68,3 +68,4 @@ context → decision → alternatives considered → consequences.
 | [0061](0061-a-frame-still-arriving-holds-the-acknowledgement.md) | A frame still arriving holds the acknowledgement | accepted |
 | [0062](0062-acknowledgements-on-the-floor-from-the-start-measured-and-not-kept.md) | Acknowledgements on the floor from the start — measured and not kept | rejected |
 | [0063](0063-an-acknowledgement-gives-back-a-turn-taken-on-noise.md) | An acknowledgement gives back a turn taken on noise | accepted |
+| [0064](0064-the-tone-floor-searches-150-hz.md) | The tone floor searches ±150 Hz | accepted |
