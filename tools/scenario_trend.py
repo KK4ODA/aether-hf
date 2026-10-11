@@ -10,7 +10,8 @@
 change that makes every session a third slower passes all of that. This reads the runs'
 CSVs (``--csv``; several seeds of each scenario, ``--seeds`` / ``--variant``), takes each
 scenario's median air time and Test rates over its passing runs and its pass count, and
-compares them with ``bench/baselines/scenarios.csv``:
+compares them with ``bench/baselines/scenarios.csv`` (a runs folder given in place of a CSV is
+read from its runs' ``result.json``):
 
 * **failing** — fewer of its runs passed than the baseline's share, by more than a third;
 * **slower** — the median air time grew by more than ``--tolerance`` (30 %) *and* by more
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import statistics
@@ -109,6 +111,13 @@ def summarise(rows: list[dict[str, str]]) -> dict[str, Night]:
 def read_rows(paths: list[Path]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in paths:
+        if path.is_dir():
+            # a runs folder: each run's result.json, which outlives a runner that died
+            # before it wrote the CSV
+            for result in sorted(path.glob("*/result.json")):
+                data = json.loads(result.read_text(encoding="utf-8"))
+                rows.append({k: "" if v is None else str(v) for k, v in data.items()})
+            continue
         with path.open(newline="", encoding="utf-8") as f:
             rows += list(csv.DictReader(f))
     return rows

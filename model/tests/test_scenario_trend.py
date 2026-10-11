@@ -111,3 +111,14 @@ def test_the_nightly_issue_names_what_failed(tmp_path: Path) -> None:
     assert "y-s1004" not in text
     assert "`soak-7`: b panicked" in text
     assert "protocol 8 against 7" in text
+
+
+def test_a_runs_folder_reads_like_its_csv(tmp_path: Path) -> None:
+    import json
+
+    for name, ok, air in (("x", True, 100.0), ("x-s1009", False, None)):
+        (tmp_path / name).mkdir()
+        result = {"scenario": name, "pass": ok, "air_s": air, "base": "x", "message_bps": None}
+        (tmp_path / name / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    nights = st.summarise(st.read_rows([tmp_path]))
+    assert (nights["x"].runs, nights["x"].passed, nights["x"].air_s) == (2, 1, 100.0)
