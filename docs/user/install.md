@@ -48,14 +48,17 @@ from a few weeks ago can still be looked up.
 and the panel says so: the Setup tab carries an amber dot, the step you changed is marked, the
 save bar at the foot of the tab names what is not saved, and every other tab shows a banner with
 *Review in Setup* and *Discard changes*. Most settings apply the moment they are saved; a sound
-card, a serial port or the callsign restarts the modem, which takes a few seconds.
+card, any keying setting, Host programs, compression, the update channel or the callsign
+restarts the modem, which takes a few seconds.
 
 **Keying, and the dial.** Setup step 2 keys the radio through a serial line (RTS or DTR), the
-radio's own *CAT command*, a CM108-class interface's GPIO pin, or `rigctld`. Its *Interface*
+radio's own *CAT command*, a CM108-class interface's GPIO pin, `rigctld` or FLRig; or it leaves
+keying to a *host program* (VarAC or Winlink Express keys the radio, see
+[host-programs.md](host-programs.md)), or to *none* for a VOX interface. Its *Interface*
 list fills the fields in for a known interface (an Icom with USB audio, a Yaesu, a
 SignaLink, a DRA or URI board) once, when you pick it; the fields are what the modem uses, and
-changing one by hand shows *Manual*. Only CAT and
-`rigctld` also read the dial, which the rules are judged at; with any other keying you say
+changing one by hand shows *Manual*. Only CAT, `rigctld`
+and FLRig also read the dial, which the rules are judged at; with any other keying you say
 where the dial is on the Session tab, and again after every change of frequency. An **Icom
 with USB audio** (IC-7300, IC-7610, IC-9700, IC-705) needs nothing but its USB cable: choose
 the rig's COM port, *CAT command* and *Icom CI-V*, and in the rig's menu (*MENU › SET ›
@@ -74,14 +77,18 @@ daemon the application did not start (a gateway service) runs on, and closing as
 nothing.
 
 **Uninstalling** (*Settings › Apps*, or *Uninstall Aether HF* from the Start menu) removes
-the program. What you made is yours, and it stays unless you say otherwise; the
-uninstaller asks, one kind at a time, and pressing Enter keeps it:
+the program. What you made is yours, and it stays unless you say otherwise. The uninstaller
+asks first about settings and caches: answering No (or pressing Enter) keeps everything and
+asks nothing more. Answering Yes goes on to the next question, and so on:
 
 | Asked | What it is | Where |
 |---|---|---|
 | Settings and caches | `station.toml` and its backups, the dial memories; the installers kept for going back; the window's stored data (the text sent, the waterfall's controls) | `%APPDATA%\aether-hf\`, `%LOCALAPPDATA%\aether-hf\`, `%LOCALAPPDATA%\org.aetherhf.desktop\` |
 | Profiles, logs and history | the profiles, `aetherd.log` and the one before it, the stations heard, the session history | `%APPDATA%\aether-hf\` |
 | Recordings | the audio and sidecars of your recorded and Test sessions — asked with a warning of its own, and only after the other two | `%APPDATA%\aether-hf\recordings\` |
+
+The dated daemon logs (`logs\`) and the zips written by *Send files…* (`shared\`), both in
+`%APPDATA%\aether-hf\`, are kept whatever you answer; delete them by hand if you want them gone.
 
 A recordings folder you moved elsewhere (`[record] dir`) is never touched, and neither is
 anything you put in these folders yourself. An update, and a silent or passive uninstall,
@@ -117,7 +124,8 @@ xattr -dr com.apple.quarantine "/Applications/Aether HF.app"
 and open it normally after that. As on Windows, `SHA256SUMS` on the release page lets you
 check the download (`shasum -a 256 aether-hf_<version>_aarch64.dmg`). The configuration is
 `~/.config/aether-hf/station.toml`; the modem's audio goes through Core Audio, keying
-through a serial line, CAT or a CM108-class interface's GPIO pin as on the other systems. Nobody has run this build on a Mac
+through a serial line, CAT, a CM108-class interface's GPIO pin, `rigctld` or FLRig as on the other
+systems. Nobody has run this build on a Mac
 with a radio yet — a report, good or bad, is worth an issue.
 
 ### Updating
@@ -142,7 +150,9 @@ of the two needs to update.
 
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
-for you, *Help > Restore the previous version…* goes back without a network. When a
+for you, *Help > Restore the previous version…* goes back without a network. That works on
+Windows and with the Linux AppImage; it has not been made to work for a `.deb` install or on
+macOS, where you reinstall the older release from the releases page instead. When a
 version changes the shape of the configuration file, it backs up the old file beside itself
 first (`station.toml.bak-v4`, named after the shape it was in). An older version cannot read
 a newer shape, so going back across such a change puts that copy back: from beta 57 a restore
@@ -165,7 +175,7 @@ asks first.
 A profile is a file — `profiles\<name>.aetherprofile` beside the configuration, JSON —
 so **Export…** saves a copy to keep or carry, and **Import…** on another computer brings
 it in. What is this computer's own (the panel's port, the log file, the recordings
-folder) is never in the file; a device the other computer does not have is shown as
+folder, the update channel, debug mode, the KISS port's address) is never in the file; a device the other computer does not have is shown as
 *not on this computer* in the device lists, with the port that has the same interface
 behind it named when there is one, and the modem stays receive-only until you choose.
 A profile written by an older version loads with defaults for what it does not have; one

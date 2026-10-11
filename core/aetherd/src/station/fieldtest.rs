@@ -4,7 +4,7 @@
 //!
 //! The sequence: a probe (both directions' SNR, ADR-0006); a session; a message of
 //! incompressible bytes, timed; the **mode ladder** — a short burst pinned at each mode from
-//! the floor up, its acknowledgement kept as a rung, until three rungs in a row decode fewer
+//! a rung under the fastest the message was acknowledged at, its acknowledgement kept as a rung, until three rungs in a row decode fewer
 //! than half their frames; a file, when the budget has room left; and an orderly
 //! disconnect. The ladder comes before the file: on a slow path the file used to take the
 //! whole budget, and three tests with ND1J (2026-09-25) never reached a rung. The other station

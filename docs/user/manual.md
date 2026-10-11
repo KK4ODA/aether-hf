@@ -130,6 +130,9 @@ settings under a name: one per radio, per place, or per way of working (for exam
   this computer* until you choose one.
 - **More** has New profile, Rename, Duplicate and Delete.
 
+What belongs to this computer stays out of a profile: the update channel, debug mode, the KISS
+port's address, the panel's port, the log file and the recordings folder.
+
 ### Step 1: Callsign and rules
 
 - **Callsign**: yours, with an SSID (`KK4ODA-1`) or a suffix (`KK4ODA/P`) if you use one, up to
@@ -224,8 +227,8 @@ the sound card's own noise.
 ### Step 6: Save
 
 **Save these settings** writes them to the modem's configuration. Most take effect at once. A new
-sound card, port or callsign restarts the modem, which takes a few seconds; the panel comes back
-by itself. **Copy as TOML** copies the settings for a configuration file, and **Discard changes**
+sound card, any keying setting, Host programs, compression, the update channel or the callsign
+restarts the modem, which takes a few seconds; the panel comes back by itself. **Copy as TOML** copies the settings for a configuration file, and **Discard changes**
 puts every field back to what the modem is using.
 
 The folded **Running configuration** and **Mode table** at the bottom show what the modem is
@@ -395,7 +398,9 @@ channel for a newer version; the updates window shows what it finds and installs
 
 The desktop application's **Help** menu has *Check for updates…*, *Restore the previous
 version…*, *Open the configuration folder* and *Releases on GitHub*. Restoring an older version
-puts back the settings file that version can read, and keeps the newer one beside it.
+puts back the settings file that version can read, and keeps the newer one beside it. Restore
+works on Windows and with the Linux AppImage; on macOS or a `.deb` install, reinstall the older
+release from the releases page.
 
 A beta installation follows the beta channel unless you choose otherwise in Setup step 5. When a
 release changes the link protocol, the offer is titled **Update required**: stations on different

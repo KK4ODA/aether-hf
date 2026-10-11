@@ -35,7 +35,7 @@ work".
 
 **The rig's AGC.** FAST or AUTO, or OFF with the RF gain set so the band noise sits well
 above the sound card's own floor. The busy detector learns the noise floor from the
-quiet, steady moments of the last five seconds; a receiver's AGC cuts its gain the
+quiet, steady moments of the last ten seconds; a receiver's AGC cuts its gain the
 instant something strong appears anywhere in its passband and lets it back over the
 next half second, and the detector is built to see through that ramp (an FTDX10 on
 AUTO recovers at 40–55 dB/s). A SLOW setting recovers gently enough to look like a
@@ -111,10 +111,12 @@ frames it heard are the channel); keep both anyway.
 
 The one-button version of §3, for volunteers. Put the other station's callsign in
 **Call** on the Session tab and press **Test session**. The modem then runs, and records,
-a fixed sequence: a probe (both directions' SNR), a call, a 2 kB message, the **mode
-ladder** — a short burst at every mode from a rung under the one the message ran at (the
-message has just shown the slower ones carrying data; the log says *ladder from rung N: the
-message ran at rung M*), each one's acknowledgement kept as a rung, until three rungs in a row fail — then a 16 kB file and an orderly
+a fixed sequence: a probe (both directions' SNR), a call, a message (512 B to 2 kB, sized
+to how well the probe says you are heard), the **mode ladder** — a short burst at every mode
+from a rung under the fastest the message was acknowledged at (the message has just shown the
+slower ones carrying data; the log says *ladder from rung N: the
+message ran at rung M*), each one's acknowledgement kept as a rung, until three rungs in a row fail — then a file sized to about two
+minutes at the measured rate (at least 256 B), if the budget leaves room, and an orderly
 disconnect. About five minutes of transmitting, ten at most: the message and the file
 are sized to what the path can do (how the other station hears you, from the probe's
 answer, sizes the message; the message's measured rate sizes the file to about two
@@ -157,8 +159,8 @@ each way, how the other station heard you, how it ended, and the recording's nam
 goes to the clipboard); attach the sidecar — the `.json` beside the `.wav` in the recordings
 folder, which *Open folder* on the Session tab's **Recording** box shows you — and submit. The audio is yours to attach or not.
 Simpler still: **Send files…** → *Send my files to the Aether project* → **Send** (§5a). The
-recording, the sidecar and your logs go to the project's folder in one press, audio included if
-you tick it; a request link from the author opens the form ready. `tools/field_ingest.py` folds what
+recording, the sidecar and your logs go to the project's folder in one press, audio included unless
+you untick it; a request link from the author opens the form ready. `tools/field_ingest.py` folds what
 arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
 <sidecar>` runs the model's engines against what the path did.
 
@@ -202,8 +204,8 @@ fields:
   secrets) and the summaries of the recordings from the period you choose, with one station or
   with anybody — and **Send** uploads it to the project's Google Drive folder, in pieces,
   picking up after a dropped connection. No address, no code, nothing to attach, and no limit at
-  email's 25 MB, which a Test session's recording passes. The audio is left out unless you tick
-  it: a summary lists every frame with its SNR and is a few kB, a recording is megabytes.
+  email's 25 MB, which a Test session's recording passes. The audio is included unless you
+  untick *audio*: a summary lists every frame with its SNR and is a few kB, a recording is megabytes.
 * **Email my files to someone** writes the same zip and opens an email to the address you give,
   with the zip's folder open to drag it in.
 * **Ask a station to send me its files** writes the request: an email with a link that, opened
@@ -225,7 +227,7 @@ when it is on, with *Turn it off*; the Log tab shows each upload (`debug`). The 
 sessions and Test sessions are not sent.
 
 The logs record how much was sent, never what. A recording's audio is different: Aether can
-decode what was sent from it, which is why it is left out of a zip unless you tick it — and why
+decode what was sent from it, which is why the *audio* box says so and can be unticked — and why
 debug mode, which includes it, says so.
 
 **Your calls are heard, your answers are not.** When the other station keeps calling after you

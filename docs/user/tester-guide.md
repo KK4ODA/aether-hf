@@ -22,7 +22,7 @@ Download the latest `-beta` release from the
 signed: *More info*, then *Run anyway*. The details, Linux and macOS are in
 [install.md](install.md).
 
-Aether updates itself: *Help > Check for Updates*. **Keep it current** — when a release changes
+Aether updates itself: *Help > Check for updates…*. **Keep it current** — when a release changes
 the link protocol, stations on different versions cannot connect, and the update is marked
 *Update required*.
 
@@ -70,7 +70,7 @@ Aether. The full guide is [host-programs.md](host-programs.md); here is the shor
 * *Vara HF* setup: host `127.0.0.1`, port `8300`. The TNC path can be Aether's application,
   `C:\Users\<you>\AppData\Local\Aether HF\aether-hf.exe` — or leave auto-launch off and start
   Aether first. **Never point it at `VARA.exe`.**
-* **Aether keys the radio** (Setup step 2: CAT, a serial line, a CM108 pin or `rigctld`), not
+* **Aether keys the radio** (Setup step 2: CAT, a serial line, a CM108 pin, `rigctld` or FLRig), not
   Winlink Express. If Aether keys on a serial line or a CM108 pin, Winlink Express can still do
   its own frequency control on the radio's CAT port.
 * The bandwidth is set in Winlink Express's session window; Aether follows it.
@@ -95,7 +95,7 @@ reach Aether: its periodic *Send beacons* — VarAC sends Aether nothing for it,
 
 ### Pat
 
-`"varahf": { "host": "localhost", "cmdPort": 8300, "dataPort": 8301, "bandwidth": "2300" }` in
+`"varahf": { "addr": "localhost:8300", "bandwidth": 2300, "rig": "", "ptt_ctrl": false }` in
 Pat's configuration, with Aether keying the radio.
 
 ## 4. On the air
@@ -113,7 +113,8 @@ Pat's configuration, with Aether keying the radio.
 * **A probe** (Session tab, *Probe*) is a one-frame check: it tells you how the other station
   hears you, and how you hear it, without starting a session. Try one before calling.
 * **A Test session** (Session tab, *Test session*) runs a fixed sequence against a listening
-  Aether station — a probe, a call, a message, a climb up every rung, a file — and records it.
+  Aether station — a probe, a call, a message, a climb up the rungs from just under the message's, a file if
+  time allows — and records it.
   It is the single most useful thing you can do on a new path.
 
 ## 5. When something goes wrong
@@ -154,8 +155,9 @@ tried again later, and after three tries the files stay in your recordings folde
 
 ## 7. Known limits
 
-* Pat at 500 Hz, and every program on the air, are what you are testing: they have passed on
-  the bench, with two stations connected through a simulated channel, not yet on a real one.
+* Every program on the air is what you are testing. Winlink Express and VarAC have passed on
+  the bench at both bandwidths and Pat at 2300 Hz, with two stations connected through a
+  simulated channel; Pat at 500 Hz has not been run even on the bench.
 * A **SSID** in Winlink Express's callsign stops messages (§3).
 * VarAC's *Send beacons* does nothing with Aether (§3).
 * The installer is not yet code-signed (§1); macOS builds are untested with a radio.

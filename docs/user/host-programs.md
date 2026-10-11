@@ -12,8 +12,8 @@ is one click.
 | | The host program owns the radio | Aether owns the radio |
 |---|---|---|
 | Like | VarAC with VARA: VarAC tunes the radio and keys it | VARA keying the radio itself |
-| Aether's keying (Setup step 2) | **host program** | CAT, a serial line, a CM108 pin or `rigctld` |
-| The host program's rig control | PTT and frequency on CAT | none (only one program can open the CAT port) |
+| Aether's keying (Setup step 2) | **host program** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
+| The host program's rig control | PTT and frequency on CAT | none when Aether keys by CAT (only one program can open the CAT port); frequency control only, when Aether keys by a serial line or a CM108 pin |
 | Aether's rules check (step 1) | **None** — you check every transmission, as with VARA | on: every transmission judged at the dial |
 | Tuning | the host program (VarAC's Auto-QSY, CQ slots) | Aether's dial list (Session tab), or by hand |
 | Best for | VarAC | Winlink Express, Pat, operators who want the safety net |
@@ -38,7 +38,7 @@ In **VarAC**, *Settings*:
 * *Vara* tab: modem type *VaraHF*, IP/host `127.0.0.1`, main port `8300`, KISS port `8100`.
   *VARA file path*: Aether's application,
   `C:\Users\<you>\AppData\Local\Aether HF\aether-hf.exe`, with *Start modem upon startup* ticked
-  — VarAC starts Aether, and closes it when VarAC closes — or leave the path empty and start
+  — VarAC starts Aether — or leave the path empty and start
   Aether yourself first. Leave *VARA monitor path* empty. Tick *Log VARA commands* while you are
   trying things out: the log is what to send with a report.
 * *RIG* tab: *PTT Configuration* **CAT** and *Frequency Control* **CAT**, for your radio. VarAC
@@ -50,12 +50,13 @@ nobody would key the radio.
 ## Aether owning the radio
 
 In **Aether**, Setup step 2 keys the radio the way VARA's own PTT settings would — CAT on the
-radio's port (which also reads the dial), a serial RTS/DTR line, a CM108 interface's pin, or
-`rigctld` — and step 1 has your rules, control and licence class.
+radio's port (which also reads the dial), a serial RTS/DTR line, a CM108 interface's pin,
+`rigctld` or FLRig — and step 1 has your rules, control and licence class.
 
 In the **host program**, turn its radio control off: VarAC's *RIG* tab *PTT* and *Frequency
 Control* **None**; Winlink Express's radio setup to none. Only one program can hold the radio's
-CAT port. Tune by picking a dial from the Session tab's dial list, or by hand.
+CAT port: if Aether keys by a serial line or a CM108 pin instead, the program can keep its
+frequency control on CAT. Tune by picking a dial from the Session tab's dial list, or by hand.
 
 ## Sharing the radio through rigctld or FLRig
 
@@ -97,7 +98,7 @@ PTT **off**.
 ## Pat
 
 ```json
-"varahf": { "host": "localhost", "cmdPort": 8300, "dataPort": 8301, "bandwidth": "2300" }
+"varahf": { "addr": "localhost:8300", "bandwidth": 2300, "rig": "", "ptt_ctrl": false }
 ```
 
 Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune through Hamlib's
@@ -114,7 +115,7 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
 
 ## How Aether follows the program
 
-* **The bandwidth.** Setup step 4 is Aether's own. A program's `BW500` or `BW2300` moves it while
+* **The bandwidth.** Setup step 4 is Aether's own. A program's `BW500`, `BW2300` or `BW2750` (run as 2300) moves it while
   the program is attached — between sessions, never during one — and it comes back when the
   program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
   500 Hz connections* does, and comes back 20 s after the session; a 500 Hz station never answers
@@ -123,8 +124,10 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   bandwidths — probes and their answers are the same tone-floor frames in both — and its result
   says when the other station runs another bandwidth ("WC4Y hears us at 3 dB … — runs 2300 Hz,
   this station 500 Hz"). A 2300 Hz station calling one it has heard run 500 Hz — from a beacon, a
-  call, a probe or a probe's answer — calls at 500 Hz and comes back 20 s after. The crossing that
-  cannot be made is a 2300 Hz call to a 500 Hz station: it is not answered, and the panel says so
+  call, a probe or a probe's answer — calls at 500 Hz and comes back 20 s after. A 2300 Hz call to a
+  station whose bandwidth is not known goes on at 500 Hz after four unanswered tries (ADR-0058).
+  The crossing that cannot be made is a call that stays at 2300 Hz to a 500 Hz station: it is
+  not answered, and the panel says so
   in a warning across every tab, naming the station, both bandwidths and the fix — Setup step 4's
   bandwidth (a 2300 Hz station still answers 500 Hz calls), the program's `BW` command when a
   program chose 500 Hz, or asking the other station to call at 500 Hz. The Stations tab shows each
@@ -147,4 +150,4 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
 * VarAC's *Remember VARA audio level per band* is ignored: set the level with Aether's *Set
   drive* (Session tab, Keying and drive).
 * The rules check needs Aether to know the dial; with the host program owning the radio it is
-  off. Keep the second way, or share the radio through `rigctld`, if you want Aether's safety net.
+  off. Keep the second way, or share the radio through `rigctld` or FLRig, if you want Aether's safety net.

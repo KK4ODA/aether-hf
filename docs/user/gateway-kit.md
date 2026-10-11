@@ -16,7 +16,7 @@ and the mode needs stations that do not.
 |---|---|
 | Machine | Anything from a Raspberry Pi 4 upwards. The modem uses well under one core at 8 kHz. |
 | Sound card | A radio interface: Digirig, SignaLink, a rig with USB audio built in. |
-| Keying | A serial control line (most interfaces), the radio's own CAT commands on its CAT port (`[ptt] kind = "cat"`: Yaesu, Kenwood/Elecraft, Icom CI-V — which also records the dial frequency), the GPIO pin of a CM108-class interface (`[ptt] kind = "cm108"`: DRA, URI, RA-40 and the like — no serial port; on Linux give the daemon's user the device with a udev rule such as `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", MODE="0660", GROUP="plugdev"` in `/etc/udev/rules.d/70-aetherd.rules`, and the same line with `0c76` for an SSS-based board), or `rigctld` if you already run Hamlib. |
+| Keying | A serial control line (most interfaces), the radio's own CAT commands on its CAT port (`[ptt] kind = "cat"`: Yaesu, Kenwood/Elecraft, Icom CI-V — which also records the dial frequency), the GPIO pin of a CM108-class interface (`[ptt] kind = "cm108"`: DRA, URI, RA-40 and the like — no serial port; on Linux give the daemon's user the device with a udev rule such as `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", MODE="0660", GROUP="plugdev"` in `/etc/udev/rules.d/70-aetherd.rules`, and the same line with `0c76` for an SSS-based board; the service unit puts the daemon's user in `plugdev` and allows the `hidraw` device), or `rigctld` if you already run Hamlib. |
 | Radio | Anything that will pass 2.3 kHz of audio and key from an external interface. |
 
 Two things that are not obvious and cost people days:
@@ -85,7 +85,7 @@ putting a carrier on the air.
 A minimal gateway configuration:
 
 ```toml
-schema_version = 7
+schema_version = 11
 callsign = "W4ODA"
 
 [audio]
@@ -129,7 +129,8 @@ class** (ADR-0018, [fcc-regulatory-controls.md](fcc-regulatory-controls.md)). Un
 **automatic** control the daemon transmits only inside the automatic-control sub-bands of
 §97.221(b), or on 6 m where data is allowed — every Aether signal measures more than the
 500 Hz that §97.221(c) allows elsewhere — and near a sub-band's edge it holds the link to the
-rungs that fit. It refuses a repeating beacon (§97.203(d)). A radio keyed over a serial line
+rungs that fit. It sends no beacon at all, single or repeating, nor a host program's CQ
+(§97.203(d), ADR-0024). A radio keyed over a serial line
 or a CM108 interface cannot report its dial, so give it `dial_hz = …`; over CAT, `rigctld` or FLRig
 the dial is read before every transmission. `[radio] answer_only = true` makes the station
 take calls and make none, and send no beacon, probe or datagram.
@@ -149,10 +150,11 @@ whatever the file says.
 `deploy/aetherd.service` is a systemd unit with the installation commands in its header. The
 parts that matter:
 
-* It runs as its own unprivileged user in the `audio` and `dialout` groups. A gateway does not
-  need root and must not have it.
-* `TimeoutStopSec=15s` with `SIGTERM`: the daemon catches the signal and **releases the
-  transmitter** before exiting. A station killed mid-burst leaves the radio keyed until
+* It runs as its own unprivileged user in the `audio`, `dialout` and `plugdev` groups, with
+  write access only to `/etc/aetherd`, where the daemon keeps everything beside its
+  configuration. A gateway does not need root and must not have it.
+* `TimeoutStopSec=15s` with `SIGTERM`: the daemon catches the signal (from 0.2.0-beta.104; an
+  older daemon only caught SIGINT) and **releases the transmitter** before exiting. A station killed mid-burst leaves the radio keyed until
   somebody notices, which on an unattended gateway can be a very long time.
 * `Nice=-5`: audio is soft real-time. Without it the modem is descheduled mid-burst on a busy
   machine and drops captured samples, which looks exactly like a bad band.
@@ -166,7 +168,7 @@ journalctl -u aetherd -f
 tarball from Releases, or the package) and `sudo systemctl restart aetherd`. Watch for a
 release whose notes open with *Update required*: it changes the link protocol, the rules
 the modems speak on the air, and a station on the new release cannot connect to a gateway on
-the old one (beta 85 is protocol 7). Update the gateway when your users update, not after.
+the old one (protocol 7 since beta 85). Update the gateway when your users update, not after.
 
 ---
 
@@ -226,13 +228,14 @@ on the air as a datagram outside any session, judged by the same rules.
 
 ```
 # ~/.config/pat/config.json
-"varahf": { "host": "localhost", "cmdPort": 8300, "dataPort": 8301, "bandwidth": "2300" }
+"varahf": { "addr": "localhost:8300", "bandwidth": 2300, "rig": "", "ptt_ctrl": false }
 ```
 
 ### RMS Trimode
 
-It expects a VARA modem on the same two ports. Point it at 8300 and it finds it; the bench's
-notes, Trimode's scanning `LISTEN` included, are in `docs/spec/host-interfaces.md` §7.
+It expects a VARA modem on the same two ports. Point it at 8300. Trimode also insists on a TNC
+"VARA program" path, which it launches and watches by process id: give it a small program that
+stays running and start `aetherd` separately (as the service does). The bench's notes, Trimode's scanning `LISTEN` included, are in `docs/spec/host-interfaces.md` §7.
 
 **Do not list an Aether gateway as a VARA gateway.** A real-VARA client that called it would
 find something it cannot talk to, and would blame VARA. The compatibility is in the host
@@ -243,9 +246,9 @@ interface, not on the air: an Aether station cannot decode a VARA signal and nev
 ## 7. Being a good neighbour
 
 * Leave `wait_for_clear = true`. The busy detector learns the noise floor — the typical
-  level of the last minute, taken only from moments when nothing was on the channel — and
-  refuses to start a session while the level sits `busy_threshold_db` (6 dB) over it for
-  most of half a second, or while a frame is being decoded. A static crash does not count;
+  level of the last ten seconds, taken only from quiet, steady moments, and held for up to a
+  minute while a signal stays — and refuses to start a session while the level sits
+  `busy_threshold_db` (6 dB) over it for half of the last 400 ms, or while a frame is being decoded. A static crash does not count;
   a signal that stays does, for as long as it stays. On a stormy night 7 dB is a fair
   setting. A station already in session answers regardless, because the peer is waiting
   and silence would only make it retransmit.
