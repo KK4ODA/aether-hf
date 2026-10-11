@@ -56,8 +56,7 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
   sees or sets — a tab, a box, a button, a setting or its default, a banner, a reading, what a
   host program is told — updates the manual (and the `docs/user/` guide covering it) in the
   same commit; the version it names is a `tools/release.py` site, so `bump` moves it and
-  `check` (CI) holds it. Write user-facing prose plainly: short sentences, no filler, the operator's words
-  (the author asked for it to read as written by a person, through a humanizer pass).
+  `check` (CI) holds it. Write user-facing prose plainly: short sentences, no filler, the operator's words.
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
