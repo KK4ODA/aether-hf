@@ -65,3 +65,4 @@ context → decision → alternatives considered → consequences.
 | [0058](0058-an-unanswered-wide-call-goes-on-at-500-hz.md) | An unanswered wide call goes on at 500 Hz | accepted |
 | [0059](0059-acknowledgements-go-on-the-floor-once-one-was-lost.md) | Acknowledgements go on the tone floor once one was lost | accepted |
 | [0060](0060-a-lost-first-frame-no-longer-takes-its-burst-with-it.md) | A lost first frame no longer takes its burst with it | accepted |
+| [0061](0061-a-frame-still-arriving-holds-the-acknowledgement.md) | A frame still arriving holds the acknowledgement | accepted |

@@ -808,8 +808,15 @@ impl<P: Ptt> Station<P> {
                         // the ladder starts a rung under the one the message ran at: the
                         // rungs below have just carried the message, and climbing them again
                         // cost WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth
-                        // of its budget, before the ladder learned anything new
-                        let rung = self.engine.current_mode();
+                        // of its budget, before the ladder learned anything new. The rung is
+                        // the fastest the message was acknowledged at, not the recommendation
+                        // at its end: two lost retries at the end of WC4Y's message of
+                        // 2026-10-11 had stepped that down from 3 to 1, and the ladder climbed
+                        // rungs 0-3 again for 105 s
+                        let rung = self
+                            .engine
+                            .top_acked_mode()
+                            .unwrap_or_else(|| self.engine.current_mode());
                         let skip = skipped_rungs(&run.modes, rung);
                         run.ladder_skipped = Some(skip);
                         run.ladder_next = skip;

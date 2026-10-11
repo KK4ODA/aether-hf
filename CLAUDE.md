@@ -1338,6 +1338,15 @@ first block stands (`first_stands`) is not refused by an arrival at its own midd
 and a stronger frame overlapping a weaker taken one by at most a sync block wins
 (`overlaps(span, statistic)`); the replay recovers 4 of the 5. That Test's one stall (20 s, keyed,
 in RFI) is the CAT hang beta.98's `ThreadedPtt` answers.
+**ADR-0061 (after beta.102, model first), from WC4Y's Test of 2026-10-11 00:57Z, both sides with
+audio:** the "PTT hiccup" the operator saw was KK4ODA-1 releasing and keying again 9 ms later — two
+floor acknowledgements in one keying, the first 0.34 s over the end of WC4Y's burst. A false
+ordinary detection inside his last tone frame re-armed the acknowledgement for its own end over the
+deadline that frame's preamble had set. The engine now remembers announced arrivals not yet reported
+(`_arriving`/`arriving`, accounted for by any frame reported at their start) and `_burst_end` is no
+earlier than the end of one still on the air. The Test's ladder starts under the fastest rung the
+message was acknowledged at (`top_acked_mode`), not the recommendation at its end (two lost retries
+had stepped it 3 → 1 and the ladder re-climbed rungs 0–3 for 105 s).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

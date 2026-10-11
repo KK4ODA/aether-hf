@@ -605,7 +605,12 @@ pub struct LinkEngine {
     harq: Vec<(u8, HarqBuffer, usize, usize)>,
     burst: Vec<RxRecord>,
     burst_t0: Option<f64>,
+    /// Frames of the burst announced by their preambles and not yet reported, as (start,
+    /// end): the burst is not over before they are (ADR-0061).
+    arriving: Vec<(f64, f64)>,
     ack_history: Vec<AckSnapshot>,
+    /// The fastest rung a frame of this session's was acknowledged at.
+    top_acked_mode: Option<usize>,
     /// An acknowledgement of this session's was lost: the rest go on the tone floor
     /// (ADR-0059).
     acks_on_floor: bool,
@@ -721,7 +726,9 @@ impl LinkEngine {
             harq: Vec::new(),
             burst: Vec::new(),
             burst_t0: None,
+            arriving: Vec::new(),
             ack_history: Vec::new(),
+            top_acked_mode: None,
             acks_on_floor: false,
             ack_counter: 0,
             asked: None,
@@ -801,6 +808,14 @@ impl LinkEngine {
     #[must_use]
     pub fn connected(&self) -> bool {
         self.state == State::Connected
+    }
+
+    /// The fastest rung a frame of this session's was acknowledged at: a rung the path has
+    /// carried, where [`current_mode`](Self::current_mode) may have stepped down after one bad
+    /// burst. The Test starts its ladder under it.
+    #[must_use]
+    pub fn top_acked_mode(&self) -> Option<usize> {
+        self.top_acked_mode
     }
 
     /// The mode the sender is currently using.
@@ -1177,6 +1192,7 @@ impl LinkEngine {
     /// Hand the engine a frame the physical layer detected, decoded or not.
     pub fn on_frame<F: SoftFrame>(&mut self, frame: &F, now: f64) {
         self.now = self.now.max(now);
+        self.account_for(frame);
         match frame.container() {
             Container::Control => self.on_control(frame),
             // A sender waiting for the answer to its DISC has no burst to acknowledge. What it
@@ -1265,6 +1281,7 @@ impl LinkEngine {
         let deadline = t_start + length + self.irs_reply_delay(None, None);
         let current = self.deadline_of(Timer::Ack).unwrap_or(0.0);
         self.set_deadline(Timer::Ack, deadline.max(current));
+        self.arriving.push((t_start, t_start + length));
     }
 
     // ── timers ────────────────────────────────────────────────────────
@@ -2392,6 +2409,10 @@ impl LinkEngine {
             if !record.acked && record.sent() && ack.received(record.seq) {
                 record.acked = true;
                 self.stats.bytes_acked += record.body.len();
+                self.top_acked_mode = Some(
+                    self.top_acked_mode
+                        .map_or(record.mode, |m| m.max(record.mode)),
+                );
                 progressed = true;
             }
         }
@@ -2630,6 +2651,17 @@ impl LinkEngine {
         Some(frame.t_end() + f64::from(most) * (frame.t_end() - frame.t_start()).max(0.0))
     }
 
+    /// A frame reported: the arrival announced at its start is that frame, and one that ended
+    /// before it began has passed unreported. What is left is still on the air (ADR-0061).
+    fn account_for<F: SoftFrame>(&mut self, frame: &F) {
+        let length = (frame.t_end() - frame.t_start()).max(0.0);
+        let t_start = frame.t_start();
+        self.arriving.retain(|&(start, end)| {
+            let tolerance = 0.5 * length.min(end - start);
+            (start - t_start).abs() > tolerance && end > t_start + 1e-9
+        });
+    }
+
     /// Whether the burst is known to be over at [`burst_end`](Self::burst_end): the frame that
     /// ends latest said, believably, that none follow it — a countdown of 0 is exact (ADR-0045).
     /// Without it the end is inferred from silence.
@@ -2675,11 +2707,20 @@ impl LinkEngine {
         } else {
             tightest(false)
         };
-        if bound.is_finite() {
+        let end = if bound.is_finite() {
             heard.max(bound)
         } else {
             heard
-        }
+        };
+        // A frame announced and not yet reported is still on the air: a frame reported inside
+        // it — a false detection in its middle — is no end of the burst. Taken for one, it set
+        // the answer for its own end over the deadline the arrival had set, and the
+        // acknowledgement went out over the last 0.3 s of WC4Y's burst on 2026-10-11, then
+        // again when that frame decoded, in the same keying (ADR-0061).
+        self.arriving
+            .iter()
+            .map(|&(_, end)| end)
+            .fold(end, f64::max)
     }
 
     /// Decode a frame of the burst, alone or combined with an earlier transmission of its
@@ -2814,6 +2855,7 @@ impl LinkEngine {
                 // and by nothing else: an acknowledgement a burst's quiet after the request
                 // went out over the caller's first burst, which follows the acceptance at once
                 self.burst.clear();
+                self.arriving.clear();
                 self.burst_t0 = None;
                 self.disarm(Timer::Ack);
                 return false;
@@ -2940,6 +2982,7 @@ impl LinkEngine {
         // HARQ buffers were stored per frame as the frames arrived, so only the accumulator
         // needs clearing here
         self.burst.clear();
+        self.arriving.clear();
         self.burst_t0 = None;
         if failed > 0
             && let (Some(slowest), Some(asked)) = (slowest, self.asked)
@@ -3229,6 +3272,7 @@ impl LinkEngine {
         self.disarm(Timer::Ack);
         self.disarm(Timer::Request);
         self.burst.clear();
+        self.arriving.clear();
         self.burst_t0 = None;
         self.break_requested = false;
         self.stated_want = false;
@@ -3527,6 +3571,7 @@ impl LinkEngine {
     fn reset_transfer_state(&mut self) {
         // a session starting, here or in reply to a call, is done with the one left before
         self.left = None;
+        self.top_acked_mode = None;
         self.disarm(Timer::Leave);
         self.records.clear();
         self.tx_base = 0;
@@ -3551,6 +3596,7 @@ impl LinkEngine {
         self.max_seen = None;
         self.harq.clear();
         self.burst.clear();
+        self.arriving.clear();
         self.burst_t0 = None;
         self.ack_history.clear();
         self.acks_on_floor = false;
@@ -4248,6 +4294,44 @@ mod tests {
         e.on_preamble(100.0, 100.3, None);
         let guessed = e.deadline_of(Timer::Ack).expect("armed");
         assert!(guessed < 100.0 + floor_frame, "{guessed}");
+    }
+
+    #[test]
+    fn a_frame_reported_inside_an_announced_one_does_not_end_the_burst() {
+        // WC4Y's Test of 2026-10-11: a false detection in the middle of the burst's last tone
+        // frame set the acknowledgement for its own end, over the deadline that frame's
+        // preamble had set; the answer went out over the end of the burst, and again when the
+        // frame decoded, in the same keying (ADR-0061)
+        let mut e = engine(narrow());
+        e.role = Role::Irs;
+        e.state = State::Connected;
+        e.now = 100.0;
+        let tone = NARROW_FRAME_S[0];
+        e.on_preamble(100.0, 100.55, Some(tone));
+        let announced = e.deadline_of(Timer::Ack).expect("armed");
+        assert!(announced >= 100.0 + tone, "{announced}");
+        e.on_frame(
+            &Junk {
+                t_start: 102.9,
+                t_end: 103.9,
+            },
+            104.0,
+        );
+        let after = e.deadline_of(Timer::Ack).expect("armed");
+        assert!(
+            after >= announced,
+            "brought forward into the announced frame: {after}"
+        );
+        assert_eq!(e.arriving.len(), 1);
+        // the announced frame reported: the burst may end with it
+        e.on_frame(
+            &Junk {
+                t_start: 100.0,
+                t_end: 100.0 + tone,
+            },
+            100.0 + tone + 0.1,
+        );
+        assert_eq!(e.arriving, [] as [(f64, f64); 0], "an arrival left over");
     }
     /// A detection that decodes to nothing: noise, or a Morse identifier, whose chips named
     /// a data mode.

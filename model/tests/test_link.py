@@ -3913,3 +3913,31 @@ def test_acknowledgements_go_on_the_floor_once_one_was_lost() -> None:
     assert any(e.startswith("acks") for e in events), events
     assert timeouts_with < timeouts_without, (timeouts_with, timeouts_without)
     assert with_rule < without, (with_rule, without)
+
+
+def test_a_frame_reported_inside_an_announced_one_does_not_end_the_burst(
+    timing: PhyTiming,
+) -> None:
+    """WC4Y's Test of 2026-10-11: a false detection — an ordinary frame's chips on noise,
+    "none follow" — in the middle of the burst's last tone frame set the acknowledgement
+    for its own end, over the deadline that frame's preamble had set. The acknowledgement
+    went out over the last 0.3 s of the burst, and again when that frame decoded, in the
+    same keying (ADR-0061). A frame announced and not yet reported is still on the air."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, _ = _connected_irs(timing)
+    b._deadlines.pop("ack", None)
+    t0 = b.now + 1.0
+    tone = timing.data_frame_s_for(0)
+    b.on_preamble(t0, t0 + 0.55, tone)
+    announced = b._deadlines["ack"]
+    assert announced >= t0 + tone
+    phantom = SimFrame(
+        Container.DATA, 11, 0, -11.7, t0 + 2.9, t0 + 3.9, b"", 1.0, trusted=False, follows=0
+    )
+    b.on_frame(phantom, t0 + 4.0)
+    assert b._deadlines["ack"] >= announced, "brought forward into the announced frame"
+    # the announced frame reported: the burst may end with it
+    last = SimFrame(Container.DATA, 0, 0, -4.3, t0, t0 + tone, b"", 1.0, floor=True)
+    b.on_frame(last, t0 + tone + 0.1)
+    assert not b._arriving
