@@ -3941,3 +3941,33 @@ def test_a_frame_reported_inside_an_announced_one_does_not_end_the_burst(
     last = SimFrame(Container.DATA, 0, 0, -4.3, t0, t0 + tone, b"", 1.0, floor=True)
     b.on_frame(last, t0 + tone + 0.1)
     assert not b._arriving
+
+
+def test_a_turn_taken_on_noise_is_given_back_by_the_acknowledgement(timing: PhyTiming) -> None:
+    """The scenario harness, 80 m at 500 Hz (ADR-0063): after a burst that offered the turn, a
+    detection at its threshold, 40 Hz off the session's offset, was taken for the other
+    station's burst arriving (ADR-0047), and this station became the receiver. The other
+    station's acknowledgement — not taking the turn — then reached a station that was
+    receiving too, and both waited for the other until the link timed out. The
+    acknowledgement is the answer: the turn is this station's again."""
+    from aether_model.link.sim import SimFrame
+
+    a, b = _pair(timing)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=5)
+    a.connect("KK4XYZ")
+    a.send(bytes(300))
+    t = 0.0
+    while not (a.role is Role.ISS and a._offer_out and a._waiting_for == "ack"):
+        t += 0.05
+        sim.run(until=t)
+        assert t < 200, "no offer went out"
+    phantom = SimFrame(
+        Container.DATA, 8, 1, -14.7, a.now, a.now + 1.05, b"", 1.0, trusted=True, follows=2
+    )
+    a.on_frame(phantom, a.now + 1.1)
+    assert a.role is Role.IRS
+    more = b"MORE AFTER THE NOISE. " * 10
+    a.send(more)
+    sim.run(until=t + 300)
+    assert sim.delivered(1) == bytes(300) + more
+    assert a.stats.frames_sent > 0
