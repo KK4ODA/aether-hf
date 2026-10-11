@@ -231,14 +231,17 @@ ARDOP). It does not copy or reverse-engineer VARA; the host-interface compatibil
 VARA's *published* TCP command set only, and Aether frames are not compatible with VARA's on
 the air.
 
+<!-- tota-support:start -->
 ## Support
 
-Aether HF is free software and stays that way. The bench it is measured on — radios,
-interfaces, the hours on the air — is paid for by its author. If the modem is useful to
-you, a contribution through
-[PayPal](https://paypal.me/facundofern)
-(also the *Sponsor* button above) helps keep it on the air. An on-air report is worth as
-much.
+Aether HF is free and stays free. It is written by KK4ODA, who also runs
+[Tiles on the Air](https://tilesontheair.com), a free program for portable
+operators, and both are kept going by the people who use them. If Aether HF is
+useful to you, a contribution through the
+[Tiles on the Air giving page](https://tilesontheair.com/Giving) helps keep this tool and Tiles
+running. Nothing is ever locked behind it, and a bug report or an on-air
+report helps just as much.
+<!-- tota-support:end -->
 
 ## License
 
