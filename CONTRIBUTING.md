@@ -51,6 +51,11 @@ request meets the rules the first time.
     what lets going back to an older version restore a file it can read.
 11. **Nothing keys the radio around the regulatory gate** (ADR-0018). A new way to transmit
     is judged by the policy before the key goes down, and a test holds it to that.
+12. **The manual moves with the application.** A change that adds, removes, renames or
+    changes the behaviour of anything an operator sees or sets — a tab, a box, a button, a
+    setting or its default, a banner, a reading, what a host program is told — updates
+    [`docs/user/manual.md`](docs/user/manual.md) in the same commit, and the other guide in
+    `docs/user/` that covers it. The version it names moves with `tools/release.py bump`.
 
 ## Workflow
 

@@ -141,6 +141,11 @@ Every one of these has cost the project a day at some point; none is decoration.
     under `core/aetherd/tests/data/config/`, and a line in the shell's `SCHEMA_HISTORY`, which
     is what lets a restore to an older version put back a file it can read. A new setting is
     in profiles unless `settings.rs` gives it a rule.
+16. **The manual moves with the application.** A PR that changes anything an operator sees
+    or sets (a tab, a box, a button, a setting or its default, a banner, a reading, what a
+    host program is told) updates `docs/user/manual.md` and the guide in `docs/user/` that
+    covers it, in the same PR. Without it the PR is not done. A release moves the version the
+    manual names (`tools/release.py bump` does it).
 
 ### 3.4 Run it
 

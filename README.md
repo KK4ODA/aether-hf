@@ -72,7 +72,8 @@ spectrum and the waterfall, and the receiver's readings:
 
 * **Desktop:** download the installer for Windows, Linux or macOS from
   [Releases](https://github.com/KK4ODA/aether-hf/releases) and follow
-  [`docs/user/install.md`](docs/user/install.md). The Setup tab walks through the callsign
+  [`docs/user/install.md`](docs/user/install.md); [`docs/user/manual.md`](docs/user/manual.md) is
+  the operator's manual, tab by tab. The Setup tab walks through the callsign
   and the rules the station runs under, the radio interface (sound card, keying and CAT), the
   receive level and the modem's settings; the Session tab's *Set drive* sets the transmit level
   against the rig's ALC. The settings are kept as *profiles*, one per radio or place,

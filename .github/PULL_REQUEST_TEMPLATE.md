@@ -27,6 +27,7 @@
 - [ ] A new configuration key: `schema_version` bumped, a migration step, a fixture and a `SCHEMA_HISTORY` line
 - [ ] A new way to key the radio or start an exchange goes through the regulatory gate, and a test says so
 - [ ] A change to `app/ui/`: every new control and indicator has a `title` tooltip, and the panel was loaded against a daemon with a clean console
+- [ ] Anything an operator sees or sets changed: `docs/user/manual.md` and the guide in `docs/user/` that covers it are updated in this PR
 - [ ] Docs updated if behaviour or a decision changed
 - [ ] Designed from public sources; nothing derived from proprietary modem internals
 - [ ] Commits follow Conventional Commits (the release notes are generated from them)
