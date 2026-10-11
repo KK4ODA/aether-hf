@@ -1356,6 +1356,14 @@ A sender that took an offered turn as taken on an unreadable frame (ADR-0047's
 acknowledgement without TAKEN gives the turn back (`_took_unread`, `_give_back_turn`): left
 receiving, both stations waited until the link timed out. The first-frame failure of that Test
 was a 5–9 dB fade inside the frame, not the receiver.
+**ADR-0064 (same day, from the nightly run):** `15m-old-rig-offset-500` (70 Hz off, drifting
+0.3 Hz/s) lost its session's end: past ~120 Hz the tone detector (±100 Hz) missed the floor's
+DISC and answer while OFDM (±300 Hz) still decoded. `tone.MAX_CFO_HZ` = 150 (the
+`preamble_tables.json` value, edited by hand — regenerating it churns last digits); noise: 4
+announcements in 30 min against 3, no false frame; 4/4 seeds pass. The nightly had been red since
+10-07 on `40m-good-2300-rtty-crashes` (file timeouts), which passed on 10-11's build. Following
+the peer's offset is the open step. beta.104 also fixed SIGTERM (ctrlc `termination` feature) and
+the systemd unit (hidraw, ttyACM, plugdev, `ReadWritePaths=/etc/aetherd`).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

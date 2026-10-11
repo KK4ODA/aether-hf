@@ -283,6 +283,24 @@ def test_the_all_zero_block_is_refused() -> None:
 
 
 @pytest.mark.parametrize("kind", FLOOR_KINDS, ids=lambda k: k.name)
+def test_the_detector_finds_a_frame_up_to_150_hz_off(kind: M.ToneKind) -> None:
+    """ADR-0064: a rig 70 Hz off and warming 0.3 Hz/s passed ±100 Hz three minutes into a
+    500 Hz session, and the floor's DISC and its answer went unheard. The detector searches
+    ±150 Hz: a frame between 100 and 150 Hz off either way is found, named and placed."""
+    rng = np.random.default_rng(64)
+    det = T.ToneDetector()
+    for i, cfo in enumerate((-148.0, -121.0, 112.0, 139.0)):
+        lead = int(rng.integers(0, 4000))
+        y = _received(kind, _payload(rng, kind), snr_db=-12.0, lead=lead, cfo_hz=cfo, seed=640 + i)
+        syncs = det.detect(y)
+        assert len(syncs) == 1, cfo
+        s = syncs[0]
+        assert s.kind == kind
+        assert abs(s.start - lead) <= kind.num.symbol_samples // 16
+        assert abs(s.cfo_hz - cfo) < 1.0, (cfo, s.cfo_hz)
+
+
+@pytest.mark.parametrize("kind", FLOOR_KINDS, ids=lambda k: k.name)
 def test_the_detector_names_kind_rv_start_and_offset(kind: M.ToneKind) -> None:
     rng = np.random.default_rng(6)
     det = T.ToneDetector()

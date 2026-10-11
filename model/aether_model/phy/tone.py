@@ -349,6 +349,15 @@ class ToneSync:
     """Mean normalised energy of the 24 sync tones: 1 on noise, 1 + Es/N0 on a frame."""
 
 
+MAX_CFO_HZ = 150.0
+"""The carrier offset the detector searches either side of the dial (ADR-0064). ±100 Hz lost a
+rig 70 Hz off and warming 0.3 Hz/s three minutes into a 500 Hz session: its data, in OFDM
+(±300 Hz), still decoded, but the floor's control frames — the DISC and its answer — went
+unheard and both stations waited out the link timeout. On noise the wider search announced 4
+first blocks in thirty minutes against 3 and found no frame at either width; the outer tones of a
+frame 150 Hz off still sit inside the 500 Hz air's band filter."""
+
+
 class ToneDetector:
     """Finds tone frames: a spectrogram at a quarter-symbol hop with bins a quarter of the
     tone spacing, and for every start, carrier-offset bin and pattern the mean of the 24 sync
@@ -401,7 +410,7 @@ class ToneDetector:
     def __init__(
         self,
         kinds: tuple[ToneKind, ...] = (TONE_CONTROL, *TONE_DATA, *TONE_FAST),
-        max_cfo_hz: float = 100.0,
+        max_cfo_hz: float = MAX_CFO_HZ,
         threshold: float = 3.0,
     ) -> None:
         self.kinds = kinds
