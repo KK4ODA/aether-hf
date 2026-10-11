@@ -98,9 +98,9 @@ more than 500 Hz, and **an automatically controlled Aether station transmits onl
 
 `[radio] answer_only = true` (Setup → Modem settings → *answer only*) is still the setting
 for a station left listening: it takes calls and refuses to make one, to beacon, to probe or
-to send a KISS datagram (it answers probes, which is a response). A repeating beacon needs a
-control operator whatever this says: the daemon refuses one under automatic control
-(§97.203(d) allows an automatically controlled beacon only in a few segments, 28.20–28.30 MHz
+to send a KISS datagram (it answers probes, which is a response). A beacon needs a
+control operator whatever this says: the daemon sends none under automatic control — not a
+single one, not a repeating one, not one a host program asks for (§97.203(d) allows an automatically controlled beacon only in a few segments, 28.20–28.30 MHz
 the only one on HF).
 
 If the mode gets enough operators for these to matter, they should be agreed publicly and
@@ -159,11 +159,13 @@ A gateway transmits without anybody watching, and most jurisdictions regulate th
   regardless of bandwidth.
 
 "Unattended" includes the ordinary case of leaving the daemon listening so friends can try
-to reach you: it answers a call to its callsign whether or not you are in the room, and with
+to reach you: it answers a call to its callsign whether or not you are in the room (with a host
+program attached, only once the program says `LISTEN ON`, `CQ` or `CHAT ON`), and with
 `[record] auto = true` it records each session, from connect to disconnect, with the
 standing `[record] notes` and — under CAT, `rigctld` or FLRig keying — the dial frequency written
 into the sidecar. Park it on one of the frequencies in §3 and it is where the rules allow it
-to answer.
+to answer. Debug mode (Setup step 5, on by default) also sends every session a host program runs
+through it, audio included, to the Aether project; turn it off there if you would rather not.
 
 If you are running a gateway, find the rule that applies to you before you leave it running.
 The software will not know.

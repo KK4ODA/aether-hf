@@ -16,7 +16,7 @@ AX.25 connected sessions over the KISS port, but at HF datagram speeds that is s
 
 In the panel, **Setup → 5. Application settings → KISS programs**:
 
-1. Tick **let APRS and packet programs send and receive frames**.
+1. Tick **KISS programs — APRS and packet programs, on**.
 2. Leave the address at **127.0.0.1** and the port at **8100** unless you have a reason not to.
    8100 is VARA HF's KISS port. If VARA HF or a soundmodem (UZ7HO uses 8100 too) is running on
    the same computer, one of them has to move; the panel says *not listening* and why, and Aether
@@ -65,10 +65,12 @@ bench; the others have not (see *Status*).
 VarAC uses both of Aether's ports: its sessions and pings go through the host interface (8300),
 and its **broadcast messages** through the KISS port (8100).
 
-1. In Aether: turn on **Host programs** (port 8300) and **KISS programs** (port 8100), and set
-   Setup step 4's bandwidth to 500 Hz for VarAC's calling frequencies.
+1. In Aether: turn on **Host programs** (port 8300) and **KISS programs** (port 8100). Setup
+   step 4's bandwidth can stay as you use it most: VarAC's `BW500` moves the station to 500 Hz
+   while VarAC is attached, and KISS frames at the default rung are heard at either bandwidth.
 2. In VarAC's VARA HF modem settings: the command port 8300 and the KISS port 8100 — its
-   defaults. Leave VarAC's *launch VARA* option off; Aether is started by its own application.
+   defaults. VarAC can start Aether (its VARA path set to Aether's `aether-hf.exe`, see
+   [host-programs.md](host-programs.md)), or leave that off and start Aether first.
 3. VarAC says `CHAT ON` when it starts, which is what allows the KISS port to transmit while it
    holds the host interface (see *Winlink priority* below), and `IGNOREKISSDCD ON` — at every
    start, whatever its *Ignore DCD* box says. VarAC senses the channel itself from the `BUSY`
@@ -180,7 +182,7 @@ parameters are told apart from VARA's frame types by their length:
 | `02` + one byte | P: the program's p-persistence |
 | `02` + frame | send it, type 2 (unformatted data) |
 | `03` + one byte | SLOTTIME: the program's slot, 10 ms units |
-| `04`, `05`, `06` | TXTAIL, FULLDUPLEX, SETHARDWARE: ignored |
+| `04` + one byte, `05` + one byte, `06` | TXTAIL, FULLDUPLEX, SETHARDWARE: ignored (a TXTAIL or FULLDUPLEX that does not carry exactly one byte is refused) |
 | `0C` + two bytes + frame | ACKMODE: send it; the two bytes come back once it has gone |
 | `FF` | RETURN: ignored |
 | any other port nibble | refused (Aether has one port, 0) |
@@ -190,7 +192,7 @@ parameters are told apart from VARA's frame types by their length:
 * **Setup** shows the port's state, each program (what it seems to be, where from, its frames in,
   out and dropped) and why frames are being held.
 * **Log**: lines tagged `kiss` — the port opening and closing, programs connecting and leaving,
-  malformed or refused frames (once per kind, not per frame), a datagram heard.
+  malformed or refused frames (once a minute per kind, not per frame), a datagram heard.
 * **`trace = true`** logs every frame's type, length and fate. Frame **contents** are never
   logged, with or without it.
 * `tools/kiss_test_client.py` is a KISS client for trying the port by hand, with no other

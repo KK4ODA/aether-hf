@@ -256,7 +256,8 @@ pub struct RadioSection {
     #[serde(default = "default_true")]
     pub wait_for_clear: bool,
     /// How far above the noise floor counts as occupied, in dB. The floor is the *typical*
-    /// noise level — the median of the last minute's blocks that were not under a signal —
+    /// noise level — the median of the last ten seconds' quiet, steady blocks, held for up
+    /// to a minute while a signal stays —
     /// so a sustained signal raises the level and not the floor, and the margin means what
     /// it says on a bursty band. The level has to be over it for half of the last 400 ms
     /// before the channel is busy: a static crash is a block, a surge of storm noise a few

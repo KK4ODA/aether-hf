@@ -33,15 +33,17 @@ The voluntary [ARRL band plan](https://www.arrl.org/band-plan) is kept separate:
 ## What you tell Aether (Setup, step 1)
 
 * **Rules** — *United States — FCC Part 97*, or *None — I check every transmission myself*.
-  Until you choose, nothing is transmitted. (A station whose callsign the FCC assigns has the US
-  profile chosen for it when it updates; nothing else is assumed.)
+  Until you choose, nothing is transmitted. (A configuration from before the rules were added, beta.60, is
+  brought forward once: an FCC-assigned callsign gets the US profile, and an answer-only station
+  gets *Automatic* control. Nothing else is assumed.)
 * **Control** — how the station is controlled:
   * **Local** — you are at the radio (the control point).
   * **Remote** — you control it through a control link, from somewhere else.
   * **Automatic** — nobody is at a control point: an unattended mailbox, gateway or answering
     station.
 
-  Aether never works this out from the network or from a host program; only you know it. Its own
+  Aether never works this out from the network or from a host program (apart from that one
+  migration of an old file); only you know it. Its own
   automation — ARQ, retries, rate adaptation, acknowledgements — is not "automatic control": the
   control mode is how the *station* is controlled.
 * **License class** — Technician, General, Advanced, Amateur Extra (or Novice). Never assumed.
@@ -91,7 +93,9 @@ by how much: *TX BLOCKED: signal extends 260 Hz beyond the FCC data segment*, wi
 **The dial.** Keyed over CAT, `rigctld` or FLRig, Aether reads the dial from the radio before each
 transmission. Keyed over a serial line, a CM108 interface or VOX, the radio cannot say, so the
 Session tab asks you: *Dial is at …* — set it whenever you move the dial. With no dial known,
-nothing is transmitted.
+nothing is transmitted. Keyed by a host program (VarAC's way, Setup step 2 *host program*), Aether
+can read no dial either: choosing it sets the rules to *None*, and if you choose a profile anyway,
+set *Dial is at …* as for any radio that cannot report its dial.
 
 ## The data segments and your privileges
 
@@ -160,7 +164,7 @@ locally controlled station's: somebody is at the radio when they are pressed.
 * A **beacon** — one frame with your callsign, addressed to nobody, on the tone floor — is
   judged like any other transmission. **A station under automatic control sends none** — not
   the Session tab's, not a repeating one (the *Repeat* list, `beacon.every`), and not one a host
-  program asks for (VarAC's beacon timer) — because §97.203(d) lets a beacon be automatically
+  program asks for (VarAC's CQ, which reaches Aether as `CQFRAME`) — because §97.203(d) lets a beacon be automatically
   controlled only on 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so
   never for Aether's data) and a few segments above 6 m (ADR-0024). An answer-only station sends
   no beacon at all.
