@@ -1,15 +1,16 @@
 # systemd unit for an unattended Aether HF gateway.
 #
 # Install:
-#   sudo useradd --system --home /var/lib/aetherd --create-home --groups audio,dialout aetherd
+#   sudo useradd --system --home /var/lib/aetherd --create-home --groups audio,dialout,plugdev aetherd
 #   sudo install -m 0755 aetherd /usr/local/bin/aetherd
 #   sudo install -d -o aetherd -g aetherd /etc/aetherd /var/lib/aetherd
 #   sudo install -m 0640 -o aetherd -g aetherd station.toml /etc/aetherd/station.toml
 #   sudo install -m 0644 aetherd.service /etc/systemd/system/aetherd.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now aetherd
 #
-# The `audio` group is for the sound card and `dialout` for a serial keying line. A gateway
-# needs both and nothing else; it does not need and must not have root.
+# The `audio` group is for the sound card, `dialout` for a serial keying line or CAT port, and
+# `plugdev` for a CM108-class interface's HID device (the udev rule in gateway-kit.md). A gateway
+# needs these and nothing else; it does not need and must not have root.
 
 [Unit]
 Description=Aether HF modem
@@ -21,13 +22,13 @@ Wants=network-online.target
 Type=simple
 User=aetherd
 Group=aetherd
-SupplementaryGroups=audio dialout
+SupplementaryGroups=audio dialout plugdev
 ExecStart=/usr/local/bin/aetherd --config /etc/aetherd/station.toml
 # Tells the daemon a restart is something it can ask for (status.supervised), which is how
 # the panel applies a setting that needs one.
 Environment=AETHERD_SUPERVISED=1
 
-# The daemon catches this and releases the transmitter before exiting. Give it time to: a
+# The daemon catches this (and SIGINT) and releases the transmitter before exiting. Give it time to: a
 # station killed mid-burst leaves the radio keyed until somebody notices, which on an
 # unattended gateway can be a very long time.
 KillSignal=SIGTERM
@@ -42,8 +43,10 @@ RestartForceExitStatus=75
 # a busy machine and drops captured samples, which looks exactly like a bad band.
 Nice=-5
 
-# It reads one configuration file, writes one state directory, talks to a sound card and a
-# serial port, and listens on loopback. Everything else is closed off.
+# It reads and writes its configuration directory (the settings, their backups, profiles,
+# recordings, the stations heard and the session history live beside station.toml), talks to a
+# sound card, a serial port or a CM108 interface, and listens on loopback. Everything else is
+# closed off.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -59,9 +62,14 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 StateDirectory=aetherd
 ConfigurationDirectory=aetherd
+# ProtectSystem=strict leaves /etc read-only; the daemon writes beside its configuration
+ReadWritePaths=/etc/aetherd
 DeviceAllow=char-alsa rw
 DeviceAllow=char-ttyS rw
 DeviceAllow=char-ttyUSB rw
+# a radio's own USB CAT port (CDC ACM) and a CM108-class interface's HID device
+DeviceAllow=char-ttyACM rw
+DeviceAllow=char-hidraw rw
 
 [Install]
 WantedBy=multi-user.target
