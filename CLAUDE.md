@@ -1347,6 +1347,14 @@ deadline that frame's preamble had set. The engine now remembers announced arriv
 earlier than the end of one still on the air. The Test's ladder starts under the fastest rung the
 message was acknowledged at (`top_acked_mode`), not the recommendation at its end (two lost retries
 had stepped it 3 → 1 and the ladder re-climbed rungs 0–3 for 105 s).
+**ADR-0062 (rejected) and ADR-0063, the same day on the harness:** acknowledgements on the floor
+from the start when the peer hears this station weakly (`ack_floor_margin_db`, the ADR-0056 test)
+were built and reverted — +8 % air time at 12 dB, noise-level at 6 dB with twice the collisions.
+A sender that took an offered turn as taken on an unreadable frame (ADR-0047's
+`_turn_taken_unread`; a detection at threshold 40 Hz off the session's CFO) and then reads an
+acknowledgement without TAKEN gives the turn back (`_took_unread`, `_give_back_turn`): left
+receiving, both stations waited until the link timed out. The first-frame failure of that Test
+was a 5–9 dB fade inside the frame, not the receiver.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
