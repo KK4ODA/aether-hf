@@ -58,9 +58,30 @@ seeds of three, the poll, the first burst at rung 1.
 `test_what_comes_with_the_session_goes_in_the_first_burst` in the model,
 `on_the_floor_the_steps_in_hand_are_decibels` and
 `what_comes_with_the_session_goes_in_the_first_burst` in the port, and the Test's own unit
-test (the first three frames sent are the probe, the call and the message). The A/B over every
-harness scenario, three seeds each, against the baseline taken on the same daemon code and
-seeds (`bench/baselines/scenarios.csv`), is added here when its runs finish.
+test (the first three frames sent are the probe, the call and the message).
+
+**The link bench** (the model's fading pipe with the floor's reading cap, 40 trials a point,
+−10…+12 dB, every class, both airs, 512 B and 2 kB sessions; the build with ADR-0065 alone
+against this one — the bench queues its data before the call, so this measures (1) alone): no
+point slower than noise (worst ratio 1.007), and no more failures. Total session time down
+4.5 % (500 Hz, 512 B), 1.6 % (500 Hz, 2 kB), 6.9 % (2 300 Hz, 512 B) and 2.8 % (2 300 Hz,
+2 kB). The gain sits where the call reads the floor's top: −6…0 dB, up to 19 % on the 500 Hz
+air at −4/−2 dB and 25–31 % on the 2 300 Hz air at −2 dB.
+
+**The harness** (every scenario, three draws, against the baseline on the same daemon code
+and draws): `80m-floor-top-start-500`'s message 57.2 → 77 bit/s (77, 77, 64) with the first
+burst at rung 3; the other 500 Hz Tests' messages faster in four of five (`80m-flutter-500`
+57 → 99, `80m-lopsided-acks-500` 44 → 65, `80m-asymmetric-500` 57 → 66, `80m-slow-machine-500`
+84 → 94 bit/s) and `80m-nvis-evening-500`'s 36 → 31. With ADR-0065 and ADR-0067 in the same
+build, the 2 300 Hz QRM scenarios' files went faster (`40m-moderate-2300-vara-qrm` 151 → 238,
+`40m-rtty-contest-2300` 46 → 116 bit/s) and `20m-polar-path-2300` took 156 s of air against 191. On that last one's main draw the first
+burst went at rung 3 into a fade, lost all five frames and resent them at rung 3: the message
+took 245 s against 130. That is the risk the steps in hand were there for, and the link bench
+says it costs less than it buys. `80m-leave-together-500` failed one draw (its message 1 kB not
+delivered within 300 s; 281 s on the build before) and passed it again at 215 s. Nothing else
+failed, and no scenario was slower beyond its baseline's range except `40m-good-2300-rtty-crashes`'s
+file, whose draws on the two builds overlap. The baseline is refreshed from these runs, with that
+draw's second run.
 
 ## 4. Not done
 
