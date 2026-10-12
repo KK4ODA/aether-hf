@@ -326,22 +326,43 @@ impl RateController {
     /// the climb makes them up in a burst if the channel allows (P9-2, ADR-0008). The steps
     /// in hand stay in the family the measurement fits: a session the SNR puts on an OFDM
     /// rung does not start on the floor, five times slower, for its caution (ADR-0013).
+    ///
+    /// On the floor the steps in hand are the decibels they keep, not the rungs: the first
+    /// burst goes at the fastest rung the measurement clears by as much as the steps below the
+    /// fit would have kept at the fit's own edge. The floor's top rung fits a measurement up to
+    /// seven decibels above it, because the rung above is the first OFDM one, and counted in
+    /// rungs the steps took a session the call had measured with ten decibels to spare down to
+    /// half the rate — WC4Y's Test of 2026-10-11, its message at tone-36 on a path that carried
+    /// tone4x100-75 in every burst after (ADR-0066). Among the OFDM rungs, a decibel or two
+    /// apart, the rungs are what ADR-0008 measured and stay the rule.
     #[must_use]
     pub fn first_mode(&self, snr_db: f64) -> usize {
         let ordinary = self.first_ordinary();
         let mut fit = 0;
         for index in 1..self.modes.len() {
-            if self.thresholds[self.modes[index]]
-                + self.margin(index)
-                + self.config.up_hysteresis_db
-                > snr_db
-            {
+            if self.required(index) > snr_db {
                 break;
             }
             fit = index;
         }
         let lowest = if fit >= ordinary { ordinary } else { 0 };
-        self.modes[fit.saturating_sub(self.config.first_mode_back).max(lowest)]
+        let back = fit.saturating_sub(self.config.first_mode_back).max(lowest);
+        if fit < ordinary {
+            let keep = self.required(fit) - self.required(back);
+            if let Some(index) = (back + 1..=fit)
+                .rev()
+                .find(|&index| self.required(index) + keep <= snr_db)
+            {
+                return self.modes[index];
+            }
+        }
+        self.modes[back]
+    }
+
+    /// The SNR a step up to the rung at `index` asks for: its threshold, the margin it is held
+    /// to and the hysteresis.
+    fn required(&self, index: usize) -> f64 {
+        self.thresholds[self.modes[index]] + self.margin(index) + self.config.up_hysteresis_db
     }
 
     /// Index in [`modes`](Self::modes) of the first rung above the floor.
@@ -745,6 +766,53 @@ mod tests {
         assert_eq!(rc.recommend(), rc.first_mode(15.0));
         rc.seed(2.0, false);
         assert_eq!(rc.snr_db(), Some(15.0));
+    }
+
+    #[test]
+    fn on_the_floor_the_steps_in_hand_are_decibels() {
+        // WC4Y's Test of 2026-10-11 (80 m, 500 Hz; ADR-0066): the call heard at about -2 dB,
+        // which the floor's top rung clears by ten decibels and the first OFDM rung does not
+        // fit; two rungs in hand sent the message at tone-36, half the rate
+        let config = RateConfig::default();
+        let narrow = RateController::for_table_timed(
+            config,
+            &NARROW_AWGN_THRESHOLD_DB,
+            &NARROW_PAYLOAD_BYTES,
+            &NARROW_FRAME_S,
+        )
+        .with_floor(4, None);
+        let required = |rung: usize| {
+            NARROW_AWGN_THRESHOLD_DB[rung] + config.margin_db + config.up_hysteresis_db
+        };
+        assert!(required(3) <= -2.0 && -2.0 < required(4));
+        assert_eq!(narrow.first_mode(-2.0), 3);
+        let keep = required(3) - required(1);
+        assert_eq!(narrow.first_mode(required(3) + keep), 3);
+        assert_eq!(narrow.first_mode(required(2) + keep), 2);
+        assert_eq!(narrow.first_mode(required(2) + keep - 0.01), 1);
+        assert_eq!(
+            narrow.first_mode(required(3)),
+            1,
+            "at the fit's edge: two rungs"
+        );
+        assert_eq!(narrow.first_mode(-20.0), 0);
+        // the OFDM rungs: the steps are rungs (ADR-0008)
+        let ordinary = narrow.first_ordinary();
+        for snr in [3.0, 6.0, 9.0, 14.0] {
+            let modes = narrow.modes().to_vec();
+            let top = modes
+                .iter()
+                .rposition(|&m| required(m) <= snr)
+                .expect("something fits");
+            assert_eq!(
+                narrow.first_mode(snr),
+                modes[top.saturating_sub(config.first_mode_back).max(ordinary)],
+                "{snr}"
+            );
+        }
+        let wide = RateController::default(); // the wide ladder's floor top is rung 5
+        assert_eq!(wide.first_mode(-3.5), 5);
+        assert_eq!(wide.first_mode(-6.7), 3, "at its edge, two rungs in hand");
     }
 
     #[test]

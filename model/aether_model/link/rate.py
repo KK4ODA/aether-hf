@@ -351,17 +351,37 @@ class RateController:
         step up would demand, less one step. The measurement is of a mode-0 frame — the
         most robust there is — and a burst at a fast mode is more exposed to what the
         channel does within a frame, so the first burst keeps :attr:`first_mode_back` steps in hand
-        and the climb makes them up in a burst if the channel allows."""
+        and the climb makes them up in a burst if the channel allows.
+
+        On the floor the steps in hand are the decibels they keep, not the rungs: the first
+        burst goes at the fastest rung the measurement clears by as much as the steps below
+        the fit would have kept at the fit's own edge. The floor's top rung fits a measurement
+        up to seven decibels above it, because the rung above is the first OFDM one, and
+        counted in rungs the steps took a session the call had measured with ten decibels to
+        spare down to half the rate — WC4Y's Test of 2026-10-11, its message at tone-36 on a
+        path that carried tone4x100-75 in every burst after (ADR-0066). Among the OFDM rungs,
+        a decibel or two apart, the rungs are what ADR-0008 measured and stay the rule."""
         ordinary = self._first_ordinary()
         fit = 0
         for i in range(1, len(self.modes)):
-            if self.thresholds[self.modes[i]] + self._margin(i) + self.up_hysteresis_db > snr_db:
+            if self._required(i) > snr_db:
                 break
             fit = i
         # the steps in hand stay in the family the measurement fits: a session the SNR puts
         # on an OFDM rung does not start on the floor, five times slower, for its caution
         lowest = ordinary if fit >= ordinary else 0
-        return self.modes[max(lowest, fit - self.first_mode_back)]
+        back = max(lowest, fit - self.first_mode_back)
+        if fit < ordinary:
+            keep = self._required(fit) - self._required(back)
+            for i in range(fit, back, -1):
+                if self._required(i) + keep <= snr_db:
+                    return self.modes[i]
+        return self.modes[back]
+
+    def _required(self, index: int) -> float:
+        """The SNR a step up to the rung at ``index`` asks for: its threshold, the margin it is
+        held to and the hysteresis."""
+        return self.thresholds[self.modes[index]] + self._margin(index) + self.up_hysteresis_db
 
     def _first_ordinary(self) -> int:
         """Index in :attr:`modes` of the first rung above the floor."""

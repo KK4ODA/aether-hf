@@ -1073,6 +1073,8 @@ fn an_ack_that_arrives_during_a_repoll_is_acted_on_when_the_poll_ends() {
     a.on_tx_done(now);
     a.on_frame(&Wire::carry(&accept[0], t.data_frame_s, &t), now);
     assert!(a.connected());
+    // the caller's first move waits for the run loop's next tick (ADR-0066)
+    a.tick(now);
     let poll = transmitted(&mut a);
     assert_eq!(
         poll.len(),
@@ -2784,6 +2786,7 @@ fn handing_over(
     let accept = transmitted(&mut b);
     let mut now = relay(&mut b, &mut a, &accept, now);
     assert!(a.connected() && b.connected());
+    a.tick(now); // the caller's first move waits for the next tick (ADR-0066)
     // the caller confirms the call with a poll, and polls again when the link is idle
     let mut poll = transmitted(&mut a);
     for asked in [false, true] {
