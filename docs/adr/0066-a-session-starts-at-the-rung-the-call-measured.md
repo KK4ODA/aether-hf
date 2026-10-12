@@ -13,8 +13,8 @@ KK4ODA-1 heard his probe at −2 dB, he heard its answer at −9.5. The Test com
 call, a 512-byte message, an eight-rung ladder, a 768-byte file — and its message took 71 s,
 57.7 bit/s, in two ways slower than the path:
 
-1. **The first burst went two rungs low.** The call was a tone-floor frame read at about
-   −2 dB. With the controller's margin (3 dB) and hysteresis (1.5 dB) the fastest rung that
+1. **The first burst went two rungs low.** KK4ODA-1 heard his probe at −2 dB, and his call,
+   a tone-floor frame too, about as well. With the controller's margin (3 dB) and hysteresis (1.5 dB) the fastest rung that
    fits is the floor's top, tone4x100-75 (rung 3, −13 dB on AWGN, needing −8.5): the rung above
    it is the first OFDM one, QPSK ⅓ at −6 dB, needing −1.5. `first_mode` keeps
    `first_mode_back` (2) rungs in hand below the fit, so the first burst went at rung 1,
