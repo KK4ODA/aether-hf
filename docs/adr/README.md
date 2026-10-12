@@ -70,3 +70,4 @@ context → decision → alternatives considered → consequences.
 | [0063](0063-an-acknowledgement-gives-back-a-turn-taken-on-noise.md) | An acknowledgement gives back a turn taken on noise | accepted |
 | [0064](0064-the-tone-floor-searches-150-hz.md) | The tone floor searches ±150 Hz | accepted |
 | [0065](0065-a-phantom-starts-no-burst.md) | A phantom starts no burst, and a left session's DISC waits out what it hears arriving | accepted |
+| [0066](0066-a-session-starts-at-the-rung-the-call-measured.md) | A session starts at the rung the call measured, with what came with the call | accepted |

@@ -361,6 +361,9 @@ pub struct TestRun {
     file_size: usize,
     /// The engine's acknowledged-bytes count when the transfer now running began.
     acked_at_step: usize,
+    /// The message, queued with the call when the probe had sized it: what the outgoing
+    /// buffer held before it, to take it back out if the call is not answered.
+    message_queued: Option<usize>,
     /// The bytes a second of air carried at the rung the link ran at when the message was
     /// acknowledged: what [`file_rate_bps`] compares the rung after the ladder with.
     message_rung_rate: Option<f64>,
@@ -401,6 +404,7 @@ impl TestRun {
             message_size: 0,
             file_size: 0,
             acked_at_step: 0,
+            message_queued: None,
             message_rung_rate: None,
             ladder_skipped: None,
             highest_passed: None,
@@ -739,7 +743,21 @@ impl<P: Ptt> Station<P> {
             Step::Connect => {
                 if !run.entered {
                     match self.connect_as(&run.plan.remote, run.plan.as_call.as_deref()) {
-                        Ok(()) => run.entered = true,
+                        Ok(()) => {
+                            run.entered = true;
+                            // The message goes with the call when the probe has sized it: the
+                            // station hands it to the link as the session comes up, and the
+                            // first burst carries it. Queued once the session was up, it
+                            // followed the caller's poll and its answer — two floor frames,
+                            // 7.4 s of WC4Y's 71 s message on 2026-10-11 (ADR-0066). Unsized,
+                            // it waits for the call's measurement as before.
+                            if run.probe.is_some() && run.message_size > 0 {
+                                let before = self.outbound.len();
+                                let data = run.test_bytes(run.message_size, 1);
+                                self.send(&data);
+                                run.message_queued = Some(before);
+                            }
+                        }
                         Err(reason) => self.finish_test(run, &format!("aborted: {reason}")),
                     }
                 } else if self.engine.state() == State::Connected {
@@ -782,9 +800,12 @@ impl<P: Ptt> Station<P> {
                 if bytes == 0 {
                     run.enter(next, now);
                 } else if !run.entered {
-                    let data = run.test_bytes(bytes, salt);
                     run.acked_at_step = self.engine.stats.bytes_acked;
-                    self.send(&data);
+                    // the message may have gone with the call
+                    if !(run.step == Step::Message && run.message_queued.take().is_some()) {
+                        let data = run.test_bytes(bytes, salt);
+                        self.send(&data);
+                    }
                     run.entered = true;
                 } else if self.engine.state() != State::Connected {
                     self.finish_test(run, "aborted: the session dropped during the transfer");
@@ -999,6 +1020,11 @@ impl<P: Ptt> Station<P> {
     }
 
     fn finish_test(&mut self, run: &mut TestRun, outcome: &str) {
+        // a message queued with a call that never came up goes with the Test, not into the
+        // next session (ADR-0052)
+        if let Some(before) = run.message_queued.take() {
+            self.outbound.truncate(before);
+        }
         run.step = Step::Done;
         run.outcome = Some(outcome.to_owned());
         run.ended_s = Some(self.now());
@@ -1311,6 +1337,19 @@ mod tests {
                 .as_array()
                 .map(Vec::len),
             Some(ladder.len())
+        );
+        // the message went with the call: what followed the acceptance was the message's
+        // first burst, not a poll and its answer (ADR-0066)
+        let sent = document["sent"].as_array().expect("the frames sent");
+        let kinds: Vec<&str> = sent
+            .iter()
+            .take(3)
+            .filter_map(|f| f["kind"].as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["data", "data", "data"],
+            "probe, call, message: {sent:?}"
         );
         // and the run can be asked for again
         assert!(!air.a.abort_test());

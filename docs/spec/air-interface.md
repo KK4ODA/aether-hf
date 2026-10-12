@@ -561,7 +561,9 @@ and climb from there, a burst per step, proving what the connect frames had alre
 measured. The called station starts its rate controller from the request's SNR and
 sends that SNR back; the caller starts its first burst two usable rungs below the fastest
 rung that SNR supports with the controller's margin and hysteresis — never falling from an
-OFDM rung onto the tone floor for that caution — and starts its own controller from the SNR
+OFDM rung onto the tone floor for that caution; on the floor the two rungs are counted in
+decibels, so a SNR the floor's top rung clears by as much as the two rungs below it would have
+kept starts there (ADR-0066) — and starts its own controller from the SNR
 the acceptance arrived at, which is what it will recommend once it receives. A station handed
 the turn later starts its first burst the same way, from the SNR it has measured the other
 station at. A body that stops at the version byte reads as "not measured"; only a version-1
@@ -740,7 +742,9 @@ receiver that lost the offer and took the last data frame's count at its word. A
 replaces the request for the turn and the `TURN` that answered it: one keying of each
 transmitter a change of direction instead of two.
 
-A caller with nothing to send confirms a new session with a `POLL`; that poll carries `OFFER`
+A caller with nothing to send confirms a new session with a `POLL` — decided a moment after
+the acceptance, so data given to it as the session comes up goes in a first burst instead
+(ADR-0066); that poll carries `OFFER`
 (ADR-0053), and the called station answers it as it answers an offering `TURN` — with `TAKEN`
 and its first burst when it has data (a gateway's greeting), with the `ACK` alone otherwise. A
 station that knows no offer on a poll answers it as a plain poll, so the flag needs no new

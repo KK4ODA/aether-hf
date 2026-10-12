@@ -312,6 +312,48 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
     assert rc.snr_db == 15.0  # a second seed changes nothing
 
 
+def test_on_the_floor_the_steps_in_hand_are_decibels() -> None:
+    """WC4Y's Test of 2026-10-11 (80 m, 500 Hz; ADR-0066): the call was heard at about −2 dB,
+    which the floor's top rung (tone4x100-75, −13 dB) clears by ten decibels and the first
+    OFDM rung does not fit; two rungs in hand sent the message at tone-36, half the rate, on a
+    path that carried tone4x100-75 in every burst after. On the floor the steps keep the
+    decibels they would at the fit's own edge; among the OFDM rungs they stay rungs."""
+    from aether_model.link.rate import (
+        NARROW_AWGN_THRESHOLD_DB,
+        NARROW_FRAME_S,
+        NARROW_PAYLOAD_BYTES,
+    )
+
+    thresholds = dict(NARROW_AWGN_THRESHOLD_DB)
+    narrow = RateController(
+        thresholds=thresholds,
+        modes=usable_modes(thresholds, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
+        floor_modes=4,
+    )
+
+    def required(rung: int) -> float:
+        return thresholds[rung] + narrow.margin_db + narrow.up_hysteresis_db
+
+    assert required(3) <= -2.0 < required(4)  # the floor's top fits, the first OFDM rung not
+    assert narrow.first_mode(-2.0) == 3
+    keep = required(3) - required(1)  # what two rungs in hand keep at the top's edge
+    assert narrow.first_mode(required(3) + keep) == 3
+    assert narrow.first_mode(required(2) + keep) == 2
+    assert narrow.first_mode(required(2) + keep - 0.01) == 1
+    assert narrow.first_mode(required(3)) == 1  # at the fit's edge: two rungs, as before
+    assert narrow.first_mode(-20.0) == 0
+    # the OFDM rungs: the steps are rungs (ADR-0008)
+    ordinary = narrow._first_ordinary()
+    for snr in (3.0, 6.0, 9.0, 14.0):
+        modes = narrow.modes
+        top = max(i for i in range(len(modes)) if required(modes[i]) <= snr)
+        assert narrow.first_mode(snr) == modes[max(ordinary, top - narrow.first_mode_back)]
+
+    wide = RateController()  # the wide ladder's floor top is rung 5, the fast kinds' fastest
+    assert wide.first_mode(-3.5) == 5
+    assert wide.first_mode(-6.7) == 3  # at its edge, two rungs in hand
+
+
 def test_a_seed_from_the_tone_floor_is_a_lower_bound() -> None:
     """ADR-0016: calls start on the tone floor, whose SNR estimate reads low on a strong path
     (it saturates near +17 dB on AWGN and reads a few decibels on a dispersive path). A
@@ -3941,6 +3983,51 @@ def test_a_frame_reported_inside_an_announced_one_does_not_end_the_burst(
     last = SimFrame(Container.DATA, 0, 0, -4.3, t0, t0 + tone, b"", 1.0, floor=True)
     b.on_frame(last, t0 + tone + 0.1)
     assert not b._arriving
+
+
+def test_what_comes_with_the_session_goes_in_the_first_burst(timing: PhyTiming) -> None:
+    """WC4Y's Test of 2026-10-11 (ADR-0066): the daemon hands its outgoing bytes to the engine
+    when the engine says the session is up, and by then a caller with nothing queued had polled
+    — the Test's message waited for the poll and its answer, two floor frames, 7.4 s. The
+    caller's first move waits for the next tick: data handed over as the session comes up goes
+    in the first burst; with nothing, the poll offers the turn as before (ADR-0053)."""
+    msg = bytes(range(200))
+
+    def run(hand_over: bool) -> tuple[list[object], bytes]:
+        a, b = _pair(timing)
+        sim = TwoStationSim(a, b, snr_db=10.0, seed=7)
+        first: list[object] = []
+        transmit = a._transmit
+
+        def keep(frames: list[TxFrame]) -> None:
+            if a.state is State.CONNECTED and not first:
+                frame = frames[0]
+                first.append(
+                    ControlFrame.decode(frame.payload).kind
+                    if frame.container is Container.CONTROL
+                    else "data"
+                )
+            transmit(frames)
+
+        on_frame = a.on_frame
+
+        def heard(frame: SoftFrame, now: float) -> None:
+            was = a.state
+            on_frame(frame, now)
+            if hand_over and was is State.CONNECTING and a.state is State.CONNECTED:
+                a.send(msg)  # the daemon's flush on "connected"
+
+        a._transmit = keep  # type: ignore[method-assign]
+        a.on_frame = heard  # type: ignore[method-assign]
+        a.connect("KK4XYZ")
+        sim.run(until=300)
+        return first, sim.delivered(1)
+
+    first, delivered = run(hand_over=True)
+    assert first == ["data"], first
+    assert delivered == msg
+    first, _ = run(hand_over=False)
+    assert first == [ControlKind.POLL], first
 
 
 def test_a_phantom_heard_alone_is_not_acknowledged(timing: PhyTiming) -> None:

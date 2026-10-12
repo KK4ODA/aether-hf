@@ -112,7 +112,8 @@ frames it heard are the channel); keep both anyway.
 The one-button version of §3, for volunteers. Put the other station's callsign in
 **Call** on the Session tab and press **Test session**. The modem then runs, and records,
 a fixed sequence: a probe (both directions' SNR), a call, a message (512 B to 2 kB, sized
-to how well the probe says you are heard), the **mode ladder** — a short burst at every mode
+to how well the probe says you are heard, and sent in the session's first burst when the probe
+was answered), the **mode ladder** — a short burst at every mode
 from a rung under the fastest the message was acknowledged at (the message has just shown the
 slower ones carrying data; the log says *ladder from rung N: the
 message ran at rung M*), each one's acknowledgement kept as a rung, until three rungs in a row fail — then a file sized to about two

@@ -900,6 +900,8 @@ class LinkEngine:
             self._maybe_request_turn()
         elif name == "leave":
             self._repeat_leave()
+        elif name == "first":
+            self._first_move()
 
     def _tx_busy(self) -> bool:
         return self.now < self._tx_busy_until
@@ -2464,12 +2466,31 @@ class LinkEngine:
         if self._has_work():
             self._send_burst()
         else:
-            # confirms the handshake and fetches the first ACK — and, with nothing to send,
-            # offers the turn: a called station with something to say (a gateway's greeting)
-            # takes it in that acknowledgement and sends at once, where a poll answered "I have
-            # data" and a TURN after it cost two more frames — three floor frames, 12 s of a
-            # 23 s reply, on a weak path (ADR-0053). A station that knows no offer on a poll
-            # answers it as a poll.
+            # the first move waits for the next tick: what the station hands over as the
+            # session comes up — a Test's message, queued with its call — goes in the first
+            # burst instead of after a poll's round trip, 7 s on the floor (ADR-0066)
+            self._arm("first", 0.0)
+
+    def _first_move(self) -> None:
+        """The caller's first transmission of a session that came up with nothing queued: a
+        burst, if something has been given since; otherwise a poll, which confirms the
+        handshake and fetches the first ACK — and, with nothing to send, offers the turn: a
+        called station with something to say (a gateway's greeting) takes it in that
+        acknowledgement and sends at once, where a poll answered "I have data" and a TURN after
+        it cost two more frames — three floor frames, 12 s of a 23 s reply, on a weak path
+        (ADR-0053). A station that knows no offer on a poll answers it as a poll."""
+        if (
+            self.state is not State.CONNECTED
+            or self.role is not Role.ISS
+            or self._waiting_for is not None
+        ):
+            return
+        if self._tx_busy():
+            self._arm("first", self._tx_busy_until - self.now)
+            return
+        if self._has_work():
+            self._send_burst()
+        else:
             self._send_poll(offer=self.cfg.offer_turn)
 
     def _accepted_unread(self, frame: SoftFrame, ctl: ControlFrame) -> None:
@@ -2570,7 +2591,7 @@ class LinkEngine:
         self._caller = False
         self.peer_capabilities = 0
         self.rate = self._rate_controller()
-        for name in ("ack", "wait", "keepalive", "link", "request"):
+        for name in ("ack", "wait", "keepalive", "link", "request", "first"):
             self._disarm(name)
 
     def _arm_leave(self) -> None:

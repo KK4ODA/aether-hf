@@ -431,6 +431,8 @@ enum Timer {
     Request,
     /// The parting DISC of a session left unheard, said again or owed (ADR-0052).
     Leave,
+    /// A caller's first move in a session that came up with nothing queued (ADR-0066).
+    First,
 }
 
 /// What the receiving station has asked for in its last acknowledgement.
@@ -1373,6 +1375,7 @@ impl LinkEngine {
             }
             Timer::Request => self.maybe_request_turn(),
             Timer::Leave => self.repeat_leave(),
+            Timer::First => self.first_move(),
         }
     }
 
@@ -3557,12 +3560,32 @@ impl LinkEngine {
         if self.has_work() {
             self.send_burst();
         } else {
-            // confirms the handshake and fetches the first acknowledgement — and, with nothing
-            // to send, offers the turn: a called station with something to say (a gateway's
-            // greeting) takes it in that acknowledgement and sends at once, where a poll
-            // answered "I have data" and a TURN after it cost two more frames — three floor
-            // frames, 12 s of a 23 s reply, on a weak path (ADR-0053). A station that knows no
-            // offer on a poll answers it as a poll.
+            // the first move waits for the next tick: what the station hands over as the
+            // session comes up — a Test's message, queued with its call — goes in the first
+            // burst instead of after a poll's round trip, 7 s on the floor (ADR-0066)
+            self.arm(Timer::First, 0.0);
+        }
+    }
+
+    /// The caller's first transmission of a session that came up with nothing queued: a
+    /// burst, if something has been given since; otherwise a poll, which confirms the
+    /// handshake and fetches the first acknowledgement — and, with nothing to send, offers the
+    /// turn: a called station with something to say (a gateway's greeting) takes it in that
+    /// acknowledgement and sends at once, where a poll answered "I have data" and a TURN after
+    /// it cost two more frames — three floor frames, 12 s of a 23 s reply, on a weak path
+    /// (ADR-0053). A station that knows no offer on a poll answers it as a poll.
+    fn first_move(&mut self) {
+        if self.state != State::Connected || self.role != Role::Iss || self.waiting_for.is_some() {
+            return;
+        }
+        if self.tx_busy() {
+            let busy = self.tx_busy_until - self.now;
+            self.arm(Timer::First, busy);
+            return;
+        }
+        if self.has_work() {
+            self.send_burst();
+        } else {
             self.send_poll_offering(self.config.offer_turn);
         }
     }
@@ -3667,6 +3690,7 @@ impl LinkEngine {
             Timer::Keepalive,
             Timer::Link,
             Timer::Request,
+            Timer::First,
         ] {
             self.disarm(timer);
         }
@@ -4388,6 +4412,55 @@ mod tests {
         );
         assert_eq!(e.arriving, [] as [(f64, f64); 0], "an arrival left over");
     }
+    #[test]
+    fn what_comes_with_the_session_goes_in_the_first_burst() {
+        // WC4Y's Test of 2026-10-11 (ADR-0066): the daemon hands its outgoing bytes to the
+        // engine when the engine says the session is up, and by then a caller with nothing
+        // queued had polled; the Test's message waited for the poll and its answer, 7.4 s
+        for hand_over in [true, false] {
+            let mut e = engine(narrow());
+            e.now = 100.0;
+            e.connect("KK4XYZ").expect("idle");
+            e.actions.clear();
+            let accept = ConnectBody {
+                src: "KK4XYZ".into(),
+                dst: e.my_call.clone(),
+                caps: e.config.capabilities,
+                version: PROTOCOL_VERSION,
+                snr_db: Some(-2.0),
+            };
+            let header = DataHeader {
+                kind: DataKind::ConnectAck,
+                seq: 0,
+                session: e.session,
+            };
+            e.now = 120.0; // the request long on the air
+            e.handle_connect_ack(header, &accept.encode().expect("encodes"), -8.0);
+            assert_eq!(e.state, State::Connected);
+            let keyed = |e: &LinkEngine| {
+                e.actions.iter().find_map(|a| match a {
+                    Action::Transmit { frames, .. } => Some(frames[0].container),
+                    _ => None,
+                })
+            };
+            assert_eq!(
+                keyed(&e),
+                None,
+                "keyed before the station could hand anything over"
+            );
+            if hand_over {
+                e.send(&[7u8; 200]);
+            }
+            e.tick(120.0);
+            let want = if hand_over {
+                Container::Data
+            } else {
+                Container::Control
+            };
+            assert_eq!(keyed(&e), Some(want), "hand over {hand_over}");
+        }
+    }
+
     #[test]
     fn a_phantom_heard_alone_is_not_acknowledged() {
         // the scenario harness on WC4Y's path of 2026-10-11 (80 m, 500 Hz; ADR-0065): after
