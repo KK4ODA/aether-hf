@@ -339,6 +339,89 @@ def tone_frame_cases() -> list[dict[str, object]]:
     return out
 
 
+TONE_COUNT_CASES = (
+    (TONE_DATA[0], 1, 3),
+    (TONE_DATA[1], 2, 1),
+    (TONE_FAST[1], 3, 2),
+    (TONE_NARROW[0], 0, 3),
+)
+"""Tone data frames saying how many frames of their burst follow them (ADR-0068): kind,
+redundancy version, count."""
+
+
+def tone_counted_frame_cases() -> list[dict[str, object]]:
+    """Tone frames carrying a count in their middle sync block (ADR-0068), as
+    :func:`tone_frame_cases` pins the frames before it: the frame's tones exact, the waveform at
+    a stride to a tolerance."""
+    out = []
+    rng = np.random.default_rng(6868)
+    for kind, rv, follows in TONE_COUNT_CASES:
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        data = tone_codec(kind).encode(payload, rv)
+        frame = tone.frame_tones(kind, data, rv, follows)
+        x = tone.burst(kind, payload, rv, follows)
+        out.append(
+            {
+                "kind": kind.name,
+                "rv": rv,
+                "follows": follows,
+                "payload": payload.hex(),
+                "frame_tones": [int(t) for t in frame],
+                "n_samples": len(x),
+                "stride": 53,
+                "strided_samples": complex_list(x[::53]),
+            }
+        )
+    return out
+
+
+def tone_counted_receive_cases() -> list[dict[str, object]]:
+    """Counted tone frames received as :func:`tone_receive_cases` receives the others, at RV 0
+    so they decode: the detector's start, kind, redundancy version, middle block and count are
+    exact, its offset and statistic to a tolerance, the payload exact."""
+    out = []
+    rng = np.random.default_rng(6969)
+    detectors = {
+        air.params.bandwidth.hz: tone.ToneDetector((air.tone_control, *air.tone_data))
+        for air in (WIDE, NARROW)
+    }
+    for i, (kind, _, follows) in enumerate(TONE_COUNT_CASES):
+        bandwidth = NARROW.params.bandwidth.hz if kind in TONE_NARROW else WIDE.params.bandwidth.hz
+        det = detectors[bandwidth]
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        lead, cfo = 1700 + 199 * i, 31.25 - 17.5 * (i % 4)
+        x = tone.burst(kind, payload, 0, follows)
+        n = lead + len(x) + 2000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y *= np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += tone_interference(n)
+        syncs = det.detect(y)
+        assert len(syncs) == 1, (kind.name, syncs)
+        sync = syncs[0]
+        assert (sync.middle, sync.follows) == (follows, follows), (kind.name, sync)
+        frame = tone.demodulate(y, sync.kind, sync.rv, sync.start, sync.cfo_hz, middle=sync.middle)
+        decoded, _ = frame.decode()
+        assert decoded == payload, kind.name
+        out.append(
+            {
+                "kind": kind.name,
+                "follows": follows,
+                "bandwidth_hz": bandwidth,
+                "payload": payload.hex(),
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "start": sync.start,
+                "detected_cfo_hz": sync.cfo_hz,
+                "statistic": sync.statistic,
+                "middle": sync.middle,
+                "detected_follows": sync.follows,
+            }
+        )
+    return out
+
+
 def tone_interference(n: int) -> NDArray[np.complex128]:
     """A deterministic stand-in for noise under a tone frame: a spread of off-grid tones
     and a slow chirp, closed form so both languages build it identically."""
@@ -552,6 +635,8 @@ def main() -> int:
         "blanker": blanker_case(),
         "tone_frames": tone_frame_cases(),
         "tone_receive": tone_receive_cases(),
+        "tone_counted_frames": tone_counted_frame_cases(),
+        "tone_counted_receive": tone_counted_receive_cases(),
         "tone_after_silence": tone_after_silence_cases(),
         "tone_sample_tolerance": 1e-9,
         "tone_llr_tolerance": 1e-6,

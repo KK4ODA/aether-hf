@@ -243,12 +243,33 @@ impl ToneKind {
         &TONE.sync_patterns[self.patterns[rv]]
     }
 
+    /// The redundancy version whose pattern the middle sync block carries: the frame's own
+    /// turned by how many frames of its burst follow it (ADR-0068). The start and end blocks
+    /// keep the frame's own pattern, which names its kind and redundancy version, so its copies
+    /// still add parity. A kind with one pattern — the control frame — carries no count.
+    #[must_use]
+    pub fn middle_rv(&self, rv: usize, follows: usize) -> usize {
+        (rv + follows) % self.patterns.len()
+    }
+
     /// Each slot's role: `None` a data slot, otherwise the sync tone.
     #[must_use]
     pub fn layout(&self, rv: usize) -> Vec<Option<usize>> {
+        self.layout_with(rv, 0)
+    }
+
+    /// [`layout`](Self::layout) with the middle block carrying `follows`
+    /// ([`middle_rv`](Self::middle_rv)).
+    #[must_use]
+    pub fn layout_with(&self, rv: usize, follows: usize) -> Vec<Option<usize>> {
         let mut out = vec![None; self.symbols()];
-        for offset in self.block_offsets() {
-            for (j, &tone) in self.sync(rv).iter().enumerate() {
+        for (i, offset) in self.block_offsets().into_iter().enumerate() {
+            let pattern = if i == 1 {
+                self.middle_rv(rv, follows)
+            } else {
+                rv
+            };
+            for (j, &tone) in self.sync(pattern).iter().enumerate() {
                 out[offset + j] = Some(tone);
             }
         }
@@ -459,10 +480,25 @@ pub fn cpfsk(hz: &[f64], lengths: &[usize], ramps: &[usize], gain_db: f64) -> Ve
 /// If `data` is shorter than the kind's data symbols.
 #[must_use]
 pub fn frame_symbols(kind: &ToneKind, data: &[usize], rv: usize) -> (Vec<usize>, Vec<bool>) {
+    frame_symbols_with(kind, data, rv, 0)
+}
+
+/// [`frame_symbols`] of a frame saying `follows` more frames of its burst in its middle sync
+/// block (ADR-0068).
+///
+/// # Panics
+/// If `data` is shorter than the kind's data symbols.
+#[must_use]
+pub fn frame_symbols_with(
+    kind: &ToneKind,
+    data: &[usize],
+    rv: usize,
+    follows: usize,
+) -> (Vec<usize>, Vec<bool>) {
     let mut data = data.iter();
     let mut tones = Vec::new();
     let mut sync = Vec::new();
-    for role in kind.layout(rv) {
+    for role in kind.layout_with(rv, follows) {
         if let Some(tone) = role {
             tones.push(tone);
             sync.push(true);
@@ -530,8 +566,22 @@ pub fn modulate_frame(
 /// # Errors
 /// If the payload is not the kind's length.
 pub fn burst(codec: &ToneCodec, payload: &[u8], rv: u8) -> Result<Vec<Complex>, FecError> {
+    burst_with(codec, payload, rv, 0)
+}
+
+/// [`burst`] saying `follows` more frames of its burst (ADR-0068; none is the frame before it).
+///
+/// # Errors
+/// If the payload is not the kind's length.
+pub fn burst_with(
+    codec: &ToneCodec,
+    payload: &[u8],
+    rv: u8,
+    follows: u8,
+) -> Result<Vec<Complex>, FecError> {
     let data = codec.encode(payload, rv)?;
-    let (tones, sync) = frame_symbols(codec.kind(), &data, usize::from(rv));
+    let (tones, sync) =
+        frame_symbols_with(codec.kind(), &data, usize::from(rv), usize::from(follows));
     Ok(modulate_frame(codec.kind(), &tones, &sync, gain_db()))
 }
 
@@ -893,7 +943,20 @@ pub fn demodulate(
     start: usize,
     cfo_hz: f64,
 ) -> Option<ToneFrame> {
-    let layout = kind.layout(usize::from(rv));
+    demodulate_with(samples, kind, rv, 0, start, cfo_hz)
+}
+
+/// [`demodulate`] with the middle sync block read as carrying the count `middle`.
+#[must_use]
+pub fn demodulate_with(
+    samples: &[Complex],
+    kind: &'static ToneKind,
+    rv: u8,
+    middle: u8,
+    start: usize,
+    cfo_hz: f64,
+) -> Option<ToneFrame> {
+    let layout = kind.layout_with(usize::from(rv), usize::from(middle));
     let energies = tone_energies(samples, start, cfo_hz, kind.symbols())?;
     let noise = sync_noise(&energies, &layout, kind);
     let metrics = if kind.speed() == 1 {
@@ -933,6 +996,13 @@ pub struct ToneSync {
     pub rv: u8,
     /// Mean normalised energy of the 24 sync tones: 1 on noise, 1 + Es/N0 on a frame.
     pub statistic: f64,
+    /// The count the middle sync block reads best as: its pattern is the kind's for redundancy
+    /// version `rv + middle` (ADR-0068). What the frame's sync tones are taken to be.
+    pub middle: u8,
+    /// How many frames of its burst follow this one, when the middle block says so clearly
+    /// ([`ToneDetector::read_middle`]); `None` when it does not — a faded block states nothing.
+    /// A control frame's count is in its body: 0 here.
+    pub follows: Option<u8>,
 }
 
 impl ToneSync {
@@ -1117,33 +1187,70 @@ impl ToneDetector {
         kind: &ToneKind,
         rv: usize,
         first_only: bool,
+        middle: Option<&[f64]>,
     ) -> Option<(f64, usize)>
     where
         R: Fn(usize) -> Option<&'a [f64]>,
     {
-        let q = TONE.hop_div;
-        let width = 2 * self.cfo_bins + 1;
         let offsets = kind.block_offsets();
-        let blocks = if first_only {
-            &offsets[..1]
-        } else {
-            &offsets[..]
-        };
-        let mut acc = vec![0.0f64; width];
-        for &o in blocks {
-            for (j, &tone) in kind.sync(rv).iter().enumerate() {
-                let row = rows(h + q * (o + j))?;
-                for (slot, &v) in acc.iter_mut().zip(&row[tone * width..(tone + 1) * width]) {
-                    *slot += v;
-                }
+        let mut acc = self.block_sum(rows, h, offsets[0], kind.sync(rv))?;
+        if !first_only {
+            let middle = match middle {
+                Some(m) => m.to_vec(),
+                None => self.middle_sum(rows, h, kind)?,
+            };
+            let end = self.block_sum(rows, h, offsets[2], kind.sync(rv))?;
+            for ((slot, m), e) in acc.iter_mut().zip(middle).zip(end) {
+                *slot += m + e;
             }
         }
-        let count = (blocks.len() * SYNC_SYMBOLS) as f64;
+        let blocks = if first_only { 1 } else { 3 };
+        let count = (blocks * SYNC_SYMBOLS) as f64;
         for slot in &mut acc {
             *slot /= count;
         }
         let c = argmax(&acc);
         Some((acc[c], c))
+    }
+
+    /// One sync block's ratios at every offset bin, summed over its eight tones of `pattern`,
+    /// for a frame starting at row `h`.
+    fn block_sum<'a, R>(
+        &self,
+        rows: &R,
+        h: usize,
+        o: usize,
+        pattern: &[usize; 8],
+    ) -> Option<Vec<f64>>
+    where
+        R: Fn(usize) -> Option<&'a [f64]>,
+    {
+        let width = 2 * self.cfo_bins + 1;
+        let mut acc = vec![0.0f64; width];
+        for (j, &tone) in pattern.iter().enumerate() {
+            let row = rows(h + TONE.hop_div * (o + j))?;
+            for (slot, &v) in acc.iter_mut().zip(&row[tone * width..(tone + 1) * width]) {
+                *slot += v;
+            }
+        }
+        Some(acc)
+    }
+
+    /// The middle block carries the count (ADR-0068): the best of the kind's patterns there,
+    /// bin by bin.
+    fn middle_sum<'a, R>(&self, rows: &R, h: usize, kind: &ToneKind) -> Option<Vec<f64>>
+    where
+        R: Fn(usize) -> Option<&'a [f64]>,
+    {
+        let o = kind.block_offsets()[1];
+        let mut best = self.block_sum(rows, h, o, kind.sync(0))?;
+        for p in 1..kind.n_rv() {
+            let other = self.block_sum(rows, h, o, kind.sync(p))?;
+            for (slot, v) in best.iter_mut().zip(other) {
+                *slot = slot.max(v);
+            }
+        }
+        Some(best)
     }
 
     /// How many of the first block's tones at offset bin `c` are the strongest in their
@@ -1178,9 +1285,20 @@ impl ToneDetector {
         R: Fn(usize) -> Option<&'a [f64]>,
     {
         let mut best: Option<(f64, usize, i64)> = None;
+        // the middle block's best pattern is the kind's, whatever the redundancy version: one
+        // sum a kind, which its hypotheses — consecutive — share
+        let mut middle: Option<(&'static ToneKind, Option<Vec<f64>>)> = None;
         for &i in hypotheses {
             let (kind, rv) = self.hypotheses[i];
-            let Some((v, c)) = self.statistic(rows, h, kind, usize::from(rv), first_only) else {
+            if !first_only && !middle.as_ref().is_some_and(|(k, _)| std::ptr::eq(*k, kind)) {
+                middle = Some((kind, self.middle_sum(rows, h, kind)));
+            }
+            let shared = middle.as_ref().and_then(|(_, m)| m.as_deref());
+            if !first_only && shared.is_none() {
+                continue;
+            }
+            let Some((v, c)) = self.statistic(rows, h, kind, usize::from(rv), first_only, shared)
+            else {
                 continue;
             };
             if best.is_some_and(|b| v <= b.0) {
@@ -1261,6 +1379,7 @@ impl ToneDetector {
         samples: &[Complex],
         kind: &ToneKind,
         rv: u8,
+        middle: u8,
         start: i64,
         cfos: &[f64],
     ) -> Vec<f64> {
@@ -1269,7 +1388,7 @@ impl ToneDetector {
             return vec![f64::NEG_INFINITY; cfos.len()];
         }
         let start = start as usize;
-        let layout = kind.layout(usize::from(rv));
+        let layout = kind.layout_with(usize::from(rv), usize::from(middle));
         let t: Vec<f64> = (0..n).map(|i| i as f64 / TONE.fs).collect();
         let shifts: Vec<Vec<(f64, f64)>> = cfos
             .iter()
@@ -1317,10 +1436,11 @@ impl ToneDetector {
         samples: &[Complex],
         kind: &ToneKind,
         rv: u8,
+        middle: u8,
         start: usize,
         cfo: f64,
     ) -> f64 {
-        let layout = kind.layout(usize::from(rv));
+        let layout = kind.layout_with(usize::from(rv), usize::from(middle));
         let Some(e) = tone_energies(samples, start, cfo, kind.symbols()) else {
             return f64::NEG_INFINITY;
         };
@@ -1345,7 +1465,56 @@ impl ToneDetector {
         cfo: f64,
     ) -> [usize; 3] {
         tone_energies(samples, start, cfo, kind.symbols())
-            .map_or([0; 3], |e| block_hits_in(&e, kind, rv))
+            .map_or([0; 3], |e| block_hits_in(&e, kind, rv, 0))
+    }
+
+    /// The count a frame's middle sync block reads best as, and the count it states — the
+    /// same when `count_hits` of its eight symbols have that count's tone strongest and no
+    /// other count comes within `count_margin`, `None` otherwise (ADR-0068). `e` is the frame's
+    /// energies at the sync numerology.
+    #[must_use]
+    pub fn read_middle(e: &[f64], kind: &ToneKind, rv: u8) -> (u8, Option<u8>) {
+        let n = kind.n_rv();
+        if n == 1 {
+            return (0, Some(0));
+        }
+        let tones = TONE.tones;
+        let o = kind.block_offsets()[1];
+        let hits: Vec<usize> = (0..n)
+            .map(|f| {
+                kind.sync(kind.middle_rv(usize::from(rv), f))
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, &t)| strongest(&e[(o + j) * tones..(o + j + 1) * tones], t))
+                    .count()
+            })
+            .collect();
+        let best = argmax_usize(&hits);
+        let rest = hits
+            .iter()
+            .enumerate()
+            .filter(|&(f, _)| f != best)
+            .map(|(_, &h)| h)
+            .max()
+            .unwrap_or(0);
+        let clear = hits[best] >= TONE.count_hits && hits[best] >= rest + TONE.count_margin;
+        (best as u8, clear.then_some(best as u8))
+    }
+
+    /// [`read_middle`](Self::read_middle) for a frame placed at `start`/`cfo`; nothing to read
+    /// where the frame would leave the buffer.
+    fn middle_at(
+        samples: &[Complex],
+        kind: &ToneKind,
+        rv: u8,
+        start: usize,
+        cfo: f64,
+    ) -> (u8, Option<u8>) {
+        if kind.n_rv() == 1 {
+            return (0, Some(0));
+        }
+        tone_energies(samples, start, cfo, kind.symbols())
+            .map_or((0, Some(0)), |e| Self::read_middle(&e, kind, rv))
     }
 
     /// Sync symbols of a frame placed at `start`/`cfo` whose own tone is the strongest
@@ -1381,13 +1550,13 @@ impl ToneDetector {
         let Some(e) = tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()) else {
             return false;
         };
-        let blocks = block_hits_in(&e, sync.kind, sync.rv);
+        let blocks = block_hits_in(&e, sync.kind, sync.rv, sync.middle);
         let mut hits = blocks;
         hits.sort_unstable();
         if hits.iter().sum::<usize>() < TONE.min_hits || hits[1] < TONE.min_block_hits {
             return false;
         }
-        let against = block_contradictions_in(&e, sync.kind, sync.rv);
+        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle);
         if against.iter().sum::<usize>() <= TONE.max_contradictions {
             return true;
         }
@@ -1409,10 +1578,14 @@ impl ToneDetector {
     /// and ITU Poor. Every symbol if the frame runs past the buffer.
     #[must_use]
     pub fn contradictions(&self, samples: &[Complex], sync: &ToneSync) -> usize {
-        tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols())
-            .map_or(3 * SYNC_SYMBOLS, |e| {
-                block_contradictions_in(&e, sync.kind, sync.rv).iter().sum()
-            })
+        tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()).map_or(
+            3 * SYNC_SYMBOLS,
+            |e| {
+                block_contradictions_in(&e, sync.kind, sync.rv, sync.middle)
+                    .iter()
+                    .sum()
+            },
+        )
     }
 
     /// Timing and offset on the sync tones' own energy: a grid of two hops and two bins
@@ -1427,6 +1600,9 @@ impl ToneDetector {
         start: usize,
         cfo: f64,
     ) -> ToneSync {
+        // the middle block is read where the search put the frame, and again where the
+        // refinement does: the count it carries decides which tones are the frame's (ADR-0068)
+        let (read, _) = Self::middle_at(samples, kind, rv, start, cfo);
         let half = (self.hop / 2) as i64;
         let cfos: Vec<f64> = (0..9)
             .map(|k| cfo + self.bin_hz * (-2.0 + 0.5 * f64::from(k)))
@@ -1435,7 +1611,7 @@ impl ToneDetector {
         let mut best = (f64::NEG_INFINITY, starts[0], cfos[0]);
         for &s in &starts {
             for (j, v) in self
-                .sync_energies(samples, kind, rv, s, &cfos)
+                .sync_energies(samples, kind, rv, read, s, &cfos)
                 .into_iter()
                 .enumerate()
             {
@@ -1450,7 +1626,7 @@ impl ToneDetector {
             let mut top = (f64::NEG_INFINITY, centre);
             let mut s = centre + lo;
             while s <= centre + hi {
-                let v = self.sync_energies(samples, kind, rv, s, &[cfo])[0];
+                let v = self.sync_energies(samples, kind, rv, read, s, &[cfo])[0];
                 if v > top.0 {
                     top = (v, s);
                 }
@@ -1461,7 +1637,7 @@ impl ToneDetector {
         let offsets: Vec<f64> = (0..21)
             .map(|k| cfo + self.bin_hz * (-0.5 + 0.05 * f64::from(k)))
             .collect();
-        let energy = self.sync_energies(samples, kind, rv, start, &offsets);
+        let energy = self.sync_energies(samples, kind, rv, read, start, &offsets);
         let k = argmax(&energy);
         let mut cfo = offsets[k];
         if k > 0 && k + 1 < offsets.len() {
@@ -1472,33 +1648,55 @@ impl ToneDetector {
             }
         }
         let start = start.max(0) as usize;
+        let (middle, follows) = Self::middle_at(samples, kind, rv, start, cfo);
         ToneSync {
             start,
             cfo_hz: cfo,
             kind,
             rv,
-            statistic: self.sync_statistic(samples, kind, rv, start, cfo),
+            statistic: self.sync_statistic(samples, kind, rv, middle, start, cfo),
+            middle,
+            follows,
         }
     }
 }
 
 /// Per sync block, the symbols whose own tone is the strongest of a frame's slot energies
 /// `e` (at the sync numerology); a silent symbol is no hit.
-fn block_hits_in(e: &[f64], kind: &ToneKind, rv: u8) -> [usize; 3] {
+fn block_hits_in(e: &[f64], kind: &ToneKind, rv: u8, middle: u8) -> [usize; 3] {
     let tones = TONE.tones;
-    let sync = kind.sync(usize::from(rv));
-    kind.block_offsets().map(|o| {
-        sync.iter()
+    let mut out = [0; 3];
+    for (i, o) in kind.block_offsets().into_iter().enumerate() {
+        let pattern = if i == 1 {
+            kind.middle_rv(usize::from(rv), usize::from(middle))
+        } else {
+            usize::from(rv)
+        };
+        out[i] = kind
+            .sync(pattern)
+            .iter()
             .enumerate()
             .filter(|&(j, &t)| strongest(&e[(o + j) * tones..(o + j + 1) * tones], t))
-            .count()
-    })
+            .count();
+    }
+    out
+}
+
+/// The index of the largest count, the first on a tie.
+fn argmax_usize(values: &[usize]) -> usize {
+    let mut best = 0;
+    for (i, &v) in values.iter().enumerate() {
+        if v > values[best] {
+            best = i;
+        }
+    }
+    best
 }
 
 /// [`ToneDetector::contradictions`] from a frame's slot energies `e`, per sync block.
-fn block_contradictions_in(e: &[f64], kind: &ToneKind, rv: u8) -> [usize; 3] {
+fn block_contradictions_in(e: &[f64], kind: &ToneKind, rv: u8, middle: u8) -> [usize; 3] {
     let tones = TONE.tones;
-    let layout = kind.layout(usize::from(rv));
+    let layout = kind.layout_with(usize::from(rv), usize::from(middle));
     let rows: Vec<(usize, &[f64])> = layout
         .iter()
         .enumerate()
@@ -2123,6 +2321,8 @@ mod tests {
             kind,
             rv: 0,
             statistic: 0.0,
+            middle: 0,
+            follows: Some(0),
         };
         assert_eq!(det.block_hits(&y, kind, 0, lead, 0.0), [8, 8, 0]);
         assert!(det.contradictions(&y, &reading) > TONE.max_contradictions);
@@ -2153,7 +2353,9 @@ mod tests {
             e[s * tones + t] = 100.0;
         }
         assert_eq!(
-            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            block_contradictions_in(&e, kind, 0, 0)
+                .iter()
+                .sum::<usize>(),
             0
         );
         // three symbols hold another tone, stronger than their own: three contradictions
@@ -2161,7 +2363,9 @@ mod tests {
             e[s * tones + (t + 5) % tones] = 200.0;
         }
         assert_eq!(
-            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            block_contradictions_in(&e, kind, 0, 0)
+                .iter()
+                .sum::<usize>(),
             3
         );
         // a symbol whose own tone faded, its strongest one no more than noise makes, is a
@@ -2170,7 +2374,9 @@ mod tests {
         e[s * tones + t] = 0.5;
         e[s * tones + (t + 5) % tones] = 5.0;
         assert_eq!(
-            block_contradictions_in(&e, kind, 0).iter().sum::<usize>(),
+            block_contradictions_in(&e, kind, 0, 0)
+                .iter()
+                .sum::<usize>(),
             2
         );
         // a steady carrier stronger than every sync tone contradicts nothing
@@ -2185,7 +2391,7 @@ mod tests {
             steady[s * tones + carrier] = 150.0;
         }
         assert_eq!(
-            block_contradictions_in(&steady, kind, 0)
+            block_contradictions_in(&steady, kind, 0, 0)
                 .iter()
                 .sum::<usize>(),
             0
