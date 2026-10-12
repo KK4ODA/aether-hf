@@ -59,7 +59,7 @@ context → decision → alternatives considered → consequences.
 | [0052](0052-a-session-ends-at-both-ends.md) | A session ends at both ends, and takes its data with it | accepted |
 | [0053](0053-the-callers-first-poll-offers-the-turn.md) | The caller's first poll offers the turn | accepted |
 | [0054](0054-each-stations-answer-gap-is-learned.md) | Each station's answer gap is learned from its asking again | accepted |
-| [0055](0055-nothing-that-sets-up-a-contact-carries-the-identifier.md) | Nothing that sets up a contact carries the Morse identifier: it goes at the end of each communication and every ten minutes during one | accepted |
+| [0055](0055-nothing-that-sets-up-a-contact-carries-the-identifier.md) | Nothing that sets up a contact carries the Morse identifier: it goes at the end of each communication and every ten minutes during one; a station calling again continues the communication (§4) | accepted |
 | [0056](0056-weak-calls-are-accepted-on-the-floor-and-a-repeat-call-ends-a-dead-session.md) | A weak call is accepted on the floor, and a station that calls again ends its dead session | accepted |
 | [0057](0057-a-call-to-another-ssid-is-shown.md) | A call to another SSID of the station's callsign is shown, and an unanswered call suggests one | accepted |
 | [0058](0058-an-unanswered-wide-call-goes-on-at-500-hz.md) | An unanswered wide call goes on at 500 Hz | accepted |
@@ -72,4 +72,4 @@ context → decision → alternatives considered → consequences.
 | [0065](0065-a-phantom-starts-no-burst.md) | A phantom starts no burst, and a left session's DISC waits out what it hears arriving | accepted |
 | [0066](0066-a-session-starts-at-the-rung-the-call-measured.md) | A session starts at the rung the call measured, with what came with the call | accepted |
 | [0067](0067-an-unconfirmed-frames-end-block-is-its-own.md) | An unconfirmed tone frame's end block is still its own | accepted |
-| [0068](0068-the-answer-goes-when-the-burst-says.md) | The answer goes when the burst says, never when the receiver guesses | proposed |
+| [0068](0068-the-answer-goes-when-the-burst-says.md) | The answer goes when the burst says, never when the receiver guesses | accepted for building |
