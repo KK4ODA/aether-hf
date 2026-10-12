@@ -2578,7 +2578,7 @@ impl LinkEngine {
             self.took_unread = false;
         }
         if part_of_burst {
-            if self.answered_already(frame, &record) {
+            if self.answered_already(frame, &record) || self.phantom(frame, &record) {
                 // what it carried for combining is kept (`decode_record`); it starts no burst
                 self.burst_t0 = None;
                 return;
@@ -2643,6 +2643,25 @@ impl LinkEngine {
         record.payload.is_none()
             && self.burst.is_empty()
             && frame.t_start() < self.tx_started - 1e-9
+    }
+
+    /// Whether an ordinary frame that did not decode is as likely the correlator on noise as a
+    /// frame of the burst: the PHY does not trust its acquisition (ADR-0020) and no ordinary
+    /// frame of the burst came before it — a burst is of one family, so after floor frames, or
+    /// alone, it is nobody's. Taken alone for a burst, it set an acknowledgement for its own
+    /// end; on WC4Y's path in the scenario harness (80 m, 500 Hz) that acknowledgement went out
+    /// on the floor 0.7 s after a detection at −13 dB, over the other station's next
+    /// transmission, which had begun under it and was not yet announced — the three collisions
+    /// of three runs. Taken after a tone burst's last frame, which it overlapped, it held the
+    /// answer to the burst a second longer (ADR-0065). After ordinary frames of the burst it is
+    /// the burst's, a faded last frame as often as not (ADR-0040); a real burst at a rung the
+    /// path cannot carry is acquired with confidence; the tone floor's frames, which a
+    /// detection confirms over their sync blocks, are left as they were.
+    fn phantom<F: SoftFrame>(&self, frame: &F, record: &RxRecord) -> bool {
+        record.payload.is_none()
+            && !frame.trusted()
+            && !frame.floor()
+            && self.burst.iter().all(|r| self.timing.is_floor(r.mode))
     }
 
     /// Whether a frame's countdown can be believed at all: it decoded, or its acquisition was
@@ -4369,6 +4388,110 @@ mod tests {
         );
         assert_eq!(e.arriving, [] as [(f64, f64); 0], "an arrival left over");
     }
+    #[test]
+    fn a_phantom_heard_alone_is_not_acknowledged() {
+        // the scenario harness on WC4Y's path of 2026-10-11 (80 m, 500 Hz; ADR-0065): after
+        // its acknowledgement the receiving station took an ordinary detection at -13 dB, its
+        // chips on noise, for a burst and acknowledged it on the floor 0.7 s after its end,
+        // over the other station's next transmission, begun under it and not yet announced
+        let mut e = engine(narrow());
+        e.role = Role::Irs;
+        e.state = State::Connected;
+        e.now = 100.0;
+        e.on_frame(
+            &Junk {
+                t_start: 100.0,
+                t_end: 101.0,
+            },
+            101.1,
+        );
+        assert_eq!(e.deadline_of(Timer::Ack), None, "armed for a phantom");
+        assert!(e.burst.is_empty());
+        // a real frame that failed, acquired with confidence, starts a burst and is answered
+        e.on_frame(
+            &TrustedNoise {
+                t_start: 102.0,
+                t_end: 103.0,
+            },
+            103.1,
+        );
+        assert!(e.deadline_of(Timer::Ack).is_some());
+        // and inside a burst a frame that did not decode is the burst's, phantom or not
+        e.on_frame(
+            &Junk {
+                t_start: 103.0,
+                t_end: 104.0,
+            },
+            104.1,
+        );
+        assert_eq!(e.burst.len(), 2);
+    }
+
+    #[test]
+    fn a_phantom_over_the_end_of_a_floor_burst_does_not_hold_its_answer() {
+        // the same harness runs (ADR-0065): an ordinary detection at -12 dB over the end of a
+        // tone burst's last frame joined the burst, and the answer waited for its end
+        let mut e = engine(narrow());
+        e.role = Role::Irs;
+        e.state = State::Connected;
+        e.now = 100.0;
+        let tone = NARROW_FRAME_S[0];
+        e.on_frame(
+            &FailedTone {
+                t_start: 100.0,
+                t_end: 100.0 + tone,
+            },
+            100.1 + tone,
+        );
+        let answer = e.deadline_of(Timer::Ack).expect("armed");
+        e.on_frame(
+            &Junk {
+                t_start: 99.8 + tone,
+                t_end: 100.85 + tone,
+            },
+            100.95 + tone,
+        );
+        assert_eq!(
+            e.deadline_of(Timer::Ack),
+            Some(answer),
+            "held for a phantom"
+        );
+        assert_eq!(e.burst.len(), 1);
+    }
+
+    /// A tone-floor frame, acquired with confidence, that did not decode.
+    struct FailedTone {
+        t_start: f64,
+        t_end: f64,
+    }
+
+    impl SoftFrame for FailedTone {
+        fn container(&self) -> Container {
+            Container::Data
+        }
+        fn mode(&self) -> usize {
+            0
+        }
+        fn floor(&self) -> bool {
+            true
+        }
+        fn rv(&self) -> u8 {
+            0
+        }
+        fn snr_db(&self) -> f64 {
+            -4.0
+        }
+        fn t_start(&self) -> f64 {
+            self.t_start
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            (None, vec![0.0])
+        }
+    }
+
     /// A detection at its threshold that the physical layer trusts and that decodes to
     /// nothing.
     struct TrustedNoise {

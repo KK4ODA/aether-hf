@@ -3943,6 +3943,89 @@ def test_a_frame_reported_inside_an_announced_one_does_not_end_the_burst(
     assert not b._arriving
 
 
+def test_a_phantom_heard_alone_is_not_acknowledged(timing: PhyTiming) -> None:
+    """The scenario harness on WC4Y's path of 2026-10-11 (80 m, 500 Hz; ADR-0065): after its
+    acknowledgement the receiving station took an ordinary detection at −13 dB, its chips on
+    noise, for a burst, and acknowledged it on the floor 0.7 s after its end — over the other
+    station's next transmission, which had begun under it and was not yet announced. An
+    untrusted ordinary frame that did not decode starts no burst on its own; a trusted one
+    still does, and is answered."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, sent = _connected_irs(timing)
+    b._deadlines.pop("ack", None)
+    t0 = b.now + 1.0
+    phantom = SimFrame(
+        Container.DATA, 11, 0, -13.3, t0, t0 + 1.0, b"", 1.0, trusted=False, follows=1
+    )
+    b.on_frame(phantom, t0 + 1.1)
+    assert "ack" not in b._deadlines
+    assert not b._burst
+    b.tick(t0 + 10.0)
+    assert not sent, "keyed for a phantom"
+    # a real frame that failed — acquired with confidence — starts a burst, and is answered
+    real = SimFrame(
+        Container.DATA, 11, 0, -3.0, t0 + 11.0, t0 + 12.0, b"", 1.0, trusted=True, follows=0
+    )
+    b.on_frame(real, t0 + 12.1)
+    assert "ack" in b._deadlines
+    b.tick(t0 + 20.0)
+    assert len(sent) == 1
+    assert ControlFrame.decode(sent[0].payload).kind is ControlKind.ACK
+
+
+def test_a_phantom_over_the_end_of_a_floor_burst_does_not_hold_its_answer(
+    timing: PhyTiming,
+) -> None:
+    """The same harness runs (ADR-0065): an ordinary detection at −12 dB over the end of a tone
+    burst's last frame joined the burst, and the answer waited for its end — a second more on
+    every such burst. A burst is of one family: an untrusted ordinary frame that did not decode,
+    after floor frames, is nobody's."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, _ = _connected_irs(timing)
+    b._deadlines.pop("ack", None)
+    t0 = b.now + 1.0
+    tone = timing.data_frame_s_for(0)
+    last = SimFrame(Container.DATA, 0, 0, -4.0, t0, t0 + tone, b"", 1.0, floor=True)
+    b.on_frame(last, t0 + tone + 0.1)
+    answer = b._deadlines["ack"]
+    phantom = SimFrame(
+        Container.DATA,
+        11,
+        1,
+        -12.3,
+        t0 + tone - 0.2,
+        t0 + tone + 0.85,
+        b"",
+        1.0,
+        trusted=False,
+        follows=3,
+    )
+    b.on_frame(phantom, t0 + tone + 0.95)
+    assert b._deadlines["ack"] == answer, "held for a phantom"
+    assert len(b._burst) == 1
+
+
+def test_a_phantom_after_a_frame_of_the_burst_is_still_the_bursts(timing: PhyTiming) -> None:
+    """Inside a burst, a frame that did not decode is the burst's whatever its acquisition
+    looked like (ADR-0040's faded last frames): only a phantom heard on its own starts
+    nothing (ADR-0065)."""
+    from aether_model.link.sim import SimFrame
+
+    _, b, _ = _connected_irs(timing)
+    b._deadlines.pop("ack", None)
+    t0 = b.now + 1.0
+    real = SimFrame(Container.DATA, 11, 0, -3.0, t0, t0 + 1.0, b"", 1.0, trusted=True, follows=1)
+    b.on_frame(real, t0 + 1.1)
+    weak = SimFrame(
+        Container.DATA, 11, 0, -9.0, t0 + 1.0, t0 + 2.0, b"", 1.0, trusted=False, follows=0
+    )
+    b.on_frame(weak, t0 + 2.1)
+    assert len(b._burst) == 2
+    assert "ack" in b._deadlines
+
+
 def test_a_turn_taken_on_noise_is_given_back_by_the_acknowledgement(timing: PhyTiming) -> None:
     """The scenario harness, 80 m at 500 Hz (ADR-0063): after a burst that offered the turn, a
     detection at its threshold, 40 Hz off the session's offset, was taken for the other

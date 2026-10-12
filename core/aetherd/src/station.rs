@@ -948,6 +948,9 @@ pub struct Station<P: Ptt> {
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
+    /// Where the last frame heard arriving ends, by what its preamble said of it: what an
+    /// abort's DISC waits out (ADR-0065).
+    arriving_until: f64,
     /// The session's account, while one is up.
     link: Option<LinkAccount>,
     /// Bytes that crossed the air, with when, for the throughput reading.
@@ -1108,6 +1111,7 @@ impl<P: Ptt> Station<P> {
             passband_quiet_since: f64::NEG_INFINITY,
             passband_pending: VecDeque::new(),
             rx_until: f64::NEG_INFINITY,
+            arriving_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
             crossed: 0,
@@ -3335,12 +3339,22 @@ impl<P: Ptt> Station<P> {
             };
         let polite =
             !responding && !own_access && self.config.wait_for_clear && !self.channel_clear(now);
+        // The DISC of a session left — an abort's, its repeats, the answer to a frame of the
+        // session left unheard (ADR-0052) — waits out the frames it hears arriving, whatever
+        // `wait_for_clear` says: the other station is sending and hears nothing until it
+        // stops. A Test whose budget ran out keyed its DISC 1.4 s into the other station's
+        // acknowledgement, and both were lost (the scenario harness, ADR-0065).
+        let left_over_arrival = matches!(next, Outgoing::Frames(frames)
+                if is_control(frames, ControlKind::Disc))
+            && self.engine.state() == State::Idle
+            && now < self.arriving_until + self.engine.timing().turnaround_s
+            && held_for < self.config.max_key_s + 5.0;
         // Nothing keys inside the answer gap after another station's frame, whatever it is: a
         // station keyed by VOX is still transmitting for its hold after the frame ends, and
         // an acceptance sent into that hold was never heard (KE4QCM, 2026-10-05; ADR-0036).
         let settling = now < self.heard_end + self.answer_gap_s();
-        if radiates && (waits_out || polite || settling) {
-            if waits_out || polite {
+        if radiates && (waits_out || polite || settling || left_over_arrival) {
+            if waits_out || polite || left_over_arrival {
                 self.stats.deferred_for_busy += 1;
             } else {
                 self.stats.deferred_for_gap += 1;
@@ -3635,6 +3649,7 @@ impl<P: Ptt> Station<P> {
                 frame_s = frame_s.max(air.long.duration_s());
             }
             self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
+            self.arriving_until = self.arriving_until.max(start_s + frame_s);
             self.engine
                 .on_preamble((origin + pending.start) as f64 / fs, now, Some(frame_s));
         }
@@ -6293,6 +6308,36 @@ mod tests {
             station.now() - aborted_at
         );
         assert_eq!(station.stats.watchdog_trips, 0);
+    }
+
+    #[test]
+    fn an_abort_waits_out_a_frame_heard_arriving() {
+        // the scenario harness (ADR-0065): a Test whose budget ran out keyed its DISC 1.4 s
+        // into the other station's acknowledgement, which it had heard arriving; both were lost
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.b.send(&[0x5A; 400]);
+        // the other station's burst arriving, its first frame announced
+        air.run(120.0, |a, b| b.transmitting() && a.receiving());
+        assert!(air.b.transmitting() && air.a.receiving());
+        air.a.abort();
+        let mut keyed_over = false;
+        air.run(30.0, |a, b| {
+            keyed_over |= a.transmitting() && b.transmitting();
+            a.transmitting()
+        });
+        assert!(air.a.transmitting(), "the DISC never went");
+        let end = air.a.arriving_until;
+        assert!(
+            air.a.now() >= end,
+            "keyed at {:.2}, before {end:.2}",
+            air.a.now()
+        );
+        assert!(
+            !keyed_over,
+            "the DISC went over the frame it heard arriving"
+        );
     }
 
     #[test]

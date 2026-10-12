@@ -836,8 +836,11 @@ countdown each frame carries (§3.2): after a frame that says `f` more follow, t
 waits `f` frame times before the silence below can end the burst, so a following frame lost
 in a fade is not answered over (ADR-0041). When the frame that ends latest said, believably
 (it decoded, or its acquisition was trusted), that none follow it, the burst is over at its end
-and the acknowledgement waits only the turnaround (ADR-0045). Otherwise the silence rule has
-two cases:
+and the acknowledgement waits only the turnaround (ADR-0045). An ordinary frame that did not
+decode and whose acquisition was not trusted belongs to a burst only after an ordinary frame
+of it: alone, or after tone frames, it starts no burst and does not move a burst's end — its
+countdown is noise, and so, as often as not, is the frame (ADR-0065). Otherwise the silence
+rule has two cases:
 
 * if the physical layer can report a *detected preamble* before the frame is decoded, the
   receiver need only wait that long plus a small guard;

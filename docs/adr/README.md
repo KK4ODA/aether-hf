@@ -69,3 +69,4 @@ context → decision → alternatives considered → consequences.
 | [0062](0062-acknowledgements-on-the-floor-from-the-start-measured-and-not-kept.md) | Acknowledgements on the floor from the start — measured and not kept | rejected |
 | [0063](0063-an-acknowledgement-gives-back-a-turn-taken-on-noise.md) | An acknowledgement gives back a turn taken on noise | accepted |
 | [0064](0064-the-tone-floor-searches-150-hz.md) | The tone floor searches ±150 Hz | accepted |
+| [0065](0065-a-phantom-starts-no-burst.md) | A phantom starts no burst, and a left session's DISC waits out what it hears arriving | accepted |
