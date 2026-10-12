@@ -3133,11 +3133,18 @@ impl<P: Ptt> Station<P> {
     /// A session ended, however it ended: its identifier falls due, it joins the history,
     /// what it did not deliver is said to be undelivered, and its coders go.
     fn session_ended(&mut self, detail: &str) {
-        // the end of a communication is identified, whatever ended it
-        if self.config.cw_id.is_some() && self.identifier.transmitted_since {
-            self.identifier.final_due = true;
+        // The end of a communication is identified, whatever ended it — except a session the
+        // same station ended by calling again (ADR-0056): it lost the session, not the
+        // contact, and the communication goes on in the session its call opens, identified at
+        // that one's end or ten minutes in. Identified here, the identifier went on the air
+        // behind the new call's acceptance, over the caller's first move (KQ4SAX,
+        // 2026-10-12; `80m-called-again-cwid-500`).
+        if !detail.ends_with(" called again") {
+            if self.config.cw_id.is_some() && self.identifier.transmitted_since {
+                self.identifier.final_due = true;
+            }
+            self.identifier.communication_began = None;
         }
-        self.identifier.communication_began = None;
         self.identifier.setup_at = None;
         if detail == "no answer" {
             let called = self.engine.remote_call.clone();
@@ -6852,6 +6859,48 @@ mod tests {
         );
         assert_eq!(air.a.stats.cw_ids, before + 1);
         assert_eq!(air.a.stats.watchdog_trips, 0);
+    }
+
+    #[test]
+    fn a_station_that_calls_again_is_not_identified_over() {
+        // KQ4SAX lost his session and called again (2026-10-12): the call ended the session
+        // (ADR-0056) and KK4ODA-1 put the ended session's Morse identifier on the air 10 ms after
+        // the new call's acceptance — 6.6 s of CW where a caller that read the acceptance makes
+        // its first move. The same station calling again continues the communication.
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            cw_id: (config.callsign == "KK4XYZ").then(CwId::default),
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.b.connected(), "the first session came up");
+        // the caller gives the session up where the other station cannot hear it go
+        air.a.abort();
+        air.run_a_alone(60.0, |a| a.state() == State::Idle && a.quiescent());
+        assert_eq!(air.a.state(), State::Idle);
+        assert!(air.b.connected(), "the called station never heard it go");
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.b
+                .take_events()
+                .iter()
+                .any(|e| e.ends_with("called again")),
+            "the new call ended the old session"
+        );
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "the second session came up"
+        );
+        air.run(15.0, |_, _| false);
+        assert_eq!(air.b.stats.cw_ids, 0, "identified behind the acceptance");
+        air.a.send(&[0x42; 300]);
+        air.a.disconnect();
+        air.run(120.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle && b.quiescent()
+        });
+        air.run(10.0, |_, _| false);
+        assert_eq!(air.b.stats.cw_ids, 1, "the communication's end, once");
     }
 
     /// Two identifying stations, the called one waiting for a clear channel, and `a` closes

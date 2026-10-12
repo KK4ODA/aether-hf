@@ -617,6 +617,10 @@ def step(run: Run, text: str) -> bool:
         return run.wait("back to idle", lambda: all_idle(run), float(arg))
     if word == "abort":
         call(a.control, "abort")
+        if arg == "a":
+            # the caller alone: in an outage the other station never hears it go, and stays in
+            # the session until its link timeout or the caller's next call
+            return run.wait("aborted", lambda: a.status()["state"] == "idle", 120)
         return run.wait("aborted", lambda: all_idle(run), 120)
     if word == "disconnect":
         leaving = {"": (a,), "a": (a,), "b": (b,), "both": (a, b)}[arg]

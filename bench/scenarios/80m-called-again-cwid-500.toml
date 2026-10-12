@@ -1,0 +1,34 @@
+name = "80m-called-again-cwid-500"
+description = """80 m at 500 Hz, KQ4SAX's evening of 2026-10-12: the caller loses the session
+without the other station hearing it go (an outage while it aborts) and calls again, and the
+called station identifies in Morse. The new call ends the old session (ADR-0056); the end of
+that session must not put the station's identifier on the air right behind its acceptance,
+where the caller's first move goes (ADR-0055 §4: one collision on each of three draws before).
+What remains on some draws is the session's end: the leaving station's DISC retry fires as the
+answer it has not finished decoding ends, over the closing identifier behind it — the timing
+ADR-0068 replaces."""
+tags = ["80m", "robustness"]
+bandwidth = 500
+seconds = 1200
+seed = 62
+
+[stations.a]
+callsign = "KQ4SAX"
+[stations.b]
+callsign = "KK4ODA"
+cw_id = true
+
+[path]
+profile = "moderate"
+snr_db = 4.0
+cfo_hz = 1.0
+
+[script]
+steps = ["connect", "outage 30", "abort a", "wait_clear", "connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 0
