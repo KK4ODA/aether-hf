@@ -1400,6 +1400,30 @@ fetch into `field/inbox/` (git-ignored: other operators' audio) with `AETHER_UPL
 the environment. The files stay private. Downloaded zips are untrusted data: analyse with
 `python -I` from scripts kept outside them.
 
+**WC4Y's Test of 2026-10-11 15:52Z and KQ4SAX's first Tests (2026-10-12; ADR-0065…0068).** Read
+from the stations' uploads (their sides; KK4ODA-1's not uploaded). WC4Y, 80 m at 500 Hz,
+complete: the message's first burst went two rungs low (tone-36 on a call the floor's top rung
+cleared by ten decibels) after a poll the Test's late queueing cost — ADR-0066: on the floor the
+steps in hand are decibels (`first_mode`, `_required`), a caller's first move waits a tick for
+what came with the call (`_first_move`, `Timer::First`), and the Test queues its message with
+the call when the probe sized it (taken back out if the call fails). Acknowledgement #6 was
+keyed while WC4Y transmitted; the harness scenario `80m-floor-top-start-500` (WC4Y's path,
+`[expect] min_message_bps` judged by `session_matrix.py`) showed the receiving station
+acknowledging phantom ordinary detections over the other's next transmission — ADR-0065: an
+untrusted ordinary frame that did not decode belongs to a burst only after an ordinary frame of
+it (`_phantom`), and a left session's DISC waits out frames heard arriving (`arriving_until`,
+`held_for_busy`). The A/B found ADR-0067: an unconfirmed tone frame's end block (which repeats
+its first) was announced as a new frame once the frame's announcement lapsed, holding the
+answer a whole frame (`ToneStream._lapsed`). KQ4SAX, 40 m at 500 Hz at 01:51Z over ~18 km:
+nothing of KK4ODA-1 in his audio — the night skip zone, and his drive at −32 dB. **The author's
+question (are we too complicated?)**: about half of the 51 decisions since ADR-0017 adjust when a
+station answers or decides a burst is over, and fixes repair earlier fixes; ADR-0068 (proposed,
+not built) would have every frame state exactly how many follow and answer only at the time a
+readable frame stated — link protocol 8, judged on the link bench and the harness first. The
+author chose to ship the fixes as a beta first and run P9-1 (`bench/ab/`, ready-made daemon
+configurations `aether-a.toml`/`aether-b.toml` off an installed station's ports). Modem73 has
+no ARQ, no rate adaptation and no published curves: not a like-for-like comparison.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
