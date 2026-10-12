@@ -188,11 +188,11 @@ class TwoStationSim:
         the per-class averages of :attr:`thresholds`."""
         self.unheard = unheard
         self.countdown = countdown
+        """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
+        it — how the receiver's other ways of finding a burst's end are measured."""
         self.floor_counts = a.cfg.stated_answers
         """Tone-floor frames carry their count too (ADR-0068: in the middle sync block): with
         stated answers, as the PHY of link protocol 8 sends them."""
-        """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
-        it — how the receiver's other ways of finding a burst's end are measured."""
         """Frames a receiver never detects, preamble or frame: called with the receiver, the
         frame's container and when it started. A fade that lets one kind of frame through and
         not another — the called station's data lost while its control frames arrive — is

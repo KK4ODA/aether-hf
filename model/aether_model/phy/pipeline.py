@@ -98,11 +98,12 @@ class Modem:
         )
 
     def rung_burst(self, payload: bytes, rung: int, rv: int = 0, follows: int = 0) -> ComplexArray:
-        """A DATA frame at a rung of the ladder: a tone-floor kind or an OFDM mode. A tone
-        frame has nowhere to carry the burst countdown and goes without it."""
+        """A DATA frame at a rung of the ladder: a tone-floor kind or an OFDM mode, saying
+        ``follows`` more frames of its burst — a tone frame in its middle sync block, an OFDM
+        frame in its chips (ADR-0068)."""
         r = self.air.ladder[rung]
         if r.tone is not None:
-            return burst(r.tone, payload, rv)
+            return burst(r.tone, payload, rv, min(follows, MAX_FOLLOWS))
         assert r.mode is not None
         return self.data_burst(payload, r.mode, rv, follows)
 
@@ -170,7 +171,7 @@ class Modem:
 
     def decode_tone(self, x: ComplexArray, sync: ToneSync) -> DecodedFrame:
         """Demodulate and decode a tone-floor frame found at ``sync``."""
-        frame = demodulate(x, sync.kind, sync.rv, sync.start, sync.cfo_hz)
+        frame = demodulate(x, sync.kind, sync.rv, sync.start, sync.cfo_hz, middle=sync.middle)
         payload, _ = frame.decode()
         return DecodedFrame(payload, None, None, frame, sync)
 

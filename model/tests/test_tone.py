@@ -44,9 +44,10 @@ def _received(
     seed: int,
     rv: int = 0,
     channel: str = "awgn",
+    follows: int = 0,
 ) -> np.ndarray:
     x = np.concatenate(
-        (np.zeros(lead, complex), T.burst(kind, payload, rv), np.zeros(2000, complex))
+        (np.zeros(lead, complex), T.burst(kind, payload, rv, follows), np.zeros(2000, complex))
     )
     ch = make_channel(
         channel, snr_db=snr_db, fs=kind.num.fs, seed=seed, signal_power=1.0, cfo_hz=cfo_hz
@@ -316,6 +317,86 @@ def test_the_detector_names_kind_rv_start_and_offset(kind: M.ToneKind) -> None:
         assert (s.kind, s.rv) == (kind, rv)
         assert abs(s.start - lead) <= kind.num.symbol_samples // 16
         assert abs(s.cfo_hz - cfo) < 1.0
+
+
+DATA_KINDS = (*M.TONE_DATA, *M.TONE_FAST, *M.TONE_NARROW)
+
+
+def _detector_for(kind: M.ToneKind) -> T.ToneDetector:
+    air = M.NARROW if kind in M.TONE_NARROW else M.WIDE
+    return T.ToneDetector((air.tone_control, *air.tone_data))
+
+
+def test_a_frame_with_nothing_following_is_the_frame_before() -> None:
+    """The count rides in the middle sync block (ADR-0068): a frame that says none follow is
+    the frame sent before it, and a control frame — one pattern — has nowhere to carry one."""
+    rng = np.random.default_rng(3)
+    for kind in DATA_KINDS:
+        for rv in range(len(kind.patterns)):
+            assert np.array_equal(kind.layout(rv, 0), kind.layout(rv))
+            for f in range(1, 4):
+                layout = kind.layout(rv, f)
+                start, mid, end = kind.block_offsets
+                assert np.array_equal(layout[start : start + 8], kind.sync(rv))
+                assert np.array_equal(layout[end : end + 8], kind.sync(rv))
+                assert np.array_equal(layout[mid : mid + 8], kind.sync((rv + f) % 4))
+    payload = _payload(rng, M.TONE_CONTROL)
+    assert np.array_equal(
+        T.burst(M.TONE_CONTROL, payload, 0, 3), T.burst(M.TONE_CONTROL, payload, 0)
+    )
+
+
+@pytest.mark.parametrize("kind", DATA_KINDS, ids=lambda k: k.name)
+def test_a_frame_says_how_many_follow_it(kind: M.ToneKind) -> None:
+    """Every data kind, every redundancy version, every count: the detector names the kind
+    and the redundancy version from the start and end blocks as before, reads the count from
+    the middle one, and a copy at RV 0 decodes."""
+    rng = np.random.default_rng(11)
+    det = _detector_for(kind)
+    for rv in range(len(kind.patterns)):
+        for f in range(4):
+            payload = _payload(rng, kind)
+            lead = int(rng.integers(0, 3000))
+            y = _received(
+                kind,
+                payload,
+                snr_db=-4.0,
+                lead=lead,
+                cfo_hz=float(rng.uniform(-80, 80)),
+                seed=10 * rv + f,
+                rv=rv,
+                follows=f,
+            )
+            syncs = det.detect(y)
+            assert len(syncs) == 1, (rv, f)
+            s = syncs[0]
+            assert (s.kind, s.rv, s.middle, s.follows) == (kind, rv, f, f)
+            if rv == 0:
+                out, _ = T.demodulate(y, kind, rv, s.start, s.cfo_hz, middle=s.middle).decode()
+                assert out == payload
+
+
+def test_a_middle_block_that_is_gone_states_nothing() -> None:
+    """A fade over the middle block takes the count with it, not the frame: it is still found
+    on its start and end blocks and still decodes, and says nothing of what follows — a guess
+    would put the answer at the wrong time."""
+    rng = np.random.default_rng(5)
+    kind = M.TONE_DATA[1]
+    det = _detector_for(kind)
+    payload = _payload(rng, kind)
+    lead = 1500
+    y = _received(kind, payload, snr_db=-2.0, lead=lead, cfo_hz=20.0, seed=4, follows=2)
+    n = kind.num.symbol_samples
+    mid = kind.block_offsets[1]
+    noise = make_channel("awgn", snr_db=-2.0, fs=kind.num.fs, seed=9, signal_power=1.0)
+    span = slice(lead + mid * n, lead + (mid + 8) * n)
+    y[span] = noise.process(np.zeros(span.stop - span.start, complex))
+    syncs = det.detect(y)
+    assert len(syncs) == 1
+    s = syncs[0]
+    assert (s.kind, s.rv, s.follows) == (kind, 0, None)
+    out, _ = T.demodulate(y, kind, 0, s.start, s.cfo_hz, middle=s.middle).decode()
+    assert out == payload
 
 
 @pytest.mark.parametrize("kind", M.TONE_FAST, ids=lambda k: k.name)

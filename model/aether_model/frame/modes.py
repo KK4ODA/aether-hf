@@ -513,11 +513,19 @@ class ToneKind:
     def sync(self, rv: int = 0) -> tuple[int, ...]:
         return SYNC_PATTERNS[self.patterns[rv]]
 
-    def layout(self, rv: int = 0) -> NDArray[np.int64]:
-        """Each slot's role: ``-1`` a data slot, otherwise the sync tone."""
+    def middle_rv(self, rv: int, follows: int) -> int:
+        """The redundancy version whose pattern the middle sync block carries: the frame's own
+        turned by how many frames of its burst follow it (ADR-0068). The start and end blocks
+        keep the frame's own pattern, which names its kind and redundancy version, so its copies
+        still add parity. A kind with one pattern — the control frame — carries no count."""
+        return (rv + follows) % len(self.patterns)
+
+    def layout(self, rv: int = 0, follows: int = 0) -> NDArray[np.int64]:
+        """Each slot's role: ``-1`` a data slot, otherwise the sync tone; the middle block
+        carries ``follows`` (:meth:`middle_rv`)."""
         out = np.full(self.symbols, -1, dtype=np.int64)
-        for o in self.block_offsets:
-            out[o : o + SYNC_SYMBOLS] = self.sync(rv)
+        for i, o in enumerate(self.block_offsets):
+            out[o : o + SYNC_SYMBOLS] = self.sync(self.middle_rv(rv, follows) if i == 1 else rv)
         return out
 
     def data_segments(self) -> tuple[tuple[int, int], ...]:
