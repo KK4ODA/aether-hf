@@ -88,6 +88,48 @@ Start where the two are likely to differ, not where both are trivially fine:
 Add points where a curve bends. Both modems are given the same tries; a session that fails
 to connect is a row with `seconds` empty and the note saying so.
 
+## Step by step, the first evening
+
+1. **Cables.** The configurations use four: VB-Audio's free CABLE and cables A, B and C from
+   its A+B and C+D packs (D is spare). Installing a pack wants a reboot. In Windows Sound, set
+   each one's playback *and* recording side to 48 000 Hz (Properties → Advanced), turn off
+   enhancements and *Listen to this device*, and keep the default playback device on your
+   speakers: a system sound played into a cable goes into the channel.
+2. **Close the installed Aether.** Nothing collides with it, but its daemon costs the machine
+   time the channel needs.
+3. **The tool.** In the checkout: `git pull`, `uv sync --extra audio`, then
+   `uv run python tools\channel_cable.py --list-devices` to see the cables' names.
+4. **The daemons.** Copy `aether-a.toml` and `aether-b.toml` to `C:\Dev\AetherBench\ab\`.
+   Check the device names against `aetherd.exe --list-devices` and fix any that differ. To
+   watch each station's panel, add `ui_dir = 'C:\Users\Facundo\AppData\Local\Aether HF\ui'` under
+   `[control]`; the panels are then at `http://127.0.0.1:8615/` and `:8616`. Start each in its
+   own window from the bench folder:
+   `& "C:\Users\Facundo\AppData\Local\Aether HF\aetherd.exe" --config aether-a.toml` (and `-b`).
+5. **The host program.** Two scratch Winlink Express copies under `C:\Dev\AetherBench\`, one
+   `KK4ODA`, one `WD5EMA` (it proposes nothing to an SSID). Each: a *Vara HF P2P* session on
+   127.0.0.1 at port 8400 (A) or 8420 (B), set before its session window is first opened; the
+   TNC path filled in and auto-launch unticked; bandwidth **2300** in the session window (at
+   2750 VARA would run wider than Aether can); any centre frequency; no rig control. The
+   message: one P2P message from A to B with the same 6 000-byte random `.dat` attachment
+   every run (`.bin` is refused). Make it once in PowerShell:
+   `$b = [byte[]]::new(6000); [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [IO.File]::WriteAllBytes('C:\Dev\AetherBench\ab\random6000.dat', $b)`.
+6. **VARA.** Two copies in their own folders. Give them the same cables as the Aether
+   stations (A: input CABLE-C Output, output CABLE Input; B: input CABLE-A Output, output
+   CABLE-B Input), PTT none, and TCP command ports 8400 (A) and 8420 (B), so Winlink Express
+   needs no change between modems. Check that *both* show registered before the first run.
+7. **Wiring check.** Aether's daemons up, then
+   `uv run python tools\channel_cable.py --a-tx "CABLE Output" --b-rx "CABLE-A Input" --b-tx "CABLE-B Output" --a-rx "CABLE-C Input" --channel awgn --snr 20 --auto-level`.
+   Send the message. Each panel's SNR should read about 20 dB on OFDM frames.
+8. **A point.** Stop the tool, start it at the point (`--channel good --snr 8`, with
+   `--log bench\ab\logs\good_8_aether.csv`), send the message, and take *connected* to
+   *disconnected* from Winlink Express's session window. Then stop the daemons, start the VARA
+   copies, and run the same point the same way. Alternate which modem goes first from point to
+   point. A run whose tool printout shows over/under counts above zero is the machine falling
+   behind: run it again.
+9. **Write it down.** One row per run in `results.csv`; `bytes` is the attachment's 6 000 for
+   both modems (Winlink Express's own byte count goes in the note); `level` is `auto`. Then
+   `uv run python tools\ab_summary.py`.
+
 ## The results
 
 `results.csv`: `date, modem, version, profile, snr_db, level, bytes, seconds, goodput_bps,
