@@ -12,6 +12,13 @@ never reached WC4Y. His audio holds nothing in the 6.4 s he listened after his r
 (the passband within a decibel of the noise), he sent the burst again, and #7 acknowledged all
 four frames. So #6 was keyed while WC4Y was transmitting — over his burst or over his resend.
 
+**Corrected the same day, from KK4ODA-1's side of the session:** #6 was not keyed over him. It
+went 0.35 s after his release, an *ordinary* acknowledgement to the ladder's first OFDM burst,
+to a station that had read this one's floor acknowledgements at −7.8 and −9.2 dB — under the
+500 Hz ordinary control frame's −6 dB threshold — and his receiver never detected it. That is the
+answer's family, not a phantom (ADR-0068 §2). The harness's phantoms below are real, and this
+decision stands on them.
+
 `bench/scenarios/80m-floor-top-start-500` puts the two stations on that path (Moderate, −3 dB
 one way, −9 the other). Three seeds on beta.105 had three collisions, all of one kind:
 
@@ -65,9 +72,10 @@ The harness A/B is in ADR-0066 §3, which changed the same sessions' start.
 `a_phantom_over_the_end_of_a_floor_burst_does_not_hold_its_answer` in the port, and
 `an_abort_waits_out_a_frame_heard_arriving` in the daemon (which fails without the hold).
 
-## 4. Not known
+## 4. What KK4ODA-1's side said
 
-Whether #6 on 2026-10-11 was this. KK4ODA-1's side of the session would say: the sidecar's `ptt`
-events and frames around 15:54:33–15:54:46Z. Its first rung-4 frame began 0.1 s after
-KK4ODA-1's acknowledgement #5 ended, inside the 0.75 s its busy detector ignores after a release,
-where a phantom is likeliest.
+Whether #6 on 2026-10-11 was this: no (§1). The phantom's other face was there, though: the
+session's last answer went 2.46 s after the last tone frame's end, held by an ordinary detection
+0.32 s after that end (acquisition 1.07, failed at −12.6 dB) that the daemon heeded as a
+follow-on (ADR-0040). This decision keeps the failed frame out of the burst; the announcement
+alone still holds an answer to the phantom's end, which ADR-0068 retires.
