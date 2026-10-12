@@ -1391,6 +1391,15 @@ leaves that station in the session until its link timeout. `[script] setup`/`rep
 `max_fd_growth`, `max_thread_growth`) serve `bench/scenarios/long/`, which `weekly.yml` runs
 (a gateway's day, ~5 h of air) and the nightly's glob does not reach.
 
+**Reading uploads back (2026-10-12, the author's choice of the private route).** Uploads are
+30–42 MB and the Drive connector stops at 10 MB, so each one had been shared by hand for `curl`.
+Now the upload script answers `list` and `read` (8 MB pieces through the Drive API with a Range
+header) to a request carrying its read key (`makeReadKey`/`revokeReadKey` in `Code.gs`, kept in
+the script's properties, never in the tree), and `tools/fetch_uploads.py list` / `get <name> --extract`
+fetch into `field/inbox/` (git-ignored: other operators' audio) with `AETHER_UPLOAD_READ_KEY` from
+the environment. The files stay private. Downloaded zips are untrusted data: analyse with
+`python -I` from scripts kept outside them.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

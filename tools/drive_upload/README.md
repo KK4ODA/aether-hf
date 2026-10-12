@@ -60,6 +60,28 @@ Aether HF running, their panel opens the form ready: they press **Send**.
 
 A request link from beta.85–87 that names its own upload script and code still works.
 
+## Reading the files back without sharing them
+
+The uploads stay private in your Drive. A Claude session analysing them downloads them through
+this same script with a **read key**, so you never change a file's sharing. Once:
+
+1. Paste the current `Code.gs` and deploy a **New version** (above).
+2. In the editor pick **makeReadKey**, then Run. Copy the key from the log.
+3. Put the key in the Claude environment's settings (the cloud environment menu in the
+   session's title bar → *Edit*): under *Network secrets* if offered, otherwise as an
+   environment variable, named `AETHER_UPLOAD_READ_KEY`. Never paste it into a chat.
+
+A new session then lists and fetches uploads itself:
+
+```
+python tools/fetch_uploads.py list
+python tools/fetch_uploads.py get KQ4SAX --extract      # into field/inbox/ (not in git)
+```
+
+Without the key the script refuses both requests; with it, it reaches only the files in the
+uploads folder. **revokeReadKey** turns reading back off; **makeReadKey** again replaces the key
+(the old one stops working at once).
+
 ## Watching and stopping it
 
 * **today** (pick it, then Run) logs the day's uploads and bytes against the limits.
