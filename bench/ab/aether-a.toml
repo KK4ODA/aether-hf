@@ -1,0 +1,37 @@
+# P9-1 bench, station A — the caller: transmits into C1, receives from C4.
+# bench/ab/README.md says how the four cables are wired. Copy the device names exactly as
+# `aetherd --list-devices` prints them; the ones below are VB-Audio's usual names.
+schema_version = 11
+callsign = "KK4ODA"
+
+[audio]
+input = "CABLE-C Output (VB-Audio Cable C)"
+output = "CABLE Input (VB-Audio Virtual Cable)"
+sample_rate = 48000
+tx_level = 0.25            # -15 dBFS RMS: the cable tool's --signal-dbfs -15 (or run --auto-level)
+
+[ptt]
+kind = "none"              # nothing to key: the cables carry the audio
+
+[radio]
+bandwidth = 2300           # 500 for the narrow grid
+wait_for_clear = false
+
+[control]
+enabled = true
+bind = "127.0.0.1:8615"   # this station's control API (and panel, with ui_dir set)
+
+[host]
+enabled = true
+bind = "127.0.0.1:8400"   # Winlink Express's VARA HF port for this station (data port 8401)
+
+[record]
+auto = true                # a sidecar and audio of every session, for the analysis
+dir = 'C:\Dev\AetherBench\ab\a-recordings'
+send_to_project = false    # bench sessions are not field sessions
+
+[update]
+check = false
+
+[regulatory]
+profile = "none"           # nothing radiates: the operator's word that no rules apply here

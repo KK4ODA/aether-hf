@@ -35,10 +35,20 @@ and the SNR is the number the rest of this repository means by SNR.
   Phase 6 bench's), each with its own callsign, each pointed at its modem's TCP port. The
   same message goes through both modems: a P2P message with a 6 kB incompressible
   attachment, or whatever fixed size you settle on, the same for every run.
-* **Two instances of each modem.** Aether: two `aetherd` daemons with `[ptt] kind = "none"`,
-  `[radio] wait_for_clear = false`, the host adapter on 8300 and 8320, audio devices C4/C1
-  for A and C2/C3 for B. VARA: two copies, PTT none, the same devices, their TCP ports set
-  in Winlink Express. Nothing keys a radio; the cables carry the audio.
+* **Two instances of each modem.** Aether: two `aetherd` daemons from
+  [`aether-a.toml`](aether-a.toml) and [`aether-b.toml`](aether-b.toml) — `[ptt] kind =
+  "none"`, `[radio] wait_for_clear = false`, audio devices C4/C1 for A and C2/C3 for B, the
+  host adapter on 8400 and 8420 and the control API on 8615 and 8616 (clear of an installed
+  station's 8300 and 8515), `[regulatory] profile = "none"` (nothing radiates), and
+  `[record] send_to_project = false` so bench sessions are not uploaded as field sessions.
+  Copy them to a bench folder (`C:\Dev\AetherBench\ab\`) and run them there: a daemon writes
+  its profiles and history beside its configuration. VARA: two copies, PTT none, the same
+  devices, their TCP ports set in Winlink Express; both registered, as an unregistered VARA HF
+  is limited in speed. Nothing keys a radio; the cables carry the audio.
+* **A wiring check first**: Aether to Aether through the tool at `--channel awgn --snr 20`.
+  The session's OFDM frames should read about 20 dB in each daemon's sidecar (tone frames read
+  lower: their estimate tops out near 17 dB); none, or a reading far off, means a cable crossed
+  or a level wrong.
 * `uv sync --extra audio` once, for the tool's sound-card library.
 
 ## Levels
