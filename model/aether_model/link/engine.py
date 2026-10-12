@@ -537,9 +537,6 @@ class LinkEngine:
         self._carrier_until = 0.0
         """Under stated answers, the end of the latest frame heard arriving: no answer waits for
         it, but nothing this station starts on its own goes over it (ADR-0068)."""
-        """The answer's time as the burst being received states it (ADR-0068): the rank of
-        the statement (1 for a decoded frame's count, 0 for a trusted one's), the start of the
-        frame that made it, and the time the answer is due."""
         self._arriving: list[tuple[float, float]] = []
         """Frames of the burst announced by their preambles and not yet reported, as (start,
         end): the burst is not over before they are (ADR-0061)."""
@@ -981,6 +978,7 @@ class LinkEngine:
             self._control_floor()
             or (kind is ControlKind.ACK and self._acks_on_floor)
             or (self.cfg.stated_answers and self._heard_weakly())
+            or (self.cfg.stated_answers and kind is ControlKind.TURN and self._turn_silences())
         )
         return TxFrame(Container.CONTROL, payload, floor=floor)
 
@@ -1001,12 +999,21 @@ class LinkEngine:
             < self._ordinary_control_threshold() + self.cfg.answer_floor_margin_db
         )
 
-    def _answer_s(self) -> float:
-        """The longest an answer to this station can be (ADR-0068): the floor's control frame on
-        an air that has one. Which family the other station answers in rests on its view — a
-        report, a lost acknowledgement it noticed — and a wait too short for its answer sends
-        again over it; one too long costs time only when the answer is lost."""
-        return max(self.timing.control_frame_s_for(f) for f in (False, True))
+    def _answer_s(self, floor: bool | None = None) -> float:
+        """How much of an answer to this station to wait for (ADR-0068). The other station
+        answers on the floor when what it answers went there, when it has been answering there
+        (a report, a lost acknowledgement it noticed: ``floor``), or on its own first switch,
+        which this station cannot see coming. Waited for in full, a floor answer costs 3.2 s a
+        lost answer or unread burst even when the answer would have been ordinary — 8–23 % on a
+        chat line's latency at 0 dB on the fading classes. So an ordinary answer is waited for
+        only until a floor one would have been announced, and the wait runs on past a frame
+        heard arriving (:meth:`on_preamble`); a PHY that announces nothing gets the floor's
+        whole length. ``None``: either family, in full."""
+        t = self.timing
+        longest = max(t.control_frame_s_for(f) for f in (False, True))
+        if floor is None or floor or t.floor_preamble_detect_s is None:
+            return longest
+        return min(longest, max(t.control_frame_s_for(False), t.floor_preamble_detect_s))
 
     def _slot_s(self, floor: bool) -> float:
         """A data frame's air time in the given family: the slot a count is in."""
@@ -1097,7 +1104,7 @@ class LinkEngine:
         floor = (
             self._peer_floor
             or self.timing.is_floor(self._burst_mode())
-            or heard_s > self.timing.data_frame_s_for(self._robust_mode(False))
+            or heard_s > self.timing.data_frame_s
         )
         return (
             # in bursts of the configured length, not ADR-0068's four: shorter bursts are no
@@ -1235,7 +1242,7 @@ class LinkEngine:
         if self.cfg.stated_answers:
             # a poll that is not read is not answered (ADR-0068): its answer, if any, comes a
             # turnaround after it
-            self._wait_for("poll", self._answer_s())
+            self._wait_for("poll", self._answer_s(poll.floor or self._peer_floor))
             return
         self._wait_for("poll", self._reply_control_s(), self._unread_poll_delay())
 
@@ -1278,6 +1285,15 @@ class LinkEngine:
         )
         self._wait_for("turn", longest)
         self.actions.append(Event("role", "irs"))
+
+    def _turn_silences(self) -> bool:
+        """Whether this TURN follows :attr:`LinkConfig.poll_silences` unanswered ones in a row,
+        and so goes on the floor (ADR-0068), as a poll steps down from its second silence
+        (ADR-0030 §3). On the chat bench (500 Hz, ITU Poor, 0 dB) a sender offered the turn in
+        three ordinary TURNs, none was read, and the session timed out with lines waiting.
+        Following the other station's last frame onto the floor instead put every poll and turn
+        there after a floor acknowledgement: lines 7 % slower, 8 % more keyed."""
+        return self._turn_tries > self.cfg.poll_silences
 
     def _turn_offers(self) -> int:
         """How many TURNs go out before this station takes the turn back (ADR-0029).
@@ -1749,7 +1765,7 @@ class LinkEngine:
             late = 0.0
             if offer:
                 late = frame_s - self.timing.control_frame_s_for(False)
-            self._wait_for("ack", self._answer_s(), max(0.0, late))
+            self._wait_for("ack", self._answer_s(bool(family) or self._peer_floor), max(0.0, late))
             return
         # the IRS's quiet after this burst: its family, and the longest frame it will expect
         # — this burst's, or the mode it recommended, as its own _peer_data_frame_s has it

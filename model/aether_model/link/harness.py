@@ -200,7 +200,7 @@ class PhyBridge:
                 self.overrun += 1
                 return None
             self.detected += 1
-            soft = tone.demodulate(y, ts.kind, ts.rv, ts.start, ts.cfo_hz)
+            soft = tone.demodulate(y, ts.kind, ts.rv, ts.start, ts.cfo_hz, middle=ts.middle)
             air = self.modem.air
             return RealSoftFrame(
                 container=Container.CONTROL if ts.kind.control else Container.DATA,
@@ -211,6 +211,7 @@ class PhyBridge:
                 t_end=t_end,
                 floor=True,
                 _decode=soft.decode,
+                follows=None if ts.kind.control else ts.follows,
             )
         syncs = self.modem.detector.detect(y, max_frames=1)
         if not syncs:

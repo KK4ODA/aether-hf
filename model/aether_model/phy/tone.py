@@ -38,7 +38,7 @@ symbols a slot, at 50 or 100 Bd on tones 50 or 100 Hz apart, so the data spreads
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 
 import numpy as np
@@ -122,12 +122,12 @@ def cpfsk(
 
 
 def frame_symbols(
-    kind: ToneKind, data: IntArray, rv: int = 0
+    kind: ToneKind, data: IntArray, rv: int = 0, follows: int = 0
 ) -> tuple[IntArray, NDArray[np.bool_]]:
     """The whole frame's tones in time order, and which of them are sync symbols: a sync
     slot is one symbol at the sync numerology, a data slot :attr:`ToneKind.speed` symbols at
-    the data's."""
-    layout = kind.layout(rv)
+    the data's. The middle sync block says how many frames follow (ADR-0068)."""
+    layout = kind.layout(rv, follows)
     sync = layout >= 0
     is_sync = np.repeat(sync, np.where(sync, 1, kind.speed))
     tones = np.empty(len(is_sync), dtype=np.int64)
@@ -136,9 +136,9 @@ def frame_symbols(
     return tones, is_sync
 
 
-def frame_tones(kind: ToneKind, data: IntArray, rv: int = 0) -> IntArray:
+def frame_tones(kind: ToneKind, data: IntArray, rv: int = 0, follows: int = 0) -> IntArray:
     """The whole frame's tones: the sync blocks with the data between them."""
-    return frame_symbols(kind, data, rv)[0]
+    return frame_symbols(kind, data, rv, follows)[0]
 
 
 def modulate_frame(
@@ -154,9 +154,10 @@ def modulate_frame(
     return cpfsk(hz, lengths, ramps, s.fs, edge=s.edge_samples, gain_db=gain_db)
 
 
-def burst(kind: ToneKind, payload: bytes, rv: int = 0) -> ComplexArray:
-    """A frame as the transmitter sends it: at :data:`TONE_GAIN_DB` above an OFDM frame."""
-    tones, is_sync = frame_symbols(kind, tone_codec(kind).encode(payload, rv), rv)
+def burst(kind: ToneKind, payload: bytes, rv: int = 0, follows: int = 0) -> ComplexArray:
+    """A frame as the transmitter sends it: at :data:`TONE_GAIN_DB` above an OFDM frame,
+    saying ``follows`` more frames of its burst (ADR-0068; none is the frame before it)."""
+    tones, is_sync = frame_symbols(kind, tone_codec(kind).encode(payload, rv), rv, follows)
     return modulate_frame(kind, tones, is_sync, TONE_GAIN_DB)
 
 
@@ -271,10 +272,11 @@ def sync_noise(energies: FloatArray, layout: IntArray, kind: ToneKind) -> float:
     return noise_level(energies[known], layout[known])
 
 
-def _block_hits(e: FloatArray, kind: ToneKind, rv: int) -> list[int]:
+def _block_hits(e: FloatArray, kind: ToneKind, rv: int, middle: int = 0) -> list[int]:
     """Per sync block, the symbols whose own tone is the strongest of the slot's energies
-    ``e`` (a frame's, at the sync numerology); a silent symbol is no hit."""
-    layout = kind.layout(rv)
+    ``e`` (a frame's, at the sync numerology); a silent symbol is no hit. ``middle`` is the
+    count the middle block is read with."""
+    layout = kind.layout(rv, middle)
     out = []
     for o in kind.block_offsets:
         rows = e[o : o + SYNC_SYMBOLS]
@@ -313,9 +315,12 @@ class ToneFrame:
         return tone_codec(self.kind).decode(self.llr, self.rv, buffer)
 
 
-def demodulate(x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo_hz: float) -> ToneFrame:
-    """Soft bits and SNR of a frame of ``kind`` at a known start and carrier offset."""
-    layout = kind.layout(rv)
+def demodulate(
+    x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo_hz: float, *, middle: int = 0
+) -> ToneFrame:
+    """Soft bits and SNR of a frame of ``kind`` at a known start and carrier offset, its
+    middle sync block read with the count ``middle``."""
+    layout = kind.layout(rv, middle)
     energies = tone_energies(x, start, cfo_hz, kind.symbols, kind.num)
     noise = sync_noise(energies, layout, kind)
     if kind.speed == 1:
@@ -347,6 +352,13 @@ class ToneSync:
     rv: int
     statistic: float
     """Mean normalised energy of the 24 sync tones: 1 on noise, 1 + Es/N0 on a frame."""
+    middle: int = 0
+    """The count the middle sync block reads best as: its pattern is the kind's for redundancy
+    version ``rv + middle`` (ADR-0068). What the frame's sync tones are taken to be."""
+    follows: int | None = 0
+    """How many frames of its burst follow this one, when the middle block says so clearly
+    (:meth:`ToneDetector.read_middle`); ``None`` when it does not — a faded block states
+    nothing. A control frame's count is in its body: 0 here."""
 
 
 MAX_CFO_HZ = 150.0
@@ -407,6 +419,13 @@ class ToneDetector:
     up two of its blocks (:attr:`~aether_model.frame.modes.ToneKind.block_offsets`), and a
     ghost is contradicted in every block, so two clean blocks are a frame's alone."""
 
+    COUNT_HITS = 5
+    """Hits the middle block needs under one count for the frame to state it (ADR-0068)."""
+    COUNT_MARGIN = 3
+    """And by how many hits it must beat every other count. A kind's four patterns share at
+    most two symbols in a slot, so a whole block reads eight against two; a count read under
+    these is no count — ``None``, which states nothing — rather than a guess."""
+
     def __init__(
         self,
         kinds: tuple[ToneKind, ...] = (TONE_CONTROL, *TONE_DATA, *TONE_FAST),
@@ -464,15 +483,26 @@ class ToneDetector:
         best = np.full(len(r), -np.inf)
         best_h = np.zeros(len(r), dtype=np.int64)
         best_c = np.zeros(len(r), dtype=np.int64)
+        middles: dict[str, FloatArray] = {}
         for h, (kind, rv) in enumerate(self.hypotheses):
             size = len(r) - q * (kind.symbols - 1)
             if size <= 0:
                 continue
-            acc = np.zeros((size, width))
-            for o in kind.block_offsets:
-                for i, tone in enumerate(kind.sync(rv)):
+
+            def block(o: int, pattern: tuple[int, ...], size: int = size) -> FloatArray:
+                out = np.zeros((size, width))
+                for i, tone in enumerate(pattern):
                     row = q * (o + i)
-                    acc += r[row : row + size, tone, :]
+                    out += r[row : row + size, tone, :]
+                return out
+
+            start, mid, end = kind.block_offsets
+            if kind.name not in middles:
+                # the middle block carries the count: the best of the kind's patterns there
+                middles[kind.name] = np.stack(
+                    [block(mid, kind.sync(p)) for p in range(len(kind.patterns))]
+                ).max(axis=0)
+            acc = block(start, kind.sync(rv)) + middles[kind.name] + block(end, kind.sync(rv))
             acc /= 3 * SYNC_SYMBOLS
             c = acc.argmax(axis=1)
             v = acc[np.arange(size), c]
@@ -509,18 +539,42 @@ class ToneDetector:
         return sorted(found, key=lambda s: s.start)
 
     def block_hits(
-        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float
+        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float, *, middle: int = 0
     ) -> list[int]:
         """Per sync block, the symbols of a frame placed at ``start``/``cfo`` whose own tone
         is the strongest of the sixteen. A symbol with no energy at all is no evidence: a
         receiver hears exact silence only while it is muted — its own transmission — and
         there every tone ties."""
-        return _block_hits(tone_energies(x, start, cfo, kind.symbols, kind.num), kind, rv)
+        e = tone_energies(x, start, cfo, kind.symbols, kind.num)
+        return _block_hits(e, kind, rv, middle)
 
-    def sync_hits(self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float) -> int:
+    def sync_hits(
+        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float, *, middle: int = 0
+    ) -> int:
         """Sync symbols of a frame placed at ``start``/``cfo`` whose own tone is the strongest
         of the sixteen (:meth:`block_hits`, summed)."""
-        return sum(self.block_hits(x, kind, rv, start, cfo))
+        return sum(self.block_hits(x, kind, rv, start, cfo, middle=middle))
+
+    def read_middle(self, e: FloatArray, kind: ToneKind, rv: int) -> tuple[int, int | None]:
+        """The count a frame's middle sync block reads best as, and the count it states — the
+        same when :attr:`COUNT_HITS` of its eight symbols have that count's tone strongest and
+        no other count comes within :attr:`COUNT_MARGIN`, ``None`` otherwise (ADR-0068). ``e``
+        is the frame's energies at the sync numerology."""
+        n = len(kind.patterns)
+        if n == 1:
+            return 0, 0
+        o = kind.block_offsets[1]
+        rows = e[o : o + SYNC_SYMBOLS]
+        top = rows.argmax(axis=1)
+        live = rows.max(axis=1) > 0
+        hits = [
+            int(np.sum((top == np.asarray(kind.sync(kind.middle_rv(rv, f)))) & live))
+            for f in range(n)
+        ]
+        best = int(np.argmax(hits))
+        rest = max(h for f, h in enumerate(hits) if f != best)
+        clear = hits[best] >= self.COUNT_HITS and hits[best] - rest >= self.COUNT_MARGIN
+        return best, (best if clear else None)
 
     def confirmed(self, x: ComplexArray, sync: ToneSync) -> bool:
         """Whether a refined candidate is a frame: at least :attr:`MIN_HITS` of its 24 sync
@@ -536,11 +590,11 @@ class ToneDetector:
         it does not name matches half its symbols and is contradicted in the rest."""
         kind = sync.kind
         e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
-        blocks = _block_hits(e, kind, sync.rv)
+        blocks = _block_hits(e, kind, sync.rv, sync.middle)
         hits = sorted(blocks)
         if sum(hits) < self.MIN_HITS or hits[-2] < self.MIN_BLOCK_HITS:
             return False
-        against = self._block_contradictions(e, kind, sync.rv)
+        against = self._block_contradictions(e, kind, sync.rv, sync.middle)
         if sum(against) <= self.MAX_CONTRADICTIONS:
             return True
         # a frame spoiled in one block — a slip or a burst of interference over it — still
@@ -555,14 +609,16 @@ class ToneDetector:
         contradicts nothing."""
         kind = sync.kind
         e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
-        return self._contradictions(e, kind, sync.rv)
+        return self._contradictions(e, kind, sync.rv, sync.middle)
 
-    def _contradictions(self, e: FloatArray, kind: ToneKind, rv: int) -> int:
-        return sum(self._block_contradictions(e, kind, rv))
+    def _contradictions(self, e: FloatArray, kind: ToneKind, rv: int, middle: int = 0) -> int:
+        return sum(self._block_contradictions(e, kind, rv, middle))
 
-    def _block_contradictions(self, e: FloatArray, kind: ToneKind, rv: int) -> list[int]:
+    def _block_contradictions(
+        self, e: FloatArray, kind: ToneKind, rv: int, middle: int = 0
+    ) -> list[int]:
         """:meth:`contradictions`, per sync block (start, middle, end)."""
-        layout = kind.layout(rv)
+        layout = kind.layout(rv, middle)
         idx = np.flatnonzero(layout >= 0)
         rows = e[idx]
         top = rows.argmax(axis=1)
@@ -574,16 +630,23 @@ class ToneDetector:
         return [int(n) for n in per_block.sum(axis=1)]
 
     def sync_statistic(
-        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float
+        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float, *, middle: int = 0
     ) -> float:
         """Mean normalised energy of the sync tones of a frame placed at ``start``/``cfo``."""
-        layout = kind.layout(rv)
+        layout = kind.layout(rv, middle)
         e = tone_energies(x, start, cfo, kind.symbols, kind.num)
         idx = np.flatnonzero(layout >= 0)
         return float(np.mean(e[idx, layout[idx]])) / sync_noise(e, layout, kind)
 
     def sync_energies(
-        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfos: FloatArray
+        self,
+        x: ComplexArray,
+        kind: ToneKind,
+        rv: int,
+        start: int,
+        cfos: FloatArray,
+        *,
+        middle: int = 0,
     ) -> FloatArray:
         """Mean energy of the 24 sync tones alone at ``start`` for each offset in ``cfos`` —
         unclipped and un-normalised, which is what a refinement at one noise level
@@ -592,7 +655,7 @@ class ToneDetector:
         if start < 0 or start + kind.samples > len(x):
             return np.full(len(cfos), -np.inf)
         n = self.num.symbol_samples
-        layout = kind.layout(rv)
+        layout = kind.layout(rv, middle)
         idx = np.flatnonzero(layout >= 0)
         seg = np.asarray(x[start : start + kind.samples], np.complex128).reshape(kind.symbols, n)
         t = np.arange(n) / self.num.fs
@@ -606,21 +669,25 @@ class ToneDetector:
         maximised is flat across a strong frame's neighbourhood, so its peak is only good to
         that — then to the sample and a fraction of a hertz. A strong frame read a few
         samples off smears the neighbouring symbol's tone over every bin, and the noise
-        estimate with it."""
+        estimate with it. The middle block is read where the search put the frame, and again
+        where the refinement does: the count it carries decides which tones are the frame's
+        (ADR-0068)."""
+        m = self._middle_at(x, kind, rv, start, cfo)[0]
         half = self.hop // 2
         cfos = cfo + self.bin_hz * np.arange(-2.0, 2.01, 0.5)
         starts = [start + k * half for k in range(-4, 5)]
-        grid = np.array([self.sync_energies(x, kind, rv, s, cfos) for s in starts])
+        grid = np.array([self.sync_energies(x, kind, rv, s, cfos, middle=m) for s in starts])
         i, j = np.unravel_index(int(np.argmax(grid)), grid.shape)
         start, cfo = starts[int(i)], float(cfos[int(j)])
         starts = list(range(start - half, start + half + 1, 4))
-        values = [float(self.sync_energies(x, kind, rv, s, np.array([cfo]))[0]) for s in starts]
+        one = np.array([cfo])
+        values = [float(self.sync_energies(x, kind, rv, s, one, middle=m)[0]) for s in starts]
         start = starts[int(np.argmax(values))]
         starts = list(range(start - 3, start + 4))
-        values = [float(self.sync_energies(x, kind, rv, s, np.array([cfo]))[0]) for s in starts]
+        values = [float(self.sync_energies(x, kind, rv, s, one, middle=m)[0]) for s in starts]
         start = starts[int(np.argmax(values))]
         offsets = cfo + self.bin_hz * np.linspace(-0.5, 0.5, 21)
-        energy = self.sync_energies(x, kind, rv, start, offsets)
+        energy = self.sync_energies(x, kind, rv, start, offsets, middle=m)
         k = int(np.argmax(energy))
         cfo = float(offsets[k])
         if 0 < k < len(offsets) - 1:
@@ -628,7 +695,18 @@ class ToneDetector:
             denom = a - 2 * b + c
             if denom < 0:
                 cfo += 0.5 * (a - c) / denom * (offsets[1] - offsets[0])
-        return ToneSync(start, cfo, kind, rv, self.sync_statistic(x, kind, rv, start, cfo))
+        m, follows = self._middle_at(x, kind, rv, start, cfo)
+        statistic = self.sync_statistic(x, kind, rv, start, cfo, middle=m)
+        return ToneSync(start, cfo, kind, rv, statistic, m, follows)
+
+    def _middle_at(
+        self, x: ComplexArray, kind: ToneKind, rv: int, start: int, cfo: float
+    ) -> tuple[int, int | None]:
+        """:meth:`read_middle` for a frame placed at ``start``/``cfo``; nothing to read where
+        the frame would leave the buffer."""
+        if len(kind.patterns) == 1 or start < 0 or start + kind.samples > len(x):
+            return 0, 0
+        return self.read_middle(tone_energies(x, start, cfo, kind.symbols, kind.num), kind, rv)
 
 
 # ── streaming ──────────────────────────────────────────────────────────
@@ -770,14 +848,28 @@ class ToneStream:
         strongest in their symbols (see :meth:`ToneDetector.confirmed`)."""
         q = self.det.HOP_DIV
         best = (-np.inf, 0, 0)
+        middles: dict[str, FloatArray] = {}
+
+        def block(o: int, pattern: tuple[int, ...]) -> FloatArray:
+            out = np.zeros(2 * self.det.cfo_bins + 1)
+            for j, tone in enumerate(pattern):
+                out += self._rows[h + q * (o + j)][tone]
+            return out
+
         for i in hypotheses:
             kind, rv = self.det.hypotheses[i]
-            blocks = kind.block_offsets[:1] if first_only else kind.block_offsets
-            acc = np.zeros(2 * self.det.cfo_bins + 1)
-            for o in blocks:
-                for j, tone in enumerate(kind.sync(rv)):
-                    acc += self._rows[h + q * (o + j)][tone]
-            acc /= len(blocks) * SYNC_SYMBOLS
+            if first_only:
+                acc = block(kind.block_offsets[0], kind.sync(rv)) / SYNC_SYMBOLS
+            else:
+                start, mid, end = kind.block_offsets
+                if kind.name not in middles:
+                    # the middle block carries the count (ADR-0068): the best of the kind's
+                    # patterns there, as the detector's own search has it
+                    middles[kind.name] = np.stack(
+                        [block(mid, kind.sync(p)) for p in range(len(kind.patterns))]
+                    ).max(axis=0)
+                acc = block(start, kind.sync(rv)) + middles[kind.name] + block(end, kind.sync(rv))
+                acc /= 3 * SYNC_SYMBOLS
             c = int(np.argmax(acc))
             if acc[c] <= best[0]:
                 continue
@@ -814,7 +906,7 @@ class ToneStream:
             sync = self.det.refine(buf, kind, rv, start - abs0, c * self.det.bin_hz)
             if not self.det.confirmed(buf, sync):
                 continue
-            sync = ToneSync(sync.start + abs0, sync.cfo_hz, kind, rv, sync.statistic)
+            sync = replace(sync, start=sync.start + abs0)
             self._taken = [*self._taken, (sync.start, sync.start + kind.samples, v)][-16:]
             found.append(sync)
         self._candidates = keep
