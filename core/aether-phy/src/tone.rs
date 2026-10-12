@@ -1574,6 +1574,9 @@ pub struct ToneStream {
     taken: std::collections::VecDeque<(usize, usize, f64)>,
     /// Frames announced and not yet final.
     pub arriving: Vec<ToneArrival>,
+    /// Announcements whose frame has just ended untaken: their end block, which repeats their
+    /// first, is read a moment after the frame ends (ADR-0067).
+    lapsed: Vec<ToneArrival>,
 }
 
 impl std::fmt::Debug for ToneStream {
@@ -1624,6 +1627,7 @@ impl ToneStream {
             firsts: Vec::new(),
             taken: std::collections::VecDeque::new(),
             arriving: Vec::new(),
+            lapsed: Vec::new(),
         }
     }
 
@@ -1816,10 +1820,14 @@ impl ToneStream {
             };
             // inside a frame already arriving: its own middle or end sync block, which repeats
             // the first, or a weaker reading than it — never a frame of its own, in a
-            // half-duplex burst
+            // half-duplex burst. A frame that never confirmed is still one: its end block is
+            // read once the frame has ended and its announcement lapsed, and announced as a
+            // frame it held the acknowledgement a whole frame for nothing (the scenario
+            // harness, 20 m across the auroral zone; ADR-0067)
             if self
                 .arriving
                 .iter()
+                .chain(&self.lapsed)
                 .any(|a| inside(a) && (Self::own_block(a, start) || v <= a.statistic))
             {
                 continue;
@@ -1836,6 +1844,15 @@ impl ToneStream {
         self.firsts = keep;
         // an announcement lasts until its frame is taken or its end has passed
         let now = self.next_hop.max(0) as usize * hop;
+        let grace = 2 * SYNC_SYMBOLS * TONE.symbol_samples;
+        let ended: Vec<ToneArrival> = self
+            .arriving
+            .iter()
+            .filter(|a| a.end() + hop <= now)
+            .copied()
+            .collect();
+        self.lapsed.extend(ended);
+        self.lapsed.retain(|a| a.end() + grace > now);
         let arriving = std::mem::take(&mut self.arriving);
         self.arriving = arriving
             .into_iter()
@@ -2215,6 +2232,49 @@ mod tests {
             (state as f64 / u64::MAX as f64 - 0.5) * 2.0 * scale
         };
         (0..n).map(|_| (next(), next())).collect()
+    }
+
+    #[test]
+    fn an_unconfirmed_frames_end_block_is_not_announced_as_a_frame() {
+        // the scenario harness, 20 m across the auroral zone (ADR-0067): a frame the Doppler
+        // spread kept from being confirmed was announced at its start, and its end block, its
+        // first block repeated, was announced as a frame of its own once the frame had ended
+        // and its announcement lapsed; the answer waited a whole frame for nothing
+        for kind in [&data_kinds()[0], control_kind()] {
+            let mut stream = ToneStream::new();
+            let (n, hop) = (TONE.symbol_samples, stream.det.hop());
+            let lookahead = TONE.announce_lookahead as i64;
+            let i = stream
+                .det
+                .hypotheses()
+                .iter()
+                .position(|(k, rv)| k.name == kind.name && *rv == 0)
+                .expect("a hypothesis");
+            let start = 20_000;
+            stream.arriving.push(ToneArrival {
+                start,
+                kind,
+                rv: 0,
+                statistic: 10.0,
+            });
+            let end = start + kind.samples();
+            // the frame ends untaken: its announcement lapses
+            stream.next_hop = ((end + 2 * hop) / hop) as i64;
+            stream.announce();
+            assert!(stream.arriving.is_empty(), "{}", kind.name);
+            // its end block read as a first block, stronger than the announcement was
+            let h = ((start + kind.block_offsets()[2] * n) / hop) as i64;
+            stream.firsts = vec![(h, 12.0, i, 0)];
+            stream.next_first = h + lookahead + 1;
+            stream.announce();
+            assert!(stream.arriving.is_empty(), "{}: announced", kind.name);
+            // the next frame of a burst, at the frame's end, is announced as ever
+            let h = (end / hop) as i64;
+            stream.firsts = vec![(h, 12.0, i, 0)];
+            stream.next_first = h + lookahead + 1;
+            stream.announce();
+            assert_eq!(stream.arriving.len(), 1, "{}", kind.name);
+        }
     }
 
     #[test]
