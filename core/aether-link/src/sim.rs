@@ -23,6 +23,7 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 
 use crate::{
     engine::{Action, LinkEngine},
+    frames::ControlFrame,
     phy::PhyTiming,
     phy::{Container, HarqBuffer, SoftFrame, TxFrame},
     rate::{AWGN_THRESHOLD_DB, CONTROL_THRESHOLD_DB},
@@ -239,6 +240,9 @@ pub struct SentFrame {
     pub t_start: f64,
     /// See [`t_start`](Self::t_start).
     pub t_end: f64,
+    /// How many frames of its transmission it said follow it: a data frame's count, or a
+    /// control frame's field (ADR-0041, ADR-0068).
+    pub follows: u8,
 }
 
 /// One side of the simulated link.
@@ -299,6 +303,9 @@ pub struct TwoStationSim {
     unheard: Option<Unheard>,
     /// Receivers read no burst countdown ([`without_countdown`](Self::without_countdown)).
     no_countdown: bool,
+    /// Tone-floor frames carry their count too (ADR-0068: in the middle sync block): with stated
+    /// answers, as the PHY of link protocol 8 sends them.
+    floor_counts: bool,
     /// Frames heard too faintly to read ([`with_garbled`](Self::with_garbled)).
     garbled: Option<Unheard>,
     /// Frames read with their chips wrong ([`with_misread`](Self::with_misread)): the mode
@@ -316,6 +323,7 @@ impl TwoStationSim {
     /// Connect two stations over a channel at a fixed SNR.
     #[must_use]
     pub fn new(a: LinkEngine, b: LinkEngine, snr_db: f64, seed: u64) -> Self {
+        let floor_counts = a.config().stated_answers;
         Self {
             stations: [Station::new(a), Station::new(b)],
             snr_db,
@@ -332,6 +340,7 @@ impl TwoStationSim {
             key_limit_s: None,
             unheard: None,
             no_countdown: false,
+            floor_counts,
             garbled: None,
             misread: None,
             rx_recovery_s: [0.0; 2],
@@ -573,6 +582,12 @@ impl TwoStationSim {
                 rv: frame.rv,
                 t_start: t,
                 t_end: t + duration,
+                follows: match frame.container {
+                    Container::Data => frame.follows,
+                    Container::Control => {
+                        ControlFrame::decode(&frame.payload).map_or(0, |control| control.follows)
+                    }
+                },
             });
             let cut = t + duration > key_up + 1e-9;
             let floor = match frame.container {
@@ -684,7 +699,9 @@ impl TwoStationSim {
             },
             threshold,
             floor,
-            follows: (frame.container == Container::Data && !floor && !self.no_countdown)
+            follows: (frame.container == Container::Data
+                && (!floor || self.floor_counts)
+                && !self.no_countdown)
                 .then_some(if garbled || misread.is_some() {
                     0
                 } else {

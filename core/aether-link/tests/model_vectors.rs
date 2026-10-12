@@ -350,7 +350,8 @@ fn control_frames_match_the_model() {
             bitmap: int(case, "bitmap") as u16,
             snr_db: case["snr_db"].as_f64(),
             recommended_mode: int(case, "recommended_mode") as u8,
-            counter: int(case, "counter") as u8,
+            follows: int(case, "follows") as u8,
+            burst_floor: case["burst_floor"].as_bool().expect("burst_floor"),
         };
         let expected = from_hex(case["encoded"].as_str().expect("encoded"));
         assert_eq!(
