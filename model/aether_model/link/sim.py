@@ -188,6 +188,9 @@ class TwoStationSim:
         the per-class averages of :attr:`thresholds`."""
         self.unheard = unheard
         self.countdown = countdown
+        self.floor_counts = a.cfg.stated_answers
+        """Tone-floor frames carry their count too (ADR-0068: in the middle sync block): with
+        stated answers, as the PHY of link protocol 8 sends them."""
         """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
         it — how the receiver's other ways of finding a burst's end are measured."""
         """Frames a receiver never detects, preamble or frame: called with the receiver, the
@@ -227,7 +230,11 @@ class TwoStationSim:
             _decode_snr_db=decode_snr_db,
             _threshold=threshold,
             _judge_snr_db=judge_snr_db,
-            follows=None if control or floor or not self.countdown else frame.follows,
+            follows=(
+                None
+                if control or (floor and not self.floor_counts) or not self.countdown
+                else frame.follows
+            ),
         )
 
     # ── scheduling ────────────────────────────────────────────────────

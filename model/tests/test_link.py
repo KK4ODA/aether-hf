@@ -451,7 +451,8 @@ def test_control_frame_round_trip() -> None:
         bitmap=0b1011,
         snr_db=-7.0,
         recommended_mode=6,
-        counter=5,
+        follows=3,
+        burst_floor=True,
     )
     got = ControlFrame.decode(ctl.encode())
     assert (got.kind, got.session, got.flags, got.base, got.bitmap) == (
@@ -461,7 +462,8 @@ def test_control_frame_round_trip() -> None:
         ctl.base,
         ctl.bitmap,
     )
-    assert got.snr_db == -7.0 and got.recommended_mode == 6 and got.counter == 5
+    assert got.snr_db == -7.0 and got.recommended_mode == 6
+    assert got.follows == 3 and got.burst_floor  # the burst after it (ADR-0068)
 
 
 def test_ack_received_semantics() -> None:

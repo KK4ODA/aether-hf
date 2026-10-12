@@ -29,7 +29,11 @@ CONTROL container, 7 bytes::
     5: SNR           signed dB, 3 kHz reference (−40 … +40), 0x7f = unknown: in an ACK the
                      burst's (ADR-0020), in any other kind the last frame decoded from the
                      other station (ADR-0021)
-    6: recommended mode (5 bits) | counter (3 bits, wraps; distinguishes repeated ACKs)
+    6: recommended mode (5 bits) | burst family (1 bit) | follows (2 bits): how many frames
+       of a burst follow this control frame in the same transmission, in slots of that
+       burst's data frame, and the burst's family (1 = the tone floor) — an acknowledgement
+       that takes the turn, its own burst after it (ADR-0047, ADR-0068); 0 otherwise. Until
+       protocol 8 the three bits were a counter of acknowledgements, a label for logs.
 
 Kinds: ACK, POLL (ISS keep-alive, answered by an ACK), TURN (ISS hands the sending role
 to the peer), DISC / DISC_ACK. Everything is big-endian; nothing here depends on the PHY.
@@ -348,9 +352,13 @@ class ControlFrame:
     recommended_mode: int = 0
     """A rung of the air's ladder: five bits, room for 32 — the 2 300 Hz ladder has 20 since
     the fast kinds (ADR-0014), past the four bits of protocol version 2."""
-    counter: int = 0
-    """The sender's count of its acknowledgements, modulo 8: a label for logs, which no
-    receiver acts on."""
+    follows: int = 0
+    """How many frames of a burst follow this control frame in the same transmission, in
+    slots of that burst's data frame (0–3, ADR-0068): an acknowledgement that took the turn
+    states its own burst after it (ADR-0047), so a receiver that reads it and nothing of the
+    burst still knows when the burst ends."""
+    burst_floor: bool = False
+    """The family of the burst :attr:`follows` counts — the length of its slots."""
 
     def encode(self) -> bytes:
         snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
@@ -362,7 +370,9 @@ class ControlFrame:
                 (self.bitmap >> 8) & 0xFF,
                 self.bitmap & 0xFF,
                 snr & 0xFF,
-                ((self.recommended_mode & 0x1F) << 3) | (self.counter & 0x07),
+                ((self.recommended_mode & 0x1F) << 3)
+                | (int(self.burst_floor) << 2)
+                | (self.follows & 0x03),
             ]
         )
 
@@ -383,7 +393,8 @@ class ControlFrame:
             bitmap=(payload[3] << 8) | payload[4],
             snr_db=snr,
             recommended_mode=payload[6] >> 3,
-            counter=payload[6] & 0x07,
+            burst_floor=bool(payload[6] & 0x04),
+            follows=payload[6] & 0x03,
         )
 
     def received(self, seq: int) -> bool:

@@ -41,6 +41,7 @@ from aether_model.link.frames import (
     CAP_BANDWIDTH_MASK,
     CONNECT_BODY_BYTES,
     MAX_BURST,
+    MAX_FOLLOWS,
     PROTOCOL_VERSION,
     WINDOW,
     ConnectBody,
@@ -63,7 +64,7 @@ from aether_model.link.frames import (
     seq_distance,
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
-from aether_model.link.rate import RateController, usable_modes
+from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
 
 # ── configuration, actions, states ────────────────────────────────────
 
@@ -197,6 +198,19 @@ class LinkConfig:
     3.4–6 s at +6 to +12 dB, with no line lost and slightly less keyed time. Named for where it
     began — a host's ``CHAT ON`` — and kept switchable (:meth:`LinkEngine.set_chat`) for the
     benches that compare it with the engine before."""
+    stated_answers: bool = False
+    """A station answers a burst at the time a frame it read stated, never because of silence,
+    an announcement or a frame it could not read (ADR-0068). Every frame of a burst states
+    exactly how many frames follow it — a burst is at most four frames — and the answer is due
+    a turnaround after the end that count gives. Only a frame that decoded states it: a burst
+    nothing of which decoded is not answered, and an untrusted frame that did not decode is no
+    part of anything. The sender waits the longest answer there can be, and from its second
+    silence in a row sends again after a random backoff. A control frame goes on the tone floor
+    whenever the other station's report of this one is under the ordinary control frame's
+    threshold or above it by less than :attr:`answer_floor_margin_db`. Off until it is judged
+    on the benches; link protocol 8."""
+    answer_floor_margin_db: float = 3.0
+    """See :attr:`stated_answers`: the rate controller's own margin."""
     offer_turn: bool = True
     """A burst that empties this station's queue ends with a TURN that offers the turn, and a
     receiving station with data of its own takes it in its acknowledgement — the acknowledgement
@@ -499,6 +513,8 @@ class LinkEngine:
         self.ladder: list[LadderRung] = []
         """What each pinned burst reported back, in order; see :meth:`pin_mode`."""
         self._waiting_for: str | None = None  # "ack" | "poll" | "turn" | "disc" | "connect"
+        self._resending: str | None = None
+        """What a backoff's repeat is of, while one is armed (ADR-0068)."""
         # receiving side
         self._rx_base = 0
         self._rx_buf: dict[int, bytes] = {}
@@ -513,6 +529,17 @@ class LinkEngine:
         """The fastest rung a frame of this session's was acknowledged at: a rung the path has
         carried, where the current recommendation may have stepped down after one bad burst.
         The Test starts its ladder under it."""
+        self._burst_snr: float | None = None
+        """The SNR of the frames of the last burst observed that were really there."""
+        self._stated: tuple[float, float] | None = None
+        """Under stated answers: the start of the latest frame read that said when its burst
+        ends, and the time its answer is due (ADR-0068)."""
+        self._carrier_until = 0.0
+        """Under stated answers, the end of the latest frame heard arriving: no answer waits for
+        it, but nothing this station starts on its own goes over it (ADR-0068)."""
+        """The answer's time as the burst being received states it (ADR-0068): the rank of
+        the statement (1 for a decoded frame's count, 0 for a trusted one's), the start of the
+        frame that made it, and the time the answer is due."""
         self._arriving: list[tuple[float, float]] = []
         """Frames of the burst announced by their preambles and not yet reported, as (start,
         end): the burst is not over before they are (ADR-0061)."""
@@ -521,7 +548,6 @@ class LinkEngine:
         self._took_unread = False
         """This station became the receiver on a frame it could not read after offering the
         turn (:meth:`_turn_taken_unread`), not on the other station's word (ADR-0063)."""
-        self._ack_counter = 0
         self._asked: int | None = None
         """The fastest rung this station has recommended to the sender in this session: a
         burst faster than any of them is the sender's choice (ADR-0020)."""
@@ -806,6 +832,10 @@ class LinkEngine:
         if (
             self.state is State.DISCONNECTING or self._waiting_for in ("turn", "ack", "poll")
         ) and "wait" in self._deadlines:
+            # Under stated answers too, as carrier sense rather than a guess at a late answer:
+            # two stations that both believe they hold the turn send on timers of their own, and
+            # without it the one resending at the end of each slot keyed over every poll of the
+            # other (ADR-0068). A false detection only delays the repeat.
             # Nor does a leaving station repeat its DISC, a station that handed over the turn
             # its TURN, or a sender its burst or its poll, over a frame it hears arriving: it
             # may be the answer, late, and a repeat keyed over it is heard by nobody. A
@@ -827,6 +857,16 @@ class LinkEngine:
             # until it is read, a frame heard after a TURN may be the answer to it (ADR-0029)
             self._turn_unread = True
         if self.role is not Role.IRS or self.state not in (State.CONNECTED, State.DISCONNECTING):
+            return
+        if self.cfg.stated_answers:
+            # An announcement is no frame read: the answer waits for what one states (ADR-0068).
+            # It is carrier, though, and a request for the turn is not keyed over it.
+            length = frame_s if frame_s is not None else self._peer_data_frame_s()
+            self._carrier_until = max(self._carrier_until, t_start + length)
+            if "request" in self._deadlines:
+                self._deadlines["request"] = max(
+                    self._deadlines["request"], self._carrier_until + self._reaction_s()
+                )
             return
         length = frame_s if frame_s is not None else self._peer_data_frame_s()
         deadline = t_start + length + self._irs_reply_delay()
@@ -902,6 +942,11 @@ class LinkEngine:
             self._repeat_leave()
         elif name == "first":
             self._first_move()
+        elif name == "resend":
+            what, self._resending = self._resending, None
+            self._resend(what)
+        elif name == "close":
+            self._close_unanswered()
 
     def _tx_busy(self) -> bool:
         return self.now < self._tx_busy_until
@@ -932,8 +977,42 @@ class LinkEngine:
             # was never acknowledged, still learns how it was heard
             kw.setdefault("snr_db", self._heard_peer_db)
         payload = ControlFrame(kind, self.session, **kw).encode()  # type: ignore[arg-type]
-        floor = self._control_floor() or (kind is ControlKind.ACK and self._acks_on_floor)
+        floor = (
+            self._control_floor()
+            or (kind is ControlKind.ACK and self._acks_on_floor)
+            or (self.cfg.stated_answers and self._heard_weakly())
+        )
         return TxFrame(Container.CONTROL, payload, floor=floor)
+
+    def _ordinary_control_threshold(self) -> float:
+        """The ordinary control frame's AWGN 10 % point on this air."""
+        return (self.timing.control_threshold_db or CONTROL_THRESHOLD_DB)[False]
+
+    def _heard_weakly(self) -> bool:
+        """Whether the other station's latest report of this one says an ordinary control frame
+        from here is a gamble there: under its threshold, or above it by less than
+        :attr:`LinkConfig.answer_floor_margin_db` (ADR-0068). WC4Y reported hearing KK4ODA-1 at
+        −7.8 and −9.2 dB, and the one ordinary acknowledgement it sent him in each of three
+        Tests was lost."""
+        return (
+            self.timing.floor_modes > 0
+            and self.peer_snr_db is not None
+            and self.peer_snr_db
+            < self._ordinary_control_threshold() + self.cfg.answer_floor_margin_db
+        )
+
+    def _answer_s(self) -> float:
+        """The longest an answer to this station can be (ADR-0068): the floor's control frame on
+        an air that has one. Which family the other station answers in rests on its view — a
+        report, a lost acknowledgement it noticed — and a wait too short for its answer sends
+        again over it; one too long costs time only when the answer is lost."""
+        return max(self.timing.control_frame_s_for(f) for f in (False, True))
+
+    def _slot_s(self, floor: bool) -> float:
+        """A data frame's air time in the given family: the slot a count is in."""
+        if floor and self.timing.floor_data_frame_s is not None:
+            return self.timing.floor_data_frame_s
+        return self.timing.data_frame_s
 
     def _note_peer_frame(self, frame: SoftFrame) -> None:
         """Learn the family (and, for data, the mode) the peer sends in — from frames that
@@ -1007,24 +1086,38 @@ class LinkEngine:
         index = modes.index(below[-1]) if below else 0
         self._recommended = modes[max(0, index - self.cfg.silence_step)]
 
-    def _exchange_s(self) -> float:
+    def _exchange_s(self, heard_s: float = 0.0) -> float:
         """One whole exchange at the family the link runs in: a full burst of the longest
-        data frame either side sends or may send next, the control frame of that family that
-        answers it, both turnarounds and the gap that ends the burst."""
-        frame = max(self._peer_data_frame_s(), self.timing.data_frame_s_for(self._burst_mode()))
-        floor = self._peer_floor or self.timing.is_floor(self._burst_mode())
+        data frame either side sends or may send next (or ``heard_s``, a frame heard that did
+        not decode), the control frame of that family that answers it, both turnarounds and
+        the gap that ends the burst."""
+        frame = max(
+            self._peer_data_frame_s(), self.timing.data_frame_s_for(self._burst_mode()), heard_s
+        )
+        floor = (
+            self._peer_floor
+            or self.timing.is_floor(self._burst_mode())
+            or heard_s > self.timing.data_frame_s_for(self._robust_mode(False))
+        )
         return (
-            self._burst_capacity(frame) * frame
+            # in bursts of the configured length, not ADR-0068's four: shorter bursts are no
+            # reason for the link timeout or a leaving sender's patience to be shorter in time,
+            # and two exchanges of four floor frames with nothing new read sent a sender away
+            # from a session at −10 dB that HARQ was still carrying (the link bench, ITU Good)
+            self._burst_capacity(frame, stated=False) * frame
             + self.timing.control_frame_s_for(floor)
             + 2 * self.timing.turnaround_s
             + self.cfg.burst_gap_s
         )
 
-    def _link_timeout(self) -> float:
+    def _link_timeout(self, heard_s: float = 0.0) -> float:
         """How long the peer may stay silent before the session ends: the configured time,
         or :attr:`LinkConfig.link_timeout_exchanges` whole exchanges (:meth:`_exchange_s`),
         whichever is longer."""
-        return max(self.cfg.link_timeout_s, self.cfg.link_timeout_exchanges * self._exchange_s())
+        return max(
+            self.cfg.link_timeout_s,
+            self.cfg.link_timeout_exchanges * self._exchange_s(heard_s),
+        )
 
     def _disc_patience(self) -> float:
         """How long a sender asked to disconnect waits for its queue to be acknowledged before
@@ -1124,6 +1217,8 @@ class LinkEngine:
         self._send_connect(DataKind.CONNECT_REQ)
 
     def _wait_for(self, what: str, response_s: float, responder_delay: float = 0.0) -> None:
+        self._disarm("resend")
+        self._resending = None
         self._waiting_for = what
         self._arm(
             "wait",
@@ -1137,6 +1232,11 @@ class LinkEngine:
         self._poll_offer = offer
         self._poll_floor = poll.floor
         self._transmit([poll])
+        if self.cfg.stated_answers:
+            # a poll that is not read is not answered (ADR-0068): its answer, if any, comes a
+            # turnaround after it
+            self._wait_for("poll", self._answer_s())
+            return
         self._wait_for("poll", self._reply_control_s(), self._unread_poll_delay())
 
     def _unread_poll_delay(self) -> float:
@@ -1205,7 +1305,9 @@ class LinkEngine:
         self._disc_tries += 1
         self.state = State.DISCONNECTING
         self._transmit([self._control(ControlKind.DISC)])
-        self._wait_for("disc", self._reply_control_s())
+        self._wait_for(
+            "disc", self._answer_s() if self.cfg.stated_answers else self._reply_control_s()
+        )
 
     def _reply_control_s(self) -> float:
         """How long the control frame that answers ours may take: ours goes out in our
@@ -1238,10 +1340,56 @@ class LinkEngine:
             return
         self._retries += 1
         self.stats.ack_timeouts += 1
+        if self.cfg.stated_answers and what == "ack" and self._ladder_pending is not None:
+            # A burst nothing of which was read is not answered (ADR-0068): the rung decoded
+            # none of its frames, and no SNR came back for it.
+            pinned_mode, fresh = self._ladder_pending
+            self._ladder_pending = None
+            self.ladder.append(LadderRung(pinned_mode, len(fresh), 0, None))
         if self._retries > self.cfg.max_retries:
             self._end_session("no response")
             return
+        if self.cfg.stated_answers and what in ("ack", "poll") and self._retries >= 2:
+            # From the second silence in a row the repeat waits a random backoff that widens
+            # with each, as a call's tries do (ADR-0068). Exact slots put two stations that
+            # both believe they hold the turn — the other's data lost in a fade, its control
+            # frames not — on timers of their own: one resending at the end of every slot, the
+            # other polling, keyed over each other every time until the session died.
+            span = (self._retries - 1) * self._slot_s(self.timing.is_floor(self._burst_mode()))
+            self._waiting_for = what  # a late answer is still taken
+            self._resending = what
+            self._arm("resend", self.rng.uniform(0.0, span))
+            return
+        self._repeat(what)
+
+    def _resend(self, what: str | None) -> None:
+        """A backoff's repeat (ADR-0068), unless an answer came meanwhile."""
+        if what is None or self._waiting_for != what or self.state is not State.CONNECTED:
+            return
+        self._waiting_for = None
+        self._repeat(what)
+
+    def _repeat(self, what: str | None) -> None:
+        """The repeat after a silence: the burst again, or the poll."""
         if what == "ack":
+            if (
+                self.cfg.stated_answers
+                and self._disc_requested
+                and self.now - self._last_peer_frame >= self._disc_patience()
+                and all(
+                    self.timing.is_floor(self._records[s].mode) and self._records[s].tx_count
+                    for s in self._unacked()
+                )
+            ):
+                # A burst nothing of which was read is not answered (ADR-0068), so a path that
+                # carries none of the queue sends nothing back to measure patience at. Silence
+                # alone cannot tell lost data from lost answers — ordinary answers lost on a
+                # lopsided path while the floor's arrive — so the DISC goes once the other
+                # station has been heard not at all for the patience and every frame left has
+                # gone on the floor unanswered.
+                self._disc_patience_until = self.now
+                self._out_of_patience()
+                return
             self._back_off()
             self._send_burst()  # same composition: nothing was acknowledged
         elif what == "poll":
@@ -1277,20 +1425,8 @@ class LinkEngine:
         if self._disc_requested and not self._unacked() and not self._tx_queue:
             self._send_disc()
             return
-        if self._disc_requested:
-            # the queue is waited for, but not for ever: a path whose acknowledgements never
-            # arrive never empties it (ADR-0039)
-            if self._disc_patience_until is None:
-                self._disc_patience_until = self.now + self._disc_patience()
-            elif self.now >= self._disc_patience_until:
-                left = len(self._tx_queue) + sum(
-                    len(self._records[s].body) for s in self._unacked()
-                )
-                self.actions.append(
-                    Event("disconnect", f"{left} bytes not acknowledged; leaving without them")
-                )
-                self._send_disc()
-                return
+        if self._disc_requested and self._out_of_patience():
+            return
         if self._peer_break or (
             self._peer_wants_tx
             and (self._bursts_since_turn >= self.cfg.bursts_before_turn or not self._has_work())
@@ -1302,6 +1438,21 @@ class LinkEngine:
             self._send_burst()
         elif "keepalive" not in self._deadlines:
             self._arm("keepalive", self.cfg.keepalive_s)
+
+    def _out_of_patience(self) -> bool:
+        """A sender asked to disconnect waits for its queue, but not for ever: a path whose
+        acknowledgements never arrive never empties it (ADR-0039). True once it has left."""
+        if self._disc_patience_until is None:
+            self._disc_patience_until = self.now + self._disc_patience()
+            return False
+        if self.now < self._disc_patience_until:
+            return False
+        left = len(self._tx_queue) + sum(len(self._records[s].body) for s in self._unacked())
+        self.actions.append(
+            Event("disconnect", f"{left} bytes not acknowledged; leaving without them")
+        )
+        self._send_disc()
+        return True
 
     def _has_work(self) -> bool:
         return bool(self._unacked()) or bool(self._tx_queue)
@@ -1343,7 +1494,10 @@ class LinkEngine:
             or self._tx_busy()
         ):
             return
-        quiet_at = max(self._tx_busy_until, self._last_peer_frame) + self._reaction_s()
+        quiet_at = (
+            max(self._tx_busy_until, self._last_peer_frame, self._carrier_until)
+            + self._reaction_s()
+        )
         if self.now < quiet_at - 1e-9:
             self._arm("request", quiet_at - self.now)
             return
@@ -1357,7 +1511,6 @@ class LinkEngine:
         bitmap, _, _ = self._receive_window()
         self._stated_want = True
         self.stats.turn_requests += 1
-        self._ack_counter = (self._ack_counter + 1) % 8
         recommended = self.rate.recommend()
         self._asked = recommended if self._asked is None else max(self._asked, recommended)
         self._disarm("request")
@@ -1370,15 +1523,18 @@ class LinkEngine:
                     bitmap=bitmap,
                     snr_db=self._heard_peer_db,
                     recommended_mode=recommended,
-                    counter=self._ack_counter,
                 )
             ]
         )
 
-    def _burst_capacity(self, frame_s: float) -> int:
+    def _burst_capacity(self, frame_s: float, *, stated: bool = True) -> int:
         """Frames of ``frame_s`` seconds one burst may carry: the configured count, and no
-        more than fit in :attr:`LinkConfig.max_burst_s` — one at least."""
+        more than fit in :attr:`LinkConfig.max_burst_s` — one at least. ``stated=False`` gives
+        the count before ADR-0068's four, which the timers measured in exchanges keep."""
         count = min(self.cfg.burst_frames, MAX_BURST)
+        if self.cfg.stated_answers and stated:
+            # every frame states exactly how many follow it, in two bits (ADR-0068)
+            count = min(count, MAX_FOLLOWS + 1)
         if self.cfg.max_burst_s is not None and frame_s > 0:
             count = min(count, max(1, int(self.cfg.max_burst_s / frame_s + 1e-9)))
         return count
@@ -1507,6 +1663,9 @@ class LinkEngine:
         # every frame of a burst is one family, and so one length: as many as fit
         frame_s = self.timing.data_frame_s_for(self._records[seqs[0]].mode if seqs else mode)
         room = self._burst_capacity(frame_s)
+        if self.cfg.stated_answers:
+            # an acknowledgement that took the turn takes a slot of the burst after it
+            room = max(1, room - len(prefix))
         seqs = seqs[:room]
         new_frames = family == self.timing.is_floor(mode)
         cap = data_capacity(self.timing.capacity(mode))
@@ -1543,7 +1702,18 @@ class LinkEngine:
             and not self._disc_requested
             and set(self._unacked()) <= set(seqs)
             and not self._offer_unheard
+            # the offer takes a slot, and a burst is four (ADR-0068); and it goes in the burst's
+            # family, which a station that hears this one weakly cannot read
+            and (
+                not self.cfg.stated_answers
+                or (
+                    len(prefix) + len(seqs) + 1 <= self._burst_capacity(frame_s)
+                    and not self._heard_weakly()
+                )
+            )
         )
+        if self.cfg.stated_answers and prefix:
+            prefix = tuple(self._restate(p, len(seqs) + int(offer), family) for p in prefix)
         frames = list(prefix)
         for i, s in enumerate(seqs):
             rec = self._records[s]
@@ -1551,11 +1721,19 @@ class LinkEngine:
                 self.stats.frames_resent += 1
             # each frame says how many of the burst come after it, so a receiver that loses
             # one in a fade still knows the burst is not over and does not answer over it
-            # (ADR-0041) — the offer counted among them
-            follows = countdown_of(len(seqs) - 1 - i + int(offer))
+            # (ADR-0041) — the offer counted among them; exactly, under stated answers
+            # (ADR-0068), and on the floor's frames too
+            following = len(seqs) - 1 - i + int(offer)
+            follows = following if self.cfg.stated_answers else countdown_of(following)
             frames.append(replace(self._data_frame(rec), follows=follows))
         if offer:
-            frames.append(self._control(ControlKind.TURN, flags=ControlFlags.OFFER))
+            turn = self._control(ControlKind.TURN, flags=ControlFlags.OFFER)
+            if self.cfg.stated_answers:
+                # a frame of the burst, in its slot: in the burst's family (ADR-0068). On the
+                # floor after an ordinary frame it ran 2.2 s past the slot it was counted in,
+                # and the answer that slot stated went out over it, every exchange.
+                turn = replace(turn, floor=family)
+            frames.append(turn)
             self.stats.turn_offers += 1
         self._offer_out = offer
         self.stats.frames_sent += len(frames) - len(prefix) - int(offer)
@@ -1564,6 +1742,15 @@ class LinkEngine:
         self._bursts_since_turn += 1
         self._disarm("keepalive")
         self._transmit(frames)
+        if self.cfg.stated_answers:
+            # The answer comes a turnaround after the end the burst stated (ADR-0068). An offer
+            # takes a data frame's slot and is shorter, so a receiver that missed it answers that
+            # much later than one that read it; the wait covers the later.
+            late = 0.0
+            if offer:
+                late = frame_s - self.timing.control_frame_s_for(False)
+            self._wait_for("ack", self._answer_s(), max(0.0, late))
+            return
         # the IRS's quiet after this burst: its family, and the longest frame it will expect
         # — this burst's, or the mode it recommended, as its own _peer_data_frame_s has it
         expected = max(
@@ -1615,6 +1802,7 @@ class LinkEngine:
         self._peer_break = bool(ack.flags & ControlFlags.BREAK)
         self._waiting_for = None
         self._disarm("wait")
+        self._disarm("resend")
         # An acknowledgement of an offer that measured none of the burst's data: the other
         # station heard the offer at the end and not the frames before it. A receiver whose
         # radio takes longer to come back after transmitting than this station takes to answer
@@ -1691,7 +1879,13 @@ class LinkEngine:
             # are noise — a false detection, most likely — and so are its SNR and its soft
             # bits; it is not part of any burst
             self.stats.frames_failed += 1
-            return
+        elif self.cfg.stated_answers:
+            self._on_stated_data(frame)
+        else:
+            self._on_counted_data(frame)
+
+    def _on_counted_data(self, frame: SoftFrame) -> None:
+        """A data frame of a burst, the receiver inferring the burst's end (before ADR-0068)."""
         # part of the current burst: record it, decode what decodes, ACK after the gap —
         # unless it was the caller's request again, which is answered by the acceptance
         # again and by nothing else (_accept)
@@ -1716,6 +1910,106 @@ class LinkEngine:
                 self._disarm("ack")
             if rec.payload_outside is not None:
                 self._called_again(rec.payload_outside, rec.frame)
+
+    def _on_stated_data(self, frame: SoftFrame) -> None:
+        """A data frame of a burst, under stated answers (ADR-0068). Only a frame that decoded
+        says when the answer is due: its count rides outside the codeword, but the codeword
+        vouches that the chips it was read from were read right. A frame that failed with a
+        trusted acquisition is part of the burst — combined, and counted against the path —
+        and says nothing of its end: on the scenario harness one read its chips as the
+        fastest rung and "none follow", and its answer went out over the rest of the burst. A
+        burst nothing of which decoded is not answered; it closes when no frame of it has
+        followed within a frame (``close``), and its failures reach the rate controller then.
+        An untrusted frame that does not decode is no part of anything."""
+        if not frame.trusted and not self._decodes(frame):
+            self.stats.frames_failed += 1
+            return
+        if self._burst and self._stated is None:
+            last = max(r.frame.t_end for r in self._burst)
+            if frame.t_start > last + 0.5 * max(0.0, frame.t_end - frame.t_start):
+                # the burst before ended with nothing of it decoded, and nothing answered it
+                self._close_unanswered()
+        rec = _RxRecord(frame, self._slot_of(frame))
+        self._burst.append(rec)
+        part = self._decode_record(rec)
+        if rec.outside:
+            self._burst.remove(rec)
+            if not self._burst:
+                self._burst_t0 = None
+                if self._stated is None:
+                    self._disarm("ack")
+                    self._disarm("close")
+            if rec.payload_outside is not None:
+                self._called_again(rec.payload_outside, rec.frame)
+            return
+        if not part:
+            return  # the caller's request again, answered by the acceptance (_accept)
+        if rec.payload is None and "link" in self._deadlines:
+            # No answer, but most likely the other station still sending, stepping down into a
+            # fade: an answer to it reckoned the timeout for its family whenever it went
+            # (ADR-0033), and without one the timeout armed by the last OFDM frame ran out under
+            # the first floor burst. The link stays up for the frame's family.
+            self._deadlines["link"] = max(
+                self._deadlines["link"],
+                self.now + self._link_timeout(frame.t_end - frame.t_start),
+            )
+        if rec.payload is not None:
+            self._took_unread = False
+            self._state_answer(rec.frame)
+        if self._stated is None:
+            # Nothing read has said when the burst ends — this frame failed, or its count was
+            # lost. The next frame of the burst ends a frame after this one and is reported a
+            # detection latency later: nothing by then, and the burst is over, unanswered.
+            close = frame.t_end + (frame.t_end - frame.t_start) + self.timing.detect_latency_s
+            self._arm("close", max(0.0, close - self.now) + self.cfg.ack_margin_s)
+            return
+        self._disarm("close")
+        if rec.payload is not None and self._stated[1] < self._tx_started - 1e-9:
+            # the burst this frame states was answered by this station's last transmission: a
+            # frame of it finished late. What it carried is kept; it is no burst of its own.
+            self._burst.remove(rec)
+            if not self._burst:
+                self._burst_t0 = None
+                self._stated = None
+                self._disarm("ack")
+
+    def _close_unanswered(self) -> None:
+        """A burst nothing of which decoded is over, unanswered (ADR-0068): what its frames
+        say of the path goes to the rate controller, as an answer's would have."""
+        self._disarm("close")
+        if self._stated is not None or not self._burst:
+            return
+        self._observe_burst(self._burst)
+        self._finish_burst()
+
+    def _decodes(self, frame: SoftFrame) -> bool:
+        """Whether a frame decodes on its own: an untrusted frame is read only if it does."""
+        payload, _ = frame.decode(None)
+        return payload is not None
+
+    def _state_answer(
+        self, frame: SoftFrame, follows: int | None = None, slot_s: float | None = None
+    ) -> None:
+        """Take what a frame read says of when its burst ends, and arm the answer for it
+        (ADR-0068); the latest frame's word stands. A frame whose count is lost — a tone frame
+        whose middle block faded — states nothing: what it carried is kept, and acknowledged
+        with the next answer. Taken as if three followed, its answer went out after the
+        sender's slot, over the burst it sent again."""
+        count = frame.follows if follows is None else follows
+        if count is None:
+            return
+        if self._stated is not None and self._stated[0] > frame.t_start:
+            return
+        slot = max(0.0, frame.t_end - frame.t_start) if slot_s is None else slot_s
+        due = frame.t_end + count * slot + self.timing.turnaround_s
+        self._stated = (frame.t_start, due)
+        self._arm("ack", max(0.0, due - self.now))
+
+    def _restate(self, prefix: TxFrame, follows: int, floor: bool) -> TxFrame:
+        """The acknowledgement that took the turn, stating the burst after it (ADR-0068)."""
+        ack = ControlFrame.decode(prefix.payload)
+        payload = replace(ack, follows=min(follows, MAX_FOLLOWS), burst_floor=floor).encode()
+        return replace(prefix, payload=payload)
 
     def _called_again(self, payload: bytes, frame: SoftFrame) -> bool:
         """A call from the station this one is in session with, under a new session number:
@@ -1951,6 +2245,7 @@ class LinkEngine:
             # out over the caller's first burst, which follows the acceptance at once
             self._burst.clear()
             self._arriving.clear()
+            self._stated = None
             self._burst_t0 = None
             self._disarm("ack")
             return False
@@ -1985,11 +2280,24 @@ class LinkEngine:
         self._burst.clear()
         self._arriving.clear()
         self._burst_t0 = None
+        self._stated = None
+        self._disarm("close")
 
     def _send_ack(self) -> None:
         if self.state is not State.CONNECTED and self.state is not State.DISCONNECTING:
             return
         decoded = [r for r in self._burst if r.payload is not None]
+        self._note_ack_lost(decoded)
+        self._observe_burst(self._burst)
+        self._finish_burst()
+        if self._disc_requested:
+            self._send_disc()
+            return
+        self._answer_burst()
+
+    def _observe_burst(self, burst: list[_RxRecord]) -> None:
+        """What a burst's frames say of the path, to the rate controller."""
+        decoded = [r for r in burst if r.payload is not None]
         ok = len(decoded)
         # A failure is news of the path when the frame could have decoded (ADR-0020): a real
         # frame (the PHY trusts it), at a redundancy version that decodes on its own or
@@ -1999,7 +2307,7 @@ class LinkEngine:
         # acknowledgement the sender missed: each lost one had taught the margin 3 dB.
         failed = sum(
             1
-            for r in self._burst
+            for r in burst
             if r.payload is None
             and r.frame.trusted
             and (r.frame.rv in SELF_DECODABLE_RVS or r.combined)
@@ -2010,12 +2318,11 @@ class LinkEngine:
         # its SNR an estimate of that noise: on ND1J's 40 m path one read -11 dB between frames
         # decoding at +5 to +8, and that number took the recommendation from rung 4 to rung 1
         # (2026-09-25). A burst with none reports no SNR; its failure is what is learned from.
-        self._note_ack_lost(decoded)
-        snrs = [r.frame.snr_db for r in self._burst if r.payload is not None or r.frame.trusted]
+        snrs = [r.frame.snr_db for r in burst if r.payload is not None or r.frame.trusted]
         snr = sum(snrs) / len(snrs) if snrs else None
-        modes = [r.frame.mode for r in self._burst]
+        self._burst_snr = snr
+        modes = [r.frame.mode for r in burst]
         burst_mode = max(set(modes), key=modes.count) if modes else None
-        self._finish_burst()
         if failed and modes and self._asked is not None and min(modes) > self._asked:
             # every frame faster than any rung this station has asked for: the sender's
             # choice, and its failure no news — the Test's ladder, pinned past what the path
@@ -2026,9 +2333,11 @@ class LinkEngine:
             self.rate.observe_snr(snr)
         else:
             self.rate.observe(snr, ok, failed, burst_mode)
-        if self._disc_requested:
-            self._send_disc()
-            return
+
+    def _answer_burst(self) -> None:
+        """The acknowledgement of the burst just observed (:meth:`_observe_burst`) — or the
+        acknowledgement that takes the turn, this station's burst after it (ADR-0047)."""
+        snr = self._burst_snr
         bitmap, missing, next_new = self._receive_window()
         self._ack_history = [_AckSnapshot(self._rx_base, missing, next_new), *self._ack_history][:2]
         flags = ControlFlags.NONE
@@ -2052,7 +2361,6 @@ class LinkEngine:
         if take:
             flags |= ControlFlags.TAKEN | ControlFlags.WANT_TX
         self._stated_want = bool(flags & ControlFlags.WANT_TX)
-        self._ack_counter = (self._ack_counter + 1) % 8
         self.stats.acks_sent += 1
         recommended = self.rate.recommend()
         self._asked = recommended if self._asked is None else max(self._asked, recommended)
@@ -2063,7 +2371,6 @@ class LinkEngine:
             bitmap=bitmap,
             snr_db=snr,
             recommended_mode=recommended,
-            counter=self._ack_counter,
         )
         if take:
             self.stats.turns_taken += 1
@@ -2149,7 +2456,9 @@ class LinkEngine:
                 # an ordinary poll answered the poll's preamble alone. Taken for the answer, it
                 # told this station the link was up while the other read nothing of it until its
                 # link timed out (ADR-0034).
-                unread_poll = frame.floor and not self._poll_floor
+                # Not under stated answers (ADR-0068): a poll that is not read is not answered,
+                # and a floor answer is the other station's choice of family.
+                unread_poll = frame.floor and not self._poll_floor and not self.cfg.stated_answers
                 self._unread_there = unread_poll
             if self.role is Role.IRS and self._took_unread and not ctl.flags & ControlFlags.TAKEN:
                 self._give_back_turn()
@@ -2164,6 +2473,10 @@ class LinkEngine:
                 )
             ):
                 self._on_ack(ctl)
+                if self.cfg.stated_answers and ctl.flags & ControlFlags.TAKEN and ctl.follows > 0:
+                    # the acknowledgement took the turn and states its burst: its end is due an
+                    # answer, whether any of the burst is read or not (ADR-0068)
+                    self._state_answer(frame, ctl.follows, self._slot_s(ctl.burst_floor))
                 if unread_poll and "keepalive" in self._deadlines:
                     # the answer asked for nothing — no turn, no burst went — and the poll was
                     # not read: it goes again now, on the floor, rather than a keepalive later
@@ -2205,7 +2518,10 @@ class LinkEngine:
             # with this frame, and the acknowledgement may take the turn
             if self.role is Role.IRS:
                 self._offered = True
-                self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
+                if self.cfg.stated_answers:
+                    self._state_answer(frame, 0)
+                else:
+                    self._arm("ack", self.timing.turnaround_s + max(0.0, frame.t_end - self.now))
         elif ctl.kind is ControlKind.TURN:
             if self.role is Role.IRS or self._waiting_for == "turn":
                 self._take_iss()
@@ -2250,6 +2566,7 @@ class LinkEngine:
         self._unread_there = False
         self._disarm("wait")
         self._disarm("keepalive")
+        self._disarm("resend")
 
     def _take_iss(self) -> None:
         self._become_iss()
@@ -2266,6 +2583,7 @@ class LinkEngine:
         self.role = Role.ISS
         self._burst.clear()
         self._arriving.clear()
+        self._stated = None
         self._burst_t0 = None
         self._disarm("ack")
         self._waiting_for = "ack"
@@ -2284,10 +2602,12 @@ class LinkEngine:
             self._recommended = max(self.cfg.initial_mode, min(self._cap(), first))
         self._waiting_for = None
         self._disarm("wait")
+        self._disarm("resend")
         self._disarm("ack")
         self._disarm("request")
         self._burst.clear()
         self._arriving.clear()
+        self._stated = None
         self._burst_t0 = None
         self._break_requested = False
         self._stated_want = False
@@ -2579,11 +2899,11 @@ class LinkEngine:
         self._harq.clear()
         self._burst.clear()
         self._arriving.clear()
+        self._stated = None
         self._burst_t0 = None
         self._ack_history = []
         self._acks_on_floor = False
         self._took_unread = False
-        self._ack_counter = 0
         self._asked = None
         self._break_requested = False
         self._stated_want = False
@@ -2591,8 +2911,9 @@ class LinkEngine:
         self._caller = False
         self.peer_capabilities = 0
         self.rate = self._rate_controller()
-        for name in ("ack", "wait", "keepalive", "link", "request", "first"):
+        for name in ("ack", "wait", "keepalive", "link", "request", "first", "resend", "close"):
             self._disarm(name)
+        self._resending = None
 
     def _arm_leave(self) -> None:
         disc = TxFrame(Container.CONTROL, b"", floor=True)
