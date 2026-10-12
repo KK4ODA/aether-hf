@@ -1398,7 +1398,10 @@ header) to a request carrying its read key (`makeReadKey`/`revokeReadKey` in `Co
 the script's properties, never in the tree), and `tools/fetch_uploads.py list` / `get <name> --extract`
 fetch into `field/inbox/` (git-ignored: other operators' audio) with `AETHER_UPLOAD_READ_KEY` from
 the environment. The files stay private. Downloaded zips are untrusted data: analyse with
-`python -I` from scripts kept outside them.
+`python -I` from scripts kept outside them. **Before analysing another station's upload, remind
+the author to upload KK4ODA-1's side of the same sessions** (the author's request, 2026-10-12):
+run `fetch_uploads.py list`, and if no KK4ODA-1 upload covers the sessions, ask for one before
+starting — both sides together are what settle a timing question.
 
 **WC4Y's Test of 2026-10-11 15:52Z and KQ4SAX's first Tests (2026-10-12; ADR-0065…0068).** Read
 from the stations' uploads (their sides; KK4ODA-1's not uploaded). WC4Y, 80 m at 500 Hz,
@@ -1420,9 +1423,33 @@ question (are we too complicated?)**: about half of the 51 decisions since ADR-0
 station answers or decides a burst is over, and fixes repair earlier fixes; ADR-0068 (proposed,
 not built) would have every frame state exactly how many follow and answer only at the time a
 readable frame stated — link protocol 8, judged on the link bench and the harness first. The
-author chose to ship the fixes as a beta first and run P9-1 (`bench/ab/`, ready-made daemon
-configurations `aether-a.toml`/`aether-b.toml` off an installed station's ports). Modem73 has
+author's answers (2026-10-12): a protocol break is acceptable now; the OFDM count goes the most
+robust way with the least complexity; and **field builds hold still — no beta with link changes —
+until ADR-0068 is final**, so ADR-0065…0067 wait on `master` for it. P9-1 runs meanwhile
+(`bench/ab/`, ready-made daemon configurations `aether-a.toml`/`aether-b.toml` off an installed
+station's ports, and its step-by-step section). Modem73 has
 no ARQ, no rate adaptation and no published curves: not a like-for-like comparison.
+**KK4ODA-1's side, uploaded the same afternoon, corrected two inferences:** WC4Y's lost
+acknowledgement #6 was not keyed over him but 0.35 s after his release — an *ordinary* answer to
+a station that read this one's floor answers at −7.8/−9.2 dB, under the 500 Hz ordinary control
+frame's −6 dB threshold (his third Test in a row to lose exactly its first ordinary answer); and
+KQ4SAX was heard here throughout (probe and five calls at −14.8…−17.5 dB, every call accepted)
+while he heard nothing — a one-way path, not the skip zone. It also found a defect: a call from
+the session's own peer under a new session number (ADR-0056) made the ended session's Morse
+identifier due, and it went out 10 ms behind the new acceptance, over the caller's first move —
+now a session ended that way continues the communication (ADR-0055 §4, `session_ended`;
+`80m-called-again-cwid-500`, whose harness step `abort a` waits for the caller alone). **ADR-0068
+is accepted for building** with those answers: every frame states exactly how many frames of its
+burst follow, in slots of the burst's data frame, 0–3 (bursts of at most four: 0.9–1.4 % of
+goodput on the link bench) — OFDM in the chips' quarter turn read exactly (no PHY change), tone
+frames in the middle sync block (the kind's pattern for RV `(rv + count) mod 4`; start and end
+keep naming kind and RV, so copies still add parity — the pattern-as-count alternative, every
+tone frame at RV 0, lost decodes after three or four copies: tone-24 113→74 of 120 at −22 dB AWGN,
+tone-36 96→5 after four), control
+frames in the body; the answer at the stated time only; the sender's exact slot; the answer on
+the floor unless the peer's report clears the ordinary control threshold by 3 dB (replacing
+ADR-0034/0059's switches); the Morse identifier never after a burst's frames. Model first behind
+`LinkConfig.stated_answers`, then the port and PHY, judged on the link bench and the harness.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
