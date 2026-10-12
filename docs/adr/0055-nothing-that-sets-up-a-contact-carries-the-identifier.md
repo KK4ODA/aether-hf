@@ -44,3 +44,15 @@ communication, not its end.
   `a_station_identifies_in_morse_when_asked_to_and_not_otherwise`,
   `the_identifier_does_not_repeat_inside_its_interval`); `a_session_ends_with_an_identifier_however_it_ends`
   expects one identifier for an orderly close instead of two.
+
+## 4. Amendment, 2026-10-12: calling again continues the communication
+
+KQ4SAX lost his session with KK4ODA-1 and called again under a new session number. The call
+ended the old session (ADR-0056), the end of a session made the identifier due, and it went on
+the air 10 ms after the new call's acceptance: 6.6 s of CW where a caller that read the
+acceptance makes its first move. `bench/scenarios/80m-called-again-cwid-500` reproduces it: one
+collision on each of three draws, the caller's first poll over the identifier. A session the same
+station ends by calling again is not the end of the communication: the identifier is not made due,
+and the communication's ten minutes keep counting from its first transmission (`session_ended`
+in `aetherd/src/station.rs`). It is identified at the end of the session the call opens. Test:
+`a_station_that_calls_again_is_not_identified_over`.

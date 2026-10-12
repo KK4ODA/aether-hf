@@ -81,7 +81,7 @@ Steps: `beacon`, `probe`, `connect`, `message N` (N incompressible bytes from a 
 `reply N` (from b to a), `test` (a Test session, a → b: it makes its own probe, call, message,
 mode ladder, file and disconnect, so it starts from idle), `wait S` (S seconds of air),
 `disconnect` (`disconnect b`: the called station leaves; `disconnect both`: at the same
-moment), `abort`. For what goes wrong mid-session: `send N` (queued, not waited for),
+moment), `abort` (`abort a`: waits for the caller alone). For what goes wrong mid-session: `send N` (queued, not waited for),
 `message? N` (a message that may fail — reported, not judged), `outage S` (from now neither
 station hears the other for S seconds: a station switched off, a band gone), `wait_idle S`
 (both back to idle by themselves within S seconds of air). `stall WHO S` (that station's
