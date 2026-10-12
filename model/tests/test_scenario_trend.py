@@ -131,3 +131,20 @@ def test_a_runs_folder_reads_like_its_csv(tmp_path: Path) -> None:
         (tmp_path / name / "result.json").write_text(json.dumps(result), encoding="utf-8")
     nights = st.summarise(st.read_rows([tmp_path]))
     assert (nights["x"].runs, nights["x"].passed, nights["x"].air_s) == (2, 1, 100.0)
+
+
+def test_the_fetch_tool_reads_the_script_the_daemon_uploads_to() -> None:
+    import re
+
+    import fetch_uploads
+
+    source = (ROOT / "core" / "aetherd" / "src" / "upload.rs").read_text(encoding="utf-8")
+    endpoint = re.search(r'pub const PROJECT_ENDPOINT: &str = "([^"]+)";', source)
+    assert endpoint is not None
+    assert endpoint.group(1) == fetch_uploads.ENDPOINT
+    files = [
+        {"id": "abc", "name": "20261012-015641Z KQ4SAX aether.zip"},
+        {"id": "def", "name": "x"},
+    ]
+    assert fetch_uploads.matching("kq4sax", files) == files[:1]
+    assert fetch_uploads.matching("def", files) == files[1:]

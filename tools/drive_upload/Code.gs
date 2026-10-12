@@ -16,6 +16,13 @@
  *
  * Protocol: the station POSTs JSON as text; the answer is JSON, {ok: true, …} or
  * {ok: false, error: "a sentence the panel shows"}.
+ *
+ * Reading back (`list`, `read`): the files stay private in your Drive, and a session analysing
+ * them fetches them through this script with a read key — one long random secret, made by
+ * makeReadKey and kept in the script's properties, never in the program. Without the key the
+ * two requests refuse; with it they reach only the files in the uploads folder. The key goes
+ * into the Claude environment as AETHER_UPLOAD_READ_KEY (tools/fetch_uploads.py reads it);
+ * revokeReadKey turns reading back off.
  */
 
 /** Your callsign: the panel tells the sender the files went to you. */
@@ -50,6 +57,19 @@ function setup() {
   Logger.log('Files will land in https://drive.google.com/drive/folders/' + id);
   Logger.log('Emails go to ' + Session.getEffectiveUser().getEmail());
   Logger.log('Next: Deploy > New deployment > Web app, Execute as: Me, Who has access: Anyone.');
+}
+
+/** A new read key for tools/fetch_uploads.py (the old one stops working). Copy it from the log. */
+function makeReadKey() {
+  const key = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  PROPS.setProperty('READ_KEY', key);
+  Logger.log('Read key (put it in the environment as AETHER_UPLOAD_READ_KEY): ' + key);
+}
+
+/** Stop all reading back until makeReadKey is run again. */
+function revokeReadKey() {
+  PROPS.deleteProperty('READ_KEY');
+  Logger.log('Reading back is off.');
 }
 
 /** A code for each station in STATIONS, each good for UPLOADS_PER_CODE uploads. */
@@ -108,6 +128,8 @@ function doPost(e) {
   try {
     if (asked.action === 'begin') return json(begin(asked));
     if (asked.action === 'finish') return json(finish(asked));
+    if (asked.action === 'list') return json(readable(asked) || list(asked));
+    if (asked.action === 'read') return json(readable(asked) || read(asked));
     return json({ok: false, error: 'The upload script does not know that request.'});
   } catch (err) {
     return json({ok: false, error: 'The upload script failed: ' + err.message});
@@ -210,6 +232,66 @@ function finish(asked) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ── reading back, with the read key ───────────────────────────────────
+
+/** The largest piece one `read` returns: base64 of 8 MB is well inside a web app's answer. */
+const READ_PIECE = 8 * 1024 * 1024;
+
+/** null when the request carries the read key; the refusal otherwise. */
+function readable(asked) {
+  const key = PROPS.getProperty('READ_KEY');
+  const given = String(asked.key || '');
+  const refused = {ok: false, error: 'Reading back needs the read key.'};
+  if (!key || given.length !== key.length) return refused;
+  let differ = 0;
+  for (let i = 0; i < key.length; i++) differ |= key.charCodeAt(i) ^ given.charCodeAt(i);
+  return differ === 0 ? null : refused;
+}
+
+/** The uploads of the last `days` (7), newest first: id, name, size, created, description. */
+function list(asked) {
+  const days = Math.min(Math.max(Number(asked.days) || 7, 1), 365);
+  const since = new Date(Date.now() - days * 86400000);
+  const files = DriveApp.getFolderById(PROPS.getProperty('FOLDER_ID')).getFiles();
+  const out = [];
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getDateCreated() < since) continue;
+    out.push({id: f.getId(), name: f.getName(), size: f.getSize(),
+      created: f.getDateCreated().toISOString(), description: f.getDescription() || ''});
+  }
+  out.sort((a, b) => (a.created < b.created ? 1 : -1));
+  return {ok: true, files: out};
+}
+
+/** Bytes [offset, offset + length) of one upload, base64; only files in the uploads folder. */
+function read(asked) {
+  const file = DriveApp.getFileById(String(asked.id || ''));
+  const folderId = PROPS.getProperty('FOLDER_ID');
+  let inFolder = false;
+  const parents = file.getParents();
+  while (parents.hasNext()) inFolder = inFolder || parents.next().getId() === folderId;
+  if (!inFolder) return {ok: false, error: 'That file is not one of this script\'s uploads.'};
+  const size = file.getSize();
+  const offset = Math.max(Number(asked.offset) || 0, 0);
+  const length = Math.min(Math.max(Number(asked.length) || READ_PIECE, 1), READ_PIECE);
+  if (offset >= size) return {ok: true, size: size, offset: offset, data: ''};
+  const last = Math.min(offset + length, size) - 1;
+  const response = UrlFetchApp.fetch(
+      'https://www.googleapis.com/drive/v3/files/' + file.getId() + '?alt=media', {
+        headers: {
+          'Authorization': 'Bearer ' + ScriptApp.getOAuthToken(),
+          'Range': 'bytes=' + offset + '-' + last,
+        },
+        muteHttpExceptions: true,
+      });
+  const code = response.getResponseCode();
+  if (code !== 206 && code !== 200) return {ok: false, error: 'Drive would not read it (' + code + ').'};
+  let bytes = response.getContent();
+  if (code === 200) bytes = bytes.slice(offset, last + 1); // a server that ignored the range
+  return {ok: true, size: size, offset: offset, data: Utilities.base64Encode(bytes)};
 }
 
 // ── helpers ───────────────────────────────────────────────────────────

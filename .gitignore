@@ -28,3 +28,5 @@ bench-out/
 Thumbs.db
 core/target/
 /runs/
+# stations' uploads fetched for analysis (tools/fetch_uploads.py): other operators' audio
+field/inbox/
