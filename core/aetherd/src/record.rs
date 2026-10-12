@@ -86,7 +86,7 @@ pub struct FrameRecord {
 pub fn describe_control(payload: &[u8]) -> Option<String> {
     let frame = aether_link::frames::ControlFrame::decode(payload).ok()?;
     Some(format!(
-        "{:?} session {} flags {:#04x} base {} bitmap {:#06x} mode {} snr {} #{}",
+        "{:?} session {} flags {:#04x} base {} bitmap {:#06x} mode {} snr {} follows {}{}",
         frame.kind,
         frame.session,
         frame.flags,
@@ -94,7 +94,12 @@ pub fn describe_control(payload: &[u8]) -> Option<String> {
         frame.bitmap,
         frame.recommended_mode,
         frame.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
-        frame.counter
+        frame.follows,
+        if frame.burst_floor {
+            " on the floor"
+        } else {
+            ""
+        }
     ))
 }
 

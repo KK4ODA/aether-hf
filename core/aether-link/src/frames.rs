@@ -28,7 +28,7 @@
 //! | 2 | base sequence number — the next one the receiver needs |
 //! | 3–4 | bitmap: bit *i* set ⇔ `base + i` received |
 //! | 5 | measured SNR, signed dB, 3 kHz reference; `0x7F` = unknown |
-//! | 6 | recommended mode (4 bits) \| counter (4 bits) |
+//! | 6 | recommended mode (5 bits) \| burst family (1 bit) \| follows (2 bits) |
 //!
 //! Everything is big-endian. Callsigns pack six bits per character (`A–Z 0–9 - /`), nine
 //! characters into seven bytes.
@@ -580,9 +580,14 @@ pub struct ControlFrame {
     /// Mode the receiver recommends: a rung of the air's ladder, five bits — room for 32; the
     /// 2 300 Hz ladder has 20 since the fast kinds (ADR-0014).
     pub recommended_mode: u8,
-    /// The sender's count of its acknowledgements, modulo 8: a label for logs, which no
-    /// receiver acts on.
-    pub counter: u8,
+    /// How many frames of a burst follow this control frame in the same transmission, in
+    /// slots of that burst's data frame (0–3, ADR-0068): an acknowledgement that took the turn
+    /// states its own burst after it (ADR-0047), so a receiver that reads it and nothing of the
+    /// burst still knows when the burst ends. Until protocol 8 these bits were a counter of
+    /// acknowledgements, a label for logs.
+    pub follows: u8,
+    /// The family of the burst [`follows`](Self::follows) counts — the length of its slots.
+    pub burst_floor: bool,
 }
 
 impl ControlFrame {
@@ -597,7 +602,9 @@ impl ControlFrame {
             ((self.bitmap >> 8) & 0xFF) as u8,
             (self.bitmap & 0xFF) as u8,
             snr,
-            ((self.recommended_mode & 0x1F) << 3) | (self.counter & 0x07),
+            ((self.recommended_mode & 0x1F) << 3)
+                | (u8::from(self.burst_floor) << 2)
+                | (self.follows & 0x03),
         ]
     }
 
@@ -620,7 +627,8 @@ impl ControlFrame {
             bitmap: (u16::from(payload[3]) << 8) | u16::from(payload[4]),
             snr_db,
             recommended_mode: payload[6] >> 3,
-            counter: payload[6] & 0x07,
+            follows: payload[6] & 0x03,
+            burst_floor: payload[6] & 0x04 != 0,
         })
     }
 
@@ -738,7 +746,8 @@ mod tests {
             bitmap: 0b1011,
             snr_db: Some(-7.0),
             recommended_mode: 6,
-            counter: 5,
+            follows: 3,
+            burst_floor: true,
         };
         let got = ControlFrame::decode(&frame.encode()).expect("decode");
         assert_eq!(got, frame);
@@ -755,7 +764,8 @@ mod tests {
             bitmap: 0,
             snr_db: Some(snr),
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         assert_eq!(
             ControlFrame::decode(&frame(12.5).encode()).unwrap().snr_db,
@@ -781,7 +791,8 @@ mod tests {
             bitmap: 0,
             snr_db: Some(snr),
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         assert_eq!(
             ControlFrame::decode(&frame(99.0).encode()).unwrap().snr_db,
@@ -803,7 +814,8 @@ mod tests {
             bitmap: 0,
             snr_db: None,
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         assert_eq!(ControlFrame::decode(&frame.encode()).unwrap().snr_db, None);
     }
@@ -818,7 +830,8 @@ mod tests {
             bitmap: 0b0101,
             snr_db: None,
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         assert!(ack.received(10) && ack.received(12));
         assert!(!ack.received(11) && !ack.received(13));

@@ -1379,7 +1379,8 @@
    "bitmap": 0,
    "snr_db": null,
    "recommended_mode": 0,
-   "counter": 0,
+   "follows": 0,
+   "burst_floor": false,
    "encoded": "002a0000007f00",
    "decoded_snr_db": null,
    "received": [
@@ -1409,7 +1410,8 @@
    "bitmap": 11,
    "snr_db": -7.0,
    "recommended_mode": 6,
-   "counter": 5,
+   "follows": 1,
+   "burst_floor": true,
    "encoded": "012a64000bf935",
    "decoded_snr_db": -7.0,
    "received": [
@@ -1439,7 +1441,8 @@
    "bitmap": 65535,
    "snr_db": 40.0,
    "recommended_mode": 19,
-   "counter": 7,
+   "follows": 3,
+   "burst_floor": true,
    "encoded": "032affffff289f",
    "decoded_snr_db": 40.0,
    "received": [
@@ -1469,7 +1472,8 @@
    "bitmap": 1,
    "snr_db": 2.0,
    "recommended_mode": 31,
-   "counter": 6,
+   "follows": 2,
+   "burst_floor": true,
    "encoded": "002a03000102fe",
    "decoded_snr_db": 2.0,
    "received": [
@@ -1499,7 +1503,8 @@
    "bitmap": 0,
    "snr_db": 12.5,
    "recommended_mode": 3,
-   "counter": 1,
+   "follows": 1,
+   "burst_floor": false,
    "encoded": "102a0700000c19",
    "decoded_snr_db": 12.0,
    "received": [
@@ -1529,7 +1534,8 @@
    "bitmap": 0,
    "snr_db": null,
    "recommended_mode": 0,
-   "counter": 0,
+   "follows": 0,
+   "burst_floor": false,
    "encoded": "202a0000007f00",
    "decoded_snr_db": null,
    "received": [
@@ -1559,7 +1565,8 @@
    "bitmap": 0,
    "snr_db": -40.0,
    "recommended_mode": 0,
-   "counter": 0,
+   "follows": 0,
+   "burst_floor": false,
    "encoded": "302a000000d800",
    "decoded_snr_db": -40.0,
    "received": [
@@ -1589,7 +1596,8 @@
    "bitmap": 0,
    "snr_db": -100.0,
    "recommended_mode": 0,
-   "counter": 0,
+   "follows": 0,
+   "burst_floor": false,
    "encoded": "402a000000d800",
    "decoded_snr_db": -40.0,
    "received": [

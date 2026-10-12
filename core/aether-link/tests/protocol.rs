@@ -2714,7 +2714,8 @@ fn control_frame(kind: aether_link::ControlKind, session: u8, t_end: f64, t: &Ph
         bitmap: 0,
         snr_db: None,
         recommended_mode: 0,
-        counter: 0,
+        follows: 0,
+        burst_floor: false,
     }
     .encode()
     .to_vec();

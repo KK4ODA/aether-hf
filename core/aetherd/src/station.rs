@@ -7425,9 +7425,12 @@ mod tests {
                 .all(|r| r.control.as_deref().is_some_and(|c| c.starts_with("Ack")))
         );
         // the acknowledgements of OFDM bursts are OFDM frames at the control mode, as beacons
-        // were before ADR-0016: a wire reads past +20 dB, and the last one's symbols sit on
-        // their constellation — none near the origin
-        assert!(acks.iter().all(|r| r.snr_db > 20.0), "{acks:?}");
+        // were before ADR-0016: a wire reads past the tone floor's ceiling (+17 dB), and the
+        // last one's symbols sit on their constellation — none near the origin. How far past
+        // depends on the frame's own bits: on a wire the reading is the waveform's own floor,
+        // which the model puts at +20.4 to +24.9 dB for an acknowledgement as its count and
+        // rung vary (ADR-0068 changed the bits this one carries, and it read +19.2)
+        assert!(acks.iter().all(|r| r.snr_db > 18.0), "{acks:?}");
         let (last, points) = air.a.constellation().expect("a frame was heard");
         assert_eq!(last.kind, "control");
         assert!(!points.is_empty() && points.len() <= CONSTELLATION_POINTS);

@@ -32,12 +32,12 @@
 use crate::{
     frames::{
         CAP_BANDWIDTH_MASK, CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader,
-        DataKind, MAX_BURST, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code, bandwidth_hz_of,
-        control_flags, data_capacity, decode_data, encode_data, in_window, pack_callsign,
-        seq_after, seq_distance,
+        DataKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
+        bandwidth_hz_of, control_flags, data_capacity, decode_data, encode_data, in_window,
+        pack_callsign, seq_after, seq_distance,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
-    rate::{RateConfig, RateController},
+    rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
 };
 
 // ── configuration, actions, states ────────────────────────────────────
@@ -167,6 +167,20 @@ pub struct LinkConfig {
     /// sessions 13.5 % shorter at 40 m (2300 Hz) and 9 % at 80 m (500 Hz). Switchable for the
     /// benches that compare the engine before.
     pub offer_turn: bool,
+    /// A station answers a burst at the time a frame it read stated, never because of silence,
+    /// an announcement or a frame it could not read (ADR-0068). Every frame of a burst states
+    /// exactly how many frames follow it — a burst is at most four frames — and the answer is
+    /// due a turnaround after the end that count gives. Only a frame that decoded states it: a
+    /// burst nothing of which decoded is not answered, and an untrusted frame that did not
+    /// decode is no part of anything. The sender waits the longest answer there can be, and
+    /// from its second silence in a row sends again after a random backoff. A control frame
+    /// goes on the tone floor whenever the other station's report of this one is under the
+    /// ordinary control frame's threshold or above it by less than
+    /// [`answer_floor_margin_db`](Self::answer_floor_margin_db). Off until it is judged on the
+    /// benches; link protocol 8.
+    pub stated_answers: bool,
+    /// See [`stated_answers`](Self::stated_answers): the rate controller's own margin.
+    pub answer_floor_margin_db: f64,
 }
 
 impl Default for LinkConfig {
@@ -199,6 +213,8 @@ impl Default for LinkConfig {
             capabilities: 0,
             chat: true,
             offer_turn: true,
+            stated_answers: false,
+            answer_floor_margin_db: 3.0,
         }
     }
 }
@@ -433,6 +449,10 @@ enum Timer {
     Leave,
     /// A caller's first move in a session that came up with nothing queued (ADR-0066).
     First,
+    /// A repeat after a silence, at the end of its random backoff (ADR-0068).
+    Resend,
+    /// The end of a burst nothing of which said when it ends (ADR-0068).
+    Close,
 }
 
 /// What the receiving station has asked for in its last acknowledgement.
@@ -598,6 +618,8 @@ pub struct LinkEngine {
     /// What each pinned burst reported back, in order; see [`pin_mode`](Self::pin_mode).
     ladder: Vec<LadderRung>,
     waiting_for: Option<Waiting>,
+    /// What a backoff's repeat is of, while one is armed (ADR-0068).
+    resending: Option<Waiting>,
     // receiving side
     rx_base: u8,
     rx_buffer: Vec<(u8, Vec<u8>)>,
@@ -620,7 +642,14 @@ pub struct LinkEngine {
     /// ([`turn_taken_unread`](Self::turn_taken_unread)), not on the other station's word
     /// (ADR-0063).
     took_unread: bool,
-    ack_counter: u8,
+    /// The SNR of the frames of the last burst observed that were really there.
+    burst_snr: Option<f64>,
+    /// Under stated answers: the start of the latest frame read that said when its burst ends,
+    /// and the time its answer is due (ADR-0068).
+    stated: Option<(f64, f64)>,
+    /// Under stated answers, the end of the latest frame heard arriving: no answer waits for
+    /// it, but nothing this station starts on its own goes over it (ADR-0068).
+    carrier_until: f64,
     /// The fastest rung this station has recommended to the sender in this session: a burst
     /// faster than any of them is the sender's choice (ADR-0020).
     asked: Option<usize>,
@@ -726,6 +755,7 @@ impl LinkEngine {
             ladder_pending: None,
             ladder: Vec::new(),
             waiting_for: None,
+            resending: None,
             rx_base: 0,
             rx_buffer: Vec::new(),
             max_seen: None,
@@ -737,7 +767,9 @@ impl LinkEngine {
             top_acked_mode: None,
             acks_on_floor: false,
             took_unread: false,
-            ack_counter: 0,
+            burst_snr: None,
+            stated: None,
+            carrier_until: 0.0,
             asked: None,
             break_requested: false,
             stated_want: false,
@@ -1254,6 +1286,10 @@ impl LinkEngine {
             ))
             && let Some(due) = self.deadline_of(Timer::Wait)
         {
+            // Under stated answers too, as carrier sense rather than a guess at a late answer:
+            // two stations that both believe they hold the turn send on timers of their own,
+            // and without it the one resending at the end of each slot keyed over every poll of
+            // the other (ADR-0068). A false detection only delays the repeat.
             // Nor does a leaving station repeat its DISC, a station that handed over the turn
             // its TURN, or a sender its burst or its poll, over a frame it hears arriving: it
             // may be the answer, late, and a repeat keyed over it is heard by nobody. A
@@ -1282,6 +1318,17 @@ impl LinkEngine {
         }
         if self.role != Role::Irs || !matches!(self.state, State::Connected | State::Disconnecting)
         {
+            return;
+        }
+        if self.config.stated_answers {
+            // An announcement is no frame read: the answer waits for what one states
+            // (ADR-0068). It is carrier, though, and a request for the turn is not keyed over it.
+            let length = frame_s.unwrap_or_else(|| self.peer_data_frame_s());
+            self.carrier_until = self.carrier_until.max(t_start + length);
+            if let Some(due) = self.deadline_of(Timer::Request) {
+                let clear = self.carrier_until + self.reaction_s();
+                self.set_deadline(Timer::Request, due.max(clear));
+            }
             return;
         }
         let length = frame_s.unwrap_or_else(|| self.peer_data_frame_s());
@@ -1376,6 +1423,11 @@ impl LinkEngine {
             Timer::Request => self.maybe_request_turn(),
             Timer::Leave => self.repeat_leave(),
             Timer::First => self.first_move(),
+            Timer::Resend => {
+                let what = self.resending.take();
+                self.resend(what);
+            }
+            Timer::Close => self.close_unanswered(),
         }
     }
 
@@ -1424,15 +1476,68 @@ impl LinkEngine {
             bitmap,
             snr_db,
             recommended_mode,
-            counter: self.ack_counter,
+            follows: 0,
+            burst_floor: false,
         };
+        let stated = self.config.stated_answers;
         TxFrame {
             container: Container::Control,
             payload: frame.encode().to_vec(),
             mode: 0,
             rv: 0,
-            floor: self.control_floor() || (kind == ControlKind::Ack && self.acks_on_floor),
+            floor: self.control_floor()
+                || (kind == ControlKind::Ack && self.acks_on_floor)
+                || (stated && self.heard_weakly())
+                || (stated && kind == ControlKind::Turn && self.turn_silences()),
             follows: 0,
+        }
+    }
+
+    /// The ordinary control frame's AWGN 10 % point on this air.
+    fn ordinary_control_threshold(&self) -> f64 {
+        self.timing
+            .control_threshold_db
+            .map_or(CONTROL_THRESHOLD_DB[0], |t| t[0])
+    }
+
+    /// Whether the other station's latest report of this one says an ordinary control frame
+    /// from here is a gamble there: under its threshold, or above it by less than
+    /// [`LinkConfig::answer_floor_margin_db`] (ADR-0068). WC4Y reported hearing KK4ODA-1 at
+    /// −7.8 and −9.2 dB, and the one ordinary acknowledgement it sent him in each of three
+    /// Tests was lost.
+    fn heard_weakly(&self) -> bool {
+        self.timing.floor_modes > 0
+            && self.peer_snr_db.is_some_and(|heard| {
+                heard < self.ordinary_control_threshold() + self.config.answer_floor_margin_db
+            })
+    }
+
+    /// How much of an answer to this station to wait for (ADR-0068). The other station answers
+    /// on the floor when what it answers went there, when it has been answering there (a
+    /// report, a lost acknowledgement it noticed: `floor`), or on its own first switch, which
+    /// this station cannot see coming. Waited for in full, a floor answer costs 3.2 s a lost
+    /// answer or unread burst even when the answer would have been ordinary. So an ordinary
+    /// answer is waited for only until a floor one would have been announced, and the wait
+    /// runs on past a frame heard arriving ([`on_preamble`](Self::on_preamble)); a PHY that
+    /// announces nothing gets the floor's whole length. `None`: either family, in full.
+    fn answer_s(&self, floor: Option<bool>) -> f64 {
+        let longest = self
+            .timing
+            .control_frame_s_for(false)
+            .max(self.timing.control_frame_s_for(true));
+        match (floor, self.timing.floor_preamble_detect_s) {
+            (Some(false), Some(announced)) => {
+                longest.min(self.timing.control_frame_s_for(false).max(announced))
+            }
+            _ => longest,
+        }
+    }
+
+    /// A data frame's air time in the given family: the slot a count is in.
+    fn slot_s(&self, floor: bool) -> f64 {
+        match self.timing.floor_data_frame_s {
+            Some(floor_s) if floor => floor_s,
+            _ => self.timing.data_frame_s,
         }
     }
 
@@ -1531,20 +1636,34 @@ impl LinkEngine {
     /// — the longest data frame either side sends or may send next, and that family's
     /// control frame — whichever is longer.
     fn link_timeout(&self) -> f64 {
+        self.link_timeout_heard(0.0)
+    }
+
+    /// [`link_timeout`](Self::link_timeout) with `heard_s`, a frame heard that did not decode,
+    /// among the frames the link may carry.
+    fn link_timeout_heard(&self, heard_s: f64) -> f64 {
         self.config
             .link_timeout_s
-            .max(self.config.link_timeout_exchanges * self.exchange_s())
+            .max(self.config.link_timeout_exchanges * self.exchange_s(heard_s))
     }
 
     /// One whole exchange at the family the link runs in: a full burst of the longest data
-    /// frame either side sends or may send next, the control frame of that family that
-    /// answers it, both turnarounds and the gap that ends the burst.
-    fn exchange_s(&self) -> f64 {
+    /// frame either side sends or may send next (or `heard_s`, a frame heard that did not
+    /// decode), the control frame of that family that answers it, both turnarounds and the gap
+    /// that ends the burst.
+    fn exchange_s(&self, heard_s: f64) -> f64 {
         let frame = self
             .peer_data_frame_s()
-            .max(self.timing.data_frame_s_for(self.burst_mode()));
-        let floor = self.peer_floor || self.timing.is_floor(self.burst_mode());
-        self.burst_capacity(frame) as f64 * frame
+            .max(self.timing.data_frame_s_for(self.burst_mode()))
+            .max(heard_s);
+        let floor = self.peer_floor
+            || self.timing.is_floor(self.burst_mode())
+            || heard_s > self.timing.data_frame_s;
+        // in bursts of the configured length, not ADR-0068's four: shorter bursts are no reason
+        // for the link timeout or a leaving sender's patience to be shorter in time, and two
+        // exchanges of four floor frames with nothing new read sent a sender away from a
+        // session at −10 dB that HARQ was still carrying (the link bench, ITU Good)
+        self.burst_capacity_for(frame, false) as f64 * frame
             + self.timing.control_frame_s_for(floor)
             + 2.0 * self.timing.turnaround_s
             + self.config.burst_gap_s
@@ -1555,14 +1674,24 @@ impl LinkEngine {
     fn disc_patience(&self) -> f64 {
         self.config
             .disc_patience_s
-            .max(self.config.disc_patience_exchanges * self.exchange_s())
+            .max(self.config.disc_patience_exchanges * self.exchange_s(0.0))
     }
 
     /// Frames of `frame_s` seconds one burst may carry: the configured count, and no more
     /// than fit in [`LinkConfig::max_burst_s`] — one at least.
     #[must_use]
     pub fn burst_capacity(&self, frame_s: f64) -> usize {
-        let count = self.config.burst_frames.min(MAX_BURST);
+        self.burst_capacity_for(frame_s, true)
+    }
+
+    /// [`burst_capacity`](Self::burst_capacity); `stated: false` gives the count before
+    /// ADR-0068's four, which the timers measured in exchanges keep.
+    fn burst_capacity_for(&self, frame_s: f64, stated: bool) -> usize {
+        let mut count = self.config.burst_frames.min(MAX_BURST);
+        if self.config.stated_answers && stated {
+            // every frame states exactly how many follow it, in two bits (ADR-0068)
+            count = count.min(usize::from(MAX_FOLLOWS) + 1);
+        }
         match self.config.max_burst_s {
             Some(limit) if frame_s > 0.0 => {
                 // truncation to whole frames is the point: a partial frame is a lost one
@@ -1861,6 +1990,8 @@ impl LinkEngine {
     }
 
     fn wait_for(&mut self, what: Waiting, response_s: f64, responder_delay: f64) {
+        self.disarm(Timer::Resend);
+        self.resending = None;
         self.waiting_for = Some(what);
         let delay = self.tx_busy_until - self.now + self.response_wait(response_s, responder_delay);
         self.arm(Timer::Wait, delay);
@@ -1877,7 +2008,18 @@ impl LinkEngine {
         let frame = self.control(ControlKind::Poll, flags, 0, 0, None, 0);
         self.poll_offer = offer;
         self.poll_floor = frame.floor;
+        let floor = frame.floor;
         self.transmit(vec![frame]);
+        if self.config.stated_answers {
+            // a poll that is not read is not answered (ADR-0068): its answer, if any, comes a
+            // turnaround after it
+            self.wait_for(
+                Waiting::Poll,
+                self.answer_s(Some(floor || self.peer_floor)),
+                0.0,
+            );
+            return;
+        }
         self.wait_for(
             Waiting::Poll,
             self.reply_control_s(),
@@ -1961,12 +2103,27 @@ impl LinkEngine {
         }
     }
 
+    /// Whether this TURN follows [`LinkConfig::poll_silences`] unanswered ones in a row, and so
+    /// goes on the floor (ADR-0068), as a poll steps down from its second silence (ADR-0030
+    /// §3). On the chat bench (500 Hz, ITU Poor, 0 dB) a sender offered the turn in three
+    /// ordinary TURNs, none was read, and the session timed out with lines waiting. Following
+    /// the other station's last frame onto the floor instead put every poll and turn there
+    /// after a floor acknowledgement: lines 7 % slower, 8 % more keyed.
+    fn turn_silences(&self) -> bool {
+        self.turn_tries > self.config.poll_silences
+    }
+
     fn send_disc(&mut self) {
         self.disc_tries += 1;
         self.state = State::Disconnecting;
         let frame = self.control(ControlKind::Disc, 0, 0, 0, None, 0);
         self.transmit(vec![frame]);
-        self.wait_for(Waiting::Disc, self.reply_control_s(), 0.0);
+        let answer = if self.config.stated_answers {
+            self.answer_s(None)
+        } else {
+            self.reply_control_s()
+        };
+        self.wait_for(Waiting::Disc, answer, 0.0);
     }
 
     fn on_response_timeout(&mut self) {
@@ -1997,14 +2154,77 @@ impl LinkEngine {
         }
         self.retries += 1;
         self.stats.ack_timeouts += 1;
+        if self.config.stated_answers
+            && what == Some(Waiting::Ack)
+            && let Some((mode, fresh)) = self.ladder_pending.take()
+        {
+            // A burst nothing of which was read is not answered (ADR-0068): the rung decoded
+            // none of its frames, and no SNR came back for it.
+            self.ladder.push(LadderRung {
+                mode,
+                frames: fresh.len(),
+                decoded: 0,
+                snr_db: None,
+            });
+        }
         if self.retries > self.config.max_retries {
             self.end_session("no response");
             return;
         }
+        if self.config.stated_answers
+            && matches!(what, Some(Waiting::Ack | Waiting::Poll))
+            && self.retries >= 2
+        {
+            // From the second silence in a row the repeat waits a random backoff that widens
+            // with each, as a call's tries do (ADR-0068). Exact slots put two stations that
+            // both believe they hold the turn — the other's data lost in a fade, its control
+            // frames not — on timers of their own: one resending at the end of every slot, the
+            // other polling, keyed over each other every time until the session died.
+            let span =
+                (self.retries - 1) as f64 * self.slot_s(self.timing.is_floor(self.burst_mode()));
+            self.waiting_for = what; // a late answer is still taken
+            self.resending = what;
+            let delay = self.backoff.next_unit() * span;
+            self.arm(Timer::Resend, delay);
+            return;
+        }
+        self.repeat(what);
+    }
+
+    /// A backoff's repeat (ADR-0068), unless an answer came meanwhile.
+    fn resend(&mut self, what: Option<Waiting>) {
+        if what.is_none() || self.waiting_for != what || self.state != State::Connected {
+            return;
+        }
+        self.waiting_for = None;
+        self.repeat(what);
+    }
+
+    /// The repeat after a silence: the burst again, or the poll.
+    fn repeat(&mut self, what: Option<Waiting>) {
         match what {
             // same composition: nothing was acknowledged — at a mode no higher than the
             // silence says the path can carry
             Some(Waiting::Ack) => {
+                if self.config.stated_answers
+                    && self.disc_requested
+                    && self.now - self.last_peer_frame >= self.disc_patience()
+                    && self.unacked().iter().all(|&seq| {
+                        self.records
+                            .iter()
+                            .any(|r| r.seq == seq && self.timing.is_floor(r.mode) && r.tx_count > 0)
+                    })
+                {
+                    // A burst nothing of which was read is not answered (ADR-0068), so a path
+                    // that carries none of the queue sends nothing back to measure patience at.
+                    // Silence alone cannot tell lost data from lost answers — ordinary answers
+                    // lost on a lopsided path while the floor's arrive — so the DISC goes once
+                    // the other station has been heard not at all for the patience and every
+                    // frame left has gone on the floor unanswered.
+                    self.disc_patience_until = Some(self.now);
+                    self.out_of_patience();
+                    return;
+                }
                 self.back_off();
                 self.send_burst();
             }
@@ -2093,7 +2313,11 @@ impl LinkEngine {
         {
             return;
         }
-        let quiet_at = self.tx_busy_until.max(self.last_peer_frame) + self.reaction_s();
+        let quiet_at = self
+            .tx_busy_until
+            .max(self.last_peer_frame)
+            .max(self.carrier_until)
+            + self.reaction_s();
         if self.now < quiet_at - 1e-9 {
             self.arm(Timer::Request, quiet_at - self.now);
             return;
@@ -2109,7 +2333,6 @@ impl LinkEngine {
         let (bitmap, _, _) = self.receive_window();
         self.stated_want = true;
         self.stats.turn_requests += 1;
-        self.ack_counter = (self.ack_counter + 1) % 8;
         let recommended = self.rate.recommend();
         self.asked = Some(
             self.asked
@@ -2139,28 +2362,8 @@ impl LinkEngine {
             self.send_disc();
             return;
         }
-        if self.disc_requested {
-            // the queue is waited for, but not for ever: a path whose acknowledgements never
-            // arrive never empties it (ADR-0039)
-            match self.disc_patience_until {
-                None => self.disc_patience_until = Some(self.now + self.disc_patience()),
-                Some(until) if self.now >= until => {
-                    let unacked: usize = self
-                        .unacked()
-                        .iter()
-                        .filter_map(|&seq| self.records.iter().find(|r| r.seq == seq))
-                        .map(|r| r.body.len())
-                        .sum();
-                    let left = self.tx_queue.len() + unacked;
-                    self.actions.push(Action::Event {
-                        name: "disconnect",
-                        detail: format!("{left} bytes not acknowledged; leaving without them"),
-                    });
-                    self.send_disc();
-                    return;
-                }
-                Some(_) => {}
-            }
+        if self.disc_requested && self.out_of_patience() {
+            return;
         }
         let hand_over = match self.peer_request {
             PeerRequest::None => false,
@@ -2178,6 +2381,33 @@ impl LinkEngine {
             self.send_burst();
         } else if self.deadline_of(Timer::Keepalive).is_none() {
             self.arm(Timer::Keepalive, self.config.keepalive_s);
+        }
+    }
+
+    /// A sender asked to disconnect waits for its queue, but not for ever: a path whose
+    /// acknowledgements never arrive never empties it (ADR-0039). True once it has left.
+    fn out_of_patience(&mut self) -> bool {
+        match self.disc_patience_until {
+            None => {
+                self.disc_patience_until = Some(self.now + self.disc_patience());
+                false
+            }
+            Some(until) if self.now >= until => {
+                let unacked: usize = self
+                    .unacked()
+                    .iter()
+                    .filter_map(|&seq| self.records.iter().find(|r| r.seq == seq))
+                    .map(|r| r.body.len())
+                    .sum();
+                let left = self.tx_queue.len() + unacked;
+                self.actions.push(Action::Event {
+                    name: "disconnect",
+                    detail: format!("{left} bytes not acknowledged; leaving without them"),
+                });
+                self.send_disc();
+                true
+            }
+            Some(_) => false,
         }
     }
 
@@ -2209,7 +2439,11 @@ impl LinkEngine {
         let frame_s = self
             .timing
             .data_frame_s_for(seqs.first().map_or(mode, |&s| self.mode_of(s)));
-        let room = self.burst_capacity(frame_s);
+        let mut room = self.burst_capacity(frame_s);
+        if self.config.stated_answers {
+            // an acknowledgement that took the turn takes a slot of the burst after it
+            room = room.saturating_sub(prefix.len()).max(1);
+        }
         seqs.truncate(room);
         let new_frames = family == self.timing.is_floor(mode);
         let capacity = data_capacity(self.timing.capacity(mode));
@@ -2257,7 +2491,8 @@ impl LinkEngine {
             }
         }
 
-        let offer = self.offers_turn(family, &seqs);
+        let offer = self.offers_turn(family, &seqs, prefix.len(), frame_s);
+        let stated = self.config.stated_answers;
         let mut frames = Vec::with_capacity(seqs.len());
         for seq in &seqs {
             let Some(index) = self.records.iter().position(|r| r.seq == *seq) else {
@@ -2270,17 +2505,17 @@ impl LinkEngine {
             frames.push(self.data_frame(&mut record));
             self.records[index] = record;
         }
-        // each frame says how many of the burst come after it — in pairs, never fewer — so a
-        // receiver that loses one in a fade still knows the burst is not over and does not
-        // answer over it (ADR-0041, ADR-0046) — the offer counted among them (ADR-0047)
         let count = frames.len();
-        for (i, frame) in frames.iter_mut().enumerate() {
-            frame.follows = crate::frames::countdown_of(count - 1 - i + usize::from(offer));
-        }
-        self.stats.frames_sent += frames.len();
-        let mut frames = [prefix, frames].concat();
+        self.stats.frames_sent += count;
+        let mut frames = self.counted(prefix, frames, offer, family);
         if offer {
-            let turn = self.control(ControlKind::Turn, control_flags::OFFER, 0, 0, None, 0);
+            let mut turn = self.control(ControlKind::Turn, control_flags::OFFER, 0, 0, None, 0);
+            if stated {
+                // a frame of the burst, in its slot: in the burst's family (ADR-0068). On the
+                // floor after an ordinary frame it ran 2.2 s past the slot it was counted in,
+                // and the answer that slot stated went out over it, every exchange.
+                turn.floor = family;
+            }
             frames.push(turn);
             self.stats.turn_offers += 1;
         }
@@ -2292,6 +2527,39 @@ impl LinkEngine {
         self.wait_for_burst_ack(&seqs, family, recommendation, count, offer);
     }
 
+    /// A burst's frames after `prefix`, each saying how many of the burst come after it — in
+    /// pairs, never fewer — so a receiver that loses one in a fade still knows the burst is not
+    /// over and does not answer over it (ADR-0041, ADR-0046) — the offer counted among them
+    /// (ADR-0047). Exactly, under stated answers (ADR-0068), on the floor's frames too, and the
+    /// acknowledgement in `prefix` that took the turn states the burst after it.
+    fn counted(
+        &self,
+        prefix: Vec<TxFrame>,
+        mut frames: Vec<TxFrame>,
+        offer: bool,
+        family: bool,
+    ) -> Vec<TxFrame> {
+        let stated = self.config.stated_answers;
+        let count = frames.len();
+        for (i, frame) in frames.iter_mut().enumerate() {
+            let following = count - 1 - i + usize::from(offer);
+            frame.follows = if stated {
+                following.min(usize::from(MAX_FOLLOWS)) as u8
+            } else {
+                crate::frames::countdown_of(following)
+            };
+        }
+        let prefix: Vec<TxFrame> = if stated {
+            prefix
+                .into_iter()
+                .map(|p| Self::restate(p, count + usize::from(offer), family))
+                .collect()
+        } else {
+            prefix
+        };
+        [prefix, frames].concat()
+    }
+
     /// The wait for the acknowledgement of the burst just sent.
     fn wait_for_burst_ack(
         &mut self,
@@ -2301,6 +2569,25 @@ impl LinkEngine {
         count: usize,
         offer: bool,
     ) {
+        let last_s = seqs
+            .last()
+            .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)));
+        if self.config.stated_answers {
+            // The answer comes a turnaround after the end the burst stated (ADR-0068). An offer
+            // takes a data frame's slot and is shorter, so a receiver that missed it answers that
+            // much later than one that read it; the wait covers the later.
+            let late = if offer {
+                (last_s - self.timing.control_frame_s_for(false)).max(0.0)
+            } else {
+                0.0
+            };
+            self.wait_for(
+                Waiting::Ack,
+                self.answer_s(Some(family || self.peer_floor)),
+                late,
+            );
+            return;
+        }
         // the receiver's quiet after this burst: its family, and the longest frame it will
         // expect — this burst's, or the mode it recommended, as its own peer_data_frame_s
         // has it
@@ -2323,9 +2610,6 @@ impl LinkEngine {
         // answers that frame late (ADR-0046); one that lost the offer takes the last data
         // frame's count — the offer among it — at its word, up to two frames (ADR-0047). The
         // wait covers them.
-        let last_s = seqs
-            .last()
-            .map_or(0.0, |&seq| self.timing.data_frame_s_for(self.mode_of(seq)));
         let late = if family {
             0.0
         } else if offer {
@@ -2346,7 +2630,11 @@ impl LinkEngine {
     /// Whether this burst ends with the turn on offer (ADR-0047): it empties the queue, with
     /// nothing else outstanding, and the other station takes the turn in its acknowledgement if
     /// it has something to send. Ordinary frames only: a floor control frame is 3.2 s.
-    fn offers_turn(&self, family: bool, seqs: &[u8]) -> bool {
+    ///
+    /// Under stated answers (ADR-0068) the offer takes a slot of the burst's four, `prefix`
+    /// frames before it take theirs, and it goes in the burst's family, which a station that
+    /// hears this one weakly cannot read.
+    fn offers_turn(&self, family: bool, seqs: &[u8], prefix: usize, frame_s: f64) -> bool {
         self.config.offer_turn
             && self.state == State::Connected
             && !family
@@ -2355,6 +2643,8 @@ impl LinkEngine {
             && !self.disc_requested
             && self.unacked().iter().all(|s| seqs.contains(s))
             && !self.offer_unheard
+            && (!self.config.stated_answers
+                || (prefix + seqs.len() < self.burst_capacity(frame_s) && !self.heard_weakly()))
     }
 
     /// A frame sent `max_combines` times at its mode without an acknowledgement is stranded
@@ -2452,6 +2742,7 @@ impl LinkEngine {
         };
         self.waiting_for = None;
         self.disarm(Timer::Wait);
+        self.disarm(Timer::Resend);
         // An acknowledgement of an offer that measured none of the burst's data: the other
         // station heard the offer at the end and not the frames before it. A receiver whose
         // radio takes longer to come back after transmitting than this station takes to answer
@@ -2554,8 +2845,15 @@ impl LinkEngine {
             // noise — a false detection, most likely — and so are its SNR and its soft bits;
             // it is not part of any burst
             self.stats.frames_failed += 1;
-            return;
+        } else if self.config.stated_answers {
+            self.on_stated_data(frame);
+        } else {
+            self.on_counted_data(frame);
         }
+    }
+
+    /// A data frame of a burst, the receiver inferring the burst's end (before ADR-0068).
+    fn on_counted_data<F: SoftFrame>(&mut self, frame: &F) {
         // part of the current burst: record it, decode what decodes, acknowledge after the gap —
         // unless it was the caller's request again, which is answered by the acceptance again
         // and by nothing else (`accept`)
@@ -2610,6 +2908,152 @@ impl LinkEngine {
                 self.called_again(&payload, record.snr_db);
             }
         }
+    }
+
+    /// A data frame of a burst, under stated answers (ADR-0068). Only a frame that decoded says
+    /// when the answer is due: its count rides outside the codeword, but the codeword vouches
+    /// that the chips it was read from were read right. A frame that failed with a trusted
+    /// acquisition is part of the burst — combined, and counted against the path — and says
+    /// nothing of its end: on the scenario harness one read its chips as the fastest rung and
+    /// "none follow", and its answer went out over the rest of the burst. A burst nothing of
+    /// which decoded is not answered; it closes when no frame of it has followed within a frame
+    /// (`Close`), and its failures reach the rate controller then. An untrusted frame that does
+    /// not decode is no part of anything.
+    fn on_stated_data<F: SoftFrame>(&mut self, frame: &F) {
+        if !frame.trusted() && frame.decode(None).0.is_none() {
+            self.stats.frames_failed += 1;
+            return;
+        }
+        let (t_start, t_end) = (frame.t_start(), frame.t_end());
+        if self.stated.is_none() && !self.burst.is_empty() {
+            let last = self
+                .burst
+                .iter()
+                .map(|r| r.t_end)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if t_start > last + 0.5 * (t_end - t_start).max(0.0) {
+                // the burst before ended with nothing of it decoded, and nothing answered it
+                self.close_unanswered();
+            }
+        }
+        let slot = self.slot_of(t_start, frame.mode());
+        let mut record = RxRecord {
+            slot,
+            mode: frame.mode(),
+            snr_db: frame.snr_db(),
+            payload: None,
+            seq: None,
+            rv: frame.rv(),
+            trusted: frame.trusted(),
+            combined: false,
+            outside: false,
+            payload_outside: None,
+            new: false,
+            t_end,
+            announced_end: None,
+            closes_at: None,
+        };
+        let part_of_burst = self.decode_record(frame, &mut record);
+        if record.outside {
+            if self.burst.is_empty() {
+                self.burst_t0 = None;
+                if self.stated.is_none() {
+                    self.disarm(Timer::Ack);
+                    self.disarm(Timer::Close);
+                }
+            }
+            if let Some(payload) = record.payload_outside.take() {
+                self.called_again(&payload, record.snr_db);
+            }
+            return;
+        }
+        if !part_of_burst {
+            return; // the caller's request again, answered by the acceptance (`accept`)
+        }
+        let decoded = record.payload.is_some();
+        if !decoded && let Some(due) = self.deadline_of(Timer::Link) {
+            // No answer, but most likely the other station still sending, stepping down into a
+            // fade: an answer to it reckoned the timeout for its family whenever it went
+            // (ADR-0033), and without one the timeout armed by the last OFDM frame ran out under
+            // the first floor burst. The link stays up for the frame's family.
+            let reckoned = self.now + self.link_timeout_heard((t_end - t_start).max(0.0));
+            self.set_deadline(Timer::Link, due.max(reckoned));
+        }
+        self.burst.push(record);
+        if decoded {
+            self.took_unread = false;
+            self.state_answer(t_start, t_end, frame.follows(), None);
+        }
+        let Some((_, due)) = self.stated else {
+            // Nothing read has said when the burst ends — this frame failed, or its count was
+            // lost. The next frame of the burst ends a frame after this one and is reported a
+            // detection latency later: nothing by then, and the burst is over, unanswered.
+            let close = t_end + (t_end - t_start) + self.timing.detect_latency_s;
+            self.arm(
+                Timer::Close,
+                (close - self.now).max(0.0) + self.config.ack_margin_s,
+            );
+            return;
+        };
+        self.disarm(Timer::Close);
+        if decoded && due < self.tx_started - 1e-9 {
+            // the burst this frame states was answered by this station's last transmission: a
+            // frame of it finished late. What it carried is kept; it is no burst of its own.
+            self.burst.pop();
+            if self.burst.is_empty() {
+                self.burst_t0 = None;
+                self.stated = None;
+                self.disarm(Timer::Ack);
+            }
+        }
+    }
+
+    /// A burst nothing of which decoded is over, unanswered (ADR-0068): what its frames say of
+    /// the path goes to the rate controller, as an answer's would have.
+    fn close_unanswered(&mut self) {
+        self.disarm(Timer::Close);
+        if self.stated.is_some() || self.burst.is_empty() {
+            return;
+        }
+        self.observe_burst();
+        self.finish_burst();
+    }
+
+    /// Take what a frame read says of when its burst ends, and arm the answer for it
+    /// (ADR-0068); the latest frame's word stands. A frame whose count is lost — a tone frame
+    /// whose middle block faded — states nothing: what it carried is kept, and acknowledged
+    /// with the next answer. Taken as if three followed, its answer went out after the sender's
+    /// slot, over the burst it sent again.
+    fn state_answer(&mut self, t_start: f64, t_end: f64, follows: Option<u8>, slot_s: Option<f64>) {
+        let Some(count) = follows else {
+            return;
+        };
+        if self.stated.is_some_and(|(start, _)| start > t_start) {
+            return;
+        }
+        let slot = slot_s.unwrap_or((t_end - t_start).max(0.0));
+        let due = t_end + f64::from(count) * slot + self.timing.turnaround_s;
+        self.stated = Some((t_start, due));
+        self.arm(Timer::Ack, (due - self.now).max(0.0));
+    }
+
+    /// The acknowledgement that took the turn, stating the burst after it (ADR-0068).
+    fn restate(mut prefix: TxFrame, follows: usize, floor: bool) -> TxFrame {
+        if let Ok(mut ack) = ControlFrame::decode(&prefix.payload) {
+            ack.follows = follows.min(usize::from(MAX_FOLLOWS)) as u8;
+            ack.burst_floor = floor;
+            prefix.payload = ack.encode().to_vec();
+        }
+        prefix
+    }
+
+    /// The burst accumulator emptied once the burst is answered or closed.
+    fn finish_burst(&mut self) {
+        self.burst.clear();
+        self.arriving.clear();
+        self.burst_t0 = None;
+        self.stated = None;
+        self.disarm(Timer::Close);
     }
 
     /// A call from the station this one is in session with, under a new session number: that
@@ -2889,6 +3333,7 @@ impl LinkEngine {
                 // went out over the caller's first burst, which follows the acceptance at once
                 self.burst.clear();
                 self.arriving.clear();
+                self.stated = None;
                 self.burst_t0 = None;
                 self.disarm(Timer::Ack);
                 return false;
@@ -2977,6 +3422,18 @@ impl LinkEngine {
                     .filter(|r| r.payload.is_some())
                     .all(|r| !r.new),
         );
+        self.observe_burst();
+        self.finish_burst();
+        if self.disc_requested {
+            self.send_disc();
+            return;
+        }
+        self.answer_burst();
+    }
+
+    /// What a burst's frames say of the path, to the rate controller.
+    fn observe_burst(&mut self) {
+        let ok = self.burst.iter().filter(|r| r.payload.is_some()).count();
         // A failure is news of the path when the frame could have decoded (ADR-0020): a real
         // frame (the PHY trusts it), at a redundancy version that decodes on its own or
         // combined with an earlier transmission of its block. A retransmission at RV 1 or 2
@@ -3005,6 +3462,7 @@ impl LinkEngine {
             .collect();
         let snr =
             (!measured.is_empty()).then(|| measured.iter().sum::<f64>() / measured.len() as f64);
+        self.burst_snr = snr;
         // the mode the burst was mostly sent at, which is what the rate controller judges
         let burst_mode = self
             .burst
@@ -3012,11 +3470,6 @@ impl LinkEngine {
             .map(|r| r.mode)
             .max_by_key(|&mode| self.burst.iter().filter(|r| r.mode == mode).count());
         let slowest = self.burst.iter().map(|r| r.mode).min();
-        // HARQ buffers were stored per frame as the frames arrived, so only the accumulator
-        // needs clearing here
-        self.burst.clear();
-        self.arriving.clear();
-        self.burst_t0 = None;
         if failed > 0
             && let (Some(slowest), Some(asked)) = (slowest, self.asked)
             && slowest > asked
@@ -3031,12 +3484,12 @@ impl LinkEngine {
         } else {
             self.rate.observe(snr, ok, failed, burst_mode);
         }
+    }
 
-        if self.disc_requested {
-            self.send_disc();
-            return;
-        }
-
+    /// The acknowledgement of the burst just observed ([`observe_burst`](Self::observe_burst))
+    /// — or the acknowledgement that takes the turn, this station's burst after it (ADR-0047).
+    fn answer_burst(&mut self) {
+        let snr = self.burst_snr;
         let (bitmap, missing, next_new) = self.receive_window();
         let missing_now = missing.clone();
         self.ack_history
@@ -3065,7 +3518,6 @@ impl LinkEngine {
             flags |= control_flags::TAKEN | control_flags::WANT_TX;
         }
         self.stated_want = flags & control_flags::WANT_TX != 0;
-        self.ack_counter = (self.ack_counter + 1) % 8;
         self.stats.acks_sent += 1;
         let base = self.rx_base;
         let recommended = self.rate.recommend();
@@ -3154,54 +3606,7 @@ impl LinkEngine {
                 self.end_session("closed");
             }
             ControlKind::DiscAck => {}
-            ControlKind::Ack => {
-                let mut unread_poll = false;
-                if self.waiting_for == Some(Waiting::Poll) {
-                    // The other station answers in the family it last read this one in, and
-                    // answers a poll it heard and could not read all the same (ADR-0028): a
-                    // floor answer to an ordinary poll answered the poll's preamble alone.
-                    // Taken for the answer, it told this station the link was up while the
-                    // other read nothing of it until its link timed out (ADR-0034).
-                    unread_poll = frame.floor() && !self.poll_floor;
-                    self.unread_there = unread_poll;
-                }
-                self.give_back_turn(control.flags);
-                if self.role == Role::Iss
-                    && (matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
-                        // an idle sender in a chat takes the other station's request for the
-                        // turn (ADR-0027) — and, with nothing of its own to finish, hands over
-                        || (self.waiting_for.is_none()
-                            && self.config.chat
-                            && control.flags & control_flags::WANT_TX != 0))
-                {
-                    self.on_ack(&control);
-                    if unread_poll && self.deadline_of(Timer::Keepalive).is_some() {
-                        // the answer asked for nothing — no turn, no burst went — and the poll
-                        // was not read: it goes again now, on the floor, rather than a
-                        // keepalive later
-                        self.arm(Timer::Keepalive, self.timing.turnaround_s);
-                    }
-                } else if self.role == Role::Irs && self.state == State::Connected {
-                    // The other station is receiving too: it has not taken a turn this one
-                    // offered, and it answered a preamble of this one's as the end of a burst.
-                    // That needs no answer, and the acknowledgement the frame's own preamble
-                    // armed is withdrawn: sent, it was answered in turn, and keyed after a TURN
-                    // it went out over the answer to the TURN (ADR-0029).
-                    if self.waiting_for == Some(Waiting::Turn) {
-                        self.turn_unread = false;
-                        // A station that reads a TURN takes the turn and answers with its burst
-                        // or a poll: this acknowledgement answered the TURN's preamble. Repeated
-                        // in its family when the wait ran out, an ordinary TURN answered on the
-                        // floor went unread three times and the other station timed out
-                        // (ADR-0034). It goes again now, on the floor.
-                        self.unread_there = true;
-                        self.arm(Timer::Wait, self.timing.turnaround_s);
-                    }
-                    if self.burst.is_empty() {
-                        self.disarm(Timer::Ack);
-                    }
-                }
-            }
+            ControlKind::Ack => self.on_ack_control(frame, &control),
             ControlKind::Poll => {
                 // Both stations hold the turn when a sender hears a poll: the other missed
                 // this one's answer to its TURN, took the turn back when its tries ran out,
@@ -3230,8 +3635,12 @@ impl LinkEngine {
                 // over with this frame, and the acknowledgement may take the turn
                 if self.role == Role::Irs {
                     self.offered = true;
-                    let delay = self.timing.turnaround_s + (frame.t_end() - self.now).max(0.0);
-                    self.arm(Timer::Ack, delay);
+                    if self.config.stated_answers {
+                        self.state_answer(frame.t_start(), frame.t_end(), Some(0), None);
+                    } else {
+                        let delay = self.timing.turnaround_s + (frame.t_end() - self.now).max(0.0);
+                        self.arm(Timer::Ack, delay);
+                    }
                 }
             }
             ControlKind::Turn => {
@@ -3250,6 +3659,73 @@ impl LinkEngine {
                     self.disarm(Timer::Keepalive);
                     self.answer_turn();
                 }
+            }
+        }
+    }
+
+    /// An acknowledgement read in a session: the answer to this station's burst or poll, a
+    /// request for the turn, or the other station receiving too.
+    fn on_ack_control<F: SoftFrame>(&mut self, frame: &F, control: &ControlFrame) {
+        let mut unread_poll = false;
+        if self.waiting_for == Some(Waiting::Poll) {
+            // The other station answers in the family it last read this one in, and
+            // answers a poll it heard and could not read all the same (ADR-0028): a
+            // floor answer to an ordinary poll answered the poll's preamble alone.
+            // Taken for the answer, it told this station the link was up while the
+            // other read nothing of it until its link timed out (ADR-0034).
+            // Not under stated answers (ADR-0068): a poll that is not read is not
+            // answered, and a floor answer is the other station's choice of family.
+            unread_poll = frame.floor() && !self.poll_floor && !self.config.stated_answers;
+            self.unread_there = unread_poll;
+        }
+        self.give_back_turn(control.flags);
+        if self.role == Role::Iss
+            && (matches!(self.waiting_for, Some(Waiting::Ack | Waiting::Poll))
+                // an idle sender in a chat takes the other station's request for the
+                // turn (ADR-0027) — and, with nothing of its own to finish, hands over
+                || (self.waiting_for.is_none()
+                    && self.config.chat
+                    && control.flags & control_flags::WANT_TX != 0))
+        {
+            self.on_ack(control);
+            if self.config.stated_answers
+                && control.flags & control_flags::TAKEN != 0
+                && control.follows > 0
+            {
+                // the acknowledgement took the turn and states its burst: its end is due
+                // an answer, whether any of the burst is read or not (ADR-0068)
+                let slot = self.slot_s(control.burst_floor);
+                self.state_answer(
+                    frame.t_start(),
+                    frame.t_end(),
+                    Some(control.follows),
+                    Some(slot),
+                );
+            }
+            if unread_poll && self.deadline_of(Timer::Keepalive).is_some() {
+                // the answer asked for nothing — no turn, no burst went — and the poll
+                // was not read: it goes again now, on the floor, rather than a
+                // keepalive later
+                self.arm(Timer::Keepalive, self.timing.turnaround_s);
+            }
+        } else if self.role == Role::Irs && self.state == State::Connected {
+            // The other station is receiving too: it has not taken a turn this one
+            // offered, and it answered a preamble of this one's as the end of a burst.
+            // That needs no answer, and the acknowledgement the frame's own preamble
+            // armed is withdrawn: sent, it was answered in turn, and keyed after a TURN
+            // it went out over the answer to the TURN (ADR-0029).
+            if self.waiting_for == Some(Waiting::Turn) {
+                self.turn_unread = false;
+                // A station that reads a TURN takes the turn and answers with its burst
+                // or a poll: this acknowledgement answered the TURN's preamble. Repeated
+                // in its family when the wait ran out, an ordinary TURN answered on the
+                // floor went unread three times and the other station timed out
+                // (ADR-0034). It goes again now, on the floor.
+                self.unread_there = true;
+                self.arm(Timer::Wait, self.timing.turnaround_s);
+            }
+            if self.burst.is_empty() {
+                self.disarm(Timer::Ack);
             }
         }
     }
@@ -3282,6 +3758,7 @@ impl LinkEngine {
         self.unread_there = false;
         self.disarm(Timer::Wait);
         self.disarm(Timer::Keepalive);
+        self.disarm(Timer::Resend);
     }
 
     fn take_iss(&mut self) {
@@ -3303,6 +3780,7 @@ impl LinkEngine {
         self.role = Role::Iss;
         self.burst.clear();
         self.arriving.clear();
+        self.stated = None;
         self.burst_t0 = None;
         self.disarm(Timer::Ack);
         self.waiting_for = Some(Waiting::Ack);
@@ -3326,10 +3804,12 @@ impl LinkEngine {
         }
         self.waiting_for = None;
         self.disarm(Timer::Wait);
+        self.disarm(Timer::Resend);
         self.disarm(Timer::Ack);
         self.disarm(Timer::Request);
         self.burst.clear();
         self.arriving.clear();
+        self.stated = None;
         self.burst_t0 = None;
         self.break_requested = false;
         self.stated_want = false;
@@ -3674,11 +4154,11 @@ impl LinkEngine {
         self.harq.clear();
         self.burst.clear();
         self.arriving.clear();
+        self.stated = None;
         self.burst_t0 = None;
         self.ack_history.clear();
         self.acks_on_floor = false;
         self.took_unread = false;
-        self.ack_counter = 0;
         self.asked = None;
         self.break_requested = false;
         self.stated_want = false;
@@ -3691,9 +4171,12 @@ impl LinkEngine {
             Timer::Link,
             Timer::Request,
             Timer::First,
+            Timer::Resend,
+            Timer::Close,
         ] {
             self.disarm(timer);
         }
+        self.resending = None;
     }
 
     fn arm_leave(&mut self) {
@@ -3712,7 +4195,8 @@ impl LinkEngine {
             bitmap: 0,
             snr_db: None,
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         TxFrame {
             container: Container::Control,
@@ -4104,7 +4588,8 @@ mod tests {
             bitmap: 0,
             snr_db: None,
             recommended_mode: 0,
-            counter: 0,
+            follows: 0,
+            burst_floor: false,
         };
         e.on_ack(&ack);
         assert!(e.all_acknowledged());
@@ -4789,7 +5274,8 @@ mod tests {
                 bitmap: 0,
                 snr_db: None,
                 recommended_mode: u8::try_from(recommended_mode).expect("a rung"),
-                counter: 0,
+                follows: 0,
+                burst_floor: false,
             }
             .encode()
             .to_vec();
@@ -5118,7 +5604,8 @@ mod tests {
                 bitmap: 0,
                 snr_db: None,
                 recommended_mode: 0,
-                counter: 0,
+                follows: 0,
+                burst_floor: false,
             };
             let end = start + control;
             let frame = crate::sim::SimFrame::decoded(
@@ -5366,5 +5853,300 @@ mod tests {
         assert!((e.rate.margin_db() - margin).abs() < 1e-12);
         assert_eq!(e.stats.frames_failed, failed);
         assert!(e.burst.is_empty());
+    }
+    // ── ADR-0068: stated answers ──────────────────────────────────────
+
+    /// A station receiving in session 7 with stated answers on, nothing due.
+    fn stated_receiver(timing: PhyTiming) -> LinkEngine {
+        let mut e = LinkEngine::new(
+            "KK4XYZ",
+            timing,
+            LinkConfig {
+                stated_answers: true,
+                ..LinkConfig::default()
+            },
+            2,
+        );
+        e.state = State::Connected;
+        e.role = Role::Irs;
+        e.session = 7;
+        e.now = 100.0;
+        e.rate.seed(15.0, false);
+        e.arm(Timer::Link, 1000.0);
+        e
+    }
+
+    /// A data frame of session 7: read or failed, trusted or not, with the count its PHY read.
+    struct Stated {
+        mode: usize,
+        seq: u8,
+        t_start: f64,
+        t_end: f64,
+        follows: Option<u8>,
+        decoded: bool,
+        trusted: bool,
+        capacity: usize,
+    }
+
+    impl Stated {
+        fn new(e: &LinkEngine, mode: usize, seq: u8, t_start: f64, follows: Option<u8>) -> Self {
+            Self {
+                mode,
+                seq,
+                t_start,
+                t_end: t_start + e.timing.data_frame_s_for(mode),
+                follows,
+                decoded: true,
+                trusted: true,
+                capacity: e.timing.capacity(mode),
+            }
+        }
+
+        fn failed(mut self) -> Self {
+            self.decoded = false;
+            self
+        }
+
+        fn untrusted(mut self) -> Self {
+            self.trusted = false;
+            self
+        }
+    }
+
+    impl SoftFrame for Stated {
+        fn container(&self) -> Container {
+            Container::Data
+        }
+        fn mode(&self) -> usize {
+            self.mode
+        }
+        fn floor(&self) -> bool {
+            false
+        }
+        fn rv(&self) -> u8 {
+            0
+        }
+        fn snr_db(&self) -> f64 {
+            if self.decoded { 20.0 } else { -2.0 }
+        }
+        fn follows(&self) -> Option<u8> {
+            self.follows
+        }
+        fn trusted(&self) -> bool {
+            self.trusted
+        }
+        fn t_start(&self) -> f64 {
+            self.t_start
+        }
+        fn t_end(&self) -> f64 {
+            self.t_end
+        }
+        fn decode(&self, _buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
+            let header = DataHeader {
+                kind: DataKind::Data,
+                seq: self.seq,
+                session: 7,
+            };
+            let payload = encode_data(&header, b"stated!!", self.capacity).expect("fits");
+            (self.decoded.then_some(payload), vec![0.0])
+        }
+    }
+
+    /// The first OFDM rung of the engine's ladder and two above it: one a 15 dB link carries.
+    fn ordinary(e: &LinkEngine) -> usize {
+        e.timing.floor_modes + 2
+    }
+
+    #[test]
+    fn the_answer_is_due_when_the_frame_said() {
+        // a frame that says two follow puts the answer two slots and a turnaround after its
+        // end; the next frame says the same; an announcement moves nothing; and the answer goes
+        // then, once
+        for timing in [wide(), narrow()] {
+            let mut e = stated_receiver(timing);
+            let mode = ordinary(&e);
+            let slot = e.timing.data_frame_s_for(mode);
+            let first = Stated::new(&e, mode, 0, 101.0, Some(2));
+            e.on_frame(&first, first.t_end + 0.05);
+            let due = 2.0f64.mul_add(slot, first.t_end) + e.timing.turnaround_s;
+            assert!((e.deadline_of(Timer::Ack).expect("armed") - due).abs() < 1e-9);
+            e.on_preamble(first.t_end + 0.3, first.t_end + 0.35, Some(3.0 * slot));
+            assert!(
+                (e.deadline_of(Timer::Ack).expect("armed") - due).abs() < 1e-9,
+                "an announcement moved the answer"
+            );
+            let second = Stated::new(&e, mode, 1, first.t_end, Some(1));
+            e.on_frame(&second, second.t_end + 0.05);
+            assert!((e.deadline_of(Timer::Ack).expect("armed") - due).abs() < 1e-9);
+            e.tick(due - 0.01);
+            assert!(transmitted(&mut e).is_empty());
+            e.tick(due + 0.01);
+            let sent = answers(&mut e);
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].0.kind, ControlKind::Ack);
+        }
+    }
+
+    #[test]
+    fn a_burst_nothing_of_which_decoded_is_not_answered() {
+        // frames that failed with a trusted acquisition are the burst's — counted against the
+        // path — but say nothing of its end: the burst closes a frame after the last, unanswered,
+        // and the rate controller hears of it then
+        let mut e = stated_receiver(wide());
+        let mode = ordinary(&e);
+        let before = e.rate.recommend();
+        let first = Stated::new(&e, mode, 0, 101.0, Some(1)).failed();
+        e.on_frame(&first, first.t_end + 0.05);
+        let second = Stated::new(&e, mode, 1, first.t_end, Some(0)).failed();
+        e.on_frame(&second, second.t_end + 0.05);
+        assert_eq!(e.deadline_of(Timer::Ack), None);
+        assert!(e.deadline_of(Timer::Close).is_some());
+        e.tick(second.t_end + 30.0);
+        assert!(
+            transmitted(&mut e).is_empty(),
+            "answered a burst it could not read"
+        );
+        assert!(e.burst.is_empty());
+        assert!(e.rate.recommend() < before);
+    }
+
+    #[test]
+    fn an_untrusted_frame_that_did_not_decode_is_nothing() {
+        let mut e = stated_receiver(narrow());
+        let phantom = Stated::new(&e, ordinary(&e), 0, 101.0, Some(0))
+            .failed()
+            .untrusted();
+        e.on_frame(&phantom, phantom.t_end + 0.05);
+        assert!(e.burst.is_empty());
+        assert_eq!(e.deadline_of(Timer::Ack), None);
+        assert_eq!(e.deadline_of(Timer::Close), None);
+        e.tick(140.0);
+        assert!(transmitted(&mut e).is_empty());
+    }
+
+    #[test]
+    fn a_frame_whose_count_is_lost_states_nothing() {
+        // kept and delivered, and the burst closes unanswered: the next answer covers it
+        let mut e = stated_receiver(wide());
+        let frame = Stated::new(&e, ordinary(&e), 0, 101.0, None);
+        e.on_frame(&frame, frame.t_end + 0.05);
+        assert_eq!(e.stats.frames_received, 1);
+        assert_eq!(e.deadline_of(Timer::Ack), None);
+        assert!(e.deadline_of(Timer::Close).is_some());
+        e.tick(frame.t_end + 30.0);
+        assert!(transmitted(&mut e).is_empty());
+        assert!(e.burst.is_empty());
+    }
+
+    #[test]
+    fn a_frame_of_a_burst_already_answered_is_no_burst() {
+        let mut e = stated_receiver(wide());
+        let frame = Stated::new(&e, ordinary(&e), 0, 101.0, Some(0));
+        e.tx_started = frame.t_end + e.timing.turnaround_s + 0.5;
+        e.now = e.tx_started + 0.1;
+        e.on_frame(&frame, e.now);
+        assert!(e.burst.is_empty());
+        assert_eq!(e.deadline_of(Timer::Ack), None);
+        assert!(transmitted(&mut e).is_empty());
+    }
+
+    #[test]
+    fn an_acknowledgement_that_takes_the_turn_states_its_burst() {
+        // the offer takes a slot and goes in the burst's family; the acknowledgement that takes
+        // the turn says how many frames follow it, and its sender's answer is due at their end
+        let mut a = LinkEngine::new(
+            "W4ODA",
+            wide(),
+            LinkConfig {
+                stated_answers: true,
+                ..LinkConfig::default()
+            },
+            1,
+        );
+        a.state = State::Connected;
+        a.role = Role::Iss;
+        a.session = 7;
+        a.now = 100.0;
+        a.recommended = ordinary(&a);
+        a.send(b"hello");
+        a.maybe_start_burst();
+        let frames = transmitted(&mut a);
+        let kinds: Vec<Container> = frames.iter().map(|f| f.container).collect();
+        assert_eq!(kinds, [Container::Data, Container::Control]);
+        let offer = ControlFrame::decode(&frames[1].payload).expect("a control frame");
+        assert_eq!(offer.kind, ControlKind::Turn);
+        assert_ne!(offer.flags & control_flags::OFFER, 0);
+        assert_eq!(frames[1].floor, a.timing.is_floor(frames[0].mode));
+        assert_eq!(frames[0].follows, 1, "the offer takes a slot");
+        let t_end = a.tx_busy_until + a.timing.turnaround_s + a.timing.control_frame_s;
+        let ack = ControlFrame {
+            kind: ControlKind::Ack,
+            session: 7,
+            flags: control_flags::TAKEN | control_flags::WANT_TX,
+            base: 1,
+            bitmap: 1,
+            snr_db: None,
+            recommended_mode: 0,
+            follows: 2,
+            burst_floor: false,
+        };
+        let frame = Readable {
+            payload: ack.encode().to_vec(),
+            floor: false,
+            t_end,
+        };
+        a.on_frame(&frame, t_end + 0.05);
+        assert_eq!(a.role, Role::Irs);
+        let due = 2.0f64.mul_add(a.timing.data_frame_s, t_end) + a.timing.turnaround_s;
+        assert!((a.deadline_of(Timer::Ack).expect("armed") - due).abs() < 1e-9);
+    }
+
+    #[test]
+    fn answers_go_on_the_floor_while_the_other_station_hears_this_one_weakly() {
+        for timing in [wide(), narrow()] {
+            let mut e = stated_receiver(timing);
+            e.peer_floor = false;
+            let threshold = e.ordinary_control_threshold();
+            let margin = e.config.answer_floor_margin_db;
+            e.peer_snr_db = Some(threshold + margin - 0.5);
+            assert!(e.control(ControlKind::Ack, 0, 0, 0, None, 0).floor);
+            e.peer_snr_db = Some(threshold + margin + 0.5);
+            assert!(!e.control(ControlKind::Ack, 0, 0, 0, None, 0).floor);
+        }
+    }
+
+    #[test]
+    fn an_unanswered_burst_goes_again_after_a_widening_random_backoff() {
+        let mut a = LinkEngine::new(
+            "W4ODA",
+            narrow(),
+            LinkConfig {
+                stated_answers: true,
+                ..LinkConfig::default()
+            },
+            1,
+        );
+        a.state = State::Connected;
+        a.role = Role::Iss;
+        a.session = 7;
+        a.now = 100.0;
+        a.send(&[0u8; 400]);
+        a.maybe_start_burst();
+        assert_eq!(a.waiting_for, Some(Waiting::Ack));
+        transmitted(&mut a);
+        let wait = a.deadline_of(Timer::Wait).expect("waiting");
+        a.tick(wait + 0.01);
+        assert!(
+            !transmitted(&mut a).is_empty(),
+            "the first silence repeats at once"
+        );
+        let wait = a.deadline_of(Timer::Wait).expect("waiting");
+        a.tick(wait + 0.01);
+        assert!(transmitted(&mut a).is_empty());
+        let resend = a.deadline_of(Timer::Resend).expect("a backoff");
+        let slot = a.slot_s(a.timing.is_floor(a.burst_mode()));
+        assert!(resend - a.now <= slot + 1e-9);
+        a.tick(resend + 0.01);
+        assert!(!transmitted(&mut a).is_empty());
     }
 }
