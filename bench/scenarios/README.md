@@ -158,7 +158,8 @@ variant.
 `--variant K` only the K-th; the nightly runs variants 0–2 side by side. `--drop-passing-audio`
 deletes a passing run's recordings. `tools/scenario_trend.py` compares a night's CSVs with
 `bench/baselines/scenarios.csv` — each scenario's median air time and Test rates over its
-passing runs, and its pass count — and fails on a step (30 % and 30 s slower, a rate 30 % down,
-a third fewer passing); `--update` rewrites the baseline when a change is meant to alter the
+passing runs, and its pass count — against the *range* of the baseline's own runs, and fails
+on a step (15 % and 30 s past the longest baseline run, a rate 15 % under the slowest, a third
+fewer passing): one build's three seeds of a scenario can differ by half; `--update` rewrites the baseline when a change is meant to alter the
 timing. A failing night opens or comments on the issue labelled `nightly`
 (`tools/nightly_report.py`); a passing one closes it.

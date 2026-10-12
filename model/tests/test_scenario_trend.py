@@ -42,20 +42,28 @@ def test_variants_are_grouped_and_failures_left_out_of_the_timing() -> None:
     assert nights["y"].runs == 1
 
 
-def test_a_step_is_flagged_and_noise_is_not() -> None:
-    base = st.Night("x", 3, 3, 200.0, 300.0, None, None)
-    same = st.Night("x", 3, 3, 240.0, 250.0, None, None)  # +20 %, −17 %
-    slower = st.Night("x", 3, 3, 300.0, 300.0, None, None)  # +50 %, +100 s
-    short = st.Night("x", 3, 3, 30.0, None, None, None)
-    tiny = st.Night("x", 3, 3, 45.0, None, None, None)  # +50 % of 30 s is 15 s
-    failing = st.Night("x", 3, 1, 200.0, 300.0, None, None)
-    assert st.verdict(same, base, 0.3, 30)[0] == "same"
-    assert st.verdict(slower, base, 0.3, 30)[0] == "slower"
-    assert st.verdict(tiny, short, 0.3, 30)[0] == "same"
-    assert st.verdict(failing, base, 0.3, 30)[0] == "failing"
-    assert st.verdict(base, slower, 0.3, 30)[0] == "faster"
-    rate = st.Night("x", 3, 3, 200.0, 150.0, None, None)
-    assert st.verdict(rate, base, 0.3, 30) == ("slower", ["message 300 → 150 bit/s"])
+def night(air: float, msg: float | None, lo: float, hi: float, passed: int = 3) -> st.Night:
+    n = st.Night("x", 3, passed, air, msg, None, None)
+    n.air_s_lo, n.air_s_hi = lo, hi
+    n.message_bps_lo, n.message_bps_hi = (None, None) if msg is None else (msg * 0.7, msg * 1.3)
+    return n
+
+
+def test_a_step_is_flagged_and_a_scenarios_own_spread_is_not() -> None:
+    # the first night's case: rtty-crashes ran 226, 248 and 364 s on one daemon, and a later
+    # median of 364 is inside that, not a regression
+    base = night(248.0, 300.0, 226.0, 364.0)
+    assert st.verdict(night(364.0, 300.0, 300, 400), base, 0.15, 30)[0] == "same"
+    assert st.verdict(night(470.0, 300.0, 400, 500), base, 0.15, 30)[0] == "slower"
+    assert st.verdict(night(150.0, 300.0, 140, 160), base, 0.15, 30)[0] == "faster"
+    # a short scenario's growth past its range by under 30 s is not a step
+    short = night(30.0, None, 28.0, 32.0)
+    assert st.verdict(night(45.0, None, 40, 50), short, 0.15, 30)[0] == "same"
+    assert st.verdict(night(248.0, 300.0, 226, 364, passed=1), base, 0.15, 30)[0] == "failing"
+    # a rate under the slowest baseline run (210 bit/s) by more than the tolerance
+    kind, why = st.verdict(night(248.0, 150.0, 226, 364), base, 0.15, 30)
+    assert kind == "slower"
+    assert why == ["message 150 bit/s, baseline runs 210–390"]
 
 
 def test_the_baseline_round_trips(tmp_path: Path) -> None:
@@ -66,6 +74,7 @@ def test_the_baseline_round_trips(tmp_path: Path) -> None:
         assert next(csv.reader(f)) == st.COLUMNS
     back = st.read_baseline(path)
     assert back["x"] == nights["x"]
+    assert (back["x"].air_s_lo, back["x"].air_s_hi) == (100.0, 100.0)
     assert back["z"].passed == 0
     assert back["z"].air_s is None
     text, flagged = st.report(nights, back, 0.3, 30)

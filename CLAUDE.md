@@ -1369,8 +1369,10 @@ the systemd unit (hidraw, ttyACM, plugdev, `ReadWritePaths=/etc/aetherd`).
 draws of every scenario side by side (`session_matrix.py --seeds N` / `--variant K`: the
 scenario's seed, +1000, +2000, named `-s<seed>`; `--drop-passing-audio`); `tools/scenario_trend.py`
 compares their medians (air time, Test rates over passing runs, pass count) with
-`bench/baselines/scenarios.csv` and fails on a step (30 % and 30 s slower, a rate 30 % down, a
-third fewer passing) — `--update` rewrites the baseline when a change is meant to alter timing;
+the range of the baseline's own runs in `bench/baselines/scenarios.csv` (`*_lo`/`*_hi`) and fails
+on a step (15 % and 30 s past the longest, a rate 15 % under the slowest, a third fewer passing;
+the first night compared medians at 30 % and flagged five scenarios on a build with no daemon
+change — `rtty-crashes` alone runs 226–364 s on one daemon) — `--update` rewrites the baseline when a change is meant to alter timing;
 the nightly's `mixed` job runs the scenarios tagged `mixed` between this build and the newest
 release's daemon both ways round (`tools/mixed_pair.py`, downloaded from the public release page;
 skipped with a note when the link protocol differs); a failing night opens or comments on the
