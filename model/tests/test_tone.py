@@ -628,6 +628,30 @@ def test_a_false_arrival_gives_way_to_a_frame_announced_inside_it() -> None:
     assert [(s.kind, abs(s.start - start) <= 4) for s in found] == [(kind, True)]
 
 
+@pytest.mark.parametrize("kind", [M.TONE_DATA[0], M.TONE_CONTROL])
+def test_an_unconfirmed_frames_end_block_is_not_announced_as_a_frame(kind: M.ToneKind) -> None:
+    """The scenario harness, 20 m across the auroral zone (ADR-0067): a tone frame the
+    Doppler spread kept from being confirmed was announced at its start, and its end block —
+    its first block repeated — was announced as a frame of its own as the frame ended, the
+    first announcement having lapsed with it. The receiving station held its acknowledgement
+    a whole frame for a frame that never came, past the sender's wait, and the two keyed at
+    once. A first block at an announced frame's own middle or end block is that frame's,
+    read after the frame's end as before it."""
+    rng = np.random.default_rng(3)
+    frame = T.burst(kind, _payload(rng, kind), 0)
+    lead = 4000
+    y = np.concatenate((np.zeros(lead, complex), frame, np.zeros(kind.samples, complex)))
+    y += 0.05 * (rng.normal(size=len(y)) + 1j * rng.normal(size=len(y)))
+    stream = T.ToneStream()
+    stream.det.confirmed = lambda buf, sync: False  # type: ignore[method-assign]
+    announced: dict[int, M.ToneKind] = {}
+    for i in range(0, len(y), 160):
+        assert not stream.feed(y[: i + 160], 0)
+        for a in stream.arriving:
+            announced.setdefault(a.start, a.kind)
+    assert len(announced) == 1 and abs(next(iter(announced)) - lead) <= 160, announced
+
+
 def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:
     """A frame half under the receiver's own transmission — the station keyed over it —
     read its noise as zero from the silent symbols and its SNR as 290 dB, which a rate

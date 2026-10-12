@@ -718,6 +718,9 @@ class ToneStream:
         self._taken: list[tuple[int, int, float]] = []
         """Frames taken: start, end and the statistic they were taken at."""
         self.arriving: list[ToneArrival] = []
+        self._lapsed: list[ToneArrival] = []
+        """Announcements whose frame has just ended untaken: their end block, which repeats
+        their first, is read a moment after the frame ends (ADR-0067)."""
 
     def feed(self, buf: ComplexArray, abs0: int) -> list[ToneSync]:
         """Frames final in ``buf`` (whose first sample is absolute index ``abs0``), with
@@ -830,11 +833,16 @@ class ToneStream:
             near = [x[1] for x in self._firsts if abs(x[0] - h) <= self.ANNOUNCE_LOOKAHEAD]
             if v < max(near) or self._overlaps((start, start + kind.samples)):
                 continue
-            inside = [a for a in self.arriving if a.start - hop < start < a.end - hop]
+            inside = [
+                a for a in (*self.arriving, *self._lapsed) if a.start - hop < start < a.end - hop
+            ]
             if any(self._own_block(a, start) or v <= a.statistic for a in inside):
                 # inside a frame already arriving: its own middle or end sync block, which
                 # repeats the first, or a weaker reading than it — never a frame of its own,
-                # in a half-duplex burst
+                # in a half-duplex burst. A frame that never confirmed is still one: its end
+                # block is read once the frame has ended and its announcement lapsed, and
+                # announced as a frame it held the acknowledgement a whole frame for nothing
+                # (the scenario harness, 20 m across the auroral zone; ADR-0067)
                 continue
             # stronger, and not one of its blocks: the arrival it falls in was the false one
             self.arriving = [a for a in self.arriving if a not in inside]
@@ -842,6 +850,12 @@ class ToneStream:
         self._firsts = keep
         # an announcement lasts until its frame is taken or its end has passed
         now = self._next_hop * hop
+        grace = 2 * SYNC_SYMBOLS * self.det.num.symbol_samples
+        self._lapsed = [
+            a
+            for a in (*self._lapsed, *(a for a in self.arriving if a.end <= now - hop))
+            if a.end + grace > now
+        ]
         self.arriving = [
             a
             for a in self.arriving
