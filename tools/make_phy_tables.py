@@ -149,6 +149,8 @@ def tone_block() -> dict[str, object]:
             "contradiction": det.CONTRADICTION,
             "max_contradictions": det.MAX_CONTRADICTIONS,
             "clean_block_hits": det.CLEAN_BLOCK_HITS,
+            "count_hits": det.COUNT_HITS,
+            "count_margin": det.COUNT_MARGIN,
             "announce_threshold": tone.ANNOUNCE_THRESHOLD,
             "lookahead": tone.ToneStream.LOOKAHEAD,
             "announce_lookahead": tone.ToneStream.ANNOUNCE_LOOKAHEAD,

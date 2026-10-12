@@ -1740,7 +1740,11 @@ class LinkEngine:
             # (ADR-0041) — the offer counted among them; exactly, under stated answers
             # (ADR-0068), and on the floor's frames too
             following = len(seqs) - 1 - i + int(offer)
-            follows = following if self.cfg.stated_answers else countdown_of(following)
+            if self.cfg.stated_answers:
+                follows = following
+            else:
+                # before stated answers a tone frame carried no count: the frame as it was
+                follows = 0 if family else countdown_of(following)
             frames.append(replace(self._data_frame(rec), follows=follows))
         if offer:
             turn = self._control(ControlKind.TURN, flags=ControlFlags.OFFER)
@@ -2096,9 +2100,16 @@ class LinkEngine:
         from a frame whose countdown is not believed (:meth:`_believed`): a phantom's chips are
         noise."""
         frame = rec.frame
-        if frame.follows is None or not self._believed(rec):
+        if frame.follows is None or not self._counted(rec):
             return None
         return frame.t_end + most_following(frame.follows) * max(0.0, frame.t_end - frame.t_start)
+
+    def _counted(self, rec: _RxRecord) -> bool:
+        """Whether a frame's count is read as the countdown before stated answers: believed
+        (:meth:`_believed`), and not a tone frame's — the floor's frames carried no count before
+        ADR-0068, and a receiver that took their "none follow" at its word would answer a floor
+        burst after its first frame."""
+        return self._believed(rec) and not self.timing.is_floor(rec.frame.mode)
 
     def _account_for(self, frame: SoftFrame) -> None:
         """A frame reported: the arrival announced at its start is that frame, and one that
@@ -2119,7 +2130,7 @@ class LinkEngine:
         end = self._burst_end()
         for rec in self._burst:
             frame = rec.frame
-            if self._believed(rec) and frame.follows == 0 and frame.t_end >= end - 1e-9:
+            if self._counted(rec) and frame.follows == 0 and frame.t_end >= end - 1e-9:
                 return True
         return False
 

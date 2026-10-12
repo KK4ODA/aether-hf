@@ -3484,8 +3484,22 @@ impl<P: Ptt> Station<P> {
 
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-        self.playback.extend(rendered);
-        self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
+        if self.engine.config().stated_answers && !ends_communication(&frames) {
+            // under stated answers the other station answers at the end the burst stated, so
+            // the identifier never follows a burst's frames: it goes ahead of them (ADR-0068
+            // §2.5). A DISC or its answer ends the communication, and the other station waits
+            // out an identifier after it (ADR-0022).
+            self.append_cw_id_at(
+                now,
+                audio_rate,
+                sets_up_contact(&frames),
+                Some(rendered.len()),
+            );
+            self.playback.extend(rendered);
+        } else {
+            self.playback.extend(rendered);
+            self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
+        }
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
     }
@@ -3806,6 +3820,12 @@ impl<P: Ptt> Station<P> {
     /// the other station has to wait out before it can reply. KK4ODA-1's first transmission
     /// after a restart was a probe's answer, and it carried the identifier (2026-10-10).
     fn append_cw_id(&mut self, now: f64, audio_rate: f64, setup: bool) {
+        self.append_cw_id_at(now, audio_rate, setup, None);
+    }
+
+    /// [`append_cw_id`](Self::append_cw_id), or with `ahead` — the samples of frames to follow
+    /// it in the same keying — ahead of them (ADR-0068 §2.5).
+    fn append_cw_id_at(&mut self, now: f64, audio_rate: f64, setup: bool, ahead: Option<usize>) {
         let Some(cw) = self.config.cw_id else { return };
         if (setup || self.engine.state() != State::Idle)
             && self.identifier.communication_began.is_none()
@@ -3857,7 +3877,9 @@ impl<P: Ptt> Station<P> {
         // does not — an operator's own `max_burst_s`, a watchdog setting just lowered —
         // passes it to the next transmission rather than taking the burst over the key's
         // limit, where the watchdog would cut both.
-        let on_air = (self.playback.len() + gap + audio.len()) as f64 / audio_rate + self.tail_s();
+        let on_air = (self.playback.len() + gap + audio.len() + ahead.unwrap_or(0)) as f64
+            / audio_rate
+            + self.tail_s();
         if on_air > self.config.max_key_s - KEY_TIME_MARGIN_S / 2.0 {
             self.identifier.transmitted_since = true;
             return;
@@ -3865,11 +3887,22 @@ impl<P: Ptt> Station<P> {
         // The engine timed its wait for an answer from the end of the frames: the answer
         // comes after the identifier — and after the other station's busy detector has let
         // it go, which holds a channel for its hangover past the last of the energy — and a
-        // wait that ran out inside it put a repeat straight behind it, over the answer
+        // wait that ran out inside it put a repeat straight behind it, over the answer. Ahead
+        // of the frames it moves them and everything timed from them by its own length.
+        let hang = if ahead.is_some() {
+            0.0
+        } else {
+            self.busy.config().hang_s
+        };
         self.engine
-            .on_tx_delayed((gap + audio.len()) as f64 / audio_rate + self.busy.config().hang_s);
-        self.playback.extend(std::iter::repeat_n(0.0f32, gap));
-        self.playback.extend(audio);
+            .on_tx_delayed((gap + audio.len()) as f64 / audio_rate + hang);
+        if ahead.is_some() {
+            self.playback.extend(audio);
+            self.playback.extend(std::iter::repeat_n(0.0f32, gap));
+        } else {
+            self.playback.extend(std::iter::repeat_n(0.0f32, gap));
+            self.playback.extend(audio);
+        }
         self.identifier.last = Some(now);
         self.stats.cw_ids += 1;
         self.identifier.transmitted_since = false;
@@ -4486,6 +4519,11 @@ fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
     })
 }
 
+/// Whether a transmission ends a communication: a DISC or its answer.
+fn ends_communication(frames: &[aether_link::TxFrame]) -> bool {
+    is_control(frames, ControlKind::Disc) || is_control(frames, ControlKind::DiscAck)
+}
+
 fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
     frames.len() == 1
         && frames[0].container == Container::Data
@@ -5073,6 +5111,8 @@ mod tests {
             kind: aether_phy::tone::control_kind(),
             rv: 0,
             statistic: detector.threshold() * 2.0,
+            middle: 0,
+            follows: Some(0),
         };
         assert!((tone.detect_confidence() - 2.0).abs() < 1e-9);
     }
@@ -7035,6 +7075,78 @@ mod tests {
             }
         }
         assert_eq!(station.stats.cw_ids, 1, "the identifier never went out");
+    }
+
+    #[test]
+    fn under_stated_answers_the_identifier_goes_ahead_of_the_frames() {
+        // ADR-0068 §2.5: the other station answers at the end a burst stated, so the
+        // identifier never follows a burst's frames; it goes ahead of them. Before stated
+        // answers it followed them, a moment of silence after
+        for stated in [false, true] {
+            let mut station = Station::new(
+                StationConfig {
+                    callsign: "W4ODA".to_owned(),
+                    wait_for_clear: false,
+                    cw_id: Some(CwId::default()),
+                    link: LinkConfig {
+                        stated_answers: stated,
+                        ..LinkConfig::default()
+                    },
+                    ..StationConfig::default()
+                },
+                NullPtt::default(),
+                1,
+            );
+            let poll = ControlFrame {
+                kind: ControlKind::Poll,
+                session: 7,
+                flags: 0,
+                base: 0,
+                bitmap: 0,
+                snr_db: None,
+                recommended_mode: 0,
+                follows: 0,
+                burst_floor: false,
+            };
+            station
+                .pending
+                .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+                    container: Container::Control,
+                    payload: poll.encode().to_vec(),
+                    mode: 0,
+                    rv: 0,
+                    floor: false,
+                    follows: 0,
+                }]));
+            station.render_next(1.0);
+            assert_eq!(station.stats.cw_ids, 1, "stated {stated}");
+            let rate = station.config.params.audio_rate as f64;
+            let id = CwId {
+                level: CW_ID_RELATIVE_LEVEL,
+                ..CwId::default()
+            }
+            .audio("W4ODA", rate);
+            let queued: Vec<f32> = station.playback.iter().copied().collect();
+            let at = queued
+                .windows(id.len())
+                .position(|w| w == id.as_slice())
+                .expect("the identifier is queued");
+            let lead = (station.config.key_lead_s * rate) as usize;
+            let after = queued.len() - at - id.len();
+            if stated {
+                assert_eq!(at, lead, "ahead of the frames, right after the key's lead");
+                assert!(
+                    after > (0.3 * rate) as usize,
+                    "the frames follow it: {after}"
+                );
+            } else {
+                assert!(at > lead + (0.3 * rate) as usize, "after the frames: {at}");
+                assert!(
+                    after < (0.3 * rate) as usize,
+                    "only the tail after it: {after}"
+                );
+            }
+        }
     }
 
     #[test]

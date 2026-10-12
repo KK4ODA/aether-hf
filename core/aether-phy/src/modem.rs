@@ -146,12 +146,14 @@ impl Received {
         }
     }
 
-    /// How many more frames of its burst an ordinary DATA frame says follow it (ADR-0041);
-    /// `None` for a control frame and a tone frame, which cannot say.
+    /// How many more frames of its burst a DATA frame says follow it: an ordinary one in its
+    /// chips (ADR-0041), a tone one in its middle sync block when that reads clearly
+    /// (ADR-0068); `None` for a control frame, and for a tone frame whose middle block faded.
     #[must_use]
     pub fn follows(&self) -> Option<u8> {
         match self {
             Self::Ofdm(frame) if frame.sync.frame_type == FrameType::Data => Some(frame.follows),
+            Self::Tone(_, sync) if !sync.kind.control => sync.follows,
             _ => None,
         }
     }
@@ -416,7 +418,13 @@ impl Modem {
         follows: u8,
     ) -> Result<Vec<Complex>, ModemError> {
         match self.air.rung(rung) {
-            Rung::Tone(kind) => Ok(tone::burst(self.tone_codec(kind)?, payload, rv)?),
+            // a tone frame says it in its middle sync block (ADR-0068)
+            Rung::Tone(kind) => Ok(tone::burst_with(
+                self.tone_codec(kind)?,
+                payload,
+                rv,
+                follows.min(MAX_FOLLOWS),
+            )?),
             Rung::Ofdm(mode, _) => self.data_burst_following(payload, mode, rv, follows),
         }
     }
@@ -598,12 +606,18 @@ impl Modem {
         samples: &[Complex],
         sync: &ToneSync,
     ) -> Result<DecodedFrame, ModemError> {
-        let frame = tone::demodulate(samples, sync.kind, sync.rv, sync.start, sync.cfo_hz).ok_or(
-            DemodError::OutOfRange {
-                start: sync.start,
-                available: samples.len(),
-            },
-        )?;
+        let frame = tone::demodulate_with(
+            samples,
+            sync.kind,
+            sync.rv,
+            sync.middle,
+            sync.start,
+            sync.cfo_hz,
+        )
+        .ok_or(DemodError::OutOfRange {
+            start: sync.start,
+            available: samples.len(),
+        })?;
         let (payload, _) = self
             .tone_codec(sync.kind)?
             .decode(&frame.llr, sync.rv, None)?;

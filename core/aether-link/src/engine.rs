@@ -2545,6 +2545,8 @@ impl LinkEngine {
             let following = count - 1 - i + usize::from(offer);
             frame.follows = if stated {
                 following.min(usize::from(MAX_FOLLOWS)) as u8
+            } else if self.timing.is_floor(frame.mode) {
+                0 // before stated answers a tone frame carried no count: the frame as it was
             } else {
                 crate::frames::countdown_of(following)
             };
@@ -2884,9 +2886,14 @@ impl LinkEngine {
                 self.burst_t0 = None;
                 return;
             }
-            record.announced_end = Self::announced_end(frame, &record);
-            record.closes_at = (Self::believed(frame, &record) && frame.follows() == Some(0))
-                .then(|| frame.t_end());
+            // a tone frame's count is stated answers' alone (ADR-0068): before them the floor's
+            // frames carried none, and a receiver that took their "none follow" at its word would
+            // answer a floor burst after its first frame
+            let counted = !self.timing.is_floor(frame.mode());
+            record.announced_end = Self::announced_end(frame, &record).filter(|_| counted);
+            record.closes_at =
+                (counted && Self::believed(frame, &record) && frame.follows() == Some(0))
+                    .then(|| frame.t_end());
             self.burst.push(record);
             // a burst whose last frame said none follow it is over when that frame ends: the
             // answer waits only the turnaround, not the silence that would otherwise show it
@@ -5979,7 +5986,8 @@ mod tests {
             e.on_frame(&second, second.t_end + 0.05);
             assert!((e.deadline_of(Timer::Ack).expect("armed") - due).abs() < 1e-9);
             e.tick(due - 0.01);
-            assert!(transmitted(&mut e).is_empty());
+            let sent = transmitted(&mut e);
+            assert!(sent.is_empty(), "{sent:?}");
             e.tick(due + 0.01);
             let sent = answers(&mut e);
             assert_eq!(sent.len(), 1);
@@ -6006,7 +6014,7 @@ mod tests {
             transmitted(&mut e).is_empty(),
             "answered a burst it could not read"
         );
-        assert!(e.burst.is_empty());
+        assert!(e.burst.is_empty(), "{:?}", e.burst.len());
         assert!(e.rate.recommend() < before);
     }
 
@@ -6017,11 +6025,12 @@ mod tests {
             .failed()
             .untrusted();
         e.on_frame(&phantom, phantom.t_end + 0.05);
-        assert!(e.burst.is_empty());
+        assert!(e.burst.is_empty(), "{:?}", e.burst.len());
         assert_eq!(e.deadline_of(Timer::Ack), None);
         assert_eq!(e.deadline_of(Timer::Close), None);
         e.tick(140.0);
-        assert!(transmitted(&mut e).is_empty());
+        let sent = transmitted(&mut e);
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[test]
@@ -6034,8 +6043,9 @@ mod tests {
         assert_eq!(e.deadline_of(Timer::Ack), None);
         assert!(e.deadline_of(Timer::Close).is_some());
         e.tick(frame.t_end + 30.0);
-        assert!(transmitted(&mut e).is_empty());
-        assert!(e.burst.is_empty());
+        let sent = transmitted(&mut e);
+        assert!(sent.is_empty(), "{sent:?}");
+        assert!(e.burst.is_empty(), "{:?}", e.burst.len());
     }
 
     #[test]
@@ -6045,9 +6055,10 @@ mod tests {
         e.tx_started = frame.t_end + e.timing.turnaround_s + 0.5;
         e.now = e.tx_started + 0.1;
         e.on_frame(&frame, e.now);
-        assert!(e.burst.is_empty());
+        assert!(e.burst.is_empty(), "{:?}", e.burst.len());
         assert_eq!(e.deadline_of(Timer::Ack), None);
-        assert!(transmitted(&mut e).is_empty());
+        let sent = transmitted(&mut e);
+        assert!(sent.is_empty(), "{sent:?}");
     }
 
     #[test]
@@ -6142,11 +6153,13 @@ mod tests {
         );
         let wait = a.deadline_of(Timer::Wait).expect("waiting");
         a.tick(wait + 0.01);
-        assert!(transmitted(&mut a).is_empty());
+        let sent = transmitted(&mut a);
+        assert!(sent.is_empty(), "{sent:?}");
         let resend = a.deadline_of(Timer::Resend).expect("a backoff");
         let slot = a.slot_s(a.timing.is_floor(a.burst_mode()));
         assert!(resend - a.now <= slot + 1e-9);
         a.tick(resend + 0.01);
-        assert!(!transmitted(&mut a).is_empty());
+        let sent = transmitted(&mut a);
+        assert!(!sent.is_empty(), "{sent:?}");
     }
 }
