@@ -1698,7 +1698,7 @@ class LinkEngine:
         decoded = self._decode_record(rec)
         if rec.payload is not None:
             self._took_unread = False
-        if decoded and self._answered_already(rec):
+        if decoded and (self._answered_already(rec) or self._phantom(rec)):
             # what it carried for combining is kept (`_decode_record`); it starts no burst
             self._burst.remove(rec)
             self._burst_t0 = None
@@ -1749,6 +1749,26 @@ class LinkEngine:
             rec.payload is None
             and len(self._burst) == 1
             and rec.frame.t_start < self._tx_started - 1e-9
+        )
+
+    def _phantom(self, rec: _RxRecord) -> bool:
+        """Whether an ordinary frame that did not decode is as likely the correlator on noise
+        as a frame of the burst: the PHY does not trust its acquisition (ADR-0020) and no
+        ordinary frame of the burst came before it — a burst is of one family, so after floor
+        frames, or alone, it is nobody's. Taken alone for a burst, it set an acknowledgement for
+        its own end; on WC4Y's path in the scenario harness (80 m, 500 Hz) that acknowledgement
+        went out on the floor 0.7 s after a detection at −13 dB, over the other station's next
+        transmission, which had begun under it and was not yet announced — the three
+        collisions of three runs. Taken after a tone burst's last frame, which it overlapped,
+        it held the answer to the burst a second longer (ADR-0065). After ordinary frames of
+        the burst it is the burst's, a faded last frame as often as not (ADR-0040); a real
+        burst at a rung the path cannot carry is acquired with confidence; the tone floor's
+        frames, which a detection confirms over their sync blocks, are left as they were."""
+        return (
+            rec.payload is None
+            and not rec.frame.trusted
+            and not rec.frame.floor
+            and all(r.frame.floor for r in self._burst if r is not rec)
         )
 
     @staticmethod
