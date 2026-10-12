@@ -74,6 +74,7 @@ test = "complete"           # the Test's outcome
 clean_end = true            # both sessions ended by DISC, not a timeout
 idle = true                 # both stations back to idle at the end, whatever happened
 max_collisions = 3          # times both radios were keyed at once
+min_message_bps = 75        # the Test's message at least this fast
 ```
 
 Steps: `beacon`, `probe`, `connect`, `message N` (N incompressible bytes from a to b),

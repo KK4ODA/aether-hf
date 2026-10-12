@@ -1,0 +1,32 @@
+name = "80m-floor-top-start-500"
+description = """80 m at 500 Hz on WC4Y's path of 2026-10-11 15:52Z: the caller is heard at about
+−3 dB on a Moderate path and hears the other station at −9, so the call measures a path the
+tone floor's top rung (tone4x100-75) carries with ten decibels to spare and the first OFDM rung
+does not. A Test session: its message showed the first burst two rungs under that, at half the
+rate, after a poll round trip the Test's late queueing cost."""
+tags = ["80m", "stress", "mixed"]
+bandwidth = 500
+seconds = 1200
+seed = 61
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -3.0
+[path.b_to_a]
+snr_db = -9.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

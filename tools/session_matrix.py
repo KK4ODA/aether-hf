@@ -674,6 +674,11 @@ def judge(run: Run, ends: list[str]) -> dict:
         failures.append(f"left {'/'.join(run.final_states)}")
     if "max_collisions" in expect and collisions > int(expect["max_collisions"]):
         failures.append(f"{collisions} collisions")
+    message_bps = ((run.test or {}).get("message") or {}).get("bps")
+    if "min_message_bps" in expect and (
+        message_bps is None or message_bps < float(expect["min_message_bps"])
+    ):
+        failures.append(f"message at {message_bps} bit/s")
     # from the first round's end to the last: growth that a long run would turn into a crash
     grew = []
     for who, samples in run.resources.items():
