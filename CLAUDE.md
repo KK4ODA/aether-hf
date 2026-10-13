@@ -1502,9 +1502,11 @@ a frame that does not decode counts only on its transmission's stated grid (phan
 the rate down the floor); the control family goes by the weakest of the last 3 readings (one
 peak reading had stalled asymmetric sessions); a floor-only slave says so in `data_floor` with no
 data after it; an idle master grants an answer after `keepalive_s` (10 s) of silence; a header is
-left out only when no data frame is lost by it. **Step 2, the port (in progress):** frames
-(`GrantFrame`, `GrantKind`, the 19-byte connect body, `with_level`/`level_of`, `GRANTED_VERSION`)
-in `frames.rs` with vectors; `aether_link::granted::GrantedEngine` (`granted.rs`), a rule-by-rule
+left out only when no data frame is lost by it. **Step 2, the port and the daemon
+(`09-step-2.md`):** frames (`GrantFrame`, `GrantKind`, the 19-byte connect body,
+`with_level`/`level_of`) in `frames.rs` with vectors; `PROTOCOL_VERSION` is 8 (what a station
+speaks and the shell's `LINK_PROTOCOL` is held to), protocol 7's `LinkEngine` reads
+`TURNS_VERSION` until Step 5; `aether_link::granted::GrantedEngine` (`granted.rs`), a rule-by-rule
 port whose draws are the model's (`Draws`, SplitMix64 in both); `Action::Transmit` gained
 `not_after` and `identifier_s` (protocol 7 sets none). It is checked by **trace replay**:
 `tools/make_granted_vectors.py` runs the model's engines through 20 sessions (clean, weak,
@@ -1520,8 +1522,31 @@ judged at the slower (Python's set order is not portable); and **render-ahead** 
 is decided as soon as what it says is final (every frame its header stated reported) and handed
 over with `Action::Transmit::not_before`, its slot's start, so the daemon renders it in the
 ~0.2 s the decode budget leaves and keys it to radiate there (campaign: 0 overlaps, field ×1.084,
-hostile 1.5–3.5 % faster). **Next: the daemon (the gate,
-`frames_end`, the identifier, the turnaround setting, render-ahead, `LINK_PROTOCOL` 8).**
+hostile 1.5–3.5 % faster). **The daemon runs it** (`station.rs`): the engine's
+transmissions are `Outgoing::Link` (frames, `KeyWindow`, `identifier_s`), and only they reach
+`on_tx_done(now, frames_end)` (the release less the tail plus the card's output latency) or
+`on_tx_dropped`; the keying gate (`within_window`) holds a rendered answer until `not_before`
+and drops it past `not_after` (`stats.dropped_late`); `held_for_busy` holds only what a station
+starts outside a session (the answer gap's hold, ADR-0022's DISC waits, `answers_burst`,
+ADR-0065's abort wait and ADR-0040's follow-on heed are gone); the engine's `tx_latency_s` is
+`radiation_latency_s()` (lead + card output latency); the identifier is placed by the engine
+(`advance_link_identifier` → `set_identifier_due`, `refresh_identifier_length` →
+`set_identifier_s`, `link_identifier` renders exactly its time ahead of the frames, silence if
+the rules refuse it, owed again if the gate drops it); roles are `master`/`slave` (the host
+adapter reads `(slave)`); counters `silent_slots`, `forfeits`, `headers_elided`,
+`left_answered`, `dropped_late`. Found by running every scenario once on it (`09-step-2.md`
+§2.2–2.3) and fixed: a transmission cut short (abort, watchdog, failed transmitter) is reported
+as ending where its frames would have (`KeyWindow::whole_end`) — the other station anchors the
+slot on what the header stated, and a leaving DISC had keyed into it; engine transmissions are
+reported done/dropped in the order handed over; captured audio a backend lost moves the
+station's clock on (`AudioIo::capture_gap`, `Station::skip_captured`; the channel server tells
+an `AEC2` daemon with `MSG_GAP`), or a station that fell behind answered late past a gate on the
+same slipped clock; and (model first) a called station's Disconnect closes without the caller's
+own queue (ADR-0023's receiving station; `80m-leave-together-500`). Owed with the release that
+ships it (a schema step needs a version bump): `[radio] turnaround_ms` replacing `answer_gap_ms` (schema 12, `SCHEMA_HISTORY`),
+Setup step 4 and the manual's *Answer gap*; the learned gap as a granted level; the capture
+path's input latency (measure in Step 4). **Next: Step 3, the harness A/B against protocol 7's
+10-seed baseline.**
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
