@@ -34,6 +34,8 @@ def config_for(air: AirInterface, knobs: tuple[float, ...], arm: str = "granted"
         cfg.decode_budget_s = (knobs[2], knobs[3])
     if "_f" in arm:
         cfg.family_readings = int(arm.rsplit("_f", 1)[1])
+    if "_a" in arm:
+        cfg.answer_floor_margin_db = float(arm.rsplit("_a", 1)[1])
     return cfg
 
 
@@ -75,7 +77,8 @@ def belief(engine: Any) -> dict[str, Any]:
 def build(
     timing: PhyTiming, air: AirInterface, seed: int, knobs: tuple[float, ...], arm: str = "granted"
 ) -> tuple[Any, Any]:
-    """``arm``: ``granted``, or ``granted_f<n>`` for :attr:`GrantConfig.family_readings` = n."""
+    """``arm``: ``granted``; ``granted_f<n>`` for :attr:`GrantConfig.family_readings` = n,
+    ``granted_a<x>`` for :attr:`GrantConfig.answer_floor_margin_db` = x."""
     return (
         ResearchGranted("A1AAA", timing, config_for(air, knobs, arm), seed),
         ResearchGranted("B2BBB", timing, config_for(air, knobs, arm), seed + 1),
