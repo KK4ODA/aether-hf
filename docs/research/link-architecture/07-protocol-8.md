@@ -126,10 +126,12 @@ the foreign master's own timing reserves, not this one's.
 ### 4.2 Data frames
 
 The DATA container's header is unchanged: kind, flags, sequence, session, length. Each data
-frame states exactly how many frames of its transmission follow it, 0–3 (ADR-0068 §2.1): the
-OFDM chips' quarter turn, or the tone frame's middle sync block. A transmission of more than
-four data frames carries a header, so its end is known from the header (`count`) or from any
-of its last four frames.
+frame states how many frames of its transmission follow it, 0–3 (ADR-0068 §2.1): the OFDM
+chips' quarter turn, or the tone frame's middle sync block. Three means *three or more*: a
+transmission of six data frames has three frames that state 3. Its end is known from the header
+(`count`) or from any of its last three frames (0, 1 or 2 follow). A header is left out only
+when at most four data frames follow (R7), and then too only the last three state the end
+exactly; a receiver that reads only the first holds no anchor and does not answer.
 
 ### 4.3 The connect body (CONNECT_REQ, CONNECT_ACK): 19 bytes
 
@@ -346,3 +348,56 @@ Slower ones use levels.
 
 The same runs give the keying latency's distribution, from the tag's `waited_s` and the air
 start. `KEY` and `SLACK` are set from it, with CAT keying measured on hardware in Step 4.
+
+## 12. Decided while building the model engine
+
+`aether_model.link.granted.GrantedEngine` (Step 1) settled what the sections above left open,
+each found by a test or a scenario and each kept inside the rules of ADR-0069 §2:
+
+* **Three or more** (§4.2). A data frame's count saturates at 3, so only counts 0–2 anchor a
+  transmission whose header was not read.
+* **Idle keepalive.** An open window nobody needs is silent, and a master that hears only
+  silence cannot tell an idle link from a dead one: idle sessions timed out. Once the master has
+  heard nothing for `keepalive_s` (10 s, protocol 7's poll interval) its idle header grants an
+  answer slot instead of an open window.
+* **Where a slave's data can go.** A header's `rung` both recommends the slave's rung and sizes
+  its grant, so a slave held to the tone floor by its ceiling or a pinned rung was granted
+  ordinary frames its own never fitted, and its data never went. An answer with no data after
+  it uses `data_floor` to say its data can go only on the floor; the master then recommends,
+  and sizes grants by, at most the floor's top rung. With data after it, the bit keeps its
+  meaning.
+* **The acceptance states the slave's level.** Its capability bits 3–4, zero in 07's first
+  draft, carry the level the called station's measurement of the call asks for, so the first
+  header's slot is already wide enough for a slow called station.
+* **A frame where none can be.** A false detection that does not decode is part of a
+  transmission only where the transmission's opening control frame says its data frames are:
+  the family, the slots, the count (or, without it, in line with a frame of it that decoded).
+  Counted in, phantoms stepped the rate down the floor in the review's phantom storm — 735 s
+  on one trial where the prototype took 413; the scenario's 16-run median is now 229 s, against
+  the prototype's 278 (`08-steps-0-and-1.md` §2.3).
+* **Only decoded content starts a transmission at the slave.** A frame that does not decode,
+  heard after a transmission whose answer is still owed, is nobody's: the master keys only after
+  the slot. Taken as the start of the next transmission, it cancelled the owed answer.
+* **The master's measured margin.** The master measures how far past the slack the slave's
+  decoded answers start and adds it to the wait for a slot nothing of which decoded. It only
+  ever delays the master. It is for a station whose keying is slower than declared, which the
+  daemon's gate cannot see after keying (the review's `ptt-jitter`).
+* **A station never answers into a slot it granted.** A call, a probe or a left session's frame
+  whose slot would fall before the last slot this station granted can close is not answered:
+  the caller tries again.
+* **The control family goes by several readings.** A station asks for ordinary control frames
+  only when the last `family_readings` (3) frames it read of the other all cleared the margin
+  (§7). One reading was biased: on a fading path an ordinary frame decodes only at a peak.
+  Swept 1–4 on the review's campaign, 3 is the fewest that never completes less than protocol 7.
+* **A header never costs data frames.** It is left out only when at most four data frames
+  follow anyway. Capping the data at four to leave it out cost the 500 Hz air's 15-byte rung 136
+  transmissions where protocol 7 took 82.
+* **The send queue survives the start of a session** — what an idle station is handed goes in
+  the next one — and is cleared at its end (ADR-0052).
+* **A probe's level covers the prober's turnaround**, since a probe carries none.
+* **`on_tx_delayed`** moves every wait for this station's own transmission (the master's next
+  key, a call's retry, a probe's wait, a leaving DISC), never the link timeout or a slot
+  answer: those are absolute, and a late answer is the gate's to drop.
+* **The closing identifier.** A DISC grants its DISC_ACK's slot with the slave's identifier time
+  whenever the slave declared one; the slave puts it ahead of the DISC_ACK. The master's goes
+  ahead of its first DISC.

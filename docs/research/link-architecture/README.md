@@ -111,6 +111,14 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    * methodology for the harness, HIL and a fair VARA comparison.
 6. [06-recommendation.md](06-recommendation.md): the recommendation, its costs and risks, and
    a gated roadmap.
+7. [07-protocol-8.md](07-protocol-8.md): protocol 8 as it is being built — frames bit by bit,
+   timing, ending, the identifier, the engine's interface — and (§12) what building the model
+   engine decided.
+8. [08-steps-0-and-1.md](08-steps-0-and-1.md): the first two steps of ADR-0069 §5. The harness
+   now attributes overlaps (protocol 7 against the ADR-0068 build). The model engine,
+   `aether_model.link.granted`, passes its gate on the review's simulator: no radiated
+   overlap in 5 040 sessions and 224 adversarial ones, ×1.09 of protocol 7 in the field
+   profile, completion no lower anywhere.
 
 ## Reproduction
 

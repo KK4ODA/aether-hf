@@ -1471,6 +1471,24 @@ the air, (5) delete the turn machinery. A failing criterion stops the step; it i
 broken assumption or rule, with a trace, before anything changes. A new rule must name the
 invariant it restores and must not move a deadline on undecoded evidence. Port bug found on the
 way: `"closed (no disc ack)"` is not the spelling `LEFT_UNHEARD` holds in `engine.rs`.
+**Steps 0 and 1 (2026-10-13, `08-steps-0-and-1.md`).** Step 0: the daemon tags every keying
+(`Action::Transmit.cause`, channel message type 5), the channel server splits overlaps into
+radiated/VOX/guard, `tools/air_account.py` names each radiated one; protocol 7 vs the ADR-0068
+build on the 43 scenarios, one draw each: radiated overlaps 23 vs 8 (the old counter said 29 vs 28).
+Owed for its gate: 10-seed distributions, air-time stepping, the decode-latency measurement that
+sets `D_ORD`/`D_FLOOR`. Step 1: **`aether_model.link.granted.GrantedEngine`** (frames:
+`GrantFrame`, the 19-byte protocol 8 `ConnectBody`, capability level bits) with the full daemon
+interface; `TwoStationSim` has the station model behind arguments (key lead, decode latency, rx
+recovery, phantoms, the gate's `not_after`, `radiated()`/`overlaps()`); `model/tests/test_granted.py`;
+the research arm `granted` (`granted_f<n>` sweeps `family_readings`); `bench_link.py --engine
+granted`. Gate passed on the review's simulator: 0 radiated overlaps in 5 040 sessions and 224
+adversarial ones, field ×1.093/×1.089/×1.036 of protocol 7 (bulk/exchange/chat), completion no
+lower in any cell; the zero-keying link bench ×1.16, 112/112 both airs. Building it found (07 §12):
+a frame that does not decode counts only on its transmission's stated grid (phantoms had stepped
+the rate down the floor); the control family goes by the weakest of the last 3 readings (one
+peak reading had stalled asymmetric sessions); a floor-only slave says so in `data_floor` with no
+data after it; an idle master grants an answer after `keepalive_s` (10 s) of silence; a header is
+left out only when no data frame is lost by it. **Next: Step 2, the port and the daemon's gate.**
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
