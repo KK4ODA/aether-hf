@@ -1,45 +1,89 @@
 base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,deaf_counted_s,deaf_reported_s,deaf_detail,vox_s,guard_s,test,message_bps,file_bps,wall_s
 15m-equatorial-flutter-2300,54,band,True,,92.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.5
+15m-equatorial-flutter-2300,1054,band,True,,104.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,34.6
 15m-old-rig-offset-500,57,band,True,,176.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.4
-15m-opening-closes-2300,55,robustness,True,,716.1,3,9.66,0,1.23,0.0,EA8XYZ 1.230 s counted (unplaced),0.0,1.2,,,,240.7
-20m-dx-500,58,band,True,,538.1,1,2.639,0,0.41,0.0,KK4ODA 0.110 s counted (unplaced); K0XYZ 0.300 s counted (unplaced),0.0,0.4,,,,168.2
+15m-old-rig-offset-500,1057,band,True,,162.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.7
+15m-opening-closes-2300,55,robustness,True,,716.1,3,9.66,0,1.23,0.0,EA8XYZ 1.230 s counted (frame+timer:wait),0.0,1.2,,,,240.7
+15m-opening-closes-2300,1055,robustness,True,,716.1,2,6.44,0,0.82,0.0,EA8XYZ 0.820 s counted (timer:wait),0.0,0.8,,,,252.5
+20m-dx-500,58,band,True,,538.1,1,2.639,0,0.41,0.0,KK4ODA 0.110 s counted (timer:ack); K0XYZ 0.300 s counted (timer:wait),0.0,0.4,,,,168.2
+20m-dx-500,1058,band,True,,372.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,124.2
 20m-dx-moderate-2300,51,band,True,,422.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,560.7,370.6,144.4
+20m-dx-moderate-2300,1051,band,True,,281.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,432.1,563.4,101.2
 20m-ft8-neighbours-2300,56,band,True,,140.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,95.8
+20m-ft8-neighbours-2300,1056,band,True,,117.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,81.9
 20m-long-path-echo-2300,53,band,True,,73.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,25.1
+20m-long-path-echo-2300,1053,band,True,,69.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,26.9
 20m-polar-path-2300,52,band,True,,207.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,67.7
-40m-abort-and-recall-2300,43,robustness,True,,87.1,2,3.595,0,0.57,0.0,WC4Y 0.080 s counted (unplaced); KK4ODA 0.490 s counted (unplaced),0.0,0.8,,,,29.3
-40m-drift-and-clocks-2300,15,2300 Hz,True,,296.1,0,0.0,0,0.115,0.0,KK4ODA 0.115 s counted (unplaced),0.0,0.215,complete,617.8,495.8,110.1
+20m-polar-path-2300,1052,band,True,,155.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.8
+40m-abort-and-recall-2300,43,robustness,True,,87.1,2,3.595,0,0.57,0.0,WC4Y 0.080 s counted (frame+timer:ack); KK4ODA 0.490 s counted (abort+connect),0.0,0.8,,,,29.3
+40m-abort-and-recall-2300,1043,robustness,True,,82.1,2,3.595,0,0.57,0.0,WC4Y 0.080 s counted (frame+timer:ack); KK4ODA 0.490 s counted (abort+connect),0.0,0.8,,,,30.5
+40m-drift-and-clocks-2300,15,2300 Hz,True,,296.1,0,0.0,0,0.115,0.0,KK4ODA 0.115 s counted (timer:wait),0.0,0.215,complete,617.8,495.8,110.1
+40m-drift-and-clocks-2300,1015,2300 Hz,True,,230.2,0,0.0,0,0.115,0.0,KK4ODA 0.115 s counted (timer:wait),0.0,0.215,complete,533.3,487.7,90.3
 40m-gateway-busy-when-called-2300,62,gateway,True,,127.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,76.0
+40m-gateway-busy-when-called-2300,1062,gateway,True,,146.2,3,4.145,0,0.0,0.0,,0.0,1.2,,,,91.7
 40m-gateway-client-vanishes-2300,41,gateway,True,,340.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,114.8
+40m-gateway-client-vanishes-2300,1041,gateway,True,,340.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,121.5
 40m-gateway-three-clients-2300,61,gateway,True,,227.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,201.0
+40m-gateway-three-clients-2300,1061,gateway,True,,206.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,191.8
 40m-good-2300-rtty-crashes,9,2300 Hz,True,,315.0,0,0.0,0,0.0,0.0,,0.0,0.0,complete,667.6,195.4,117.3
+40m-good-2300-rtty-crashes,1009,2300 Hz,True,,209.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,253.1,557.8,82.5
 40m-good-throughput-2300,20,2300 Hz,True,,96.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,33.9
+40m-good-throughput-2300,1020,2300 Hz,True,,95.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,35.5
 40m-hidden-vara-2300,12,2300 Hz,True,,119.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,42.8
-40m-long-attachment-cwid-2300,44,robustness,True,,829.2,13,1.087,0,0.758,0.0,W4TGA 0.573 s counted (unplaced); KK4ODA 0.185 s counted (unplaced),0.0,1.603,,,,292.0
-40m-moderate-2300-vara-qrm,7,2300 Hz,True,,406.1,0,0.0,0,5.137,0.0,KK4ODA 5.137 s counted (unplaced),0.0,0.0,complete,256.6,338.7,174.4
+40m-hidden-vara-2300,1012,2300 Hz,True,,132.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.9
+40m-long-attachment-cwid-2300,44,robustness,True,,829.2,13,1.087,0,0.758,0.0,W4TGA 0.573 s counted (timer:ack); KK4ODA 0.185 s counted (frame),0.0,1.603,,,,292.0
+40m-long-attachment-cwid-2300,1044,robustness,True,,921.1,13,1.087,0,0.758,0.0,W4TGA 0.573 s counted (timer:ack); KK4ODA 0.185 s counted (frame),0.0,1.603,,,,327.7
+40m-moderate-2300-vara-qrm,7,2300 Hz,True,,406.1,0,0.0,0,5.137,0.0,KK4ODA 5.137 s counted (disconnect+frame+send+timer:first),0.0,0.0,complete,256.6,338.7,174.4
+40m-moderate-2300-vara-qrm,1007,2300 Hz,True,,501.1,2,0.91,0,7.518,0.0,KK4ODA 7.518 s counted (disconnect+frame+send+timer:first),0.0,0.8,complete,391.8,332.6,212.0
 40m-rtty-contest-2300,19,2300 Hz,False,ended aborted/none; left idle/connected,526.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,294.9,69.2,260.0
+40m-rtty-contest-2300,1019,2300 Hz,True,,372.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,511.4,136.7,172.2
 40m-trimode-gateway-2300,45,gateway,True,,71.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,25.8
+40m-trimode-gateway-2300,1045,gateway,True,,61.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.5
 40m-wide-calls-narrow,22,2300 Hz,True,,181.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,68.9
+40m-wide-calls-narrow,1022,2300 Hz,True,,130.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,47.8
 40m-wide-calls-narrow-unprobed,23,2300 Hz,True,,237.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,74.9
+40m-wide-calls-narrow-unprobed,1023,2300 Hz,True,,160.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.1
 40m-winlink-exchange-2300,31,2300 Hz,True,,75.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,28.4
-80m-asymmetric-500,11,500 Hz,True,,436.1,0,0.0,0,0.219,0.0,KK4ODA 0.219 s counted (unplaced),0.0,0.0,complete,74.8,62.4,154.6
+40m-winlink-exchange-2300,1031,2300 Hz,True,,84.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.6
+80m-asymmetric-500,11,500 Hz,True,,436.1,0,0.0,0,0.219,0.0,KK4ODA 0.219 s counted (frame),0.0,0.0,complete,74.8,62.4,154.6
+80m-asymmetric-500,1011,500 Hz,True,,395.2,0,0.0,0,0.219,0.0,KK4ODA 0.219 s counted (frame),0.0,0.0,complete,71.1,74.1,134.1
 80m-band-closes-2300,14,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,145.1
+80m-band-closes-2300,1014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,138.5
 80m-called-again-cwid-500,62,robustness,True,,172.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,58.7
+80m-called-again-cwid-500,1062,robustness,True,2 collisions,126.1,2,0.242,0,0.509,0.0,KQ4SAX 0.203 s counted (frame); KK4ODA 0.306 s counted (timer:wait),0.0,0.807,,,,41.8
 80m-floor-top-start-500,61,500 Hz,True,,389.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,77.0,70.1,136.4
+80m-floor-top-start-500,1061,500 Hz,True,,394.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,77.0,58.8,130.7
 80m-flutter-500,21,500 Hz,True,,376.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,119.5,77.2,128.2
+80m-flutter-500,1021,500 Hz,True,,395.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,88.3,64.4,129.1
 80m-leave-together-500,42,robustness,True,,376.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,121.4
+80m-leave-together-500,1042,robustness,False,a message did not arrive; left connected/connected,405.7,1,3.219,0,0.0,0.0,,0.0,0.151,,,,125.0
 80m-lopsided-acks-500,59,500 Hz,True,,439.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,65.1,59.0,147.3
+80m-lopsided-acks-500,1059,500 Hz,True,,513.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,87.6,66.4,173.8
 80m-nvis-disturbed-500,24,500 Hz,True,,256.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,80.8
-80m-nvis-evening-500,6,500 Hz,True,,372.1,0,0.0,0,1.443,0.0,KK4ODA 1.443 s counted (unplaced),0.0,0.0,complete,34.9,,153.5
+80m-nvis-disturbed-500,1024,500 Hz,True,,224.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,70.2
+80m-nvis-evening-500,6,500 Hz,True,,372.1,0,0.0,0,1.443,0.0,KK4ODA 1.443 s counted (frame+send),0.0,0.0,complete,34.9,,153.5
+80m-nvis-evening-500,1006,500 Hz,True,,469.1,1,0.454,0,2.117,0.0,KK4ODA 2.117 s counted (disconnect+frame+send+timer:wait),0.0,0.4,complete,24.7,42.6,205.3
 80m-offset-500,16,500 Hz,True,,142.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,44.1
-80m-poor-500-pactor-signalink,8,500 Hz,True,,335.1,0,0.0,0,0.119,0.0,KK4ODA 0.119 s counted (unplaced),0.0,0.0,,,,119.4
+80m-offset-500,1016,500 Hz,True,,216.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,72.9
+80m-poor-500-pactor-signalink,8,500 Hz,True,,335.1,0,0.0,0,0.119,0.0,KK4ODA 0.119 s counted (frame),0.0,0.0,,,,119.4
+80m-poor-500-pactor-signalink,1008,500 Hz,True,,353.1,2,0.908,0,1.84,0.0,KK4ODA 1.840 s counted (frame+timer:wait),0.0,0.801,,,,138.5
 80m-qsb-dropout-500,13,500 Hz,True,,566.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,176.1
-80m-slow-machine-500,81,robustness,True,,519.1,4,9.827,0,1.321,0.0,KK4ODA 0.280 s counted (unplaced); KE4QCM 1.041 s counted (unplaced),0.0,1.301,complete,84.6,26.2,165.5
-80m-thunderstorm-agc-2300,17,2300 Hz,True,,367.1,0,0.0,0,4.992,0.0,KK4ODA 4.992 s counted (unplaced),0.0,0.0,complete,168.1,228.6,122.4
+80m-qsb-dropout-500,1013,500 Hz,True,,524.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,173.4
+80m-slow-machine-500,81,robustness,True,,519.1,4,9.827,0,1.321,0.0,KK4ODA 0.280 s counted (frame+timer:ack); KE4QCM 1.041 s counted (frame),0.0,1.301,complete,84.6,26.2,165.5
+80m-slow-machine-500,1081,robustness,True,,433.1,2,3.138,0,0.82,0.0,KK4ODA 0.410 s counted (timer:ack); KE4QCM 0.410 s counted (frame+timer:wait),0.0,0.801,complete,74.6,64.3,150.3
+80m-thunderstorm-agc-2300,17,2300 Hz,True,,367.1,0,0.0,0,4.992,0.0,KK4ODA 4.992 s counted (disconnect+frame+send),0.0,0.0,complete,168.1,228.6,122.4
+80m-thunderstorm-agc-2300,1017,2300 Hz,True,,438.1,0,0.0,0,4.816,0.0,KK4ODA 4.816 s counted (disconnect+frame+send),0.0,0.0,complete,315.3,185.5,156.6
 80m-trimode-gateway-client-vanishes-500,46,gateway,True,,645.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,193.2
+80m-trimode-gateway-client-vanishes-500,1046,gateway,True,,664.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,211.5
 80m-vara-on-frequency-500,23,500 Hz,True,,148.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.6
-80m-vox-caller-declared-500,71,robustness,False,a message did not arrive,646.1,0,0.0,0,4.746,0.0,KE4QCM 4.746 s counted (unplaced),4.746,0.0,,,,198.9
-80m-vox-caller-learned-gap-500,71,robustness,False,a message did not arrive,638.1,0,0.0,0,4.74,0.0,KE4QCM 4.740 s counted (unplaced),4.74,0.0,,,,192.0
+80m-vara-on-frequency-500,1023,500 Hz,True,,209.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,83.7
+80m-vox-caller-declared-500,71,robustness,False,a message did not arrive,646.1,0,0.0,0,4.746,0.0,KE4QCM 4.746 s counted (frame+timer:ack),4.746,0.0,,,,198.9
+80m-vox-caller-declared-500,1071,robustness,False,a message did not arrive,682.1,0,0.0,0,4.843,0.0,KE4QCM 4.843 s counted (frame+timer:ack),4.843,0.0,,,,217.2
+80m-vox-caller-learned-gap-500,71,robustness,False,a message did not arrive,638.1,0,0.0,0,0.0,4.74,KE4QCM 4.740 s S4 broken (frame+timer:ack),4.74,0.0,,,,192.0
+80m-vox-caller-learned-gap-500,1071,robustness,False,a message did not arrive,645.1,0,0.0,0,0.0,4.77,KE4QCM 4.770 s S4 broken (frame+timer:ack),4.77,0.0,,,,205.0
 80m-weak-500,18,500 Hz,True,,143.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,44.6
+80m-weak-500,1018,500 Hz,True,,170.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,55.6
 80m-winlink-exchange-500,32,500 Hz,True,,319.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,91.4
+80m-winlink-exchange-500,1032,500 Hz,True,,310.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,95.5
 quick-awgn-2300,1,2300 Hz,True,,43.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,14.3
+quick-awgn-2300,1001,2300 Hz,True,,44.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,15.5
