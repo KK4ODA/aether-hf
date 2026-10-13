@@ -41,7 +41,15 @@ seeded), ``stall_s`` a length or a ``[shortest, longest]`` range; the command fi
 ``stall <who> S`` stalls one now.
 
 The report says when each station was keyed on the air, and every stretch both were — a
-collision, which no recording at either end can show.
+collision, which no recording at either end can show. It splits that time three ways
+(ADR-0069 §5): **radiated** — both transmitters putting out signal at once, a collision of the
+protocol's —, **vox** — one of them only held keyed by its VOX — and **guard** — the rest, a
+station's keyed lead or tail of silence against the other's transmission, which costs nobody a
+frame. It also says, for each station, how much of its peer's signal reached it while it could
+not hear (``deaf_hits_s``: transmitting, keyed in its own silence, held by its VOX, or its
+receiver recovering), and where each transmission went on the air with the account the daemon
+gave of it (``transmissions``: why it was keyed, what it carried, what the engine believed),
+which ``tools/air_account.py`` turns into a collision's mechanism.
 """
 
 from __future__ import annotations
@@ -76,7 +84,10 @@ TICK = 960
 DEVICE_LATENCY_S = 0.25
 """From the daemon (``audio::DEVICE_LATENCY_S``): played to on the air."""
 
-MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR = 1, 2, 3, 4
+MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG = 1, 2, 3, 4, 5
+RADIATED_BLOCK = 48
+"""Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
+zero, a keyed lead or tail of silence is all zeros."""
 
 
 # ── the channel, one direction ────────────────────────────────────────
@@ -336,6 +347,17 @@ class Station:
     stall_every: float = 0.0
     stall_range: tuple[float, float] = (0.0, 0.0)
     rng: np.random.Generator | None = None
+    # the account of the air (ADR-0069 §5): samples ever queued, the daemon's tags waiting for
+    # their first sample to be played, the transmissions placed on the air, where the station
+    # radiated, and how much of its peer it missed while deaf, by why
+    queued_total: int = 0
+    tags_waiting: list[tuple[int, dict]] = field(default_factory=list)
+    transmissions: list[dict] = field(default_factory=list)
+    radiated: list[list[float]] = field(default_factory=list)
+    radiating_since: int | None = None
+    deaf_hits: dict[str, int] = field(
+        default_factory=lambda: {"transmitting": 0, "own_silence": 0, "vox": 0, "recovering": 0}
+    )
 
     def read_exact(self, n: int) -> bytes:
         data = b""
@@ -357,9 +379,23 @@ class Station:
                 samples = np.frombuffer(self.read_exact(4 * n), dtype="<f4").astype(np.float32)
                 self.queue.append(samples)
                 self.queued += n
+                self.queued_total += n
             elif kind == MSG_CLEAR:
                 self.queue.clear()
                 self.queued = 0
+                # what was queued and not played never goes: the next sample queued is the
+                # next one played, and the accounts of what was dropped go with it
+                self.queued_total = self.consumed
+                self.tags_waiting.clear()
+            elif kind == MSG_TAG:
+                (n,) = struct.unpack("<I", self.read_exact(4))
+                raw = self.read_exact(n).decode("utf-8", errors="replace")
+                try:
+                    tag = json.loads(raw)
+                except json.JSONDecodeError:
+                    tag = {"raw": raw}
+                # it describes the samples queued next
+                self.tags_waiting.append((self.queued_total, tag))
             else:
                 raise ConnectionError(f"{self.name} sent message {kind}")
 
@@ -507,14 +543,39 @@ class Server:
         self.both_keyed = 0
         self.collisions: list[list[float]] = []
         self._colliding_since: int | None = None
+        # the keyed overlap split (radiated, vox, guard), in samples, in all and per collision
+        self.overlap = {"radiated": 0, "vox": 0, "guard": 0}
+        self.collision_split: list[dict[str, int]] = []
+        self.rf_overlaps: list[list[float]] = []
+        self._rf_since: int | None = None
+        # each path's travel time, so a receiver's deafness is set against the signal as it
+        # arrives, not as it leaves
+        self.delays = {
+            (tx, rx): round(
+                float(path_for(scenario, f"{tx}_to_{rx}").get("delay_ms", 0.0)) * AUDIO_RATE / 1000
+            )
+            for tx in names
+            for rx in names
+            if tx != rx
+        }
+        self._in_flight = {key: np.zeros(n, dtype=bool) for key, n in self.delays.items()}
 
-    def _radiate(self, st: Station) -> tuple[np.ndarray, np.ndarray]:
-        """This tick of what the station puts on the air, and when it is keyed."""
+    def _radiate(self, st: Station) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """This tick of what the station puts on the air; when it is keyed; when it radiates
+        signal; and when it is keyed only by its VOX's hold."""
+        before = st.consumed
         played, real = st.take(TICK)
+        # a tag goes on the air with the first sample it describes, a card's latency after it
+        # is played
+        while st.tags_waiting and st.tags_waiting[0][0] < st.consumed:
+            offset, tag = st.tags_waiting.pop(0)
+            at = self.t + self.latency + max(0, offset - before)
+            st.transmissions.append({"air_s": round(at / AUDIO_RATE, 3), **tag})
         st.air = np.concatenate((st.air, played))
         st.air_keyed = np.concatenate((st.air_keyed, real))
         audio, keyed = st.air[:TICK].copy(), st.air_keyed[:TICK].copy()
         st.air, st.air_keyed = st.air[TICK:], st.air_keyed[TICK:]
+        played_keyed = keyed.copy()
         radiating = keyed.copy()
         for i in range(TICK):
             t = self.t + i
@@ -532,7 +593,11 @@ class Server:
             if not keyed[i] and t - st.last_keyed <= st.vox_hold:
                 keyed[i] = True
         audio[~radiating] = 0.0
-        return audio, keyed
+        signal = np.repeat(
+            (np.abs(audio) > 1e-9).reshape(-1, RADIATED_BLOCK).any(axis=1), RADIATED_BLOCK
+        )
+        vox = keyed & ~played_keyed
+        return audio, keyed, signal, vox
 
     def _deaf(self, st: Station, keyed: np.ndarray) -> np.ndarray:
         """Where the station hears nothing: keyed, held, or recovering."""
@@ -550,10 +615,13 @@ class Server:
                 st.owed -= 1
         audio: dict[str, np.ndarray] = {}
         keyed: dict[str, np.ndarray] = {}
+        signal: dict[str, np.ndarray] = {}
+        vox: dict[str, np.ndarray] = {}
         for who, st in self.stations.items():
-            audio[who], keyed[who] = self._radiate(st)
+            audio[who], keyed[who], signal[who], vox[who] = self._radiate(st)
             if self.t < self.outage_until:
                 audio[who] = np.zeros_like(audio[who])
+            self._note_radiated(st, signal[who])
         heard: dict[str, np.ndarray] = {}
         for rx, st in self.stations.items():
             main = main_peer(rx)
@@ -561,7 +629,10 @@ class Server:
             for tx in self.stations:
                 if tx not in (rx, main):
                     out = out + self.paths[(tx, rx)].process(audio[tx] * self.gains[(tx, rx)])
-            out[self._deaf(st, keyed[rx])] = 0.0
+            deaf = self._deaf(st, keyed[rx])
+            out[deaf] = 0.0
+            if self.t >= self.outage_until:
+                self._note_deaf_hits(st, rx, main, signal, keyed, vox, deaf)
             if st.agc is not None:
                 out = st.agc.process(out)
             heard[rx] = out
@@ -570,30 +641,90 @@ class Server:
         if self.t < self.outage_until:
             both[:] = False  # neither hears the other: not a collision on this path
         self.both_keyed += int(both.sum())
+        # what the keyed overlap was: signal from two at once, a VOX's hold, or a keyed silence
+        radiated = np.sum(np.stack(list(signal.values())), axis=0) >= 2
+        held = np.any(np.stack(list(vox.values())), axis=0)
+        split = np.where(radiated, 0, np.where(held, 1, 2))
         for i in np.flatnonzero(both):
             t = self.t + int(i)
             if self._colliding_since is None or t > self._colliding_since + 1:
                 self.collisions.append([t / AUDIO_RATE, (t + 1) / AUDIO_RATE])
+                self.collision_split.append({"radiated": 0, "vox": 0, "guard": 0})
             self.collisions[-1][1] = (t + 1) / AUDIO_RATE
             self._colliding_since = t
+            what = ("radiated", "vox", "guard")[int(split[i])]
+            self.overlap[what] += 1
+            self.collision_split[-1][what] += 1
+            if what == "radiated":
+                if self._rf_since is None or t > self._rf_since + 1:
+                    self.rf_overlaps.append([t / AUDIO_RATE, (t + 1) / AUDIO_RATE])
+                self.rf_overlaps[-1][1] = (t + 1) / AUDIO_RATE
+                self._rf_since = t
         for who, st in self.stations.items():
             st.deliver(self.t + TICK, heard[who], stalled[who])
         self.t += TICK
 
+    def _note_radiated(self, st: Station, signal: np.ndarray) -> None:
+        """Extend the station's radiated intervals by this tick, a radiated block at a time."""
+        blocks = signal[::RADIATED_BLOCK]
+        for b, on in enumerate(blocks):
+            t = self.t + b * RADIATED_BLOCK
+            if on and st.radiating_since is None:
+                st.radiating_since = t
+                st.radiated.append([t / AUDIO_RATE, t / AUDIO_RATE])
+            if on:
+                st.radiated[-1][1] = (t + RADIATED_BLOCK) / AUDIO_RATE
+            elif st.radiating_since is not None:
+                st.radiating_since = None
+
+    def _note_deaf_hits(
+        self,
+        st: Station,
+        rx: str,
+        tx: str,
+        signal: dict[str, np.ndarray],
+        keyed: dict[str, np.ndarray],
+        vox: dict[str, np.ndarray],
+        deaf: np.ndarray,
+    ) -> None:
+        """How much of the peer's signal reached the station, after the path's travel time,
+        while it could not hear it — and why: its own transmission, its own keyed silence, its
+        VOX holding it keyed, or its receiver still recovering."""
+        line = np.concatenate((self._in_flight[(tx, rx)], signal[tx]))
+        arriving, self._in_flight[(tx, rx)] = line[:TICK], line[TICK:]
+        lost = arriving & deaf
+        if not lost.any():
+            return
+        own = signal[rx]
+        st.deaf_hits["transmitting"] += int((lost & own).sum())
+        st.deaf_hits["vox"] += int((lost & vox[rx]).sum())
+        st.deaf_hits["own_silence"] += int((lost & keyed[rx] & ~own & ~vox[rx]).sum())
+        st.deaf_hits["recovering"] += int((lost & ~keyed[rx]).sum())
+
     def report(self) -> dict:
+        seconds = lambda n: round(n / AUDIO_RATE, 3)  # noqa: E731
         return {
             "scenario": self.scenario.get("name"),
             "seconds": self.t / AUDIO_RATE,
+            "latency_s": DEVICE_LATENCY_S,
             "stations": {
                 st.name: {
                     "keyed": [[round(x, 3) for x in iv] for iv in st.intervals],
+                    "radiated": [[round(x, 3) for x in iv] for iv in st.radiated],
                     "stalls": [[round(x, 3) for x in iv] for iv in st.stalls],
                     "stall_dropped_s": round(st.stall_dropped / AUDIO_RATE, 3),
+                    "deaf_hits_s": {k: seconds(v) for k, v in st.deaf_hits.items()},
+                    "transmissions": st.transmissions,
                 }
                 for st in self.stations.values()
             },
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
+            "overlap_s": {k: seconds(v) for k, v in self.overlap.items()},
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
+            "collision_split_s": [
+                {k: seconds(v) for k, v in split.items()} for split in self.collision_split
+            ],
+            "rf_overlaps": [[round(x, 3) for x in iv] for iv in self.rf_overlaps],
             "outages": self.outages,
         }
 

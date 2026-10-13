@@ -50,6 +50,10 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from air_account import account as air_account
+from air_account import summary as air_summary
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DAEMON = (
     ROOT / "core" / "target" / "release" / ("aetherd.exe" if os.name == "nt" else "aetherd")
@@ -704,6 +708,13 @@ def judge(run: Run, ends: list[str]) -> dict:
         "air_s": round(report.get("seconds", run.air_s()), 1),
         "collisions": collisions,
         "both_keyed_s": report.get("both_keyed_s"),
+        # the keyed overlap split (ADR-0069 §5): signal against signal, a VOX hold, keyed
+        # silence; and what each radiated overlap was, from the daemons' accounts
+        "rf_overlaps": len(report.get("rf_overlaps", [])),
+        "radiated_s": (report.get("overlap_s") or {}).get("radiated"),
+        "vox_s": (report.get("overlap_s") or {}).get("vox"),
+        "guard_s": (report.get("overlap_s") or {}).get("guard"),
+        "mechanisms": air_summary(air_account(report)) if report else "",
         "probe": run.probe or "",
         "test": got_test or "",
         "message_bps": (test.get("message") or {}).get("bps"),

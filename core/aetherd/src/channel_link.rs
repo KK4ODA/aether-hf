@@ -16,6 +16,8 @@
 //! * station → server, once: `AEC1`, `u32` sample rate, `u16` length, the station's name;
 //! * station → server: `2` `u32 n` then `n` `f32` samples to play; `3` ready for the next
 //!   block (the last one has been processed); `4` drop what is queued and not yet played;
+//!   `5` `u32 n` then `n` bytes of UTF-8: the account of the transmission whose samples come
+//!   next (`AudioIo::annotate`), which the server puts on the air with them;
 //! * server → station: `1`, `u64` the playback clock — samples the station's device has
 //!   played through this block, silence included, as a sound card counts them —, `u64` the
 //!   samples of its queue played so far, `u32 n`, then `n` `f32` samples heard.
@@ -186,6 +188,15 @@ impl AudioIo for ChannelLink {
         self.send(&[4]);
         self.handed = self.consumed;
     }
+
+    fn annotate(&mut self, tag: &str) {
+        let tag = tag.as_bytes();
+        let mut bytes = Vec::with_capacity(5 + tag.len());
+        bytes.push(5);
+        bytes.extend_from_slice(&u32::try_from(tag.len()).unwrap_or(0).to_le_bytes());
+        bytes.extend_from_slice(tag);
+        self.send(&bytes);
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +237,12 @@ mod tests {
                     }
                     3 => break,
                     4 => queue.clear(),
+                    5 => {
+                        let mut n = [0u8; 4];
+                        stream.read_exact(&mut n).expect("n");
+                        let mut tag = vec![0u8; u32::from_le_bytes(n) as usize];
+                        stream.read_exact(&mut tag).expect("tag");
+                    }
                     other => panic!("message {other}"),
                 }
             }

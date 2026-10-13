@@ -220,7 +220,7 @@ mod tests {
         gaps.accepted("KE4QCM", 10.0);
         // the caller never heard it, and tries again: one lost answer, however many tries
         let learned = gaps.called("KE4QCM", 17.0).expect("a lost acceptance");
-        assert_eq!(learned.gap_s, STEP_S);
+        assert!((learned.gap_s - STEP_S).abs() < 1e-9, "{}", learned.gap_s);
         assert!(gaps.called("KE4QCM", 24.0).is_none(), "one lost answer");
         // the station answers the try with its acceptance again, and that one is lost too
         gaps.accepted("KE4QCM", 24.0);
@@ -253,7 +253,7 @@ mod tests {
         let mut gaps = LearnedGaps::default();
         gaps.probe_answered("KE4QCM", 0.0);
         let learned = gaps.probed("KE4QCM", 20.0).expect("a lost answer");
-        assert_eq!(learned.gap_s, STEP_S);
+        assert!((learned.gap_s - STEP_S).abs() < 1e-9, "{}", learned.gap_s);
         assert!(gaps.probed("KE4QCM", 30.0).is_none());
         // a probe a long while later is a new question
         gaps.probe_answered("KE4QCM", 100.0);

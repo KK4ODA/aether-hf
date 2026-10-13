@@ -150,7 +150,20 @@ uv run python tools/session_matrix.py [scenarios…] [--tag T] [--jobs N] [--dae
 The daemon is `core/target/release/aetherd` unless `--daemon` names another; `--daemon-b` runs
 the called station on another build (a release against this tree). Each run leaves
 `result.json`, `channel.json` (when each station was keyed, and every collision) and both
-daemons' logs and recordings under `--out`; `--csv` appends one line per scenario. Runs of one
+daemons' logs and recordings under `--out`; `--csv` appends one line per scenario.
+
+A *collision* there is both radios keyed at once, which includes a keyed lead or tail of
+silence and a VOX's hold. The report splits that time (ADR-0069 §5): `overlap_s` gives
+`radiated` (signal against signal: the protocol's collisions, also listed as `rf_overlaps`),
+`vox` and `guard` (keyed silence). Each station's `transmissions` place the daemon's own
+account of every transmission on the air — the engine's cause (`timer:ack`, `timer:wait`,
+`frame`, …), its role and state, its frames, how long it was held — and `deaf_hits_s` says how
+much of its peer's signal reached it while it could not hear, and why. The results row carries
+`rf_overlaps`, the split, and `mechanisms`: each radiated overlap named by
+`tools/air_account.py` (`request`, `answer held`, `answer over a repeat`, `answer over a burst`,
+`repeat over an answer`, `both initiating`, `leaving`). `python tools/air_account.py
+runs/<scenario>/channel.json` lists them with both transmissions' accounts. `max_collisions`
+still counts keyed overlaps. Runs of one
 build are not identical (the daemons' threads), so judge a single difference against a second
 run, and an A/B on the same seeds; a scenario's `seed = N` and a `-sN` in its name make a
 variant.

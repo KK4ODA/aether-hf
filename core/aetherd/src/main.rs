@@ -979,6 +979,10 @@ fn fill_card(
         if count == 0 {
             break;
         }
+        // the account of a transmission keyed by this call goes ahead of its first samples
+        for tag in station.take_tags() {
+            audio.annotate(&tag);
+        }
         audio.playback(&buffer[..count]);
     }
     // The key is released, and the station's deafness ends, when the card's clock reaches
