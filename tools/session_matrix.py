@@ -721,10 +721,18 @@ def judge(run: Run, ends: list[str]) -> dict:
         if "max_thread_growth" in expect and th1 - th0 > int(expect["max_thread_growth"]):
             failures.append(f"{who} threads grew {th0}→{th1}")
     test = run.test or {}
+    # what each station's receiver lost while it could not hear — keyed in its own silence, held
+    # by its VOX, recovering — beyond the radiated overlaps counted apart
+    deaf = {
+        name: sum(float(v) for k, v in st.get("deaf_hits_s", {}).items() if k != "transmitting")
+        for name, st in report.get("stations", {}).items()
+    }
     return {
         "scenario": sc.get("name"),
         "pass": not failures,
         "why": "; ".join(failures + run.notes) or "",
+        # the judgements that failed, without the notes `why` adds
+        "failures": "; ".join(failures),
         "air_s": round(report.get("seconds", run.air_s()), 1),
         "collisions": collisions,
         "both_keyed_s": report.get("both_keyed_s"),
@@ -734,6 +742,7 @@ def judge(run: Run, ends: list[str]) -> dict:
         "radiated_s": (report.get("overlap_s") or {}).get("radiated"),
         "vox_s": (report.get("overlap_s") or {}).get("vox"),
         "guard_s": (report.get("overlap_s") or {}).get("guard"),
+        "deaf_s": " ".join(f"{name} {s:.3f}" for name, s in deaf.items()),
         "mechanisms": air_summary(air_account(report)) if report else "",
         "probe": run.probe or "",
         "test": got_test or "",
