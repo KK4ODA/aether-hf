@@ -1,0 +1,127 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=46055 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+TLC2 Version 2026.10.13.011403 (rev: 210df3a)
+Running breadth-first search Model-Checking with fp 17 and seed -2069880507446778510 with 4 workers on 4 cores with 3040MB heap and 64MB offheap memory [pid: 3609] (Linux 6.18.44-fc-v114 amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/user/aether-hf/research/link_arch/tla/TokenTransfer.tla
+Parsing file /tmp/tlc-10809906470783960288/Naturals.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-10809906470783960288/FiniteSets.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-10809906470783960288/_TLCTrace.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-10809906470783960288/Sequences.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-10809906470783960288/TLC.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-10809906470783960288/TLCExt.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-10809906470783960288/Integers.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Integers
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module TokenTransfer
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module TokenTransfer
+Starting... (2026-10-13 11:04:36)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 11:04:36.
+Error: Invariant SomeoneMay is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 0
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 0, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, kind |-> "none"],
+  B |-> [start |-> 99999, kind |-> "none"] ]
+/\ inbox = {}
+/\ lossRun = 0
+/\ free = [A |-> 0, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 2: <Initiate("A") line 71, col 5 to line 80, col 71 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 0
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 0, B |-> 0]
+/\ tx = [A |-> [start |-> 0, kind |-> "data"], B |-> [start |-> 99999, kind |-> "none"]]
+/\ inbox = {}
+/\ lossRun = 0
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 3: <Tick line 147, col 9 to line 148, col 94 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 1
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 0, B |-> 0]
+/\ tx = [A |-> [start |-> 0, kind |-> "data"], B |-> [start |-> 99999, kind |-> "none"]]
+/\ inbox = {}
+/\ lossRun = 0
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 4: <FrameEnd("A") line 89, col 5 to line 97, col 67 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 1
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 1, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, kind |-> "none"],
+  B |-> [start |-> 99999, kind |-> "none"] ]
+/\ inbox = {}
+/\ lossRun = 1
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 5: <Tick line 147, col 9 to line 148, col 94 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 2
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 1, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, kind |-> "none"],
+  B |-> [start |-> 99999, kind |-> "none"] ]
+/\ inbox = {}
+/\ lossRun = 1
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 6: <Tick line 147, col 9 to line 148, col 94 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 3
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 1, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, kind |-> "none"],
+  B |-> [start |-> 99999, kind |-> "none"] ]
+/\ inbox = {}
+/\ lossRun = 1
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+State 7: <Tick line 147, col 9 to line 148, col 94 of module TokenTransfer>
+/\ heard = [A |-> 0, B |-> 0]
+/\ now = 4
+/\ tok = [A |-> "held", B |-> "none"]
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ renewed = [A |-> 0, B |-> 0]
+/\ lastTx = [A |-> 1, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, kind |-> "none"],
+  B |-> [start |-> 99999, kind |-> "none"] ]
+/\ inbox = {}
+/\ lossRun = 1
+/\ free = [A |-> 3, B |-> 0]
+/\ grantAt = [A |-> 0, B |-> 0]
+
+89 states generated, 89 distinct states found, 29 states left on queue.
+The depth of the complete state graph search is 9.
+Finished in 00s at (2026-10-13 11:04:36)
+Trace exploration spec path: ./TokenTransfer_TTrace_1791889475.tla

@@ -80,6 +80,7 @@ ignore = [
 "model/aether_model/host/*.py" = ["PL", "B"]
 "model/tests/*.py" = ["PL"]
 "tools/*.py" = ["PL", "E501"]
+"research/**/*.py" = ["PL"]  # research prototypes (docs/research/link-architecture/)
 
 [tool.ruff.format]
 quote-style = "double"
