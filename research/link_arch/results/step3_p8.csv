@@ -1,0 +1,45 @@
+base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,deaf_counted_s,deaf_reported_s,deaf_detail,vox_s,guard_s,test,message_bps,file_bps,wall_s
+15m-equatorial-flutter-2300,54,band,True,,95.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.5
+15m-old-rig-offset-500,57,band,True,,324.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,101.5
+15m-opening-closes-2300,55,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,234.0
+20m-dx-500,58,band,True,,409.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,126.4
+20m-dx-moderate-2300,51,band,True,,358.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,650.2,690.1,119.8
+20m-ft8-neighbours-2300,56,band,True,,125.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,81.0
+20m-long-path-echo-2300,53,band,True,,66.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.1
+20m-polar-path-2300,52,band,True,,208.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,65.7
+40m-abort-and-recall-2300,43,robustness,True,,86.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.4
+40m-drift-and-clocks-2300,15,2300 Hz,True,,273.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,620.6,618.5,98.2
+40m-gateway-busy-when-called-2300,62,gateway,True,,185.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,106.2
+40m-gateway-client-vanishes-2300,41,gateway,True,,348.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,113.9
+40m-gateway-three-clients-2300,61,gateway,True,,214.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,184.3
+40m-good-2300-rtty-crashes,9,2300 Hz,True,,325.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,402.8,375.2,120.6
+40m-good-throughput-2300,20,2300 Hz,True,,102.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,33.8
+40m-hidden-vara-2300,12,2300 Hz,True,,105.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,39.1
+40m-long-attachment-cwid-2300,44,robustness,True,,911.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,290.0
+40m-moderate-2300-vara-qrm,7,2300 Hz,True,,354.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,383.5,385.6,150.4
+40m-rtty-contest-2300,19,2300 Hz,False,ended aborted/none; left idle/connected,593.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,272.0,156.1,270.7
+40m-trimode-gateway-2300,45,gateway,True,,63.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.7
+40m-wide-calls-narrow,22,2300 Hz,True,,193.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,65.6
+40m-wide-calls-narrow-unprobed,23,2300 Hz,True,,258.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,80.9
+40m-winlink-exchange-2300,31,2300 Hz,True,,73.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,26.9
+80m-asymmetric-500,11,500 Hz,True,,284.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,51.4,66.9,93.8
+80m-band-closes-2300,14,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,136.7
+80m-called-again-cwid-500,62,robustness,True,,183.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,58.8
+80m-floor-top-start-500,61,500 Hz,True,,528.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,73.9,59.5,183.6
+80m-flutter-500,21,500 Hz,True,,488.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,43.3,42.7,168.0
+80m-leave-together-500,42,robustness,True,,297.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,99.8
+80m-lopsided-acks-500,59,500 Hz,True,,455.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,41.9,62.5,155.3
+80m-nvis-disturbed-500,24,500 Hz,True,,227.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,72.5
+80m-nvis-evening-500,6,500 Hz,True,,528.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,35.4,30.1,225.3
+80m-offset-500,16,500 Hz,True,,152.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.1
+80m-poor-500-pactor-signalink,8,500 Hz,True,,328.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,120.4
+80m-qsb-dropout-500,13,500 Hz,True,,483.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,155.4
+80m-slow-machine-500,81,robustness,True,,500.1,1,0.454,0,0.41,0.0,KE4QCM 0.410 s counted (unplaced),0.0,0.4,complete,121.3,66.6,172.9
+80m-thunderstorm-agc-2300,17,2300 Hz,True,,292.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,269.3,364.8,106.3
+80m-trimode-gateway-client-vanishes-500,46,gateway,True,,637.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,208.8
+80m-vara-on-frequency-500,23,500 Hz,True,,174.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,70.1
+80m-vox-caller-declared-500,71,robustness,True,,275.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,89.7
+80m-vox-caller-learned-gap-500,71,robustness,True,,463.1,0,0.0,0,3.33,0.0,KE4QCM 3.330 s counted (unplaced),3.33,0.0,,,,151.5
+80m-weak-500,18,500 Hz,True,,173.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.3
+80m-winlink-exchange-500,32,500 Hz,True,,304.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,97.5
+quick-awgn-2300,1,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,16.0
