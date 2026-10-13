@@ -35,6 +35,7 @@ import argparse
 import base64
 import contextlib
 import csv
+import functools
 import json
 import os
 import re
@@ -132,7 +133,7 @@ def incompressible(n: int, salt: int) -> bytes:
 
 
 STATION_TOML = """\
-schema_version = 11
+schema_version = {schema}
 callsign = "{callsign}"
 
 [audio]
@@ -145,7 +146,7 @@ kind = "none"
 [radio]
 bandwidth = {bandwidth}
 wait_for_clear = {wait_for_clear}
-answer_gap_ms = {answer_gap_ms}
+answer_gap_ms = {answer_gap_ms}{turnaround}
 max_mode = {max_mode}
 cw_id = {cw_id}
 cw_id_interval_s = {cw_id_interval_s}
@@ -168,6 +169,20 @@ dir = "{record}"
 # never the project's upload folder from a bench (debug mode, ADR-0050)
 send_to_project = false
 """
+
+
+@functools.cache
+def schema_of(daemon: Path) -> int:
+    """The configuration schema a daemon reads, from its own example file: a build from before
+    a key cannot read a file that has it, and the A/B runs older builds beside this one."""
+    try:
+        example = subprocess.run(
+            [str(daemon), "--example-config"], capture_output=True, text=True, timeout=30
+        ).stdout
+    except OSError:
+        return 11
+    found = re.search(r"^schema_version = (\d+)", example, re.MULTILINE)
+    return int(found.group(1)) if found else 11
 
 
 @dataclass
@@ -415,8 +430,13 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         record = (run.dir / who / "recordings").resolve()
         record.mkdir(parents=True, exist_ok=True)
         config = run.dir / who / "station.toml"
+        schema = schema_of(binary)
+        # a radio's declared turnaround (schema 12, granted slots): what its operator set
+        turnaround = f"\nturnaround_ms = {int(cfg.get('turnaround_ms', 0))}" if schema >= 12 else ""
         config.write_text(
             STATION_TOML.format(
+                schema=min(schema, 12),
+                turnaround=turnaround,
                 callsign=callsign,
                 tx_level=cfg.get("tx_level", 0.25),
                 bandwidth=cfg.get("bandwidth", sc.get("bandwidth", 2300)),

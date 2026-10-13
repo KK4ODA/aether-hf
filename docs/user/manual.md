@@ -5,7 +5,7 @@ contact, what the readings mean, and what to try when something goes wrong. The 
 this folder go deeper on one subject each, and this manual links to them rather than repeating
 them.
 
-It describes **0.2.0-beta.105**. When the application changes, this manual changes in the same
+It describes **0.2.0-beta.106**. When the application changes, this manual changes in the same
 commit (see *Keeping this manual current* at the end).
 
 ## Contents
@@ -193,10 +193,13 @@ the sound card's own noise.
   frame can spoil the rest. Use it only on a solid link.
 - **Busy channel**: *wait for a clear channel before calling*, and how far above the noise floor
   counts as busy (6 dB by default).
-- **Answer gap**: the least time between the end of the other station's frame and this station
-  keying. Leave it at 0 unless the other station keys by VOX (a SignaLink); then 500–800 ms gives
-  its radio time to get back to receive. Aether also learns this per station when a station keeps
-  asking again after being answered.
+- **Turnaround**: how long after your radio stops sending it hears again. 0 for a radio keyed
+  by CAT, a serial line or a host program. With VOX (a SignaLink), set its delay time plus
+  100 ms. Aether tells the other station, which waits that long before it answers. Up to 1500 ms.
+- **Answer gap**: the least time between the end of the other station's transmission and yours.
+  Leave it at 0 unless the other station keys by VOX and has not set its own turnaround; then
+  500–800 ms gives its radio time to get back to receive. Aether also learns this per station
+  when a station keeps calling again after being answered.
 - **Longest key**: the watchdog's limit on one transmission, 30 s by default. Aether sizes its
   bursts to fit inside it.
 - **Morse ID**: off by default. Aether's frames carry both callsigns; whether that satisfies
@@ -526,7 +529,8 @@ what happened in an issue on GitHub or by email.
 - **Acknowledgement (ACK)**: which frames arrived, how well, and which rung to use next. Each
   station's goes with the next thing it sends: the caller's ahead of its frames, the called
   station's in its slot.
-- **Answer gap**: the least time Aether waits after the other station's frame before keying.
+- **Answer gap**: the least time Aether waits after the other station's transmission before its
+  own, for a station that keys by VOX and has not set its turnaround.
 - **Bandwidth**: 2300 Hz or 500 Hz. Both stations of a session use the same.
 - **Beacon**: your callsign on the air once, addressed to nobody.
 - **Burst**: the frames sent in one transmission.
@@ -555,6 +559,8 @@ what happened in an issue on GitHub or by email.
   transmissions. The called station keys only in its slot; an answer that would start too late
   for it is not sent, so the two stations never key over each other.
 - **Test session**: the field test: probe, call, message, ladder, file, recorded.
+- **Turnaround**: how long after a radio stops sending it hears again. Each station tells the
+  other its own, and the other waits that long before it answers.
 
 ## 16. Where to read more
 

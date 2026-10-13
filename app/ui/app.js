@@ -2557,6 +2557,7 @@ async function loadConfig() {
   busyThresholdDb = Number(radio.busy_threshold_db ?? 6);
   $("radio-max-key").value = String(radio.max_key_s ?? 30);
   $("radio-answer-gap").value = String(radio.answer_gap_ms ?? 0);
+  $("radio-turnaround").value = String(radio.turnaround_ms ?? 0);
   $("radio-cwid").checked = radio.cw_id === true;
   $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
   $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
@@ -2638,6 +2639,7 @@ const SETTING_NAMES = {
   "radio.busy_threshold_db": "busy threshold",
   "radio.max_key_s": "longest key",
   "radio.answer_gap_ms": "answer gap",
+  "radio.turnaround_ms": "turnaround",
   "radio.cw_id": "Morse ID",
   "radio.cw_id_interval_s": "Morse ID interval",
   "radio.cw_id_wpm": "Morse speed",
@@ -2914,6 +2916,8 @@ function formChanges() {
   // whole milliseconds: the file keeps an integer
   const gap = numberIn("radio-answer-gap");
   if (gap !== null) changes["radio.answer_gap_ms"] = Math.round(gap);
+  const turnaround = numberIn("radio-turnaround");
+  if (turnaround !== null) changes["radio.turnaround_ms"] = Math.round(turnaround);
   changes["radio.cw_id"] = $("radio-cwid").checked;
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
@@ -3607,7 +3611,8 @@ function checkModemSettings() {
   const morse = !$("radio-cwid").checked
     || (numberWithin("radio-cwid-interval", 10, 3600) && numberWithin("radio-cwid-wpm", 5, 40));
   const ok = numberWithin("radio-busy-db", 0, 60) && numberWithin("radio-max-key", 1, 600)
-    && numberWithin("radio-answer-gap", 0, 2000) && morse;
+    && numberWithin("radio-answer-gap", 0, 2000) && numberWithin("radio-turnaround", 0, 1500)
+    && morse;
   markStep(4, ok);
   return ok;
 }
@@ -5041,7 +5046,7 @@ function wire() {
   for (const id of ["dev-in", "dev-out", "dev-ptt", "ptt-line", "ptt-protocol", "ptt-baud", "ptt-civ", "ptt-gpio", "ptt-address"]) {
     $(id).addEventListener("change", interfaceEdited);
   }
-  for (const id of ["radio-busy-db", "radio-max-key", "radio-answer-gap", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
+  for (const id of ["radio-busy-db", "radio-max-key", "radio-answer-gap", "radio-turnaround", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
     $(id).addEventListener("input", checkModemSettings);
   }
   for (const id of ["host-port", "update-channel", "host-enabled", "kiss-enabled", "kiss-host", "kiss-port"]) {

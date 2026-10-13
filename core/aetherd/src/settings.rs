@@ -194,9 +194,15 @@ pub const RULES: &[Rule] = &[
     Rule {
         min: Some(0.0),
         max: Some(2000.0),
-        why: "two seconds is longer than any VOX hold worth answering after, and the other \
-              station's wait for an answer has to outlast it",
+        why: "two seconds is longer than any VOX hold worth answering after, and the top gap \
+              level a called station can ask for",
         ..rule("radio.answer_gap_ms")
+    },
+    Rule {
+        min: Some(0.0),
+        max: Some(1500.0),
+        why: "a call or acceptance carries it in tenths of a second, up to a second and a half",
+        ..rule("radio.turnaround_ms")
     },
     // ── this installation ──────────────────────────────────────────────────────────
     Rule {

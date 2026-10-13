@@ -1062,9 +1062,14 @@
                 <span class="sub">dB above the noise floor</span>
               </div>
               <div class="row">
+                <label for="radio-turnaround">Turnaround</label>
+                <input id="radio-turnaround" title="How long after your radio stops sending it hears again, in milliseconds: 0 for CAT, serial or host-program keying; with VOX (a SignaLink) its delay time plus 100. The other station is told, and waits that long before answering. Up to 1500." type="text" inputmode="numeric" class="port" value="0" aria-label="Radio turnaround in milliseconds" />
+                <span class="sub">ms your radio takes to hear again; with VOX, its delay plus 100</span>
+              </div>
+              <div class="row">
                 <label for="radio-answer-gap">Answer gap</label>
-                <input id="radio-answer-gap" title="The least time between the end of another station's frame and this station keying, in milliseconds: 0 answers as the link times it; 500-800 gives a station keyed by VOX, such as a SignaLink, time to get back to receive" type="text" inputmode="numeric" class="port" value="0" aria-label="Answer gap in milliseconds" />
-                <span class="sub">ms before answering; 500–800 if the other station keys by VOX (SignaLink)</span>
+                <input id="radio-answer-gap" title="The least time between the end of another station's frames and this station transmitting, in milliseconds, for a station keyed by VOX that has not set its own turnaround: 500-800 suits a SignaLink. 0 waits for nothing more than the other station says it needs." type="text" inputmode="numeric" class="port" value="0" aria-label="Answer gap in milliseconds" />
+                <span class="sub">ms to wait after the other station; 500–800 if it keys by VOX and has not set its turnaround</span>
               </div>
               <div class="row">
                 <label for="radio-max-key">Longest key</label>
