@@ -16,8 +16,8 @@ use std::{fs, path::PathBuf};
 use aether_link::{
     datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
-        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, ProbeBody, decode_data,
-        encode_data, pack_callsign, unpack_callsign,
+        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, GrantFrame, GrantKind,
+        ProbeBody, decode_data, encode_data, level_of, pack_callsign, unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
@@ -240,6 +240,8 @@ fn connect_bodies_match_the_model() {
             snr_db: case["snr_db"].as_f64(),
             caps: int(case, "caps") as u8,
             version: int(case, "version") as u8,
+            turnaround_s: case["turnaround_s"].as_f64().unwrap_or(0.0),
+            identifier_s: case["identifier_s"].as_f64().unwrap_or(0.0),
         };
         let expected = from_hex(case["encoded"].as_str().expect("encoded"));
         assert_eq!(
@@ -259,6 +261,76 @@ fn connect_bodies_match_the_model() {
             (None, None) => {}
             (Some(got), Some(want)) => assert!((got - want).abs() < 1e-12, "SNR {got} vs {want}"),
             (got, want) => panic!("SNR presence differs, {got:?} vs {want:?}"),
+        }
+        // protocol 8's turnaround and identifier, in their steps (ADR-0069)
+        let turnaround = case["decoded_turnaround_s"].as_f64().expect("turnaround");
+        let identifier = case["decoded_identifier_s"].as_f64().expect("identifier");
+        assert!(
+            (decoded.turnaround_s - turnaround).abs() < 1e-12,
+            "turnaround {} vs {turnaround}",
+            decoded.turnaround_s
+        );
+        assert!(
+            (decoded.identifier_s - identifier).abs() < 1e-12,
+            "identifier {} vs {identifier}",
+            decoded.identifier_s
+        );
+        assert_eq!(usize::from(level_of(body.caps)), int(case, "level"));
+    }
+}
+
+fn grant_kind(name: &str) -> GrantKind {
+    match name {
+        "HEADER" => GrantKind::Header,
+        "ANSWER" => GrantKind::Answer,
+        "DISC" => GrantKind::Disc,
+        "DISC_ACK" => GrantKind::DiscAck,
+        other => panic!("unknown grant kind {other}"),
+    }
+}
+
+fn grant_frame(case: &Value) -> GrantFrame {
+    GrantFrame {
+        kind: grant_kind(case["kind"].as_str().expect("kind")),
+        session: int(case, "session") as u8,
+        count: int(case, "count") as u8,
+        data_floor: case["data_floor"].as_bool().expect("data_floor"),
+        level: int(case, "level") as u8,
+        fam: case["fam"].as_bool().expect("fam"),
+        flag: case["flag"].as_bool().expect("flag"),
+        ident: case["ident"].as_bool().expect("ident"),
+        base: int(case, "base") as u8,
+        bitmap: int(case, "bitmap") as u16,
+        snr_db: case["snr_db"].as_f64(),
+        rung: int(case, "rung") as u8,
+        n: int(case, "n") as u8,
+    }
+}
+
+#[test]
+fn grant_frames_match_the_model() {
+    for case in vectors()["grant_frames"].as_array().expect("grant frames") {
+        let frame = grant_frame(case);
+        let expected = from_hex(case["encoded"].as_str().expect("encoded"));
+        assert_eq!(
+            frame.encode().to_vec(),
+            expected,
+            "{frame:?}: bytes differ from the model"
+        );
+        let decoded = GrantFrame::decode(&expected).expect("decode");
+        assert_eq!(decoded, grant_frame(&case["decoded"]), "{frame:?}: decoded");
+        for (index, want) in case["received"]
+            .as_array()
+            .expect("received")
+            .iter()
+            .enumerate()
+        {
+            let seq = (index * 13) as u8;
+            assert_eq!(
+                decoded.received(seq),
+                want.as_bool().expect("flag"),
+                "received({seq})"
+            );
         }
     }
 }

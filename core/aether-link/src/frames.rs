@@ -356,6 +356,15 @@ pub struct ConnectBody {
     /// the caller starts its first burst from (P9-2). `None` in a request, and from a
     /// station of an earlier version, whose body stops at the version byte.
     pub snr_db: Option<f64>,
+    /// Protocol 8: how long the sender's radio takes to hear again after it stops sending —
+    /// its VOX hold and receiver recovery — in 0.1 s steps up to 1.5 s. The other station's
+    /// slot starts no sooner after this station's transmission, and its transmissions no
+    /// sooner after this station's slot (ADR-0069). Absent before protocol 8.
+    pub turnaround_s: f64,
+    /// Protocol 8: how long the sender's Morse identifier lasts, in 0.5 s steps (0 for none):
+    /// a master grants a slot that much longer when the slave's identifier is due. Absent
+    /// before protocol 8.
+    pub identifier_s: f64,
 }
 
 /// Capability bit 0: stream compression (deflate) — offered, and used only if both offer.
@@ -450,6 +459,37 @@ pub fn most_following(countdown: u8) -> u8 {
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
 
+/// Protocol 8's connect body: the turnaround and the identifier's length after the SNR. With a
+/// DATA header and an explicit length it fills the 24 bytes of the tone floor's slowest rung.
+pub const CONNECT_BODY_8_BYTES: usize = CONNECT_BODY_BYTES + 2;
+
+/// Link protocol 8: granted slots (ADR-0069). The caller is the session's master and the only
+/// station that keys on its own initiative; every master transmission grants the other station
+/// one slot, defined by what it states; a station keys only in a slot granted by a frame it
+/// decoded in time. Its control frame ([`GrantFrame`]) and its connect body's two more bytes
+/// are not version 7's, and neither is any of its timing: a station of one ignores a call of
+/// the other, and says so.
+pub const GRANTED_VERSION: u8 = 8;
+
+/// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
+/// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called
+/// station whose computer decodes late is reached; an answer carries 0.
+pub const CAP_LEVEL_SHIFT: u8 = 3;
+/// The mask of the level bits.
+pub const CAP_LEVEL_MASK: u8 = 0x03 << CAP_LEVEL_SHIFT;
+
+/// A capability byte with the answer slot's gap level set (bits 3–4).
+#[must_use]
+pub const fn with_level(caps: u8, level: u8) -> u8 {
+    (caps & !CAP_LEVEL_MASK) | ((level & 0x03) << CAP_LEVEL_SHIFT)
+}
+
+/// The answer slot's gap level a request's capability byte states.
+#[must_use]
+pub const fn level_of(caps: u8) -> u8 {
+    (caps & CAP_LEVEL_MASK) >> CAP_LEVEL_SHIFT
+}
+
 /// The SNR byte shared by the CONTROL frame and the probe body: signed whole decibels
 /// (3 kHz reference), clamped to ±40, [`SNR_UNKNOWN`] for "not measured".
 ///
@@ -536,6 +576,13 @@ impl ConnectBody {
         out.push(self.caps);
         out.push(self.version);
         out.push(snr_byte(self.snr_db));
+        if self.version >= GRANTED_VERSION {
+            // whole steps up, as the model's ceil less a hair: 0.25 s says 0.3, 0.2 says 0.2
+            let turnaround = (self.turnaround_s * 10.0 - 1e-9).ceil().clamp(0.0, 15.0);
+            let identifier = (self.identifier_s * 2.0 - 1e-9).ceil().clamp(0.0, 255.0);
+            out.push(turnaround as u8);
+            out.push(identifier as u8);
+        }
         Ok(out)
     }
 
@@ -547,15 +594,27 @@ impl ConnectBody {
         if body.len() < 2 * CALL_BYTES + 2 {
             return Err(FrameError::TooShort);
         }
+        let version = body[2 * CALL_BYTES + 1];
+        let (turnaround_s, identifier_s) =
+            if version >= GRANTED_VERSION && body.len() >= CONNECT_BODY_8_BYTES {
+                (
+                    f64::from(body[2 * CALL_BYTES + 3] & 0x0F) / 10.0,
+                    f64::from(body[2 * CALL_BYTES + 4]) / 2.0,
+                )
+            } else {
+                (0.0, 0.0)
+            };
         Ok(Self {
             src: unpack_callsign(&body[..CALL_BYTES])?,
             dst: unpack_callsign(&body[CALL_BYTES..2 * CALL_BYTES])?,
             caps: body[2 * CALL_BYTES],
-            version: body[2 * CALL_BYTES + 1],
+            version,
             // a body from an earlier version stops here: not measured
             snr_db: body
                 .get(2 * CALL_BYTES + 2)
                 .and_then(|&byte| snr_from_byte(byte)),
+            turnaround_s,
+            identifier_s,
         })
     }
 }
@@ -638,6 +697,187 @@ impl ControlFrame {
         let distance = seq_distance(seq, self.base);
         if distance >= WINDOW {
             // far behind the base means already acknowledged and slid past
+            return distance >= SEQ_MOD / 2;
+        }
+        (self.bitmap >> distance) & 1 == 1
+    }
+}
+
+// ── protocol 8: the CONTROL container ────────────────────────────────
+
+/// What a protocol 8 control frame is (ADR-0069).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GrantKind {
+    /// The master's: what this transmission carries, what it acknowledges, and the slot it
+    /// grants the slave.
+    Header,
+    /// The slave's, in its slot: what it acknowledges, what follows, what it has queued.
+    Answer,
+    /// Either's: the session ends. A master's grants the `DISC_ACK`'s slot; a slave's goes in a
+    /// slot it was granted, the last it uses.
+    Disc,
+    /// The answer to a DISC.
+    DiscAck,
+}
+
+impl GrantKind {
+    /// The kind's two bits.
+    #[must_use]
+    pub const fn to_bits(self) -> u8 {
+        match self {
+            Self::Header => 0,
+            Self::Answer => 1,
+            Self::Disc => 2,
+            Self::DiscAck => 3,
+        }
+    }
+
+    /// The kind two bits name (every value names one).
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits & 0x03 {
+            0 => Self::Header,
+            1 => Self::Answer,
+            2 => Self::Disc,
+            _ => Self::DiscAck,
+        }
+    }
+}
+
+/// The six-bit SNR field's "not measured": −32 in two's complement, outside −31 … +31.
+pub const GRANT_SNR_UNKNOWN: u8 = 0x20;
+
+/// Protocol 8's control frame (ADR-0069): seven bytes, 56 bits.
+///
+/// ```text
+/// 0: kind (2) | count (3) | data family (1) | level (2)
+/// 1: session (7) | fam (1)
+/// 2: flag (1) | id (1) | SNR (6)
+/// 3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
+/// 6: rung (5) | n (3)
+/// ```
+///
+/// `count`: data frames after this one in its transmission, exactly (0–6), and their family
+/// (`data_floor`) — with it a receiver that reads this frame and none of them still knows where
+/// the transmission ends. `level`: in a header, the gap level of the slot it grants; in an
+/// answer, the level its sender needs. `fam`: in a header, the family the answer goes in; in an
+/// answer, the family its sender needs headers in. `flag`: the header's slot is an open window;
+/// the answer asks to leave. `ident`: the header's slot includes the slave's Morse identifier;
+/// the answer says it is due. `snr_db`: how the sender hears the other station, −31 … +31 dB
+/// (ADR-0021). `rung`: recommended for the other station's data. `n`: frames granted (or an
+/// open window's size step) / frames queued, at most 7. `session` is the session number's low
+/// seven bits: data frames carry all eight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // the frame's flag bits, as the wire has them
+pub struct GrantFrame {
+    /// What it is.
+    pub kind: GrantKind,
+    /// The session number's low seven bits.
+    pub session: u8,
+    /// Data frames after it in its transmission.
+    pub count: u8,
+    /// The family of those data frames.
+    pub data_floor: bool,
+    /// A header's slot's gap level; an answer's sender's need.
+    pub level: u8,
+    /// A header: the answer's family; an answer: the family its sender needs headers in.
+    pub fam: bool,
+    /// A header: the slot is an open window; an answer: its sender asks to leave.
+    pub flag: bool,
+    /// A header: the slot includes the slave's identifier; an answer: its sender's is due.
+    pub ident: bool,
+    /// Next sequence number the sender needs.
+    pub base: u8,
+    /// Bit *i* set means `base + i` has been received.
+    pub bitmap: u16,
+    /// How the sender hears the other station, whole decibels, `None` if not measured.
+    pub snr_db: Option<f64>,
+    /// The rung recommended for the other station's data.
+    pub rung: u8,
+    /// Frames granted (or an open window's size step) / frames queued.
+    pub n: u8,
+}
+
+impl GrantFrame {
+    /// A frame of a kind and session with every other field zero.
+    #[must_use]
+    pub const fn new(kind: GrantKind, session: u8) -> Self {
+        Self {
+            kind,
+            session,
+            count: 0,
+            data_floor: false,
+            level: 0,
+            fam: false,
+            flag: false,
+            ident: false,
+            base: 0,
+            bitmap: 0,
+            snr_db: None,
+            rung: 0,
+            n: 0,
+        }
+    }
+
+    /// Serialise into exactly [`CONTROL_BYTES`] bytes.
+    #[must_use]
+    pub fn encode(&self) -> [u8; CONTROL_BYTES] {
+        let snr = match self.snr_db {
+            None => GRANT_SNR_UNKNOWN,
+            Some(value) => ((value.round_ties_even().clamp(-31.0, 31.0) as i8) as u8) & 0x3F,
+        };
+        [
+            (self.kind.to_bits() << 6)
+                | (self.count.min(7) << 3)
+                | (u8::from(self.data_floor) << 2)
+                | (self.level & 0x03),
+            ((self.session & 0x7F) << 1) | u8::from(self.fam),
+            (u8::from(self.flag) << 7) | (u8::from(self.ident) << 6) | snr,
+            self.base,
+            ((self.bitmap >> 8) & 0xFF) as u8,
+            (self.bitmap & 0xFF) as u8,
+            ((self.rung & 0x1F) << 3) | (self.n.min(7) & 0x07),
+        ]
+    }
+
+    /// Parse one.
+    ///
+    /// # Errors
+    /// If the payload is short.
+    pub fn decode(payload: &[u8]) -> Result<Self, FrameError> {
+        if payload.len() < CONTROL_BYTES {
+            return Err(FrameError::TooShort);
+        }
+        let raw = payload[2] & 0x3F;
+        let snr_db = (raw != GRANT_SNR_UNKNOWN).then(|| {
+            f64::from(if raw >= 32 {
+                i16::from(raw) - 64
+            } else {
+                i16::from(raw)
+            })
+        });
+        Ok(Self {
+            kind: GrantKind::from_bits(payload[0] >> 6),
+            count: (payload[0] >> 3) & 0x07,
+            data_floor: payload[0] & 0x04 != 0,
+            level: payload[0] & 0x03,
+            session: payload[1] >> 1,
+            fam: payload[1] & 0x01 != 0,
+            flag: payload[2] & 0x80 != 0,
+            ident: payload[2] & 0x40 != 0,
+            snr_db,
+            base: payload[3],
+            bitmap: (u16::from(payload[4]) << 8) | u16::from(payload[5]),
+            rung: payload[6] >> 3,
+            n: payload[6] & 0x07,
+        })
+    }
+
+    /// Acknowledgement semantics, as [`ControlFrame::received`].
+    #[must_use]
+    pub fn received(&self, seq: u8) -> bool {
+        let distance = seq_distance(seq, self.base);
+        if distance >= WINDOW {
             return distance >= SEQ_MOD / 2;
         }
         (self.bitmap >> distance) & 1 == 1
@@ -730,6 +970,8 @@ mod tests {
             caps: 0b101,
             version: 1,
             snr_db: None,
+            turnaround_s: 0.0,
+            identifier_s: 0.0,
         };
         let encoded = body.encode().expect("encode");
         assert_eq!(encoded.len(), CONNECT_BODY_BYTES);
