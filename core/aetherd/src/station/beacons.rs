@@ -170,9 +170,9 @@ impl<P: Ptt> Station<P> {
     /// Whether a beacon is queued and has not gone yet — most often held for a busy channel.
     #[must_use]
     pub fn beacon_waiting(&self) -> bool {
-        self.pending
-            .iter()
-            .any(|next| matches!(next, super::Outgoing::Frames(frames) if super::is_beacon(frames)))
+        self.pending.iter().any(
+            |next| matches!(next, super::Outgoing::Frames(frames, _) if super::is_beacon(frames)),
+        )
     }
 
     /// The beacon's part of `status`.

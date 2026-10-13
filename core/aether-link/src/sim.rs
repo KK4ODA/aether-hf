@@ -553,7 +553,9 @@ impl TwoStationSim {
     fn pump(&mut self, who: usize, at: f64) {
         for action in self.stations[who].engine.drain() {
             match action {
-                Action::Transmit { frames, duration_s } => {
+                Action::Transmit {
+                    frames, duration_s, ..
+                } => {
                     self.launch(who, at, frames, duration_s);
                 }
                 Action::Deliver(data) => self.stations[who].delivered.extend_from_slice(&data),

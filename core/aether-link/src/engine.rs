@@ -252,6 +252,10 @@ pub enum Action {
         frames: Vec<TxFrame>,
         /// Total air time.
         duration_s: f64,
+        /// What set it going: the engine's entry point, or the timer that fired
+        /// (`timer:ack`, `frame`, `send`, ...). For the account of the air a harness keeps
+        /// (ADR-0069 §5), never for the protocol.
+        cause: &'static str,
     },
     /// Deliver these payload bytes to the application, in order.
     Deliver(Vec<u8>),
@@ -459,6 +463,25 @@ enum Timer {
     Close,
 }
 
+impl Timer {
+    /// The timer's name as a transmission's cause (`Action::Transmit::cause`).
+    const fn cause(self) -> &'static str {
+        match self {
+            Self::Link => "timer:link",
+            Self::Connect => "timer:connect",
+            Self::Ack => "timer:ack",
+            Self::Wait => "timer:wait",
+            Self::Keepalive => "timer:keepalive",
+            Self::Probe => "timer:probe",
+            Self::Request => "timer:request",
+            Self::Leave => "timer:leave",
+            Self::First => "timer:first",
+            Self::Resend => "timer:resend",
+            Self::Close => "timer:close",
+        }
+    }
+}
+
 /// What the receiving station has asked for in its last acknowledgement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PeerRequest {
@@ -534,6 +557,8 @@ pub struct LinkEngine {
     session: u8,
     now: f64,
     actions: Vec<Action>,
+    /// The entry point or timer being handled: what a transmission it makes is put down to.
+    cause: &'static str,
     rate: RateController,
     deadlines: Vec<(Timer, f64)>,
     tx_busy_until: f64,
@@ -719,6 +744,7 @@ impl LinkEngine {
             session: 0,
             now: 0.0,
             actions: Vec::new(),
+            cause: "",
             rate,
             deadlines: Vec::new(),
             tx_busy_until: 0.0,
@@ -1036,6 +1062,7 @@ impl LinkEngine {
         remote_call: &str,
         as_call: Option<&str>,
     ) -> Result<(), &'static str> {
+        self.cause = "connect";
         if self.state != State::Idle {
             return Err("already in a session");
         }
@@ -1076,6 +1103,7 @@ impl LinkEngine {
     /// If a session is up, a probe is already out, or `as_call` is not one of this
     /// station's callsigns.
     pub fn probe(&mut self, remote_call: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        self.cause = "probe";
         if self.state != State::Idle {
             return Err("already in a session");
         }
@@ -1110,6 +1138,7 @@ impl LinkEngine {
     /// Requesting this while still connecting means "disconnect once the transfer is done";
     /// only [`abort`](Self::abort) tears down a half-open session.
     pub fn disconnect(&mut self) {
+        self.cause = "disconnect";
         if self.state == State::Idle {
             return;
         }
@@ -1142,6 +1171,7 @@ impl LinkEngine {
 
     /// Drop the session now, with one disconnect on the way out.
     pub fn abort(&mut self) {
+        self.cause = "abort";
         if self.state == State::Idle {
             return;
         }
@@ -1154,6 +1184,7 @@ impl LinkEngine {
 
     /// Queue bytes to send.
     pub fn send(&mut self, data: &[u8]) {
+        self.cause = "send";
         self.tx_queue.extend_from_slice(data);
         if self.state == State::Connected && self.role == Role::Iss {
             self.maybe_start_burst();
@@ -1184,6 +1215,7 @@ impl LinkEngine {
     /// during a re-poll, data queued mid-burst — could not start a burst then, and nothing
     /// else would start it later: this is the moment to try.
     pub fn on_tx_done(&mut self, now: f64) {
+        self.cause = "tx_done";
         self.now = self.now.max(now);
         self.tx_busy_until = self.tx_busy_until.min(now);
         if self.state == State::Connected && self.role == Role::Iss && self.waiting_for.is_none() {
@@ -1227,6 +1259,7 @@ impl LinkEngine {
                 .position(|&(t, at)| t == timer && at <= self.now);
             if let Some(index) = due {
                 self.deadlines.remove(index);
+                self.cause = timer.cause();
                 self.expire(timer);
             }
         }
@@ -1234,6 +1267,7 @@ impl LinkEngine {
 
     /// Hand the engine a frame the physical layer detected, decoded or not.
     pub fn on_frame<F: SoftFrame>(&mut self, frame: &F, now: f64) {
+        self.cause = "frame";
         self.now = self.now.max(now);
         self.account_for(frame);
         match frame.container() {
@@ -1271,6 +1305,7 @@ impl LinkEngine {
     /// undecodable preamble of the caller's next try on the floor — which the try after that
     /// ran into, again and again, until the caller gave up (ADR-0016).
     pub fn on_preamble(&mut self, t_start: f64, now: f64, frame_s: Option<f64>) {
+        self.cause = "preamble";
         self.now = self.now.max(now);
         if self.state == State::Connecting || self.probing.is_some() {
             // the longest frame there is when the physical layer cannot say
@@ -1441,7 +1476,11 @@ impl LinkEngine {
         let duration_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
         self.tx_started = self.now + self.timing.tx_latency_s;
         self.tx_busy_until = self.tx_started + duration_s;
-        self.actions.push(Action::Transmit { frames, duration_s });
+        self.actions.push(Action::Transmit {
+            frames,
+            duration_s,
+            cause: self.cause,
+        });
         // The link timeout spans four exchanges at the family the link runs in, and was
         // reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered
         // stepped down to the floor still holding the 45 s its last acknowledgement had
@@ -4710,7 +4749,9 @@ mod tests {
                     });
                     let Some((frames, duration_s)) =
                         actions.into_iter().find_map(|action| match action {
-                            Action::Transmit { frames, duration_s } => Some((frames, duration_s)),
+                            Action::Transmit {
+                                frames, duration_s, ..
+                            } => Some((frames, duration_s)),
                             _ => None,
                         })
                     else {

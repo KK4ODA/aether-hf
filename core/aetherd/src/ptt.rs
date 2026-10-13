@@ -940,7 +940,7 @@ mod tests {
         assert!(ptt.key().is_err(), "no key while the port is stuck");
         assert!(ptt.fault().is_some());
         assert!(
-            began.elapsed() < std::time::Duration::from_millis(2000),
+            began.elapsed() < std::time::Duration::from_secs(2),
             "the loop waited {:?}",
             began.elapsed()
         );

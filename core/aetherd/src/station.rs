@@ -257,8 +257,8 @@ impl SoftFrame for PhyFrame {
 
 /// Something waiting to be transmitted.
 enum Outgoing {
-    /// Link-layer frames, to be modulated.
-    Frames(Vec<aether_link::TxFrame>),
+    /// Link-layer frames, to be modulated, and why they were queued.
+    Frames(Vec<aether_link::TxFrame>, Origin),
     /// A drive-setting burst: the real waveform, modulated exactly as traffic is, so the
     /// rig's ALC sees the peaks traffic will actually present it with. The operator may cut
     /// it short like a tune tone.
@@ -288,6 +288,27 @@ enum Outgoing {
         /// Whether it is a tune tone, which the operator may cut short.
         tone: bool,
     },
+}
+
+/// Why a burst of frames was queued and when: the account of the air a harness keeps
+/// (`AudioIo::annotate`, ADR-0069 §5). Nothing in the protocol reads it.
+#[derive(Debug, Clone, Copy)]
+struct Origin {
+    /// The engine's entry point or timer (`Action::Transmit::cause`), or what the station
+    /// itself queued it for (`beacon`).
+    cause: &'static str,
+    /// The station's clock when it was queued.
+    queued_s: f64,
+}
+
+impl Origin {
+    /// Frames the station queues on its own: a beacon, or a test's.
+    const fn station(cause: &'static str) -> Self {
+        Self {
+            cause,
+            queued_s: f64::NAN,
+        }
+    }
 }
 
 /// Room kept between a burst's air time and the key watchdog: the sound card's clock and
@@ -869,6 +890,14 @@ pub struct Station<P: Ptt> {
     /// running, after the transmit level is applied — what the rig's ALC is actually being
     /// shown.
     tx_peak_running: f32,
+    /// The account of the transmission rendered and not yet keyed (`Self::tag`), and of
+    /// those keyed since the run loop last took them (`Self::take_tags`): what a harness puts
+    /// on the air beside the audio (ADR-0069 §5).
+    tx_tag: Option<String>,
+    tx_tags: Vec<String>,
+    /// How long the transmission now leaving the queue was held for a busy channel or the
+    /// answer gap (`held_for_busy`).
+    last_hold_s: f64,
     /// The same for the last transmission that finished, which is the one worth reporting:
     /// a peak is only meaningful over a whole burst.
     tx_peak_last: Option<f32>,
@@ -1076,6 +1105,9 @@ impl<P: Ptt> Station<P> {
             playing_test: false,
             was_busy: false,
             tx_peak_running: 0.0,
+            tx_tag: None,
+            tx_tags: Vec::new(),
+            last_hold_s: 0.0,
             tx_peak_last: None,
             held_since: None,
             held_from: None,
@@ -1601,7 +1633,7 @@ impl<P: Ptt> Station<P> {
     /// arrived inside the one and under the other, and the peer never heard it.
     pub fn abort(&mut self) {
         self.pending
-            .retain(|next| !matches!(next, Outgoing::Frames(_)));
+            .retain(|next| !matches!(next, Outgoing::Frames(..)));
         if self.transmitting && !self.playing_test {
             self.playback.clear();
             self.authorized = None;
@@ -1924,15 +1956,17 @@ impl<P: Ptt> Station<P> {
         let capacity = self.engine.timing().capacity(mode);
         let payload =
             encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
-        self.pending
-            .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+        self.pending.push_back(Outgoing::Frames(
+            vec![aether_link::TxFrame {
                 container: Container::Data,
                 payload,
                 mode,
                 rv: 0,
                 floor: false,
                 follows: 0,
-            }]));
+            }],
+            Origin::station("beacon"),
+        ));
         self.stats.beacons_sent += 1;
         Ok(())
     }
@@ -2470,6 +2504,9 @@ impl<P: Ptt> Station<P> {
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
+            if let Some(tag) = self.tx_tag.take() {
+                self.tx_tags.push(tag);
+            }
             if let Some(recording) = &mut self.recording {
                 recording.event(now, "ptt", "keyed", &format!("{:?}", self.engine.state()));
             }
@@ -3177,8 +3214,12 @@ impl<P: Ptt> Station<P> {
         let mut connected = false;
         for action in self.engine.drain() {
             match action {
-                Action::Transmit { frames, .. } => {
-                    self.pending.push_back(Outgoing::Frames(frames));
+                Action::Transmit { frames, cause, .. } => {
+                    let origin = Origin {
+                        cause,
+                        queued_s: self.now(),
+                    };
+                    self.pending.push_back(Outgoing::Frames(frames, origin));
                 }
                 Action::Deliver(bytes) => {
                     let plain = self.decompressor.push(&bytes);
@@ -3252,7 +3293,7 @@ impl<P: Ptt> Station<P> {
             && !self
                 .pending
                 .iter()
-                .any(|next| matches!(next, Outgoing::Frames(_)))
+                .any(|next| matches!(next, Outgoing::Frames(..)))
         {
             self.identifier.final_due = false;
             self.pending.push_back(Outgoing::Identifier);
@@ -3305,7 +3346,7 @@ impl<P: Ptt> Station<P> {
         // `channel_clear` no longer lets a session's frames through: the DISC it answers had
         // just marked the channel busy, the answer waited two seconds for it, and the caller's
         // retry was keyed over it (ND1J, 2026-09-25).
-        let responding = matches!(next, Outgoing::Frames(frames)
+        let responding = matches!(next, Outgoing::Frames(frames, _)
             if is_probe_answer(frames) || is_control(frames, ControlKind::DiscAck));
         // a datagram has had its own channel access already: the client's DCD and persistence
         let own_access = matches!(next, Outgoing::Datagram { .. });
@@ -3326,19 +3367,19 @@ impl<P: Ptt> Station<P> {
         // as well as by its decode — it waited two seconds, the sender heard no answer and sent
         // the burst again, and the two were keyed at once (found by the scenario harness,
         // ADR-0042). A later DISC, a retry, still waits out the other's identifier.
-        let answers_burst = matches!(next, Outgoing::Frames(frames)
+        let answers_burst = matches!(next, Outgoing::Frames(frames, _)
                 if is_control(frames, ControlKind::Disc))
             && self.engine.role() == Role::Irs
             && now < self.heard_end + self.busy.config().frame_hold_s;
         let held_for = self.held_from.map_or(0.0, |from| now - from);
         let waits_out = held_for < OTHER_ID_WAIT_MAX_S
             && match next {
-                Outgoing::Frames(frames) if is_control(frames, ControlKind::Disc) => {
+                Outgoing::Frames(frames, _) if is_control(frames, ControlKind::Disc) => {
                     self.engine.state() == State::Disconnecting
                         && busy_but_for_a_frame
                         && !answers_burst
                 }
-                Outgoing::Frames(frames) if is_control(frames, ControlKind::DiscAck) => {
+                Outgoing::Frames(frames, _) if is_control(frames, ControlKind::DiscAck) => {
                     held_for < ANSWER_LISTEN_S || busy_but_for_a_frame
                 }
                 Outgoing::Identifier => busy,
@@ -3351,7 +3392,7 @@ impl<P: Ptt> Station<P> {
         // `wait_for_clear` says: the other station is sending and hears nothing until it
         // stops. A Test whose budget ran out keyed its DISC 1.4 s into the other station's
         // acknowledgement, and both were lost (the scenario harness, ADR-0065).
-        let left_over_arrival = matches!(next, Outgoing::Frames(frames)
+        let left_over_arrival = matches!(next, Outgoing::Frames(frames, _)
                 if is_control(frames, ControlKind::Disc))
             && self.engine.state() == State::Idle
             && now < self.arriving_until + self.engine.timing().turnaround_s
@@ -3375,6 +3416,7 @@ impl<P: Ptt> Station<P> {
             self.held_from.get_or_insert(now);
             return true;
         }
+        self.last_hold_s = self.held_from.map_or(0.0, |from| now - from);
         self.held_since = None;
         self.held_from = None;
         false
@@ -3389,7 +3431,7 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.pending
-            .retain(|next| !matches!(next, Outgoing::Frames(frames) if is_beacon(frames)));
+            .retain(|next| !matches!(next, Outgoing::Frames(frames, _) if is_beacon(frames)));
         self.held_since = None;
         self.held_from = None;
         self.note("beacon", "dropped: a session started before it went out");
@@ -3401,8 +3443,9 @@ impl<P: Ptt> Station<P> {
             return;
         };
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
-        let frames = match outgoing {
-            Outgoing::Frames(frames) | Outgoing::Drive(frames) => frames,
+        let (frames, origin) = match outgoing {
+            Outgoing::Frames(frames, origin) => (frames, origin),
+            Outgoing::Drive(frames) => (frames, Origin::station("drive")),
             Outgoing::Datagram {
                 frames,
                 reference,
@@ -3411,13 +3454,16 @@ impl<P: Ptt> Station<P> {
                 if last {
                     self.datagrams.on_air = Some(datagrams::OnAir { reference });
                 }
-                frames
+                (frames, Origin::station("datagram"))
             }
             // handled above, before anything is popped
             Outgoing::Pause { .. } => return,
-            Outgoing::Identifier => return self.render_identifier(now),
-            Outgoing::Audio { samples, tone, .. } => return self.render_audio(samples, tone),
+            Outgoing::Identifier => return self.render_identifier_tagged(now),
+            Outgoing::Audio { samples, tone, .. } => {
+                return self.render_audio_tagged(now, samples, tone);
+            }
         };
+        let ids_before = self.stats.cw_ids;
 
         self.record_sent(&frames, now);
         if is_beacon(&frames) {
@@ -3502,6 +3548,82 @@ impl<P: Ptt> Station<P> {
         }
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.playing_test = cuttable;
+        let with_id = self.stats.cw_ids > ids_before;
+        self.tx_tag = Some(self.tag(now, origin, &frames, with_id));
+    }
+
+    /// [`Self::render_identifier`], with its account of the air.
+    fn render_identifier_tagged(&mut self, now: f64) {
+        self.render_identifier(now);
+        self.tx_tag = Some(self.tag(now, Origin::station("identifier"), &[], true));
+    }
+
+    /// [`Self::render_audio`], with its account of the air.
+    fn render_audio_tagged(&mut self, now: f64, samples: Vec<f32>, tone: bool) {
+        let what = if tone { "tune" } else { "keying test" };
+        self.render_audio(samples, tone);
+        self.tx_tag = Some(self.tag(now, Origin::station(what), &[], false));
+    }
+
+    /// One line of JSON for the account of the air (ADR-0069 §5): why this transmission was
+    /// queued, how long it waited, what the engine believed, and what it carries — control
+    /// frames by kind and flags, data frames by kind, rung, RV and count. A harness puts it on
+    /// the air beside the audio (`AudioIo::annotate`), so a collision can be put down to the
+    /// two transmissions in it without either recording; nothing on the air reads it.
+    fn tag(
+        &self,
+        now: f64,
+        origin: Origin,
+        frames: &[aether_link::TxFrame],
+        with_id: bool,
+    ) -> String {
+        let described: Vec<serde_json::Value> = frames
+            .iter()
+            .map(|frame| match frame.container {
+                Container::Control => match ControlFrame::decode(&frame.payload) {
+                    Ok(control) => serde_json::json!({
+                        "c": "control",
+                        "kind": format!("{:?}", control.kind),
+                        "flags": control.flags,
+                        "follows": control.follows,
+                        "floor": frame.floor,
+                    }),
+                    Err(_) => serde_json::json!({"c": "control", "kind": "?"}),
+                },
+                Container::Data => {
+                    let kind = decode_data(&frame.payload)
+                        .map_or_else(|_| "?".to_owned(), |(h, _)| format!("{:?}", h.kind));
+                    serde_json::json!({
+                        "c": "data",
+                        "kind": kind,
+                        "mode": frame.mode,
+                        "rv": frame.rv,
+                        "follows": frame.follows,
+                    })
+                }
+            })
+            .collect();
+        serde_json::json!({
+            "cause": origin.cause,
+            "waited_s": if origin.queued_s.is_finite() {
+                Some((now - origin.queued_s).max(0.0))
+            } else {
+                None
+            },
+            "held_s": self.last_hold_s,
+            "state": format!("{:?}", self.engine.state()),
+            "role": format!("{:?}", self.engine.role()),
+            "session": self.engine.session(),
+            "cw_id": with_id,
+            "frames": described,
+        })
+        .to_string()
+    }
+
+    /// The accounts of the transmissions keyed since the last call, oldest first: the run
+    /// loop hands each to the audio device ahead of the transmission's first samples.
+    pub fn take_tags(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.tx_tags)
     }
 
     /// A frame found: into the recording, or kept for the next one's first seconds.
@@ -4041,7 +4163,7 @@ impl<P: Ptt> Station<P> {
             )
         })?;
         match outgoing {
-            Outgoing::Frames(frames)
+            Outgoing::Frames(frames, _)
             | Outgoing::Drive(frames)
             | Outgoing::Datagram { frames, .. } => {
                 let mut edges: Option<Edges> = None;
@@ -4183,7 +4305,7 @@ impl<P: Ptt> Station<P> {
         self.report_decision(&decision, now);
         self.last_gate = Some((now, decision));
         match outgoing {
-            Some(Outgoing::Frames(_)) if self.engine.state() != State::Idle => {
+            Some(Outgoing::Frames(..)) if self.engine.state() != State::Idle => {
                 self.note(
                     "regulatory",
                     "session halted: its next transmission is not lawful",
@@ -4534,9 +4656,9 @@ fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
 /// beacon or a datagram, which only wait for a clear channel and may go on any.
 fn holds_the_dial(next: &Outgoing) -> Option<&'static str> {
     match next {
-        Outgoing::Frames(frames) if is_beacon(frames) => None,
+        Outgoing::Frames(frames, _) if is_beacon(frames) => None,
         Outgoing::Datagram { .. } => None,
-        Outgoing::Frames(_) => Some("an answer"),
+        Outgoing::Frames(..) => Some("an answer"),
         Outgoing::Identifier => Some("the Morse identifier"),
         Outgoing::Drive(_) | Outgoing::Pause { .. } => Some("a drive check"),
         Outgoing::Audio { tone: true, .. } => Some("a tuner tone"),
@@ -7108,16 +7230,17 @@ mod tests {
                 follows: 0,
                 burst_floor: false,
             };
-            station
-                .pending
-                .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+            station.pending.push_back(Outgoing::Frames(
+                vec![aether_link::TxFrame {
                     container: Container::Control,
                     payload: poll.encode().to_vec(),
                     mode: 0,
                     rv: 0,
                     floor: false,
                     follows: 0,
-                }]));
+                }],
+                Origin::station("test"),
+            ));
             station.render_next(1.0);
             assert_eq!(station.stats.cw_ids, 1, "stated {stated}");
             let rate = station.config.params.audio_rate as f64;
@@ -8026,16 +8149,17 @@ mod tests {
         let mode = air.a.engine.robust_mode(true);
         let capacity = air.a.engine.timing().capacity(mode);
         let payload = encode_data(&header, &body, capacity).expect("fits");
-        air.a
-            .pending
-            .push_back(Outgoing::Frames(vec![aether_link::TxFrame {
+        air.a.pending.push_back(Outgoing::Frames(
+            vec![aether_link::TxFrame {
                 container: Container::Data,
                 payload,
                 mode,
                 rv: 0,
                 floor: false,
                 follows: 0,
-            }]));
+            }],
+            Origin::station("test"),
+        ));
         air.run(30.0, |_, b| b.mismatch().is_some());
         assert!(!air.b.connected());
         let mismatch = air.b.mismatch().expect("the call was noticed").clone();

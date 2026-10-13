@@ -84,6 +84,11 @@ pub trait AudioIo {
     fn output_latency_s(&self) -> Option<f64> {
         None
     }
+    /// An account of the transmission whose samples are queued next (one line of JSON,
+    /// `Station::take_tags`): a harness's channel server puts it on the air beside them, so a
+    /// collision can be put down to its two transmissions (ADR-0069 §5). A sound card has
+    /// nowhere to put it.
+    fn annotate(&mut self, _tag: &str) {}
 }
 
 /// Anything that went wrong with a sound card.

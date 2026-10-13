@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import struct
 import sys
@@ -28,6 +29,10 @@ class Fake:
     def play(self, samples: np.ndarray) -> None:
         self.mine.sendall(struct.pack("<BI", cs.MSG_PLAY, len(samples)))
         self.mine.sendall(samples.astype("<f4").tobytes())
+
+    def tag(self, tag: dict) -> None:
+        raw = json.dumps(tag).encode()
+        self.mine.sendall(struct.pack("<BI", cs.MSG_TAG, len(raw)) + raw)
 
     def ready(self, n: int = 1) -> None:
         self.mine.sendall(bytes([cs.MSG_READY]) * n)  # one write: a socketpair counts writes
@@ -121,6 +126,55 @@ def test_two_stations_keyed_at_once_are_counted_as_a_collision() -> None:
     assert len(report["collisions"]) == 1
     # a on the air 0.35–0.85 s, b from 0.65 s: overlapping 0.20 s
     assert abs(report["both_keyed_s"] - 0.20) < 0.03
+
+
+def keyed_burst(seconds: float, hz: float = 1500.0) -> np.ndarray:
+    """What a daemon plays for a transmission: 0.1 s of keyed silence, the signal, 0.3 s of
+    keyed silence (its lead and tail)."""
+    lead, tail = np.zeros(round(0.1 * RATE)), np.zeros(round(0.3 * RATE))
+    return np.concatenate((lead, tone(seconds, hz), tail)).astype(np.float32)
+
+
+def test_a_keyed_overlap_is_split_into_radiated_vox_and_guard() -> None:
+    # a: keyed 0.35-1.25 s, signal 0.45-0.95 s. b keyed from 0.95 s, its signal from 1.05 s:
+    # 0.30 s of b's keying against a's silent tail, no signal against signal
+    srv, a, b = server({})
+    run(srv, a, b, 3.0, {5: [("a", keyed_burst(0.5))], 35: [("b", keyed_burst(0.5, 1200))]})
+    report = srv.report()
+    assert len(report["collisions"]) == 1
+    assert report["overlap_s"]["radiated"] == 0.0 and report["rf_overlaps"] == []
+    assert abs(report["overlap_s"]["guard"] - 0.30) < 0.03
+    # now b's signal meets a's: radiated, from b's signal at 0.75 s to a's end at 0.95 s
+    srv, a, b = server({})
+    run(srv, a, b, 3.0, {5: [("a", keyed_burst(0.5))], 20: [("b", keyed_burst(0.5, 1200))]})
+    report = srv.report()
+    assert abs(report["overlap_s"]["radiated"] - 0.20) < 0.02
+    assert len(report["rf_overlaps"]) == 1
+    # a VOX holding a keyed past its tail, over b's signal: vox
+    srv, a, b = server({"a": {"vox_hold_ms": 400}})
+    run(srv, a, b, 3.0, {5: [("a", keyed_burst(0.5))], 40: [("b", keyed_burst(0.5, 1200))]})
+    report = srv.report()
+    assert report["overlap_s"]["vox"] > 0.1 and report["overlap_s"]["radiated"] == 0.0
+
+
+def test_a_tag_goes_on_the_air_with_the_first_sample_it_describes() -> None:
+    srv, a, b = server({})
+    a.tag({"cause": "timer:wait", "frames": [{"c": "data"}]})
+    run(srv, a, b, 2.0, {5: [("a", keyed_burst(0.5))]})
+    (tx,) = srv.a.transmissions
+    # handed over before tick 5 (0.10 s), on the air a card's latency later
+    assert tx["cause"] == "timer:wait" and abs(tx["air_s"] - 0.35) < 0.025
+    radiated = srv.a.radiated
+    assert len(radiated) == 1 and abs(radiated[0][0] - 0.45) < 0.005
+
+
+def test_the_peer_arriving_while_deaf_is_counted_by_why() -> None:
+    # b's signal arrives while a's receiver is still recovering from a's own transmission
+    srv, a, b = server({"a": {"rx_recovery_ms": 300}})
+    run(srv, a, b, 3.0, {5: [("a", keyed_burst(0.5))], 50: [("b", keyed_burst(0.5, 1200))]})
+    hits = {k: v / RATE for k, v in srv.a.deaf_hits.items()}
+    # a keyed until 1.25 s, deaf until 1.55 s; b's signal from 1.35 s
+    assert abs(hits["recovering"] - 0.20) < 0.03 and hits["transmitting"] == 0.0
 
 
 def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
