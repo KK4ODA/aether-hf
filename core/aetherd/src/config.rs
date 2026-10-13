@@ -280,17 +280,24 @@ pub struct RadioSection {
     /// station inside the sub-bands whatever this says; `docs/user/frequency-plan.md`.
     #[serde(default)]
     pub answer_only: bool,
-    /// The least time, in milliseconds, between the end of a frame heard from another
-    /// station and this station keying: its answers, acknowledgements and polls wait that
-    /// long. A station keyed by VOX — a `SignaLink`, whose DLY knob holds the key after the
-    /// audio stops — is still transmitting for a moment after its frame ends, and an answer
-    /// that starts inside that moment is not heard: KE4QCM's calls reached this station and
-    /// its acceptances did not reach him (2026-10-05). 0, the default, answers as the link
-    /// times it (a quarter second after the frame); 500–800 suits a VOX-keyed peer. The
-    /// other station holds its wait for a frame it hears arriving, so a later answer is
-    /// still taken for one (ADR-0036).
+    /// The least time, in milliseconds, between the end of another station's frames and this
+    /// station transmitting. For a peer whose radio is keyed by VOX — a `SignaLink`, whose DLY
+    /// knob holds the key after the audio stops — and which has not declared that hold as its
+    /// turnaround: an answer keyed into the hold is not heard (KE4QCM, 2026-10-05; ADR-0036).
+    /// Under protocol 8 (ADR-0069) a caller keys no sooner than the gap after the called
+    /// station's frames, and a called station asks for the gap level that starts its slots
+    /// that late; the larger of this and what the station learned the other needs is used
+    /// (ADR-0054). 0, the default, waits for nothing more than the other station declared.
     #[serde(default)]
     pub answer_gap_ms: u32,
+    /// How long, in milliseconds, after this station's radio stops sending it hears again: a
+    /// VOX interface's hold (a `SignaLink`'s DLY) and the receiver's recovery. Declared to the
+    /// other station in every call and acceptance, so it waits that long before answering
+    /// (07-protocol-8.md §3). 0 for a radio keyed by CAT, a serial line or a host program,
+    /// which hears again at once; with VOX, its delay time plus 100 ms. Sent in 0.1 s steps,
+    /// up to 1.5 s.
+    #[serde(default)]
+    pub turnaround_ms: u32,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
     /// constellations, or a band where they never work. Indexes the ladder of the bandwidth
     /// in use — the tone floor's kinds, then the OFDM modes (ADR-0013, ADR-0014, ADR-0015):
@@ -380,6 +387,7 @@ impl Default for RadioSection {
             bandwidth: default_bandwidth(),
             answer_only: false,
             answer_gap_ms: 0,
+            turnaround_ms: 0,
             max_mode: default_max_mode(),
             compress: false,
             cw_id: false,
@@ -906,7 +914,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -929,6 +937,7 @@ pub const MIGRATIONS: &[Migration] = &[
     flrig_keying,
     answer_gap,
     debug_mode,
+    turnaround,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1066,6 +1075,11 @@ fn answer_gap(_table: &mut toml::Table) {}
 /// Schema 10 → 11, debug mode (ADR-0050): nothing moves — `record.send_to_project` is a new
 /// key, and the step is for going back (`<name>.bak-v10`).
 fn debug_mode(_table: &mut toml::Table) {}
+
+/// Schema 11 → 12, granted slots (ADR-0069): nothing moves — `radio.turnaround_ms` is a new key,
+/// and `radio.answer_gap_ms` keeps its value and what it asks for, the least time after the
+/// other station's frames; the step is for going back (`<name>.bak-v11`).
+fn turnaround(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1458,6 +1472,8 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.bandwidth",
     "radio.answer_only",
     "radio.answer_gap_ms",
+    // declared in the next call or acceptance
+    "radio.turnaround_ms",
     "radio.busy_threshold_db",
     // the identifier is rendered at each transmission, so its settings apply to the next
     "radio.cw_id",
@@ -1668,7 +1684,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 11
+schema_version = 12
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1731,9 +1747,14 @@ bandwidth = 2300
 # transmits only inside the §97.221(b) sub-bands, or on 6 m: every Aether signal measures over
 # the 500 Hz that §97.221(c) allows elsewhere (docs/user/fcc-regulatory-controls.md).
 answer_only = false
-# The least time between the end of another station's frame and this station keying, in
-# milliseconds. 0 answers as the link times it; 500-800 lets a station keyed by VOX (a
-# SignaLink, whose DLY knob holds its key after the audio stops) get back to receive first.
+# How long after this radio stops sending it hears again, in milliseconds: a VOX interface's
+# hold (a SignaLink's DLY knob) and the receiver's recovery. The other station is told, and
+# waits that long before answering. 0 for a radio keyed by CAT, a serial line or a host program;
+# with VOX, the delay time plus 100. Up to 1500.
+turnaround_ms = 0
+# The least time between the end of another station's frames and this station transmitting, in
+# milliseconds, for a station keyed by VOX that has not set its own turnaround: 500-800 suits
+# a SignaLink. 0 waits for nothing more than the other station says it needs.
 answer_gap_ms = 0
 # The fastest mode this station will use: a rung of the ladder — the tone floor's kinds (six
 # at 2300 Hz, four at 500), then the OFDM modes — 0 to 19 at 2300 Hz; at 500 Hz the ladder has

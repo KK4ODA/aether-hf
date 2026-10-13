@@ -90,8 +90,8 @@ needed:
   none of which has been tried yet.
 * **Setup on hardware we do not have**: CM108 GPIO keying (DRA, URI and similar boards —
   built, untested on hardware), radios whose CAT keying is untested, FLRig keying
-  (`[ptt] kind = "flrig"`), VOX interfaces such as the SignaLink with Setup's *Answer gap*
-  (ADR-0036), a Mac with a radio, Linux sound-card notes for `docs/user/`.
+  (`[ptt] kind = "flrig"`), VOX interfaces such as the SignaLink with Setup's *Turnaround* and
+  *Answer gap* (ADR-0036, ADR-0069), a Mac with a radio, Linux sound-card notes for `docs/user/`.
 * **Rules for another country**: a regulatory profile beside
   `core/aetherd/data/regulatory/us-fcc-part97.json`, from the administration's published
   rules ([`docs/user/fcc-regulatory-controls.md`](docs/user/fcc-regulatory-controls.md)).

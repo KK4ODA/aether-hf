@@ -1,9 +1,10 @@
 //! The answer gap each station has shown it needs, learned from the air (ADR-0054).
 //!
-//! `[radio] answer_gap_ms` (ADR-0036) holds this station's answers until a gap after the last
-//! frame heard, for a station whose radio is keyed by VOX: its interface holds the transmitter
-//! on for its DLY time after the audio stops, deaf, and an answer keyed into that hold is never
-//! heard. One number for every station is either too short for the one with a long hold or a
+//! `[radio] answer_gap_ms` (ADR-0036) holds this station off the other's frames for a gap —
+//! under protocol 8, a caller's next key and a called station's slots (ADR-0069) — for a
+//! station whose radio is keyed by VOX and did not declare it as its turnaround: its interface
+//! holds the transmitter on for its DLY time after the audio stops, deaf, and an answer keyed
+//! into that hold is never heard. One number for every station is either too short for the one with a long hold or a
 //! cost on every exchange with all the others — KE4QCM's FT-100 lost KK4ODA-1's probe answers
 //! with the gap at 500 ms (2026-10-09), and the other testers need none.
 //!

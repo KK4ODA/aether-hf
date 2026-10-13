@@ -1,0 +1,36 @@
+# As beta.105 wrote a 500 Hz station keyed by VOX through a SignaLink, waiting for another VOX
+# station's hold: schema 11, the last before granted slots (ADR-0069) and a radio's declared
+# turnaround.
+schema_version = 11
+callsign = "KE4QCM"
+
+[operator]
+grid = "EM74"
+rig = "FT-100"
+power_w = 50.0
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "none"
+
+[radio]
+bandwidth = 500
+max_mode = 14
+wait_for_clear = true
+answer_gap_ms = 600
+cw_id = true
+cw_id_wpm = 20.0
+
+[record]
+auto = true
+send_to_project = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "general"
+sideband = "usb"

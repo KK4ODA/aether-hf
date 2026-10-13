@@ -43,11 +43,13 @@ it is done. Nothing changes until you press **Save** at the bottom.
 4. **Modem settings.** *Bandwidth*: **500 Hz** for VarAC and P2P on the calling frequencies,
    **2300 Hz** for Winlink to a gateway — a program that asks for the other one moves Aether
    there for its session, so either is fine. If your interface is a **SignaLink** (or anything
-   keyed by VOX), set *Answer gap* to **500–800 ms**: its DLY knob holds the key after the audio
-   stops, and Aether's answers would otherwise start while your radio is still transmitting.
-   Aether also learns each station's gap by itself: when a station calls or probes again after
-   being answered, its gap grows (the Log tab says so), and it is remembered. The setting is the
-   least it uses.
+   keyed by VOX), set *Turnaround* to its DLY time plus **100 ms**: the DLY knob holds the key
+   after the audio stops, and the other station's answers would otherwise start while your radio
+   is still transmitting. Aether tells the other station, and it waits. *Answer gap* is for the
+   other way round — a station you work that keys by VOX and has not set its turnaround:
+   500–800 ms. Aether also learns each station's gap by itself: when a station calls or probes
+   again after being answered, its gap grows (the Log tab says so), and it is remembered. The
+   setting is the least it uses.
 5. **Application settings.** *Host programs* on (port 8300). *KISS programs* on (port 8100)
    only for VarAC's broadcasts. **Debug mode** — leave it on (§6).
 

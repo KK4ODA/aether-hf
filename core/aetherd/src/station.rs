@@ -103,8 +103,9 @@ pub struct StationConfig {
     pub max_key_s: f64,
     /// Refuse to start a transmission while the channel is occupied.
     pub wait_for_clear: bool,
-    /// The least time between the end of a frame heard from another station and this
-    /// station keying, in seconds (`radio.answer_gap_ms`, ADR-0036).
+    /// The least time between the end of another station's frames and this station
+    /// transmitting, in seconds (`radio.answer_gap_ms`, ADR-0036): the engine's answer gap,
+    /// with what this station learned the other needs (ADR-0054).
     pub answer_gap_s: f64,
     /// This station's radio: how long after it stops sending it hears again (VOX hold and
     /// receiver recovery), declared in its call or acceptance so the other station's slots
@@ -1814,6 +1815,9 @@ impl<P: Ptt> Station<P> {
         self.refresh_burst_cap(self.now());
         self.config.wait_for_clear = config.radio.wait_for_clear;
         self.config.answer_gap_s = f64::from(config.radio.answer_gap_ms) / 1000.0;
+        // this radio's turnaround: declared in the next call or acceptance
+        self.config.turnaround_s = f64::from(config.radio.turnaround_ms) / 1000.0;
+        self.engine.set_turnaround_s(self.config.turnaround_s);
         // the operator's fastest rung, on the ladder running now — and in the engine, which
         // used to keep the one it started with until the modem restarted
         self.config.max_mode_setting = Some(config.radio.max_mode);
@@ -2485,6 +2489,7 @@ impl<P: Ptt> Station<P> {
         self.refresh_burst_cap(now);
         self.refresh_ceiling(false);
         self.advance_link_identifier(now);
+        self.engine.set_answer_gap(self.answer_gap_s());
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
             // the key was stuck: drop whatever was still queued rather than resume mid-burst
@@ -2980,8 +2985,8 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The answer gap now: the operator's, or the one learned for the station this one would
-    /// answer — the other end of the session, or the last to call or probe it — when that is
-    /// longer (ADR-0054).
+    /// answer — the other end of the session or the call, or the last to call or probe it —
+    /// when that is longer (ADR-0054). The engine waits it out after that station's frames.
     #[must_use]
     pub fn answer_gap_s(&self) -> f64 {
         let whom = if self.engine.state() == State::Idle {
@@ -8867,6 +8872,32 @@ mod tests {
         assert!(air.a.connected() && air.b.connected());
         // and a station with no program attached answers, as it always did
         assert!(HostPresence::default().answering());
+    }
+
+    #[test]
+    fn the_radios_turnaround_and_the_answer_gap_reach_the_engine() {
+        // the turnaround is this radio's, declared in the next call or acceptance; the answer
+        // gap is the least wait after the other station's frames, the larger of the
+        // operator's and the one learned for the station answered (ADR-0054, ADR-0069)
+        let mut station = idle_station();
+        let config = crate::config::Config::parse(&format!(
+            "schema_version = {}\ncallsign = \"KK4XYZ\"\n[radio]\nturnaround_ms = 800\n\
+             answer_gap_ms = 600\n",
+            crate::config::SCHEMA_VERSION
+        ))
+        .expect("a configuration");
+        station.apply_live(&config);
+        run_alone(&mut station, 0.2, |_| false);
+        assert!((station.engine().config().turnaround_s - 0.8).abs() < 1e-9);
+        assert!((station.engine().config().answer_gap_s - 0.6).abs() < 1e-9);
+        station.remember_gap("W4ODA", 1.0);
+        station.connect("W4ODA").expect("idle");
+        run_alone(&mut station, 0.2, |_| false);
+        assert!(
+            (station.engine().config().answer_gap_s - 1.0).abs() < 1e-9,
+            "the gap learned for the station called"
+        );
+        station.abort();
     }
 
     #[test]

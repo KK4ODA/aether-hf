@@ -558,6 +558,7 @@ fn station_config(
         max_key_s: config.radio.max_key_s,
         wait_for_clear: config.radio.wait_for_clear,
         answer_gap_s: f64::from(config.radio.answer_gap_ms) / 1000.0,
+        turnaround_s: f64::from(config.radio.turnaround_ms) / 1000.0,
         compress: config.radio.compress,
         cw_id: config.radio.cw_id.then(|| aetherd::cwid::CwId {
             wpm: config.radio.cw_id_wpm,

@@ -17,6 +17,8 @@ seed = 1
 callsign = "W4ODA"
 tx_level = 0.25             # [audio] tx_level; the channel's SNR is against it
 answer_gap_ms = 0           # [radio] answer_gap_ms
+turnaround_ms = 0           # [radio] turnaround_ms, the radio's own (a daemon of schema 12
+                            # and up; an older build's file leaves it out)
 wait_for_clear = true
 max_mode = 19               # [radio] max_mode (default 19 at 2300 Hz, 14 at 500 Hz)
 [stations.a.radio]          # the radio, as the channel server models it
