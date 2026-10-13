@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, TONE_CONTROL, WIDE, AirInterface
 from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
+from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing, two_modem_sim
 from aether_model.link.phy import Container, TxFrame
 from aether_model.link.rate import (
@@ -322,11 +323,21 @@ def run_point(
     continuous: bool = False,
     link: dict[str, float | int] | None = None,
     floor_cap: float | None = None,
+    engine: str = "p7",
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
-    cfg = LinkConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
-    a = LinkEngine("W4ODA", timing, cfg, seed=seed)
-    b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
+    a: LinkEngine | GrantedEngine
+    b: LinkEngine | GrantedEngine
+    if engine == "granted":
+        # protocol 8 (ADR-0069): its gaps are its protocol's constants, and the pipe charges no
+        # keying, so this measures the header and the slot's cost, not keying's
+        gcfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
+        a = GrantedEngine("W4ODA", timing, gcfg, seed=seed)
+        b = GrantedEngine("KK4XYZ", timing, gcfg, seed=seed + 1)
+    else:
+        cfg = LinkConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
+        a = LinkEngine("W4ODA", timing, cfg, seed=seed)
+        b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
     if ramp is not None:
         span, period = ramp
         top, half = snr_db + span / 2, period / 2
@@ -375,13 +386,23 @@ def run_point(
         )
 
     modes: list[int] = []
-    original = a._send_burst
+    if isinstance(a, GrantedEngine):
+        sender = a
+        header = sender._send_header
 
-    def wrapped() -> None:
-        modes.append(min(a._recommended, a.cfg.max_mode))
-        original()
+        def wrapped_header() -> None:
+            modes.append(min(sender._recommended, sender.cfg.max_mode))
+            header()
 
-    a._send_burst = wrapped  # type: ignore[method-assign]
+        sender._send_header = wrapped_header  # type: ignore[method-assign]
+    else:
+        original = a._send_burst
+
+        def wrapped(prefix: tuple[TxFrame, ...] = ()) -> None:
+            modes.append(min(a._recommended, a.cfg.max_mode))
+            original(prefix)
+
+        a._send_burst = wrapped  # type: ignore[method-assign]
 
     wall = time.perf_counter()
     a.connect("KK4XYZ")
@@ -422,11 +443,14 @@ def run_point(
         "mode_max": max(modes) if modes else "",
         "mode_final": modes[-1] if modes else "",
         "mode_changes": changes,
-        "bursts": a.stats.bursts,
+        "engine": engine,
+        "bursts": a.stats.transmissions if isinstance(a, GrantedEngine) else a.stats.bursts,
         "frames_sent": a.stats.frames_sent,
         "frames_resent": a.stats.frames_resent,
         "harq_rescues": b.stats.harq_rescues,
-        "ack_timeouts": a.stats.ack_timeouts,
+        "ack_timeouts": (
+            a.stats.silent_slots if isinstance(a, GrantedEngine) else a.stats.ack_timeouts
+        ),
         "ok": int(ok),
         "wall_s": round(time.perf_counter() - wall, 1),
     }
@@ -634,6 +658,13 @@ def main() -> int:
         help="with --backend phy: one fade for the whole session, shared by both "
         "directions, instead of a fresh channel per frame",
     )
+    ap.add_argument(
+        "--engine",
+        choices=("p7", "granted"),
+        default="p7",
+        help="the link engine: protocol 7's LinkEngine, or protocol 8's GrantedEngine "
+        "(ADR-0069); the pipe charges neither any keying",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -681,6 +712,7 @@ def main() -> int:
                     continuous=args.continuous,
                     link=link,
                     floor_cap=FLOOR_READING_CAP_DB.get(channel) if args.floor_cap else None,
+                    engine=args.engine,
                 )
                 rows.append(row)
                 print(

@@ -21,6 +21,19 @@ Channel model
   delivered frame carries its family, as the modem reports it: a DATA frame's is its
   mode's, a CONTROL frame's the layout it went out on — the engine drops a floor-mode frame
   whose flag disagrees with its mode, as it must for a real one.
+
+The station (ADR-0069 §5)
+-------------------------
+By default a station keys the instant its engine asks, its receiver reports a frame the instant
+it ends, and it hears everything that is there. Protocol 8's safety rests on bounds of exactly
+those things, so each can be put back, behind its own argument, as the review's adversarial
+simulator (``research/link_arch/advsim.py``) has them: a keying lead per transmission
+(``key_lead``), a decode latency per frame (``decode_latency``), a receiver deaf for a while after
+its own transmission (``rx_recovery_s``), false detections (``phantoms_per_min``), and the keying
+gate — a transmission that carries ``not_after`` (``granted.SlotTransmit``) and would start
+radiating later is not sent, and the engine is told (``on_tx_dropped``). What each station
+radiated is kept (:meth:`TwoStationSim.radiated`), so a test can assert that the two never
+radiated at once (:meth:`TwoStationSim.overlaps`).
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ from typing import cast
 
 from aether_model.link.engine import Deliver, Event, LinkEngine, Transmit
 from aether_model.link.fading import FadingPipe, success_probability
+from aether_model.link.granted import GrantedEngine
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -120,13 +134,19 @@ class _Ev:
     data: object = field(compare=False)
 
 
+Engine = LinkEngine | GrantedEngine
+
+
 @dataclass
 class _Station:
-    engine: LinkEngine
+    engine: Engine
     delivered: bytearray = field(default_factory=bytearray)
     events: list[str] = field(default_factory=list)
     tx_end: float = 0.0
     busy: list[tuple[float, float]] = field(default_factory=list)
+    """What the station radiated: one interval a transmission, its identifier included."""
+    dropped: list[float] = field(default_factory=list)
+    """When the keying gate refused a transmission that would have started late."""
 
 
 class TwoStationSim:
@@ -134,8 +154,8 @@ class TwoStationSim:
 
     def __init__(
         self,
-        a: LinkEngine,
-        b: LinkEngine,
+        a: Engine,
+        b: Engine,
         *,
         snr_db: float = 10.0,
         seed: int = 0,
@@ -150,6 +170,11 @@ class TwoStationSim:
         key_limit_s: float | None = None,
         unheard: Callable[[int, Container, float], bool] | None = None,
         countdown: bool = True,
+        key_lead: Callable[[int], float] | None = None,
+        decode_latency: Callable[[int, TxFrame, float], float] | None = None,
+        rx_recovery_s: tuple[float, float] = (0.0, 0.0),
+        phantoms_per_min: float = 0.0,
+        phantom_trusted: float = 0.05,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -190,9 +215,26 @@ class TwoStationSim:
         self.countdown = countdown
         """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
         it — how the receiver's other ways of finding a burst's end are measured."""
-        self.floor_counts = a.cfg.stated_answers
+        self.floor_counts = (
+            a.counts_on_floor if isinstance(a, GrantedEngine) else a.cfg.stated_answers
+        )
         """Tone-floor frames carry their count too (ADR-0068: in the middle sync block): with
         stated answers, as the PHY of link protocol 8 sends them."""
+        self.key_lead = key_lead
+        """Seconds from a station's engine asking for a transmission to its first radiated
+        sample, drawn per transmission: the daemon's lead, the card, CAT keying. Unset, none —
+        the pipe plays what it is handed at once."""
+        self.decode_latency = decode_latency
+        """Seconds from a frame's end to its report reaching the receiving engine, drawn per
+        frame: called with the receiver, the frame and when it ends. Unset, none."""
+        self.rx_recovery_s = rx_recovery_s
+        """How long each station's receiver hears nothing after it stops transmitting (a VOX
+        hold, a receiver's recovery)."""
+        self.phantoms_per_min = phantoms_per_min
+        """False detections a minute of listening, per station: a frame that never decodes,
+        of a random kind and mode, trusted (ADR-0020) a :attr:`phantom_trusted` part of the
+        time."""
+        self.phantom_trusted = phantom_trusted
         """Frames a receiver never detects, preamble or frame: called with the receiver, the
         frame's container and when it started. A fade that lets one kind of frame through and
         not another — the called station's data lost while its control frames arrive — is
@@ -261,10 +303,18 @@ class TwoStationSim:
 
     def _launch(self, who: int, at: float, tx: Transmit) -> None:
         st = self.st[who]
-        t = max(at, st.tx_end)
+        lead = self.key_lead(who) if self.key_lead is not None else 0.0
+        t = max(at + lead, st.tx_end)
+        not_after = getattr(tx, "not_after", None)
+        if not_after is not None and t > not_after + 1e-9:
+            # the keying gate: a transmission that would start past its slot is not sent
+            st.dropped.append(t)
+            self._push(t, "dropped", who)
+            return
         st.busy.append((t, t + tx.duration_s))
         timing = st.engine.timing
         key_up = t + self.key_limit_s if self.key_limit_s is not None else float("inf")
+        t += getattr(tx, "identifier_s", 0.0)  # the Morse identifier goes first
         for frame in tx.frames:
             dur = timing.frame_s(frame)
             if t >= key_up - 1e-9:
@@ -286,7 +336,8 @@ class TwoStationSim:
         self._push(t, "tx_done", who)
 
     def _busy(self, who: int, t0: float, t1: float) -> bool:
-        return any(a < t1 - 1e-9 and t0 + 1e-9 < b for a, b in self.st[who].busy)
+        deaf = self.rx_recovery_s[who]
+        return any(a < t1 - 1e-9 and t0 + 1e-9 < b + deaf for a, b in self.st[who].busy)
 
     def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float, *, cut: bool = False) -> None:
         if self.unheard is not None and self.unheard(rx, frame.container, t0):
@@ -304,10 +355,19 @@ class TwoStationSim:
             if not isinstance(sf, SimFrame):
                 return  # a real modem's frame cannot be cut here: it is not delivered
             sf._draw = 2.0  # acquired, and past every probability of decoding
+        latency = 0.0
+        if self.decode_latency is not None:
+            latency = self.decode_latency(rx, frame, arrival)
+        if latency > 0.0:
+            self._push(arrival + latency, "report", rx, sf)
+            return
+        self._report(rx, sf, arrival)
+
+    def _report(self, rx: int, sf: SoftFrame, at: float) -> None:
         eng = self.st[rx].engine
-        eng.tick(arrival)
-        eng.on_frame(sf, arrival)
-        self._pump(rx, arrival)
+        eng.tick(at)
+        eng.on_frame(sf, at)
+        self._pump(rx, at)
 
     def _announce(self, rx: int, t_start: float, at: float, frame_s: float) -> None:
         """Tell a listening receiver that a frame's preamble was detected (P2-2a), and how
@@ -321,9 +381,72 @@ class TwoStationSim:
 
     # ── run loop ──────────────────────────────────────────────────────
 
+    def _phantom(self, rx: int, t0: float) -> None:
+        """A false detection starting at ``t0``: announced, then reported as a frame that does
+        not decode — of a random container and mode, trusted now and then (ADR-0020)."""
+        rate = self.phantoms_per_min / 60.0
+        self._push(t0 + self.rng.expovariate(rate), "phantom", rx)
+        timing = self.st[rx].engine.timing
+        modes = sorted(timing.data_capacity or {0: 0})
+        control = self.rng.random() < 0.5
+        mode = self.rng.choice(modes)
+        floor = self.rng.random() < 0.3 if control else timing.is_floor(mode)
+        length = timing.control_frame_s_for(floor) if control else timing.data_frame_s_for(mode)
+        if self._busy(rx, t0, t0 + length):
+            return
+        frame = TxFrame(
+            Container.CONTROL if control else Container.DATA,
+            bytes(self.rng.randrange(256) for _ in range(7)),
+            mode=0 if control else mode,
+            rv=self.rng.randrange(4),
+            floor=floor,
+            follows=self.rng.randrange(4),
+        )
+        sf = SimFrame(
+            container=frame.container,
+            mode=frame.mode,
+            rv=frame.rv,
+            snr_db=self.rng.uniform(-15.0, 5.0),
+            t_start=t0,
+            t_end=t0 + length,
+            payload=frame.payload,
+            _draw=2.0,
+            floor=floor,
+            trusted=self.rng.random() < self.phantom_trusted,
+            follows=None if control else frame.follows,
+        )
+        sof = timing.preamble_detect_s_for(floor)
+        if sof is not None:
+            self._push(t0 + sof, "preamble", rx, (t0, t0 + sof, length, frame.container))
+        latency = 0.0
+        if self.decode_latency is not None:
+            latency = self.decode_latency(rx, frame, t0 + length)
+        self._push(t0 + length + latency, "report", rx, sf)
+
+    # ── what went on the air ──────────────────────────────────────────
+
+    def radiated(self, who: int) -> list[tuple[float, float]]:
+        """The intervals station ``who`` radiated, in order."""
+        return list(self.st[who].busy)
+
+    def overlaps(self) -> list[tuple[float, float]]:
+        """Every stretch both stations radiated at once."""
+        out = []
+        for a0, a1 in self.st[0].busy:
+            for b0, b1 in self.st[1].busy:
+                lo, hi = max(a0, b0), min(a1, b1)
+                if hi > lo + 1e-9:
+                    out.append((lo, hi))
+        return sorted(out)
+
     def run(self, until: float = 600.0, idle_gap: float = 3.0) -> float:
         """Advance until both engines have been idle for ``idle_gap`` seconds or ``until``
         is reached. Returns the final simulation time."""
+        if self.phantoms_per_min > 0.0:
+            for who in (0, 1):
+                self._push(
+                    self.t + self.rng.expovariate(self.phantoms_per_min / 60.0), "phantom", who
+                )
         for who in (0, 1):
             self._pump(who, self.t)
         last = 0.0
@@ -355,6 +478,16 @@ class TwoStationSim:
                 elif ev.kind == "tx_done":
                     self.st[ev.who].engine.on_tx_done(nt)
                     self._pump(ev.who, nt)
+                elif ev.kind == "report":
+                    self._report(ev.who, cast("SoftFrame", ev.data), nt)
+                elif ev.kind == "dropped":
+                    eng = self.st[ev.who].engine
+                    if isinstance(eng, GrantedEngine):
+                        eng.on_tx_dropped(nt)
+                        self._pump(ev.who, nt)
+                elif ev.kind == "phantom":
+                    self._phantom(ev.who, nt)
+                    continue  # a phantom alone is no progress: an idle pair still stops
                 progressed = True
             if progressed:
                 last = self.t
