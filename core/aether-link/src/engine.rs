@@ -256,6 +256,15 @@ pub enum Action {
         /// (`timer:ack`, `frame`, `send`, ...). For the account of the air a harness keeps
         /// (ADR-0069 §5), never for the protocol.
         cause: &'static str,
+        /// The latest its radiation may start, on the air's clock, or `None` for one the
+        /// station makes on its own initiative. Past it the transmission is not sent at all,
+        /// whatever held it — the keying gate's rule (ADR-0069 §2.3) — and the engine is told
+        /// ([`GrantedEngine::on_tx_dropped`](crate::GrantedEngine::on_tx_dropped)). Protocol
+        /// 7's engine sets none.
+        not_after: Option<f64>,
+        /// The station's Morse identifier goes first, this long, ahead of the frames: the
+        /// engine of protocol 8 places it (07-protocol-8.md §5.4). Counted in `duration_s`.
+        identifier_s: f64,
     },
     /// Deliver these payload bytes to the application, in order.
     Deliver(Vec<u8>),
@@ -1480,6 +1489,8 @@ impl LinkEngine {
             frames,
             duration_s,
             cause: self.cause,
+            not_after: None,
+            identifier_s: 0.0,
         });
         // The link timeout spans four exchanges at the family the link runs in, and was
         // reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered

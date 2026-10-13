@@ -814,3 +814,29 @@ def test_the_fastest_rung_is_a_live_setting() -> None:
     done = _exchange(sim, a, b, b"r" * 6000, b"s" * 2000)
     assert done is not None
     assert max(modes) == 8  # the path carries far more: the setting is what holds it
+
+
+def test_a_transmission_split_evenly_between_two_rungs_is_judged_at_the_slower() -> None:
+    """The rate controller judges a transmission at the rung most of it went at; of two as
+    common, the slower — a rule written out so the port takes the same one (the Rust engine's
+    unit test says the same)."""
+    from types import SimpleNamespace
+
+    from aether_model.link.granted import _RxRecord
+
+    timing = _timing(WIDE)
+    engine = GrantedEngine("W4ODA", timing, GrantConfig(), seed=1)
+
+    def record(mode: int, decoded: bool) -> _RxRecord:
+        frame = SimpleNamespace(mode=mode, trusted=True, rv=0, snr_db=8.5, floor=False)
+        return _RxRecord(frame, 0, b"" if decoded else None)  # type: ignore[arg-type]
+
+    engine._observe([record(12, True), record(12, False), record(9, True), record(9, False)])
+
+    def judged_at(mode: int) -> float:
+        rate = GrantedEngine("W4ODA", timing, GrantConfig(), seed=1).rate
+        rate.observe(8.5, 2, 2, mode)
+        return rate.margin_db
+
+    assert abs(judged_at(9) - judged_at(12)) > 0.1
+    assert engine.rate.margin_db == judged_at(9)
