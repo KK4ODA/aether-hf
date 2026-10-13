@@ -1,0 +1,211 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=46055 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+TLC2 Version 2026.10.13.011403 (rev: 210df3a)
+Running breadth-first search Model-Checking with fp 74 and seed 4209690951245546045 with 4 workers on 4 cores with 3040MB heap and 64MB offheap memory [pid: 2703] (Linux 6.18.44-fc-v114 amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/user/aether-hf/research/link_arch/tla/GrantedSlots.tla
+Parsing file /tmp/tlc-1468070072082774700/Naturals.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-1468070072082774700/FiniteSets.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-1468070072082774700/_TLCTrace.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-1468070072082774700/Sequences.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-1468070072082774700/TLC.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-1468070072082774700/TLCExt.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-1468070072082774700/Integers.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Integers
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module GrantedSlots
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module GrantedSlots
+Starting... (2026-10-13 11:00:05)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 11:00:05.
+Error: Invariant NoOverlap is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ now = 0
+/\ sXid = 0
+/\ xid = 0
+/\ sEnd = 99999
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 0
+/\ sStart = 99999
+
+State 2: <MasterKey line 66, col 5 to line 73, col 68 of module GrantedSlots>
+/\ now = 0
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 2
+/\ exchanges = 0
+/\ mStart = 0
+/\ mNext = 6
+/\ sStart = 99999
+
+State 3: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 1
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 2
+/\ exchanges = 0
+/\ mStart = 0
+/\ mNext = 6
+/\ sStart = 99999
+
+State 4: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 2
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 2
+/\ exchanges = 0
+/\ mStart = 0
+/\ mNext = 6
+/\ sStart = 99999
+
+State 5: <MasterEnd line 77, col 5 to line 81, col 73 of module GrantedSlots>
+/\ now = 2
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = { [ xid |-> 1,
+    to |-> "S",
+    kind |-> "grant",
+    slotStart |-> 3,
+    slotEnd |-> 5,
+    end |-> 2,
+    at |-> 5 ] }
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 99999
+
+State 6: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 3
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = { [ xid |-> 1,
+    to |-> "S",
+    kind |-> "grant",
+    slotStart |-> 3,
+    slotEnd |-> 5,
+    end |-> 2,
+    at |-> 5 ] }
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 99999
+
+State 7: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 4
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = { [ xid |-> 1,
+    to |-> "S",
+    kind |-> "grant",
+    slotStart |-> 3,
+    slotEnd |-> 5,
+    end |-> 2,
+    at |-> 5 ] }
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 99999
+
+State 8: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 5
+/\ sXid = 0
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = { [ xid |-> 1,
+    to |-> "S",
+    kind |-> "grant",
+    slotStart |-> 3,
+    slotEnd |-> 5,
+    end |-> 2,
+    at |-> 5 ] }
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 99999
+
+State 9: <SlaveGetsGrant line 85, col 5 to line 93, col 77 of module GrantedSlots>
+/\ now = 5
+/\ sXid = 1
+/\ xid = 1
+/\ sEnd = 99999
+/\ inbox = {}
+/\ sDue = 5
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 99999
+
+State 10: <SlaveKey line 97, col 5 to line 100, col 74 of module GrantedSlots>
+/\ now = 5
+/\ sXid = 1
+/\ xid = 1
+/\ sEnd = 7
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 5
+
+State 11: <Tick line 128, col 9 to line 129, col 93 of module GrantedSlots>
+/\ now = 6
+/\ sXid = 1
+/\ xid = 1
+/\ sEnd = 7
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 99999
+/\ exchanges = 0
+/\ mStart = 99999
+/\ mNext = 6
+/\ sStart = 5
+
+State 12: <MasterKey line 66, col 5 to line 73, col 68 of module GrantedSlots>
+/\ now = 6
+/\ sXid = 1
+/\ xid = 0
+/\ sEnd = 7
+/\ inbox = {}
+/\ sDue = 99999
+/\ mEnd = 7
+/\ exchanges = 0
+/\ mStart = 6
+/\ mNext = 11
+/\ sStart = 5
+
+336 states generated, 260 distinct states found, 62 states left on queue.
+The depth of the complete state graph search is 15.
+Finished in 00s at (2026-10-13 11:00:05)
+Trace exploration spec path: ./GrantedSlots_TTrace_1791889204.tla

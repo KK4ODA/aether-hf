@@ -1,0 +1,196 @@
+Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=46055 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes=
+TLC2 Version 2026.10.13.011403 (rev: 210df3a)
+Running breadth-first search Model-Checking with fp 89 and seed -7107981281512780253 with 4 workers on 4 cores with 3040MB heap and 64MB offheap memory [pid: 2862] (Linux 6.18.44-fc-v114 amd64, Ubuntu 21.0.12.1 64bit, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/user/aether-hf/research/link_arch/tla/ImplicitTurn.tla
+Parsing file /tmp/tlc-15997290350147401588/Naturals.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Naturals.tla)
+Parsing file /tmp/tlc-15997290350147401588/FiniteSets.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/FiniteSets.tla)
+Parsing file /tmp/tlc-15997290350147401588/_TLCTrace.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/_TLCTrace.tla)
+Parsing file /tmp/tlc-15997290350147401588/Sequences.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Sequences.tla)
+Parsing file /tmp/tlc-15997290350147401588/TLC.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLC.tla)
+Parsing file /tmp/tlc-15997290350147401588/TLCExt.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/TLCExt.tla)
+Parsing file /tmp/tlc-15997290350147401588/Integers.tla (jar:file:/tmp/claude-0/-home-user-aether-hf/2479497d-53b0-555f-9588-326477f3c501/scratchpad/tla/tla2tools.jar!/tla2sany/StandardModules/Integers.tla)
+Semantic processing of module Naturals
+Semantic processing of module Sequences
+Semantic processing of module FiniteSets
+Semantic processing of module TLC
+Semantic processing of module Integers
+Semantic processing of module TLCExt
+Semantic processing of module _TLCTrace
+Semantic processing of module ImplicitTurn
+Linting of module TLCExt
+Linting of module _TLCTrace
+Linting of module ImplicitTurn
+Starting... (2026-10-13 11:00:31)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-10-13 11:00:31.
+Error: Invariant NoOverlap is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 0
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 0, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 99999, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "none", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 2: <SendBurst("A") line 92, col 5 to line 97, col 41 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 0
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 0, B |-> 0]
+/\ tx = [ A |-> [start |-> 0, end |-> 2, kind |-> "burst_offer", sensed |-> TRUE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 3: <Tick line 234, col 9 to line 235, col 96 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 1
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 0, B |-> 0]
+/\ tx = [ A |-> [start |-> 0, end |-> 2, kind |-> "burst_offer", sensed |-> TRUE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 4: <Tick line 234, col 9 to line 235, col 96 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 2
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 0, B |-> 0]
+/\ tx = [ A |-> [start |-> 0, end |-> 2, kind |-> "burst_offer", sensed |-> TRUE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 5: <TxEnd("A") line 160, col 5 to line 167, col 77 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 2
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {[end |-> 2, kind |-> "burst_offer", at |-> 5, to |-> "B"]}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 6: <Tick line 234, col 9 to line 235, col 96 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 3
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {[end |-> 2, kind |-> "burst_offer", at |-> 5, to |-> "B"]}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 7: <Tick line 234, col 9 to line 235, col 96 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 4
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {[end |-> 2, kind |-> "burst_offer", at |-> 5, to |-> "B"]}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 8: <Tick line 234, col 9 to line 235, col 96 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 5
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 0]
+/\ tx = [ A |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 5, B |-> 99999]
+/\ inbox = {[end |-> 2, kind |-> "burst_offer", at |-> 5, to |-> "B"]}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 9: <Repeat("A") line 110, col 5 to line 115, col 41 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 5
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 0]
+/\ tx = [ A |-> [start |-> 5, end |-> 7, kind |-> "burst_offer", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 10, B |-> 99999]
+/\ inbox = {[end |-> 2, kind |-> "burst_offer", at |-> 5, to |-> "B"]}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 10: <Receive("B") line 171, col 3 to line 223, col 34 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 5
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "ack", at |-> 5]]
+/\ lastAct = [A |-> 2, B |-> 2]
+/\ tx = [ A |-> [start |-> 5, end |-> 7, kind |-> "burst_offer", sensed |-> FALSE],
+  B |-> [start |-> 99999, end |-> 99999, kind |-> "none", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 10, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+State 11: <Answer("B") line 137, col 5 to line 156, col 61 of module ImplicitTurn>
+/\ offered = [A |-> FALSE, B |-> FALSE]
+/\ now = 5
+/\ sched = [A |-> [kind |-> "none", at |-> 99999], B |-> [kind |-> "none", at |-> 99999]]
+/\ lastAct = [A |-> 2, B |-> 2]
+/\ tx = [ A |-> [start |-> 5, end |-> 7, kind |-> "burst_offer", sensed |-> FALSE],
+  B |-> [start |-> 5, end |-> 6, kind |-> "ack", sensed |-> FALSE] ]
+/\ asked = [A |-> FALSE, B |-> FALSE]
+/\ role = [A |-> "ISS", B |-> "IRS"]
+/\ wait = [A |-> 10, B |-> 99999]
+/\ inbox = {}
+/\ wfor = [A |-> "ack", B |-> "none"]
+/\ apps = 0
+/\ data = [A |-> TRUE, B |-> FALSE]
+
+390 states generated, 311 distinct states found, 113 states left on queue.
+The depth of the complete state graph search is 12.
+Finished in 00s at (2026-10-13 11:00:31)
+Trace exploration spec path: ./ImplicitTurn_TTrace_1791889231.tla

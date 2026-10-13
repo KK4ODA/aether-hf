@@ -1,0 +1,5 @@
+# TLC's working files
+states/
+*.st
+*_TTrace_*.tla
+*_TTrace_*.bin
