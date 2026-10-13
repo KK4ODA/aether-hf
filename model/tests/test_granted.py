@@ -478,6 +478,51 @@ def test_the_slave_asking_to_leave_stops_the_masters_own_data() -> None:
     assert len(sim.delivered(1)) < 256 * 24, "the master sent its whole queue first"
 
 
+def _gap_session(gaps: tuple[float, float], hold: float) -> tuple[list[tuple[float, float]], int]:
+    """Both radios hold their transmitter ``hold`` after the audio stops and declare nothing;
+    each station's answer gap is ``gaps``. Returns every transmission that began while the
+    other station was still deaf after its own, once the session was up, and the slave's level."""
+    a, b = _pair(NARROW)
+    for e, gap in zip((a, b), gaps, strict=True):
+        e.set_answer_gap(gap)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=9, rx_recovery_s=(hold, hold))
+    a.connect("KK4XYZ")
+    t = 0.0
+    while a.state is not State.CONNECTED and t < 200.0:
+        t += 1.0
+        sim.run(until=t)
+    assert a.state is State.CONNECTED
+    up = sim.t
+    a.send(b"x" * 400)
+    b.send(b"y" * 200)
+    sim.run(until=up + 300.0)
+    assert sim.delivered(1) == b"x" * 400 and sim.delivered(0) == b"y" * 200
+    into = [
+        (end, begin)
+        for who in (0, 1)
+        for _, end in sim.radiated(who)
+        for begin, _ in sim.radiated(1 - who)
+        if begin > up and end - 1e-9 <= begin < end + hold
+    ]
+    return into, b.level
+
+
+def test_the_answer_gap_holds_a_station_off_the_others_frames() -> None:
+    """A peer slower to hear again than it declared — a VOX interface's hold left at 0 — is
+    waited for by the answer gap (ADR-0036): as the master, by keying no sooner than the gap
+    after the slave's frames; as the slave, by asking for the level that starts its slots the
+    gap after the master's. The acceptance is the call's slot, which the caller's own declared
+    turnaround and its stepping level govern, so only the session after it is judged."""
+    hold = 1.1
+    # the master's gap covers the slave's radio, the slave's gap the master's
+    into, level = _gap_session((1.3, 1.3), hold)
+    assert into == [], f"a station radiated into the other's hold: {into}"
+    assert level >= 2, "the slave did not ask for a level that covers its gap"
+    # without them the same radios radiate into each other's holds
+    into, _ = _gap_session((0.0, 0.0), hold)
+    assert into, "the radios' hold did not show without the gap"
+
+
 @pytest.mark.parametrize("air", ["2300", "500"])
 def test_an_aborting_master_leaves_and_the_slave_hears_it(air: str) -> None:
     a, b = _pair(AIRS[air])

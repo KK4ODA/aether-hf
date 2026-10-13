@@ -217,6 +217,14 @@ pub struct GrantConfig {
     /// This station's Morse identifier's length, 0 for none: declared at the connection, so the
     /// master grants the time for it.
     pub identifier_s: f64,
+    /// The least time between the end of the other station's frames and this station
+    /// radiating: the operator's `[radio] answer_gap_ms`, or what this station learned the other
+    /// needs (ADR-0036, ADR-0054). For a peer whose radio is slower to hear again than it
+    /// declared — a VOX interface's hold left at 0. As the master the station keys no sooner
+    /// than the gap after the slave's frames; as the slave it asks for the gap level that starts
+    /// its slots that late (07-protocol-8.md §10). Set by
+    /// [`set_answer_gap`](GrantedEngine::set_answer_gap).
+    pub answer_gap_s: f64,
     /// [`DECODE_BUDGET_S`].
     pub decode_budget_s: [f64; 2],
     /// [`KEY_S`].
@@ -271,6 +279,7 @@ impl Default for GrantConfig {
             elide: true,
             turnaround_s: 0.0,
             identifier_s: 0.0,
+            answer_gap_s: 0.0,
             decode_budget_s: DECODE_BUDGET_S,
             key_s: KEY_S,
             guard_s: GUARD_S,
@@ -1021,7 +1030,7 @@ impl GrantedEngine {
         if self.role == Role::Master {
             self.level_asked.max(self.silence_level)
         } else {
-            self.need_level
+            self.asked_level()
         }
     }
 
@@ -1257,6 +1266,13 @@ impl GrantedEngine {
             self.cause = "send";
             self.try_window();
         }
+    }
+
+    /// The least time between the other station's frames and this station radiating
+    /// ([`GrantConfig::answer_gap_s`]): the daemon's, for the station it is calling or in a
+    /// session with. From the next key as the master, the next answer as the slave.
+    pub const fn set_answer_gap(&mut self, seconds: f64) {
+        self.config.answer_gap_s = seconds.max(0.0);
     }
 
     /// The daemon's word that this station's Morse identifier is due. The engine places it —
@@ -1610,6 +1626,27 @@ impl GrantedEngine {
         end + self.budget(floor).max(other_turnaround - lead) + self.config.guard_s
     }
 
+    /// How long after the other station's frames this station's radiation waits: the other's
+    /// declared turnaround, or the answer gap when that is longer.
+    const fn peer_wait_s(&self) -> f64 {
+        self.peer_turnaround_s.max(self.config.answer_gap_s)
+    }
+
+    /// The gap level this station asks for as the slave: what its own lateness needs, and at
+    /// least what starts its slots the answer gap after the master's frames.
+    fn asked_level(&self) -> usize {
+        let gap = self.config.answer_gap_s;
+        if gap <= 0.0 {
+            return self.need_level;
+        }
+        let base = [false, true]
+            .into_iter()
+            .map(|floor| (self.budget(floor) + self.config.key_s).max(self.peer_turnaround_s))
+            .fold(f64::INFINITY, f64::min);
+        self.need_level
+            .max(self.level_for(gap - base - self.config.guard_s))
+    }
+
     /// The smallest gap level at least `extra_s` long.
     fn level_for(&self, extra_s: f64) -> usize {
         self.config
@@ -1850,10 +1887,10 @@ impl GrantedEngine {
     /// or after the slot's latest end when nothing of it was decoded (§3.2).
     fn slot_close(&self, slot: &Slot) -> f64 {
         if let Some(end) = slot.stated_end {
-            return self.after(end, slot.stated_floor, self.peer_turnaround_s);
+            return self.after(end, slot.stated_floor, self.peer_wait_s());
         }
         let end = slot.end_max + self.peer_late_s;
-        self.after(end, slot.answer_floors.floor, self.peer_turnaround_s)
+        self.after(end, slot.answer_floors.floor, self.peer_wait_s())
     }
 
     /// Arm what ends this station's wait for the slot it granted last.
@@ -2993,7 +3030,7 @@ impl GrantedEngine {
             session: self.session & 0x7F,
             count: u8::try_from(data.len()).unwrap_or(7),
             data_floor,
-            level: u8::try_from(self.need_level).unwrap_or(3),
+            level: u8::try_from(self.asked_level()).unwrap_or(3),
             fam,
             flag: self.disc_requested,
             ident: self.identifier_due && self.config.identifier_s > 0.0,
@@ -3039,7 +3076,7 @@ impl GrantedEngine {
             dst: answer.remote.clone(),
             caps: with_level(
                 self.config.capabilities,
-                u8::try_from(self.need_level).unwrap_or(3),
+                u8::try_from(self.asked_level()).unwrap_or(3),
             ),
             version: PROTOCOL_VERSION,
             snr_db: answer.snr_db,
