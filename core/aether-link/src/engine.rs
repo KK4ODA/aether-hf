@@ -5290,7 +5290,9 @@ mod tests {
         for _ in 0..e.config.disc_retries {
             let end = e.tx_busy_until;
             e.on_tx_done(end);
-            let due = e.deadline_of(Timer::Wait).expect("waiting for the DISC_ACK");
+            let due = e
+                .deadline_of(Timer::Wait)
+                .expect("waiting for the DISC_ACK");
             e.tick(due + 0.01);
         }
         assert_eq!(e.state, State::Idle);
