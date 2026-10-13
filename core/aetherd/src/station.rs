@@ -8138,6 +8138,8 @@ mod tests {
             caps: aether_link::frames::with_bandwidth(0, 2300),
             version: PROTOCOL_VERSION - 1,
             snr_db: None,
+            turnaround_s: 0.0,
+            identifier_s: 0.0,
         }
         .encode()
         .expect("body");

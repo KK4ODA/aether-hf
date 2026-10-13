@@ -1952,6 +1952,8 @@ impl LinkEngine {
             caps: self.config.capabilities,
             version: PROTOCOL_VERSION,
             snr_db,
+            turnaround_s: 0.0,
+            identifier_s: 0.0,
         };
         let Ok(encoded) = body.encode() else { return };
         // a request starts on the tone floor and alternates families (ADR-0016); an answer
@@ -4965,6 +4967,8 @@ mod tests {
                 caps: e.config.capabilities,
                 version: PROTOCOL_VERSION,
                 snr_db: Some(-2.0),
+                turnaround_s: 0.0,
+                identifier_s: 0.0,
             };
             let header = DataHeader {
                 kind: DataKind::ConnectAck,

@@ -1816,6 +1816,8 @@ fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
             caps: 0,
             version,
             snr_db: None,
+            turnaround_s: 0.0,
+            identifier_s: 0.0,
         }
         .encode()
         .expect("body");
@@ -3517,6 +3519,8 @@ fn call_frame(
         caps: LinkConfig::default().capabilities,
         version: PROTOCOL_VERSION,
         snr_db: None,
+        turnaround_s: 0.0,
+        identifier_s: 0.0,
     }
     .encode()
     .expect("body");

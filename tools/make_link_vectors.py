@@ -25,15 +25,20 @@ from aether_model.link.datagram import body as datagram_body
 from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
     DATA_HEADER,
+    GRANTED_VERSION,
     ConnectBody,
     ControlFlags,
     ControlFrame,
     ControlKind,
     DataHeader,
     DataKind,
+    GrantFrame,
+    GrantKind,
     ProbeBody,
     encode_data,
+    level_of,
     pack_callsign,
+    with_level,
 )
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -116,13 +121,28 @@ def datagram_body_cases() -> list[dict]:  # type: ignore[type-arg]
 
 def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
     out = []
-    for src, dst, caps, version, snr in (
-        ("W4ODA", "KK4XYZ", 0, 1, None),
-        ("M0ABC", "VK2DEF/P", 0b101, 1, 12.5),
-        ("A1", "9Z9ZZZ9ZZ", 255, 7, -7.4),
-        ("KK4ODA", "N0CALL-T", 0b010, 1, 200.0),
+    for src, dst, caps, version, snr, turnaround, identifier in (
+        ("W4ODA", "KK4XYZ", 0, 1, None, 0.0, 0.0),
+        ("M0ABC", "VK2DEF/P", 0b101, 1, 12.5, 0.0, 0.0),
+        ("A1", "9Z9ZZZ9ZZ", 255, 7, -7.4, 0.0, 0.0),
+        ("KK4ODA", "N0CALL-T", 0b010, 1, 200.0, 0.0, 0.0),
+        # protocol 8 (ADR-0069): the turnaround in 0.1 s steps up to 1.5 s, the identifier in
+        # 0.5 s steps, both rounded up; the level bits in a request
+        ("KK4ODA", "W1AW", with_level(0b010, 2), GRANTED_VERSION, None, 0.25, 4.3),
+        ("W4ODA", "KK4XYZ", with_level(0b001, 3), GRANTED_VERSION, -3.0, 0.2, 0.0),
+        ("A1", "9Z9ZZZ9ZZ", 0, GRANTED_VERSION, 12.5, 2.0, 200.0),
+        ("M0ABC", "VK2DEF/P", 0b010, GRANTED_VERSION, 0.0, 0.0, 0.5),
     ):
-        body = ConnectBody(src, dst, caps=caps, version=version, snr_db=snr)
+        body = ConnectBody(
+            src,
+            dst,
+            caps=caps,
+            version=version,
+            snr_db=snr,
+            turnaround_s=turnaround,
+            identifier_s=identifier,
+        )
+        decoded = ConnectBody.decode(body.encode())
         out.append(
             {
                 "src": src,
@@ -130,8 +150,80 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
                 "caps": caps,
                 "version": version,
                 "snr_db": snr,
-                "decoded_snr_db": ConnectBody.decode(body.encode()).snr_db,
+                "turnaround_s": turnaround,
+                "identifier_s": identifier,
+                "decoded_snr_db": decoded.snr_db,
+                "decoded_turnaround_s": decoded.turnaround_s,
+                "decoded_identifier_s": decoded.identifier_s,
+                "level": level_of(caps),
                 "encoded": body.encode().hex(),
+            }
+        )
+    return out
+
+
+def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
+    """Protocol 8's control frame (ADR-0069): every field at its edges, the session's high bit
+    dropped, the SNR's ties to even and its six-bit clamp."""
+    out = []
+    cases = [
+        GrantFrame(GrantKind.HEADER, 42),
+        GrantFrame(
+            GrantKind.HEADER,
+            135,
+            count=6,
+            data_floor=True,
+            level=3,
+            fam=True,
+            flag=True,
+            ident=True,
+            base=250,
+            bitmap=0xFFFF,
+            snr_db=31.6,
+            rung=19,
+            n=7,
+        ),
+        GrantFrame(GrantKind.ANSWER, 1, count=2, level=1, base=3, bitmap=0b1011, snr_db=12.5),
+        GrantFrame(GrantKind.ANSWER, 127, flag=True, snr_db=-0.5, rung=31, n=5),
+        GrantFrame(GrantKind.DISC, 64, fam=True, level=2, snr_db=-40.0),
+        GrantFrame(GrantKind.DISC_ACK, 255, ident=True, snr_db=-31.4, base=17),
+        GrantFrame(GrantKind.HEADER, 9, count=9, n=12, snr_db=13.5, rung=40),
+    ]
+    for frame in cases:
+        encoded = frame.encode()
+        decoded = GrantFrame.decode(encoded)
+        out.append(
+            {
+                "kind": frame.kind.name,
+                "session": frame.session,
+                "count": frame.count,
+                "data_floor": frame.data_floor,
+                "level": frame.level,
+                "fam": frame.fam,
+                "flag": frame.flag,
+                "ident": frame.ident,
+                "base": frame.base,
+                "bitmap": frame.bitmap,
+                "snr_db": frame.snr_db,
+                "rung": frame.rung,
+                "n": frame.n,
+                "encoded": encoded.hex(),
+                "decoded": {
+                    "kind": decoded.kind.name,
+                    "session": decoded.session,
+                    "count": decoded.count,
+                    "data_floor": decoded.data_floor,
+                    "level": decoded.level,
+                    "fam": decoded.fam,
+                    "flag": decoded.flag,
+                    "ident": decoded.ident,
+                    "base": decoded.base,
+                    "bitmap": decoded.bitmap,
+                    "snr_db": decoded.snr_db,
+                    "rung": decoded.rung,
+                    "n": decoded.n,
+                },
+                "received": [decoded.received(q) for q in range(0, 256, 13)],
             }
         )
     return out
@@ -302,6 +394,7 @@ def main() -> int:
         "datagrams": datagram_cases(),
         "datagram_bodies": datagram_body_cases(),
         "control_frames": control_frame_cases(),
+        "grant_frames": grant_frame_cases(),
         "rate_traces": rate_trace_cases(),
     }
     out = Path(args.out)
