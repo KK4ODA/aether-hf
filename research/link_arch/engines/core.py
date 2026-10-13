@@ -202,6 +202,8 @@ class CoreConfig:
     connect_retries: int = 8
     max_retries: int = 8
     max_combines: int = 4
+    reencode_early_after: int = 2
+    reencode_hopeless_db: float = 1.0
     silence_step: int = 2
     link_timeout_s: float = 45.0
     link_timeout_exchanges: float = 4.0
@@ -288,6 +290,9 @@ class Core:
         self._disc_requested = False
         self._disc_tries = 0
         self.top_acked_mode: int | None = None
+        self._asked: int | None = None
+        """The fastest rung this station has recommended in the session (ADR-0020): a frame
+        faster than any of them failing is the sender's choice, and teaches only the SNR."""
 
     def _rate_controller(self) -> RateController:
         t = self.timing
@@ -374,8 +379,18 @@ class Core:
         cap = data_capacity(self.timing.capacity(mode))
         return n == cap or n <= cap - 2
 
+    def _hopeless(self, mode: int) -> bool:
+        """The other station measured this station further under ``mode``'s threshold than
+        combining every copy could make up (ADR-0038): re-encode early."""
+        thresholds = self.rate.thresholds
+        if self.peer_report_db is None or mode not in thresholds:
+            return False
+        reach = thresholds[mode] - 10.0 * math.log10(max(1, self.cfg.max_combines))
+        return self.peer_report_db < reach - self.cfg.reencode_hopeless_db
+
     def _reencode(self, rec: TxRec, rung: int) -> None:
-        if rec.tx_count < self.cfg.max_combines or rung >= rec.mode:
+        due = self.cfg.reencode_early_after if self._hopeless(rec.mode) else self.cfg.max_combines
+        if rec.tx_count < due or rung >= rec.mode:
             return
         for m in sorted(self.timing.data_capacity or {}):
             if rung <= m < rec.mode and self._fits(len(rec.body), m):
@@ -563,8 +578,17 @@ class Core:
         snr = sum(snrs) / len(snrs) if snrs else None
         if burst:
             modes = [r.frame.mode for r in burst]
-            self.rate.observe(snr, ok, failed, max(set(modes), key=modes.count))
+            if failed and self._asked is not None and min(modes) > self._asked:
+                self.rate.observe_snr(snr)  # the sender's choice, not news of the path
+            else:
+                self.rate.observe(snr, ok, failed, max(set(modes), key=modes.count))
         return snr
+
+    def recommend(self) -> int:
+        """The rung this station's next control frame recommends, remembered (ADR-0020)."""
+        rung = self.rate.recommend()
+        self._asked = rung if self._asked is None else max(self._asked, rung)
+        return rung
 
     def window(self) -> tuple[int, list[int], int]:
         bitmap = 0

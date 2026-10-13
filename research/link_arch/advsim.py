@@ -135,6 +135,21 @@ class TxRec:
     """For an answer: the end of what it answers (in the receiver's clock)."""
 
 
+@dataclass(frozen=True)
+class FrameCtx:
+    """One frame on the air, as a scenario's adversary sees it."""
+
+    rx: int
+    tx: int
+    tx_n: int
+    """Which of the sender's transmissions this is (0 = its first)."""
+    kinds: list[str]
+    """Every frame of the transmission, by kind."""
+    i: int
+    kind: str
+    t0: float
+
+
 @dataclass
 class _Ev:
     t: float
@@ -301,6 +316,13 @@ class AdvSim:
         """Called after a station's delivered stream grows: (sim, who, now)."""
         self.phantoms = [0, 0]
         self.dropped = [0, 0]
+        self._tx_count = [0, 0]
+        self.scenario: Callable[[FrameCtx], object] | None = None
+        """A deterministic adversary: told about every frame put on the air, it may make the
+        other station miss it (``"unheard"``), detect it and fail to decode it
+        (``"undecodable"``), or decode it late (``("late", seconds)``)."""
+        self.snr_schedule: Callable[[float], float] | None = None
+        """The path's level against time, overriding ``ChannelCfg.snr_db``."""
         """Transmissions the keying gate refused to start late (the forfeit rule)."""
         self.log: list[tuple[float, int, str]] = []
         """(time, station, what) for every detection and delivery: for traces."""
@@ -397,14 +419,18 @@ class AdvSim:
         t = t_key + timing.tx_latency_s + extra
         start = t
         key_up = t + self.key_limit_s if self.key_limit_s is not None else math.inf
-        kinds = []
-        for frame in tx.frames:
+        label = getattr(st.engine, "frame_kind", frame_kind)
+        kinds = [label(f) for f in tx.frames]
+        n = self._tx_count[who]
+        self._tx_count[who] += 1
+        for i, frame in enumerate(tx.frames):
             dur = timing.frame_s(frame)
             if t >= key_up - 1e-9:
+                kinds = kinds[:i]
                 break
             cut = t + dur > key_up + 1e-9
-            kinds.append(getattr(st.engine, "frame_kind", frame_kind)(frame))
-            self._radiate(who, frame, t, t + dur, cut)
+            ctx = FrameCtx(rx=1 - who, tx=who, tx_n=n, kinds=kinds, i=i, kind=kinds[i], t0=t)
+            self._radiate(who, frame, t, t + dur, cut, ctx)
             t += dur
         end = t
         st.tx_free_at = end
@@ -450,7 +476,15 @@ class AdvSim:
         table = timing.control_threshold_db or {False: -5.1, True: -19.5}
         return table[floor] + self.ch.det_offset_db[int(floor)]
 
-    def _radiate(self, tx: int, frame: TxFrame, t0: float, t1: float, cut: bool) -> None:
+    def _radiate(
+        self,
+        tx: int,
+        frame: TxFrame,
+        t0: float,
+        t1: float,
+        cut: bool,
+        ctx: FrameCtx | None = None,
+    ) -> None:
         """Schedule what the other station makes of one frame: whether its preamble is
         detected (decided when the preamble is in), then what the frame decodes to (at its
         end, when the receiver's own keying may have cut it)."""
@@ -459,7 +493,10 @@ class AdvSim:
         floor = self._family(tx, frame)
         sof = timing.preamble_detect_s_for(floor) or 0.0
         at = t0 + self.ch.prop_s + sof + self.st[rx].cfg.announce_latency_s
-        self._push(max(at, self.t), "detect", rx, (tx, frame, t0, t1, cut, floor, sof))
+        fate = self.scenario(ctx) if self.scenario is not None and ctx is not None else None
+        if fate == "unheard":
+            return
+        self._push(max(at, self.t), "detect", rx, (tx, frame, t0, t1, cut, floor, sof, fate))
 
     def _detect(
         self,
@@ -471,6 +508,7 @@ class AdvSim:
         cut: bool,
         floor: bool,
         sof: float,
+        fate: object = None,
     ) -> bool:
         ch = self.ch
         p = ch.prop_s
@@ -478,7 +516,8 @@ class AdvSim:
             return False  # deaf at the start: never detected
         if ch.outage is not None and ch.outage[0] < t1 and t0 < ch.outage[1]:
             return False
-        level = ch.snr_db - (ch.asym_db if rx == 0 else 0.0)
+        base = self.snr_schedule(t0) if self.snr_schedule is not None else ch.snr_db
+        level = base - (ch.asym_db if rx == 0 else 0.0)
         if ch.fading is not None:
             reported, decode_at = ch.fading.judge(frame, level, t0, t1)
         else:
@@ -491,7 +530,7 @@ class AdvSim:
         eng.tick(self.t)
         eng.on_preamble(t0 + p, self.t, t1 - t0)
         self._pump(rx, self.t)
-        self._push(t1 + p, "finish", rx, (tx, frame, t0, t1, cut, floor, reported, decode_at))
+        self._push(t1 + p, "finish", rx, (tx, frame, t0, t1, cut, floor, reported, decode_at, fate))
         return True
 
     def _finish(
@@ -505,6 +544,7 @@ class AdvSim:
         floor: bool,
         reported: float,
         decode_at: float,
+        fate: object = None,
     ) -> None:
         st = self.st[rx]
         ch = self.ch
@@ -515,7 +555,7 @@ class AdvSim:
         shown = reported
         if floor and ch.floor_cap_db is not None:
             shown = min(reported, ch.floor_cap_db)
-        draw = 2.0 if cut else _u(self.seed, "dec", tx, round(t0, 3))
+        draw = 2.0 if cut or fate == "undecodable" else _u(self.seed, "dec", tx, round(t0, 3))
         counts = getattr(getattr(self.st[tx].engine, "cfg", None), "stated_answers", True)
         follows = None
         if frame.container is Container.DATA and (not floor or counts):
@@ -541,6 +581,8 @@ class AdvSim:
             lat += st.rng.expovariate(1.0 / c.latency_tail_s)
         if c.stall_prob > 0.0 and st.rng.random() < c.stall_prob:
             lat += st.rng.uniform(*c.stall_s)
+        if isinstance(fate, tuple) and fate[0] == "late":
+            lat += float(fate[1])
         at = max(t1 + p + lat, st.last_delivery)
         st.last_delivery = at
         self._push(at, "deliver", rx, sf)
@@ -612,7 +654,9 @@ class AdvSim:
                 progressed = self._event(ev) or progressed
             if progressed:
                 last = self.t
-            elif self.t - last > idle_gap:
+            elif self.t - last > idle_gap and all(d is None for d in nds):
+                # only phantoms for a while, and no engine waiting on a timer: nothing more
+                # will happen (a pending timer, a call's next try, is no idleness)
                 break
             if self._quiet():
                 break

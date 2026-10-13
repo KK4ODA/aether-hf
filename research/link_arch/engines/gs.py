@@ -25,7 +25,7 @@ caller tie-break, ``_turn_unread``, ``_unread_there``, ``_took_unread`` and thei
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from aether_model.frame.modes import AirInterface
@@ -42,6 +42,13 @@ from aether_model.link.harness import bandwidth_capabilities
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from research.link_arch.engines.core import Core, CoreConfig, Ctl, Kind, State
 
+GAP_STEPS = (0.0, 0.5, 1.0, 2.0)
+"""Extra gap before the slave's slot, by level (two bits in the header, where the exchange id
+was: answers are attributed by their air time). A slave whose computer decodes late asks for
+a level in its answer; a master that hears nothing twice in a row raises it; both come down
+as answers arrive on time. A longer gap costs dead air; a slot the slave cannot reach in time
+costs the whole exchange."""
+
 
 @dataclass
 class GsConfig(CoreConfig):
@@ -56,6 +63,10 @@ class GsConfig(CoreConfig):
     """An open window's base length on the ordinary family; the floor's is 2.5 times it, and
     each idle window in a row doubles it, up to :attr:`window_doublings` times."""
     window_doublings: int = 1
+    elide: bool = True
+    """Leave the header out of a data transmission when it would grant nothing new (see
+    ``GsEngine._elide``): a bulk transfer's sender then sends what a turn-holding sender
+    sends, data alone, and its header only when something changes."""
     """How far idle windows grow: the master's own new data waits up to the window, so this
     is its worst-case latency on an idle link against one header per window of air."""
 
@@ -73,6 +84,10 @@ class GsConfig(CoreConfig):
             cfg.early_reclaim = True
         if arm.startswith("gs_w"):
             cfg.window_doublings = int(arm[4:])
+        if arm.endswith("_m0"):
+            cfg.answer_floor_margin_db = 0.0
+        if arm.endswith("_noelide"):
+            cfg.elide = False
         return cfg
 
 
@@ -93,7 +108,12 @@ class GsEngine(Core):
     def reset(self) -> None:
         super().reset()
         # master
-        self._xid = 0
+        self._level = 0
+        """The gap level the master grants with."""
+        self._silence_level = 0
+        self._asked_level = 0
+        """The level the slave last asked for."""
+        self._on_time = 0
         self._slot: dict[str, Any] | None = None
         self._stated_end: float | None = None
         self._stated_heard = 0.0
@@ -102,6 +122,12 @@ class GsEngine(Core):
         self._hdr_floor = True
         self._ans_cmd = True
         self._ans_prev = True
+        self._possible: set[bool] = {True}
+        """Every family the slave may hold for an answer to a transmission whose header it did
+        not read: the family of its last answer read here, and every command sent since. A
+        reservation covers the longest of them; a header is left out only when there is one,
+        and it is the one wanted (header elision)."""
+        self.elided = 0
         self._idle_windows = 0
         self._last_kind = ""
         self._silent = 0
@@ -116,6 +142,10 @@ class GsEngine(Core):
         self._ans_sticky = True
         self._grant_floor = False
         self._m_last_floor = False
+        self._m_level = 0
+        """Slave: the gap level of the last header read."""
+        self._need_level = 0
+        """Slave: the level its own decode lateness needs."""
         self._window: tuple[float, float] | None = None
         self._answer_what: tuple[str, SoftFrame | None, int] = ("", None, 0)
         self._answer_slot = 0.0
@@ -193,6 +223,7 @@ class GsEngine(Core):
             fs = self.timing.data_frame_s_for(self.robust_mode(True))
             wait = (
                 self.gap_s(True)
+                + GAP_STEPS[self._level]
                 + self.cfg.slack_s
                 + fs
                 + self.heard_by(True)
@@ -249,10 +280,18 @@ class GsEngine(Core):
         self._arm("link", self.now + self.link_timeout())
 
     # ── connection ────────────────────────────────────────────────────
+    def _call_level(self) -> int:
+        """The gap level a call grants its acceptance: up a level every second try, so a
+        called station whose computer decodes late is reached (capability bits 3-4)."""
+        return min(len(GAP_STEPS) - 1, max(0, self._connect_tries - 1) // 2)
+
     def _send_connect(self) -> None:
         floor = self.timing.floor_modes > 0 and self._connect_tries % 2 == 0
         mode = self.robust_mode(floor)
-        body = ConnectBody(self.my_call, self.remote_call, caps=self.cfg.capabilities).encode()
+        level = self._call_level() if self._connect_tries else 0
+        caps = self.cfg.capabilities | (level << 3)
+        body = ConnectBody(self.my_call, self.remote_call, caps=caps).encode()
+        self._level = level
         payload = encode_data(
             DataHeader(DataKind.CONNECT_REQ, 0, self.session), body, self.timing.capacity(mode)
         )
@@ -285,7 +324,8 @@ class GsEngine(Core):
                 return
             self._heard(frame)
             # the acceptance goes in the request's slot, or not at all
-            slot = frame.t_end + self.gap_s(frame.floor)
+            level = (cb.caps >> 3) & 3
+            slot = frame.t_end + self.gap_s(frame.floor) + GAP_STEPS[level]
             self._schedule_answer(slot, ("connect_ack", frame, self.session))
         elif (
             header.kind is DataKind.CONNECT_ACK
@@ -301,6 +341,13 @@ class GsEngine(Core):
                     self.cfg.initial_mode, min(self.cap(), self.rate.first_mode(cb.snr_db))
                 )
                 self.peer_report_db = cb.snr_db
+                # the acceptance says how the slave heard the call: the first header goes in
+                # the family that reading asks for, as every later one goes in the family the
+                # slave's answers ask for (a floor reading is a lower bound: never too fast)
+                if self.timing.floor_modes > 0:
+                    self._hdr_floor = cb.snr_db < (
+                        self.ctl_threshold() + self.cfg.answer_floor_margin_db
+                    )
             self.event("connected", f"{self.remote_call} (master)")
             self._arm("proceed", frame.t_end + self.heard_by(frame.floor))
 
@@ -343,31 +390,63 @@ class GsEngine(Core):
             return 0, True, min(self.gcfg.window_doublings, self._idle_windows)
         return 0, False, 0
 
+    def _elide(self, n: int, open_window: bool, wanted: bool) -> bool:
+        """Whether this transmission may go without its header: data only, nothing to grant
+        the slave beyond its answer, the gap at level 0, the last slot heard, and the answer's
+        family one the slave surely holds already."""
+        return (
+            self.gcfg.elide
+            and not open_window
+            and n == 0
+            and self._slave_want == 0
+            and self._silent == 0
+            and max(self._asked_level, self._silence_level) == 0
+            and self._possible == {wanted}
+            and self.has_work()
+        )
+
     def _send_hdr(self) -> None:
         n, open_window, w_index = self._grant_size()
+        wanted = self.wants_floor() or self._silent >= 2
+        elide = self._elide(n, open_window, wanted)
         self._ans_prev = self._ans_cmd
-        self._ans_cmd = self.wants_floor() or self._silent >= 2
+        self._ans_cmd = wanted
+        if not elide:
+            self._possible.add(wanted)
         hdr_floor = self._hdr_floor or self._silent >= 2
-        room = self.cfg.max_burst_s - self.ctl_s(hdr_floor)
+        room = self.cfg.max_burst_s - (0.0 if elide else self.ctl_s(hdr_floor))
         data = [] if open_window else self.build_data(room)
-        self._xid = (self._xid + 1) & 3
+        self._level = 0 if elide else max(self._asked_level, self._silence_level)
         data_floor = bool(data) and self.is_floor(data[0].mode)
         ctl = Ctl(
             Kind.HDR,
             self.session,
-            xid=self._xid,
+            xid=self._level,
             count=len(data),
             data_floor=data_floor,
             fam=self._ans_cmd,
             flag=open_window,
             snr_db=self.heard_db,
-            rung=self.rate.recommend(),
+            rung=self.recommend(),
             n=w_index if open_window else n,
             **self.ack_fields(),
         )
         frames = [TxFrame(Container.CONTROL, ctl.encode(), floor=hdr_floor), *data]
+        # without a header, every data frame must state exactly how many follow (two bits:
+        # four frames at most), or a receiver that loses the last ones cannot know the end
+        if elide and data and len(data) <= 4:
+            frames = data
+            self.elided += 1
+        elif elide:
+            elide = False
+            self._possible.add(wanted)
+            self._level = max(self._asked_level, self._silence_level)
+            ctl = replace(ctl, xid=self._level)
+            frames = [TxFrame(Container.CONTROL, ctl.encode(), floor=hdr_floor), *data]
         slave_floor = self.is_floor(self.rate.recommend())
-        ans_s = self.ctl_s(self._ans_cmd)
+        # the answer may come in any family the slave may hold: reserve for the longest
+        ans_floor = any(self._possible | {self._ans_cmd})
+        ans_s = self.ctl_s(ans_floor)
         if open_window:
             base = self.gcfg.open_window_s * (2.5 if hdr_floor else 1.0)
             grant_s = base * (1 << w_index)
@@ -384,7 +463,7 @@ class GsEngine(Core):
         if self._retries:
             reason = "holder:repeat"
         self._slot["last_floor"] = data_floor if data else hdr_floor
-        self._slot["ans_floor"] = self._ans_cmd
+        self._slot["ans_floor"] = ans_floor
         end = self.transmit(frames, reason)
         self._last_kind = "hdr"
         # until on_tx_done says where it really ended
@@ -415,7 +494,8 @@ class GsEngine(Core):
         slot = self._slot
         if slot is None:
             return
-        slot["start"] = end + self.gap_s(slot["last_floor"])
+        slot["tx_end"] = end
+        slot["start"] = end + self.gap_s(slot["last_floor"]) + GAP_STEPS[self._level]
         slot["end_max"] = slot["start"] + self.cfg.slack_s + slot["grant_s"]
         if slot.get("open"):
             slot["end_max"] = slot["start"] + slot["grant_s"]
@@ -440,8 +520,10 @@ class GsEngine(Core):
             slot["announced"] = True
 
     def _in_slot(self, frame: SoftFrame) -> bool:
+        """A slave frame belongs to the slot after the master's last transmission: the slave
+        keys only after a master transmission ends, whatever gap level it read."""
         slot = self._slot
-        return slot is not None and "start" in slot and frame.t_start >= slot["start"] - 0.3
+        return slot is not None and "tx_end" in slot and frame.t_start >= slot["tx_end"]
 
     def _master_data(self, frame: SoftFrame, decoded: bool) -> None:
         if not self._in_slot(frame):
@@ -495,7 +577,10 @@ class GsEngine(Core):
             if self.take_ack(ctl):
                 self._patience_until = None
             self._slave_want = ctl.n
+            self._asked_level = ctl.xid
             self._hdr_floor = ctl.fam
+            # the slave answered this slot in this family: it holds it now
+            self._possible = {frame.floor}
             self._leave_asked = ctl.flag
             self._ans_t_end = frame.t_end
             last_floor = ctl.data_floor if ctl.count else frame.floor
@@ -514,6 +599,8 @@ class GsEngine(Core):
         self._ans_sticky = ctl.fam
         self._grant = ctl
         self._grant_floor = frame.floor
+        self._m_level = ctl.xid
+        self._measure(frame)
         self._m_start = frame.t_start
         self._answered = None
         self.begin_rx()
@@ -533,6 +620,10 @@ class GsEngine(Core):
         if self._slot_heard:
             self._retries = 0
             self._silent = 0
+            self._on_time += 1
+            if self._on_time >= 4 and self._silence_level > 0:
+                self._silence_level -= 1
+                self._on_time = 0
             if slot.get("open") and self._stated_end is None:
                 self._idle_windows += 1
             else:
@@ -545,6 +636,9 @@ class GsEngine(Core):
         self.stats.silent_slots += 1
         self._silent += 1
         self._retries += 1
+        self._on_time = 0
+        if self._silent >= 2 and self._silence_level < len(GAP_STEPS) - 1:
+            self._silence_level += 1
         if slot.get("data"):
             self.back_off()
         if slot.get("n") and self._silent >= 2:
@@ -564,6 +658,7 @@ class GsEngine(Core):
         decoded = self.take_data(frame, self._rx_first)
         if decoded:
             self._heard(frame)
+            self._measure(frame)
             if frame.follows is not None and frame.follows < 3:
                 end = frame.t_end + frame.follows * (frame.t_end - frame.t_start)
                 self._m_end = end if self._m_end is None else max(self._m_end, end)
@@ -574,7 +669,13 @@ class GsEngine(Core):
         if self._m_end is None or self._answered == self._m_end:
             return
         grant = self._grant
-        slot = self._m_end + self.gap_s(self._m_last_floor)
+        # A value the master can change is taken only from this transmission's own header;
+        # without it, the one that keeps the answer inside every slot the master may have
+        # granted: the earliest start (level 0), the shortest answer, no data. A level read
+        # from an older header, after the master had lowered it, started the answer late and
+        # ran it into the master's next transmission (the main campaign, 500 Hz, ITU Good).
+        level = self._m_level if grant is not None else 0
+        slot = self._m_end + self.gap_s(self._m_last_floor) + GAP_STEPS[level]
         if grant is not None and grant.flag:
             # an open window: start when there is something to say, end inside it
             base = self.gcfg.open_window_s * (2.5 if self._hdr_was_floor() else 1.0)
@@ -586,6 +687,20 @@ class GsEngine(Core):
             return
         self._window = None
         self._schedule_answer(slot, ("ans", None, self.session))
+
+    def _measure(self, frame: SoftFrame) -> None:
+        """How late this station's receiver reported a master frame, against the budget its
+        slot assumes: the gap level its next answer asks for. Easing down one level at a time
+        when it is on time."""
+        late = self.now - frame.t_end - self.cfg.decode_budget_s[int(frame.floor)]
+        need = next((i for i, g in enumerate(GAP_STEPS) if late <= g + 1e-9), len(GAP_STEPS) - 1)
+        if need > self._need_level:
+            self._need_level = need
+        elif need < self._need_level:
+            self._ok_run = getattr(self, "_ok_run", 0) + 1
+            if self._ok_run >= 6:
+                self._need_level -= 1
+                self._ok_run = 0
 
     def _hdr_was_floor(self) -> bool:
         return self._grant is not None and self._grant_floor
@@ -671,9 +786,7 @@ class GsEngine(Core):
         grant = self._grant
         # the family the master asked for; without its header for this transmission, the
         # ordinary family, the shortest — it fits any slot the master may have granted
-        floor = grant.fam if grant is not None else False
-        if window_end is not None:
-            floor = self._ans_sticky
+        floor = grant.fam if grant is not None else self._ans_sticky
         if room_s is None:
             n = grant.n if grant is not None and not grant.flag else 0
             fs = self.frame_s(self.is_floor(min(self.send_rung, self.cap())))
@@ -682,13 +795,13 @@ class GsEngine(Core):
         ctl = Ctl(
             Kind.ANS,
             self.session,
-            xid=grant.xid if grant else 0,
+            xid=self._need_level,
             count=len(data),
             data_floor=bool(data) and self.is_floor(data[0].mode),
             fam=self.wants_floor(),
             flag=self._disc_requested,
             snr_db=self.heard_db,
-            rung=self.rate.recommend(),
+            rung=self.recommend(),
             n=min(7, self.queued_frames()),
             **self.ack_fields(),
         )

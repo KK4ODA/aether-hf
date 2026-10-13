@@ -136,6 +136,15 @@ def model_engine(
         max_burst_s=26.0,
         ack_margin_s=max(0.4, knobs[1] + 0.1),
     )
+    if name.endswith("_m0"):
+        # control frames on the floor only under the ordinary threshold itself (no margin)
+        cfg.answer_floor_margin_db = 0.0
+        name = name[: -len("_m0")]
+    if name.endswith("_lt"):
+        # the same link timeout as the prototypes derive (four of the longest exchanges): a
+        # parameter, not the architecture — for the outage comparison
+        cfg.link_timeout_s = 245.0
+        name = name[: -len("_lt")]
     if name == "legacy":
         engine: Any = LinkEngine(call, timing, cfg, seed=seed)
     elif name == "stated":
@@ -170,7 +179,7 @@ def builder(
     def make(trial: int) -> tuple[Any, Any, AdvSim]:
         seed = 1000 * trial + 17
         knobs = KNOBS[profile]
-        if arm in ("legacy", "stated", "stated6"):
+        if arm.removesuffix("_m0").removesuffix("_lt") in ("legacy", "stated", "stated6"):
             a = model_engine(arm, "A1AAA", timing, air, seed, knobs)
             b = model_engine(arm, "B2BBB", timing, air, seed + 1, knobs)
             belief = None
