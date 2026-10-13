@@ -1,0 +1,348 @@
+# Protocol 8: granted slots, as it will be built
+
+`04-formal-spec.md` specified granted slots for a session's data exchange. This document is
+the rest of the design: everything the daemon needs from a link engine today, decided before
+the model engine is written. It covers:
+
+* the frame formats, bit by bit;
+* the timing constants and formulas both stations compute alike;
+* connection, probes, ending, abort and the left session;
+* the Morse identifier;
+* the master's scheduling policy;
+* the engine's interface against `LinkEngine`'s.
+
+It is the brief for Step 1. When the model engine settles, the parts that are wire format go
+into `docs/spec/air-interface.md` §7 (generated tables where they are numbers).
+
+The rule from ADR-0069 §5 governs every choice here: **safety must not depend on anything a
+lost or late frame can change**, and a rule that moves a deadline on undecoded evidence is not
+allowed.
+
+## 1. Names
+
+* **Master** is the station whose call was accepted (the caller). **Slave** is the called
+  station. The roles are fixed for the session.
+* **Transmission** is everything one station radiates between key-up and key-down.
+* **E** is the end on the air of a transmission's last frame, as the receiver places it: the
+  end of a decoded frame, plus the count it states times the frame length of the stated
+  family (S1 in `04-formal-spec.md`).
+* **Slot** is the interval in which the slave may radiate (§3).
+* **Family** is ordinary (OFDM) or floor (tone).
+
+## 2. Constants
+
+These are protocol constants, the same at both ends. They are not configuration. A station
+slower than they assume asks for a gap level (§3.3).
+
+| Name | Value | What it covers |
+|---|---|---|
+| `D_ORD`, `D_FLOOR` | 0.30 s, 0.65 s | from a frame's end on the air to its decode reaching the engine (the floor's receiver settles later); **to be measured on the harness and HIL before freezing**, §11 |
+| `KEY` | 0.35 s | from the engine's decision to radiation: the daemon's lead (0.1 s) and the card (0.25 s) |
+| `GUARD` | 0.05 s | propagation (≤ 20 ms one way on HF), clock error over a transmission, rounding |
+| `SLACK` | 0.35 s | how late a slot may start on the air and still be used; the keying gate drops past it |
+| `LEVEL` | 0, 0.5, 1.0, 2.0 s | extra gap by level (§3.3) |
+| `MAX_DATA` | 6 | data frames in one transmission (also capped by the key limit) |
+| `WINDOW` | 16 | selective-repeat window (unchanged) |
+| `OPEN_WINDOW` | 4 s ordinary, 10 s floor | an idle link's open window, doubled once while idle |
+
+## 3. Timing
+
+### 3.1 The slave's slot
+
+After a master transmission ending at `E`, whose last frame is in family `f`, at gap level
+`L` (from the current header):
+
+```
+start(E) = E + max(D_f + KEY, T_master) + GUARD + LEVEL[L]
+end_max  = start + SLACK + grant
+grant    = ans(fam) + n · frame(slave rung)    or    window(index)
+```
+
+`T_master` is the master's declared turnaround (§4.3): its radio's VOX hold and receiver
+recovery. It is in the max because the slave needs `D_f + KEY` to decode and key, and the
+master needs `T_master` to hear again. Both must have passed.
+
+The slave arms its keying for `start − KEY`. Past `start − KEY + SLACK` it forfeits. Its
+keying gate refuses radiation that would begin after `start + SLACK`. This is the safety rule
+(S2), and it holds whatever held the transmission back.
+
+### 3.2 The master's next key
+
+After a decoded slave frame of the current slot stated its end `S`:
+
+```
+key ≥ S + max(D_f, T_slave − KEY) + GUARD
+```
+
+The master must have decoded the answer, and its radiation, `KEY` later, must not land in the
+slave's turnaround. If the master decoded nothing of the slot, it keys at
+`end_max + D_slowest + GUARD`, where `D_slowest` is the decode budget of the slowest family the
+answer may use. The master's own keying latency only delays its own transmission, because the
+slave anchors on `E` as it hears it. It never affects safety.
+
+### 3.3 Gap levels
+
+* **The slave asks for a level in every ANS.** It asks for the level its measured lateness
+  needs: decode lateness past `D_f`, plus its keying latency past `KEY`. It eases one level
+  after six on-time slots.
+* **The master grants `max(asked, silence level)`.** Two silent slots in a row raise the
+  silence level by one; four slots answered in time lower it by one.
+* **Calls step the level.** The acceptance slot's level rises every second try: capability
+  bits 3–4.
+
+### 3.4 Where the master's end is measured
+
+The master's engine places `E` at the end of the last *frame* on the air, not at key-down. Today
+the daemon calls `on_tx_done` at key-down, a tail later. Protocol 8 adds
+`on_tx_done(frames_end)`, with the end the daemon computes from the card's clock less the tail
+(§10). A later `E` would be safe (the slave's slot would start earlier than the master
+assumes), but it would waste the tail every exchange.
+
+## 4. Frames
+
+### 4.1 The control frame (CONTROL container, 7 bytes, 56 bits)
+
+| Bits | Field | HDR (master) | ANS (slave) | DISC / DISC_ACK |
+|---|---|---|---|---|
+| 2 | kind | 0 | 1 | 2 / 3 |
+| 7 | session | the session number's low 7 bits | same | same |
+| 3 | count | data frames after this header, exact (0–6) | data frames after this answer, exact | 0 |
+| 1 | data family | those frames are floor frames | same | — |
+| 2 | level | the gap level of this slot | the level this slave needs | the level of the DISC_ACK slot |
+| 1 | fam | the family the answer must use | the family the slave needs headers in | — |
+| 1 | flag | the slot is an open window | the slave asks to leave | — |
+| 1 | id | the slot includes the slave's identifier time | the slave's identifier is due | — |
+| 8 + 16 | base, bitmap | selective acknowledgement | selective acknowledgement | — |
+| 6 | snr | how this station hears the other: −31 … +31 dB, `0x20` unknown | same | same (ADR-0021) |
+| 5 | rung | rung recommended for the other's data | same | — |
+| 3 | n | frames granted, or the window index | frames queued, capped at 7 | — |
+
+Total 56 bits. The **SNR goes from 8 bits to 6**: a 3 kHz reading above +31 dB adds nothing a
+rate controller can use, and below −31 dB nothing decodes. That frees the identifier bit.
+**The session field is 7 bits.** Data frames keep their 8-bit session byte, so a foreign
+control frame is taken for this session's at most one time in 128. Even then it grants a slot
+the foreign master's own timing reserves, not this one's.
+
+### 4.2 Data frames
+
+The DATA container's header is unchanged: kind, flags, sequence, session, length. Each data
+frame states exactly how many frames of its transmission follow it, 0–3 (ADR-0068 §2.1): the
+OFDM chips' quarter turn, or the tone frame's middle sync block. A transmission of more than
+four data frames carries a header, so its end is known from the header (`count`) or from any
+of its last four frames.
+
+### 4.3 The connect body (CONNECT_REQ, CONNECT_ACK): 19 bytes
+
+| Bytes | Field |
+|---|---|
+| 0–6, 7–13 | source and destination callsigns (unchanged) |
+| 14 | capabilities: bit 0 compression; bits 1–2 bandwidth; **bits 3–4 the level of the acceptance slot** (a request) |
+| 15 | version: **8** |
+| 16 | SNR the request arrived at (an acceptance; unchanged) |
+| 17 | **timing**: bits 0–3 turnaround `T` in 0.1 s (0–1.5 s); bits 4–7 reserved, zero |
+| 18 | **identifier**: the sender's Morse identifier length in 0.5 s units, 0 for none |
+
+Nineteen bytes fit the robust mode of both families on both airs, with an explicit length:
+24-byte rung 0 on the floor, 25–26 bytes ordinary. A body shorter than 19 bytes is
+version 7 or older, and is refused with an `ignored` event naming the version, as today.
+
+### 4.4 The probe body (PROBE, PROBE_ACK): unchanged, 16 bytes
+
+The probe's capability byte gains bits 3–4, the level of the answer's slot, as a call's does.
+The answer goes in that slot or not at all.
+
+## 5. A session
+
+### 5.1 Connection
+
+* The caller sends CONNECT_REQ:
+  * tries alternate floor and ordinary, the floor first (ADR-0016);
+  * the level rises every second try;
+  * a try is repeated at `end_max(acceptance slot) + D_FLOOR + GUARD + jitter`, never earlier;
+  * the jitter is `uniform(0, (1 + tries) · floor frame)`.
+* The called station answers in the request's slot, or forfeits. **No acceptance goes late.**
+* The caller becomes master on reading the acceptance.
+* The master's first transmission:
+  * its first header goes in the family the acceptance's SNR asks for;
+  * the master's rung is `first_mode(snr)`;
+  * the first grant is two frames, so a gateway can greet.
+* **Simultaneous calls** (each calling the other): the station whose callsign sorts lower
+  yields and answers. This is today's rule.
+* **Called again** (ADR-0056): a call from the current peer under a new session number ends
+  the session, at either end, and is answered as from idle.
+* Version, bandwidth or callsign mismatches are `ignored` events, as today. The daemon's
+  mismatch banner reads them unchanged.
+
+### 5.2 The exchange
+
+This is `04-formal-spec.md` R1–R12. The master's policy for each transmission:
+
+1. **Own data:** up to `MAX_DATA` frames within the key limit (`set_max_burst_s`), at its rung.
+   This means retransmissions first, at the next RV, then new frames.
+2. **The grant:**
+   * if the slave said it has frames queued, `min(queued, MAX_DATA, fit)`, where `fit` is
+     what fits the key limit at the slave's recommended rung;
+   * otherwise an answer-only slot;
+   * an open window when neither side has anything (R12).
+
+   When the operator asks for a **break** (`request_break` at the slave), the slave's ANS sets
+   `n` to its queue and the master grants it in full before sending more of its own.
+3. **Header elision** (R7).
+
+The slave's transmission:
+
+* **What it sends:** an ANS, then up to `n` data frames at its own rung (the master's
+  recommendation, capped by the slave's ceiling and pinned rung).
+* **Content without a header:** if the master's header was not read, the slave takes level 0
+  and an answer-only slot, in the sticky family (R6). Its anchor `E` comes from the last four
+  frames' exact counts. With no anchor, it does not transmit.
+
+### 5.3 Ending
+
+* **A master's disconnect:**
+  * it waits until its own queue is acknowledged, or for patience:
+    `max(20 s, 2 exchanges)` without progress (ADR-0039);
+  * then it sends DISC, which grants a DISC_ACK slot;
+  * it ends on the DISC_ACK, or after three DISCs ("closed (no DISC_ACK)").
+* **A slave's disconnect:** it sets `flag` in its next ANS. The master then disconnects as
+  above, with the slave's queue counted too.
+* **Abort at the master:** it sends DISC at its next key opportunity (after the open slot's
+  `end_max`), on the floor, up to three times without waiting for an answer, then ends.
+* **Abort at the slave:** it sends DISC in its next granted slot, if one comes within the
+  daemon's wind-down, and ends either way. A slave never keys outside a slot, even to leave.
+  A master that hears nothing more ends by `max_retries` silent slots.
+* **The left session** (ADR-0052):
+  * a slave that left answers a header of its old session with DISC, in that header's slot;
+  * a master that left has nothing to answer, because the slave keys only in slots.
+
+  The left session is remembered for a link timeout, as today.
+* **Link timeout:** four exchanges of the size in use, not the longest possible. That is two
+  transmissions of the current grant sizes at the current rungs, plus control frames and gaps,
+  with a minimum of 45 s. It is re-reckoned at each header the slave reads. A slave that hears
+  nothing for it ends "link timeout".
+
+### 5.4 The Morse identifier
+
+The identifier never follows a frame whose end the other station anchors on.
+
+* **In a master transmission,** it goes ahead of the header, inside the master's own time.
+* **In a slave slot,** it goes ahead of the ANS, and only in a slot granted with `id`. The
+  slave says in its ANS that its identifier is due (`id`). The master grants the next slot with
+  the slave's declared identifier length (connect body byte 18) added. The slave's DISC_ACK slot
+  always includes it, which covers the closing identifier.
+* **The engine decides where an identifier goes; the daemon decides when one is due.**
+  * The daemon tells the engine (`set_identifier_due`).
+  * The engine marks the `Transmit` action that must carry it (`identifier: true`), and has
+    already counted its length in the transmission's air time.
+  * The daemon renders it first.
+
+This replaces ADR-0055's placement rules for sessions. Outside sessions (calls, probes,
+beacons), the daemon's rules stay.
+
+## 6. Outside a session
+
+* **Probes** (ADR-0006, ADR-0016, ADR-0035):
+  * a PROBE grants a PROBE_ACK slot, at the level in its capability bits;
+  * the answer goes in the slot or not at all;
+  * the prober waits to `end_max + D_FLOOR + GUARD`, then reports "no answer";
+  * probes across bandwidths are answered as today.
+* **Beacons and datagrams** are the daemon's, unchanged. The engine ignores `OUTSIDE_SESSIONS`
+  kinds.
+* **Carrier sense:** the daemon's `wait_for_clear` still holds calls, probes, beacons and
+  datagrams. Nothing inside a session waits for the channel: a slot is used or forfeited.
+
+## 7. Rate and family
+
+* **The receiver recommends the rung in every control frame, and the sender follows** it,
+  capped by `set_ceiling` (regulatory), `max_mode` and a pinned rung (the Test ladder).
+* **The family of control frames** comes from the peer's report:
+  * the floor unless the report clears the ordinary control threshold by
+    `answer_floor_margin_db` (3 dB);
+  * the floor after two silent slots;
+  * back to the report on the next slot heard.
+* **Silence steps the rate down.** A data slot heard silent steps the sender's rung down by
+  `silence_step` (2). Two silent slots step the recommended rung for the slave too.
+* **Unchanged from the model:**
+  * the re-seed from the floor's lower bound (ADR-0016);
+  * the trusted-failure rules (ADR-0020);
+  * the hopeless re-encode (ADR-0038);
+  * the RV sequence (ADR-0043).
+* **The Test ladder:**
+  * `pin_mode(rung, body_bytes)` pins this station's own data, at either end;
+  * `take_ladder` reports rungs as today;
+  * `top_acked_mode` is kept.
+
+## 8. The engine's interface
+
+The model engine is `aether_model.link.granted.GrantedEngine`, beside `LinkEngine`. The port
+mirrors it in Step 2, and the daemon switches to it there. The daemon's present uses of
+`LinkEngine`, with their fate:
+
+| Kept, same meaning | Changed | Dropped (no counterpart) |
+|---|---|---|
+| `connect_as`, `connect_tries`, `connect_due`, `move_call` (ADR-0058), `probe`, `probing`, `last_probe`, `send`, `disconnect`, `disconnect_requested`, `abort`, `tick`, `next_deadline`, `on_frame`, `drain`, `state`, `session`, `connected`, `callsigns`/`set_callsigns`, `peer_capabilities`, `peer_snr_db`, `ended_peer_snr_db`, `rate_readings`, `current_mode`, `robust_mode`, `timing`, `config`, `set_air`, `set_max_mode`, `set_ceiling`/`ceiling`, `set_max_burst_s`, `burst_capacity`, `pin_mode`, `take_ladder`, `top_acked_mode`, `tx_pending_bytes`, `tx_undelivered_bytes`, `all_acknowledged`, `reset_stats`, `stats`, `on_tx_delayed` | `on_tx_done(frames_end)` (§3.4); `role()` returns `Master`/`Slave`/`None`; `Transmit` gains `not_after` (the gate's bound, §3.1) and `identifier`; `request_break` (§5.2); `set_identifier_due` (new, §5.4); `on_preamble` changes nothing in a session (calls and probes keep it as carrier information for their own next try) | `set_chat` (open windows), `acknowledgement_at` (the follow-on heed, ADR-0040), the turn's state, `transmitting` as a turn notion |
+
+**Events kept:**
+
+* `connected` and `disconnected`, with the same details;
+* `probe`, `probed` and `ignored`, with the same texts, which the daemon parses.
+
+`role` events become `master`/`slave` once, at connection. `accepted` and `acks` have no
+counterpart.
+
+**Stats kept:** frames sent, resent, received, failed; HARQ rescues; bytes acked and
+delivered; probes. **New:** `silent_slots`, `forfeits` (decoded too late), `dropped` (the
+gate), `level` (the gap level in use). The turn's counters go.
+
+## 9. Step 1's tests
+
+These are model tests, strict, in `model/tests/test_granted.py`.
+
+* **I1, on the air.** `TwoStationSim` gains the review simulator's station model: keying lead
+  and jitter, decode latency with a tail, phantoms (some trusted), the gate's `not_after`, and
+  a record of radiated intervals. Every scenario of `research/link_arch/scenarios.py` and a
+  randomised sweep assert that no two radiated intervals overlap.
+* **I2–I4.** Exact once-only delivery under loss, late decodes and duplicates. An old ANS,
+  replayed, acknowledges nothing new.
+* **L1–L5:**
+  * every session either delivers or ends;
+  * a slow slave reaches level 2 and completes;
+  * a call reaches a slave that decodes 1.35 s late.
+* **The interface:** every method in §8's kept column, exercised. The Test ladder runs.
+* **Benches** (`bench_link.py`, `bench_chat.py`): against protocol 7 on the calibrated pipe,
+  every class, −6…+12 dB, both airs.
+  * The pipe charges no keying, so it measures the header and slot cost only.
+  * The criterion is field ×1.10 ± 0.05 on the review's simulator, which does charge keying,
+    and no completion lost on the pipe.
+
+## 10. What the daemon must do (Step 2)
+
+Listed here so the model's interface already fits:
+
+* **The gate.** Before keying, the daemon drops a `Transmit` whose `not_after` has passed,
+  after every hold (busy, answer gap, regulatory, CAT). It logs the drop and tells the engine
+  (`on_tx_dropped`).
+* **`on_tx_done(frames_end)`.** The end of the last frame on the air, from the card's clock
+  less the tail.
+* **The identifier, as §5.4:** the engine places it, and the daemon renders it first.
+* **The answer gap becomes the declared turnaround.** `[radio] turnaround_ms` is the operator's
+  radio. The learned per-station gap (ADR-0054) becomes the level a peer is granted. A
+  configuration schema step.
+* **No session transmission waits for the channel.** `channel_clear` already passes them. The
+  ADR-0022 holds on DISC and DISC_ACK go: a DISC_ACK goes in its slot.
+* **Removed from the daemon:**
+  * the follow-on heed (ADR-0040);
+  * `answers_burst`;
+  * `fragment_of_own_tx`'s role in the engine's input. The frames still go to the recording.
+* **`LINK_PROTOCOL` 8** in the shell.
+
+## 11. Measurements before the constants freeze
+
+Decode latency per family is what `D_ORD` and `D_FLOOR` stand for. It is measured on the
+instrumented harness, not assumed: the daemon's recording gives each frame's end and the moment
+it was reported. The latency is taken under load (`--jobs 2`), with a stall-free machine and
+with `80m-slow-machine-500`'s. The constants are set at the 99th percentile of a normal machine.
+Slower ones use levels.
+
+The same runs give the keying latency's distribution, from the tag's `waited_s` and the air
+start. `KEY` and `SLACK` are set from it, with CAT keying measured on hardware in Step 4.
