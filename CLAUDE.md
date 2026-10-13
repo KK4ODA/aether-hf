@@ -1480,15 +1480,24 @@ way: `"closed (no disc ack)"` is not the spelling `LEFT_UNHEARD` holds in `engin
 (`Action::Transmit.cause`, channel message type 5), the channel server splits overlaps into
 radiated/VOX/guard, `tools/air_account.py` names each radiated one; protocol 7 vs the ADR-0068
 build on the 43 scenarios, one draw each: radiated overlaps 23 vs 8 (the old counter said 29 vs 28).
-Owed for its gate: 10-seed distributions, air-time stepping, the decode-latency measurement that
-sets `D_ORD`/`D_FLOOR`. Step 1: **`aether_model.link.granted.GrantedEngine`** (frames:
+Measured for its gate (§1.3–1.4): decode latency ≤ 0.157 s for both families on both airs, so
+`D_ORD` = `D_FLOOR` = 0.30 s (`research/link_arch/latency.py`; the 0.65 s was the OFDM floor's);
+`KEY` stays 0.35 s and the port renders a slot's data frames ahead (render: four tone frames up
+to 0.18 s, invisible to the lockstep harness). Repeatability (`repeatability.py`): 8 of 12
+scenarios replay to the millisecond on one seed; the rest part where a runner step (a call, an
+abort, a host program's call, a Test's start — its bytes are seeded from the audio clock) lands a
+20 ms block apart, then drift like another seed. Air-time stepping is not built (in-band commands
+would be needed); the A/B judges distributions, and protocol 7's 10-seed baseline runs with it in
+Step 3. Step 1: **`aether_model.link.granted.GrantedEngine`** (frames:
 `GrantFrame`, the 19-byte protocol 8 `ConnectBody`, capability level bits) with the full daemon
 interface; `TwoStationSim` has the station model behind arguments (key lead, decode latency, rx
 recovery, phantoms, the gate's `not_after`, `radiated()`/`overlaps()`); `model/tests/test_granted.py`;
 the research arm `granted` (`granted_f<n>` sweeps `family_readings`); `bench_link.py --engine
 granted`. Gate passed on the review's simulator: 0 radiated overlaps in 5 040 sessions and 224
 adversarial ones, field ×1.093/×1.089/×1.036 of protocol 7 (bulk/exchange/chat), completion no
-lower in any cell; the zero-keying link bench ×1.16, 112/112 both airs. Building it found (07 §12):
+lower in any cell; the zero-keying link bench ×1.17/×1.16, 112/112 both airs.
+`answer_floor_margin_db` swept 0–3 dB (`granted_a<x>`): 3 dB stays (smaller margins win a steady
+channel at the boundary — the bench's 500 Hz AWGN −3 dB cell, ×1.69 — and lose on fading paths). Building it found (07 §12):
 a frame that does not decode counts only on its transmission's stated grid (phantoms had stepped
 the rate down the floor); the control family goes by the weakest of the last 3 readings (one
 peak reading had stalled asymmetric sessions); a floor-only slave says so in `data_floor` with no
