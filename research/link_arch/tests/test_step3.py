@@ -52,13 +52,41 @@ def test_an_overlap_of_two_initiations_is_left_out_and_any_other_counts() -> Non
     report = {
         "rf_overlaps": [[10.0, 10.5], [20.0, 20.2]],
         "stations": {
-            "a": {"transmissions": [_tx(9.0, "connect"), _tx(19.5, "timer:proceed")]},
-            "b": {"transmissions": [_tx(9.8, "beacon"), _tx(20.0, "connect")]},
+            "a": {
+                "radiated": [[9.1, 14.0], [19.6, 21.0]],
+                "transmissions": [_tx(9.0, "connect"), _tx(19.5, "timer:proceed")],
+            },
+            "b": {
+                "radiated": [[9.9, 10.5], [20.0, 25.0]],
+                "transmissions": [_tx(9.8, "beacon"), _tx(20.0, "connect")],
+            },
         },
     }
     counted, initiations, seconds = step3.overlaps(report)
     assert (counted, initiations) == (1, 1)
     assert abs(seconds - 0.2) < 1e-9
+
+
+def test_an_overlap_is_put_down_to_what_each_station_was_radiating() -> None:
+    # with three stations, the transmission a station began last may be over: here the gateway's
+    # answer ended before the client's call met the session's header, and only those two count
+    report = {
+        "rf_overlaps": [[143.51, 143.97]],
+        "stations": {
+            "client": {
+                "radiated": [[143.51, 143.965]],
+                "transmissions": [_tx(143.41, "timer:proceed")],
+            },
+            "gateway": {
+                "radiated": [[141.27, 142.78]],
+                "transmissions": [_tx(141.17, "frame")],
+            },
+            "caller": {"radiated": [[140.77, 146.15]], "transmissions": [_tx(140.67, "connect")]},
+        },
+    }
+    assert step3.radiating_at(report["stations"]["gateway"], 143.51) is None
+    counted, initiations, _ = step3.overlaps(report)
+    assert (counted, initiations) == (1, 0)
 
 
 def test_deaf_hits_count_unless_the_radio_breaks_s4_or_an_initiation_made_them() -> None:
