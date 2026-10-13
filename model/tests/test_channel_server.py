@@ -129,6 +129,22 @@ def test_a_vox_hold_leaves_its_station_deaf_after_the_audio_stops() -> None:
     assert on[0] * 0.01 >= b_air_end + 0.3 - 0.02, "b heard the start of the answer while held"
 
 
+def test_a_vox_radio_keys_on_the_audio_not_on_the_silence_around_it() -> None:
+    # a daemon hands over its keying lead and tail as silence; a VOX interface hears none of
+    # it, so it keys with the tone and its hold starts where the tone ends, as an operator's
+    # delay time counts — not 0.2 s later, after the silent tail
+    srv, a, b = server({"b": {"vox_hold_ms": 300}})
+    burst = np.concatenate((np.zeros(4800, np.float32), tone(0.5), np.zeros(9600, np.float32)))
+    # b's tone on the air 0.10 + 0.25 + 0.10 s after it was handed over, for 0.5 s: to 0.95 s;
+    # a's long tone from 1.01 s
+    run(srv, a, b, 3.0, {5: [("b", burst)], 38: [("a", tone(1.0, 1200))]})
+    start, end = srv.b.intervals[0]
+    assert abs(start - 0.45) < 0.01, f"keyed from {start:.3f} s: the silent lead keyed it"
+    assert abs(end - 0.95) < 0.01, f"keyed to {end:.3f} s: the silent tail kept it keyed"
+    heard = np.flatnonzero(envelope(b.heard) > 0.05)
+    assert abs(heard[0] * 0.01 - (0.95 + 0.3)) < 0.02, f"b heard again at {heard[0] * 0.01:.2f} s"
+
+
 def test_two_stations_keyed_at_once_are_counted_as_a_collision() -> None:
     srv, a, b = server({})
     run(srv, a, b, 2.0, {5: [("a", tone(0.5))], 20: [("b", tone(0.5))]})

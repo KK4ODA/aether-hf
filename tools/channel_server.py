@@ -22,8 +22,9 @@ The radios are modelled at both ends, from what the field recordings showed (ADR
   last — the daemon's own keyed lead and tail are in what it plays;
 * ``tx_delay_ms`` — the first part of each transmission never radiates (a transmitter, or an
   amplifier, still switching);
-* ``vox_hold_ms`` — the transmitter stays keyed that long after the audio stops (a
-  SignaLink's DLY): nothing radiates, and the station hears nothing;
+* ``vox_hold_ms`` — the radio is keyed by VOX: by the audio itself, so the daemon's silent
+  lead and tail key nothing, and it stays keyed that long after the audio stops (a SignaLink's
+  DLY): nothing radiates, and the station hears nothing;
 * ``rx_recovery_ms`` — the receiver delivers silence that long after the key comes up (a
   rig's T/R recovery, a codec unmuting);
 * while a station transmits, its receive audio is silence, as a transceiver's is;
@@ -573,6 +574,10 @@ class Server:
         signal; and when it is keyed only by its VOX's hold."""
         before = st.consumed
         played, real = st.take(TICK)
+        if st.vox_hold > 0:
+            # a VOX interface keys on audio: the daemon's silent lead and tail trip nothing, and
+            # its hold starts where the frames end — where an operator's delay time counts from
+            real = real & (np.abs(played) > 1e-9)
         # a tag goes on the air with the first sample it describes, a card's latency after it
         # is played
         while st.tags_waiting and st.tags_waiting[0][0] < st.consumed:
