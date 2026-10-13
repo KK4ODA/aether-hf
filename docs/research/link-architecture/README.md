@@ -121,7 +121,10 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    profile, completion no lower anywhere.
 9. [09-step-2.md](09-step-2.md): Step 2. The engine ported to `aether-link`, checked against
    the model input by input; the daemon runs it with the keying gate, the engine's account of
-   its own transmissions, and the Morse identifier where the engine puts it.
+   its own transmissions, and the Morse identifier where the engine puts it. Then (§3) the
+   radio's declared turnaround, configuration schema 12.
+10. [10-step-3.md](10-step-3.md): Step 3, the harness A/B. Its criteria, made exact and
+   committed before either arm ran (§1), then the runs and the verdict.
 
 ## Reproduction
 
