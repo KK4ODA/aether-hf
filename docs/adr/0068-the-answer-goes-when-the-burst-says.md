@@ -1,6 +1,8 @@
 # ADR-0068: The answer goes when the burst says, never when the receiver guesses
 
-**Status:** accepted for building, 2026-10-12. The author's answers: a protocol break is
+**Status:** superseded by ADR-0069 (2026-10-13), except §2.1: the exact counts stay, and
+everything else here — the answer at the stated time, the sender's slot, the answer's family,
+the turn it kept — gives way to granted slots. Before that: accepted for building, 2026-10-12. The author's answers: a protocol break is
 acceptable now; the count goes whichever way is the most robust with the least complexity; and
 field builds hold still until this is built and judged. It is link protocol 8, an "Update
 required" release (ADR-0041 §4). Model first behind a switch, then the port, judged on the link

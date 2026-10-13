@@ -72,5 +72,5 @@ context → decision → alternatives considered → consequences.
 | [0065](0065-a-phantom-starts-no-burst.md) | A phantom starts no burst, and a left session's DISC waits out what it hears arriving | accepted |
 | [0066](0066-a-session-starts-at-the-rung-the-call-measured.md) | A session starts at the rung the call measured, with what came with the call | accepted |
 | [0067](0067-an-unconfirmed-frames-end-block-is-its-own.md) | An unconfirmed tone frame's end block is still its own | accepted |
-| [0068](0068-the-answer-goes-when-the-burst-says.md) | The answer goes when the burst says, never when the receiver guesses | accepted for building |
-| [0069](0069-granted-slots.md) | Granted slots — one master per session; the other station keys only in a slot it was granted | proposed (draft, from the architecture review in `docs/research/link-architecture/`) |
+| [0068](0068-the-answer-goes-when-the-burst-says.md) | The answer goes when the burst says, never when the receiver guesses | superseded by 0069 except §2.1 (the exact counts) |
+| [0069](0069-granted-slots.md) | Granted slots — one master per session; the other station keys only in a slot it was granted | accepted for building (from the architecture review in `docs/research/link-architecture/`) |

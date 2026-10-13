@@ -1,10 +1,12 @@
 # ADR-0069: Granted slots — one master per session; the other station keys only in a slot it was granted
 
-**Status:** proposed (draft), 2026-10-13. Written after the architecture review in
-`docs/research/link-architecture/`. **Not accepted.** Nothing in the model, the port or the
-daemon implements it. If accepted, it supersedes ADR-0068's turn model (its §2.2–2.4) and keeps
-ADR-0068's exact counts (§2.1). It is judged on the harness and the air before any build
-reaches a tester (§5).
+**Status:** accepted for building, 2026-10-13. Written after the architecture review in
+`docs/research/link-architecture/`. The author's answers: granted slots is the direction, with
+ADR-0068 kept only for its exact frame counts (§2.1); the cost against protocol 7 (about 10 %
+of completion time, 9–13 % of bulk goodput at high SNR) is the price of no collisions; and
+nothing ships before it — it is built the best way possible, not the fastest. It supersedes
+ADR-0068's turn model and answer timing (its §2.2–2.4). It is built in the gated steps of §5, and
+judged on the harness and the air before any build reaches a tester.
 
 ## 1. Context
 
