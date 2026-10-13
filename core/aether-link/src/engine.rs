@@ -419,10 +419,14 @@ const SELF_DECODABLE_RVS: [u8; 2] = [0, 3];
 const RV_SEQUENCE: [u8; 4] = [0, 0, 2, 3];
 
 /// How a session ends without the other station's word that it is over: frames of it heard
-/// afterwards are answered with a DISC (ADR-0052).
+/// afterwards are answered with a DISC (ADR-0052). Each is the reason `end_session` is
+/// given, letter for letter, and the session history's `end`
+/// (`docs/spec/control-api.md`): this list read `closed (no DISC_ACK)` while the engine ended
+/// sessions `closed (no disc ack)`, so a station whose DISCs all went unanswered was never
+/// taken to have left.
 const LEFT_UNHEARD: [&str; 4] = [
     "aborted",
-    "closed (no DISC_ACK)",
+    "closed (no disc ack)",
     "no response",
     "link timeout",
 ];
@@ -5253,6 +5257,70 @@ mod tests {
         e.on_preamble(t_start, t_start + 0.2, None);
         let longest = e.timing.data_frame_s_for(0);
         assert!(e.deadline_of(Timer::Wait).expect("armed") >= t_start + longest);
+    }
+
+    /// Whether each frame the engine has put on the air since it was last asked — every one a
+    /// DISC of session 7 — went on the floor.
+    fn discs_of_session_7(e: &mut LinkEngine) -> Vec<bool> {
+        transmitted(e)
+            .iter()
+            .map(|f| {
+                let control = ControlFrame::decode(&f.payload).expect("a control frame");
+                assert_eq!((control.kind, control.session), (ControlKind::Disc, 7));
+                f.floor
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_station_whose_discs_go_unanswered_has_left() {
+        // ADR-0052: a sender whose every DISC went unanswered ends the session without the
+        // other station's word that it is over — the other may have heard none of them, and
+        // be in the session still. Frames of it heard afterwards are answered with a DISC: a
+        // control frame at once, in its own family, a burst once it has ended, on the floor.
+        // `LEFT_UNHEARD` read `closed (no DISC_ACK)` while the session ended `closed (no disc
+        // ack)`, and such a station answered nothing
+        let mut e = engine(wide());
+        e.role = Role::Iss;
+        e.state = State::Connected;
+        e.session = 7;
+        e.now = 100.0;
+        e.disconnect();
+        assert_eq!(e.state, State::Disconnecting);
+        for _ in 0..e.config.disc_retries {
+            let end = e.tx_busy_until;
+            e.on_tx_done(end);
+            let due = e.deadline_of(Timer::Wait).expect("waiting for the DISC_ACK");
+            e.tick(due + 0.01);
+        }
+        assert_eq!(e.state, State::Idle);
+        let ended: Vec<String> = e
+            .drain()
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Event {
+                    name: "disconnected",
+                    detail,
+                } => Some(detail),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ended, ["closed (no disc ack)"]);
+        // the other station polls: answered at once, in the poll's family
+        let t = e.now + 2.0;
+        e.on_frame(&Readable::new(ControlKind::Poll, false, 0, 0, t), t);
+        assert_eq!(discs_of_session_7(&mut e), [false]);
+        assert_eq!(e.stats.left_answered, 1);
+        // it sends a burst: answered once the burst has ended, on the floor
+        let frame = Stated::new(&e, ordinary(&e), 0, t + 1.0, None);
+        let t_end = frame.t_end;
+        e.on_frame(&frame, t_end);
+        let early = discs_of_session_7(&mut e);
+        assert!(early.is_empty(), "answered inside the burst: {early:?}");
+        let due = e.deadline_of(Timer::Leave).expect("a DISC owed");
+        e.tick(due + 0.01);
+        assert_eq!(discs_of_session_7(&mut e), [true]);
+        assert_eq!(e.stats.left_answered, 2);
     }
 
     // ── an answer to a frame that was not read (ADR-0034) ─────────────
