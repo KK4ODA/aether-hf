@@ -282,6 +282,7 @@ impl Replay<'_> {
                     duration_s,
                     cause,
                     not_after,
+                    not_before,
                     identifier_s,
                 } => w.get("transmit").is_some_and(|wf| {
                     let wf = wf.as_array().expect("frames");
@@ -293,6 +294,7 @@ impl Replay<'_> {
                         && close(*duration_s, num(&w["duration_s"]))
                         && *cause == w["cause"].as_str().expect("cause")
                         && close_opt(*not_after, opt(&w["not_after"]))
+                        && close_opt(*not_before, opt(&w["not_before"]))
                         && close(*identifier_s, num(&w["identifier_s"]))
                 }),
                 Action::Deliver(data) => w.get("deliver").is_some_and(|b| *data == self.blob(b)),

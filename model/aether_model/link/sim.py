@@ -304,6 +304,11 @@ class TwoStationSim:
     def _launch(self, who: int, at: float, tx: Transmit) -> None:
         st = self.st[who]
         lead = self.key_lead(who) if self.key_lead is not None else 0.0
+        # an answer decided ahead of its slot is keyed to radiate at the slot's start: the
+        # station keys its own latency before it, and radiates a lead after it keys
+        not_before = getattr(tx, "not_before", None)
+        if not_before is not None:
+            at = max(at, not_before - st.engine.timing.tx_latency_s)
         t = max(at + lead, st.tx_end)
         not_after = getattr(tx, "not_after", None)
         if not_after is not None and t > not_after + 1e-9:

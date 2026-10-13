@@ -549,6 +549,28 @@ impl Answer {
     }
 }
 
+/// When a transmission may radiate, and what goes ahead of its frames.
+#[derive(Debug, Clone, Copy, Default)]
+struct Keying {
+    /// The latest its radiation may start (the keying gate's limit).
+    not_after: Option<f64>,
+    /// The earliest (the start of the slot it answers in).
+    not_before: Option<f64>,
+    /// The identifier ahead of the frames.
+    identifier_s: f64,
+}
+
+impl Keying {
+    /// An answer in its slot.
+    const fn answering(answer: &Answer, identifier_s: f64) -> Self {
+        Self {
+            not_after: Some(answer.not_after),
+            not_before: Some(answer.start),
+            identifier_s,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Timer {
     Link,
@@ -1720,26 +1742,25 @@ impl GrantedEngine {
 
     /// Hand a transmission over; returns where its frames end on the air, as far as this engine
     /// knows.
-    fn transmit(
-        &mut self,
-        frames: Vec<TxFrame>,
-        not_after: Option<f64>,
-        identifier_s: f64,
-        granting: Option<u64>,
-    ) -> f64 {
+    fn transmit(&mut self, frames: Vec<TxFrame>, keying: Keying, granting: Option<u64>) -> f64 {
         // the frames' air time first, then the identifier: the model's association
         let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
-        let dur = identifier_s + frames_s;
+        let dur = keying.identifier_s + frames_s;
         self.actions.push(Action::Transmit {
             frames,
             duration_s: dur,
             cause: self.cause,
-            not_after,
-            identifier_s,
+            not_after: keying.not_after,
+            not_before: keying.not_before,
+            identifier_s: keying.identifier_s,
         });
         self.in_flight.push_back(granting);
         self.stats.transmissions += 1;
-        self.now + self.own_latency() + dur
+        let mut on_air = self.now + self.own_latency();
+        if let Some(earliest) = keying.not_before {
+            on_air = on_air.max(earliest);
+        }
+        on_air + dur
     }
 
     fn control(ctl: &GrantFrame, floor: bool) -> TxFrame {
@@ -1772,7 +1793,11 @@ impl GrantedEngine {
         slot.id = self.next_slot_id;
         let id = slot.id;
         self.slot = Some(slot);
-        let end = self.transmit(frames, None, identifier_s, Some(id));
+        let keying = Keying {
+            identifier_s,
+            ..Keying::default()
+        };
+        let end = self.transmit(frames, keying, Some(id));
         self.open_slot(end);
     }
 
@@ -2697,20 +2722,20 @@ impl GrantedEngine {
             return;
         }
         let index = self.take_data(soft, frame);
-        if index.is_none_or(|i| self.rx[i].payload.is_none()) {
-            return;
+        if index.is_some_and(|i| self.rx[i].payload.is_some()) {
+            self.heard(frame);
+            self.measure(frame);
+            if self.m_end.is_none()
+                && let Some(follows) = frame.follows
+                && follows < MAX_FOLLOWS
+            {
+                // the header was not read: the transmission's end is the one this frame states
+                self.m_end = Some(frame.t_end + f64::from(follows) * (frame.t_end - frame.t_start));
+                self.m_last_floor = self.timing.is_floor(frame.mode);
+                self.schedule_slave();
+            }
         }
-        self.heard(frame);
-        self.measure(frame);
-        if self.m_end.is_none()
-            && let Some(follows) = frame.follows
-            && follows < MAX_FOLLOWS
-        {
-            // the header was not read: the transmission's end is the one this frame states
-            self.m_end = Some(frame.t_end + f64::from(follows) * (frame.t_end - frame.t_start));
-            self.m_last_floor = self.timing.is_floor(frame.mode);
-            self.schedule_slave();
-        }
+        self.decide_if_final();
     }
 
     /// How late this station's receiver reported a frame of the other's, and how late its
@@ -2798,6 +2823,33 @@ impl GrantedEngine {
         let at = self.now.max(answer.start - self.own_latency());
         self.answer = Some(answer);
         self.deadlines.set(Timer::Answer, at);
+        self.decide_if_final();
+    }
+
+    /// Decide an owed answer as soon as what it says is final, not at the last moment: it
+    /// radiates at its slot's start all the same (`not_before`), and the daemon renders it
+    /// meanwhile — four tone frames take up to 0.18 s to render, more under load, which the
+    /// keying latency the slot allows has no room for (07-protocol-8.md §10). An answer to a
+    /// call, a probe or a DISC is final at once; a slot's answer once every data frame its
+    /// header stated has been reported, decoded or not. Without the header, or with a frame
+    /// never reported, it is decided at the last moment, as it always was.
+    fn decide_if_final(&mut self) {
+        let Some(what) = self.answer.as_ref().map(|a| a.what) else {
+            return;
+        };
+        if what == AnswerKind::Window || (what == AnswerKind::Ans && !self.heard_all()) {
+            return;
+        }
+        self.deadlines.remove(Timer::Answer);
+        self.key_answer();
+    }
+
+    /// Every data frame the header being answered stated has been reported.
+    fn heard_all(&self) -> bool {
+        let (Some((_, count, _)), Some(_)) = (self.grid, self.grant) else {
+            return false;
+        };
+        (0..count).all(|k| self.rx.iter().any(|r| r.slot == k))
     }
 
     /// A transmission of the master's this station will not answer: what it heard of it is
@@ -2832,13 +2884,12 @@ impl GrantedEngine {
             AnswerKind::Disc | AnswerKind::DiscAck => self.send_disc_answer(&answer),
             AnswerKind::Ans if self.state == State::Connected && self.role == Role::Slave => {
                 self.answered_end = Some(answer.anchor);
-                self.send_answer(
-                    answer.floor,
-                    answer.room_s,
-                    Some(answer.not_after),
-                    answer.ident,
-                    None,
-                );
+                let keying = Keying {
+                    not_after: Some(answer.not_after),
+                    not_before: Some(answer.start),
+                    identifier_s: 0.0,
+                };
+                self.send_answer(answer.floor, answer.room_s, keying, answer.ident, None);
             }
             _ => {}
         }
@@ -2870,14 +2921,14 @@ impl GrantedEngine {
         }
         self.window = None;
         self.answered_end = self.m_end;
-        self.send_answer(floor, room, None, ident, Some(end));
+        self.send_answer(floor, room, Keying::default(), ident, Some(end));
     }
 
     fn send_answer(
         &mut self,
         floor: bool,
         room_s: f64,
-        not_after: Option<f64>,
+        keying: Keying,
         ident: bool,
         window_end: Option<f64>,
     ) {
@@ -2923,12 +2974,15 @@ impl GrantedEngine {
         };
         let mut frames = vec![Self::control(&ctl, floor)];
         frames.extend(data);
-        let mut not_after = not_after;
+        let mut keying = Keying {
+            identifier_s: ident_s,
+            ..keying
+        };
         if let Some(window_end) = window_end {
             let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
-            not_after = Some(window_end - (ident_s + frames_s));
+            keying.not_after = Some(window_end - (ident_s + frames_s));
         }
-        self.transmit(frames, not_after, ident_s, None);
+        self.transmit(frames, keying, None);
     }
 
     /// Whether this station's data can go only on the tone floor: its ceiling, or the rung it is
@@ -2973,8 +3027,7 @@ impl GrantedEngine {
         };
         self.transmit(
             vec![Self::data_frame(payload, mode)],
-            Some(answer.not_after),
-            0.0,
+            Keying::answering(answer, 0.0),
             None,
         );
     }
@@ -3001,8 +3054,7 @@ impl GrantedEngine {
         };
         self.transmit(
             vec![Self::data_frame(payload, mode)],
-            Some(answer.not_after),
-            0.0,
+            Keying::answering(answer, 0.0),
             None,
         );
     }
@@ -3025,8 +3077,7 @@ impl GrantedEngine {
         }
         self.transmit(
             vec![Self::control(&ctl, answer.floor)],
-            Some(answer.not_after),
-            ident_s,
+            Keying::answering(answer, ident_s),
             None,
         );
     }

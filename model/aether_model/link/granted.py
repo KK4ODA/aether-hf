@@ -167,6 +167,12 @@ class SlotTransmit(Transmit):
     makes on its own initiative. Past it the transmission is not sent at all (the forfeit rule,
     ADR-0069 §2.3), whatever held it, and the engine is told
     (:meth:`GrantedEngine.on_tx_dropped`)."""
+    not_before: float | None = None
+    """The earliest its radiation may start, on the air's clock: the start of the slot it is
+    the answer in. An answer is decided as soon as what it says is final — typically a decode's
+    worth after the transmission it answers, where the slot starts the whole decode budget and
+    keying latency after — so the daemon renders it in the meantime and keys it to start
+    radiating here (07-protocol-8.md §10). ``None``: as soon as it can."""
     identifier_s: float = 0.0
     """The station's Morse identifier goes first, this long, ahead of the frames: inside the
     master's own time, or inside a slot granted with its time (07-protocol-8.md §5.4). Already
@@ -1042,6 +1048,7 @@ class GrantedEngine:
         frames: list[TxFrame],
         *,
         not_after: float | None = None,
+        not_before: float | None = None,
         identifier_s: float = 0.0,
         granting: _Slot | None = None,
     ) -> float:
@@ -1050,12 +1057,20 @@ class GrantedEngine:
         dur = identifier_s + sum(self.timing.frame_s(f) for f in frames)
         self.actions.append(
             SlotTransmit(
-                frames, dur, not_after=not_after, identifier_s=identifier_s, cause=self._cause
+                frames,
+                dur,
+                not_after=not_after,
+                not_before=not_before,
+                identifier_s=identifier_s,
+                cause=self._cause,
             )
         )
         self._in_flight.append(granting)
         self.stats.transmissions += 1
-        return self.now + self._own_latency() + dur
+        on_air = self.now + self._own_latency()
+        if not_before is not None:
+            on_air = max(on_air, not_before)
+        return on_air + dur
 
     def _control(self, ctl: GrantFrame, floor: bool) -> TxFrame:
         return TxFrame(Container.CONTROL, ctl.encode(), floor=floor)
@@ -1760,15 +1775,15 @@ class GrantedEngine:
                     self._accept(_RxRecord(frame, 0), payload)
             return
         rec = self._take_data(frame)
-        if rec.payload is None:
-            return
-        self._heard(frame)
-        self._measure(frame)
-        if self._m_end is None and frame.follows is not None and frame.follows < MAX_FOLLOWS:
-            # the header was not read: the transmission's end is the one this frame states
-            self._m_end = frame.t_end + frame.follows * (frame.t_end - frame.t_start)
-            self._m_last_floor = self.timing.is_floor(frame.mode)
-            self._schedule_slave()
+        if rec.payload is not None:
+            self._heard(frame)
+            self._measure(frame)
+            if self._m_end is None and frame.follows is not None and frame.follows < MAX_FOLLOWS:
+                # the header was not read: the transmission's end is the one this frame states
+                self._m_end = frame.t_end + frame.follows * (frame.t_end - frame.t_start)
+                self._m_last_floor = self.timing.is_floor(frame.mode)
+                self._schedule_slave()
+        self._decide_if_final()
 
     def _measure(self, frame: SoftFrame) -> None:
         """How late this station's receiver reported a frame of the other's, and how late its
@@ -1836,6 +1851,31 @@ class GrantedEngine:
             return
         self._answer = answer
         self._arm_at("answer", max(self.now, answer.start - self._own_latency()))
+        self._decide_if_final()
+
+    def _decide_if_final(self) -> None:
+        """Decide an owed answer as soon as what it says is final, not at the last moment: it
+        radiates at its slot's start all the same (``not_before``), and the daemon renders it
+        meanwhile — four tone frames take up to 0.18 s to render, more under load, which the
+        keying latency the slot allows has no room for (07-protocol-8.md §10). An answer to a
+        call, a probe or a DISC is final at once; a slot's answer once every data frame its
+        header stated has been reported, decoded or not. Without the header, or with a frame
+        never reported, it is decided at the last moment, as it always was."""
+        answer = self._answer
+        if answer is None or answer.what == "window":
+            return
+        if answer.what == "ans" and not self._heard_all():
+            return
+        self._disarm("answer")
+        self._key_answer()
+
+    def _heard_all(self) -> bool:
+        """Every data frame the header being answered stated has been reported."""
+        if self._grid is None or self._grant is None:
+            return False
+        _, count, _ = self._grid
+        slots = {r.slot for r in self._rx}
+        return all(k in slots for k in range(count))
 
     def _forfeit(self, anchor: float) -> None:
         """A transmission of the master's this station will not answer: what it heard of it is
@@ -1865,7 +1905,9 @@ class GrantedEngine:
             self._send_disc_answer(answer)
         elif answer.what == "ans" and self.state is State.CONNECTED and self.role is Role.SLAVE:
             self._answered_end = answer.anchor
-            self._send_answer(answer.floor, answer.room_s, answer.not_after, answer.ident)
+            self._send_answer(
+                answer.floor, answer.room_s, answer.not_after, answer.ident, not_before=answer.start
+            )
 
     def _try_window(self) -> None:
         """Inside an open window: speak now if there is something to say, ending inside it."""
@@ -1895,6 +1937,7 @@ class GrantedEngine:
         ident: bool,
         *,
         window_end: float | None = None,
+        not_before: float | None = None,
     ) -> None:
         snr = self._observe(self._rx) if self._rx else None
         self._restart_rx()
@@ -1924,7 +1967,7 @@ class GrantedEngine:
         if window_end is not None:
             dur = ident_s + sum(self.timing.frame_s(f) for f in frames)
             not_after = window_end - dur
-        self._transmit(frames, not_after=not_after, identifier_s=ident_s)
+        self._transmit(frames, not_after=not_after, not_before=not_before, identifier_s=ident_s)
 
     def _data_floor_only(self) -> bool:
         """Whether this station's data can go only on the tone floor: its ceiling, or the rung
@@ -1953,7 +1996,9 @@ class GrantedEngine:
             DataHeader(DataKind.CONNECT_ACK, 0, self.session), body, self.timing.capacity(mode)
         )
         self._transmit(
-            [TxFrame(Container.DATA, payload, mode=mode, rv=0)], not_after=answer.not_after
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)],
+            not_after=answer.not_after,
+            not_before=answer.start,
         )
 
     def _send_probe_answer(self, answer: _Answer) -> None:
@@ -1967,7 +2012,9 @@ class GrantedEngine:
             DataHeader(DataKind.PROBE_ACK, 0, 0), body, self.timing.capacity(mode)
         )
         self._transmit(
-            [TxFrame(Container.DATA, payload, mode=mode, rv=0)], not_after=answer.not_after
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)],
+            not_after=answer.not_after,
+            not_before=answer.start,
         )
 
     def _send_disc_answer(self, answer: _Answer) -> None:
@@ -1980,7 +2027,10 @@ class GrantedEngine:
         if kind is GrantKind.DISC:
             self.stats.left_answered += 1
         self._transmit(
-            [self._control(ctl, answer.floor)], not_after=answer.not_after, identifier_s=ident_s
+            [self._control(ctl, answer.floor)],
+            not_after=answer.not_after,
+            not_before=answer.start,
+            identifier_s=ident_s,
         )
 
     def _answer_disc(self, ctl: GrantFrame, frame: SoftFrame, kind: GrantKind) -> None:

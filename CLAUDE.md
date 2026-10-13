@@ -1511,7 +1511,11 @@ action and, after every input, state/role/session/level/rung/queues/deadline/cou
 bugs in the port were caught, and where one survived a session was added for it. Model changes
 before the port: the link timeout re-checked on expiry against the exchanges in use (found by
 the new draws on the ack-lost scenario), and a transmission split evenly between two rungs is
-judged at the slower (Python's set order is not portable). **Next: the daemon (the gate,
+judged at the slower (Python's set order is not portable); and **render-ahead** — an answer
+is decided as soon as what it says is final (every frame its header stated reported) and handed
+over with `Action::Transmit::not_before`, its slot's start, so the daemon renders it in the
+~0.2 s the decode budget leaves and keys it to radiate there (campaign: 0 overlaps, field ×1.084,
+hostile 1.5–3.5 % faster). **Next: the daemon (the gate,
 `frames_end`, the identifier, the turnaround setting, render-ahead, `LINK_PROTOCOL` 8).**
 
 **Never run an installer or the packaged app from a Claude session on the author's

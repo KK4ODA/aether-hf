@@ -262,6 +262,11 @@ pub enum Action {
         /// ([`GrantedEngine::on_tx_dropped`](crate::GrantedEngine::on_tx_dropped)). Protocol
         /// 7's engine sets none.
         not_after: Option<f64>,
+        /// The earliest its radiation may start, on the air's clock: the start of the slot it
+        /// is the answer in. Protocol 8 decides an answer as soon as what it says is final, so
+        /// the daemon renders it while the slot has yet to start and keys it to radiate here
+        /// (07-protocol-8.md §10); `None`, as soon as it can. Protocol 7's engine sets none.
+        not_before: Option<f64>,
         /// The station's Morse identifier goes first, this long, ahead of the frames: the
         /// engine of protocol 8 places it (07-protocol-8.md §5.4). Counted in `duration_s`.
         identifier_s: f64,
@@ -1490,6 +1495,7 @@ impl LinkEngine {
             duration_s,
             cause: self.cause,
             not_after: None,
+            not_before: None,
             identifier_s: 0.0,
         });
         // The link timeout spans four exchanges at the family the link runs in, and was
