@@ -73,6 +73,18 @@ PROFILES: dict[str, StationCfg] = {
         phantom_per_min=1.0,
         phantom_trusted=0.05,
     ),
+    "hostile-c": StationCfg(
+        lead_jitter_s=0.6,
+        vox_hold_s=0.15,
+        rx_recovery_s=0.15,
+        decode_latency_s=0.15,
+        latency_tail_s=0.2,
+        floor_latency_s=0.5,
+        stall_prob=0.02,
+        stall_s=(0.5, 4.0),
+        phantom_per_min=4.0,
+        phantom_trusted=0.1,
+    ),
     "hostile": StationCfg(
         lead_jitter_s=0.6,
         gate_prob=0.15,
@@ -91,10 +103,39 @@ PROFILES: dict[str, StationCfg] = {
 }
 
 
-def model_engine(name: str, call: str, timing: PhyTiming, air: AirInterface, seed: int) -> Any:
+KNOBS: dict[str, tuple[float, float, float, float]] = {
+    "ideal": (0.0, 0.3, 0.15, 0.3),
+    "field": (0.05, 0.35, 0.3, 0.65),
+    "hostile": (0.3, 0.65, 0.6, 1.1),
+    "hostile-c": (0.3, 0.65, 0.6, 1.1),
+}
+"""What every engine is told about the stations, per profile: (extra turnaround — the peer's
+VOX hold and receiver recovery, which a station must wait out before keying —; slack — the
+keying-time jitter its waits must absorb —; decode budget for an ordinary and a floor frame —
+how long after a frame ends its decode is surely in). The same figures go to every arm: the
+model's engine gets them as ``PhyTiming.turnaround_s``, ``LinkConfig.ack_margin_s`` and
+``PhyTiming.detect_latency_s`` (it has one latency for both families: the ordinary one), the
+prototypes as their gap, slack and decode budgets. The hostile daemon's holds and answer gap
+are *not* in them: they are what that profile breaks."""
+
+
+def model_engine(
+    name: str,
+    call: str,
+    timing: PhyTiming,
+    air: AirInterface,
+    seed: int,
+    knobs: tuple[float, ...] = (0.0, 0.3, 0.15, 0.3),
+) -> Any:
     """The model's engine as each arm configures it."""
     caps = bandwidth_capabilities(air.params)
-    cfg = LinkConfig(max_mode=air.n_rungs - 1, capabilities=caps, max_burst_s=26.0)
+    timing = replace(timing, turnaround_s=timing.turnaround_s + knobs[0], detect_latency_s=knobs[2])
+    cfg = LinkConfig(
+        max_mode=air.n_rungs - 1,
+        capabilities=caps,
+        max_burst_s=26.0,
+        ack_margin_s=max(0.4, knobs[1] + 0.1),
+    )
     if name == "legacy":
         engine: Any = LinkEngine(call, timing, cfg, seed=seed)
     elif name == "stated":
@@ -128,14 +169,15 @@ def builder(
 
     def make(trial: int) -> tuple[Any, Any, AdvSim]:
         seed = 1000 * trial + 17
+        knobs = KNOBS[profile]
         if arm in ("legacy", "stated", "stated6"):
-            a = model_engine(arm, "A1AAA", timing, air, seed)
-            b = model_engine(arm, "B2BBB", timing, air, seed + 1)
+            a = model_engine(arm, "A1AAA", timing, air, seed, knobs)
+            b = model_engine(arm, "B2BBB", timing, air, seed + 1, knobs)
             belief = None
         else:
             from research.link_arch.engines import build
 
-            a, b, belief = build(arm, timing, air, seed)
+            a, b, belief = build(arm, timing, air, seed, knobs)
         ca = replace(PROFILES[profile], carrier_sense=carrier_sense)
         cb = replace(PROFILES[profile_b or profile], carrier_sense=carrier_sense)
         ch = ChannelCfg(
