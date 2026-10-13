@@ -310,10 +310,6 @@ modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path,
 against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
 
 RV_SEQUENCE = (0, 0, 2, 3)
-
-LEFT_UNHEARD = frozenset({"aborted", "closed (no DISC_ACK)", "no response", "link timeout"})
-"""How a session ends without the other station's word that it is over: frames of it heard
-afterwards are answered with a DISC (ADR-0052)."""
 """The redundancy version of a frame's first, second, third and fourth transmission under one
 codeword, then round again (ADR-0043). On HF a retransmission is as often of a frame the
 receiver never detected — a fade, a collision, a burst's faded end — as of one it detected and
@@ -323,6 +319,13 @@ then adds the parity neither RV 0 carries, and RV 3 the systematic bits with the
 outermost parity. The order was 0, 1, 2, 3, under which a frame whose first copy was missed
 could not decode until its fourth: RV 1 and RV 2 decode alone at no SNR, and RV 3 not at all on
 the 36 bit/s tone rung (85 s of tone frames at +5 dB on a 500 Hz path, the scenario harness)."""
+
+LEFT_UNHEARD = frozenset({"aborted", "closed (no disc ack)", "no response", "link timeout"})
+"""How a session ends without the other station's word that it is over: frames of it heard
+afterwards are answered with a DISC (ADR-0052). Each is the reason ``_end_session`` is given,
+letter for letter, and the session history's ``end`` (``docs/spec/control-api.md``): the port
+listed ``closed (no DISC_ACK)`` and ended sessions ``closed (no disc ack)``, so a station whose
+DISCs all went unanswered was never taken to have left."""
 
 
 @dataclass
@@ -1339,7 +1342,7 @@ class LinkEngine:
         what, self._waiting_for = self._waiting_for, None
         if self.state is State.DISCONNECTING or what == "disc":
             if self._disc_tries >= self.cfg.disc_retries:
-                self._end_session("closed (no DISC_ACK)")
+                self._end_session("closed (no disc ack)")
             else:
                 self._send_disc()
             return

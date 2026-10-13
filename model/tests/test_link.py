@@ -3812,6 +3812,49 @@ def test_a_station_that_left_answers_its_old_session_with_a_disc(timing: PhyTimi
     assert sim.t - started < b._link_timeout()
 
 
+def test_a_station_whose_discs_go_unanswered_has_left(timing: PhyTiming) -> None:
+    """ADR-0052. A sender whose every DISC went unanswered ends the session without the other
+    station's word that it is over: the other station may have heard none of them, and is
+    still in the session. Frames of it heard afterwards are answered with a DISC — a control
+    frame at once, in the family it was heard in, a burst once it has ended, on the floor. The
+    port listed the reason as ``closed (no DISC_ACK)`` and ended the session ``closed (no disc
+    ack)``, and so never took such a session for left."""
+    a = LinkEngine("W4ODA", timing, LinkConfig())
+    a.role, a.state, a.session, a.now = Role.ISS, State.CONNECTED, 7, 100.0
+    a.disconnect()
+    assert a.state is State.DISCONNECTING
+    for _ in range(a.cfg.disc_retries):
+        a.on_tx_done(a._tx_busy_until)
+        a.tick(a._deadlines["wait"] + 0.01)
+    assert a.state is State.IDLE
+    ended = [x.detail for x in a.actions if isinstance(x, Event) and x.name == "disconnected"]
+    assert ended == ["closed (no disc ack)"]
+    a.actions.clear()
+
+    def discs() -> list[bool]:
+        """Whether each DISC of session 7 sent since last asked went on the floor."""
+        sent = [f for x in a.drain() if isinstance(x, Transmit) for f in x.frames]
+        assert all(ControlFrame.decode(f.payload).kind is ControlKind.DISC for f in sent)
+        assert all(ControlFrame.decode(f.payload).session == 7 for f in sent)
+        return [f.floor for f in sent]
+
+    # the other station polls: answered at once, in the poll's family
+    t = a.now + 2.0
+    a.on_frame(_control_frame(ControlKind.POLL, 7, t), t)
+    assert discs() == [False]
+    assert a.stats.left_answered == 1
+    # it sends a burst: answered once the burst has ended, on the floor
+    mode = timing.floor_modes + 2
+    t_start = t + 1.0
+    t_end = t_start + timing.data_frame_s_for(mode)
+    payload = encode_data(DataHeader(DataKind.DATA, 0, 7), b"still here", timing.capacity(mode))
+    a.on_frame(SimFrame(Container.DATA, mode, 0, 20.0, t_start, t_end, payload, 0.0), t_end)
+    assert not discs(), "answered inside the burst"
+    a.tick(a._deadlines["leave"] + 0.01)
+    assert discs() == [True]
+    assert a.stats.left_answered == 2
+
+
 def _call_frame(
     timing: PhyTiming, caller: str, called: str, session: int, snr_db: float, t: float
 ) -> SoftFrame:
