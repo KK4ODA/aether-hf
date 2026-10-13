@@ -119,6 +119,9 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    `aether_model.link.granted`, passes its gate on the review's simulator: no radiated
    overlap in 5 040 sessions and 224 adversarial ones, ×1.09 of protocol 7 in the field
    profile, completion no lower anywhere.
+9. [09-step-2.md](09-step-2.md): Step 2. The engine ported to `aether-link`, checked against
+   the model input by input; the daemon runs it with the keying gate, the engine's account of
+   its own transmissions, and the Morse identifier where the engine puts it.
 
 ## Reproduction
 
