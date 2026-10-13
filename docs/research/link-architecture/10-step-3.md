@@ -187,3 +187,26 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   "Holds apply only to what a station starts on its own").
 * **What restores it.** Only calls and probes, their retries included, wait for the channel.
   Every other transmission of the engine goes without the hold.
+
+### 3.4 Ordinary answers lost on a lopsided path (C2, `80m-poor-500-pactor-signalink`)
+
+* **What happened.** Seed 2008: the 2 kB message reached the slave, but after the scenario's
+  300 s budget. Protocol 7 delivered the same seed's in 237 s. There was no overlap.
+* **The record.** The slave sent 21 answers, 6 on the tone floor and 15 ordinary. The master read
+  all 6 floor answers and 4 of the 15 ordinary ones; it detected 3 more it could not read, and
+  missed 8 entirely. That left 11 silent slots, each costing an exchange. The other two seeds had
+  4 and 8.
+* **The rule.** A header asks for floor answers when the master's last three readings of the
+  slave are under the ordinary threshold plus 3 dB, or after **two** silent slots in a row
+  (`_send_header`). The DISC already asks after one. The readings come only from frames
+  that decoded, so they do not see PACTOR bursts killing 0.43 s answers. A heard floor answer
+  then resets the silence, and the next header asks for ordinary answers again.
+* **Not a safety failure.** Nothing radiated over anything. The rule chose the family on
+  evidence that was always one slot behind.
+* **Candidates, to be measured after the runs.**
+  * Ask for floor answers after one silent slot, as the DISC does.
+  * Keep asking for them while any of the last few slots was silent. ADR-0059 did this for
+    protocol 7's acknowledgements.
+
+  Either is judged on the link bench and the harness before it is taken. Neither moves a
+  deadline: only the family of a frame changes.
