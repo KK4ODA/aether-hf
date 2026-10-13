@@ -120,14 +120,22 @@ def on_air_at(transmissions: list[dict[str, Any]], t: float) -> dict[str, Any] |
     return best
 
 
+def radiating_at(station: dict[str, Any], t: float) -> dict[str, Any] | None:
+    """The transmission the station was radiating at ``t``, if it was radiating: with three
+    stations or more, the one that began last may have ended before ``t``."""
+    if not any(float(r0) <= t + 1e-6 and t < float(r1) for r0, r1 in station.get("radiated", [])):
+        return None
+    return on_air_at(station.get("transmissions", []), t)
+
+
 def overlaps(report: dict[str, Any]) -> tuple[int, int, float]:
     """Radiated overlaps: (counted, both initiations, counted seconds). An overlap is put down
-    to the transmission each station had on the air at its start, as ``air_account.py`` does."""
+    to the transmission each station was radiating at its start."""
     stations = report.get("stations", {})
     counted = initiations = 0
     seconds = 0.0
     for start, end in report.get("rf_overlaps", []):
-        on = [on_air_at(st.get("transmissions", []), float(start)) for st in stations.values()]
+        on = [radiating_at(st, float(start)) for st in stations.values()]
         present = sorted((tx for tx in on if tx is not None), key=lambda tx: float(tx["air_s"]))
         if len(present) >= 2 and is_initiation(present[-1]) and is_initiation(present[-2]):
             initiations += 1

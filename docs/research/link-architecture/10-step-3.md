@@ -125,3 +125,65 @@ The A/B stops (06 §4).
   (`station_keys`), and its test is written on a callsign-named account. The rule is
   unchanged. Every collect re-reads all the runs, so the committed CSVs carry the fix from
   variant 1 on.
+* **What each station was radiating (variant 1, before variant 2's collect).** An overlap was
+  put down to the transmission each station *began last* before it, as `air_account.py` does.
+  With three stations, that can be one already over. In `40m-gateway-busy-when-called-2300`
+  (seed 1062), a gateway's answer that had ended 0.7 s before was named in place of the call
+  that was radiating. The judge now takes only what a station was radiating at the overlap's
+  start (`radiating_at`). The rule is unchanged, and this case still counts: one of its two
+  transmissions is not an initiation.
+
+## 3. Failures found while the runs went on
+
+Each is read from its runs' records as §1.4 requires. C1 failed with variant 0's first
+overlap. The runs go on all the same, and nothing is changed until they end (the author's
+decision, 2026-10-13). The protocol 7 baseline is needed whatever happens, and one pass finds
+every kind of failure at once. Then protocol 8's arm runs again in full.
+
+### 3.1 A slow station keyed late on a clock behind the air (C1, `80m-slow-machine-500`)
+
+* **What happened.** Seed 81: KE4QCM, the slave, whose computer stalls, keyed an answer 0.45 s
+  over the master's next header.
+* **The record.** The channel's account against KE4QCM's sidecar: at each of its keyings the
+  station's clock stood 0.25 s behind the air, the card's latency, through fifteen stalls. At
+  this one it stood 2.09 s behind. The stall (466.82–469.32 s of air) cost 0.52 s of audio, which
+  the station skipped (`skip_captured`). The 1.84 s the channel kept were still to be processed
+  when the station keyed, straight after the pass that ended the stall.
+* **The assumption broken: S2.** The keying gate judges `not_after` on the station's clock: the
+  audio it has *processed*. Behind it lies everything captured and not yet processed. The gate
+  passed an answer that radiated 1.84 s past its slot.
+* **What restores it.** The gate's clock has to be the air's: the processed clock plus the
+  capture backlog. The card's playback clock keeps real time through a stall, so its lead over
+  the processed clock, beyond its steady value, measures the backlog. That holds on a real card
+  as on the channel link. Seed 1081 shows the same kind once more (a 0.11 s deaf hit).
+
+### 3.2 A third station's call keyed into a session's gap (C1, `40m-gateway-busy-when-called-2300`)
+
+* **What happened.** Seed 1062: ND1J had waited 108 s for a clear channel to call the gateway,
+  busy in a session with KE4QCM. ND1J keyed its 5.4 s floor call 0.13 s after the master's header
+  ended. The gateway's granted answer, the master's next header and the gateway's next answer all
+  went over it: three radiated overlaps. The two session stations never overlapped each other.
+* **The rule.** The registration counts these, since only two initiations are left out.
+* **The assumption.** The spec's I1 is about a session's two transmitters, and nothing in
+  S1–S7 covers a third station. Its call relies on carrier sense. Between a header and its slot
+  the air is quiet for `D + KEY + GUARD` (0.70 s) or more, and the busy detector's hangover does
+  not bridge that.
+* **What restores it.** The header states its end and the slot it grants. A station outside the
+  session that decodes it knows the channel is spoken for until the slot's latest end and the
+  master's next key: a reservation, as 802.11's NAV. A rule of that kind names I1 extended to
+  every station that hears the session, and it moves no deadline on undecoded evidence.
+
+### 3.3 An abort's DISC waited for a clear channel (C2, `40m-rtty-contest-2300`)
+
+* **What happened.** Seeds 19 and 1019: the Test's budget ran out mid-file and the master aborted.
+  Its leaving DISC was held for a clear channel in the contest's QRM: 29.4 s in one run, and
+  still unsent when the run ended in the other. The called station never heard it and was still
+  connected at the end, so the runs did not complete. Protocol 7 failed seed 19 too, but not
+  seed 1019.
+* **The defect: the daemon's.** `held_for_busy` lets a transmission of the engine's skip the
+  hold while the engine is Connected or Disconnecting, or when the transmission has a slot. After
+  an abort the engine is Idle, and the master's DISC has no slot, so it was held as if the
+  station had started it on its own. It is the end of the session, not a new initiation (09 §2.1:
+  "Holds apply only to what a station starts on its own").
+* **What restores it.** Only calls and probes, their retries included, wait for the channel.
+  Every other transmission of the engine goes without the hold.
