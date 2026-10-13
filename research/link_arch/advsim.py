@@ -300,6 +300,8 @@ class AdvSim:
         self.app_hooks: list[Callable[[AdvSim, int, float], None]] = []
         """Called after a station's delivered stream grows: (sim, who, now)."""
         self.phantoms = [0, 0]
+        self.dropped = [0, 0]
+        """Transmissions the keying gate refused to start late (the forfeit rule)."""
         self.log: list[tuple[float, int, str]] = []
         """(time, station, what) for every detection and delivery: for traces."""
         for who in (0, 1):
@@ -383,6 +385,14 @@ class AdvSim:
         if hold > 0.0:
             st.engine.on_tx_delayed(hold)
         t_key = max(at + hold, st.tx_free_at)
+        not_after = getattr(tx, "not_after", None)
+        if not_after is not None and t_key + timing.tx_latency_s > not_after + 1e-9:
+            # the keying gate: a transmission that cannot start in its slot is not sent
+            self.dropped[who] += 1
+            dropped = getattr(st.engine, "on_tx_dropped", None)
+            if dropped is not None:
+                dropped(at)
+            return
         extra = st.rng.uniform(0.0, st.cfg.lead_jitter_s) if st.cfg.lead_jitter_s else 0.0
         t = t_key + timing.tx_latency_s + extra
         start = t
@@ -393,7 +403,7 @@ class AdvSim:
             if t >= key_up - 1e-9:
                 break
             cut = t + dur > key_up + 1e-9
-            kinds.append(frame_kind(frame))
+            kinds.append(getattr(st.engine, "frame_kind", frame_kind)(frame))
             self._radiate(who, frame, t, t + dur, cut)
             t += dur
         end = t

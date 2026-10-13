@@ -42,7 +42,7 @@ def kind_of(rec: TxRec) -> tuple[str, str]:
     trig = rec.trigger
     if r.startswith(("answer:", "holder:", "unsolicited:")):
         cls, what = r.split(":", 1)
-        return cls, what
+        return {"answer": SOLICITED}.get(cls, cls), what
     # the model's engine: read the chain of methods that keyed it
     if "_repeat_leave" in r or "_answer_left" in r:
         return UNSOLICITED, "leave"

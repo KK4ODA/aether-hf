@@ -187,6 +187,7 @@ def run(
         "overlap_s": round(sum(k for *_, k, _ in over), 2),
         "dual_s": round(dual, 2),
         "phantoms": sum(sim.phantoms),
+        "dropped": sum(sim.dropped),
     }
     for c in classes:
         row[f"c:{c}"] = row.get(f"c:{c}", 0) + 1

@@ -89,17 +89,50 @@ def classes(overs: list[dict[str, str]], runs: list[dict[str, str]], by: list[st
         print(" | ".join(key), f"| per run: rf {total / nruns[key]:.2f} :: {parts}")
 
 
+def paired(runs: list[dict[str, str]], base: str, other: str, by: list[str]) -> None:
+    """``other`` against ``base`` on the same (conditions, trial): completion-time ratio over
+    runs both completed (geometric mean, bootstrap CI over pairs), and completions."""
+    key_fields = ["bw", "channel", "snr", "kind", "profile", "trial", "cs"]
+    index: dict[tuple[str, ...], dict[str, dict[str, str]]] = defaultdict(dict)
+    for r in runs:
+        index[tuple(r[k] for k in key_fields)][r["arm"]] = r
+    groups: dict[tuple[str, ...], list[tuple[float, float]]] = defaultdict(list)
+    done: dict[tuple[str, ...], list[int]] = defaultdict(lambda: [0, 0, 0])
+    for arms in index.values():
+        if base not in arms or other not in arms:
+            continue
+        a, b = arms[base], arms[other]
+        g = tuple(a[f] for f in by)
+        done[g][0] += 1
+        done[g][1] += int(a["ok"])
+        done[g][2] += int(b["ok"])
+        if int(a["ok"]) and int(b["ok"]):
+            groups[g].append((float(a["done_s"]), float(b["done_s"])))
+    print(
+        f"{other} / {base}: completion time ratio (<1 = {other} faster) [95% CI], "
+        f"completed {base} vs {other}"
+    )
+    for g in sorted(done):
+        n, ca, cb = done[g]
+        print(" | ".join(g), f"| time x{fmt(paired_ratio_ci(groups[g]), 3)} | {ca}/{n} vs {cb}/{n}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("runs")
     ap.add_argument("overlaps", nargs="?", default="")
     ap.add_argument("--by", default="arm,profile")
     ap.add_argument("--where", default="", help="k=v,k=v filters")
+    ap.add_argument("--pair", default="", help="base:other — paired completion-time ratios")
     args = ap.parse_args()
     runs = load(args.runs)
     flt = [kv.split("=", 1) for kv in args.where.split(",") if kv]
     runs = [r for r in runs if all(r.get(k) == v for k, v in flt)]
     by = args.by.split(",")
+    if args.pair:
+        base, other = args.pair.split(":")
+        paired(runs, base, other, by)
+        return 0
     summarize(runs, by)
     if args.overlaps:
         overs = [o for o in load(args.overlaps) if all(o.get(k) == v for k, v in flt)]
