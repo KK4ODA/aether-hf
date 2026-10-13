@@ -459,6 +459,29 @@ def aborts() -> list[Recorder]:
     return [ra, rb]
 
 
+def leaving() -> list[Recorder]:
+    """Mid-transfer, the slave asks to close: its last words go, the master's queue does not;
+    then, in a second session, both ask at once."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(41)
+    sim = TwoStationSim(a, b, snr_db=2.0, seed=41)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.send(_message(rng, 3000))
+    sim.run(until=70.0)
+    b.send(_message(rng, 30))
+    b.disconnect()
+    sim.run(until=200.0)
+    a.connect("KK4XYZ")
+    sim.run(until=240.0)
+    a.send(_message(rng, 3000))
+    sim.run(until=270.0)
+    a.disconnect()
+    b.disconnect()
+    sim.run(until=400.0)
+    return [ra, rb]
+
+
 def probes() -> list[Recorder]:
     """Probes answered, across bandwidths, and unanswered; a call to nobody."""
     timing = phy_timing(WIDE.params)
@@ -686,6 +709,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "outage": outage,
     "dead-path": dead_path,
     "aborts": aborts,
+    "leaving": leaving,
     "probes": probes,
     "identifiers": identifiers,
     "ladder": ladder,

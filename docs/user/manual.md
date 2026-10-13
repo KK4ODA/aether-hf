@@ -259,8 +259,9 @@ frequency in the program.
 Type the other station's callsign, with its SSID if it uses one, then:
 
 - **Connect**: call it and start a session. Calls go out on the tone floor first.
-- **Disconnect**: send what is queued, then close. The station that was called asks the caller
-  to close in its next answer. While calling it reads **Stop calling**.
+- **Disconnect**: send what is queued, then close. At the station that was called, it sends
+  what that station has queued and asks the caller to close; the caller stops sending and
+  closes. While calling it reads **Stop calling**.
 - **Abort**: drop the session at once, sending nothing more.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
   you and how well, both ways.

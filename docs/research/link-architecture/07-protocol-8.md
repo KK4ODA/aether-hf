@@ -206,8 +206,12 @@ The slave's transmission:
     `max(20 s, 2 exchanges)` without progress (ADR-0039);
   * then it sends DISC, which grants a DISC_ACK slot;
   * it ends on the DISC_ACK, or after three DISCs ("closed (no DISC_ACK)").
-* **A slave's disconnect:** it sets `flag` in its next ANS. The master then disconnects as
-  above, with the slave's queue counted too.
+* **A slave's disconnect:** it sets `flag` in its next ANS. The master then sends its DISC
+  once what the slave still had is delivered; its own queue is left undelivered, since the
+  slave's operator has stopped receiving (ADR-0023's receiving station). Patience bounds it as
+  above. (Step 2 found the first wording, "as above, with the slave's queue counted too",
+  keeping a weak session going for minutes of the master's queue after both operators had
+  pressed Disconnect: `09-step-2.md` §2.2.)
 * **Abort at the master:** it sends DISC at its next key opportunity (after the open slot's
   `end_max`), on the floor, up to three times without waiting for an answer, then ends.
 * **Abort at the slave:** it sends DISC in its next granted slot, if one comes within the
@@ -319,7 +323,9 @@ These are model tests, strict, in `model/tests/test_granted.py`.
 
 ## 10. What the daemon must do (Step 2)
 
-Listed here so the model's interface already fits:
+Listed here so the model's interface already fits. Built in Step 2
+([09-step-2.md](09-step-2.md) §2), but for the capture path, the turnaround setting and the
+learned gap as a level (§2.3 there):
 
 * **The gate.** Before keying, the daemon drops a `Transmit` whose `not_after` has passed,
   after every hold (busy, answer gap, regulatory, CAT). It logs the drop and tells the engine

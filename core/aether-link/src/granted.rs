@@ -2435,8 +2435,14 @@ impl GrantedEngine {
         self.send_header();
     }
 
+    /// Whether the master may send its DISC now. What the slave still has goes first, and the
+    /// master's own queue when the disconnect is its own; when the slave asked, its operator
+    /// has stopped receiving, and what the master has not delivered stays undelivered
+    /// (ADR-0023's receiving station; `80m-leave-together-500`). Either waits no longer than
+    /// the patience (ADR-0039).
     fn can_leave(&mut self) -> bool {
-        if self.all_acknowledged() && self.slave_want.unwrap_or(0) == 0 && self.max_seen.is_none() {
+        let own_done = self.all_acknowledged() || self.slave_leaves;
+        if own_done && self.slave_want.unwrap_or(0) == 0 && self.max_seen.is_none() {
             return true;
         }
         if self.patience_until.is_none() {
