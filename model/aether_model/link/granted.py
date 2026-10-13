@@ -1531,7 +1531,13 @@ class GrantedEngine:
         self._send_header()
 
     def _can_leave(self) -> bool:
-        if self.all_acknowledged() and not self._slave_want and self._max_seen is None:
+        """Whether the master may send its DISC now. What the slave still has goes first, and
+        the master's own queue when the disconnect is its own; when the slave asked, its
+        operator has stopped receiving, and what the master has not delivered stays undelivered
+        (ADR-0023's receiving station; `80m-leave-together-500`). Either waits no longer than
+        :meth:`_disc_patience` (ADR-0039)."""
+        own_done = self.all_acknowledged() or self._slave_leaves
+        if own_done and not self._slave_want and self._max_seen is None:
             return True
         if self._patience_until is None:
             self._patience_until = self.now + self._disc_patience()

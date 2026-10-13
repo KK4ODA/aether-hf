@@ -454,6 +454,30 @@ def test_the_slave_asks_to_leave_and_the_master_closes() -> None:
     assert sim.events(0)[-1] == "disconnected:closed"
 
 
+def test_the_slave_asking_to_leave_stops_the_masters_own_data() -> None:
+    """The called station's Disconnect closes the session at the master's next opportunity,
+    with what the called station still had delivered first and the master's own queue left
+    unsent: its operator has stopped receiving (ADR-0023, protocol 7's receiving station). The
+    harness's `80m-leave-together-500` (Step 2): both operators pressed Disconnect in the
+    middle of a 6 kB transfer on a weak 500 Hz path, and the master went on sending its queue —
+    minutes of tone frames — before it would close."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=4)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    assert a.state is State.CONNECTED
+    a.send(bytes(range(256)) * 24)
+    sim.run(until=80.0)
+    b.send(b"last words")
+    b.disconnect()
+    asked = sim.t
+    sim.run(until=asked + 120.0)
+    assert sim.delivered(0) == b"last words"
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert sim.events(0)[-1] == "disconnected:closed"
+    assert len(sim.delivered(1)) < 256 * 24, "the master sent its whole queue first"
+
+
 @pytest.mark.parametrize("air", ["2300", "500"])
 def test_an_aborting_master_leaves_and_the_slave_hears_it(air: str) -> None:
     a, b = _pair(AIRS[air])
