@@ -69,12 +69,13 @@ Protocol 7 failed one scenario, `40m-rtty-contest-2300`.
 * **A loaded machine.** Both builds ran at a load average near 10 on four cores, alongside the
   model work. Late decodes are what that load produces, and they are what protocol 7 is
   sensitive to.
-* **The harness is not deterministic.** Its daemons run on threads.
+* **One run per scenario is not a measurement.** Some scenarios replay differently on the same
+  seed (§1.4).
 
-**Owed for Step 0's gate.** It is not closed:
-
-* distributions over 10 seeds on an idle machine;
-* air-time stepping.
+**Step 0's gate.** The harness classifies what it sees (§1.1–1.2), the decode budgets are
+measured (§1.3) and the harness's repeatability is sized (§1.4). One item moves to Step 3:
+protocol 7's distributions over 10 seeds on an idle machine. They are the baseline of the A/B
+and are run with it, on the same seeds and the same machine.
 
 ### 1.3 Decode latency, measured
 
@@ -116,6 +117,56 @@ are what gap levels are for.
 * **Changed in the model.** `granted.DECODE_BUDGET_S` is `(0.30, 0.30)`. The review's campaign
   is unchanged: it gives every arm its profile's budgets (`setups.KNOBS`). The link bench moves
   by its own noise. Its AWGN cells, where timing alone moves the result, are 0.3–2 % faster.
+
+### 1.4 How repeatable a harness run is
+
+The harness runs in lockstep with the audio, but its runner acts on the wall clock: it polls the
+daemons every 20 ms and issues each step when its condition holds. A step can therefore land in a
+different 20 ms block from one run to the next. The question was whether that matters, and
+whether the runner should step on air time instead.
+
+Twelve scenarios were run three to five times each on one seed, through one daemon (protocol 7),
+on an idle machine. A run's transmissions were compared with the first run's, keying by keying.
+
+| scenario | runs | transmissions | air time | first parting |
+|---|---:|---|---|---|
+| `quick-awgn-2300` | 5 | identical | 43.1–44.2 s | none |
+| `40m-winlink-exchange-2300` | 5 | identical | 75.1 s | none |
+| `80m-weak-500` | 5 | identical | 143.1–143.2 s | none |
+| `40m-good-throughput-2300` | 5 | identical | 96.1–96.2 s | none |
+| `40m-abort-and-recall-2300` | 3 | identical | 87.1 s | none |
+| `40m-gateway-client-vanishes-2300` | 3 | identical | 340.1 s | none |
+| `40m-trimode-gateway-2300` | 3 | shifted 20 ms | 70.1–71.1 s | the host program's call, 4.3 s |
+| `40m-gateway-three-clients-2300` | 3 | shifted 20 ms | 227.2 s | a client's call, 8.3 s |
+| `40m-gateway-busy-when-called-2300` | 3 | 29–35 | 127.1–133.2 s | a client's call, 6.3 s |
+| `80m-called-again-cwid-500` | 3 | 30–42 | 123.1–172.1 s | the abort, 16.6 s |
+| `80m-leave-together-500` | 3 | 27–39 | 295.1–376.1 s | the second call, 58.5 s |
+| `80m-slow-machine-500` | 3 | 95–102 | 425.2–519.1 s | an acknowledgement, 35.6 s |
+
+* **Most runs are identical to the millisecond.** Where the air time differs by up to a second,
+  it is the runner noticing the end: it reads the channel's progress once a second of air.
+* **Every parting is a step landing a block apart.** A call, an abort or a host program's call
+  goes out 20 ms earlier or later. Four scenarios then drift as far as a different seed would
+  take them.
+* **The slow machine's parting has the same cause, hidden.** Its stalls are identical in every
+  run. Its Test seeds its message bytes from the audio clock at the moment it starts
+  (`fieldtest.rs`), so a Test started a block later sends other bytes. The first 35 s of
+  keying are the same, and then a frame on the edge decodes in one run and not in the other.
+
+**Air-time stepping is not built.** Making every step land on a chosen block needs the
+channel server to hold the air while a daemon takes a command. A control call waits for the run
+loop, and the run loop waits for its next block, so the command would have to travel in band
+with the audio: changes to the daemon, the server and the runner. What it buys is replaying a
+failing run exactly. What the A/B needs is distributions:
+
+* Step 3 compares the two protocols over 10 seeds a scenario. A step landing a block apart is
+  one more source of randomness, the same for both arms, and biases neither.
+* A failing run is read from its own record: both stations' recordings, the transmission tags
+  and the channel's account of the air. Every overlap in §1.2 was named that way.
+* If Step 3 meets a failure its record cannot explain, stepping is built then.
+
+The harness's results are read accordingly. A difference in one run is judged against a second
+run of the same build, as `scenario_trend.py` already does with three draws.
 
 ## 2. Step 1: the model engine
 
@@ -304,6 +355,8 @@ uv run python -m research.link_arch.scenarios --arms granted --trials 8 --out sc
 # the family-margin sweep: arms granted_a0, granted_a1.5, granted_a2 (3 dB is `granted`)
 # decode latency from a harness run's recordings
 uv run python research/link_arch/latency.py <runs> [<runs> …]
+# repeatability: the same scenarios run into several directories on one seed
+uv run python research/link_arch/repeatability.py <runs1> <runs2> [<runs3> …]
 uv run python -m research.link_arch.campaign --arms granted_f1,granted_f2,granted_f3 ...
 # the link bench, either engine
 uv run python tools/bench_link.py --engine granted --bandwidth 500 --fading --floor-cap \
