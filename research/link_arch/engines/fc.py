@@ -485,7 +485,7 @@ class FcEngine(Core):
             fam=ctl_floor,
             flag=self._pending is not None,
             snr_db=self.heard_db,
-            rung=self.rate.recommend(),
+            rung=self.recommend(),
             n=want_s,
             **self.ack_fields(),
         )
@@ -574,7 +574,7 @@ class FcEngine(Core):
             fam=self.wants_floor(),
             flag=confirm,
             snr_db=self.heard_db if not blind else None,
-            rung=self.rate.recommend(),
+            rung=self.recommend(),
             n=min(7, self.queued_frames()),
             **self.ack_fields(),
         )
