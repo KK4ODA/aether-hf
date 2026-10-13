@@ -38,6 +38,7 @@ GENERATORS: list[tuple[str, str]] = [
     ("tools/make_phy_vectors.py", "core/aether-phy/tests/data/phy_vectors.json"),
     ("tools/make_phy_tables.py", "core/aether-phy/data/preamble_tables.json"),
     ("tools/make_link_vectors.py", "core/aether-link/tests/data/link_vectors.json"),
+    ("tools/make_granted_vectors.py", "core/aether-link/tests/data/granted_vectors.json"),
 ]
 
 

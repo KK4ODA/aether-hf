@@ -1502,7 +1502,22 @@ a frame that does not decode counts only on its transmission's stated grid (phan
 the rate down the floor); the control family goes by the weakest of the last 3 readings (one
 peak reading had stalled asymmetric sessions); a floor-only slave says so in `data_floor` with no
 data after it; an idle master grants an answer after `keepalive_s` (10 s) of silence; a header is
-left out only when no data frame is lost by it. **Next: Step 2, the port and the daemon's gate.**
+left out only when no data frame is lost by it. **Step 2, the port (in progress):** frames
+(`GrantFrame`, `GrantKind`, the 19-byte connect body, `with_level`/`level_of`, `GRANTED_VERSION`)
+in `frames.rs` with vectors; `aether_link::granted::GrantedEngine` (`granted.rs`), a rule-by-rule
+port whose draws are the model's (`Draws`, SplitMix64 in both); `Action::Transmit` gained
+`not_after` and `identifier_s` (protocol 7 sets none). It is checked by **trace replay**:
+`tools/make_granted_vectors.py` runs the model's engines through 20 sessions (clean, weak,
+fading with the station model, outages, phantom storm, aborts, probes across bandwidths,
+identifiers, the ladder, stranded frames, the HARQ limit, VOX turnarounds) and records every
+input and drained action; `tests/granted_vectors.rs` hands the port the same inputs, answers
+its decodes from the record (checking the HARQ buffer it combines with) and compares every
+action and, after every input, state/role/session/level/rung/queues/deadline/counters. Planted
+bugs in the port were caught, and where one survived a session was added for it. Model changes
+before the port: the link timeout re-checked on expiry against the exchanges in use (found by
+the new draws on the ack-lost scenario), and a transmission split evenly between two rungs is
+judged at the slower (Python's set order is not portable). **Next: the daemon (the gate,
+`frames_end`, the identifier, the turnaround setting, render-ahead, `LINK_PROTOCOL` 8).**
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
@@ -1516,7 +1531,8 @@ an installer by extracting it, not by running it; the real install is
 `C:\Users\Facundo\AppData\Local\Aether HF\`, updated in place by the updater.
 
 Every ported layer has a `tests/model_vectors.rs` fed by a `tools/make_*_vectors.py`
-generator, and CI regenerates them and fails on drift. **A vector mismatch means the core is
+generator, and CI regenerates them and fails on drift (`tools/check_vectors.py`; protocol 8's
+engine has its own, `granted_vectors.rs`, replayed input by input). **A vector mismatch means the core is
 wrong** — regenerate only for a deliberate model change. Integer quantities are compared for
 equality; floating-point ones to a tolerance carried in the vector file.
 

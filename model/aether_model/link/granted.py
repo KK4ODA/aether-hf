@@ -2259,7 +2259,9 @@ class GrantedEngine:
         if failed and self._asked is not None and min(modes) > self._asked:
             self.rate.observe_snr(snr)  # the sender's choice, not news of the path
         else:
-            self.rate.observe(snr, ok, failed, max(set(modes), key=modes.count))
+            # the rung most of it went at; of two as common, the slower (stated, so the port
+            # takes the same one)
+            self.rate.observe(snr, ok, failed, max(sorted(set(modes)), key=modes.count))
         return snr
 
     def _receive_window(self) -> tuple[int, list[int], int]:
