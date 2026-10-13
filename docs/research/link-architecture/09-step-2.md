@@ -159,11 +159,11 @@ daemon (one seed, `session_matrix.py --jobs 3`).
   cut transmission; `80m-slow-machine-500` (1.37 s over three stalls), the clock. Run again
   after the fixes: all three pass with no overlap; the slow machine's station moved its clock
   past 0.88, 2.84 and 1.62 s of lost audio and forfeited one slot rather than answer late.
-* **The two VOX scenarios** show VOX-held overlaps — a transmitter held on by its VOX, deaf,
-  while the other station's answer went out — 2.2 s in `80m-poor-500-pactor-signalink` (which
-  fails on its collision count) and 12.7 s in `80m-vox-caller-learned-gap-500`. Nothing in this
-  build declares a radio's turnaround (§2.4), which is what protocol 8 times those slots by; the
-  master's silence levels recover each time, and the learned gap does not yet set a level.
+* **The two VOX scenarios** showed VOX-held overlaps — a transmitter held on by its VOX while
+  the other station's answer went out — 2.2 s in `80m-poor-500-pactor-signalink` (which failed
+  on its collision count) and 12.7 s in `80m-vox-caller-learned-gap-500`. Read again (§3.3), the
+  first was the channel server's: it keyed a VOX radio for the daemon's whole keying, silent
+  lead and tail included, which no VOX hears.
 * **`80m-leave-together-500` failed**: both operators pressed Disconnect in the middle of a
   6 kB transfer on a weak 500 Hz path, and neither session had ended within 120 s of air. The
   caller went on sending its queue — four tone frames a transmission — because protocol 8's
@@ -175,16 +175,78 @@ daemon (one seed, `session_matrix.py --jobs 3`).
   `_can_leave`/`can_leave`; `test_the_slave_asking_to_leave_stops_the_masters_own_data`; the
   replay gained a `leaving` session, which fails the port with the old rule).
 
-### 2.4 Not done in Step 2
+## 3. The radio's turnaround and the answer gap (schema 12)
 
-* **The turnaround setting.** The engine declares `StationConfig::turnaround_s` in its call and
-  acceptance, but nothing sets it yet: `[radio] turnaround_ms`, replacing `answer_gap_ms`, is a
-  configuration schema step, and a schema step ships with a release (the shell's
-  `SCHEMA_HISTORY` test ties the schema to the package version). It goes in the commit that
-  bumps the version for the first build with protocol 8, with Setup step 4's box and the
-  manual's *Answer gap* entries. Until then the answer gap is in the file and does nothing.
-* **The learned gap as a level.** ADR-0054's per-station gap is still learned and kept in
-  `heard.json`; 07-protocol-8.md §10 makes it the gap level a peer is granted. Not wired.
+A configuration schema step ships with a version (the shell's `SCHEMA_HISTORY` test ties the
+schema to the package version), so this went in with the bump to `0.2.0-beta.106` — on the
+working branch only: no tag, no release, `master` untouched (the author's choice, 2026-10-13).
+
+### 3.1 What was built
+
+* **`[radio] turnaround_ms`** (0–1500, default 0, live): how long after its own transmission the
+  operator's radio takes to hear again — a SignaLink's DLY, a VOX hold, a slow relay. The engine
+  declares it in the call and the acceptance (tenths of a second, up to 1.5 s), and the other
+  station starts this one's slots that much later (`max(D + KEY, T)`). A live change reaches the
+  engine at once (`set_turnaround_s`) and is declared from the next call. Configuration schema
+  12 (`turnaround`, a step that changes nothing; fixture `0.2.0-beta.105-vox.toml`, a VOX station
+  with an answer gap, whose every setting survives), the shell's `SCHEMA_HISTORY` line
+  `("0.2.0-beta.106", 12)`, Setup step 4's *Turnaround* box, the manual.
+* **`[radio] answer_gap_ms` keeps a meaning** (model first, then the port and the replay): the
+  least time between the other station's frames and this one radiating, for a peer slower to
+  hear again than it declares — a VOX station whose operator left *Turnaround* at 0, or any
+  beta.105 or older. The daemon hands the engine, every pass, the larger of the setting and the
+  gap it learned for the station it is calling or in a session with (ADR-0054;
+  `Station::answer_gap_s`, `set_answer_gap`). As the master the engine keys no sooner than the
+  gap after the slave's frames (`_peer_wait_s`/`peer_wait_s`); as the slave it asks for the gap
+  level that starts its slots the gap after the master's (`_asked_level`/`asked_level`, in its
+  answers and its acceptance's capability byte). It never moves a slot on its own: the master
+  grants the level, and the slave keys only where the grant says. An acceptance cannot honour
+  the called station's gap — its slot is the one the call granted — which is what the caller's
+  declared turnaround is for; an unanswered call steps its level every second try.
+  `test_the_answer_gap_holds_a_station_off_the_others_frames` (model) holds both directions
+  with radios that hold 1.1 s and declare nothing; the replay gained an `answer-gap` session.
+  `the_radios_turnaround_and_the_answer_gap_reach_the_engine` (daemon).
+* **The harness writes each daemon the file its own build reads** (`session_matrix.py`
+  `schema_of`, from the binary's `--example-config`), so protocol 7's daemon still runs beside
+  this one in Step 3's A/B, and a scenario may set a station's `turnaround_ms`. New scenario:
+  `80m-vox-caller-declared-500`, `80m-vox-caller-learned-gap-500`'s path with the VOX caller
+  declaring a 1 s turnaround.
+
+### 3.2 The harness's VOX radio
+
+The channel server keyed a VOX radio for the whole of the daemon's keying: the key lead and the
+keyed tail, which are silence, held it as long as the frames did, and its hold counted from the
+end of the tail. A real VOX keys on audio, and its hold — the operator's delay time — counts from
+where the audio stops. The server now keys a VOX radio only while its audio carries energy
+(`_radiate`); `test_a_vox_radio_keys_on_the_audio_not_on_the_silence_around_it` fails on the old
+model. A radio keyed by a line (`ptt`, CAT) is unchanged.
+
+### 3.3 Measured
+
+One draw each, the same seeds, protocol 8 with schema 12 (the overlaps are the channel server's
+VOX-held ones; none of the runs had a radiated overlap):
+
+| scenario | before (§2.3) | schema 12 | schema 12, VOX on audio |
+|---|---|---|---|
+| `80m-poor-500-pactor-signalink` | fail, 2.2 s held, 288 s | fail, 2.2 s, 288 s | **pass, 0 s**, 328 s |
+| `80m-vox-caller-learned-gap-500` | pass, 12.7 s, 687 s | pass, 8.0 s, 550 s | pass, 3.3 s, 442 s |
+| `80m-vox-caller-declared-500` | — | pass, 3.2 s, 468 s | **pass, 0 s**, 243 s |
+
+* **PACTOR and the SignaLink.** Its 2.2 s were the daemon's silent lead under the other
+  station's VOX hold: no frame was keyed into a deaf receiver. With the VOX keyed on audio there
+  is nothing to count, and the scenario passes.
+* **The declared turnaround** takes the VOX caller's path to no overlap at all, in half the air
+  time of the learned gap: the slots are where the radio can hear them from the first call.
+* **The learned gap** still loses 3.3 s: it is learned by losing answers (ADR-0054, 250 ms a
+  step), so a station's first sessions with a VOX peer pay for it. That is what the declared
+  turnaround replaces.
+* **What Step 3 judges.** `[expect] max_collisions` counts any overlap of keyings, and the two
+  stations' silent lead and tail are not radiation. Step 3's pre-registered criteria judge
+  radiated overlaps and frames keyed into a deaf receiver (a VOX hold, a radio's recovery), not
+  that count.
+
+## 4. Not done in Step 2
+
 * **The capture path's latency.** A frame's time is its place in the captured audio, which is
   the air's clock; the station's "now" lags the air by the card's input latency, so an answer
   keyed at `not_before − tx_latency` radiates that much late. The harness delivers capture with

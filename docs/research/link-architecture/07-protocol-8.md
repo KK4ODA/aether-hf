@@ -324,8 +324,7 @@ These are model tests, strict, in `model/tests/test_granted.py`.
 ## 10. What the daemon must do (Step 2)
 
 Listed here so the model's interface already fits. Built in Step 2
-([09-step-2.md](09-step-2.md) §2), but for the capture path, the turnaround setting and the
-learned gap as a level (§2.3 there):
+([09-step-2.md](09-step-2.md) §2–§3), but for the capture path (§4 there):
 
 * **The gate.** Before keying, the daemon drops a `Transmit` whose `not_after` has passed,
   after every hold (busy, answer gap, regulatory, CAT). It logs the drop and tells the engine
@@ -342,8 +341,14 @@ learned gap as a level (§2.3 there):
 * **The capture path.** Received frames are placed on the air's clock: the card's reported input
   latency is taken off their times.
 * **The answer gap becomes the declared turnaround.** `[radio] turnaround_ms` is the operator's
-  radio. The learned per-station gap (ADR-0054) becomes the level a peer is granted. A
-  configuration schema step.
+  radio, declared in the call and the acceptance. A configuration schema step (12).
+* **The answer gap stays, for a peer slower than it declares** (a VOX interface whose hold the
+  operator left at 0). `[radio] answer_gap_ms`, or the gap learned for that station (ADR-0054)
+  when longer, is handed to the engine (`set_answer_gap`): as the master it keys no sooner than
+  the gap after the slave's frames; as the slave it asks for the level that starts its slots the
+  gap after the master's. An acceptance cannot honour it: its slot is the one the call granted.
+  A caller's own declared turnaround covers that slot from the first try, and an unanswered
+  caller steps its call's level every second try.
 * **No session transmission waits for the channel.** `channel_clear` already passes them. The
   ADR-0022 holds on DISC and DISC_ACK go: a DISC_ACK goes in its slot.
 * **Removed from the daemon:**
