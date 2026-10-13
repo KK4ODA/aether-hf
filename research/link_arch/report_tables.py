@@ -14,13 +14,14 @@ from typing import Any
 
 from research.link_arch.analyze import boot_ci, load, paired_ratio_ci
 
-ARMS = ["legacy", "stated", "stated6", "gs", "fc"]
+ARMS = ["legacy", "stated", "stated6", "gs", "fc", "granted"]
 NAMES = {
     "legacy": "legacy (protocol 7)",
     "stated": "ADR-0068",
     "stated6": "ADR-0068, 6-frame",
     "gs": "D: granted slots",
     "fc": "C: fixed cycle",
+    "granted": "protocol 8 (model engine)",
 }
 PROFILES = ["ideal", "field", "field-asym", "hostile-c", "hostile"]
 KINDS = ["bulk", "exchange", "chat"]

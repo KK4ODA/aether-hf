@@ -24,6 +24,12 @@ def build(
 ) -> tuple[Any, Any, Callable[[Any], dict[str, Any]]]:
     """Two engines of a prototype arm and its belief reader; ``knobs`` is (extra turnaround,
     slack), as ``setups.KNOBS`` gives every arm."""
+    if arm.startswith("granted"):
+        from research.link_arch.engines.granted import belief as granted_belief
+        from research.link_arch.engines.granted import build as build_granted
+
+        a, b = build_granted(timing, air, seed, knobs, arm)
+        return a, b, granted_belief
     if arm.startswith("gs"):
         from research.link_arch.engines.gs import GsConfig, GsEngine, belief
 

@@ -1,0 +1,2308 @@
+"""Granted slots: the link engine of protocol 8 (ADR-0069).
+
+One :class:`GrantedEngine` per station, beside :class:`~aether_model.link.engine.LinkEngine`
+(protocol 7). Like it, it is a pure state machine — :meth:`~GrantedEngine.on_frame`,
+:meth:`~GrantedEngine.on_tx_done` and :meth:`~GrantedEngine.tick` in, actions out — and it
+keeps its data path: selective repeat over a 16-frame window, HARQ with slot inference,
+re-encoding, the rate controller and the connect handshake's measurements. What it changes is
+*when* a station may key, and nothing else.
+
+The protocol in one paragraph
+-----------------------------
+The caller is the **master** for the whole session and the only station that keys on its own
+initiative; the called station is the **slave**. Every master transmission is a header control
+frame and up to six data frames, each data frame stating exactly how many of the transmission
+follow it. The header acknowledges the slave's data, recommends the slave's rung, states its own
+count and *grants* the slave one slot, which starts a fixed gap after the transmission's end and
+lasts at most the grant: an answer, an answer and ``n`` data frames, or, when neither side has
+anything, an open window. The slave keys only in a slot granted by a frame it decoded in time to
+start the slot on time — the daemon's keying gate drops a transmission that would start late,
+whatever held it (``SlotTransmit.not_after``) — and its answer acknowledges the master's data,
+says what follows it and what it has queued. The master keys again only once the slot can no
+longer be in use: a gap after the end a decoded slave frame of the slot stated, or after the
+slot's latest end when it decoded nothing. Only decoded content changes state: a detection, an
+announcement or a silence moves no deadline. There is no turn, no TURN, OFFER, TAKEN, POLL or
+turn request, and nothing to hand over. ``docs/research/link-architecture/07-protocol-8.md`` is
+the design, ``04-formal-spec.md`` the rules and their proof, ADR-0069 the decision.
+
+The slot, as both stations reckon it
+------------------------------------
+After a transmission ending on the air at ``E`` whose last frame is of family ``f`` (ordinary or
+the tone floor), at gap level ``L``::
+
+    start   = E + max(D_f + KEY, T_granter) + GUARD + LEVEL[L]
+    end_max = start + SLACK + grant
+
+``D_f`` is the decode budget (a frame's end to its report), ``KEY`` the keying latency a station
+is allowed, ``T_granter`` the turnaround the granting station declared at the connection (its
+radio's VOX hold and receiver recovery), ``GUARD`` propagation and clock error. These are
+protocol constants (:data:`DECODE_BUDGET_S` …), the same at both ends: a station slower than they
+allow asks for a gap level in its answers.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import math
+import random
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from enum import Enum
+
+from aether_model.link.engine import (
+    LEFT_UNHEARD,
+    OUTSIDE_SESSIONS,
+    RV_SEQUENCE,
+    SELF_DECODABLE_RVS,
+    Action,
+    Deliver,
+    Event,
+    LadderRung,
+    ProbeResult,
+    State,
+    Transmit,
+)
+from aether_model.link.frames import (
+    CAP_LEVEL_MASK,
+    CONNECT_BODY_8_BYTES,
+    GRANTED_VERSION,
+    MAX_BURST,
+    MAX_FOLLOWS,
+    WINDOW,
+    ConnectBody,
+    DataHeader,
+    DataKind,
+    GrantFrame,
+    GrantKind,
+    ProbeBody,
+    bandwidth_code,
+    bandwidth_hz_of,
+    data_capacity,
+    decode_data,
+    encode_data,
+    in_window,
+    level_of,
+    pack_callsign,
+    seq_after,
+    seq_distance,
+    with_level,
+)
+from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
+from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
+
+# ── the protocol's constants ──────────────────────────────────────────
+
+DECODE_BUDGET_S = (0.30, 0.65)
+"""From a frame's end on the air to its decode reaching the engine, ordinary and tone floor:
+the streaming receiver settles a floor candidate later (ADR-0009 §8). To be measured on the
+harness and in hardware before they freeze (07-protocol-8.md §11)."""
+KEY_S = 0.35
+"""From the engine's decision to radiation: the daemon's lead and the sound card."""
+GUARD_S = 0.05
+"""Propagation (under 20 ms one way on HF), clock error over a transmission, rounding."""
+SLACK_S = 0.35
+"""How late a slot may start on the air and still be used; the keying gate drops past it."""
+LEVELS_S = (0.0, 0.5, 1.0, 2.0)
+"""Extra gap by level: what a slave whose computer decodes or keys late asks for, and what a
+master that hears nothing twice in a row grants."""
+GRID_TOLERANCE_S = 0.15
+"""How far from its slot a frame that did not decode may begin and still count as one of the
+transmission's: the receiver places a frame to a few milliseconds, propagation adds 20."""
+MAX_DATA = 6
+"""Data frames in one transmission (three bits count them in the control frame)."""
+OPEN_WINDOW_S = (4.0, 10.0)
+"""An idle link's open window, after an ordinary and after a floor header."""
+
+
+class Role(Enum):
+    NONE = "none"
+    MASTER = "master"
+    SLAVE = "slave"
+
+
+@dataclass
+class SlotTransmit(Transmit):
+    """A transmission, with what the daemon's keying gate needs to know about it."""
+
+    not_after: float | None = None
+    """The latest its radiation may start, on the air's clock, or ``None`` for one the station
+    makes on its own initiative. Past it the transmission is not sent at all (the forfeit rule,
+    ADR-0069 §2.3), whatever held it, and the engine is told
+    (:meth:`GrantedEngine.on_tx_dropped`)."""
+    identifier_s: float = 0.0
+    """The station's Morse identifier goes first, this long, ahead of the frames: inside the
+    master's own time, or inside a slot granted with its time (07-protocol-8.md §5.4). Already
+    counted in :attr:`duration_s`."""
+    cause: str = ""
+    """What set the transmission going (a timer, a frame, a command): for the harness's account
+    of the air, never for the protocol."""
+
+    @property
+    def identifier(self) -> bool:
+        return self.identifier_s > 0.0
+
+
+# ── configuration and counters ────────────────────────────────────────
+
+
+@dataclass
+class GrantConfig:
+    max_data_frames: int = MAX_DATA
+    """Data frames in one transmission, at most :data:`MAX_DATA`."""
+    max_burst_s: float | None = None
+    """The longest a transmission may be on the air, seconds: the key-time limit less the
+    keying's lead and tail (ADR-0017). Unset, the frame count alone decides."""
+    max_retries: int = 8
+    """Silent slots in a row before a master gives the session up ("no response")."""
+    connect_retries: int = 8
+    disc_retries: int = 3
+    """DISCs a leaving master sends, unanswered, before it leaves without the DISC_ACK."""
+    disc_patience_exchanges: float = 2.0
+    """A leaving master gives up on what it has not got acknowledged after this many whole
+    exchanges with nothing new acknowledged, or :attr:`disc_patience_s` (ADR-0039)."""
+    disc_patience_s: float = 20.0
+    leave_repeats: int = 3
+    """DISCs an aborting master says, one a slot, while nothing answers (ADR-0052)."""
+    floor_answer_margin_db: float = 12.0
+    """A call heard in the ordinary family less than this above the ordinary control frame's
+    threshold is accepted on the tone floor (ADR-0056)."""
+    answer_floor_margin_db: float = 3.0
+    """A station asks for the other's control frames on the floor while it hears the other
+    less than this above the ordinary control frame's threshold (07-protocol-8.md §7)."""
+    family_readings: int = 3
+    """How many of the other station's frames, read in a row, must all clear that before a
+    station asks for ordinary control frames. One was the rule: on a fading path an ordinary
+    frame is decoded only at a peak, so the frame that said "ordinary is fine" was the one most
+    likely to — a slave 6 dB under its master asked for ordinary headers at every peak, missed
+    the next two in the fade, and its data waited three exchanges each time (the review's
+    campaign, field-asym, -6 dB, until the 1 500 s horizon). On that campaign one and two
+    readings each leave a cell completing less than protocol 7 (field-asym exchanges, 329 and
+    332 of 336 against 333); three and four complete as much or more everywhere, and their
+    times are within each other's intervals. Three is the fewest that holds completion."""
+    link_timeout_s: float = 45.0
+    link_timeout_exchanges: float = 4.0
+    """Silence ends a session after this many exchanges of the size in use, 45 s at least."""
+    rate: dict[str, float | int | None] = field(default_factory=dict)
+    initial_mode: int = 0
+    max_mode: int = 19
+    ceiling: int | None = None
+    """The fastest rung the rules allow (ADR-0018); see ``LinkConfig.ceiling``."""
+    silence_step: int = 2
+    """Rungs a master steps its own data down by for every data slot heard silent (P9-7)."""
+    max_combines: int = 4
+    reencode_early_after: int = 2
+    reencode_hopeless_db: float = 1.0
+    capabilities: int = 0
+    """Offered in the handshake: compression (bit 0) and the bandwidth (bits 1–2)."""
+    first_grant: int = 2
+    """Data frames granted to the slave before it has said what it has: a gateway greets."""
+    window_doublings: int = 1
+    """How far an idle link's open window grows, by doubling, while it stays idle."""
+    elide: bool = True
+    """Leave the header out of a transmission it would change nothing in (R7)."""
+    turnaround_s: float = 0.0
+    """This station's radio: how long after it stops sending it hears again (VOX hold and
+    receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s."""
+    identifier_s: float = 0.0
+    """This station's Morse identifier's length, 0 for none. Declared at the connection, so the
+    master grants the time for it."""
+    decode_budget_s: tuple[float, float] = DECODE_BUDGET_S
+    key_s: float = KEY_S
+    guard_s: float = GUARD_S
+    slack_s: float = SLACK_S
+    levels_s: tuple[float, ...] = LEVELS_S
+    """The protocol's constants (above). Both stations must hold the same values; a bench may
+    change them for both."""
+    open_window_s: tuple[float, float] = OPEN_WINDOW_S
+    keepalive_s: float = 10.0
+    """On an idle link the master grants an answer, not an open window, once it has heard
+    nothing from the slave for this long: an open window nobody needs is silent, and a link
+    that is only ever silent cannot tell idle from dead."""
+    silence_levels_after: int = 2
+    """Silent slots in a row after which a master raises the gap level one step."""
+    on_time_to_lower: int = 4
+    """Slots answered in a row after which a master lowers the silence level one step."""
+    need_ease_after: int = 6
+    """Slots answered on time after which a slave asks for one level less."""
+
+
+@dataclass
+class GrantStats:
+    frames_sent: int = 0
+    frames_resent: int = 0
+    frames_received: int = 0
+    frames_failed: int = 0
+    harq_rescues: int = 0
+    bytes_delivered: int = 0
+    bytes_acked: int = 0
+    probes_sent: int = 0
+    probes_answered: int = 0
+    probe_replies: int = 0
+    frames_reencoded: int = 0
+    left_answered: int = 0
+    transmissions: int = 0
+    headers_elided: int = 0
+    silent_slots: int = 0
+    """Slots this master granted in which it decoded nothing."""
+    forfeits: int = 0
+    """Slots this station was granted and did not use: the grant decoded too late."""
+    dropped: int = 0
+    """Transmissions the keying gate refused to start late (:meth:`GrantedEngine.on_tx_dropped`)."""
+
+
+# ── internal records ──────────────────────────────────────────────────
+
+
+@dataclass
+class _TxRecord:
+    seq: int
+    body: bytes
+    mode: int
+    tx_count: int = 0
+    acked: bool = False
+    reencoded: int = 0
+
+    @property
+    def sent(self) -> bool:
+        return self.tx_count > 0 or self.reencoded > 0
+
+
+@dataclass
+class _RxRecord:
+    frame: SoftFrame
+    slot: int
+    payload: bytes | None = None
+    seq: int | None = None
+    combined: bool = False
+
+
+@dataclass
+class _AckSnapshot:
+    base: int
+    missing: list[int]
+    next_new: int
+
+
+@dataclass
+class _Slot:
+    """A slot this station granted: the other station's time on the air, and this station's
+    wait for it."""
+
+    kind: str
+    """``header``, ``disc``, ``connect`` (a call's acceptance) or ``probe``."""
+    grant_s: float
+    """The longest the answering transmission may be, its identifier included."""
+    last_floor: bool
+    """The family of the granting transmission's last frame: the gap's decode budget."""
+    answer_floors: frozenset[bool]
+    """Every family the answer, and what follows it, may be in: the wait covers the slowest."""
+    level: int
+    granter_turnaround_s: float
+    open_window: bool = False
+    ident_s: float = 0.0
+    """The slave's identifier time granted: its answer starts that much into the slot."""
+    data: bool = False
+    """The granting transmission carried data: a silent slot steps its rung down."""
+    granted: int = 0
+    tx_end: float = 0.0
+    start: float = 0.0
+    end_max: float = 0.0
+    final: bool = False
+    """:attr:`tx_end` is where the granting transmission really ended (``on_tx_done``), not
+    this engine's estimate."""
+    heard: bool = False
+    """A frame of the other station's, begun in the slot, decoded."""
+    stated_end: float | None = None
+    stated_floor: bool = False
+
+
+@dataclass
+class _Answer:
+    """A transmission this station owes in a slot it was granted (or, idle, a call's or a
+    probe's or a left session's slot)."""
+
+    what: str
+    """``ans``, ``window``, ``connect_ack``, ``probe_ack``, ``disc`` or ``disc_ack``."""
+    start: float
+    not_after: float
+    floor: bool
+    """The family of its control frame."""
+    session: int = 0
+    anchor: float = 0.0
+    """The end of the transmission it answers."""
+    remote: str = ""
+    snr_db: float | None = None
+    room_s: float = 0.0
+    """Data time granted after the answer."""
+    ident: bool = False
+    """The slot includes this station's identifier time."""
+
+
+# ── the engine ────────────────────────────────────────────────────────
+
+
+class GrantedEngine:
+    """The link engine of protocol 8: granted slots (ADR-0069)."""
+
+    counts_on_floor = True
+    """Tone frames carry their count too (ADR-0068 §2.1, kept): a simulated PHY delivers it."""
+
+    def __init__(
+        self,
+        my_call: str,
+        timing: PhyTiming,
+        config: GrantConfig | None = None,
+        seed: int | None = None,
+    ) -> None:
+        self.callsigns = [my_call.upper()]
+        """The callsigns this station answers to; the first is the one it calls as."""
+        self.my_call = self.callsigns[0]
+        self.timing = timing
+        self.cfg = config or GrantConfig()
+        self.rng = random.Random(seed)
+        self.state = State.IDLE
+        self.role = Role.NONE
+        self.remote_call = ""
+        self.session = 0
+        self.now = 0.0
+        self.actions: list[Action] = []
+        self.stats = GrantStats()
+        self._deadlines: dict[str, float] = {}
+        self._cause = ""
+        self._slot: _Slot | None = None
+        """The slot this station granted last — a call's, a probe's, a header's, a DISC's."""
+        self._in_flight: list[_Slot | None] = []
+        """This station's transmissions handed over and not yet done, in order, each with the
+        slot it granted: ``on_tx_done`` reports where that slot's granting transmission ended."""
+        self._hold_until = 0.0
+        """Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
+        while idle keys before this: the last slot it granted may still be in use."""
+        self._left: tuple[int, float, bool] | None = None
+        """A session this station has left: its number, until when its frames are answered, and
+        whether the other station's DISC ended it (then only a DISC is answered, with its
+        DISC_ACK; otherwise a header is answered with a DISC — ADR-0052)."""
+        self._leave_repeats = 0
+        self._call_jitter = 0.0
+        self._identifier_due = False
+        self._probing: str | None = None
+        self._probe_unsent = False
+        self.last_probe: ProbeResult | None = None
+        self.ended_peer_snr_db: float | None = None
+        self.ladder: list[LadderRung] = []
+        """What each pinned transmission's acknowledgement reported (the Test's ladder)."""
+        self._pinned: int | None = None
+        self._pin_body: int | None = None
+        self._connect_tries = 0
+        self._tx_queue = bytearray()
+        """What :meth:`send` was given and no frame carries yet. Kept across the start of a
+        session — what an idle station is handed goes in the next one — and cleared at its end:
+        left queued, it opened the next session, to anybody (ADR-0052)."""
+        self._reset_session()
+
+    # ── per-session state ─────────────────────────────────────────────
+
+    def _reset_session(self) -> None:
+        self.top_acked_mode: int | None = None
+        self._records: dict[int, _TxRecord] = {}
+        self._tx_base = self._tx_next = 0
+        self._recommended = self.cfg.initial_mode
+        """The rung this station's data goes at: what the other station recommends."""
+        self.peer_snr_db: float | None = None
+        """How the other station says it hears this one (every control frame carries it)."""
+        self._heard_db: float | None = None
+        """How this station heard the other's last frame it decoded."""
+        self._heard_recent: list[float] = []
+        """The readings of the last :attr:`GrantConfig.family_readings` frames of the other's
+        decoded: the family this station asks for its control frames in goes by the weakest."""
+        self.peer_capabilities = 0
+        self._peer_turnaround_s = 0.0
+        self._peer_identifier_s = 0.0
+        self._disc_requested = False
+        self._disc_tries = 0
+        self._patience_until: float | None = None
+        self._ladder_pending: tuple[int, list[int]] | None = None
+        self.rate = self._rate_controller()
+        self._asked: int | None = None
+        # receiving, either role
+        self._rx_base = 0
+        self._rx_buf: dict[int, bytes] = {}
+        self._max_seen: int | None = None
+        self._harq: dict[int, tuple[object, int, int]] = {}
+        self._rx: list[_RxRecord] = []
+        """The frames heard of the other station's transmission being received."""
+        self._rx_t0: float | None = None
+        self._grid: tuple[float, int, bool] | None = None
+        """Where that transmission's data frames are, as its opening control frame stated:
+        the first one's start, how many, their family."""
+        self._ack_history: list[_AckSnapshot] = []
+        # the master
+        self._slot = None
+        self._level_asked = 0
+        self._silence_level = 0
+        self._silent = 0
+        self._answered_run = 0
+        self._slave_want: int | None = None
+        """Frames the slave said it has queued; ``None`` before its first answer."""
+        self._slave_leaves = False
+        self._slave_id_due = False
+        self._slave_floor_only = False
+        """The slave said its data can go only on the tone floor (an answer's ``data_floor``
+        with no data after it)."""
+        self._hdr_floor = True
+        self._possible: set[bool] = {True}
+        """Every family the slave may answer in when it has not read the header: the family of
+        its last answer read here and every family asked for since (R6)."""
+        self._idle_windows = 0
+        self._ack_owed = False
+        self._heard_at = self.now
+        self._peer_late_s = 0.0
+        """How far past the slot's slack the slave's answers have been seen to start: a
+        station whose keying is slower than it declared (CAT keying, a slow card) radiates
+        late, and a master that waited only the slot's own length keyed over the end of an
+        answer it had not yet decoded. Measured on the answers decoded, eased as they come in
+        on time, and added to the wait for a slot nothing of which decoded — the master's own
+        margin, which only ever delays it."""
+        # the slave
+        self._answer: _Answer | None = None
+        self._grant: GrantFrame | None = None
+        """The header of the master transmission being received, if it was read."""
+        self._grant_floor = False
+        self._m_end: float | None = None
+        """Where that transmission ends, as the frames read of it say: the slot's anchor."""
+        self._m_last_floor = False
+        self._answered_end: float | None = None
+        """The end of the last master transmission this station answered or forfeited."""
+        self._ans_sticky = True
+        self._need_level = 0
+        self._on_time = 0
+        self._window: tuple[float, float, bool] | None = None
+        for name in ("proceed", "answer", "link"):
+            self._deadlines.pop(name, None)
+
+    # ── public commands ───────────────────────────────────────────────
+
+    def set_callsigns(self, calls: Sequence[str]) -> None:
+        """As :meth:`LinkEngine.set_callsigns`: refused while a session is up."""
+        if self.state is not State.IDLE:
+            raise RuntimeError("a session is running")
+        cleaned = [c.strip().upper() for c in calls if c.strip()]
+        if not cleaned:
+            raise ValueError("at least one callsign is needed")
+        for call in cleaned:
+            pack_callsign(call)
+        self.callsigns = cleaned
+        self.my_call = cleaned[0]
+
+    def _calling_as(self, as_call: str | None) -> None:
+        if as_call is None:
+            self.my_call = self.callsigns[0]
+        elif as_call.upper() in self.callsigns:
+            self.my_call = as_call.upper()
+        else:
+            raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
+
+    def connect(self, remote_call: str, as_call: str | None = None) -> None:
+        """Call a station; the caller is the session's master once it reads the acceptance.
+        The first try goes once the last slot this station granted can no longer be in use."""
+        if self.state is not State.IDLE:
+            raise RuntimeError("already in a session")
+        self._calling_as(as_call)
+        self.remote_call = remote_call.upper()
+        self.session = self._new_session_number()
+        self.state = State.CONNECTING
+        self.role = Role.NONE
+        self._connect_tries = 0
+        self._left = None
+        self._disarm("leave")
+        self._reset_session()
+        self._cause = "connect"
+        if self.now >= self._hold_until - 1e-9:
+            self._send_connect()
+        else:
+            self._arm_at("connect", self._hold_until)
+
+    def _new_session_number(self) -> int:
+        # 1–255, and never 0 in the control frame's seven bits: a header with no counts, at
+        # level 0, and an SNR of 0 dB would be all zeros, which the PHY refuses
+        while True:
+            session = self.rng.randrange(1, 256)
+            if session & 0x7F:
+                return session
+
+    def probe(self, remote_call: str, as_call: str | None = None) -> None:
+        """Ask a station whether it hears this one, outside a session (ADR-0006). The probe
+        grants its answer a slot, at the level this station's own turnaround needs (a probe
+        carries no turnaround); the answer comes in it or not at all."""
+        if self.state is not State.IDLE:
+            raise RuntimeError("already in a session")
+        if self._probing is not None:
+            raise RuntimeError("a probe is already out")
+        self._calling_as(as_call)
+        self._probing = remote_call.upper()
+        self.last_probe = None
+        self.stats.probes_sent += 1
+        self._cause = "probe"
+        self._probe_unsent = True
+        if self.now >= self._hold_until - 1e-9:
+            self._send_probe()
+        else:
+            self._arm_at("probe", self._hold_until)
+
+    def disconnect(self) -> None:
+        """Orderly close. The master finishes what it has queued, and what the slave has, or
+        runs out of patience (ADR-0039), then sends DISC; the slave asks to leave in its next
+        answer and the master closes the session."""
+        if self.state is State.IDLE:
+            return
+        self._disc_requested = True
+        if self.role is Role.SLAVE and self._window is not None:
+            self._cause = "disconnect"
+            self._try_window()
+
+    @property
+    def disconnect_requested(self) -> bool:
+        return self._disc_requested and self.state is State.CONNECTED
+
+    def abort(self) -> None:
+        """Drop the session now. A master says DISC from idle, on the floor, at its next
+        opportunities, until one is answered or :attr:`GrantConfig.leave_repeats` have gone; a
+        slave, which never keys outside a slot, answers the old session's next header with a
+        DISC in its slot (ADR-0052)."""
+        if self.state is State.IDLE:
+            return
+        was_master = self.role is Role.MASTER
+        self._cause = "abort"
+        self._end_session("aborted")
+        if was_master and self._left is not None:
+            self._leave_repeats = self.cfg.leave_repeats
+            self._arm_at("leave", max(self.now, self._hold_until))
+
+    def send(self, data: bytes) -> None:
+        self._tx_queue += data
+        if self.role is Role.SLAVE and self._window is not None:
+            self._cause = "send"
+            self._try_window()
+
+    def set_identifier_due(self, due: bool = True) -> None:
+        """The daemon's word that this station's Morse identifier is due (07-protocol-8.md
+        §5.4). The engine places it — ahead of the master's next header, or ahead of the
+        slave's answer in the next slot granted with its time; the slave says in its answers
+        that it is due — and clears it once placed."""
+        self._identifier_due = due
+
+    def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
+        """As :meth:`LinkEngine.pin_mode`: this station's own new data goes at ``mode`` until
+        unpinned — the Test's ladder, at either end of a session."""
+        if mode is not None and mode not in (self.timing.data_capacity or {}):
+            raise ValueError(f"mode {mode} is not in the table")
+        if body_bytes is not None and body_bytes < 1:
+            raise ValueError("body_bytes must be at least 1")
+        self._pinned = mode
+        self._pin_body = body_bytes if mode is not None else None
+
+    def take_ladder(self) -> list[LadderRung]:
+        rungs, self.ladder = self.ladder, []
+        return rungs
+
+    def request_break(self) -> None:
+        """Kept for the daemon's interface. Every answer states the slave's queue and the next
+        header grants it, so the slave's data never waits for the master's to run out: there is
+        no turn to break into."""
+
+    @property
+    def tx_pending_bytes(self) -> int:
+        return len(self._tx_queue) + sum(len(r.body) for r in self._records.values() if not r.acked)
+
+    @property
+    def tx_undelivered_bytes(self) -> int:
+        return len(self._tx_queue) + sum(len(r.body) for r in self._records.values())
+
+    @property
+    def probing(self) -> bool:
+        return self._probing is not None
+
+    def all_acknowledged(self) -> bool:
+        return not self._tx_queue and all(r.acked for r in self._records.values())
+
+    @property
+    def connected(self) -> bool:
+        return self.state is State.CONNECTED
+
+    @property
+    def current_mode(self) -> int:
+        return self._recommended
+
+    @property
+    def level(self) -> int:
+        """The gap level in use: what a master grants, what a slave asks for."""
+        if self.role is Role.MASTER:
+            return max(self._level_asked, self._silence_level)
+        return self._need_level
+
+    def drain(self) -> list[Action]:
+        out, self.actions = self.actions, []
+        return out
+
+    def reset_stats(self) -> None:
+        self.stats = GrantStats()
+
+    def robust_mode(self, floor: bool) -> int:
+        """The slowest mode of a family that carries a connect body: what calls, acceptances,
+        probes and their answers go at."""
+        need = CONNECT_BODY_8_BYTES + 5
+        caps = self.timing.data_capacity or {}
+        for m in sorted(caps):
+            if self.timing.is_floor(m) == floor and caps[m] >= need:
+                return m
+        if floor:
+            return self.robust_mode(False)
+        raise ValueError("no mode carries a connect frame")
+
+    def burst_capacity(self, frame_s: float) -> int:
+        """Data frames of ``frame_s`` seconds one transmission may carry, one at least."""
+        count = min(self.cfg.max_data_frames, MAX_DATA)
+        if self.cfg.max_burst_s is not None and frame_s > 0:
+            count = min(count, max(1, int(self.cfg.max_burst_s / frame_s + 1e-9)))
+        return count
+
+    def set_max_burst_s(self, seconds: float | None) -> None:
+        self.cfg.max_burst_s = seconds
+
+    def set_ceiling(self, rung: int | None) -> None:
+        self.cfg.ceiling = rung
+
+    @property
+    def ceiling(self) -> int | None:
+        return self.cfg.ceiling
+
+    def set_max_mode(self, rung: int) -> None:
+        self.cfg.max_mode = rung
+
+    def set_air(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
+        """As :meth:`LinkEngine.set_air` (ADR-0026): another air from the next session on."""
+        if self.state is not State.IDLE or self._probing is not None:
+            raise RuntimeError("a session, a call or a probe is running")
+        self._move(timing, capabilities, max_mode)
+
+    def move_call(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
+        """As :meth:`LinkEngine.move_call` (ADR-0058): an unanswered call's next tries go out on
+        another air, its tries and timers standing."""
+        if self.state is not State.CONNECTING:
+            raise RuntimeError("no call is going out")
+        self._move(timing, capabilities, max_mode)
+
+    def _move(self, timing: PhyTiming, capabilities: int, max_mode: int | None) -> None:
+        self.timing = timing
+        self.cfg.capabilities = capabilities
+        if max_mode is not None:
+            self.cfg.max_mode = max_mode
+        self.rate = self._rate_controller()
+        self._recommended = self.cfg.initial_mode
+
+    @property
+    def connect_tries(self) -> int:
+        return self._connect_tries
+
+    @property
+    def connect_due(self) -> float | None:
+        return self._deadlines.get("connect")
+
+    # ── inputs ────────────────────────────────────────────────────────
+
+    def on_tx_done(self, now: float, frames_end: float | None = None) -> None:
+        """A transmission finished. ``frames_end`` is where its last frame ended on the air —
+        the card's clock less the keying tail; ``now`` when not given. The slot a transmission
+        granted is measured from it, as the other station measures it from the frames it hears
+        end (07-protocol-8.md §3.4)."""
+        self.now = max(self.now, now)
+        if not self._in_flight:
+            return
+        granted = self._in_flight.pop(0)
+        if granted is not None and granted is self._slot and not granted.final:
+            self._slot.final = True
+            self._open_slot(now if frames_end is None else frames_end)
+
+    def on_tx_dropped(self, now: float) -> None:
+        """The keying gate did not start a transmission: it would have begun past its
+        ``not_after``, and nothing of it was sent."""
+        self.now = max(self.now, now)
+        if self._in_flight:
+            self._in_flight.pop(0)
+        self.stats.dropped += 1
+
+    def on_tx_delayed(self, seconds: float) -> None:
+        """The daemon is holding this station's last transmission. A slot is absolute and a
+        late answer is dropped by the gate, so what moves is only what waits for this station's
+        own transmission to end: the master's next key, a call's next try, a probe's wait, a
+        leaving DISC's repeat."""
+        if seconds <= 0.0:
+            return
+        for name in self._deadlines:
+            if name not in ("link", "answer"):
+                self._deadlines[name] += seconds
+        self._hold_until += seconds
+
+    def tick(self, now: float) -> None:
+        self.now = max(self.now, now)
+        for name in sorted(self._deadlines, key=self._deadlines.__getitem__):
+            if self._deadlines.get(name, math.inf) <= self.now + 1e-9:
+                del self._deadlines[name]
+                self._cause = f"timer:{name}"
+                self._expire(name)
+
+    def next_deadline(self) -> float | None:
+        return min(self._deadlines.values()) if self._deadlines else None
+
+    def on_preamble(self, t_start: float, now: float, frame_s: float | None = None) -> None:
+        """A frame announced and not yet decoded. Inside a session it changes nothing: only
+        decoded content does (ADR-0069 §2.5). A caller or a prober takes it as carrier — its
+        next try, or its giving up, waits past the frame, which may be the answer."""
+        self.now = max(self.now, now)
+        if self.state is not State.CONNECTING and self._probing is None:
+            return
+        length = frame_s if frame_s is not None else self.timing.data_frame_s_for(0)
+        clear = t_start + length + self._budget(True) + self.cfg.guard_s
+        if "connect" in self._deadlines and self._connect_tries > 0:
+            self._deadlines["connect"] = max(self._deadlines["connect"], clear)
+        if "probe" in self._deadlines and not self._probe_unsent:
+            self._deadlines["probe"] = max(self._deadlines["probe"], clear)
+
+    def on_frame(self, frame: SoftFrame, now: float) -> None:
+        self.now = max(self.now, now)
+        self._cause = "frame"
+        payload, _ = frame.decode(None)
+        if frame.container is Container.CONTROL:
+            if payload is None:
+                return  # a control frame not read changes nothing
+            ctl = None
+            with contextlib.suppress(ValueError):
+                ctl = GrantFrame.decode(payload)
+            if ctl is not None:
+                self._on_control(ctl, frame)
+            return
+        if payload is not None and not self._outside(payload, frame):
+            return
+        if self.state not in (State.CONNECTED, State.DISCONNECTING):
+            return
+        if payload is None and not frame.trusted:
+            return  # untrusted and unread: nothing at all
+        if frame.floor != self.timing.is_floor(frame.mode):
+            self.stats.frames_failed += 1  # the chips are noise
+        elif self.role is Role.MASTER:
+            self._master_data(frame, payload is not None)
+        elif self.role is Role.SLAVE:
+            self._slave_data(frame, payload is not None)
+
+    def _outside(self, payload: bytes, frame: SoftFrame) -> bool:
+        """Handle a decoded DATA frame that is no session data — a call, an acceptance, a probe
+        or its answer — and ``True`` only for this session's data."""
+        try:
+            header, body = decode_data(payload)
+        except ValueError:
+            return False
+        if header.kind in (DataKind.CONNECT_REQ, DataKind.CONNECT_ACK):
+            self._on_connect(header, body, frame)
+            return False
+        if header.kind in (DataKind.PROBE, DataKind.PROBE_ACK):
+            self._on_probe(header.kind, body, frame)
+            return False
+        # a beacon or a datagram is nobody's session's, whatever its session byte says
+        return header.kind not in OUTSIDE_SESSIONS and header.session == self.session
+
+    # ── timers ────────────────────────────────────────────────────────
+
+    def _arm_at(self, name: str, at: float) -> None:
+        self._deadlines[name] = at
+
+    def _disarm(self, name: str) -> None:
+        self._deadlines.pop(name, None)
+
+    def _expire(self, name: str) -> None:
+        if name == "link":
+            self._end_session("link timeout")
+        elif name == "connect":
+            self._retry_connect()
+        elif name == "probe":
+            if self._probe_unsent:
+                self._send_probe()
+            elif self._probing is not None:
+                self.actions.append(Event("probe", f"{self._probing}: no answer"))
+                self._probing = None
+        elif name == "proceed":
+            self._proceed()
+        elif name == "answer":
+            self._key_answer()
+        elif name == "leave":
+            self._repeat_leave()
+
+    # ── timing ────────────────────────────────────────────────────────
+
+    def _budget(self, floor: bool) -> float:
+        return self.cfg.decode_budget_s[int(floor)]
+
+    def _own_latency(self) -> float:
+        return self.timing.tx_latency_s
+
+    def _slot_start(self, end: float, floor: bool, level: int, granter_turnaround: float) -> float:
+        """Where the slot granted by a transmission ending at ``end`` starts, as both stations
+        reckon it (07-protocol-8.md §3.1)."""
+        cfg = self.cfg
+        gap = max(self._budget(floor) + cfg.key_s, granter_turnaround) + cfg.guard_s
+        return end + gap + cfg.levels_s[min(level, len(cfg.levels_s) - 1)]
+
+    def _after(self, end: float, floor: bool, other_turnaround: float) -> float:
+        """The earliest this station keys after the other's transmission ends at ``end``: with
+        its last frame decoded, and radiating no sooner than the other hears again (§3.2). The
+        keying latency counted is this station's own, never more than the protocol's: a
+        station that radiates sooner than ``KEY`` waits the difference."""
+        lead = min(self.cfg.key_s, self._own_latency())
+        return end + max(self._budget(floor), other_turnaround - lead) + self.cfg.guard_s
+
+    def _level_for(self, extra_s: float) -> int:
+        """The smallest gap level at least ``extra_s`` long."""
+        for i, step in enumerate(self.cfg.levels_s):
+            if extra_s <= step + 1e-9:
+                return i
+        return len(self.cfg.levels_s) - 1
+
+    def _ctl_s(self, floor: bool) -> float:
+        return self.timing.control_frame_s_for(floor)
+
+    def _frame_s(self, floor: bool) -> float:
+        if floor and self.timing.floor_data_frame_s is not None:
+            return self.timing.floor_data_frame_s
+        return self.timing.data_frame_s
+
+    def _robust_frame_s(self, floor: bool) -> float:
+        return self.timing.data_frame_s_for(self.robust_mode(floor))
+
+    def _window_s(self, floor: bool, index: int) -> float:
+        return self.cfg.open_window_s[int(floor)] * (1 << index)
+
+    def _exchange_s(self) -> float:
+        """One whole exchange of the size in use: two full transmissions at the rungs the link
+        runs at with their control frames, the gaps at the highest level and the slack — or an
+        idle exchange's longest open window, whichever is longer."""
+        floor = (
+            self.timing.is_floor(self._burst_mode())
+            or self.timing.is_floor(self.rate.recommend())
+            or self._hdr_floor
+        )
+        frame = max(
+            self._frame_s(self.timing.is_floor(self._burst_mode())),
+            self._frame_s(self.timing.is_floor(self.rate.recommend())),
+        )
+        gap = (
+            self._slot_start(0.0, True, len(self.cfg.levels_s) - 1, self._peer_turnaround_s)
+            + self.cfg.slack_s
+        )
+        busy = 2 * (self._ctl_s(floor) + self.burst_capacity(frame) * frame + gap)
+        idle = self._ctl_s(True) + self._window_s(True, self.cfg.window_doublings) + 2 * gap
+        return max(busy, idle)
+
+    def _link_timeout(self) -> float:
+        return max(self.cfg.link_timeout_s, self.cfg.link_timeout_exchanges * self._exchange_s())
+
+    def _disc_patience(self) -> float:
+        return max(self.cfg.disc_patience_s, self.cfg.disc_patience_exchanges * self._exchange_s())
+
+    def _heard(self, frame: SoftFrame) -> None:
+        """A decoded frame of the session: the link is alive."""
+        self._heard_db = frame.snr_db
+        self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
+        self._heard_at = self.now
+        self._arm_at("link", self.now + self._link_timeout())
+
+    # ── rate and family ───────────────────────────────────────────────
+
+    def _cap(self) -> int:
+        if self.cfg.ceiling is None:
+            return self.cfg.max_mode
+        return min(self.cfg.max_mode, self.cfg.ceiling)
+
+    def _floor_only(self) -> bool:
+        return self.cfg.ceiling is not None and self.timing.is_floor(self.cfg.ceiling)
+
+    def _burst_mode(self) -> int:
+        chosen = self._recommended if self._pinned is None else self._pinned
+        return min(chosen, self._cap())
+
+    def _ctl_threshold(self) -> float:
+        return (self.timing.control_threshold_db or CONTROL_THRESHOLD_DB)[False]
+
+    def _wants_floor(self) -> bool:
+        """Whether this station needs the other's control frames on the floor: it hears the
+        other under the ordinary control frame's threshold plus a margin, or not yet at all."""
+        if self.timing.floor_modes <= 0:
+            return False
+        if self._floor_only() or not self._heard_recent:
+            return True
+        return min(self._heard_recent) < self._ctl_threshold() + self.cfg.answer_floor_margin_db
+
+    def _recommend(self, floor_only: bool = False) -> int:
+        """The rung this station's control frame recommends for the other's data, remembered
+        (ADR-0020). ``floor_only``: the other station has said its data can only go on the tone
+        floor — its ceiling or its pinned rung is there — and a header's rung is also what its
+        grant is sized by, so it stays on the floor: granted in ordinary frames, a floor-only
+        slave's data never fitted, and never went."""
+        rung = self.rate.recommend()
+        if floor_only and self.timing.floor_modes > 0:
+            rung = min(rung, self.timing.floor_modes - 1)
+        self._asked = rung if self._asked is None else max(self._asked, rung)
+        return rung
+
+    def _back_off(self) -> None:
+        modes = self.rate.modes
+        current = min(self._recommended, self._cap())
+        below = [m for m in modes if m <= current]
+        index = modes.index(below[-1]) if below else 0
+        self._recommended = modes[max(0, index - self.cfg.silence_step)]
+
+    def _hopeless(self, mode: int) -> bool:
+        thresholds = self.rate.thresholds
+        if self.peer_snr_db is None or mode not in thresholds:
+            return False
+        reach = thresholds[mode] - 10.0 * math.log10(max(1, self.cfg.max_combines))
+        return self.peer_snr_db < reach - self.cfg.reencode_hopeless_db
+
+    def _fits(self, body_len: int, mode: int) -> bool:
+        cap = data_capacity(self.timing.capacity(mode))
+        return body_len == cap or body_len <= cap - 2
+
+    def _reencode_target(self, body_len: int, from_mode: int, to_mode: int) -> int | None:
+        for mode in sorted(self.timing.data_capacity or {}):
+            if to_mode <= mode < from_mode and self._fits(body_len, mode):
+                return mode
+        return None
+
+    def _rate_controller(self) -> RateController:
+        thresholds = self.timing.mode_threshold_db
+        floor = {
+            "floor_modes": self.timing.floor_modes,
+            "floor_margin_db": self.timing.floor_margin_db,
+        }
+        if thresholds is None:
+            return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
+        payload = self.timing.data_capacity or {m: 0 for m in thresholds}
+        frame_s = {m: self.timing.data_frame_s_for(m) for m in thresholds}
+        return RateController(
+            thresholds=dict(thresholds),
+            modes=usable_modes(thresholds, payload, frame_s),
+            **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
+        )
+
+    # ── keying ────────────────────────────────────────────────────────
+
+    def _transmit(
+        self,
+        frames: list[TxFrame],
+        *,
+        not_after: float | None = None,
+        identifier_s: float = 0.0,
+        granting: _Slot | None = None,
+    ) -> float:
+        """Hand a transmission over; returns where its frames end on the air, as far as this
+        engine knows."""
+        dur = identifier_s + sum(self.timing.frame_s(f) for f in frames)
+        self.actions.append(
+            SlotTransmit(
+                frames, dur, not_after=not_after, identifier_s=identifier_s, cause=self._cause
+            )
+        )
+        self._in_flight.append(granting)
+        self.stats.transmissions += 1
+        return self.now + self._own_latency() + dur
+
+    def _control(self, ctl: GrantFrame, floor: bool) -> TxFrame:
+        return TxFrame(Container.CONTROL, ctl.encode(), floor=floor)
+
+    def _take_identifier(self) -> float:
+        """This station's identifier, when it is due and there is one: placed, and so no longer
+        due."""
+        if not self._identifier_due or self.cfg.identifier_s <= 0.0:
+            return 0.0
+        self._identifier_due = False
+        return self.cfg.identifier_s
+
+    # ── slots this station grants ─────────────────────────────────────
+
+    def _key_granting(
+        self, slot: _Slot, frames: list[TxFrame], *, identifier_s: float = 0.0
+    ) -> None:
+        """Key a transmission that grants a slot, and wait for the slot — placed from this
+        engine's estimate of the transmission's end until ``on_tx_done`` says where it was."""
+        self._slot = slot
+        end = self._transmit(frames, identifier_s=identifier_s, granting=slot)
+        self._open_slot(end)
+
+    def _open_slot(self, end: float) -> None:
+        slot = self._slot
+        if slot is None:
+            return
+        slot.tx_end = end
+        slot.start = self._slot_start(end, slot.last_floor, slot.level, slot.granter_turnaround_s)
+        slot.end_max = slot.start + slot.grant_s + (0.0 if slot.open_window else self.cfg.slack_s)
+        self._arm_wait()
+
+    def _slot_close(self, slot: _Slot) -> float:
+        """When this station may key again: a gap after the end a decoded frame of the slot
+        stated, or after the slot's latest end when nothing of it was decoded (§3.2)."""
+        if slot.stated_end is not None:
+            return self._after(slot.stated_end, slot.stated_floor, self._peer_turnaround_s)
+        end = slot.end_max + self._peer_late_s
+        return self._after(end, any(slot.answer_floors), self._peer_turnaround_s)
+
+    def _arm_wait(self) -> None:
+        """Arm what ends this station's wait for the slot it granted last."""
+        slot = self._slot
+        if slot is None:
+            return
+        due = self._slot_close(slot)
+        self._hold_until = due
+        if slot.kind == "connect" and self.state is State.CONNECTING:
+            self._arm_at("connect", due + self._call_jitter)
+        elif slot.kind == "probe":
+            if self._probing is not None and not self._probe_unsent:
+                self._arm_at("probe", due)
+        elif self.role is Role.MASTER and self.state in (State.CONNECTED, State.DISCONNECTING):
+            self._arm_at("proceed", max(self.now, due))
+
+    def _in_slot(self, frame: SoftFrame) -> bool:
+        """A frame of the other station's is of the slot this station granted last if it began
+        after the granting transmission ended: the other station keys only in a slot."""
+        slot = self._slot
+        return slot is not None and slot.final and frame.t_start >= slot.tx_end - 1e-9
+
+    def _state_end(self, end: float, floor: bool) -> None:
+        """A decoded frame of the slot says where the other station's transmission ends."""
+        slot = self._slot
+        if slot is None:
+            return
+        slot.heard = True
+        if slot.stated_end is None or end >= slot.stated_end - 1e-9:
+            slot.stated_end = end
+            slot.stated_floor = floor
+        self._arm_wait()
+
+    # ── the call and the probe ────────────────────────────────────────
+
+    def _connect_floor(self) -> bool:
+        if self.timing.floor_modes > 0 and self._floor_only():
+            return True
+        return self.timing.floor_modes > 0 and self._connect_tries % 2 == 0
+
+    def _call_level(self) -> int:
+        """The gap level a call grants its acceptance: up one every second try, so a called
+        station whose computer decodes late is reached (capability bits 3–4)."""
+        return min(len(self.cfg.levels_s) - 1, self._connect_tries // 2)
+
+    def _send_connect(self) -> None:
+        """A try of the call: on the tone floor first, the families alternating (ADR-0016); the
+        acceptance's slot at the try's level; the next try once that slot can no longer be in
+        use, and a random part of a floor frame per try later, so that two stations calling
+        each other fall apart."""
+        floor = self._connect_floor()
+        level = self._call_level()
+        body = ConnectBody(
+            self.my_call,
+            self.remote_call,
+            caps=with_level(self.cfg.capabilities, level),
+            version=GRANTED_VERSION,
+            turnaround_s=self.cfg.turnaround_s,
+            identifier_s=self.cfg.identifier_s,
+        ).encode()
+        mode = self.robust_mode(floor)
+        payload = encode_data(
+            DataHeader(DataKind.CONNECT_REQ, 0, self.session), body, self.timing.capacity(mode)
+        )
+        self._connect_tries += 1
+        self._call_jitter = self.rng.uniform(
+            0.0, (1 + self._connect_tries) * self._robust_frame_s(True)
+        )
+        # the acceptance comes in the request's family, or on the floor when the call arrived
+        # weak (ADR-0056) or the rules allow only the floor
+        families = frozenset({True, False}) if self.timing.floor_modes > 0 else frozenset({False})
+        self._key_granting(
+            _Slot(
+                kind="connect",
+                grant_s=max(self._robust_frame_s(f) for f in families),
+                last_floor=self.timing.is_floor(mode),
+                answer_floors=families,
+                level=level,
+                granter_turnaround_s=self.cfg.turnaround_s,
+            ),
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)],
+        )
+
+    def _retry_connect(self) -> None:
+        if self.state is not State.CONNECTING:
+            return
+        if self._connect_tries >= self.cfg.connect_retries:
+            self._end_session("no answer")
+            return
+        self._send_connect()
+
+    def _send_probe(self) -> None:
+        """The probe goes on the tone floor (ADR-0016). It carries no turnaround: its level
+        covers this station's own."""
+        self._probe_unsent = False
+        if self._probing is None:
+            return
+        level = self._level_for(self.cfg.turnaround_s - self._budget(True) - self.cfg.key_s)
+        body = ProbeBody(
+            self.my_call, self._probing, None, caps=with_level(self.cfg.capabilities, level)
+        ).encode()
+        mode = self.robust_mode(True)
+        payload = encode_data(DataHeader(DataKind.PROBE, 0, 0), body, self.timing.capacity(mode))
+        families = frozenset({True, False}) if self.timing.floor_modes > 0 else frozenset({False})
+        self._key_granting(
+            _Slot(
+                kind="probe",
+                grant_s=max(self._robust_frame_s(f) for f in families),
+                last_floor=self.timing.is_floor(mode),
+                answer_floors=families,
+                level=level,
+                granter_turnaround_s=0.0,
+            ),
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)],
+        )
+
+    def _on_connect(self, header: DataHeader, body: bytes, frame: SoftFrame) -> None:
+        try:
+            cb = ConnectBody.decode(body)
+        except ValueError:
+            return
+        if header.kind is DataKind.CONNECT_REQ:
+            self._on_request(header, cb, frame, len(body))
+        else:
+            self._on_acceptance(header, cb, frame, len(body))
+
+    def _version_ok(self, cb: ConnectBody, size: int, verb: str) -> bool:
+        if cb.version == GRANTED_VERSION and size >= CONNECT_BODY_8_BYTES:
+            return True
+        self.actions.append(Event("ignored", f"{cb.src} {verb} with link protocol {cb.version}"))
+        return False
+
+    def _on_request(
+        self, header: DataHeader, req: ConnectBody, frame: SoftFrame, size: int
+    ) -> None:
+        if req.dst not in self.callsigns:
+            return
+        if bandwidth_code(req.caps) != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(
+                Event("ignored", f"{req.src} calls in another bandwidth{self._mismatch(req.caps)}")
+            )
+            return
+        if not self._version_ok(req, size, "calls"):
+            return
+        start = self._slot_start(frame.t_end, frame.floor, level_of(req.caps), req.turnaround_s)
+        if self.state in (State.CONNECTED, State.DISCONNECTING) and not self._called_again(
+            header, req, frame, start
+        ):
+            return
+        if start < self._hold_until - 1e-9 or self._probing is not None:
+            return  # its slot would fall in one this station granted, still open
+        if self.state is State.CONNECTING:
+            if req.src == self.remote_call and self.my_call > self.remote_call:
+                return  # simultaneous calls: the higher callsign keeps calling
+            self._disarm("connect")
+        self._accept_call(header, req, frame, start)
+
+    def _called_again(
+        self, header: DataHeader, req: ConnectBody, frame: SoftFrame, start: float
+    ) -> bool:
+        """A call heard in a session. The peer's under a new session number has given the
+        session up (ADR-0056): the session ends, ``True``, and the call is answered as from
+        idle. The peer's under this session's number is a try whose acceptance was not read:
+        answered again, in its own slot, with the SNR it arrived at (P9-2)."""
+        if req.src != self.remote_call:
+            return False  # another station's call: this one is in a session
+        if header.session != self.session:
+            self._end_session(f"{req.src} called again")
+            return True
+        if self.role is Role.SLAVE and self._m_end is None and self._grant is None:
+            self._heard(frame)
+            self._measure(frame)
+            self._schedule_acceptance(req, frame, start)
+        return False
+
+    def _accept_call(
+        self, header: DataHeader, req: ConnectBody, frame: SoftFrame, start: float
+    ) -> None:
+        self.my_call = req.dst
+        self.remote_call = req.src
+        self.session = header.session
+        self._left = None
+        self._disarm("leave")
+        self._reset_session()
+        self.peer_capabilities = req.caps & ~CAP_LEVEL_MASK & 0xFF
+        self._peer_turnaround_s = req.turnaround_s
+        self._peer_identifier_s = req.identifier_s
+        self.state = State.CONNECTED
+        self.role = Role.SLAVE
+        self._heard(frame)
+        self._measure(frame)
+        # the request is the first measurement of how the caller is heard; a lower bound if it
+        # came on the tone floor (ADR-0016)
+        self.rate.seed(frame.snr_db, lower_bound=frame.floor)
+        self._ans_sticky = self._acceptance_floor(frame)
+        self.actions.append(Event("connected", f"{self.remote_call} (slave)"))
+        self.actions.append(Event("role", "slave"))
+        self._schedule_acceptance(req, frame, start)
+
+    def _acceptance_floor(self, frame: SoftFrame) -> bool:
+        """The acceptance goes back in the request's family — or on the floor when an ordinary
+        call arrived too weak to bet the session on an ordinary acceptance making it back
+        (ADR-0056), or when the rules allow only the floor."""
+        if frame.floor or self._floor_only():
+            return self.timing.floor_modes > 0
+        if self.timing.floor_modes <= 0:
+            return False
+        threshold = self.rate.thresholds.get(self.robust_mode(False))
+        return threshold is not None and frame.snr_db < threshold + self.cfg.floor_answer_margin_db
+
+    def _schedule_acceptance(self, req: ConnectBody, frame: SoftFrame, start: float) -> None:
+        self._schedule(
+            _Answer(
+                what="connect_ack",
+                start=start,
+                not_after=start + self.cfg.slack_s,
+                floor=self._acceptance_floor(frame),
+                session=self.session,
+                anchor=frame.t_end,
+                remote=req.src,
+                snr_db=frame.snr_db,
+            )
+        )
+
+    def _on_acceptance(
+        self, header: DataHeader, ack: ConnectBody, frame: SoftFrame, size: int
+    ) -> None:
+        if self.state is not State.CONNECTING or header.session != self.session:
+            return
+        if ack.dst != self.my_call:
+            return
+        if bandwidth_code(ack.caps) != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(Event("ignored", f"{ack.src} answers in another bandwidth"))
+            return
+        if not self._version_ok(ack, size, "answers"):
+            return
+        self._disarm("connect")
+        self.peer_capabilities = ack.caps & ~CAP_LEVEL_MASK & 0xFF
+        self._peer_turnaround_s = ack.turnaround_s
+        self._peer_identifier_s = ack.identifier_s
+        # an acceptance's level bits say the gap level the slave needs, measured on the call
+        self._level_asked = level_of(ack.caps)
+        self.state = State.CONNECTED
+        self.role = Role.MASTER
+        self._heard(frame)
+        self.rate.seed(frame.snr_db, lower_bound=frame.floor)
+        self._recommended = self.cfg.initial_mode
+        if ack.snr_db is not None:
+            first = self.rate.first_mode(ack.snr_db)
+            self._recommended = max(self.cfg.initial_mode, min(self._cap(), first))
+            self.peer_snr_db = ack.snr_db
+            # the first header goes in the family the slave's reading of the call asks for: a
+            # floor reading is a lower bound, never too fast
+            if self.timing.floor_modes > 0:
+                self._hdr_floor = self._floor_only() or (
+                    ack.snr_db < self._ctl_threshold() + self.cfg.answer_floor_margin_db
+                )
+        self._possible = {frame.floor}
+        self.actions.append(Event("connected", f"{self.remote_call} (master)"))
+        self.actions.append(Event("role", "master"))
+        if self._slot is not None and self._in_slot(frame):
+            self._state_end(frame.t_end, frame.floor)
+        else:
+            # an earlier try's acceptance, read late: the latest try's slot may be in use
+            self._arm_wait()
+
+    def _on_probe(self, kind: DataKind, body: bytes, frame: SoftFrame) -> None:
+        try:
+            pb = ProbeBody.decode(body)
+        except ValueError:
+            return
+        if kind is DataKind.PROBE:
+            if pb.dst not in self.callsigns or self.state is not State.IDLE:
+                return  # a session's frames matter more than a question from outside it
+            if self._probing is not None:
+                return
+            start = self._slot_start(frame.t_end, frame.floor, level_of(pb.caps), 0.0)
+            if start < self._hold_until - 1e-9:
+                return
+            # answered across bandwidths too, on the floor both airs share (ADR-0035)
+            across = bandwidth_code(pb.caps) != bandwidth_code(self.cfg.capabilities)
+            self.my_call = pb.dst
+            self.stats.probes_answered += 1
+            self.actions.append(
+                Event("probed", f"{pb.src} at {frame.snr_db:.1f} dB{self._mismatch(pb.caps)}")
+            )
+            self._schedule(
+                _Answer(
+                    what="probe_ack",
+                    start=start,
+                    not_after=start + self.cfg.slack_s,
+                    floor=self.timing.floor_modes > 0
+                    and (across or frame.floor or self._floor_only()),
+                    remote=pb.src,
+                    snr_db=frame.snr_db,
+                    anchor=frame.t_end,
+                )
+            )
+            return
+        if self._probing is None or pb.dst != self.my_call or pb.src != self._probing:
+            return
+        self._disarm("probe")
+        self._probing = None
+        self.stats.probe_replies += 1
+        self.last_probe = ProbeResult(pb.src, pb.snr_db, frame.snr_db, bandwidth_hz_of(pb.caps))
+        theirs = "?" if pb.snr_db is None else f"{pb.snr_db:.0f}"
+        self.actions.append(
+            Event(
+                "probe",
+                f"{pb.src} hears us at {theirs} dB, heard at {frame.snr_db:.1f} dB"
+                f"{self._mismatch(pb.caps)}",
+            )
+        )
+        if self._slot is not None and self._slot.kind == "probe" and self._in_slot(frame):
+            self._state_end(frame.t_end, frame.floor)
+
+    def _mismatch(self, caps: int) -> str:
+        if bandwidth_code(caps) == bandwidth_code(self.cfg.capabilities):
+            return ""
+        theirs = bandwidth_hz_of(caps)
+        ours = bandwidth_hz_of(self.cfg.capabilities)
+        there = "an unknown bandwidth" if theirs is None else f"{theirs} Hz"
+        here = "an unknown bandwidth" if ours is None else f"{ours} Hz"
+        return f" — runs {there}, this station {here}"
+
+    # ── control frames ────────────────────────────────────────────────
+
+    def _on_control(self, ctl: GrantFrame, frame: SoftFrame) -> None:
+        if self.state in (State.IDLE, State.CONNECTING):
+            self._answer_left(ctl, frame)
+            return
+        if ctl.session != self.session & 0x7F:
+            return
+        if self.role is Role.MASTER:
+            self._master_control(ctl, frame)
+        else:
+            self._slave_control(ctl, frame)
+
+    # ── the master ────────────────────────────────────────────────────
+
+    def _master_control(self, ctl: GrantFrame, frame: SoftFrame) -> None:
+        if not self._in_slot(frame):
+            return  # a frame of a slot already closed: its timing is nothing's now
+        self._heard(frame)
+        if ctl.snr_db is not None:
+            self.peer_snr_db = ctl.snr_db
+        if ctl.kind is GrantKind.DISC_ACK:
+            if self.state is State.DISCONNECTING:
+                self._end_session("closed")
+            return
+        if ctl.kind is GrantKind.DISC:
+            # the slave has left (an abort, a left session's answer): nothing to answer
+            self._end_session("peer disconnected")
+            return
+        if ctl.kind is not GrantKind.ANSWER:
+            return
+        slot = self._slot
+        if slot is not None and not slot.open_window:
+            late = frame.t_start - slot.ident_s - slot.start - self.cfg.slack_s
+            if late > self._peer_late_s:
+                self._peer_late_s = late
+            else:
+                self._peer_late_s = max(0.0, late, self._peer_late_s - 0.1)
+        self._take_ack(ctl)
+        self._slave_want = ctl.n
+        self._level_asked = ctl.level
+        self._hdr_floor = ctl.fam or self._floor_only()
+        self._possible = {frame.floor}
+        self._slave_leaves = ctl.flag
+        if not ctl.count:
+            self._slave_floor_only = ctl.data_floor
+        self._slave_id_due = ctl.ident
+        self._open_rx(frame, ctl.count, ctl.data_floor)
+        if ctl.count:
+            self._ack_owed = True
+        last_floor = ctl.data_floor if ctl.count else frame.floor
+        self._state_end(frame.t_end + ctl.count * self._frame_s(ctl.data_floor), last_floor)
+
+    def _master_data(self, frame: SoftFrame, decoded: bool) -> None:
+        if not self._in_slot(frame):
+            if decoded:
+                # of an earlier slot, decoded late: what it carries is kept (sequence numbers
+                # make that safe), its timing is not
+                payload, _ = frame.decode(None)
+                if payload is not None:
+                    self._accept(_RxRecord(frame, 0), payload)
+            return
+        rec = self._take_data(frame)
+        if rec.payload is None:
+            return
+        self._heard(frame)
+        self._ack_owed = True
+        if frame.follows is not None and frame.follows < MAX_FOLLOWS:
+            floor = self.timing.is_floor(frame.mode)
+            self._state_end(frame.t_end + frame.follows * (frame.t_end - frame.t_start), floor)
+        elif self._slot is not None:
+            self._slot.heard = True
+
+    def _proceed(self) -> None:
+        """The slot is over: the master keys again."""
+        if self.role is not Role.MASTER or self.state not in (
+            State.CONNECTED,
+            State.DISCONNECTING,
+        ):
+            return
+        self._close_slot()
+        if self.state is State.IDLE:
+            return
+        if self.state is State.DISCONNECTING:
+            if self._disc_tries >= self.cfg.disc_retries:
+                self._end_session("closed (no DISC_ACK)")
+                return
+            self._send_disc()
+            return
+        if (self._disc_requested or self._slave_leaves) and self._can_leave():
+            self.state = State.DISCONNECTING
+            self._send_disc()
+            return
+        self._send_header()
+
+    def _can_leave(self) -> bool:
+        if self.all_acknowledged() and not self._slave_want and self._max_seen is None:
+            return True
+        if self._patience_until is None:
+            self._patience_until = self.now + self._disc_patience()
+        return self.now >= self._patience_until
+
+    def _close_slot(self) -> None:
+        """What the slave sent in the slot goes to the rate controller; silence is counted and
+        stepped down from (ADR-0069 §2.5)."""
+        slot, self._slot = self._slot, None
+        if slot is None:
+            return
+        if self._rx:
+            self._observe(self._rx)
+        self._restart_rx()
+        if slot.heard:
+            self._silent = 0
+            self._answered_run += 1
+            if self._answered_run >= self.cfg.on_time_to_lower and self._silence_level > 0:
+                self._silence_level -= 1
+                self._answered_run = 0
+            self._idle_windows = self._idle_windows + 1 if slot.open_window else 0
+            return
+        if slot.open_window:
+            self._idle_windows += 1  # an open window nobody needed is no silence
+            return
+        self.stats.silent_slots += 1
+        self._silent += 1
+        self._answered_run = 0
+        if (
+            self._silent >= self.cfg.silence_levels_after
+            and self._silence_level < len(self.cfg.levels_s) - 1
+        ):
+            self._silence_level += 1
+        if slot.data:
+            self._back_off()
+        if slot.granted and self._silent >= 2:
+            self.rate.observe(None, 0, 1)
+        if self._silent > self.cfg.max_retries:
+            self._end_session("no response")
+
+    def _has_work(self) -> bool:
+        return bool(self._tx_queue) or bool(self._unacked())
+
+    def _grant_size(self, rung: int) -> tuple[int, bool, int]:
+        """(data frames granted, open window, window index): the master's policy (§5.2)."""
+        frame = self._frame_s(self.timing.is_floor(rung))
+        fit = min(self.cfg.max_data_frames, MAX_DATA)
+        if self.cfg.max_burst_s is not None:
+            room = self.cfg.max_burst_s - self._ctl_s(True) - self._peer_identifier_s
+            fit = min(fit, max(0, int(room / frame + 1e-9)))
+        if self._slave_want is None:
+            return min(self.cfg.first_grant, fit), False, 0
+        if self._slave_want > 0:
+            return min(self._slave_want, fit), False, 0
+        idle = not self._has_work() and not self._disc_requested and not self._slave_id_due
+        if idle and self.now - self._heard_at < self.cfg.keepalive_s:
+            return 0, True, min(self.cfg.window_doublings, self._idle_windows)
+        return 0, False, 0
+
+    def _elide(self, n: int, open_window: bool, wanted: bool) -> bool:
+        """Whether this transmission may go without its header (R7): data only, nothing granted
+        beyond an answer, the gap at level 0, nothing to acknowledge or recommend anew, the last
+        slot heard, no identifier, and the answer's family one the slave surely holds."""
+        return (
+            self.cfg.elide
+            and not open_window
+            and n == 0
+            and self._slave_want == 0
+            and self._silent == 0
+            and self.level == 0
+            and self._possible == {wanted}
+            and not self._ack_owed
+            and not self._slave_id_due
+            and not self._identifier_due
+            and self._has_work()
+        )
+
+    def _send_header(self) -> None:
+        rung = self._recommend(self._slave_floor_only)
+        n, open_window, index = self._grant_size(rung)
+        wanted = self._wants_floor() or self._silent >= 2
+        elide = self._elide(n, open_window, wanted)
+        hdr_floor = self._hdr_floor or self._silent >= 2 or self._floor_only()
+        ident_s = self._take_identifier()
+        room = math.inf if self.cfg.max_burst_s is None else self.cfg.max_burst_s - ident_s
+        data: list[TxFrame] = []
+        if not open_window:
+            data = self._data_frames(room - self._ctl_s(hdr_floor))
+        # the header is left out only of a transmission that carries no fewer data frames for
+        # it: capped at the four whose counts can anchor it, the 15-byte rung of the 500 Hz
+        # air sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB)
+        elide = elide and 0 < len(data) <= MAX_FOLLOWS + 1
+        level = 0 if elide else self.level
+        slave_ident = self._slave_id_due and not elide
+        if not elide:
+            self._possible.add(wanted)
+        answer_floors = set(self._possible | {wanted})
+        ans_s = max(self._ctl_s(f) for f in answer_floors)
+        slave_floor = self.timing.is_floor(rung)
+        if open_window:
+            grant_s = self._window_s(hdr_floor, index)
+        else:
+            grant_s = ans_s + n * self._frame_s(slave_floor)
+            if n:
+                answer_floors.add(slave_floor)
+            if slave_ident:
+                grant_s += self._peer_identifier_s
+        data_floor = bool(data) and self.timing.is_floor(data[0].mode)
+        frames: list[TxFrame] = list(data)
+        if elide:
+            self.stats.headers_elided += 1
+        else:
+            ctl = GrantFrame(
+                GrantKind.HEADER,
+                self.session & 0x7F,
+                count=len(data),
+                data_floor=data_floor,
+                level=level,
+                fam=wanted,
+                flag=open_window,
+                ident=slave_ident,
+                snr_db=self._heard_db,
+                rung=rung,
+                n=index if open_window else n,
+                **self._ack_fields(),
+            )
+            frames.insert(0, self._control(ctl, hdr_floor))
+            self._ack_owed = False
+            self._slave_id_due = False
+        self._key_granting(
+            _Slot(
+                kind="header",
+                grant_s=grant_s,
+                last_floor=data_floor if data else hdr_floor,
+                answer_floors=frozenset(answer_floors),
+                level=level,
+                granter_turnaround_s=self.cfg.turnaround_s,
+                open_window=open_window,
+                ident_s=self._peer_identifier_s if slave_ident else 0.0,
+                data=bool(data),
+                granted=n,
+            ),
+            frames,
+            identifier_s=ident_s,
+        )
+
+    def _send_disc(self) -> None:
+        """DISC grants the DISC_ACK's slot with the slave's identifier time — its closing
+        identifier goes ahead of the DISC_ACK. The master's own goes ahead of its first DISC."""
+        self._disc_tries += 1
+        wanted = self._wants_floor() or self._silent >= 1
+        floor = self._hdr_floor or self._silent >= 1 or self._floor_only()
+        level = self.level
+        ctl = GrantFrame(
+            GrantKind.DISC,
+            self.session & 0x7F,
+            level=level,
+            fam=wanted,
+            ident=self._peer_identifier_s > 0,
+            snr_db=self._heard_db,
+        )
+        ident_s = self.cfg.identifier_s if self._disc_tries == 1 else 0.0
+        if ident_s:
+            self._identifier_due = False
+        self._possible.add(wanted)
+        answer_floors = frozenset(self._possible | {wanted})
+        self._key_granting(
+            _Slot(
+                kind="disc",
+                grant_s=max(self._ctl_s(f) for f in answer_floors) + self._peer_identifier_s,
+                last_floor=floor,
+                answer_floors=answer_floors,
+                level=level,
+                granter_turnaround_s=self.cfg.turnaround_s,
+            ),
+            [self._control(ctl, floor)],
+            identifier_s=ident_s,
+        )
+
+    # ── the slave ─────────────────────────────────────────────────────
+
+    def _placed(self, frame: SoftFrame, decoded: bool) -> bool:
+        """Place a frame of the master's among its transmissions: ``False`` for one of a
+        transmission this station has answered already, decoded late, and for one that cannot
+        be the master's. A frame that begins at or after the end of the transmission being
+        received starts the next one — once this station has answered that transmission, or
+        when the frame decoded: the master keys only after the slot, so until then a frame
+        nothing vouches for is no transmission of its, and changes nothing (ADR-0069 §2.5)."""
+        if self._answered_end is not None and frame.t_end <= self._answered_end + 1e-6:
+            return False
+        if self._m_end is not None and frame.t_start >= self._m_end - 1e-3:
+            owed = self._answered_end is None or abs(self._m_end - self._answered_end) > 1e-6
+            if owed and not decoded:
+                return False
+            self._next_transmission()
+        return True
+
+    def _next_transmission(self) -> None:
+        """The master transmission being received is over and another begins. What is left of
+        the last was heard after its answer, or with no anchor to answer it by: nothing the
+        rate controller can take as a transmission — false detections between transmissions,
+        each counted a failed transmission of its own, held the master's rung on the floor
+        through the review's phantom storm."""
+        self._restart_rx()
+        self._grant = None
+        self._m_end = None
+        self._window = None
+        if self._answer is not None and self._answer.what in ("ans", "window"):
+            self._answer = None
+            self._disarm("answer")
+
+    def _slave_control(self, ctl: GrantFrame, frame: SoftFrame) -> None:
+        if not self._placed(frame, True):
+            if ctl.kind is GrantKind.HEADER:
+                self._take_ack(ctl, recommendation=False)
+            return
+        self._heard(frame)
+        self._measure(frame)
+        if ctl.snr_db is not None:
+            self.peer_snr_db = ctl.snr_db
+        if ctl.kind is GrantKind.DISC:
+            self._end_session("peer disconnected", disc_heard=True)
+            self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
+            return
+        if ctl.kind is not GrantKind.HEADER:
+            return
+        self._open_rx(frame, ctl.count, ctl.data_floor)
+        self._take_ack(ctl)
+        self._ans_sticky = ctl.fam or self._floor_only()
+        self._grant = ctl
+        self._grant_floor = frame.floor
+        self._m_end = frame.t_end + ctl.count * self._frame_s(ctl.data_floor)
+        self._m_last_floor = ctl.data_floor if ctl.count else frame.floor
+        self._schedule_slave()
+
+    def _slave_data(self, frame: SoftFrame, decoded: bool) -> None:
+        if not self._placed(frame, decoded):
+            if decoded:
+                payload, _ = frame.decode(None)
+                if payload is not None:
+                    self._accept(_RxRecord(frame, 0), payload)
+            return
+        rec = self._take_data(frame)
+        if rec.payload is None:
+            return
+        self._heard(frame)
+        self._measure(frame)
+        if self._m_end is None and frame.follows is not None and frame.follows < MAX_FOLLOWS:
+            # the header was not read: the transmission's end is the one this frame states
+            self._m_end = frame.t_end + frame.follows * (frame.t_end - frame.t_start)
+            self._m_last_floor = self.timing.is_floor(frame.mode)
+            self._schedule_slave()
+
+    def _measure(self, frame: SoftFrame) -> None:
+        """How late this station's receiver reported a frame of the other's, and how late its
+        keying is, against what the slot allows: the level its answers ask for. Up at once,
+        down one level after :attr:`GrantConfig.need_ease_after` frames on time."""
+        late = self.now - frame.t_end - self._budget(frame.floor)
+        late += max(0.0, self._own_latency() - self.cfg.key_s)
+        need = self._level_for(late)
+        if need > self._need_level:
+            self._need_level = need
+            self._on_time = 0
+        elif need < self._need_level:
+            self._on_time += 1
+            if self._on_time >= self.cfg.need_ease_after:
+                self._need_level -= 1
+                self._on_time = 0
+
+    def _schedule_slave(self) -> None:
+        """The slot the master transmission being received grants. A value the master can
+        change is taken only from that transmission's own header; without it, the one that
+        fits every slot the master may have granted — level 0, an answer alone, the family last
+        asked for (ADR-0069 §2.3)."""
+        if self._m_end is None or self.state is not State.CONNECTED:
+            return
+        if self._answered_end is not None and abs(self._m_end - self._answered_end) < 1e-6:
+            return
+        grant = self._grant
+        level = grant.level if grant is not None else 0
+        start = self._slot_start(self._m_end, self._m_last_floor, level, self._peer_turnaround_s)
+        floor = self._ans_sticky
+        if grant is not None and grant.flag:
+            window = self._window_s(self._grant_floor, grant.n)
+            self._window = (start, start + window, floor)
+            self._answer = None
+            self._disarm("answer")
+            if self._has_work() or self._disc_requested or self._identifier_due:
+                self._try_window()
+            return
+        self._window = None
+        room = 0.0
+        ident = False
+        if grant is not None:
+            room = grant.n * self._frame_s(self.timing.is_floor(grant.rung))
+            ident = grant.ident
+        self._schedule(
+            _Answer(
+                what="ans",
+                start=start,
+                not_after=start + self.cfg.slack_s,
+                floor=floor,
+                session=self.session,
+                anchor=self._m_end,
+                room_s=room,
+                ident=ident,
+            )
+        )
+
+    def _schedule(self, answer: _Answer) -> None:
+        """Owe an answer in a slot — or forfeit it, decoded too late to start on time. Nothing
+        is ever sent late."""
+        if self.now > answer.start - self._own_latency() + self.cfg.slack_s + 1e-9:
+            self.stats.forfeits += 1
+            if answer.what == "ans":
+                self._forfeit(answer.anchor)
+            return
+        self._answer = answer
+        self._arm_at("answer", max(self.now, answer.start - self._own_latency()))
+
+    def _forfeit(self, anchor: float) -> None:
+        """A transmission of the master's this station will not answer: what it heard of it is
+        still news of the path."""
+        self._answered_end = anchor
+        if self._rx:
+            self._observe(self._rx)
+        self._restart_rx()
+
+    def _key_answer(self) -> None:
+        answer, self._answer = self._answer, None
+        if answer is None:
+            return
+        if answer.what == "window":
+            self._try_window()
+            return
+        if self.now > answer.start - self._own_latency() + self.cfg.slack_s + 1e-9:
+            self.stats.forfeits += 1  # the tick came too late
+            if answer.what == "ans":
+                self._forfeit(answer.anchor)
+            return
+        if answer.what == "connect_ack":
+            self._send_acceptance(answer)
+        elif answer.what == "probe_ack":
+            self._send_probe_answer(answer)
+        elif answer.what in ("disc", "disc_ack"):
+            self._send_disc_answer(answer)
+        elif answer.what == "ans" and self.state is State.CONNECTED and self.role is Role.SLAVE:
+            self._answered_end = answer.anchor
+            self._send_answer(answer.floor, answer.room_s, answer.not_after, answer.ident)
+
+    def _try_window(self) -> None:
+        """Inside an open window: speak now if there is something to say, ending inside it."""
+        if self._window is None or self.state is not State.CONNECTED:
+            return
+        start, end, floor = self._window
+        on_air = self.now + self._own_latency()
+        if on_air < start - 1e-9:
+            self._answer = _Answer("window", start, end, floor)
+            self._arm_at("answer", start - self._own_latency())
+            return
+        if not (self._has_work() or self._disc_requested or self._identifier_due):
+            return
+        ident = self._identifier_due and self.cfg.identifier_s > 0
+        room = end - on_air - self._ctl_s(floor) - (self.cfg.identifier_s if ident else 0.0)
+        if room < 0:
+            return
+        self._window = None
+        self._answered_end = self._m_end
+        self._send_answer(floor, room, None, ident, window_end=end)
+
+    def _send_answer(
+        self,
+        floor: bool,
+        room_s: float,
+        not_after: float | None,
+        ident: bool,
+        *,
+        window_end: float | None = None,
+    ) -> None:
+        snr = self._observe(self._rx) if self._rx else None
+        self._restart_rx()
+        if snr is not None:
+            self._heard_db = snr
+        ident_s = self._take_identifier() if ident else 0.0
+        if self.cfg.max_burst_s is not None:
+            room_s = min(room_s, self.cfg.max_burst_s - self._ctl_s(floor) - ident_s)
+        data = self._data_frames(room_s)
+        ctl = GrantFrame(
+            GrantKind.ANSWER,
+            self.session & 0x7F,
+            count=len(data),
+            # with no data after it, the bit says where this station's data can go: only on
+            # the floor, when its ceiling or its pinned rung is there
+            data_floor=self.timing.is_floor(data[0].mode) if data else self._data_floor_only(),
+            level=self._need_level,
+            fam=self._wants_floor(),
+            flag=self._disc_requested,
+            ident=self._identifier_due and self.cfg.identifier_s > 0,
+            snr_db=self._heard_db,
+            rung=self._recommend(),
+            n=min(7, self._queued_frames()),
+            **self._ack_fields(),
+        )
+        frames = [self._control(ctl, floor), *data]
+        if window_end is not None:
+            dur = ident_s + sum(self.timing.frame_s(f) for f in frames)
+            not_after = window_end - dur
+        self._transmit(frames, not_after=not_after, identifier_s=ident_s)
+
+    def _data_floor_only(self) -> bool:
+        """Whether this station's data can go only on the tone floor: its ceiling, or the rung
+        it is pinned at, is a floor rung."""
+        limit = self._cap() if self._pinned is None else min(self._pinned, self._cap())
+        return self.timing.floor_modes > 0 and self.timing.is_floor(limit)
+
+    def _queued_frames(self) -> int:
+        cap = data_capacity(self.timing.capacity(self._burst_mode()))
+        return len(self._unacked()) + math.ceil(len(self._tx_queue) / max(1, cap))
+
+    def _send_acceptance(self, answer: _Answer) -> None:
+        if self.session != answer.session or self.role is not Role.SLAVE:
+            return
+        body = ConnectBody(
+            self.my_call,
+            answer.remote,
+            caps=with_level(self.cfg.capabilities, self._need_level),
+            version=GRANTED_VERSION,
+            snr_db=answer.snr_db,
+            turnaround_s=self.cfg.turnaround_s,
+            identifier_s=self.cfg.identifier_s,
+        ).encode()
+        mode = self.robust_mode(answer.floor)
+        payload = encode_data(
+            DataHeader(DataKind.CONNECT_ACK, 0, self.session), body, self.timing.capacity(mode)
+        )
+        self._transmit(
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)], not_after=answer.not_after
+        )
+
+    def _send_probe_answer(self, answer: _Answer) -> None:
+        if self.state is not State.IDLE:
+            return
+        body = ProbeBody(
+            self.my_call, answer.remote, answer.snr_db, caps=self.cfg.capabilities
+        ).encode()
+        mode = self.robust_mode(answer.floor)
+        payload = encode_data(
+            DataHeader(DataKind.PROBE_ACK, 0, 0), body, self.timing.capacity(mode)
+        )
+        self._transmit(
+            [TxFrame(Container.DATA, payload, mode=mode, rv=0)], not_after=answer.not_after
+        )
+
+    def _send_disc_answer(self, answer: _Answer) -> None:
+        kind = GrantKind.DISC_ACK if answer.what == "disc_ack" else GrantKind.DISC
+        ctl = GrantFrame(kind, answer.session & 0x7F, snr_db=answer.snr_db)
+        ident_s = 0.0
+        if kind is GrantKind.DISC_ACK and answer.ident and self.cfg.identifier_s > 0:
+            ident_s = self.cfg.identifier_s  # the closing identifier, in the slot's time
+            self._identifier_due = False
+        if kind is GrantKind.DISC:
+            self.stats.left_answered += 1
+        self._transmit(
+            [self._control(ctl, answer.floor)], not_after=answer.not_after, identifier_s=ident_s
+        )
+
+    def _answer_disc(self, ctl: GrantFrame, frame: SoftFrame, kind: GrantKind) -> None:
+        """A DISC_ACK to a DISC, or a DISC to a left session's header: in the slot the frame
+        grants, or not at all."""
+        end = frame.t_end + ctl.count * self._frame_s(ctl.data_floor)
+        last_floor = ctl.data_floor if ctl.count else frame.floor
+        start = self._slot_start(end, last_floor, ctl.level, self._peer_turnaround_s)
+        self._schedule(
+            _Answer(
+                what="disc_ack" if kind is GrantKind.DISC_ACK else "disc",
+                start=start,
+                not_after=start + self.cfg.slack_s,
+                floor=ctl.fam or self._floor_only(),
+                session=ctl.session,
+                anchor=end,
+                snr_db=frame.snr_db,
+                ident=ctl.ident,
+            )
+        )
+
+    # ── sending data ──────────────────────────────────────────────────
+
+    def _unacked(self) -> list[int]:
+        seqs = [s for s, r in self._records.items() if not r.acked and r.sent]
+        return sorted(seqs, key=lambda s: seq_distance(s, self._tx_base))
+
+    def _data_frames(self, room_s: float) -> list[TxFrame]:
+        """This station's data for a transmission, laid out as ``LinkEngine`` lays out a burst:
+        the unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones,
+        one family a transmission, as many as ``room_s`` and :data:`MAX_DATA`
+        allow. Each frame states how many follow it, three meaning three or more."""
+        if room_s <= 0:
+            return []
+        mode = self._burst_mode()
+        recommendation = min(self._recommended, self._cap())
+        unacked = self._unacked()
+        for s in unacked:
+            rec = self._records[s]
+            due = (
+                self.cfg.reencode_early_after if self._hopeless(rec.mode) else self.cfg.max_combines
+            )
+            if rec.tx_count >= due and recommendation < rec.mode:
+                target = self._reencode_target(len(rec.body), rec.mode, recommendation)
+                if target is not None:
+                    rec.mode = target
+                    rec.reencoded += rec.tx_count
+                    rec.tx_count = 0
+                    self.stats.frames_reencoded += 1
+        family = self.timing.is_floor(mode)
+        if unacked:
+            family = self.timing.is_floor(self._records[unacked[0]].mode)
+        seqs = [s for s in unacked if self.timing.is_floor(self._records[s].mode) == family]
+        frame_s = self._frame_s(family)
+        room = self.burst_capacity(frame_s)
+        if math.isfinite(room_s):
+            room = min(room, int(room_s / frame_s + 1e-9))
+        if room <= 0:
+            return []
+        seqs = seqs[:room]
+        new_frames = family == self.timing.is_floor(mode)
+        cap = data_capacity(self.timing.capacity(mode))
+        while (
+            new_frames
+            and len(seqs) < room
+            and seq_distance(self._tx_next, self._tx_base) < WINDOW
+            and self._tx_queue
+        ):
+            take = min(cap, len(self._tx_queue))
+            if self._pin_body is not None:
+                take = min(take, self._pin_body)
+            if take == cap - 1:
+                take -= 1  # the one length the container cannot carry
+            body = bytes(self._tx_queue[:take])
+            del self._tx_queue[:take]
+            rec = _TxRecord(self._tx_next, body, mode)
+            self._records[rec.seq] = rec
+            self._tx_next = seq_after(self._tx_next)
+            seqs.append(rec.seq)
+        if self._pinned is not None:
+            fresh = [s for s in seqs if not self._records[s].sent]
+            if fresh:
+                self._ladder_pending = (mode, fresh)
+        frames = []
+        for i, s in enumerate(seqs):
+            rec = self._records[s]
+            if rec.sent:
+                self.stats.frames_resent += 1
+            rec.tx_count += 1
+            payload = encode_data(
+                DataHeader(DataKind.DATA, rec.seq, self.session),
+                rec.body,
+                self.timing.capacity(rec.mode),
+            )
+            rv = RV_SEQUENCE[(rec.tx_count - 1) % len(RV_SEQUENCE)]
+            follows = min(MAX_FOLLOWS, len(seqs) - 1 - i)
+            frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv, follows=follows))
+        self.stats.frames_sent += len(frames)
+        return frames
+
+    def _take_ack(self, ctl: GrantFrame, *, recommendation: bool = True) -> None:
+        """The other station's acknowledgement of this one's data, and its recommendation."""
+        if self._ladder_pending is not None and recommendation:
+            pinned_mode, fresh = self._ladder_pending
+            self._ladder_pending = None
+            decoded = sum(1 for s in fresh if ctl.received(s))
+            self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, ctl.snr_db))
+        progress = False
+        for s, rec in list(self._records.items()):
+            if not rec.acked and rec.sent and ctl.received(s):
+                rec.acked = True
+                progress = True
+                self.top_acked_mode = max(self.top_acked_mode or 0, rec.mode)
+                self.stats.bytes_acked += len(rec.body)
+        while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
+            del self._records[self._tx_base]
+            self._tx_base = seq_after(self._tx_base)
+        if progress and self._patience_until is not None:
+            self._patience_until = self.now + self._disc_patience()
+        if recommendation:
+            self._recommended = max(0, min(self._cap(), ctl.rung))
+
+    # ── receiving data ────────────────────────────────────────────────
+
+    def _take_data(self, frame: SoftFrame) -> _RxRecord:
+        """A data frame of the transmission being received: decoded alone, or combined with an
+        earlier copy of its block, its sequence number inferred from its slot (as
+        ``LinkEngine``)."""
+        payload, buffer = frame.decode(None)
+        rec = _RxRecord(frame, 0)
+        if payload is None and not self._on_grid(frame):
+            self.stats.frames_failed += 1  # where no frame of the transmission can be
+            return rec
+        if self._rx_t0 is None:
+            self._rx_t0 = frame.t_start
+        frame_s = max(1e-6, frame.t_end - frame.t_start)
+        rec.slot = max(0, round((frame.t_start - self._rx_t0) / frame_s))
+        self._rx.append(rec)
+        if payload is not None:
+            if not self._accept(rec, payload):
+                self._rx.remove(rec)
+            return rec
+        guess = self._infer_seq(rec.slot)
+        rec.seq = guess
+        if guess is None or not in_window(guess, self._rx_base):
+            self.stats.frames_failed += 1
+            return rec
+        if guess in self._harq and self._harq[guess][2] != frame.mode:
+            del self._harq[guess]  # re-encoded at another mode: start over
+        if guess in self._harq:
+            prev, combines, _ = self._harq[guess]
+            rec.combined = True
+            combined, merged = frame.decode(prev)
+            if combined is not None:
+                self.stats.harq_rescues += 1
+                if not self._accept(rec, combined):
+                    self._rx.remove(rec)
+                return rec
+            self._harq[guess] = (
+                (buffer, 0, frame.mode)
+                if combines + 1 >= self.cfg.max_combines
+                else (merged, combines + 1, frame.mode)
+            )
+        else:
+            self._harq[guess] = (buffer, 0, frame.mode)
+        self.stats.frames_failed += 1
+        return rec
+
+    def _restart_rx(self) -> None:
+        self._rx = []
+        self._rx_t0 = None
+        self._grid = None
+
+    def _open_rx(self, opener: SoftFrame, count: int, floor: bool) -> None:
+        """A control frame read opens the other station's transmission and states it: ``count``
+        data frames of ``floor``'s family, back to back from its end. Nothing heard before is of
+        it, and from now on a frame that does not decode counts only where one of those frames
+        can be."""
+        self._rx_t0 = opener.t_end
+        self._grid = (opener.t_end, count, floor)
+        self._rx = [r for r in self._rx if self._on_grid(r.frame)]
+
+    def _on_grid(self, frame: SoftFrame) -> bool:
+        """Whether a frame sits where a data frame of the transmission being received can: in
+        its family, on its slots, within its count — as its opening control frame stated, or,
+        without it, in line with a frame of it that decoded. A false detection between the
+        slots — 30 a minute in the review's phantom storm, a fifth of them trusted — is a
+        failure of nothing: counted in, it stepped the rate down the floor (ADR-0020's rule is
+        for frames that are there)."""
+        floor = self.timing.is_floor(frame.mode)
+        if self._grid is not None:
+            t0, count, grid_floor = self._grid
+            slot_s = self._frame_s(grid_floor)
+            k = round((frame.t_start - t0) / slot_s)
+            return (
+                floor == grid_floor
+                and 0 <= k < count
+                and abs(frame.t_start - (t0 + k * slot_s)) <= GRID_TOLERANCE_S
+            )
+        ref = next((r.frame for r in self._rx if r.payload is not None), None)
+        if ref is None:
+            return True
+        slot_s = max(1e-6, ref.t_end - ref.t_start)
+        k = round((frame.t_start - ref.t_start) / slot_s)
+        offset = abs(frame.t_start - (ref.t_start + k * slot_s))
+        return floor == self.timing.is_floor(ref.mode) and offset <= GRID_TOLERANCE_S
+
+    def _infer_seq(self, slot: int) -> int | None:
+        anchors = [(r.slot, r.seq) for r in self._rx if r.payload is not None and r.seq is not None]
+        snapshots = self._ack_history or [_AckSnapshot(self._rx_base, [], self._rx_base)]
+        for snap in snapshots:
+            expected = list(snap.missing)
+            s = snap.next_new
+            while len(expected) < MAX_BURST:
+                expected.append(s)
+                s = seq_after(s)
+            offsets: set[int] = set()
+            consistent = True
+            for a_slot, a_seq in anchors:
+                if a_seq not in expected:
+                    consistent = False
+                    break
+                offsets.add(expected.index(a_seq) - a_slot)
+            if not consistent or len(offsets) > 1:
+                continue
+            idx = slot + (offsets.pop() if offsets else 0)
+            if 0 <= idx < len(expected):
+                return expected[idx]
+        return None
+
+    def _accept(self, rec: _RxRecord, payload: bytes) -> bool:
+        """Take a decoded data frame of this session; ``False`` for anything else."""
+        try:
+            header, body = decode_data(payload)
+        except ValueError:
+            return False
+        if header.kind is not DataKind.DATA or header.session != self.session:
+            return False
+        rec.payload = payload
+        rec.seq = header.seq
+        self.stats.frames_received += 1
+        if in_window(header.seq, self._rx_base):
+            if self._max_seen is None or seq_distance(header.seq, self._rx_base) > seq_distance(
+                self._max_seen, self._rx_base
+            ):
+                self._max_seen = header.seq
+            self._rx_buf.setdefault(header.seq, body)
+            self._harq.pop(header.seq, None)
+            while self._rx_base in self._rx_buf:
+                data = self._rx_buf.pop(self._rx_base)
+                self._harq.pop(self._rx_base, None)
+                self._rx_base = seq_after(self._rx_base)
+                self.stats.bytes_delivered += len(data)
+                if data:
+                    self.actions.append(Deliver(data))
+            if self._max_seen is not None and seq_distance(self._max_seen, self._rx_base) >= WINDOW:
+                self._max_seen = None
+        return True
+
+    def _observe(self, records: list[_RxRecord]) -> float | None:
+        """What a transmission's data said of the path, to the rate controller (ADR-0020's
+        rules, as ``LinkEngine._observe_burst``). Returns the SNR measured on it."""
+        ok = sum(1 for r in records if r.payload is not None)
+        failed = sum(
+            1
+            for r in records
+            if r.payload is None
+            and r.frame.trusted
+            and (r.frame.rv in SELF_DECODABLE_RVS or r.combined)
+        )
+        snrs = [r.frame.snr_db for r in records if r.payload is not None or r.frame.trusted]
+        snr = sum(snrs) / len(snrs) if snrs else None
+        modes = [r.frame.mode for r in records]
+        if not modes:
+            return snr
+        if failed and self._asked is not None and min(modes) > self._asked:
+            self.rate.observe_snr(snr)  # the sender's choice, not news of the path
+        else:
+            self.rate.observe(snr, ok, failed, max(set(modes), key=modes.count))
+        return snr
+
+    def _receive_window(self) -> tuple[int, list[int], int]:
+        bitmap = 0
+        missing: list[int] = []
+        limit = 0 if self._max_seen is None else seq_distance(self._max_seen, self._rx_base) + 1
+        for i in range(WINDOW):
+            s = seq_after(self._rx_base, i)
+            if s in self._rx_buf:
+                bitmap |= 1 << i
+            elif i < limit:
+                missing.append(s)
+        return bitmap, missing, seq_after(self._rx_base, limit)
+
+    def _ack_fields(self) -> dict[str, int]:
+        """What a control frame says this station has received — remembered, for the slot
+        inference of the copies sent after it."""
+        bitmap, missing, next_new = self._receive_window()
+        snap = _AckSnapshot(self._rx_base, missing, next_new)
+        self._ack_history = [snap, *self._ack_history][:2]
+        return {"base": self._rx_base, "bitmap": bitmap}
+
+    # ── the end ───────────────────────────────────────────────────────
+
+    def _answer_left(self, ctl: GrantFrame, frame: SoftFrame) -> None:
+        """An idle station hears a control frame of a session it left: a DISC is answered with
+        its DISC_ACK, a header (the other station still in the session) with a DISC — in the
+        frame's slot, or not at all (ADR-0052). A DISC_ACK ends the leaving."""
+        if self._left is None:
+            return
+        session, until, disc_heard = self._left
+        if self.now > until:
+            self._left = None
+            return
+        if ctl.session != session & 0x7F:
+            return
+        if ctl.kind is GrantKind.DISC_ACK:
+            self._left = None
+            self._disarm("leave")
+            return
+        if self.state is State.CONNECTING:
+            return  # a call of this station's is out: its slot is the one that matters
+        if ctl.kind is GrantKind.DISC:
+            self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
+        elif ctl.kind is GrantKind.HEADER and not disc_heard:
+            self._answer_disc(ctl, frame, GrantKind.DISC)
+
+    def _repeat_leave(self) -> None:
+        """An aborting master's DISC, from idle: on the floor, granting the DISC_ACK's slot, up
+        to :attr:`GrantConfig.leave_repeats` times, each once the last one's slot is over."""
+        if self._left is None or self.state is not State.IDLE or self._leave_repeats <= 0:
+            return
+        if self.now < self._hold_until - 1e-9:
+            self._arm_at("leave", self._hold_until)
+            return
+        session, until, _ = self._left
+        if self.now > until:
+            self._left = None
+            return
+        self._leave_repeats -= 1
+        ctl = GrantFrame(GrantKind.DISC, session & 0x7F, fam=True, level=self._silence_level)
+        self._key_granting(
+            _Slot(
+                kind="leave",
+                grant_s=self._ctl_s(True) + self._peer_identifier_s,
+                last_floor=True,
+                answer_floors=frozenset({True}),
+                level=self._silence_level,
+                granter_turnaround_s=self.cfg.turnaround_s,
+            ),
+            [self._control(ctl, True)],
+        )
+        if self._leave_repeats > 0:
+            self._arm_at("leave", self._hold_until)
+
+    def _end_session(self, reason: str, *, disc_heard: bool = False) -> None:
+        left = None
+        if self.state is not State.CONNECTING and (reason in LEFT_UNHEARD or disc_heard):
+            left = (self.session, self.now + self._link_timeout(), disc_heard)
+        self.ended_peer_snr_db = self.peer_snr_db
+        kept = (self._peer_turnaround_s, self._peer_identifier_s, self._silence_level)
+        self.state = State.IDLE
+        self.role = Role.NONE
+        self._disarm("connect")
+        self._reset_session()
+        self._tx_queue = bytearray()
+        # what answering or leaving the old session in its slots still needs
+        self._peer_turnaround_s, self._peer_identifier_s, self._silence_level = kept
+        self._left = left
+        self.actions.append(Event("disconnected", reason))

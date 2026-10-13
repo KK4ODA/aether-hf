@@ -43,6 +43,7 @@ Callsigns are packed 6 bits per character (``A–Z 0–9 - /``), 9 characters in
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from enum import Enum, IntFlag
@@ -257,6 +258,31 @@ OFFER flag and an acknowledgement's TAKEN, which a station of version 6 would ta
 answer and an acknowledgement alone."""
 
 
+GRANTED_VERSION = 8
+"""Link protocol 8: granted slots (ADR-0069). The caller is the session's master and the only
+station that keys on its own initiative; every master transmission grants the other station one
+slot, defined by what it states; a station keys only in a slot granted by a frame it decoded in
+time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes are not
+version 7's, and neither is any of its timing: a station of one ignores a call of the other, and
+says so."""
+
+CAP_LEVEL_SHIFT = 3
+CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT
+"""Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the slot
+its answer goes in (ADR-0069). A caller raises it every second try, so a called station whose
+computer decodes late is reached; an answer carries 0."""
+
+
+def with_level(caps: int, level: int) -> int:
+    """A capability byte with the answer slot's gap level set (bits 3–4)."""
+    return (caps & ~CAP_LEVEL_MASK & 0xFF) | ((level & 0x03) << CAP_LEVEL_SHIFT)
+
+
+def level_of(caps: int) -> int:
+    """The answer slot's gap level a request's capability byte states."""
+    return (caps & CAP_LEVEL_MASK) >> CAP_LEVEL_SHIFT
+
+
 @dataclass(frozen=True)
 class ConnectBody:
     """Body of CONNECT_REQ / CONNECT_ACK: who is calling whom, and what they can do."""
@@ -265,21 +291,36 @@ class ConnectBody:
     dst: str
     caps: int = 0
     """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
-    (bits 1–2, :func:`bandwidth_code`)."""
+    (bits 1–2, :func:`bandwidth_code`); in a request of protocol 8, the gap level of the
+    acceptance's slot (bits 3–4, :func:`level_of`)."""
     version: int = PROTOCOL_VERSION
     snr_db: float | None = None
     """In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels, in the
     CONTROL frame's byte — what the caller starts its first burst from (P9-2). Absent
     in a request, and from a station of an earlier version, whose body stops at the
     version byte; a receiver takes a short body as "not measured"."""
+    turnaround_s: float = 0.0
+    """Protocol 8: how long the sender's radio takes to hear again after it stops sending —
+    its VOX hold and receiver recovery — in 0.1 s steps up to 1.5 s. The other station's slot
+    starts no sooner after this station's transmission, and its transmissions no sooner after
+    this station's slot (ADR-0069). Absent before protocol 8."""
+    identifier_s: float = 0.0
+    """Protocol 8: how long the sender's Morse identifier lasts, in 0.5 s steps (0 for none):
+    a master grants a slot that time longer when the slave's identifier is due. Absent before
+    protocol 8."""
 
     def encode(self) -> bytes:
         snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
-        return (
+        out = (
             pack_callsign(self.src)
             + pack_callsign(self.dst)
             + bytes([self.caps, self.version, snr & 0xFF])
         )
+        if self.version >= GRANTED_VERSION:
+            turnaround = max(0, min(15, math.ceil(self.turnaround_s * 10 - 1e-9)))
+            identifier = max(0, min(255, math.ceil(self.identifier_s * 2 - 1e-9)))
+            out += bytes([turnaround, identifier])
+        return out
 
     @classmethod
     def decode(cls, body: bytes) -> ConnectBody:
@@ -287,16 +328,26 @@ class ConnectBody:
             raise ValueError("short connect body")
         raw = body[2 * CALL_BYTES + 2] if len(body) > 2 * CALL_BYTES + 2 else SNR_UNKNOWN
         snr = None if raw == SNR_UNKNOWN else float(raw - 256 if raw >= 128 else raw)
+        version = body[2 * CALL_BYTES + 1]
+        turnaround = identifier = 0.0
+        if version >= GRANTED_VERSION and len(body) >= CONNECT_BODY_8_BYTES:
+            turnaround = (body[2 * CALL_BYTES + 3] & 0x0F) / 10.0
+            identifier = body[2 * CALL_BYTES + 4] / 2.0
         return cls(
             src=unpack_callsign(body[:CALL_BYTES]),
             dst=unpack_callsign(body[CALL_BYTES : 2 * CALL_BYTES]),
             caps=body[2 * CALL_BYTES],
-            version=body[2 * CALL_BYTES + 1],
+            version=version,
             snr_db=snr,
+            turnaround_s=turnaround,
+            identifier_s=identifier,
         )
 
 
 CONNECT_BODY_BYTES = 2 * CALL_BYTES + 3
+CONNECT_BODY_8_BYTES = CONNECT_BODY_BYTES + 2
+"""Protocol 8's connect body: the turnaround and the identifier's length after the SNR. With
+a DATA header and an explicit length it fills the 24 bytes of the tone floor's slowest rung."""
 
 
 @dataclass(frozen=True)
@@ -402,6 +453,111 @@ class ControlFrame:
         d = (seq - self.base) % SEQ_MOD
         if d >= WINDOW:
             return d >= SEQ_MOD // 2  # far behind base → already acknowledged
+        return bool((self.bitmap >> d) & 1)
+
+
+# ── protocol 8: the CONTROL container ──────────────────────────────────
+
+
+class GrantKind(Enum):
+    HEADER = 0
+    """The master's: what this transmission carries, what it acknowledges, and the slot it
+    grants the slave."""
+    ANSWER = 1
+    """The slave's, in its slot: what it acknowledges, what follows, what it has queued."""
+    DISC = 2
+    """Either's: the session ends. A master's grants the DISC_ACK's slot; a slave's goes in a
+    slot it was granted, the last it uses."""
+    DISC_ACK = 3
+
+
+GRANT_SNR_UNKNOWN = 0x20
+"""The six-bit SNR field's "not measured": −32 in two's complement, outside −31 … +31."""
+
+
+@dataclass(frozen=True)
+class GrantFrame:
+    """Protocol 8's control frame (ADR-0069): seven bytes, 56 bits::
+
+        0: kind (2) | count (3) | data family (1) | level (2)
+        1: session (7) | fam (1)
+        2: flag (1) | id (1) | SNR (6)
+        3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
+        6: rung (5) | n (3)
+
+    ``count``: data frames after this one in its transmission, exactly (0–6), and their family
+    (``data_floor``) — with it a receiver that reads this frame and none of them still knows
+    where the transmission ends. ``level``: in a header, the gap level of the slot it grants;
+    in an answer, the level its sender needs. ``fam``: in a header, the family the answer goes
+    in; in an answer, the family its sender needs headers in. ``flag``: the header's slot is an
+    open window; the answer asks to leave. ``ident``: the header's slot includes the slave's
+    Morse identifier; the answer says it is due. ``snr_db``: how the sender hears the other
+    station, −31 … +31 dB (ADR-0021). ``rung``: recommended for the other station's data.
+    ``n``: frames granted (or an open window's size step) / frames queued, at most 7.
+    ``session`` is the session number's low seven bits: data frames carry all eight."""
+
+    kind: GrantKind
+    session: int
+    count: int = 0
+    data_floor: bool = False
+    level: int = 0
+    fam: bool = False
+    flag: bool = False
+    ident: bool = False
+    base: int = 0
+    bitmap: int = 0
+    snr_db: float | None = None
+    rung: int = 0
+    n: int = 0
+
+    def encode(self) -> bytes:
+        snr = (
+            GRANT_SNR_UNKNOWN
+            if self.snr_db is None
+            else max(-31, min(31, round(self.snr_db))) & 0x3F
+        )
+        return bytes(
+            [
+                (self.kind.value << 6)
+                | (min(self.count, 7) << 3)
+                | (int(self.data_floor) << 2)
+                | (self.level & 0x03),
+                ((self.session & 0x7F) << 1) | int(self.fam),
+                (int(self.flag) << 7) | (int(self.ident) << 6) | snr,
+                self.base & 0xFF,
+                (self.bitmap >> 8) & 0xFF,
+                self.bitmap & 0xFF,
+                ((self.rung & 0x1F) << 3) | (min(self.n, 7) & 0x07),
+            ]
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes) -> GrantFrame:
+        if len(payload) < CONTROL_BYTES:
+            raise ValueError("short CONTROL payload")
+        raw = payload[2] & 0x3F
+        snr = None if raw == GRANT_SNR_UNKNOWN else float(raw - 64 if raw >= 32 else raw)
+        return cls(
+            kind=GrantKind(payload[0] >> 6),
+            count=(payload[0] >> 3) & 0x07,
+            data_floor=bool(payload[0] & 0x04),
+            level=payload[0] & 0x03,
+            session=payload[1] >> 1,
+            fam=bool(payload[1] & 0x01),
+            flag=bool(payload[2] & 0x80),
+            ident=bool(payload[2] & 0x40),
+            snr_db=snr,
+            base=payload[3],
+            bitmap=(payload[4] << 8) | payload[5],
+            rung=payload[6] >> 3,
+            n=payload[6] & 0x07,
+        )
+
+    def received(self, seq: int) -> bool:
+        """Acknowledgement semantics, as :meth:`ControlFrame.received`."""
+        d = (seq - self.base) % SEQ_MOD
+        if d >= WINDOW:
+            return d >= SEQ_MOD // 2
         return bool((self.bitmap >> d) & 1)
 
 
