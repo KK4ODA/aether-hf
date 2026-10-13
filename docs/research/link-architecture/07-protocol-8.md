@@ -36,8 +36,8 @@ slower than they assume asks for a gap level (§3.3).
 
 | Name | Value | What it covers |
 |---|---|---|
-| `D_ORD`, `D_FLOOR` | 0.30 s, 0.65 s | from a frame's end on the air to its decode reaching the engine (the floor's receiver settles later); **to be measured on the harness and HIL before freezing**, §11 |
-| `KEY` | 0.35 s | from the engine's decision to radiation: the daemon's lead (0.1 s) and the card (0.25 s) |
+| `D_ORD`, `D_FLOOR` | 0.30 s, 0.30 s | from a frame's end on the air to its decode reaching the engine; measured on the harness (§11), checked again in hardware before freezing |
+| `KEY` | 0.35 s | from the engine's decision to radiation: the daemon's lead (0.1 s) and the card (0.25 s); the daemon renders a slot's data frames ahead (§10) |
 | `GUARD` | 0.05 s | propagation (≤ 20 ms one way on HF), clock error over a transmission, rounding |
 | `SLACK` | 0.35 s | how late a slot may start on the air and still be used; the keying gate drops past it |
 | `LEVEL` | 0, 0.5, 1.0, 2.0 s | extra gap by level (§3.3) |
@@ -259,7 +259,7 @@ beacons), the daemon's rules stay.
   capped by `set_ceiling` (regulatory), `max_mode` and a pinned rung (the Test ladder).
 * **The family of control frames** comes from the peer's report:
   * the floor unless the report clears the ordinary control threshold by
-    `answer_floor_margin_db` (3 dB);
+    `answer_floor_margin_db` (3 dB; swept 0–3 dB, `08-steps-0-and-1.md` §2.5);
   * the floor after two silent slots;
   * back to the report on the next slot heard.
 * **Silence steps the rate down.** A data slot heard silent steps the sender's rung down by
@@ -327,6 +327,11 @@ Listed here so the model's interface already fits:
 * **`on_tx_done(frames_end)`.** The end of the last frame on the air, from the card's clock
   less the tail.
 * **The identifier, as §5.4:** the engine places it, and the daemon renders it first.
+* **Rendering ahead.** A slot's data frames are rendered while the header that grants it is
+  still arriving, so only the answer (a control frame, 4–20 ms) is rendered after the decode
+  (§11). A station whose decode, render and keying still exceed the constants asks for a level.
+* **The capture path.** Received frames are placed on the air's clock: the card's reported input
+  latency is taken off their times.
 * **The answer gap becomes the declared turnaround.** `[radio] turnaround_ms` is the operator's
   radio. The learned per-station gap (ADR-0054) becomes the level a peer is granted. A
   configuration schema step.
@@ -348,6 +353,25 @@ Slower ones use levels.
 
 The same runs give the keying latency's distribution, from the tag's `waited_s` and the air
 start. `KEY` and `SLACK` are set from it, with CAT keying measured on hardware in Step 4.
+
+**Measured (2026-10-13, `08-steps-0-and-1.md` §1.3).** Over 11 895 frames of the Step 0 runs, both
+families on both airs, a frame was reported at most 0.157 s after its end, the 99th percentile
+0.156 s; a slow machine's no later. The floor's figure is no larger than the ordinary one's: the
+tone floor's frames are reported as soon as they end, and the 0.65 s was the OFDM floor family's
+settling (ADR-0009 §8), a family the tone floor replaced. Both are 0.30 s. What the harness cannot
+show:
+
+* **Processing.** The harness runs in lockstep with the audio, so a slow pass costs no air time.
+  The receiver runs at 0.07× real time on the replay of a session, its slowest pass 35 ms.
+* **Rendering.** Measured outside the harness: a control frame 4–20 ms, six OFDM frames
+  0.06–0.11 s, four tone frames 0.10–0.18 s, about twice that under load. `KEY`'s 0.35 s is the
+  lead and the card, so the daemon renders a slot's data frames before the header that grants the
+  slot is decoded, and only the answer after it (§10).
+* **The capture path.** The harness delays only what a station plays. A real card delivers what
+  it hears late too, so a station places received frames late by its input latency `c`, and a
+  slave's slot, reckoned from the `E` it places, falls `c` late on the air: its start inside
+  `SLACK`, its end inside the master's wait past `end_max` (`D + GUARD`, 0.35 s). Cards are
+  10–100 ms, and the daemon takes the latency the card reports off received frames' times (§10).
 
 ## 12. Decided while building the model engine
 

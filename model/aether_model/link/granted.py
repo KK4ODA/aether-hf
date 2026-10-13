@@ -92,12 +92,20 @@ from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_
 
 # ── the protocol's constants ──────────────────────────────────────────
 
-DECODE_BUDGET_S = (0.30, 0.65)
-"""From a frame's end on the air to its decode reaching the engine, ordinary and tone floor:
-the streaming receiver settles a floor candidate later (ADR-0009 §8). To be measured on the
-harness and in hardware before they freeze (07-protocol-8.md §11)."""
+DECODE_BUDGET_S = (0.30, 0.30)
+"""From a frame's end on the air to its decode reaching the engine, ordinary and tone floor.
+Measured on the harness (08-steps-0-and-1.md §1.3): 11 895 frames of both families on both airs
+were reported at most 0.157 s after their end on the receiver's audio clock, the 99th percentile
+0.156 s; the receiver runs at 0.07× real time, its slowest pass 35 ms. The floor's provisional
+0.65 s was the OFDM floor family's settling (ADR-0009 §8), and the tone floor replaced that
+family. Hardware in the loop checks it again before it freezes (Step 4)."""
 KEY_S = 0.35
-"""From the engine's decision to radiation: the daemon's lead and the sound card."""
+"""From the engine's decision to radiation: the daemon's lead (0.1 s) and the sound card
+(0.25 s, the harness's figure and the upper end of a real card's). It leaves nothing for
+rendering the transmission, which the harness cannot see (it runs in lockstep with the audio)
+and which takes up to 0.18 s for four tone frames: the daemon renders a slot's data frames
+before the header that grants it is decoded (07-protocol-8.md §10). A station slower than this
+asks for a level."""
 GUARD_S = 0.05
 """Propagation (under 20 ms one way on HF), clock error over a transmission, rounding."""
 SLACK_S = 0.35

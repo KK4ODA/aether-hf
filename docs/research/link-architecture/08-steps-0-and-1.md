@@ -74,8 +74,48 @@ Protocol 7 failed one scenario, `40m-rtty-contest-2300`.
 **Owed for Step 0's gate.** It is not closed:
 
 * distributions over 10 seeds on an idle machine;
-* air-time stepping;
-* the decode-latency measurement that sets `D_ORD` and `D_FLOOR` (07-protocol-8.md §11).
+* air-time stepping.
+
+### 1.3 Decode latency, measured
+
+07-protocol-8.md §11 sets `D_ORD` and `D_FLOOR` from the harness. Every frame in the recordings
+of §1.2's runs has its end on the air (`end_s`) and the moment the daemon reported it (`t_s`),
+both on the receiver's audio clock (`research/link_arch/latency.py`). The latency is the
+difference.
+
+| air | family | kind | frames | median | 99th percentile | most |
+|---|---|---|---:|---:|---:|---:|
+| 2 300 Hz | ordinary | control | 1 254 | 0.122 s | 0.147 s | 0.151 s |
+| 2 300 Hz | ordinary | data | 4 040 | 0.122 s | 0.147 s | 0.151 s |
+| 2 300 Hz | floor | control | 207 | 0.130 s | 0.150 s | 0.156 s |
+| 2 300 Hz | floor | data | 235 | 0.129 s | 0.156 s | 0.156 s |
+| 500 Hz | ordinary | control | 1 049 | 0.123 s | 0.149 s | 0.151 s |
+| 500 Hz | ordinary | data | 3 743 | 0.123 s | 0.148 s | 0.151 s |
+| 500 Hz | floor | control | 672 | 0.117 s | 0.156 s | 0.157 s |
+| 500 Hz | floor | data | 695 | 0.130 s | 0.156 s | 0.157 s |
+
+Frames that decoded and frames that did not are counted together; they do not differ.
+`80m-slow-machine-500`'s frames, from the station whose computer stalls, are no later: a
+station's clock is the audio it has processed, so a stall does not show in this measure. Stalls
+are what gap levels are for.
+
+* **Both budgets are 0.30 s.** The tone floor reports a frame as soon as it ends. The
+  provisional 0.65 s was the settling of the OFDM floor family (ADR-0009 §8), which the tone
+  floor replaced. 0.30 s leaves 0.14 s over the slowest report for what the harness does not
+  charge.
+* **What the harness does not charge.** It runs in lockstep with the audio, so a pass of the
+  receiver costs no air time. Outside it:
+  * the receiver runs at 0.07× real time on a session's replay, its slowest pass 35 ms;
+  * rendering takes 4–20 ms for a control frame, 0.06–0.11 s for six OFDM frames and
+    0.10–0.18 s for four tone frames, about twice that under load (`aether-phy`'s transmitter,
+    timed per rung);
+  * a card delivers what it hears 10–100 ms late, which the harness does not model.
+* **`KEY` stays 0.35 s**, the daemon's lead and the harness's card. It leaves nothing for
+  rendering, so Step 2 renders a slot's data frames before the header granting it is decoded,
+  and only the answer after (07 §10). A station still slower asks for a level.
+* **Changed in the model.** `granted.DECODE_BUDGET_S` is `(0.30, 0.30)`. The review's campaign
+  is unchanged: it gives every arm its profile's budgets (`setups.KNOBS`). The link bench moves
+  by its own noise. Its AWGN cells, where timing alone moves the result, are 0.3–2 % faster.
 
 ## 2. Step 1: the model engine
 
@@ -180,7 +220,8 @@ Medians are 16-run figures (`results/scenarios_granted.csv`).
 airs, 4 trials:
 
 * both engines complete 112 of 112 on each air;
-* the model engine takes ×1.165 (2 300 Hz) and ×1.159 (500 Hz) as long.
+* the model engine takes ×1.171 (2 300 Hz) and ×1.157 (500 Hz) as long, with the measured
+  decode budgets (§1.3; ×1.165 and ×1.159 with the provisional ones).
 
 The pipe charges no keying latency, so it charges protocol 7 nothing for answering at once. It
 charges protocol 8 the decode budget, keying latency and guard that every one of its gaps
@@ -219,11 +260,34 @@ Each finding is in 07-protocol-8.md §12. Three changed results.
 
 * **The review's simulator is the model's world.** It has the assumed decode latencies,
   keying leads and phantom rates; a real receiver, card and radio are Step 3's and Step 4's.
-* **The constants are unmeasured.** `D_ORD`, `D_FLOOR`, `KEY` and `SLACK` are 07's provisional
-  values until Step 0's latency measurement sets them.
+* **Two constants are still provisional.** `D_ORD` and `D_FLOOR` are measured (§1.3). `KEY`
+  and `SLACK` are the harness's own figures until Step 2's daemon and Step 4's hardware measure
+  rendering and CAT keying.
 * **Pipe and harness are not the same comparison.** The link bench's ×1.16 and the review's
   ×1.09 measure different things (§2.2). The harness A/B (Step 3) is the one that counts for a
   release.
+
+### 2.5 The family margin, swept
+
+A station asks for ordinary control frames only when its last three readings clear the ordinary
+control threshold by `answer_floor_margin_db`. The link bench's one outlier cell, 500 Hz AWGN at
+−3 dB (×1.69), is that margin at work: the readings sit 1.5 dB over the threshold, short of the
+3 dB margin, so every control frame goes on the floor. Protocol 7 sends ordinary ones there.
+
+The margin was swept on the review's campaign before the port fixes it (arms `granted_a<x>`,
+`results/granted_margin.csv.gz`). Against the 3 dB default, by profile, over all kinds:
+
+* **0 dB:** 1–3 % faster on average. Completes fewer sessions than protocol 7 in field-asym
+  exchange (three lost, two gained).
+* **1.5 dB:** 1–2 % faster. Completes one fewer than protocol 7 in the same cell.
+* **2 dB:** 0.5–2 % faster, no cell below protocol 7.
+* **By cell**, a smaller margin is faster on AWGN at −3 dB (×0.74 at 0 dB on 500 Hz) and slower on
+  fading paths near the boundary: Poor −3 dB ×1.40/×1.16/×1.08 at 500 Hz and ×1.22/×1.13/×1.07
+  at 2 300 Hz (0/1.5/2 dB); Moderate 500 Hz −3 dB ×1.13–1.23.
+
+**3 dB stays.** A smaller margin wins a steady channel sitting at the boundary and loses on the
+fading ones, which are the air. 2 dB passes the gate's rule too, but its gain is inside the
+intervals.
 
 ## 3. Reproducing
 
@@ -237,6 +301,9 @@ uv run python -m research.link_arch.campaign --arms granted --bandwidth 500,2300
     --out granted_main.csv --overlaps-out granted_main_overlaps.csv
 uv run python -m research.link_arch.scenarios --arms granted --trials 8 --out scenarios_granted.csv
 # the family-readings sweep: arms granted_f1 … granted_f4
+# the family-margin sweep: arms granted_a0, granted_a1.5, granted_a2 (3 dB is `granted`)
+# decode latency from a harness run's recordings
+uv run python research/link_arch/latency.py <runs> [<runs> …]
 uv run python -m research.link_arch.campaign --arms granted_f1,granted_f2,granted_f3 ...
 # the link bench, either engine
 uv run python tools/bench_link.py --engine granted --bandwidth 500 --fading --floor-cap \
