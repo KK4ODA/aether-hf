@@ -529,8 +529,11 @@ fn two_daemons_complete_a_session_at_500_hz() {
     assert_eq!(sent["ok"], true, "{sent}");
     let received = receive(b.control, message.len(), || b.status()["counters"].clone());
     assert_eq!(String::from_utf8_lossy(&received), message);
+    // a rung of the narrow ladder — fifteen since ADR-0015, where the bound of 12 was written
+    // for the ten-mode table and held only while the link had not yet climbed past it
     let mode = b.status()["metrics"]["mode"].as_u64().unwrap_or(99);
-    assert!(mode < 12, "a narrow mode index: {mode}");
+    let rungs = caps["modes"].as_array().map_or(0, Vec::len) as u64;
+    assert!(mode < rungs, "a narrow mode index: {mode} of {rungs}");
 
     let closed = a.call("disconnect", &json!({}));
     assert_eq!(closed["ok"], true, "{closed}");

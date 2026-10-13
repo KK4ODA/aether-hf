@@ -240,14 +240,15 @@ def most_following(countdown: int) -> int:
     return 2 * countdown
 
 
-PROTOCOL_VERSION = 7
-"""The link protocol a station speaks, in the connect body's version byte. 2 since the tone
-floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
-above the OFDM mode of version 1 — so a session between the two would run on numbers that
-mean different frames at either end; a station ignores a call or an acceptance of another
-version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
-air, between the floor's two and the OFDM modes, and a control frame whose recommended mode
-has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two more
+TURNS_VERSION = 7
+"""Link protocol 7, the turn engine's (:class:`~aether_model.link.engine.LinkEngine`), in the
+connect body's version byte — kept until granted slots replace that engine (ADR-0069 Step 5).
+2 since the tone floor (ADR-0013): a mode number is a rung of the air's ladder — on the
+2 300 Hz air two above the OFDM mode of version 1 — so a session between the two would run on
+numbers that mean different frames at either end; a station ignores a call or an acceptance
+of another version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the
+2 300 Hz air, between the floor's two and the OFDM modes, and a control frame whose recommended
+mode has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two more
 rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz ladder is
 as it was, but one number says what both ladders are). 5 since the burst countdown
 (ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its
@@ -258,8 +259,10 @@ OFFER flag and an acknowledgement's TAKEN, which a station of version 6 would ta
 answer and an acknowledgement alone."""
 
 
-GRANTED_VERSION = 8
-"""Link protocol 8: granted slots (ADR-0069). The caller is the session's master and the only
+PROTOCOL_VERSION = 8
+"""The link protocol a station speaks, in the connect body's version byte; what a release
+states (``link_protocol``). 8, granted slots (ADR-0069): the caller is the session's master and
+the only
 station that keys on its own initiative; every master transmission grants the other station one
 slot, defined by what it states; a station keys only in a slot granted by a frame it decoded in
 time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes are not
@@ -293,7 +296,7 @@ class ConnectBody:
     """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
     (bits 1–2, :func:`bandwidth_code`); in a request of protocol 8, the gap level of the
     acceptance's slot (bits 3–4, :func:`level_of`)."""
-    version: int = PROTOCOL_VERSION
+    version: int = TURNS_VERSION
     snr_db: float | None = None
     """In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels, in the
     CONTROL frame's byte — what the caller starts its first burst from (P9-2). Absent
@@ -316,7 +319,7 @@ class ConnectBody:
             + pack_callsign(self.dst)
             + bytes([self.caps, self.version, snr & 0xFF])
         )
-        if self.version >= GRANTED_VERSION:
+        if self.version >= PROTOCOL_VERSION:
             turnaround = max(0, min(15, math.ceil(self.turnaround_s * 10 - 1e-9)))
             identifier = max(0, min(255, math.ceil(self.identifier_s * 2 - 1e-9)))
             out += bytes([turnaround, identifier])
@@ -330,7 +333,7 @@ class ConnectBody:
         snr = None if raw == SNR_UNKNOWN else float(raw - 256 if raw >= 128 else raw)
         version = body[2 * CALL_BYTES + 1]
         turnaround = identifier = 0.0
-        if version >= GRANTED_VERSION and len(body) >= CONNECT_BODY_8_BYTES:
+        if version >= PROTOCOL_VERSION and len(body) >= CONNECT_BODY_8_BYTES:
             turnaround = (body[2 * CALL_BYTES + 3] & 0x0F) / 10.0
             identifier = body[2 * CALL_BYTES + 4] / 2.0
         return cls(

@@ -1339,17 +1339,35 @@ mod tests {
             Some(ladder.len())
         );
         // the message went with the call: what followed the acceptance was the message's
-        // first burst, not a poll and its answer (ADR-0066)
+        // first transmission, not a header granting an answer and nothing else (ADR-0066) —
+        // under granted slots a header and the message's data behind it (ADR-0069)
         let sent = document["sent"].as_array().expect("the frames sent");
-        let kinds: Vec<&str> = sent
-            .iter()
-            .take(3)
-            .filter_map(|f| f["kind"].as_str())
-            .collect();
+        let mut transmissions: Vec<Vec<&str>> = Vec::new();
+        let mut at: Option<f64> = None;
+        for frame in sent {
+            let t = frame["t_s"].as_f64().expect("a time");
+            if at.is_none_or(|a| (t - a).abs() > 1e-9) {
+                transmissions.push(Vec::new());
+                at = Some(t);
+            }
+            if let (Some(last), Some(kind)) = (transmissions.last_mut(), frame["kind"].as_str()) {
+                last.push(kind);
+            }
+        }
         assert_eq!(
-            kinds,
-            ["data", "data", "data"],
-            "probe, call, message: {sent:?}"
+            transmissions.first().map(Vec::as_slice),
+            Some(&["data"][..]),
+            "the probe"
+        );
+        assert_eq!(
+            transmissions.get(1).map(Vec::as_slice),
+            Some(&["data"][..]),
+            "the call"
+        );
+        let message = transmissions.get(2).expect("the message");
+        assert!(
+            message.first() == Some(&"control") && message[1..].contains(&"data"),
+            "a header and the message's data: {sent:?}"
         );
         // and the run can be asked for again
         assert!(!air.a.abort_test());

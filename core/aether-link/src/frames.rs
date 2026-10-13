@@ -418,8 +418,9 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
     (caps & !CAP_BANDWIDTH_MASK) | (code << CAP_BANDWIDTH_SHIFT)
 }
 
-/// The link protocol a station speaks, in the connect body's version byte. 2 since the tone
-/// floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
+/// Link protocol 7, the turn engine's ([`LinkEngine`](crate::LinkEngine)), in the connect
+/// body's version byte — kept until granted slots replace that engine (ADR-0069 Step 5). 2
+/// since the tone floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
 /// above the OFDM mode of version 1 — so a session between the two would run on numbers that
 /// mean different frames at either end; a station ignores a call or an acceptance of another
 /// version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
@@ -433,7 +434,7 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
 /// would answer a frame early. 7 since the turn offered at the end of a burst (ADR-0047): a
 /// TURN's `OFFER` flag and an acknowledgement's `TAKEN`, which a 6 would take for a TURN to
 /// answer and an acknowledgement alone.
-pub const PROTOCOL_VERSION: u8 = 7;
+pub const TURNS_VERSION: u8 = 7;
 
 /// The largest countdown a data frame carries (ADR-0041): the physical layer turns the frame's
 /// mode chips a quarter turn a step, so four values.
@@ -463,13 +464,14 @@ pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
 /// DATA header and an explicit length it fills the 24 bytes of the tone floor's slowest rung.
 pub const CONNECT_BODY_8_BYTES: usize = CONNECT_BODY_BYTES + 2;
 
-/// Link protocol 8: granted slots (ADR-0069). The caller is the session's master and the only
-/// station that keys on its own initiative; every master transmission grants the other station
-/// one slot, defined by what it states; a station keys only in a slot granted by a frame it
-/// decoded in time. Its control frame ([`GrantFrame`]) and its connect body's two more bytes
-/// are not version 7's, and neither is any of its timing: a station of one ignores a call of
-/// the other, and says so.
-pub const GRANTED_VERSION: u8 = 8;
+/// The link protocol a station speaks, in the connect body's version byte; what a release
+/// states (`link_protocol`) and the shell's `LINK_PROTOCOL` is held to. 8, granted slots
+/// (ADR-0069): the caller is the session's master and the only station that keys on its own
+/// initiative; every master transmission grants the other station one slot, defined by what it
+/// states; a station keys only in a slot granted by a frame it decoded in time. Its control
+/// frame ([`GrantFrame`]) and its connect body's two more bytes are not version 7's, and
+/// neither is any of its timing: a station of one ignores a call of the other, and says so.
+pub const PROTOCOL_VERSION: u8 = 8;
 
 /// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
 /// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called
@@ -576,7 +578,7 @@ impl ConnectBody {
         out.push(self.caps);
         out.push(self.version);
         out.push(snr_byte(self.snr_db));
-        if self.version >= GRANTED_VERSION {
+        if self.version >= PROTOCOL_VERSION {
             // whole steps up, as the model's ceil less a hair: 0.25 s says 0.3, 0.2 says 0.2
             let turnaround = (self.turnaround_s * 10.0 - 1e-9).ceil().clamp(0.0, 15.0);
             let identifier = (self.identifier_s * 2.0 - 1e-9).ceil().clamp(0.0, 255.0);
@@ -596,7 +598,7 @@ impl ConnectBody {
         }
         let version = body[2 * CALL_BYTES + 1];
         let (turnaround_s, identifier_s) =
-            if version >= GRANTED_VERSION && body.len() >= CONNECT_BODY_8_BYTES {
+            if version >= PROTOCOL_VERSION && body.len() >= CONNECT_BODY_8_BYTES {
                 (
                     f64::from(body[2 * CALL_BYTES + 3] & 0x0F) / 10.0,
                     f64::from(body[2 * CALL_BYTES + 4]) / 2.0,

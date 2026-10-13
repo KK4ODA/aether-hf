@@ -409,15 +409,14 @@ function bannerFor(status) {
   if (status.state === "connected" && status.closing) {
     return [
       "closing",
-      status.role === "iss"
-        ? `Disconnecting from ${who}: sending what is still queued first. Abort closes now.`
-        : `Disconnecting from ${who} after the burst now arriving…`,
+      status.role === "master"
+        ? `Disconnecting from ${who}: what is still queued goes first. Abort closes now.`
+        : `Disconnecting from ${who}: the next answer asks it to close…`,
     ];
   }
   if (status.state === "connected") {
-    const role = { iss: ", sending", irs: ", receiving" }[status.role] ?? "";
     if (test) return ["connected", `Test session with ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
-    return ["connected", `Connected to ${who || "?"}${role}`];
+    return ["connected", `Connected to ${who || "?"}`];
   }
   if (test) return ["working", `Test session with ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
   if (status.probing) return ["working", probeTarget ? `Probing ${probeTarget}…` : "Probing…"];
@@ -481,8 +480,7 @@ async function refreshStatus() {
   // the engine keeps the last session's callsign after it ends: name it only while there is a
   // call or a session to name
   const who = status.remote && status.state !== "idle" ? ` with ${status.remote}` : "";
-  const role = { iss: " — sending", irs: " — receiving" }[status.role] ?? "";
-  setState(status.state, name + who, detail + role);
+  setState(status.state, name + who, detail);
   syncBanner(status);
 
   $("callsign").textContent = status.callsign || "—";
@@ -577,12 +575,12 @@ function applyClosing(status) {
   button.textContent = calling ? "Stop calling" : "Disconnect";
   button.title = calling
     ? "Stop calling: no session has come up, so there is nothing to close"
-    : "Close the session: what is queued is sent first; a receiving station closes between the other's bursts";
+    : "Close the session: what is queued is sent first; the called station asks the caller to close in its next answer";
   let note = "";
   if (status.closing) {
-    note = status.role === "iss"
-      ? "Closing: sending what is still queued first, then the disconnect. Abort closes at once."
-      : "Closing as soon as the burst now arriving ends. Abort closes at once.";
+    note = status.role === "master"
+      ? "Closing: what is still queued goes first, then the disconnect. Abort closes at once."
+      : "Closing: the next answer asks the other station to close. Abort closes at once.";
   } else if (status.state === "disconnecting") {
     note = "Closing: waiting for the other station to answer the disconnect.";
   }
@@ -822,8 +820,7 @@ function applyLink(link) {
     return;
   }
   $("v-session").textContent = formatDuration(link.seconds ?? 0);
-  const role = { iss: " · sending", irs: " · receiving" }[lastStatus?.role] ?? "";
-  $("v-session-sub").textContent = `with ${link.remote ?? "—"}${role}`;
+  $("v-session-sub").textContent = `with ${link.remote ?? "—"}`;
   $("v-bytes").textContent =
     `↑ ${formatBytes(link.bytes_sent ?? 0)} · ↓ ${formatBytes(link.bytes_received ?? 0)}`;
 }
@@ -2165,9 +2162,9 @@ const COUNTER_LABELS = {
   frames_failed: ["Failed to decode", "Frames detected that did not decode"],
   harq_rescues: ["HARQ rescues", "Frames recovered by combining retransmissions"],
   bytes_delivered: ["Bytes delivered", "Payload bytes handed to the application"],
-  bursts: ["Bursts", "Bursts sent"],
-  turns: ["Turns", "Times the sending role changed hands"],
-  ack_timeouts: ["ACKs missed", "Acknowledgements that never arrived in time"],
+  silent_slots: ["Slots unheard", "Slots this station granted the other in which it read nothing"],
+  forfeits: ["Slots missed", "Slots granted to this station that it read too late to use"],
+  dropped_late: ["Answers dropped", "Answers not sent because they would have started past their slot"],
   transmissions: ["Transmissions", "Times the radio was keyed"],
   deferred_for_busy: ["Held for busy", "Transmissions held back for a busy channel"],
   watchdog_trips: ["Watchdog trips", "Times the key-time watchdog released the key"],

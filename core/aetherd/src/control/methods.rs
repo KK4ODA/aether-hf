@@ -1838,9 +1838,9 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             aether_link::State::Disconnecting => "disconnecting",
         },
         "role": match station.role() {
-            aether_link::Role::None => "none",
-            aether_link::Role::Iss => "iss",
-            aether_link::Role::Irs => "irs",
+            aether_link::granted::Role::None => "none",
+            aether_link::granted::Role::Master => "master",
+            aether_link::granted::Role::Slave => "slave",
         },
         "callsign": engine.my_call,
         "callsigns": engine.callsigns,
@@ -1937,16 +1937,18 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "frames_failed": stats.frames_failed,
         "harq_rescues": stats.harq_rescues,
         "bytes_delivered": stats.bytes_delivered,
-        "bursts": stats.bursts,
-        "turns": stats.turns,
-        "ack_timeouts": stats.ack_timeouts,
+        // the slots of protocol 8 (ADR-0069): granted by this master and heard nothing in,
+        // granted to this station and decoded too late to use, answers the keying gate did
+        // not send because they would have started past their slot
+        "silent_slots": stats.silent_slots,
+        "forfeits": stats.forfeits,
+        "dropped_late": station.stats.dropped_late,
+        "headers_elided": stats.headers_elided,
+        "left_answered": stats.left_answered,
         "transmissions": station.stats.transmissions,
         "frames_detected": station.stats.frames_detected,
         "frames_under_own_tx": station.stats.frames_under_own_tx,
         "deferred_for_busy": station.stats.deferred_for_busy,
-        "deferred_for_gap": station.stats.deferred_for_gap,
-        // faint arrivals taken for the next frame of a burst being acknowledged (ADR-0040)
-        "follow_on_heeded": station.stats.follow_on_heeded,
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
@@ -1956,12 +1958,6 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "probes_answered": stats.probes_answered,
         "probe_replies": stats.probe_replies,
         "frames_reencoded": stats.frames_reencoded,
-        // a chat's requests for the turn (ADR-0027)
-        "turn_requests": stats.turn_requests,
-        // the turn offered at the end of a burst, and taken with an acknowledgement (ADR-0047)
-        "turn_offers": stats.turn_offers,
-        "turns_taken": stats.turns_taken,
-        "acceptances_inferred": stats.acceptances_inferred,
     })
 }
 

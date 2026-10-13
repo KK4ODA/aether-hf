@@ -32,7 +32,7 @@
 use crate::{
     frames::{
         CAP_BANDWIDTH_MASK, CONNECT_BODY_BYTES, ConnectBody, ControlFrame, ControlKind, DataHeader,
-        DataKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
+        DataKind, MAX_BURST, MAX_FOLLOWS, ProbeBody, TURNS_VERSION, WINDOW, bandwidth_code,
         bandwidth_hz_of, control_flags, data_capacity, decode_data, encode_data, in_window,
         pack_callsign, seq_after, seq_distance,
     },
@@ -1967,7 +1967,7 @@ impl LinkEngine {
             src: self.my_call.clone(),
             dst: self.remote_call.clone(),
             caps: self.config.capabilities,
-            version: PROTOCOL_VERSION,
+            version: TURNS_VERSION,
             snr_db,
             turnaround_s: 0.0,
             identifier_s: 0.0,
@@ -4019,7 +4019,7 @@ impl LinkEngine {
             });
             return;
         }
-        if request.version != PROTOCOL_VERSION {
+        if request.version != TURNS_VERSION {
             // a mode number is a rung of the ladder since ADR-0013, which an earlier version
             // numbers differently: a session would run on numbers meaning other frames
             self.actions.push(Action::Event {
@@ -4074,7 +4074,7 @@ impl LinkEngine {
             });
             return;
         }
-        if accept.version != PROTOCOL_VERSION {
+        if accept.version != TURNS_VERSION {
             self.actions.push(Action::Event {
                 name: "ignored",
                 detail: format!(
@@ -4982,7 +4982,7 @@ mod tests {
                 src: "KK4XYZ".into(),
                 dst: e.my_call.clone(),
                 caps: e.config.capabilities,
-                version: PROTOCOL_VERSION,
+                version: TURNS_VERSION,
                 snr_db: Some(-2.0),
                 turnaround_s: 0.0,
                 identifier_s: 0.0,

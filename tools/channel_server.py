@@ -36,7 +36,9 @@ of air the station neither hears nor answers in: what it queued before plays on 
 plays what it was handed), what it hears piles up — the newest ``backlog_s`` (2 s, the
 daemon's ``max_backlog_s``) kept and the rest dropped, as its capture queue does — and when it
 ends the station is handed the pile and processes it before the clock moves on, as a loop that
-has fallen behind catches up. ``stall_every_s`` is the mean time between stalls (drawn,
+has fallen behind catches up. A daemon that greets with ``AEC2`` is told how much was dropped
+ahead of the pile (``MSG_GAP``), as a sound card's queue tells the run loop, and moves its clock
+past it. ``stall_every_s`` is the mean time between stalls (drawn,
 seeded), ``stall_s`` a length or a ``[shortest, longest]`` range; the command file's
 ``stall <who> S`` stalls one now.
 
@@ -84,7 +86,7 @@ TICK = 960
 DEVICE_LATENCY_S = 0.25
 """From the daemon (``audio::DEVICE_LATENCY_S``): played to on the air."""
 
-MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG = 1, 2, 3, 4, 5
+MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP = 1, 2, 3, 4, 5, 6
 RADIATED_BLOCK = 48
 """Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
 zero, a keyed lead or tail of silence is all zeros."""
@@ -343,6 +345,9 @@ class Station:
     backlog_limit: int = 2 * AUDIO_RATE
     stalls: list[list[float]] = field(default_factory=list)
     stall_dropped: int = 0
+    # the daemon reads MSG_GAP (it said ``AEC2``): told what a stall dropped, its clock moves
+    # on by it, as a sound card's queue tells the run loop
+    reads_gaps: bool = False
     next_stall: int | None = None
     stall_every: float = 0.0
     stall_range: tuple[float, float] = (0.0, 0.0)
@@ -434,8 +439,11 @@ class Station:
             pile = np.concatenate([*self.backlog, samples])
             self.backlog.clear()
             if len(pile) > self.backlog_limit:
-                self.stall_dropped += len(pile) - self.backlog_limit
+                lost = len(pile) - self.backlog_limit
+                self.stall_dropped += lost
                 pile = pile[-self.backlog_limit :]
+                if self.reads_gaps:
+                    self.sock.sendall(struct.pack("<BQ", MSG_GAP, lost))
             for i in range(0, len(pile), TICK):
                 self.send_block(clock, pile[i : i + TICK])
                 self.owed += 1
@@ -749,8 +757,9 @@ def accept_station(listener: socket.socket, radios: dict) -> Station:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     st = Station("?", sock, 0, 0, 0)
     magic = st.read_exact(4)
-    if magic != b"AEC1":
+    if magic not in (b"AEC1", b"AEC2"):
         raise SystemExit(f"not a daemon: {magic!r}")
+    st.reads_gaps = magic == b"AEC2"
     rate, length = struct.unpack("<IH", st.read_exact(6))
     if rate != AUDIO_RATE:
         raise SystemExit(f"a daemon at {rate} Hz; the channel runs at {AUDIO_RATE}")

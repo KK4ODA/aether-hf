@@ -2,7 +2,7 @@
 //! frames other stations sent, joined and handed on.
 //!
 //! A datagram waits in a queue of its own and goes out only while no session is up — the
-//! session's turn-taking has no room for a stranger's burst — as bursts that each fit the key
+//! session's slots have no room for a stranger's burst — as bursts that each fit the key
 //! (`burst_limit_s`), at the rung the client's configuration names (the tone floor's `tone-36`
 //! by default, which a station of either bandwidth decodes). It reaches the air through the
 //! same queue, gate and keying as everything else: `start_pending` feeds the next burst in

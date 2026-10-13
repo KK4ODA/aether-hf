@@ -1794,7 +1794,7 @@ impl aether_link::SoftFrame for Handed {
 
 #[test]
 fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
-    use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
+    use aether_link::frames::{ConnectBody, DataHeader, DataKind, TURNS_VERSION, encode_data};
     // version 7 offers the turn at the end of a burst (ADR-0047), which a version 6 station
     // would take for a TURN to answer; version 6 counts a burst's following frames in pairs
     // (ADR-0046), which a version 5
@@ -1806,7 +1806,7 @@ fn a_call_in_another_link_protocol_is_ignored_and_said_so() {
     // ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     // other frames by the same numbers, so a call from one is not a session to start — it is
     // ignored, with an event saying why
-    assert_eq!(PROTOCOL_VERSION, 7);
+    assert_eq!(TURNS_VERSION, 7);
     for version in [1u8, 2, 3, 4, 5, 6] {
         let t = timing(false);
         let mut b = LinkEngine::new("KK4XYZ", t.clone(), LinkConfig::default(), 2);
@@ -3511,13 +3511,13 @@ fn call_frame(
     snr_db: f64,
     at: f64,
 ) -> Called {
-    use aether_link::frames::{ConnectBody, DataHeader, DataKind, PROTOCOL_VERSION, encode_data};
+    use aether_link::frames::{ConnectBody, DataHeader, DataKind, TURNS_VERSION, encode_data};
     let mode = air_interface(WIDE_2300).control_rung();
     let body = ConnectBody {
         src: caller.into(),
         dst: called.into(),
         caps: LinkConfig::default().capabilities,
-        version: PROTOCOL_VERSION,
+        version: TURNS_VERSION,
         snr_db: None,
         turnaround_s: 0.0,
         identifier_s: 0.0,

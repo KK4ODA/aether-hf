@@ -13,14 +13,17 @@
 //!
 //! The wire, little-endian:
 //!
-//! * station → server, once: `AEC1`, `u32` sample rate, `u16` length, the station's name;
+//! * station → server, once: `AEC2` (`AEC1` from a daemon that reads no gap), `u32` sample
+//!   rate, `u16` length, the station's name;
 //! * station → server: `2` `u32 n` then `n` `f32` samples to play; `3` ready for the next
 //!   block (the last one has been processed); `4` drop what is queued and not yet played;
 //!   `5` `u32 n` then `n` bytes of UTF-8: the account of the transmission whose samples come
 //!   next (`AudioIo::annotate`), which the server puts on the air with them;
 //! * server → station: `1`, `u64` the playback clock — samples the station's device has
 //!   played through this block, silence included, as a sound card counts them —, `u64` the
-//!   samples of its queue played so far, `u32 n`, then `n` `f32` samples heard.
+//!   samples of its queue played so far, `u32 n`, then `n` `f32` samples heard; and, to an
+//!   `AEC2` station, `6` `u64 n` ahead of a block: `n` samples it heard were lost just before
+//!   it, as a capture queue loses its oldest when the loop has fallen behind (a stall).
 //!
 //! Nothing here is used on the air: `--channel` is for the harness, and a daemon on it keys
 //! no transmitter.
@@ -46,6 +49,8 @@ pub struct ChannelLink {
     consumed: u64,
     /// The playback clock as the last block said: silence counts, as on a sound card.
     clock: u64,
+    /// Samples heard and lost ahead of the blocks taken since `capture_gap` was last asked.
+    gap: usize,
     /// Human-readable, for the log.
     pub description: String,
 }
@@ -76,7 +81,7 @@ impl ChannelLink {
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(BLOCK_WAIT))?;
         let name = name.as_bytes();
-        let mut hello = b"AEC1".to_vec();
+        let mut hello = b"AEC2".to_vec();
         hello.extend_from_slice(&sample_rate.to_le_bytes());
         hello.extend_from_slice(&u16::try_from(name.len()).unwrap_or(0).to_le_bytes());
         hello.extend_from_slice(&name[..name.len().min(usize::from(u16::MAX))]);
@@ -86,6 +91,7 @@ impl ChannelLink {
             handed: 0,
             consumed: 0,
             clock: 0,
+            gap: 0,
             description: format!("channel server at {address}, in lockstep"),
         })
     }
@@ -110,7 +116,15 @@ impl ChannelLink {
             return Err(std::io::ErrorKind::NotConnected.into());
         };
         let mut head = [0u8; 21];
-        stream.read_exact(&mut head)?;
+        stream.read_exact(&mut head[..1])?;
+        // audio lost ahead of the block that follows
+        while head[0] == 6 {
+            let mut lost = [0u8; 8];
+            stream.read_exact(&mut lost)?;
+            self.gap += usize::try_from(u64::from_le_bytes(lost)).unwrap_or(0);
+            stream.read_exact(&mut head[..1])?;
+        }
+        stream.read_exact(&mut head[1..])?;
         if head[0] != 1 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -144,6 +158,10 @@ impl AudioIo for ChannelLink {
         self.clock = clock;
         self.consumed = consumed.min(self.handed);
         samples
+    }
+
+    fn capture_gap(&mut self) -> usize {
+        std::mem::take(&mut self.gap)
     }
 
     fn playback(&mut self, samples: &[f32]) {
@@ -204,12 +222,16 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
 
-    /// A server that plays the station's queue back to it a block later, as a mirror.
+    /// Samples the mirror says were lost ahead of its fourth block, as a stall's are.
+    const LOST: u64 = 37;
+
+    /// A server that plays the station's queue back to it a block later, as a mirror, and
+    /// says [`LOST`] samples went missing ahead of its fourth block.
     fn mirror(listener: &TcpListener, blocks: usize, block: usize) -> Vec<f32> {
         let (mut stream, _) = listener.accept().expect("accept");
         let mut hello = [0u8; 10];
         stream.read_exact(&mut hello).expect("hello");
-        assert_eq!(&hello[..4], b"AEC1");
+        assert_eq!(&hello[..4], b"AEC2", "a daemon that reads gaps");
         let name_len = u16::from_le_bytes([hello[8], hello[9]]) as usize;
         let mut name = vec![0u8; name_len];
         stream.read_exact(&mut name).expect("name");
@@ -219,7 +241,7 @@ mod tests {
         let mut clock = 0u64;
         let mut heard_back = Vec::new();
         let mut last = vec![0.0f32; block];
-        for _ in 0..blocks {
+        for index in 0..blocks {
             // read until ready
             loop {
                 let mut kind = [0u8; 1];
@@ -246,7 +268,12 @@ mod tests {
                     other => panic!("message {other}"),
                 }
             }
-            let mut message = vec![1u8];
+            let mut message = Vec::new();
+            if index == 3 {
+                message.push(6u8);
+                message.extend_from_slice(&LOST.to_le_bytes());
+            }
+            message.push(1u8);
             message.extend_from_slice(&clock.to_le_bytes());
             message.extend_from_slice(&consumed.to_le_bytes());
             message.extend_from_slice(&(block as u32).to_le_bytes());
@@ -275,9 +302,13 @@ mod tests {
         assert_eq!(link.queued(), 150);
         assert_eq!(link.drains_at(), 150);
         let mut heard = Vec::new();
+        let mut gaps = Vec::new();
         for _ in 0..5 {
             heard.extend(link.capture());
+            gaps.push(link.capture_gap());
         }
+        // the loss is said ahead of the block it preceded, once
+        assert_eq!(gaps, [0, 0, LOST as usize, 0, 0]);
         // the server played it on its clock, silence and all: four blocks on, all of it gone
         assert_eq!(link.played(), 500);
         assert_eq!(link.queued(), 0);

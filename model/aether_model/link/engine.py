@@ -42,7 +42,7 @@ from aether_model.link.frames import (
     CONNECT_BODY_BYTES,
     MAX_BURST,
     MAX_FOLLOWS,
-    PROTOCOL_VERSION,
+    TURNS_VERSION,
     WINDOW,
     ConnectBody,
     ControlFlags,
@@ -2752,7 +2752,7 @@ class LinkEngine:
                 )
             )
             return
-        if req.version != PROTOCOL_VERSION:
+        if req.version != TURNS_VERSION:
             self.actions.append(
                 Event("ignored", f"{req.src} calls with link protocol {req.version}")
             )
@@ -2790,7 +2790,7 @@ class LinkEngine:
         if bandwidth_code(ack.caps) != bandwidth_code(self.cfg.capabilities):
             self.actions.append(Event("ignored", f"{ack.src} answers in another bandwidth"))
             return
-        if ack.version != PROTOCOL_VERSION:
+        if ack.version != TURNS_VERSION:
             self.actions.append(
                 Event("ignored", f"{ack.src} answers with link protocol {ack.version}")
             )

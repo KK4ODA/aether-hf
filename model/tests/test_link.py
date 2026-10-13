@@ -2033,10 +2033,10 @@ def test_a_call_in_another_link_protocol_is_ignored_and_said_so(
     ladders before them (ADR-0013), version 1 OFDM modes: a station of another version means
     other frames by the same numbers, so a call from one is not a session to start — it is
     ignored, with an event saying why."""
-    from aether_model.link.frames import PROTOCOL_VERSION, ConnectBody, DataHeader, encode_data
+    from aether_model.link.frames import TURNS_VERSION, ConnectBody, DataHeader, encode_data
     from aether_model.link.phy import Container, TxFrame
 
-    assert PROTOCOL_VERSION == 7 and ConnectBody("A", "B").version == 7
+    assert TURNS_VERSION == 7 and ConnectBody("A", "B").version == 7
     b = LinkEngine("KK4XYZ", timing, None, seed=2)
     body = ConnectBody("W4ODA", "KK4XYZ", version=version).encode()
     payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 7), body, timing.capacity(2))

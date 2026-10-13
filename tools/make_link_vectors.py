@@ -25,7 +25,7 @@ from aether_model.link.datagram import body as datagram_body
 from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
     DATA_HEADER,
-    GRANTED_VERSION,
+    PROTOCOL_VERSION,
     ConnectBody,
     ControlFlags,
     ControlFrame,
@@ -128,10 +128,10 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
         ("KK4ODA", "N0CALL-T", 0b010, 1, 200.0, 0.0, 0.0),
         # protocol 8 (ADR-0069): the turnaround in 0.1 s steps up to 1.5 s, the identifier in
         # 0.5 s steps, both rounded up; the level bits in a request
-        ("KK4ODA", "W1AW", with_level(0b010, 2), GRANTED_VERSION, None, 0.25, 4.3),
-        ("W4ODA", "KK4XYZ", with_level(0b001, 3), GRANTED_VERSION, -3.0, 0.2, 0.0),
-        ("A1", "9Z9ZZZ9ZZ", 0, GRANTED_VERSION, 12.5, 2.0, 200.0),
-        ("M0ABC", "VK2DEF/P", 0b010, GRANTED_VERSION, 0.0, 0.0, 0.5),
+        ("KK4ODA", "W1AW", with_level(0b010, 2), PROTOCOL_VERSION, None, 0.25, 4.3),
+        ("W4ODA", "KK4XYZ", with_level(0b001, 3), PROTOCOL_VERSION, -3.0, 0.2, 0.0),
+        ("A1", "9Z9ZZZ9ZZ", 0, PROTOCOL_VERSION, 12.5, 2.0, 200.0),
+        ("M0ABC", "VK2DEF/P", 0b010, PROTOCOL_VERSION, 0.0, 0.0, 0.5),
     ):
         body = ConnectBody(
             src,
