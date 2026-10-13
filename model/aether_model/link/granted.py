@@ -250,6 +250,13 @@ class GrantConfig:
     identifier_s: float = 0.0
     """This station's Morse identifier's length, 0 for none. Declared at the connection, so the
     master grants the time for it."""
+    answer_gap_s: float = 0.0
+    """The least time between the end of the other station's frames and this station radiating:
+    the operator's ``[radio] answer_gap_ms``, or what this station learned the other needs
+    (ADR-0036, ADR-0054). For a peer whose radio is slower to hear again than it declared — a
+    VOX interface's hold left at 0. As the master the station keys no sooner than the gap after
+    the slave's frames; as the slave it asks for the gap level that starts its slots that late
+    (07-protocol-8.md §10). Set by :meth:`GrantedEngine.set_answer_gap`."""
     decode_budget_s: tuple[float, float] = DECODE_BUDGET_S
     key_s: float = KEY_S
     guard_s: float = GUARD_S
@@ -627,6 +634,12 @@ class GrantedEngine:
             self._cause = "send"
             self._try_window()
 
+    def set_answer_gap(self, seconds: float) -> None:
+        """The least time between the other station's frames and this station radiating
+        (:attr:`GrantConfig.answer_gap_s`): the daemon's, for the station it is calling or in a
+        session with. From the next key as the master, the next answer as the slave."""
+        self.cfg.answer_gap_s = max(0.0, seconds)
+
     def set_identifier_due(self, due: bool = True) -> None:
         """The daemon's word that this station's Morse identifier is due (07-protocol-8.md
         §5.4). The engine places it — ahead of the master's next header, or ahead of the
@@ -681,7 +694,7 @@ class GrantedEngine:
         """The gap level in use: what a master grants, what a slave asks for."""
         if self.role is Role.MASTER:
             return max(self._level_asked, self._silence_level)
-        return self._need_level
+        return self._asked_level()
 
     def drain(self) -> list[Action]:
         out, self.actions = self.actions, []
@@ -908,6 +921,23 @@ class GrantedEngine:
         lead = min(self.cfg.key_s, self._own_latency())
         return end + max(self._budget(floor), other_turnaround - lead) + self.cfg.guard_s
 
+    def _peer_wait_s(self) -> float:
+        """How long after the other station's frames this station's radiation waits: the
+        other's declared turnaround, or the answer gap when that is longer."""
+        return max(self._peer_turnaround_s, self.cfg.answer_gap_s)
+
+    def _asked_level(self) -> int:
+        """The gap level this station asks for as the slave: what its own lateness needs, and at
+        least what starts its slots the answer gap after the master's frames."""
+        gap = self.cfg.answer_gap_s
+        if gap <= 0.0:
+            return self._need_level
+        base = min(
+            max(self._budget(floor) + self.cfg.key_s, self._peer_turnaround_s)
+            for floor in (False, True)
+        )
+        return max(self._need_level, self._level_for(gap - base - self.cfg.guard_s))
+
     def _level_for(self, extra_s: float) -> int:
         """The smallest gap level at least ``extra_s`` long."""
         for i, step in enumerate(self.cfg.levels_s):
@@ -1107,9 +1137,9 @@ class GrantedEngine:
         """When this station may key again: a gap after the end a decoded frame of the slot
         stated, or after the slot's latest end when nothing of it was decoded (§3.2)."""
         if slot.stated_end is not None:
-            return self._after(slot.stated_end, slot.stated_floor, self._peer_turnaround_s)
+            return self._after(slot.stated_end, slot.stated_floor, self._peer_wait_s())
         end = slot.end_max + self._peer_late_s
-        return self._after(end, any(slot.answer_floors), self._peer_turnaround_s)
+        return self._after(end, any(slot.answer_floors), self._peer_wait_s())
 
     def _arm_wait(self) -> None:
         """Arm what ends this station's wait for the slot it granted last."""
@@ -1960,7 +1990,7 @@ class GrantedEngine:
             # with no data after it, the bit says where this station's data can go: only on
             # the floor, when its ceiling or its pinned rung is there
             data_floor=self.timing.is_floor(data[0].mode) if data else self._data_floor_only(),
-            level=self._need_level,
+            level=self._asked_level(),
             fam=self._wants_floor(),
             flag=self._disc_requested,
             ident=self._identifier_due and self.cfg.identifier_s > 0,
@@ -1991,7 +2021,7 @@ class GrantedEngine:
         body = ConnectBody(
             self.my_call,
             answer.remote,
-            caps=with_level(self.cfg.capabilities, self._need_level),
+            caps=with_level(self.cfg.capabilities, self._asked_level()),
             version=PROTOCOL_VERSION,
             snr_db=answer.snr_db,
             turnaround_s=self.cfg.turnaround_s,

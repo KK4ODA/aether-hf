@@ -130,6 +130,7 @@ fn config(doc: &Value) -> GrantConfig {
         elide: doc["elide"].as_bool().expect("elide"),
         turnaround_s: num(&doc["turnaround_s"]),
         identifier_s: num(&doc["identifier_s"]),
+        answer_gap_s: num(&doc["answer_gap_s"]),
         decode_budget_s: pair(&doc["decode_budget_s"]),
         key_s: num(&doc["key_s"]),
         guard_s: num(&doc["guard_s"]),
@@ -453,6 +454,7 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
             "abort" => engine.abort(),
             "send" => engine.send(&replay.blob(&entry["data"])),
             "set_identifier_due" => engine.set_identifier_due(entry["due"].as_bool().expect("due")),
+            "set_answer_gap" => engine.set_answer_gap(num(&entry["seconds"])),
             "pin_mode" => engine
                 .pin_mode(opt_int(&entry["mode"]), opt_int(&entry["body"]))
                 .expect("pin"),

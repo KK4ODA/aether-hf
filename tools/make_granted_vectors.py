@@ -120,6 +120,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "elide": c.elide,
         "turnaround_s": bits(c.turnaround_s),
         "identifier_s": bits(c.identifier_s),
+        "answer_gap_s": bits(c.answer_gap_s),
         "decode_budget_s": [bits(x) for x in c.decode_budget_s],
         "key_s": bits(c.key_s),
         "guard_s": bits(c.guard_s),
@@ -292,6 +293,7 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
     "abort": lambda: {},
     "send": lambda data: {"data": BLOBS(data)},
     "set_identifier_due": lambda due=True: {"due": due},
+    "set_answer_gap": lambda seconds: {"seconds": bits(seconds)},
     "pin_mode": lambda mode, body_bytes=None: {"mode": mode, "body": body_bytes},
     "take_ladder": lambda: {},
     "set_ceiling": lambda rung: {"rung": rung},
@@ -684,6 +686,19 @@ def vox() -> list[Recorder]:
     return [ra, rb]
 
 
+def answer_gap() -> list[Recorder]:
+    """Radios that hold their transmitter after the audio and declare nothing, and an answer gap
+    at each end that covers them: the master keys the gap after the slave's frames, the slave
+    asks for the level that starts its slots the gap after the master's."""
+    a, b, ra, rb = _pair(NARROW)
+    a.set_answer_gap(1.3)
+    b.set_answer_gap(1.3)
+    rng = random.Random(17)
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=17, rx_recovery_s=(1.1, 1.1))
+    _exchange(sim, a, b, _message(rng, 600), _message(rng, 300))
+    return [ra, rb]
+
+
 def idle_identifier() -> list[Recorder]:
     """An idle link: open windows, the slave's identifier falling due in one with nothing else
     to say, and a line typed into another."""
@@ -721,6 +736,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "stranded": stranded,
     "harq-limit": harq_limit,
     "vox": vox,
+    "answer-gap": answer_gap,
     "idle-identifier": idle_identifier,
 }
 
