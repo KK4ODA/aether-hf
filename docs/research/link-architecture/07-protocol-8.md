@@ -425,3 +425,8 @@ each found by a test or a scenario and each kept inside the rules of ADR-0069 §
 * **The closing identifier.** A DISC grants its DISC_ACK's slot with the slave's identifier time
   whenever the slave declared one; the slave puts it ahead of the DISC_ACK. The master's goes
   ahead of its first DISC.
+* **The link timeout is checked when it falls due** against whole exchanges of the family the
+  link runs in then. Armed when a frame is heard, it had counted exchanges of the family that
+  frame was heard in, and an answer that moved the link to the floor left it a third as long
+  as the rule says (`08-steps-0-and-1.md` §2.6).
+* **The engine's draws are SplitMix64**, so the port draws the same numbers from a seed.

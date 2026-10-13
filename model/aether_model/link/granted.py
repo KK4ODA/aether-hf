@@ -122,6 +122,36 @@ OPEN_WINDOW_S = (4.0, 10.0)
 """An idle link's open window, after an ordinary and after a floor header."""
 
 
+_MASK64 = (1 << 64) - 1
+
+
+class Draws:
+    """The engine's random draws (a session number, a call's jitter): SplitMix64, written out so
+    that the port draws exactly the same numbers from the same seed, and an engine's every
+    action can be checked against the model's (``tools/make_granted_vectors.py``)."""
+
+    def __init__(self, seed: int) -> None:
+        self.state = seed & _MASK64
+
+    def next_u64(self) -> int:
+        self.state = (self.state + 0x9E3779B97F4A7C15) & _MASK64
+        z = self.state
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _MASK64
+        return z ^ (z >> 31)
+
+    def unit(self) -> float:
+        """Uniform in [0, 1), from the top 53 bits."""
+        return (self.next_u64() >> 11) * (1.0 / (1 << 53))
+
+    def uniform(self, low: float, high: float) -> float:
+        return low + (high - low) * self.unit()
+
+    def below(self, n: int) -> int:
+        """Uniform in [0, n) (the modulo's bias is under 2**-56 for the engine's n)."""
+        return self.next_u64() % n
+
+
 class Role(Enum):
     NONE = "none"
     MASTER = "master"
@@ -367,7 +397,7 @@ class GrantedEngine:
         self.my_call = self.callsigns[0]
         self.timing = timing
         self.cfg = config or GrantConfig()
-        self.rng = random.Random(seed)
+        self.rng = Draws(seed if seed is not None else random.getrandbits(64))
         self.state = State.IDLE
         self.role = Role.NONE
         self.remote_call = ""
@@ -533,7 +563,7 @@ class GrantedEngine:
         # 1–255, and never 0 in the control frame's seven bits: a header with no counts, at
         # level 0, and an SNR of 0 dB would be all zeros, which the PHY refuses
         while True:
-            session = self.rng.randrange(1, 256)
+            session = 1 + self.rng.below(255)
             if session & 0x7F:
                 return session
 
@@ -827,7 +857,13 @@ class GrantedEngine:
 
     def _expire(self, name: str) -> None:
         if name == "link":
-            self._end_session("link timeout")
+            # whole exchanges of the size in use now: the answer that last armed the timer may
+            # have moved the link to the floor, whose exchanges are three times as long
+            due = self._heard_at + self._link_timeout()
+            if due > self.now:
+                self._arm_at("link", due)
+            else:
+                self._end_session("link timeout")
         elif name == "connect":
             self._retry_connect()
         elif name == "probe":

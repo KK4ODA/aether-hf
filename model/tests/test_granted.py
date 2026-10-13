@@ -81,12 +81,12 @@ def _station_model(
     rng: random.Random, timing: PhyTiming, *, tail_s: float = 0.08, lead_s: float = SLACK_S
 ) -> dict[str, object]:
     """A field station, as the review's simulator draws one: a keying lead up to the slack past
-    the engine's own, a decode latency inside the budget with an exponential tail past it, a
-    receiver deaf for a moment after transmitting, false detections now and then."""
+    the engine's own, a decode latency inside the budget with an exponential tail past it (the
+    harness measured 0.12 s typical for both families, 08 §1.3), a receiver deaf for a moment
+    after transmitting, false detections now and then."""
 
-    def latency(_rx: int, frame: TxFrame, _end: float) -> float:
-        base = 0.1 + (0.3 if _family(timing, frame) else 0.0)
-        return base + rng.expovariate(1.0 / tail_s)
+    def latency(_rx: int, _frame: TxFrame, _end: float) -> float:
+        return 0.12 + rng.expovariate(1.0 / tail_s)
 
     return {
         "key_lead": lambda _who: rng.uniform(0.0, lead_s),
@@ -363,6 +363,28 @@ def test_a_dead_path_ends_the_session_at_both_ends(air: str) -> None:
     assert ended & set(sim.events(0))
     assert any(e.startswith("disconnected:link timeout") for e in sim.events(1))
     assert sim.overlaps() == []
+
+
+def test_the_link_timeout_spans_exchanges_of_the_family_in_use_when_it_falls_due() -> None:
+    """The four whole exchanges (ADR-0012) are of the family the link runs in when the timer
+    falls due. An answer that moved the link to the floor armed the timer by the ordinary
+    exchange it was heard in, a third of a floor one, and on the review's ack-lost scenario the
+    master ended a live session as the answer it was waiting for arrived (08 §2.6)."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=5)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    assert a.state is State.CONNECTED and not a.timing.is_floor(a._burst_mode())
+    heard = a._heard_at
+    ordinary = a._link_timeout()
+    a.pin_mode(0)  # the link moves to the floor and the other station falls silent
+    floor = a._link_timeout()
+    assert floor > ordinary + 60.0
+    a.tick(heard + ordinary)
+    assert a.state is State.CONNECTED
+    assert a.next_deadline() is not None and a.next_deadline() <= heard + floor
+    a.tick(heard + floor)
+    assert a.state is State.IDLE
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
