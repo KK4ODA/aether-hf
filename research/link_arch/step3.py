@@ -87,6 +87,21 @@ def main_peer(who: str) -> str:
     return "a" if who == "b" else "b"
 
 
+DEFAULT_CALLSIGNS = {"a": "W4ODA", "b": "KK4XYZ", "c": "N4CCC", "d": "N4DDD", "e": "N4EEE"}
+"""``session_matrix.py``'s, for a station whose scenario names no callsign."""
+
+
+def station_keys(scenario: dict[str, Any], names: list[str]) -> dict[str, str]:
+    """The scenario's key (``a``, ``b``, …) of each station the channel's account names: it
+    names them by the callsign each daemon gave it."""
+    stations = scenario.get("stations", {})
+    keys = set(DEFAULT_CALLSIGNS) | set(stations)
+    by_call = {
+        str(stations.get(k, {}).get("callsign", DEFAULT_CALLSIGNS.get(k, k))): k for k in keys
+    }
+    return {name: by_call.get(name, name) for name in names}
+
+
 # ── one run
 
 
@@ -140,22 +155,25 @@ def deaf_hits(report: dict[str, Any], scenario: dict[str, Any]) -> tuple[float, 
     counted = reported = 0.0
     detail = []
     stations = report.get("stations", {})
-    for who, st in stations.items():
+    key = station_keys(scenario, list(stations))
+    name_of = {k: name for name, k in key.items()}
+    for name, st in stations.items():
         hits = sum(float(v) for k, v in st.get("deaf_hits_s", {}).items() if k != "transmitting")
         if hits <= 0.0:
             continue
+        who = key[name]
         peer = main_peer(who)
+        peer_st = stations.get(name_of.get(peer, peer), {})
         radio = scenario.get("stations", {}).get(who, {}).get("radio", {})
         after = (float(radio.get("vox_hold_ms", 0)) + float(radio.get("rx_recovery_ms", 0))) / 1000
         deaf = [[float(k0), float(k1) + after] for k0, k1 in st.get("keyed", [])]
         path = scenario.get("path", {})
         delay = float({**path, **path.get(f"{peer}_to_{who}", {})}.get("delay_ms", 0.0)) / 1000
         arriving = [
-            [float(r0) + delay, float(r1) + delay]
-            for r0, r1 in stations.get(peer, {}).get("radiated", [])
+            [float(r0) + delay, float(r1) + delay] for r0, r1 in peer_st.get("radiated", [])
         ]
         found = _intersect(deaf, arriving)
-        txs = stations.get(peer, {}).get("transmissions", [])
+        txs = peer_st.get("transmissions", [])
         causes = {str((on_air_at(txs, lo - delay) or {}).get("cause", "?")) for lo, _ in found}
         by_initiation = bool(causes) and all(c in INITIATIONS for c in causes)
         keeps = s4_holds(scenario, who)
@@ -168,7 +186,7 @@ def deaf_hits(report: dict[str, Any], scenario: dict[str, Any]) -> tuple[float, 
             if keeps and not by_initiation
             else ("S4 broken" if not keeps else "initiation")
         )
-        detail.append(f"{who} {hits:.3f} s {why} ({'+'.join(sorted(causes)) or 'unplaced'})")
+        detail.append(f"{name} {hits:.3f} s {why} ({'+'.join(sorted(causes)) or 'unplaced'})")
     return counted, reported, "; ".join(detail)
 
 

@@ -113,3 +113,15 @@ The A/B stops (06 §4).
 ## 2. The runs
 
 *To be written from the runs.*
+
+### Changes to the judge after the registration
+
+* **The channel's station names (variant 0, before variant 1's collect).** The channel server's
+  account names each station by the callsign its daemon gave, not by the scenario's key
+  (`a`, `b`, …). `deaf_hits` looked the radio up by the name it was handed. It therefore read every
+  station as a line-keyed radio with no recovery, and found no peer to put a hit down to.
+  Under that reading, `80m-vox-caller-learned-gap-500`'s undeclared VOX hold was counted, though
+  §1.3 says it is reported. The judge now maps callsigns to keys as the harness assigns them
+  (`station_keys`), and its test is written on a callsign-named account. The rule is
+  unchanged. Every collect re-reads all the runs, so the committed CSVs carry the fix from
+  variant 1 on.
