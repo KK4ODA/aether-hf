@@ -62,15 +62,17 @@ def test_an_overlap_of_two_initiations_is_left_out_and_any_other_counts() -> Non
 
 
 def test_deaf_hits_count_unless_the_radio_breaks_s4_or_an_initiation_made_them() -> None:
+    # the channel's account names each station by the callsign its daemon gave: the scenario's
+    # own, or the harness's default for the key (W4ODA for ``a``, KK4XYZ for ``b``)
     report = {
         "stations": {
-            "a": {
+            "KE4QCM": {
                 "keyed": [[0.0, 2.0]],
                 "radiated": [[0.1, 1.9]],
                 "deaf_hits_s": {"transmitting": 0.0, "recovering": 0.1},
                 "transmissions": [_tx(0.1, "timer:proceed")],
             },
-            "b": {
+            "KK4XYZ": {
                 "keyed": [[2.05, 3.0]],
                 "radiated": [[2.05, 3.0]],
                 "deaf_hits_s": {},
@@ -78,17 +80,28 @@ def test_deaf_hits_count_unless_the_radio_breaks_s4_or_an_initiation_made_them()
             },
         }
     }
-    line = {"stations": {"a": {"radio": {"rx_recovery_ms": 200}}}}
-    counted, reported, _ = step3.deaf_hits(report, line)
+
+    def scenario(radio: dict[str, int]) -> dict[str, object]:
+        return {"stations": {"a": {"callsign": "KE4QCM", "radio": radio}}}
+
+    line = scenario({"rx_recovery_ms": 200})
+    counted, reported, detail = step3.deaf_hits(report, line)
     assert (counted, reported) == (0.1, 0.0)
-    undeclared = {"stations": {"a": {"radio": {"vox_hold_ms": 900, "rx_recovery_ms": 100}}}}
+    assert "(frame)" in detail, "the hit is put down to the other station's transmission"
+    undeclared = scenario({"vox_hold_ms": 900, "rx_recovery_ms": 100})
     counted, reported, detail = step3.deaf_hits(report, undeclared)
     assert (counted, reported) == (0.0, 0.1)
     assert "S4 broken" in detail
-    report["stations"]["b"]["transmissions"] = [_tx(2.05, "beacon")]
+    report["stations"]["KK4XYZ"]["transmissions"] = [_tx(2.05, "beacon")]
     counted, reported, detail = step3.deaf_hits(report, line)
     assert (counted, reported) == (0.0, 0.1)
     assert "initiation" in detail
+
+
+def test_the_channels_callsigns_name_the_scenarios_stations() -> None:
+    scenario = {"stations": {"a": {"callsign": "KE4QCM"}, "c": {}}}
+    keys = step3.station_keys(scenario, ["KE4QCM", "KK4XYZ", "N4CCC"])
+    assert keys == {"KE4QCM": "a", "KK4XYZ": "b", "N4CCC": "c"}
 
 
 def _write(path: Path, rows: list[dict[str, object]]) -> None:
