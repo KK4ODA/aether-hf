@@ -37,7 +37,7 @@ other side to time out. Aether can do better than the second at no cost on the w
    reason; the host adapter already keeps what a program writes with no session up in its own
    pipe, not in the engine.)
 2. **A station that left a session unheard answers it.** When a session ends by `aborted`,
-   `closed (no DISC_ACK)`, `no response` or `link timeout` (`LEFT_UNHEARD`), the station keeps
+   `closed (no disc ack)`, `no response` or `link timeout` (`LEFT_UNHEARD`), the station keeps
    its number for as long as the other station's link could still be waiting (the link
    timeout from then). While idle, a frame of that session —
    * a control frame: answered at once with a DISC (a DISC with its DISC_ACK), in the family it
