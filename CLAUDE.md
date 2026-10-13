@@ -1542,11 +1542,18 @@ reported done/dropped in the order handed over; captured audio a backend lost mo
 station's clock on (`AudioIo::capture_gap`, `Station::skip_captured`; the channel server tells
 an `AEC2` daemon with `MSG_GAP`), or a station that fell behind answered late past a gate on the
 same slipped clock; and (model first) a called station's Disconnect closes without the caller's
-own queue (ADR-0023's receiving station; `80m-leave-together-500`). Owed with the release that
-ships it (a schema step needs a version bump): `[radio] turnaround_ms` replacing `answer_gap_ms` (schema 12, `SCHEMA_HISTORY`),
-Setup step 4 and the manual's *Answer gap*; the learned gap as a granted level; the capture
-path's input latency (measure in Step 4). **Next: Step 3, the harness A/B against protocol 7's
-10-seed baseline.**
+own queue (ADR-0023's receiving station; `80m-leave-together-500`). **Schema 12**
+(`09-step-2.md` §3; the branch bumped to `0.2.0-beta.106` for it, **no tag, no release, `master`
+untouched** — the author's choice): `[radio] turnaround_ms` (0–1500, live; Setup step 4
+*Turnaround*) is declared in the call and acceptance; `answer_gap_ms` stays for a peer slower
+than it declares, the larger of it and the learned gap (ADR-0054) handed to the engine each pass
+(`set_answer_gap`, model first): the master keys no sooner than the gap after the slave's
+frames, the slave asks for the level that covers it — never a hold of the daemon's. The harness
+writes each daemon the schema its build reads (`schema_of`, from `--example-config`), and its
+VOX radio keys on audio, not on the daemon's silent lead and tail (the "29 collisions" of
+`80m-poor-500-pactor-signalink` were that). Step 3 judges radiated overlaps and frames keyed into
+a deaf receiver, not `max_collisions`. Owed: the capture path's input latency (measure in Step
+4). **Next: Step 3, the harness A/B against protocol 7's 10-seed baseline.**
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
