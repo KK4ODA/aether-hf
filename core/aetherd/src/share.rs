@@ -486,7 +486,7 @@ mod tests {
         let file = dir.join("aetherd.log");
         std::fs::write(
             &file,
-            "2026-10-05T00:16:22Z info  connected: KE4QCM (irs)\n".repeat(50),
+            "2026-10-05T00:16:22Z info  connected: KE4QCM (slave)\n".repeat(50),
         )
         .expect("write");
         let wav = dir.join("a.wav");

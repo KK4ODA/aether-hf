@@ -65,9 +65,9 @@ from aether_model.link.engine import (
 from aether_model.link.frames import (
     CAP_LEVEL_MASK,
     CONNECT_BODY_8_BYTES,
-    GRANTED_VERSION,
     MAX_BURST,
     MAX_FOLLOWS,
+    PROTOCOL_VERSION,
     WINDOW,
     ConnectBody,
     DataHeader,
@@ -1166,7 +1166,7 @@ class GrantedEngine:
             self.my_call,
             self.remote_call,
             caps=with_level(self.cfg.capabilities, level),
-            version=GRANTED_VERSION,
+            version=PROTOCOL_VERSION,
             turnaround_s=self.cfg.turnaround_s,
             identifier_s=self.cfg.identifier_s,
         ).encode()
@@ -1237,7 +1237,7 @@ class GrantedEngine:
             self._on_acceptance(header, cb, frame, len(body))
 
     def _version_ok(self, cb: ConnectBody, size: int, verb: str) -> bool:
-        if cb.version == GRANTED_VERSION and size >= CONNECT_BODY_8_BYTES:
+        if cb.version == PROTOCOL_VERSION and size >= CONNECT_BODY_8_BYTES:
             return True
         self.actions.append(Event("ignored", f"{cb.src} {verb} with link protocol {cb.version}"))
         return False
@@ -1986,7 +1986,7 @@ class GrantedEngine:
             self.my_call,
             answer.remote,
             caps=with_level(self.cfg.capabilities, self._need_level),
-            version=GRANTED_VERSION,
+            version=PROTOCOL_VERSION,
             snr_db=answer.snr_db,
             turnaround_s=self.cfg.turnaround_s,
             identifier_s=self.cfg.identifier_s,

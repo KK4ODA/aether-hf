@@ -759,8 +759,7 @@ impl<P: Ptt> Station<P> {
     /// The link timing of the air the station runs, with this station's keying in it.
     pub(super) fn air_timing(&self) -> aether_link::PhyTiming {
         let mut timing = super::phy_timing(self.config.params);
-        timing.tx_latency_s =
-            self.config.key_lead_s + self.config.playback_lead_s + self.config.key_tail_s;
+        timing.tx_latency_s = self.radiation_latency_s();
         timing
     }
 

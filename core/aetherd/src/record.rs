@@ -84,22 +84,26 @@ pub struct FrameRecord {
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
 #[must_use]
 pub fn describe_control(payload: &[u8]) -> Option<String> {
-    let frame = aether_link::frames::ControlFrame::decode(payload).ok()?;
+    let frame = aether_link::GrantFrame::decode(payload).ok()?;
     Some(format!(
-        "{:?} session {} flags {:#04x} base {} bitmap {:#06x} mode {} snr {} follows {}{}",
+        "{:?} session {} count {}{} level {} base {} bitmap {:#06x} rung {} n {} snr {}{}{}{}",
         frame.kind,
         frame.session,
-        frame.flags,
-        frame.base,
-        frame.bitmap,
-        frame.recommended_mode,
-        frame.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
-        frame.follows,
-        if frame.burst_floor {
+        frame.count,
+        if frame.data_floor {
             " on the floor"
         } else {
             ""
-        }
+        },
+        frame.level,
+        frame.base,
+        frame.bitmap,
+        frame.rung,
+        frame.n,
+        frame.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
+        if frame.fam { " fam floor" } else { "" },
+        if frame.flag { " flag" } else { "" },
+        if frame.ident { " ident" } else { "" },
     ))
 }
 

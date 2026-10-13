@@ -25,7 +25,7 @@ from typing import Any
 
 from aether_model.frame.modes import AirInterface
 from aether_model.link.frames import (
-    PROTOCOL_VERSION,
+    TURNS_VERSION,
     ConnectBody,
     DataHeader,
     DataKind,
@@ -217,7 +217,7 @@ class FcEngine(Core):
             cb = ConnectBody.decode(body)
         except ValueError:
             return
-        if cb.dst != self.my_call or cb.version != PROTOCOL_VERSION:
+        if cb.dst != self.my_call or cb.version != TURNS_VERSION:
             return
         if bandwidth_code(cb.caps) != bandwidth_code(self.cfg.capabilities):
             return

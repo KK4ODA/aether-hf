@@ -259,8 +259,8 @@ frequency in the program.
 Type the other station's callsign, with its SSID if it uses one, then:
 
 - **Connect**: call it and start a session. Calls go out on the tone floor first.
-- **Disconnect**: send what is queued, then close. On the receiving side it closes between the
-  other station's bursts. While calling it reads **Stop calling**.
+- **Disconnect**: send what is queued, then close. The station that was called asks the caller
+  to close in its next answer. While calling it reads **Stop calling**.
 - **Abort**: drop the session at once, sending nothing more.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
   you and how well, both ways.
@@ -522,8 +522,9 @@ what happened in an issue on GitHub or by email.
 
 ## 15. Glossary
 
-- **Acknowledgement (ACK)**: the receiving station's answer to a burst, saying which frames
-  arrived, how well, and which rung to use next.
+- **Acknowledgement (ACK)**: which frames arrived, how well, and which rung to use next. Each
+  station's goes with the next thing it sends: the caller's ahead of its frames, the called
+  station's in its slot.
 - **Answer gap**: the least time Aether waits after the other station's frame before keying.
 - **Bandwidth**: 2300 Hz or 500 Hz. Both stations of a session use the same.
 - **Beacon**: your callsign on the air once, addressed to nobody.
@@ -537,7 +538,6 @@ what happened in an issue on GitHub or by email.
   low SNR. Calls, probes and beacons go on it.
 - **Host program**: Winlink Express, Pat or VarAC, using Aether through the VARA-compatible
   interface.
-- **ISS / IRS**: the station sending (Information Sending Station) and the one receiving.
 - **Ladder**: the rungs of a bandwidth, slowest first. Also the step of a Test that tries each
   rung.
 - **Link protocol**: the version of the rules both stations follow on the air. Different
@@ -550,9 +550,10 @@ what happened in an issue on GitHub or by email.
   retransmission.
 - **Sidecar**: the `.json` file beside a recording, saying what the modem made of every frame.
 - **SNR**: signal-to-noise ratio, here always in a 3 kHz bandwidth.
+- **Slot**: the time the calling station gives the called one to send in, after each of its own
+  transmissions. The called station keys only in its slot; an answer that would start too late
+  for it is not sent, so the two stations never key over each other.
 - **Test session**: the field test: probe, call, message, ladder, file, recorded.
-- **Turn**: which station is sending. It changes hands when the sender's queue is empty or the
-  receiver has data of its own.
 
 ## 16. Where to read more
 

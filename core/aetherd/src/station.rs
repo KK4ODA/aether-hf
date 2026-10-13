@@ -41,11 +41,13 @@ pub use host::HostPresence;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use aether_link::{
-    Action, Container, HarqBuffer, LinkConfig, LinkEngine, PhyTiming, Role, SoftFrame, State,
+    Action, Container, GrantConfig, GrantFrame, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
+    State,
     frames::{
-        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, ProbeBody, decode_data,
-        encode_data, pack_callsign, unpack_callsign, with_bandwidth,
+        ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
+        unpack_callsign, with_bandwidth,
     },
+    granted::Role,
 };
 use aether_phy::{
     AudioToBaseband, BasebandToAudio, Complex, Modem, Received, StreamingReceiver,
@@ -53,7 +55,7 @@ use aether_phy::{
 };
 
 use crate::{
-    busy::{BusyConfig, BusyDetector, BusyReason},
+    busy::{BusyConfig, BusyDetector},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
@@ -79,7 +81,7 @@ pub struct StationConfig {
     /// left listening with nobody at it (`[radio] answer_only`).
     pub answer_only: bool,
     /// Link-layer tuning.
-    pub link: LinkConfig,
+    pub link: GrantConfig,
     /// Busy-detector tuning.
     pub busy: BusyConfig,
     /// Transmit level, as a fraction of full scale: the amplitude of a sine that has the
@@ -104,6 +106,10 @@ pub struct StationConfig {
     /// The least time between the end of a frame heard from another station and this
     /// station keying, in seconds (`radio.answer_gap_ms`, ADR-0036).
     pub answer_gap_s: f64,
+    /// This station's radio: how long after it stops sending it hears again (VOX hold and
+    /// receiver recovery), declared in its call or acceptance so the other station's slots
+    /// wait for it (07-protocol-8.md §3).
+    pub turnaround_s: f64,
     /// Offer stream compression in the connect handshake. Used only if the peer offers it
     /// too; a station that cannot decompress must never be sent a compressed stream.
     pub compress: bool,
@@ -146,7 +152,7 @@ impl Default for StationConfig {
             callsign: String::new(),
             params: WIDE_2300,
             answer_only: false,
-            link: LinkConfig::default(),
+            link: GrantConfig::default(),
             busy: BusyConfig::default(),
             tx_level: 0.25,
             key_lead_s: 0.1,
@@ -158,6 +164,7 @@ impl Default for StationConfig {
             max_key_s: 30.0,
             wait_for_clear: true,
             answer_gap_s: 0.0,
+            turnaround_s: 0.0,
             compress: true,
             cw_id: None,
             record_dir: None,
@@ -257,7 +264,11 @@ impl SoftFrame for PhyFrame {
 
 /// Something waiting to be transmitted.
 enum Outgoing {
-    /// Link-layer frames, to be modulated, and why they were queued.
+    /// A transmission the link engine decided (ADR-0069): its frames, when it may radiate and
+    /// the identifier the engine put ahead of them. The engine follows each one it hands over
+    /// to its end, so one the station does not send is reported dropped, never just forgotten.
+    Link(LinkTx),
+    /// Frames the station queues on its own — a beacon — to be modulated, and why.
     Frames(Vec<aether_link::TxFrame>, Origin),
     /// A drive-setting burst: the real waveform, modulated exactly as traffic is, so the
     /// rig's ALC sees the peaks traffic will actually present it with. The operator may cut
@@ -290,6 +301,33 @@ enum Outgoing {
     },
 }
 
+/// A transmission of the link engine's, as it handed it over.
+struct LinkTx {
+    frames: Vec<aether_link::TxFrame>,
+    origin: Origin,
+    /// When its radiation may start: no sooner than `not_before`, no later than `not_after`.
+    window: KeyWindow,
+    /// The Morse identifier's time ahead of the frames, the engine's placement.
+    identifier_s: f64,
+}
+
+/// When a transmission may radiate, on the station's clock: an answer in a slot from the
+/// slot's start to its slack (ADR-0069 §2.3). The keying gate holds the rendered transmission
+/// until the first and drops it past the second, whatever held it.
+#[derive(Debug, Clone, Copy, Default)]
+struct KeyWindow {
+    not_before: Option<f64>,
+    not_after: Option<f64>,
+    /// Where the Morse identifier stood before this transmission's own was counted, when it
+    /// carries one: put back if the gate drops it, since nothing of it went out.
+    identifier_before: Option<IdentifierState>,
+    /// Samples of its audio, from the first, to the end of its last frame: the keying's lead,
+    /// the identifier, the frames.
+    frames_samples: usize,
+    /// Where its last frame ends on the air if it plays whole, set when it is keyed.
+    whole_end: Option<f64>,
+}
+
 /// Why a burst of frames was queued and when: the account of the air a harness keeps
 /// (`AudioIo::annotate`, ADR-0069 §5). Nothing in the protocol reads it.
 #[derive(Debug, Clone, Copy)]
@@ -316,10 +354,8 @@ impl Origin {
 /// last frame as surely as one that ends seconds past it.
 const KEY_TIME_MARGIN_S: f64 = 1.0;
 
-/// How long before a Morse identifier falls due the bursts are already sized to carry it:
-/// a burst is shaped when the engine decides it and rendered a moment later. In a session
-/// nothing holds a burst back, so a minute is room to spare.
-const ID_LOOKAHEAD_S: f64 = 60.0;
+/// The moment of silence between the Morse identifier and the frames it goes with.
+const CW_ID_GAP_S: f64 = 0.1;
 
 /// The longest a burst of frames may be on the air, so that the whole transmission — the
 /// keying's lead, the frames, the Morse identifier when `with_id` says one rides on it, and
@@ -331,7 +367,7 @@ fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
     let identifier = config.cw_id.filter(|_| with_id).map_or(0.0, |cw| {
         let rate = config.params.audio_rate as f64;
         // the identifier and the moment of silence before it (`append_cw_id`)
-        cw.audio(&config.callsign, rate).len() as f64 / rate + 0.1
+        cw.audio(&config.callsign, rate).len() as f64 / rate + CW_ID_GAP_S
     });
     (config.max_key_s - config.key_lead_s - config.key_tail_s - identifier - KEY_TIME_MARGIN_S)
         .max(1.1)
@@ -380,17 +416,11 @@ const DRIVE_GAP_S: f64 = 5.0;
 /// the drive so an operator who sets the level by the tone has set the identifier too.
 const CW_ID_RELATIVE_LEVEL: f64 = 0.8;
 
-/// The longest a DISC, or the identifier that ends a session, waits out the other station's
-/// Morse identifier, which follows its answer to a DISC and which no frame announces — ten
-/// characters at 10 wpm take about thirteen seconds. Longer, and what holds the channel is
-/// not an identifier, and the session is closed and identified rather than held open.
+/// The longest the identifier that ends a session on its own waits out the other station's
+/// Morse identifier, which no frame announces — ten characters at 10 wpm take about thirteen
+/// seconds. Longer, and what holds the channel is not an identifier, and the session is
+/// identified rather than held open.
 const OTHER_ID_WAIT_MAX_S: f64 = 15.0;
-
-/// How long the answer to a DISC listens before it goes: an identifier the DISC carried
-/// starts a tenth of a second after it, the DISC is decoded before that identifier has been
-/// on long enough for the busy detector's attack (200 ms of energy in 400), and the answer
-/// went out over it.
-const ANSWER_LISTEN_S: f64 = 0.5;
 
 /// Why a station under automatic control sends no beacon (ADR-0024).
 pub const BEACON_UNDER_AUTOMATIC_CONTROL: &str = "a station under automatic control sends no \
@@ -793,11 +823,9 @@ pub struct StationStats {
     pub frames_under_own_tx: usize,
     /// Times a transmission was held back because the channel was busy.
     pub deferred_for_busy: usize,
-    /// Transmissions held for the answer gap after another station's frame (ADR-0036).
-    pub deferred_for_gap: usize,
-    /// Arrivals heard below the trusted confidence that were still taken for the next frame
-    /// of a burst, because they began where it would (ADR-0040).
-    pub follow_on_heeded: usize,
+    /// Answers the keying gate did not send: they would have started radiating past the end of
+    /// their slot (ADR-0069 §2.3).
+    pub dropped_late: usize,
     /// Times the key-time watchdog fired.
     pub watchdog_trips: usize,
     /// Application bytes handed to the compressor this session.
@@ -863,7 +891,7 @@ impl PlaybackClock {
 /// One station: link engine, physical layer, radio.
 pub struct Station<P: Ptt> {
     config: StationConfig,
-    engine: LinkEngine,
+    engine: GrantedEngine,
     receiver: StreamingReceiver,
     /// Shared with every [`PhyFrame`] handed to the engine, for decoding and combining.
     decoder: Rc<RefCell<Modem>>,
@@ -911,9 +939,6 @@ pub struct Station<P: Ptt> {
     /// arrives after the key is released, and read as channel it would hold the next burst
     /// back for its own echo.
     deaf_until: f64,
-    /// Where the last frame heard from another station ended, in the station's clock: the
-    /// answer gap counts from here (ADR-0036).
-    heard_end: f64,
     /// When the key last came up, for the receive trace after it (`trace_after_release`).
     released_at: f64,
     /// When that trace last wrote a line.
@@ -977,9 +1002,6 @@ pub struct Station<P: Ptt> {
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
-    /// Where the last frame heard arriving ends, by what its preamble said of it: what an
-    /// abort's DISC waits out (ADR-0065).
-    arriving_until: f64,
     /// The session's account, while one is up.
     link: Option<LinkAccount>,
     /// Bytes that crossed the air, with when, for the throughput reading.
@@ -993,9 +1015,11 @@ pub struct Station<P: Ptt> {
     outbound: Vec<u8>,
     /// The Morse identifier: when it last went out, and what is owed.
     identifier: IdentifierState,
-    /// The frames of the burst on the air: how long each is, and whether they are the
-    /// tone floor's — what an abort that cuts it has to wait out before its DISC.
-    on_air_frames: Option<(f64, bool)>,
+    /// The engine's transmission rendered or on the air, and when it may radiate (ADR-0069
+    /// §2.3): the gate holds it until the slot's start and drops it past the slot's slack. Only
+    /// the engine's own transmissions are reported to it, done or dropped — a beacon, a
+    /// datagram or a tune tone is not in its account — and this is how they are told apart.
+    keying: Option<KeyWindow>,
     /// The regulatory policy in force (ADR-0018).
     policy: Policy,
     /// What this air's transmissions occupy, measured; `None` when nothing is measured for
@@ -1067,22 +1091,25 @@ impl<P: Ptt> Station<P> {
         config.max_mode_setting.get_or_insert(config.link.max_mode);
         let params = config.params;
         let mut timing = phy_timing(params);
-        timing.tx_latency_s = config.key_lead_s + config.playback_lead_s + config.key_tail_s;
-        let link = LinkConfig {
+        // how long after a transmission is keyed it radiates: what an answer is keyed ahead of
+        // its slot by (07-protocol-8.md §10); the card's own report replaces the assumed lead
+        timing.tx_latency_s = config.key_lead_s + config.playback_lead_s;
+        let link = GrantConfig {
             // what this station offers, and the bandwidth it transmits in — stated, not
             // negotiated: a call claiming another bandwidth than it arrived in is ignored
             capabilities: with_bandwidth(
                 offered_capabilities(config.compress),
                 params.bandwidth.hz(),
             ),
-            // the first transmission identifies, so the first bursts keep room for it
+            // the engine keeps the identifier's room itself, in the transmission it places it in
             max_burst_s: config
                 .link
                 .max_burst_s
-                .or_else(|| Some(burst_limit_s(&config, true))),
+                .or_else(|| Some(burst_limit_s(&config, false))),
+            turnaround_s: config.turnaround_s,
             ..config.link.clone()
         };
-        let engine = LinkEngine::new(&config.callsign, timing, link, seed);
+        let engine = GrantedEngine::new(&config.callsign, timing, link, seed);
         let busy = BusyDetector::new(BusyConfig {
             fs: params.fs_baseband,
             passband_hz: params.occupied_bandwidth_hz(),
@@ -1112,7 +1139,6 @@ impl<P: Ptt> Station<P> {
             held_since: None,
             held_from: None,
             deaf_until: f64::NEG_INFINITY,
-            heard_end: f64::NEG_INFINITY,
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
             device_latency_s: None,
@@ -1143,7 +1169,6 @@ impl<P: Ptt> Station<P> {
             passband_quiet_since: f64::NEG_INFINITY,
             passband_pending: VecDeque::new(),
             rx_until: f64::NEG_INFINITY,
-            arriving_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
             crossed: 0,
@@ -1155,7 +1180,7 @@ impl<P: Ptt> Station<P> {
             decompressor: Decompressor::new(false),
             outbound: Vec::new(),
             identifier: IdentifierState::default(),
-            on_air_frames: None,
+            keying: None,
             policy: Policy::from_setting(&config.regulatory.profile),
             occupancy: crate::regulatory::occupancy::air(params.bandwidth.hz()).ok(),
             authorized: None,
@@ -1176,6 +1201,7 @@ impl<P: Ptt> Station<P> {
         };
         // a speed set above what the rules allow is sent at their limit, and said so at start
         station.note_identifier_speed();
+        station.refresh_identifier_length();
         station
     }
 
@@ -1393,7 +1419,7 @@ impl<P: Ptt> Station<P> {
 
     /// The link engine, for a status display.
     #[must_use]
-    pub fn engine(&self) -> &LinkEngine {
+    pub fn engine(&self) -> &GrantedEngine {
         &self.engine
     }
 
@@ -1453,7 +1479,7 @@ impl<P: Ptt> Station<P> {
         if ours && self.engine.state() == State::Idle {
             self.move_for_call(remote);
         }
-        self.engine.connect_as(remote, as_call)?;
+        self.engine.connect(remote, as_call)?;
         self.pump();
         Ok(())
     }
@@ -1476,7 +1502,7 @@ impl<P: Ptt> Station<P> {
             return Ok(true);
         }
         // validated now, so a host is not told OK for a list the engine will refuse later
-        let mut probe = LinkEngine::new(
+        let mut probe = GrantedEngine::new(
             &self.engine.my_call,
             self.engine.timing().clone(),
             self.config.link.clone(),
@@ -1625,37 +1651,60 @@ impl<P: Ptt> Station<P> {
     ///
     /// The rest of the burst is the session's, and the session is over. Left to play, a
     /// long tone burst ran on after the operator's abort until the key watchdog cut it,
-    /// ten seconds later (ND1J, 2026-09-25), with the DISC queued behind it.
+    /// ten seconds later (ND1J, 2026-09-25), with the DISC queued behind it. An answer
+    /// rendered and waiting for its slot goes no further either.
     ///
-    /// The DISC waits, key up, for what the cut would otherwise have run into: the rest of
-    /// the frame that was on the air, which the other station's receiver still holds the
-    /// span of, and the acknowledgement it then sends for the burst. Sent at once, the DISC
-    /// arrived inside the one and under the other, and the peer never heard it.
+    /// The engine times what follows: a master's DISC once the slot it granted is over, a
+    /// slave's in the old session's next slot (ADR-0052, ADR-0069), so neither lands in the
+    /// other station's transmission.
     pub fn abort(&mut self) {
-        self.pending
-            .retain(|next| !matches!(next, Outgoing::Frames(..)));
+        // The engine's account of what this station has handed over runs in order, the oldest
+        // first: the transmission on the air or waiting for its slot, then those queued behind
+        // it (`drop_link_pending`).
         if self.transmitting && !self.playing_test {
             self.playback.clear();
             self.authorized = None;
             self.clock.flush_device = true;
             self.clock.cut_short = true;
-            if self.engine.state() != State::Idle
-                && let Some((frame_s, floor)) = self.on_air_frames
-            {
-                let timing = self.engine.timing();
-                let wait = frame_s
-                    + self.engine.config().burst_gap_s
-                    + timing.control_frame_s_for(floor)
-                    + 2.0 * timing.turnaround_s
-                    + 0.5;
-                self.pending.push_back(Outgoing::Pause {
-                    seconds: wait,
-                    until_s: None,
-                });
+            // the engine's transmission cut here is over; the slot its header granted is
+            // where the header said, which is where the other station looks for it
+            if let Some(window) = self.keying.take() {
+                self.engine.on_tx_done(self.now(), window.whole_end);
             }
+        } else if self.keying.is_some() && !self.transmitting && !self.playback.is_empty() {
+            // rendered and waiting for its slot: it goes no further
+            self.discard_waiting_link();
         }
+        self.drop_link_pending();
+        self.pending
+            .retain(|next| !matches!(next, Outgoing::Frames(..)));
+        // a master's cut header still granted the slot its count said, which the engine knows
         self.engine.abort();
         self.pump();
+    }
+
+    /// Drop every engine transmission still queued, telling the engine of each. The engine
+    /// counts them off its oldest first, so the transmission on the air or waiting for its slot
+    /// is reported before this.
+    fn drop_link_pending(&mut self) {
+        let now = self.now();
+        let before = self.pending.len();
+        self.pending
+            .retain(|next| !matches!(next, Outgoing::Link(..)));
+        for _ in self.pending.len()..before {
+            self.engine.on_tx_dropped(now);
+        }
+    }
+
+    /// The engine transmission rendered and waiting for its slot is dropped.
+    fn discard_waiting_link(&mut self) {
+        self.playback.clear();
+        self.authorized = None;
+        self.tx_capture = None;
+        self.tx_tag = None;
+        if self.keying.take().is_some() {
+            self.engine.on_tx_dropped(self.now());
+        }
     }
 
     /// Nothing on the air, nothing queued for it, and no session: a station that may stop.
@@ -1698,6 +1747,15 @@ impl<P: Ptt> Station<P> {
     /// pass can try again.
     pub fn abandon_tx(&mut self) -> Result<(), PttError> {
         let was_transmitting = self.transmitting;
+        let now = self.now();
+        // the oldest the engine handed over first: the one on the air, or the one waiting
+        if !was_transmitting && self.keying.is_some() {
+            self.discard_waiting_link();
+        } else if let Some(window) = self.keying.take() {
+            // cut short: the slot it granted stays where its header said
+            self.engine.on_tx_done(now, window.whole_end);
+        }
+        self.drop_link_pending();
         self.playback.clear();
         self.authorized = None;
         // a datagram on the air, or its burst waiting, is lost with the transmission
@@ -1716,15 +1774,11 @@ impl<P: Ptt> Station<P> {
         self.transmitting = false;
         self.playing_test = false;
         self.tx_peak_running = 0.0;
-        let now = self.now();
         if was_transmitting {
             self.forced_release(now, "abandoned");
         }
         let result = self.ptt.unkey(now);
-        if was_transmitting {
-            self.engine.on_tx_done(now);
-            self.pump();
-        }
+        self.pump();
         result
     }
 
@@ -1790,6 +1844,7 @@ impl<P: Ptt> Station<P> {
         self.config.cw_id_interval_s = config.radio.cw_id_interval_s;
         self.refresh_burst_cap(self.now());
         self.note_identifier_speed();
+        self.refresh_identifier_length();
     }
 
     /// The speed the Morse identifier is sent at: the one set, or the rules' limit on an
@@ -2429,12 +2484,19 @@ impl<P: Ptt> Station<P> {
 
         self.refresh_burst_cap(now);
         self.refresh_ceiling(false);
+        self.advance_link_identifier(now);
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
             // the key was stuck: drop whatever was still queued rather than resume mid-burst
             self.stats.watchdog_trips += 1;
             self.playback.clear();
             self.authorized = None;
+            // the engine's transmission on the air first, then those queued behind it; the
+            // slot it granted stays where its header said
+            if let Some(window) = self.keying.take() {
+                self.engine.on_tx_done(now, window.whole_end);
+            }
+            self.drop_link_pending();
             self.pending.clear();
             self.clock.flush_device = true;
             self.clock.cut_short = false;
@@ -2442,7 +2504,6 @@ impl<P: Ptt> Station<P> {
             self.transmitting = false;
             self.forced_release(now, "watchdog");
             self.ptt.unkey(now)?;
-            self.engine.on_tx_done(now);
             self.note("watchdog", "key time exceeded");
         }
         self.pump();
@@ -2488,6 +2549,9 @@ impl<P: Ptt> Station<P> {
             return Ok(0);
         }
 
+        if !self.transmitting && !self.within_window(now) {
+            return Ok(0);
+        }
         if !self.transmitting {
             // Nothing the regulatory gate has not judged is keyed: leave is made only by the
             // policy (`Policy::authorize`), in `start_pending`, and spent here.
@@ -2504,6 +2568,14 @@ impl<P: Ptt> Station<P> {
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
+            // where its frames end if it plays whole: the slot it grants is anchored there, by
+            // the other station on what its header stated, whatever cuts it short
+            let audio_rate = self.config.params.audio_rate as f64;
+            let output_latency = self.radiation_latency_s() - self.config.key_lead_s;
+            if let Some(window) = &mut self.keying {
+                window.whole_end =
+                    Some(now + output_latency + window.frames_samples as f64 / audio_rate);
+            }
             if let Some(tag) = self.tx_tag.take() {
                 self.tx_tags.push(tag);
             }
@@ -2533,6 +2605,62 @@ impl<P: Ptt> Station<P> {
             capture.push(&out[..count]);
         }
         Ok(count)
+    }
+
+    /// How long after the key comes up a transmission starts radiating: the silence of the
+    /// keying lead, then the sound card's output latency — its own report once it runs, the
+    /// assumed playback lead until then.
+    fn radiation_latency_s(&self) -> f64 {
+        self.config.key_lead_s + self.device_latency_s.unwrap_or(self.config.playback_lead_s)
+    }
+
+    /// The keying gate (ADR-0069 §2.3): whether the rendered transmission waiting to be keyed
+    /// may be keyed now. An answer decided ahead of its slot waits for it (`not_before`); one
+    /// that would start radiating past its slack is not sent at all — whatever held it, a slow
+    /// pass, the radio, the rules — and the engine is told, so its account of what this station
+    /// has on the air stays true.
+    fn within_window(&mut self, now: f64) -> bool {
+        let Some(window) = self.keying else {
+            return true;
+        };
+        if self.playback.is_empty() {
+            return true;
+        }
+        let radiates_at = now + self.radiation_latency_s();
+        if window
+            .not_before
+            .is_some_and(|earliest| radiates_at < earliest - 1e-6)
+        {
+            return false;
+        }
+        if window
+            .not_after
+            .is_some_and(|latest| radiates_at > latest + 1e-6)
+        {
+            let late = radiates_at - window.not_after.unwrap_or(radiates_at);
+            if let Some(before) = window.identifier_before {
+                self.identifier = before;
+                self.stats.cw_ids = self.stats.cw_ids.saturating_sub(1);
+            }
+            self.playback.clear();
+            self.authorized = None;
+            self.keying = None;
+            self.tx_capture = None;
+            self.tx_tag = None;
+            self.stats.dropped_late += 1;
+            self.engine.on_tx_dropped(now);
+            self.note(
+                "dropped",
+                &format!("an answer {:.0} ms past its slot: not sent", late * 1000.0),
+            );
+            if let Some(recording) = &mut self.recording {
+                let state = format!("{:?}", self.engine.state());
+                recording.event(now, "dropped", &format!("late {late:.3}"), &state);
+            }
+            self.pump();
+            return false;
+        }
+        true
     }
 
     /// The transmission is over — its queue drained and, by the card's clock, its last
@@ -2589,9 +2717,14 @@ impl<P: Ptt> Station<P> {
         self.released_at = now;
         self.ptt.unkey(now)?;
         self.datagram_transmitted(cut);
-        // the queue drained now, and what the sound card still holds is the tail's
-        // silence: the burst itself has already left
-        self.engine.on_tx_done(now);
+        // the engine is told of its own transmissions only, with where the last frame ended
+        // on the air: the tail's silence before the release less, the card's output latency
+        // more (07-protocol-8.md §3.4). The slot the transmission granted is measured from
+        // there, as the other station measures it from the frames it hears end.
+        if self.keying.take().is_some() {
+            let frames_end = now - tail_s + self.radiation_latency_s() - self.config.key_lead_s;
+            self.engine.on_tx_done(now, Some(frames_end));
+        }
         self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
         self.pump();
         Ok(())
@@ -2602,6 +2735,7 @@ impl<P: Ptt> Station<P> {
     pub fn device_latency(&mut self, seconds: Option<f64>) {
         if let Some(s) = seconds.filter(|s| s.is_finite() && *s >= 0.0 && *s < 1.0) {
             self.device_latency_s = Some(s);
+            self.engine.set_tx_latency_s(self.radiation_latency_s());
         }
     }
 
@@ -2796,12 +2930,9 @@ impl<P: Ptt> Station<P> {
             let container = [Container::Data, Container::Control][usize::from(control)];
             let start = (origin + decoded.frame.start()) as f64 / fs;
             let frame_s = decoded.frame.samples(&air) as f64 / fs;
-            if self.fragment_of_own_tx(&decoded, origin, &air) {
-                continue;
-            }
-            // the answer gap counts from the end of whatever was heard, read or not: a frame
-            // that did not decode is still answered (ADR-0036)
-            self.heard_end = self.heard_end.max(start + frame_s);
+            // counted for the record; the engine sees it as it sees any frame (a slot is the
+            // only place the other station transmits, so a fragment is on no grid)
+            self.fragment_of_own_tx(&decoded, origin, &air);
             let decoded_ok = decoded.ok();
             let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected);
             // A frame that decoded is real whatever its acquisition looked like, and a weak
@@ -2978,8 +3109,10 @@ impl<P: Ptt> Station<P> {
         if control {
             if let Some(payload) = payload {
                 report.control = crate::record::describe_control(payload);
-                if let Ok(control) = aether_link::frames::ControlFrame::decode(payload) {
-                    report.from = ours(control.session);
+                // a control frame of protocol 8 carries the session's low seven bits
+                if let Ok(control) = GrantFrame::decode(payload) {
+                    report.from = ours(self.engine.session())
+                        .filter(|_| control.session == self.engine.session() & 0x7F);
                 }
             }
         } else if let Some((header, body)) = payload.and_then(|p| decode_data(p).ok()) {
@@ -3146,7 +3279,7 @@ impl<P: Ptt> Station<P> {
         });
         self.link_sent = 0;
         // the frames of a session are the call's or the answer's (§97.221(c)(1))
-        self.session_direction = Some(if detail.ends_with("(iss)") {
+        self.session_direction = Some(if detail.ends_with("(master)") {
             Direction::Originate
         } else {
             Direction::Respond
@@ -3158,7 +3291,7 @@ impl<P: Ptt> Station<P> {
                 .next()
                 .unwrap_or_default()
                 .to_owned(),
-            caller: detail.ends_with("(iss)"),
+            caller: detail.ends_with("(master)"),
             frequency_hz: self.frequency.value,
             acked_at_start: self.engine.stats.bytes_acked,
             host: self.host_attached(),
@@ -3214,12 +3347,28 @@ impl<P: Ptt> Station<P> {
         let mut connected = false;
         for action in self.engine.drain() {
             match action {
-                Action::Transmit { frames, cause, .. } => {
+                Action::Transmit {
+                    frames,
+                    cause,
+                    not_after,
+                    not_before,
+                    identifier_s,
+                    ..
+                } => {
                     let origin = Origin {
                         cause,
                         queued_s: self.now(),
                     };
-                    self.pending.push_back(Outgoing::Frames(frames, origin));
+                    self.pending.push_back(Outgoing::Link(LinkTx {
+                        frames,
+                        origin,
+                        window: KeyWindow {
+                            not_before,
+                            not_after,
+                            ..KeyWindow::default()
+                        },
+                        identifier_s,
+                    }));
                 }
                 Action::Deliver(bytes) => {
                     let plain = self.decompressor.push(&bytes);
@@ -3293,7 +3442,7 @@ impl<P: Ptt> Station<P> {
             && !self
                 .pending
                 .iter()
-                .any(|next| matches!(next, Outgoing::Frames(..)))
+                .any(|next| matches!(next, Outgoing::Frames(..) | Outgoing::Link(..)))
         {
             self.identifier.final_due = false;
             self.pending.push_back(Outgoing::Identifier);
@@ -3328,86 +3477,38 @@ impl<P: Ptt> Station<P> {
     }
 
     /// Whether the transmission at the head of the queue waits for a busy channel: a
-    /// transmission this station starts, when the operator asked to wait for a clear one.
+    /// transmission this station starts on its own, when the operator asked to wait for a
+    /// clear one.
+    ///
+    /// Under granted slots (ADR-0069) nothing of a session's waits for the channel, and
+    /// nothing answered in a slot does: the master keys only once the slot it granted is over,
+    /// the slave only in its slot, and a held answer would only miss it. What does wait is what
+    /// this station starts outside a session — a call, a probe, a beacon, a datagram, the Morse
+    /// identifier on its own — and that only while `wait_for_clear` says so.
     fn held_for_busy(&mut self, now: f64) -> bool {
         self.drop_beacons_in_session();
         let Some(next) = self.pending.front() else {
             return true;
         };
-        // silence radiates nothing, so a keying test does not wait for the channel
-        let radiates = !matches!(next, Outgoing::Audio { silent: true, .. });
-        // A probe answer is a response to a frame addressed to this station (§97.221(c)),
-        // not a transmission this station is starting — and the very frame it answers has
-        // just marked the channel busy for two seconds (`mark_frame`), so holding it for
-        // that meant every probe to a station with `wait_for_clear` on reported "no answer".
-        // A connect answer never reaches here held: the station is Connected by then and
-        // `channel_clear` lets a session's frames through.
-        // So is the answer to a disconnect, and it is queued as the session ends, when
-        // `channel_clear` no longer lets a session's frames through: the DISC it answers had
-        // just marked the channel busy, the answer waited two seconds for it, and the caller's
-        // retry was keyed over it (ND1J, 2026-09-25).
-        let responding = matches!(next, Outgoing::Frames(frames, _)
-            if is_probe_answer(frames) || is_control(frames, ControlKind::DiscAck));
-        // a datagram has had its own channel access already: the client's DCD and persistence
-        let own_access = matches!(next, Outgoing::Datagram { .. });
-        // The end of a session waits out the other station's Morse identifier, which follows
-        // a DISC or its answer and which no frame announces, whatever `wait_for_clear` says:
-        // a repeated DISC went out over it when the answer was lost (ND1J, 2026-09-25), an
-        // answer over the identifier its DISC carried, and this station's own closing
-        // identifier followed the answer straight onto it. A DISC and its answer wait for a
-        // channel something other than a decoded frame holds — the frame each follows marked
-        // the channel itself —, the identifier for any: the answer it follows is decoded
-        // before the identifier behind it has been on long enough to be heard.
-        let busy = self.busy.busy(now);
-        let busy_but_for_a_frame =
-            busy && !matches!(self.busy.reason(), Some(BusyReason::Frame { .. }));
-        // A receiving station's DISC goes in place of the acknowledgement of the burst it has
-        // just heard (ADR-0023), and is that burst's answer: it goes when the acknowledgement
-        // would have. Held while the busy detector still held the burst itself — by its energy
-        // as well as by its decode — it waited two seconds, the sender heard no answer and sent
-        // the burst again, and the two were keyed at once (found by the scenario harness,
-        // ADR-0042). A later DISC, a retry, still waits out the other's identifier.
-        let answers_burst = matches!(next, Outgoing::Frames(frames, _)
-                if is_control(frames, ControlKind::Disc))
-            && self.engine.role() == Role::Irs
-            && now < self.heard_end + self.busy.config().frame_hold_s;
-        let held_for = self.held_from.map_or(0.0, |from| now - from);
-        let waits_out = held_for < OTHER_ID_WAIT_MAX_S
-            && match next {
-                Outgoing::Frames(frames, _) if is_control(frames, ControlKind::Disc) => {
-                    self.engine.state() == State::Disconnecting
-                        && busy_but_for_a_frame
-                        && !answers_burst
-                }
-                Outgoing::Frames(frames, _) if is_control(frames, ControlKind::DiscAck) => {
-                    held_for < ANSWER_LISTEN_S || busy_but_for_a_frame
-                }
-                Outgoing::Identifier => busy,
-                _ => false,
-            };
-        let polite =
-            !responding && !own_access && self.config.wait_for_clear && !self.channel_clear(now);
-        // The DISC of a session left — an abort's, its repeats, the answer to a frame of the
-        // session left unheard (ADR-0052) — waits out the frames it hears arriving, whatever
-        // `wait_for_clear` says: the other station is sending and hears nothing until it
-        // stops. A Test whose budget ran out keyed its DISC 1.4 s into the other station's
-        // acknowledgement, and both were lost (the scenario harness, ADR-0065).
-        let left_over_arrival = matches!(next, Outgoing::Frames(frames, _)
-                if is_control(frames, ControlKind::Disc))
-            && self.engine.state() == State::Idle
-            && now < self.arriving_until + self.engine.timing().turnaround_s
-            && held_for < self.config.max_key_s + 5.0;
-        // Nothing keys inside the answer gap after another station's frame, whatever it is: a
-        // station keyed by VOX is still transmitting for its hold after the frame ends, and
-        // an acceptance sent into that hold was never heard (KE4QCM, 2026-10-05; ADR-0036).
-        let settling = now < self.heard_end + self.answer_gap_s();
-        if radiates && (waits_out || polite || settling || left_over_arrival) {
-            if waits_out || polite || left_over_arrival {
-                self.stats.deferred_for_busy += 1;
-            } else {
-                self.stats.deferred_for_gap += 1;
+        let in_turn = match next {
+            Outgoing::Link(tx) => {
+                tx.window.not_after.is_some()
+                    || matches!(self.engine.state(), State::Connected | State::Disconnecting)
             }
-            // the engine's timers move with the burst, or a retry fires against a burst
+            // silence radiates nothing, so a keying test does not wait for the channel; a
+            // datagram has had its own channel access already: the client's DCD and persistence
+            Outgoing::Audio { silent: true, .. } | Outgoing::Datagram { .. } => true,
+            _ => false,
+        };
+        let busy_for_id = matches!(next, Outgoing::Identifier)
+            && self.busy.busy(now)
+            && self
+                .held_from
+                .is_none_or(|from| now - from < OTHER_ID_WAIT_MAX_S);
+        let polite = !in_turn && self.config.wait_for_clear && !self.channel_clear(now);
+        if !in_turn && (polite || busy_for_id) {
+            self.stats.deferred_for_busy += 1;
+            // a call's next try, a probe's wait move with it, or a try fires against a call
             // that has not left yet and the two go out back to back when the channel clears
             if let Some(since) = self.held_since {
                 self.engine.on_tx_delayed(now - since);
@@ -3443,7 +3544,12 @@ impl<P: Ptt> Station<P> {
             return;
         };
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
+        let mut link: Option<(KeyWindow, f64)> = None;
         let (frames, origin) = match outgoing {
+            Outgoing::Link(tx) => {
+                link = Some((tx.window, tx.identifier_s));
+                (tx.frames, tx.origin)
+            }
             Outgoing::Frames(frames, origin) => (frames, origin),
             Outgoing::Drive(frames) => (frames, Origin::station("drive")),
             Outgoing::Datagram {
@@ -3469,14 +3575,6 @@ impl<P: Ptt> Station<P> {
         if is_beacon(&frames) {
             self.beacon_sent();
         }
-        self.on_air_frames = frames.first().map(|frame| {
-            let timing = self.engine.timing();
-            let floor = match frame.container {
-                aether_link::Container::Data => timing.is_floor(frame.mode),
-                aether_link::Container::Control => frame.floor,
-            };
-            (timing.frame_s(frame), floor)
-        });
         if self.config.record_tx_audio {
             self.tx_capture = Some(crate::record::TxCapture::begin(
                 self.config.params.audio_rate as u32,
@@ -3487,8 +3585,50 @@ impl<P: Ptt> Station<P> {
             ));
         }
 
+        let Some(baseband) = self.modulate(&frames) else {
+            // nothing of an engine transmission goes out: the engine is told, as for a drop
+            if link.is_some() {
+                self.engine.on_tx_dropped(now);
+            }
+            return;
+        };
+
+        let audio_rate = self.config.params.audio_rate as f64;
+        let lead = (self.config.key_lead_s * audio_rate) as usize;
+        let tail = (self.tail_s() * audio_rate) as usize;
+        // flush the chain after the burst, or its filters keep the tail of the last frame
+        let mut rendered = self.to_audio.process(&baseband);
+        rendered.extend(self.to_audio.flush());
+
+        // at unit level: the transmit level is applied as the audio leaves
+        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+        if let Some((window, identifier_s)) = link {
+            // Nothing follows a link transmission's frames: the other station's slot starts
+            // after them, or this station's own after its answer's (ADR-0069). The identifier
+            // goes where the engine put it — ahead of them, in time it was granted.
+            let before = self.identifier;
+            let carried = self.link_identifier(now, audio_rate, identifier_s, &frames);
+            self.playback.extend(rendered);
+            self.keying = Some(KeyWindow {
+                identifier_before: carried.then_some(before),
+                frames_samples: self.playback.len(),
+                ..window
+            });
+        } else {
+            self.playback.extend(rendered);
+            self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
+            self.keying = None;
+        }
+        self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+        self.playing_test = cuttable;
+        let with_id = self.stats.cw_ids > ids_before;
+        self.tx_tag = Some(self.tag(now, origin, &frames, with_id));
+    }
+
+    /// The frames' baseband, back to back; `None` when there is nothing to send.
+    fn modulate(&mut self, frames: &[aether_link::TxFrame]) -> Option<Vec<Complex>> {
         let mut baseband: Vec<Complex> = Vec::new();
-        for frame in &frames {
+        for frame in frames {
             let burst = match frame.container {
                 // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
                 Container::Data => {
@@ -3513,43 +3653,11 @@ impl<P: Ptt> Station<P> {
                 Err(error) => {
                     self.events
                         .push(format!("error:cannot modulate frame: {error}"));
-                    return;
+                    return None;
                 }
             }
         }
-        if baseband.is_empty() {
-            return;
-        }
-
-        let audio_rate = self.config.params.audio_rate as f64;
-        let lead = (self.config.key_lead_s * audio_rate) as usize;
-        let tail = (self.tail_s() * audio_rate) as usize;
-        // flush the chain after the burst, or its filters keep the tail of the last frame
-        let mut rendered = self.to_audio.process(&baseband);
-        rendered.extend(self.to_audio.flush());
-
-        // at unit level: the transmit level is applied as the audio leaves
-        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-        if self.engine.config().stated_answers && !ends_communication(&frames) {
-            // under stated answers the other station answers at the end the burst stated, so
-            // the identifier never follows a burst's frames: it goes ahead of them (ADR-0068
-            // §2.5). A DISC or its answer ends the communication, and the other station waits
-            // out an identifier after it (ADR-0022).
-            self.append_cw_id_at(
-                now,
-                audio_rate,
-                sets_up_contact(&frames),
-                Some(rendered.len()),
-            );
-            self.playback.extend(rendered);
-        } else {
-            self.playback.extend(rendered);
-            self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
-        }
-        self.playback.extend(std::iter::repeat_n(0.0f32, tail));
-        self.playing_test = cuttable;
-        let with_id = self.stats.cw_ids > ids_before;
-        self.tx_tag = Some(self.tag(now, origin, &frames, with_id));
+        (!baseband.is_empty()).then_some(baseband)
     }
 
     /// [`Self::render_identifier`], with its account of the air.
@@ -3580,12 +3688,12 @@ impl<P: Ptt> Station<P> {
         let described: Vec<serde_json::Value> = frames
             .iter()
             .map(|frame| match frame.container {
-                Container::Control => match ControlFrame::decode(&frame.payload) {
+                Container::Control => match GrantFrame::decode(&frame.payload) {
                     Ok(control) => serde_json::json!({
                         "c": "control",
                         "kind": format!("{:?}", control.kind),
-                        "flags": control.flags,
-                        "follows": control.follows,
+                        "count": control.count,
+                        "level": control.level,
                         "floor": frame.floor,
                     }),
                     Err(_) => serde_json::json!({"c": "control", "kind": "?"}),
@@ -3733,9 +3841,10 @@ impl<P: Ptt> Station<P> {
     /// a decode, so busy is asserted by the level criterion and by decoded frames, and a
     /// preamble alone asserts nothing (`field/OTA-2-FINDINGS.md`).
     ///
-    /// The engine's timing signal and the receive indicator still take the gate: a phantom
-    /// telling the engine a burst is arriving held this station's own turn. An OFDM
-    /// preamble's threshold sits at the statistic's noise maximum, so its acquisitions take
+    /// The engine's signal and the receive indicator still take the gate. Under granted slots
+    /// an announcement changes nothing in a session (ADR-0069 §2.5); a caller or a prober takes
+    /// a trusted one as carrier, its next try waiting past it. An OFDM preamble's threshold
+    /// sits at the statistic's noise maximum, so its acquisitions take
     /// [`DETECT_CONFIDENCE_TRUSTED`]; a tone frame (ADR-0013) is announced only once its
     /// first sync block has cleared a threshold set over the noise maximum of that block and
     /// beaten its neighbours for three symbols, which is the gate already.
@@ -3744,31 +3853,17 @@ impl<P: Ptt> Station<P> {
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
             let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
-            // A faint arrival is still heeded where the next frame of a burst would begin while
-            // this station owes the burst its acknowledgement: there a phantom costs a late
-            // answer, and a real frame ignored is an answer keyed over it — the frame lost,
-            // the answer unheard, and the burst sent again. In ND1J's session of 2026-10-06,
-            // 21 of the 22 acknowledgements he never heard went out while he was still sending,
-            // and 17 of them over an arrival this station had heard below the gate (ADR-0040).
             let start_s = (origin + pending.start) as f64 / fs;
-            let follow_on = !trusted
-                && !pending.tone
-                && self.engine.acknowledgement_at().is_some()
-                && start_s >= self.heard_end - FOLLOW_ON_EARLY_S
-                && start_s <= self.heard_end + FOLLOW_ON_WINDOW_S;
-            let heeded = trusted || follow_on;
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
             if let Some(recording) = &mut self.recording {
-                let start = (origin + pending.start) as f64 / fs;
                 let detail = format!(
                     "ago {:.3} frame_s {:.3} tone {} confidence {:.2} heeded {}",
-                    now - start,
+                    now - start_s,
                     pending.end.saturating_sub(pending.start) as f64 / fs,
                     u8::from(pending.tone),
                     pending.detect_confidence,
-                    // 2: heeded as the next frame of a burst, below the gate
-                    if follow_on { 2 } else { u8::from(trusted) },
+                    u8::from(trusted),
                 );
                 recording.event(
                     now,
@@ -3777,25 +3872,52 @@ impl<P: Ptt> Station<P> {
                     &format!("{:?}", self.engine.state()),
                 );
             }
-            if !heeded {
+            if !trusted {
                 continue;
             }
             // the frame named itself — an OFDM preamble its layout, a tone frame its kind:
             // its own air time, not a guess from the peer's last mode — a floor frame after
-            // ordinary connect frames is five times as long, and an answer timed for an
-            // ordinary one tramples it (ADR-0012)
-            let mut frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
-            if follow_on {
-                // read weakly, its layout may be read wrong too — a data frame taken for a
-                // control frame was the usual case — and the frames of a burst are data frames
-                self.stats.follow_on_heeded += 1;
-                frame_s = frame_s.max(air.long.duration_s());
-            }
+            // ordinary connect frames is five times as long (ADR-0012)
+            let frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
             self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
-            self.arriving_until = self.arriving_until.max(start_s + frame_s);
-            self.engine
-                .on_preamble((origin + pending.start) as f64 / fs, now, Some(frame_s));
+            self.engine.on_preamble(start_s, now, Some(frame_s));
         }
+    }
+
+    /// Captured audio lost before the next block: the capture queue dropped its oldest while
+    /// the run loop was behind (`AudioIo::capture_gap`).
+    ///
+    /// The station's clock is the audio it has heard, and the slots it answers in are on the
+    /// air's: a clock that did not move on would run that far behind the air from then on, and
+    /// every answer would radiate that late — past the keying gate, which reads the same clock
+    /// (the scenario harness's slow machine, Step 2: 0.85 s dropped after a stall, the answer
+    /// keyed over the caller's next transmission). It moves on by what was lost. The receiver
+    /// starts again after the gap, as it does on a move of bandwidth — a frame across it is
+    /// lost with the audio — and a recording gets silence for it, so a replay keeps time.
+    pub fn skip_captured(&mut self, samples: usize) {
+        if samples == 0 {
+            return;
+        }
+        let params = self.config.params;
+        let rate = params.audio_rate as f64;
+        if let Some(recording) = &mut self.recording
+            && let Err(error) = recording.captured(&vec![0.0; samples])
+        {
+            self.note("error", &format!("recording stopped: {error}"));
+            self.recording = None;
+        }
+        self.audio_seen += samples;
+        self.from_audio = AudioToBaseband::new(params);
+        self.baseband_seen += (samples as f64 * params.fs_baseband / rate).round() as usize;
+        self.receiver = StreamingReceiver::new(params, 6.0, true);
+        self.rx_origin = self.baseband_seen;
+        self.note(
+            "audio",
+            &format!(
+                "{:.0} ms of captured audio lost: the clock moves on past it",
+                samples as f64 * 1000.0 / rate
+            ),
+        );
     }
 
     /// Fold the receiver's noise spectrum into the passband monitor, a couple of times a
@@ -3948,7 +4070,9 @@ impl<P: Ptt> Station<P> {
     /// [`append_cw_id`](Self::append_cw_id), or with `ahead` — the samples of frames to follow
     /// it in the same keying — ahead of them (ADR-0068 §2.5).
     fn append_cw_id_at(&mut self, now: f64, audio_rate: f64, setup: bool, ahead: Option<usize>) {
-        let Some(cw) = self.config.cw_id else { return };
+        if self.config.cw_id.is_none() {
+            return;
+        }
         if (setup || self.engine.state() != State::Idle)
             && self.identifier.communication_began.is_none()
         {
@@ -3963,38 +4087,12 @@ impl<P: Ptt> Station<P> {
             self.identifier.transmitted_since = true;
             return;
         }
-        let cw = crate::cwid::CwId {
-            level: CW_ID_RELATIVE_LEVEL,
-            // an identifier keyed by an automatic device is sent no faster than the rules
-            // allow (§97.119(b)(1): 20 wpm)
-            wpm: self
-                .policy
-                .cw_id_max_wpm()
-                .map_or(cw.wpm, |max| cw.wpm.min(max)),
-            ..cw
-        };
-        // The identifier rides inside the burst's keying, so the gate's leave for the burst
-        // covers its data, not this: it is judged here as the CW emission it is (ADR-0018),
-        // and a refused one waits for a transmission of its own, which is judged again.
-        let identifier = Transmission {
-            what: "the Morse identifier".to_owned(),
-            kind: EmissionKind::Cw,
-            audio: Edges::tone(cw.tone_hz, crate::regulatory::occupancy::CW_HALF_WIDTH_HZ),
-            direction: self.session_direction.unwrap_or(Direction::Originate),
-        };
-        let situation = self.situation(false);
-        let decision = self.policy.evaluate(&situation, &identifier);
-        if !decision.allowed() {
+        let Some(audio) = self.identifier_audio(now, audio_rate) else {
             self.identifier.transmitted_since = true;
-            self.report_decision(&decision, now);
             return;
-        }
-        let audio = cw.audio(&self.engine.my_call, audio_rate);
-        if audio.is_empty() {
-            return;
-        }
+        };
         // a moment of silence so the identifier is not run into the data
-        let gap = (0.1 * audio_rate) as usize;
+        let gap = (CW_ID_GAP_S * audio_rate) as usize;
         // Bursts are sized to leave it room from a minute before it falls due; one that
         // does not — an operator's own `max_burst_s`, a watchdog setting just lowered —
         // passes it to the next transmission rather than taking the burst over the key's
@@ -4025,6 +4123,11 @@ impl<P: Ptt> Station<P> {
             self.playback.extend(std::iter::repeat_n(0.0f32, gap));
             self.playback.extend(audio);
         }
+        self.identified(now);
+    }
+
+    /// The Morse identifier went out now.
+    fn identified(&mut self, now: f64) {
         self.identifier.last = Some(now);
         self.stats.cw_ids += 1;
         self.identifier.transmitted_since = false;
@@ -4033,6 +4136,117 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() == State::Idle {
             // the communication it ends is over
             self.identifier.communication_began = None;
+        }
+    }
+
+    /// The Morse identifier's audio at the speed it goes out, judged as the CW emission it is
+    /// (ADR-0018): it rides inside a transmission's keying, so the gate's leave for the
+    /// transmission covers its data, not this. `None` when there is none to send, or the rules
+    /// refuse it now — the refusal reported, and the identifier left owed.
+    fn identifier_audio(&mut self, now: f64, audio_rate: f64) -> Option<Vec<f32>> {
+        let cw = self.config.cw_id?;
+        let cw = crate::cwid::CwId {
+            level: CW_ID_RELATIVE_LEVEL,
+            // an identifier keyed by an automatic device is sent no faster than the rules
+            // allow (§97.119(b)(1): 20 wpm)
+            wpm: self.identifier_wpm().unwrap_or(cw.wpm),
+            ..cw
+        };
+        let identifier = Transmission {
+            what: "the Morse identifier".to_owned(),
+            kind: EmissionKind::Cw,
+            audio: Edges::tone(cw.tone_hz, crate::regulatory::occupancy::CW_HALF_WIDTH_HZ),
+            direction: self.session_direction.unwrap_or(Direction::Originate),
+        };
+        let situation = self.situation(false);
+        let decision = self.policy.evaluate(&situation, &identifier);
+        if !decision.allowed() {
+            self.report_decision(&decision, now);
+            return None;
+        }
+        let audio = cw.audio(&self.engine.my_call, audio_rate);
+        (!audio.is_empty()).then_some(audio)
+    }
+
+    /// How long the Morse identifier keeps the radio keyed, with the moment of silence that
+    /// parts it from the frames; 0 for none. What this station declares in its call or
+    /// acceptance, so the master grants it the time (07-protocol-8.md §5.4), and what the
+    /// engine counts in a transmission it places one in.
+    fn identifier_length_s(&self) -> f64 {
+        let (Some(cw), Some(wpm)) = (self.config.cw_id, self.identifier_wpm()) else {
+            return 0.0;
+        };
+        let rate = self.config.params.audio_rate as f64;
+        let cw = crate::cwid::CwId { wpm, ..cw };
+        cw.audio(&self.engine.my_call, rate).len() as f64 / rate + CW_ID_GAP_S
+    }
+
+    /// Tell the engine how long the identifier is, after anything that may change it: on or
+    /// off, its speed, the rules' limit on it.
+    fn refresh_identifier_length(&mut self) {
+        let seconds = self.identifier_length_s();
+        self.engine.set_identifier_s(seconds);
+    }
+
+    /// The identifier the engine placed ahead of a link transmission's frames (07-protocol-8.md
+    /// §5.4): `identifier_s` of audio — the identifier and the moment of silence after it —
+    /// counted in the transmission's air time and, in a slot, in the time the master granted.
+    /// One the rules refuse leaves silence of its length, so the frames still go where the
+    /// engine put them. A call, an acceptance, a probe or its answer carries none and starts
+    /// the communication's count (ADR-0055). Whether one went out.
+    fn link_identifier(
+        &mut self,
+        now: f64,
+        audio_rate: f64,
+        identifier_s: f64,
+        frames: &[aether_link::TxFrame],
+    ) -> bool {
+        if self.config.cw_id.is_none() {
+            return false;
+        }
+        let setup = sets_up_contact(frames);
+        if (setup || self.engine.state() != State::Idle)
+            && self.identifier.communication_began.is_none()
+        {
+            self.identifier.communication_began = Some(now);
+        }
+        if setup {
+            self.identifier.setup_at = Some(now);
+        }
+        if identifier_s <= 0.0 {
+            self.identifier.transmitted_since = true;
+            return false;
+        }
+        let room = (identifier_s * audio_rate).round() as usize;
+        let start = self.playback.len();
+        let audio = self.identifier_audio(now, audio_rate);
+        let sent = audio.is_some();
+        if let Some(audio) = audio {
+            self.playback.extend(audio.into_iter().take(room));
+        }
+        self.playback.resize(start + room, 0.0);
+        if sent {
+            self.identified(now);
+        } else {
+            self.identifier.transmitted_since = true;
+        }
+        sent
+    }
+
+    /// Tell the engine when this station's Morse identifier falls due in a session: the engine
+    /// places it — ahead of the master's next header, ahead of the slave's answer in a slot
+    /// granted with its time (07-protocol-8.md §5.4). One handed over and not yet rendered is
+    /// not due again; outside a session the station's own rules place it.
+    fn advance_link_identifier(&mut self, now: f64) {
+        let placed = self
+            .pending
+            .iter()
+            .any(|next| matches!(next, Outgoing::Link(tx) if tx.identifier_s > 0.0));
+        let due = matches!(self.engine.state(), State::Connected | State::Disconnecting)
+            && !placed
+            && self.id_due_by(now);
+        if due != self.engine.identifier_due() {
+            self.engine.set_identifier_due(due);
         }
     }
 
@@ -4075,17 +4289,15 @@ impl<P: Ptt> Station<P> {
             && (self.identifier.final_due || since.is_none_or(|since| t - since >= interval))
     }
 
-    /// Size the engine's bursts to the key: with room for the identifier when it falls due
-    /// within [`ID_LOOKAHEAD_S`], without it otherwise — an identifying station gives up a
-    /// tone frame only on the burst the identifier rides on. An explicit `max_burst_s` in
-    /// the link settings stands.
-    fn refresh_burst_cap(&mut self, now: f64) {
+    /// Size the engine's transmissions to the key. The engine keeps the identifier's room
+    /// itself, in the transmission it places one in (07-protocol-8.md §5.4), so the limit is
+    /// the key's less its lead and tail. An explicit `max_burst_s` in the link settings stands.
+    fn refresh_burst_cap(&mut self, _now: f64) {
         if self.config.link.max_burst_s.is_some() {
             return;
         }
-        let with_id = self.id_due_by(now + ID_LOOKAHEAD_S);
         self.engine
-            .set_max_burst_s(Some(burst_limit_s(&self.config, with_id)));
+            .set_max_burst_s(Some(burst_limit_s(&self.config, false)));
     }
 
     // ── the regulatory gate (ADR-0018) ───────────────────────────────────
@@ -4163,7 +4375,8 @@ impl<P: Ptt> Station<P> {
             )
         })?;
         match outgoing {
-            Outgoing::Frames(frames, _)
+            Outgoing::Link(LinkTx { frames, .. })
+            | Outgoing::Frames(frames, _)
             | Outgoing::Drive(frames)
             | Outgoing::Datagram { frames, .. } => {
                 let mut edges: Option<Edges> = None;
@@ -4248,7 +4461,7 @@ impl<P: Ptt> Station<P> {
                 }
             },
             Container::Control => {
-                let kind = aether_link::frames::ControlFrame::decode(&first.payload)
+                let kind = GrantFrame::decode(&first.payload)
                     .map_or_else(|_| "control".to_owned(), |c| format!("{:?}", c.kind));
                 (format!("a {} frame", kind.to_lowercase()), session)
             }
@@ -4305,12 +4518,18 @@ impl<P: Ptt> Station<P> {
         self.report_decision(&decision, now);
         self.last_gate = Some((now, decision));
         match outgoing {
-            Some(Outgoing::Frames(..)) if self.engine.state() != State::Idle => {
-                self.note(
-                    "regulatory",
-                    "session halted: its next transmission is not lawful",
-                );
-                self.engine.abort();
+            Some(Outgoing::Link(..)) => {
+                // the engine follows each transmission it hands over: this one never went
+                self.engine.on_tx_dropped(now);
+                if self.engine.state() != State::Idle {
+                    self.note(
+                        "regulatory",
+                        "session halted: its next transmission is not lawful",
+                    );
+                    // nothing more of the session goes either
+                    self.drop_link_pending();
+                    self.engine.abort();
+                }
                 self.pump();
             }
             Some(Outgoing::Identifier) => self.identifier.final_due = false,
@@ -4641,11 +4860,6 @@ fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
     })
 }
 
-/// Whether a transmission ends a communication: a DISC or its answer.
-fn ends_communication(frames: &[aether_link::TxFrame]) -> bool {
-    is_control(frames, ControlKind::Disc) || is_control(frames, ControlKind::DiscAck)
-}
-
 fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
     frames.len() == 1
         && frames[0].container == Container::Data
@@ -4658,29 +4872,12 @@ fn holds_the_dial(next: &Outgoing) -> Option<&'static str> {
     match next {
         Outgoing::Frames(frames, _) if is_beacon(frames) => None,
         Outgoing::Datagram { .. } => None,
-        Outgoing::Frames(..) => Some("an answer"),
+        Outgoing::Frames(..) | Outgoing::Link(..) => Some("an answer"),
         Outgoing::Identifier => Some("the Morse identifier"),
         Outgoing::Drive(_) | Outgoing::Pause { .. } => Some("a drive check"),
         Outgoing::Audio { tone: true, .. } => Some("a tuner tone"),
         Outgoing::Audio { .. } => Some("a keying test"),
     }
-}
-
-/// Whether a queued burst is one control frame of this kind.
-fn is_control(frames: &[aether_link::TxFrame], kind: ControlKind) -> bool {
-    frames.len() == 1
-        && frames[0].container == Container::Control
-        && ControlFrame::decode(&frames[0].payload).is_ok_and(|frame| frame.kind == kind)
-}
-
-/// Whether a queued burst is a probe answer: one data frame carrying a `ProbeAck`. Such a
-/// burst is a response to a frame addressed to this station and is not held for a busy
-/// channel (see [`Station::start_pending`]).
-fn is_probe_answer(frames: &[aether_link::TxFrame]) -> bool {
-    frames.len() == 1
-        && frames[0].container == Container::Data
-        && decode_data(&frames[0].payload)
-            .is_ok_and(|(header, _)| header.kind == DataKind::ProbeAck)
 }
 
 /// The bandwidth a beacon says its sender runs: the capability byte after its callsign
@@ -5378,8 +5575,8 @@ mod tests {
             air.b.state(),
             air.b.take_events()
         );
-        assert_eq!(air.a.role(), Role::Iss);
-        assert_eq!(air.b.role(), Role::Irs);
+        assert_eq!(air.a.role(), Role::Master);
+        assert_eq!(air.b.role(), Role::Slave);
     }
 
     #[test]
@@ -5404,114 +5601,62 @@ mod tests {
         );
     }
 
-    /// How long after the end of the last frame it heard a station first keyed, with `gap`
-    /// as its answer gap, when the other station probed it; and whether the prober took the
-    /// answer.
-    fn probe_answered_after(gap: f64) -> (f64, bool) {
-        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
-            answer_gap_s: gap,
-            ..config
-        });
-        air.run(2.0, |_, _| false);
-        air.a.probe("KK4XYZ", None).expect("idle");
-        let mut keyed_after = None;
-        air.run(30.0, |a, b| {
-            if keyed_after.is_none() && b.transmitting() {
-                keyed_after = Some(b.now() - b.heard_end);
+    /// How long after the caller's key came up the called station keyed its acceptance, with
+    /// `turnaround` declared by the caller's radio; and whether the session came up.
+    fn acceptance_keyed_after(turnaround: f64) -> (f64, bool) {
+        let mut air = Air::new(1.0, 0.0005);
+        air.a = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                turnaround_s: turnaround,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        air.a.connect("KK4XYZ").expect("idle");
+        let (mut released, mut keyed) = (None, None);
+        air.run(60.0, |a, b| {
+            if released.is_none() && a.stats.transmissions > 0 && !a.transmitting() {
+                released = Some(a.now());
             }
-            a.engine().last_probe().is_some()
+            if keyed.is_none() && b.transmitting() {
+                keyed = Some(b.now());
+            }
+            a.connected() && b.connected()
         });
-        let answered = air.a.engine().last_probe().is_some();
-        (
-            keyed_after.expect("the probed station never keyed"),
-            answered,
-        )
+        let up = air.a.connected() && air.b.connected();
+        let released = released.expect("the call went out");
+        (keyed.expect("the called station keyed") - released, up)
     }
 
     #[test]
-    fn an_answer_waits_out_the_gap_and_is_still_taken() {
+    fn an_answer_waits_out_the_callers_turnaround() {
         // A station keyed by VOX — a SignaLink, whose DLY knob holds the key after the audio
         // stops — is still transmitting for a moment after its frame ends, and an acceptance
-        // that started inside that moment never reached KE4QCM (2026-10-05). With an answer
-        // gap the station keys no sooner than the gap after the frame it heard; the prober,
-        // which holds its wait for a frame it hears arriving, still takes the later answer.
-        let (prompt, answered) = probe_answered_after(0.0);
-        assert!(answered, "the probe went unanswered without a gap");
+        // that started inside that moment never reached KE4QCM (2026-10-05). Under granted
+        // slots the caller's radio declares how long it takes to hear again, and the slot it
+        // grants starts no sooner (07-protocol-8.md §3): with 1.2 s declared, past the decode
+        // budget and the keying's 0.65 s, the acceptance keys 0.55 s later than with none.
+        let (prompt, up) = acceptance_keyed_after(0.0);
+        assert!(up, "the session did not come up with no turnaround");
+        let (late, up) = acceptance_keyed_after(1.2);
+        assert!(up, "the session did not come up with a 1.2 s turnaround");
+        // the harness moves in 85 ms blocks
         assert!(
-            prompt < 0.4,
-            "without a gap the answer keyed {prompt:.2} s after the probe"
-        );
-        let (late, answered) = probe_answered_after(0.8);
-        assert!(
-            late >= 0.8,
-            "the answer keyed {late:.2} s after the probe, inside the gap"
-        );
-        assert!(
-            late < 1.2,
-            "the answer waited {late:.2} s, well past the gap"
-        );
-        assert!(
-            answered,
-            "the prober gave up on an answer {late:.2} s after its probe"
+            (late - prompt - 0.55).abs() < 0.1,
+            "the acceptance keyed {prompt:.2} s after the call's release with no turnaround, \
+             {late:.2} s with 1.2 s"
         );
     }
 
     #[test]
-    fn a_faint_arrival_where_the_next_frame_would_begin_holds_the_acknowledgement() {
-        // ND1J, 2026-10-06: the fourth frame of his bursts arrived faded, acquisition read it
-        // below the trusted confidence, and this station keyed its acknowledgement over it —
-        // the frame lost, the answer unheard, the burst sent again. Where the next frame of a
-        // burst would begin, a faint arrival now holds the answer for a frame's length; a
-        // faint arrival anywhere else, or with no answer owed, still moves nothing (ADR-0040).
-        let message = vec![0x5Au8; 400];
-        let mut air = Air::new(1.0, 0.0005);
-        air.a.connect("KK4XYZ").expect("idle");
-        air.a.send(&message);
-        air.run(90.0, |_, b| b.engine().acknowledgement_at().is_some());
-        let b = &mut air.b;
-        let due = b
-            .engine()
-            .acknowledgement_at()
-            .expect("an acknowledgement owed");
-        let fs = b.config.params.fs_baseband;
-        let long = b.air().long.duration_s();
-        let at = |s: f64| (s * fs) as usize;
-        let faint = |start_s: f64| aether_phy::PendingFrame {
-            start: at(start_s),
-            end: at(start_s + 0.434),
-            detect_confidence: 1.05,
-            tone: false,
-            control: true,
-        };
-        let now = b.now();
-
-        // well after the last frame ended: not the burst going on, nothing moves
-        let away = b.heard_end + 2.0;
-        b.heed_preambles(&[faint(away)], 0, now);
-        assert_eq!(
-            b.engine().acknowledgement_at(),
-            Some(due),
-            "a stray phantom moved the answer"
-        );
-        assert_eq!(b.stats.follow_on_heeded, 0);
-
-        // where the next frame would begin: the answer waits a whole data frame past it
-        let next = b.heard_end + 0.3;
-        b.heed_preambles(&[faint(next)], 0, now);
-        let held = b.engine().acknowledgement_at().expect("still owed");
-        assert!(
-            held >= next + long,
-            "the answer at {held:.2} s would key over a frame running to {:.2} s",
-            next + long
-        );
-        assert_eq!(b.stats.follow_on_heeded, 1);
-    }
-
-    #[test]
-    fn a_faint_arrival_holds_nothing_when_no_acknowledgement_is_owed() {
+    fn a_faint_arrival_lights_nothing() {
+        // an OFDM detection under the trusted confidence is the detector's noise as often as
+        // not (OTA-2): it neither lights the receive indicator nor reaches the engine
         let mut station = idle_station();
         let now = station.now();
-        station.heard_end = now;
         let fs = station.config.params.fs_baseband;
         let start = ((now + 0.2) * fs) as usize;
         station.heed_preambles(
@@ -5525,18 +5670,18 @@ mod tests {
             0,
             now,
         );
-        assert_eq!(station.stats.follow_on_heeded, 0);
-        assert!(station.engine().acknowledgement_at().is_none());
         assert!(!station.receiving(), "a phantom lit the receive indicator");
     }
 
     #[test]
-    fn a_receiving_station_that_disconnects_answers_the_burst_with_its_disc_at_once() {
+    fn a_receiving_station_that_disconnects_sends_its_disc_at_once() {
         // Found by the scenario harness on its first run (ADR-0042): the receiving station
         // pressed Disconnect as a message arrived, its DISC — sent in place of the burst's
         // acknowledgement (ADR-0023) — waited two seconds behind the busy detector's hold on the
         // burst it answered, the sender heard no answer and sent the burst again, and the two
         // were keyed at once. ND1J's "the disconnect button does not work", from the other side.
+        // Under granted slots the caller is the master: its DISC goes in its own time, once the
+        // slot that carried the message is over, and nothing holds it (ADR-0069).
         let message: Vec<u8> = (0..900u32)
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
             .collect();
@@ -5550,7 +5695,7 @@ mod tests {
         air.b.send(&message);
         air.run(120.0, |a, _| a.received_len() >= message.len());
         assert_eq!(air.a.received_len(), message.len());
-        let heard_end = air.a.heard_end;
+        let had_it = air.a.now();
         air.a.disconnect();
         let mut keyed_at = None;
         air.run(60.0, |a, b| {
@@ -5561,9 +5706,9 @@ mod tests {
         });
         let keyed_at = keyed_at.expect("the DISC went out");
         assert!(
-            keyed_at - heard_end < 1.2,
-            "the DISC keyed {:.2} s after the burst it answers",
-            keyed_at - heard_end
+            keyed_at - had_it < 1.2,
+            "the DISC keyed {:.2} s after the message was in",
+            keyed_at - had_it
         );
         assert_eq!(
             air.b.engine().stats.frames_resent,
@@ -5573,22 +5718,27 @@ mod tests {
     }
 
     #[test]
-    fn a_session_crosses_with_both_stations_answering_late() {
-        // every acceptance, acknowledgement and poll waits the gap; the other station's waits
-        // hold for a frame they hear arriving, so the session still runs to the end
-        let message = b"Both stations waited out the gap before every answer.";
+    fn a_session_crosses_with_both_radios_slow_to_turn_around() {
+        // both radios declare 0.8 s to hear again: every slot waits for the radio that granted
+        // it, and no answer is late for its slot or dropped by the keying gate
+        let message = b"Both stations waited out the other's radio before every answer.";
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
-            answer_gap_s: 0.8,
+            turnaround_s: 0.8,
             ..config
         });
         air.a.connect("KK4XYZ").expect("idle");
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received().as_slice(), message.as_slice());
-        assert!(
-            air.b.stats.deferred_for_gap > 0,
-            "the called station never waited the gap"
-        );
+        for station in [&air.a, &air.b] {
+            assert_eq!(station.stats.dropped_late, 0, "{}", station.config.callsign);
+            assert_eq!(
+                station.engine().stats.forfeits,
+                0,
+                "{}",
+                station.config.callsign
+            );
+        }
     }
 
     #[test]
@@ -6403,22 +6553,19 @@ mod tests {
                 <= 30.0
         );
         assert_eq!(plain.engine.burst_capacity(ofdm), 6);
-        // an identifier needs room on the bursts it rides on: the first transmission's, and
-        // those shaped within a minute of the next falling due — and only those
+        // the engine keeps an identifier's room itself, in the transmission it places one in
+        // (07-protocol-8.md §5.4): the limit is the key's whether or not one falls due, and the
+        // identifier's length is what the station declares
         let mut identifying = station(30.0, Some(CwId::default()));
-        assert_eq!(identifying.engine.burst_capacity(tone), 4);
-        identifying.identifier.last = Some(0.0);
-        identifying.refresh_burst_cap(1.0);
         assert_eq!(identifying.engine.burst_capacity(tone), 5);
-        let interval = identifying.config.cw_id_interval_s;
-        identifying.refresh_burst_cap(interval - ID_LOOKAHEAD_S - 1.0);
-        assert_eq!(identifying.engine.burst_capacity(tone), 5);
-        identifying.refresh_burst_cap(interval - ID_LOOKAHEAD_S + 1.0);
-        assert_eq!(identifying.engine.burst_capacity(tone), 4);
-        // the end of a session is identified at once, and its last bursts keep room for it
         identifying.identifier.final_due = true;
         identifying.refresh_burst_cap(2.0);
-        assert_eq!(identifying.engine.burst_capacity(tone), 4);
+        assert_eq!(identifying.engine.burst_capacity(tone), 5);
+        let declared = identifying.engine.config().identifier_s;
+        assert!(
+            (declared - identifying.identifier_length_s()).abs() < 1e-9 && declared > 1.0,
+            "declared {declared:.2} s"
+        );
         // and the limit follows the setting, live
         let mut longer = station(30.0, None);
         let mut config =
@@ -6479,10 +6626,151 @@ mod tests {
         assert_eq!(station.stats.watchdog_trips, 0);
     }
 
+    /// Run `air` with `b` stalled for `stall_s` once `a` has keyed a transmission of the
+    /// session's, as the scenario harness's slow machine does: `b` neither hears nor answers,
+    /// what `a` sends piles up, the newest two seconds of it are kept and the rest lost — told
+    /// to `b` when `skip` says so — and `b` takes the pile before the air moves on. How far
+    /// `b`'s clock stood behind the air's after the pile, whether the two were ever keyed at
+    /// once afterwards, and how many answers `b` dropped late.
+    fn stalled_session(skip: bool, stall_s: f64) -> (f64, bool, usize) {
+        let message: Vec<u8> = (0..4000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        air.a.send(&message);
+        // a transmission of the caller's well under way: its header read, its frames going
+        air.run(60.0, |a, b| {
+            a.transmitting() && !b.transmitting() && b.received_len() > 0
+        });
+        let mut on = 0usize;
+        air.run(20.0, |a, _| {
+            on = if a.transmitting() { on + 1 } else { 0 };
+            on >= 12
+        });
+        let rate = WIDE_2300.audio_rate as f64;
+        let blocks = (stall_s * rate / air.block as f64) as usize;
+        let kept = (2.0 * rate / air.block as f64) as usize;
+        let mut pile = Vec::new();
+        let mut from_a = vec![0.0f32; air.block];
+        for _ in 0..blocks {
+            let start = air.played;
+            air.a.device_played(start);
+            air.played += air.block as u64;
+            let handed = air.a.playback(&mut from_a).expect("playback");
+            air.a.device_drains_at(start + handed as u64);
+            let mut to_b = vec![0.0f32; air.block];
+            let mut to_a = vec![0.0f32; air.block];
+            for index in 0..air.block {
+                to_b[index] = from_a[index].mul_add(air.gain, air.noise() * air.noise_sigma);
+                to_a[index] = air.noise() * air.noise_sigma;
+            }
+            air.a.capture(&to_a).expect("capture");
+            pile.push(to_b);
+        }
+        let lost = pile.len().saturating_sub(kept);
+        if skip {
+            air.b.skip_captured(lost * air.block);
+        }
+        for block in &pile[lost..] {
+            air.b.capture(block).expect("capture");
+        }
+        let behind = air.a.now() - air.b.now();
+        let mut keyed_over = false;
+        air.run(120.0, |a, b| {
+            keyed_over |= a.transmitting() && b.transmitting();
+            b.received_len() >= message.len()
+        });
+        assert_eq!(air.b.received_len(), message.len(), "the message crossed");
+        (behind, keyed_over, air.b.stats.dropped_late)
+    }
+
     #[test]
-    fn an_abort_waits_out_a_frame_heard_arriving() {
+    fn a_station_that_fell_behind_moves_its_clock_past_the_audio_it_lost() {
+        // the scenario harness's slow machine (Step 2): after a stall the capture queue kept
+        // the newest two seconds and dropped the rest, the station's clock — the audio it had
+        // heard — fell that far behind the air, and its next answer went out that late, over
+        // the caller's next transmission; the keying gate read the same clock and let it go.
+        // Here the stall begins after the header was read: its slot passes during the stall,
+        // and the answer, decided on the clock moved on, is the gate's to drop (1.5 s late
+        // without the move, and radiated)
+        let (behind, keyed_over, dropped) = stalled_session(true, 3.5);
+        assert!(
+            behind.abs() < 1e-9,
+            "the station's clock {behind:.3} s behind the air's"
+        );
+        assert!(
+            dropped >= 1,
+            "the answer whose slot passed in the stall was not dropped"
+        );
+        assert!(
+            !keyed_over,
+            "an answer went out over the caller after the stall"
+        );
+        let (behind, _, dropped) = stalled_session(false, 3.5);
+        assert!(
+            behind > 1.4 && dropped == 0,
+            "the harness's stall: {behind:.2} s, {dropped}"
+        );
+    }
+
+    #[test]
+    fn an_abort_that_cuts_a_header_waits_out_the_slot_the_header_stated() {
+        // the scenario harness (`40m-abort-and-recall-2300`, Step 2): the caller aborted
+        // halfway through a header and six data frames, the transmission was reported over at
+        // the cut, the slot it granted was measured from there — and the leaving DISC keyed at
+        // the start of the called station's answer, which the called station placed after the
+        // six frames the header had stated. Rung 10 at most, as there: its frames are long.
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            max_mode_setting: Some(10),
+            link: GrantConfig {
+                max_mode: 10,
+                ..config.link.clone()
+            },
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        let message: Vec<u8> = (0..6000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        air.a.send(&message);
+        // a transmission of the message's that runs over two seconds: its header out, a second
+        // in, and its data frames still going
+        let rate = WIDE_2300.audio_rate as f64;
+        let long = |a: &Station<NullPtt>| {
+            a.transmitting()
+                && a.keying
+                    .is_some_and(|w| w.frames_samples as f64 / rate > 2.0)
+        };
+        air.run(60.0, |a, _| long(a));
+        assert!(long(&air.a), "a long transmission of the message's");
+        air.run(1.0, |_, _| false);
+        assert!(air.a.transmitting(), "the message is on the air");
+        air.a.abort();
+        let mut keyed_over = false;
+        air.run(30.0, |a, b| {
+            keyed_over |= a.transmitting() && b.transmitting();
+            false
+        });
+        assert!(
+            air.b.engine().stats.transmissions > 0,
+            "the called station answered nothing"
+        );
+        assert!(
+            !keyed_over,
+            "the leaving DISC went over the called station's answer"
+        );
+    }
+
+    #[test]
+    fn an_abort_waits_out_the_slot_it_granted() {
         // the scenario harness (ADR-0065): a Test whose budget ran out keyed its DISC 1.4 s
-        // into the other station's acknowledgement, which it had heard arriving; both were lost
+        // into the other station's acknowledgement, which it had heard arriving; both were lost.
+        // Under granted slots the master's DISC waits for the slot it granted to end (ADR-0069).
         let mut air = Air::new(1.0, 0.0005);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
@@ -6497,12 +6785,6 @@ mod tests {
             a.transmitting()
         });
         assert!(air.a.transmitting(), "the DISC never went");
-        let end = air.a.arriving_until;
-        assert!(
-            air.a.now() >= end,
-            "keyed at {:.2}, before {end:.2}",
-            air.a.now()
-        );
         assert!(
             !keyed_over,
             "the DISC went over the frame it heard arriving"
@@ -7066,11 +7348,12 @@ mod tests {
     }
 
     /// Two identifying stations, the called one waiting for a clear channel, and `a` closes
-    /// the session; whether `a`'s DISC carries its identifier is `a_identifies_on_disc`. How
-    /// many times `a` keyed from its DISC on, and in how many blocks both were keyed at once.
+    /// the session; whether `a`'s interval has run out is `a_due`. How many times `a` keyed
+    /// from its DISC on, in how many blocks both were keyed at once, and how many identifiers
+    /// each sent meanwhile.
     fn close_between_identifying_stations(
-        a_identifies_on_disc: bool,
-    ) -> (Vec<String>, usize, usize) {
+        a_due: bool,
+    ) -> (Vec<String>, usize, usize, usize, usize) {
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
             cw_id: Some(CwId::default()),
             wait_for_clear: config.callsign == "KK4XYZ",
@@ -7083,12 +7366,13 @@ mod tests {
         air.run(60.0, |_, b| b.received_len() >= 2);
         air.run(3.0, |a, _| !a.transmitting() && a.pending.is_empty());
         air.a.take_events();
-        if a_identifies_on_disc {
+        if a_due {
             // the interval has run out — the session has been going ten minutes and more since
-            // the last identifier: the DISC carries one
+            // the last identifier
             air.a.identifier.last = Some(-1.0e6);
             air.a.identifier.communication_began = Some(-1.0e6);
         }
+        let ids = (air.a.stats.cw_ids, air.b.stats.cw_ids);
         air.a.disconnect();
         let (mut overlap, mut a_keyings, mut was_keyed) = (0usize, 0usize, false);
         air.run(60.0, |a, b| {
@@ -7101,7 +7385,13 @@ mod tests {
             was_keyed = a.transmitting();
             a.quiescent() && b.quiescent()
         });
-        (air.a.take_events(), a_keyings, overlap)
+        (
+            air.a.take_events(),
+            a_keyings,
+            overlap,
+            air.a.stats.cw_ids - ids.0,
+            air.b.stats.cw_ids - ids.1,
+        )
     }
 
     #[test]
@@ -7110,30 +7400,30 @@ mod tests {
         // its retries went out over ND1J's DISC_ACK and then over his Morse identifier. His
         // station waits for a clear channel, and by the time its DISC_ACK was queued its
         // session was over — so the DISC it answered, which marks the channel busy for two
-        // seconds, held the answer past the caller's retry.
-        let (events, keyings, overlap) = close_between_identifying_stations(false);
-        assert!(
-            events.iter().any(|e| e == "disconnected:closed"),
-            "the DISC_ACK was not heard: {events:?}"
-        );
-        assert_eq!(
-            keyings, 2,
-            "the DISC and the closing identifier, and nothing repeated"
-        );
-        assert_eq!(overlap, 0, "the two stations were keyed at once");
-
-        // the DISC carries the caller's identifier: the answer waits for it to end, and the
-        // caller's wait for the answer runs from the end of its identifier
-        let (events, keyings, overlap) = close_between_identifying_stations(true);
-        assert!(
-            events.iter().any(|e| e == "disconnected:closed"),
-            "the DISC_ACK was not heard: {events:?}"
-        );
-        assert_eq!(
-            keyings, 1,
-            "the DISC carried the identifier, and nothing was repeated"
-        );
-        assert_eq!(overlap, 0, "the two stations were keyed at once");
+        // seconds, held the answer past the caller's retry. Under granted slots the closing
+        // identifiers go ahead of the frames that end the session (07-protocol-8.md §5.4): the
+        // master's ahead of its first DISC, the slave's ahead of its DISC_ACK, in the slot the
+        // DISC granted with its time — whether or not the interval has run out.
+        for due in [false, true] {
+            let (events, keyings, overlap, a_ids, b_ids) = close_between_identifying_stations(due);
+            assert!(
+                events.iter().any(|e| e == "disconnected:closed"),
+                "the DISC_ACK was not heard: {events:?}"
+            );
+            assert_eq!(
+                keyings, 1,
+                "the DISC carried the identifier, and nothing was repeated (due {due})"
+            );
+            assert_eq!(
+                overlap, 0,
+                "the two stations were keyed at once (due {due})"
+            );
+            assert_eq!(
+                (a_ids, b_ids),
+                (1, 1),
+                "each closing identifier once (due {due})"
+            );
+        }
     }
 
     #[test]
@@ -7200,75 +7490,109 @@ mod tests {
     }
 
     #[test]
-    fn under_stated_answers_the_identifier_goes_ahead_of_the_frames() {
-        // ADR-0068 §2.5: the other station answers at the end a burst stated, so the
-        // identifier never follows a burst's frames; it goes ahead of them. Before stated
-        // answers it followed them, a moment of silence after
-        for stated in [false, true] {
-            let mut station = Station::new(
-                StationConfig {
-                    callsign: "W4ODA".to_owned(),
-                    wait_for_clear: false,
-                    cw_id: Some(CwId::default()),
-                    link: LinkConfig {
-                        stated_answers: stated,
-                        ..LinkConfig::default()
-                    },
-                    ..StationConfig::default()
-                },
-                NullPtt::default(),
-                1,
-            );
-            let poll = ControlFrame {
-                kind: ControlKind::Poll,
-                session: 7,
-                flags: 0,
-                base: 0,
-                bitmap: 0,
-                snr_db: None,
-                recommended_mode: 0,
-                follows: 0,
-                burst_floor: false,
-            };
-            station.pending.push_back(Outgoing::Frames(
-                vec![aether_link::TxFrame {
-                    container: Container::Control,
-                    payload: poll.encode().to_vec(),
-                    mode: 0,
-                    rv: 0,
-                    floor: false,
-                    follows: 0,
-                }],
-                Origin::station("test"),
-            ));
-            station.render_next(1.0);
-            assert_eq!(station.stats.cw_ids, 1, "stated {stated}");
-            let rate = station.config.params.audio_rate as f64;
-            let id = CwId {
-                level: CW_ID_RELATIVE_LEVEL,
-                ..CwId::default()
-            }
-            .audio("W4ODA", rate);
-            let queued: Vec<f32> = station.playback.iter().copied().collect();
-            let at = queued
-                .windows(id.len())
-                .position(|w| w == id.as_slice())
-                .expect("the identifier is queued");
-            let lead = (station.config.key_lead_s * rate) as usize;
-            let after = queued.len() - at - id.len();
-            if stated {
-                assert_eq!(at, lead, "ahead of the frames, right after the key's lead");
-                assert!(
-                    after > (0.3 * rate) as usize,
-                    "the frames follow it: {after}"
-                );
-            } else {
-                assert!(at > lead + (0.3 * rate) as usize, "after the frames: {at}");
-                assert!(
-                    after < (0.3 * rate) as usize,
-                    "only the tail after it: {after}"
-                );
-            }
+    fn the_identifier_the_engine_places_goes_ahead_of_the_frames() {
+        // 07-protocol-8.md §5.4: the other station's slot starts after this station's frames,
+        // so the identifier never follows them; the engine places it ahead of them, in time it
+        // counted, and the daemon renders exactly that much: the identifier, then silence
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                cw_id: Some(CwId::default()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let mut header = GrantFrame::new(aether_link::GrantKind::Header, 7);
+        header.count = 0;
+        let frame = aether_link::TxFrame {
+            container: Container::Control,
+            payload: header.encode().to_vec(),
+            mode: 0,
+            rv: 0,
+            floor: false,
+            follows: 0,
+        };
+        let identifier_s = station.identifier_length_s();
+        let rate = station.config.params.audio_rate as f64;
+        let room = (identifier_s * rate).round() as usize;
+        let alone = station
+            .modulate(std::slice::from_ref(&frame))
+            .expect("a frame");
+        station.pending.push_back(Outgoing::Link(LinkTx {
+            frames: vec![frame],
+            origin: Origin::station("test"),
+            window: KeyWindow::default(),
+            identifier_s,
+        }));
+        station.render_next(1.0);
+        assert_eq!(station.stats.cw_ids, 1);
+        let id = CwId {
+            level: CW_ID_RELATIVE_LEVEL,
+            ..CwId::default()
+        }
+        .audio("W4ODA", rate);
+        let queued: Vec<f32> = station.playback.iter().copied().collect();
+        let lead = (station.config.key_lead_s * rate) as usize;
+        assert_eq!(
+            &queued[lead..lead + id.len()],
+            id.as_slice(),
+            "ahead of the frames, right after the key's lead"
+        );
+        assert!(
+            queued[lead + id.len()..lead + room]
+                .iter()
+                .all(|&x| x == 0.0),
+            "silence for the rest of its time"
+        );
+        let frames = station.to_audio.process(&alone).len();
+        assert!(
+            queued.len() >= lead + room + frames,
+            "the frames follow its time: {} of {}",
+            queued.len(),
+            lead + room + frames
+        );
+    }
+
+    #[test]
+    fn in_a_session_both_stations_identify_where_the_engine_puts_it() {
+        // the master ahead of its next header; the slave says its identifier is due in its
+        // answer, and the master grants it the time ahead of its next one (07-protocol-8.md
+        // §5.4): both go out, the message crosses, and no slot is missed for them
+        let message = vec![0x3Cu8; 600];
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            cw_id: Some(CwId::default()),
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        let ids = (air.a.stats.cw_ids, air.b.stats.cw_ids);
+        for station in [&mut air.a, &mut air.b] {
+            let interval = station.config.cw_id_interval_s;
+            let now = station.now();
+            station.identifier.communication_began = Some(now - interval - 1.0);
+            station.identifier.last = None;
+        }
+        air.a.send(&message);
+        air.b.send(&message);
+        // the slave's takes an exchange more: its answer says it is due, the next header grants
+        // it the time
+        air.run(180.0, |a, b| {
+            a.received_len() >= message.len()
+                && b.received_len() >= message.len()
+                && a.stats.cw_ids > ids.0
+                && b.stats.cw_ids > ids.1
+        });
+        assert_eq!(air.a.received_len(), message.len());
+        assert_eq!(air.b.received_len(), message.len());
+        assert!(air.a.stats.cw_ids > ids.0, "the master never identified");
+        assert!(air.b.stats.cw_ids > ids.1, "the slave never identified");
+        for station in [&air.a, &air.b] {
+            assert_eq!(station.stats.watchdog_trips, 0);
+            assert_eq!(station.stats.dropped_late, 0);
+            assert_eq!(station.engine().stats.forfeits, 0);
         }
     }
 
@@ -7643,7 +7967,10 @@ mod tests {
         air.a.take_frame_reports();
         air.b.take_frame_reports();
         air.a.send(&[0x5a; 300]);
-        air.run(120.0, |_, b| b.received_len() >= 300);
+        // the answer to the data goes in the slot after it
+        air.run(120.0, |a, b| {
+            b.received_len() >= 300 && a.engine().all_acknowledged()
+        });
         let on_b = air.b.take_frame_reports();
         let data: Vec<_> = on_b.iter().filter(|r| r.kind == "data").collect();
         assert!(!data.is_empty(), "data is empty");
@@ -7655,10 +7982,11 @@ mod tests {
         let acks: Vec<_> = on_a.iter().filter(|r| r.kind == "control").collect();
         assert!(!acks.is_empty(), "acks is empty");
         assert!(acks.iter().all(|r| r.from.as_deref() == Some("KK4XYZ")));
-        assert!(
-            acks.iter()
-                .all(|r| r.control.as_deref().is_some_and(|c| c.starts_with("Ack")))
-        );
+        assert!(acks.iter().all(|r| {
+            r.control
+                .as_deref()
+                .is_some_and(|c| c.starts_with("Answer"))
+        }));
         // the acknowledgements of OFDM bursts are OFDM frames at the control mode, as beacons
         // were before ADR-0016: a wire reads past the tone floor's ceiling (+17 dB), and the
         // last one's symbols sit on their constellation — none near the origin. How far past
@@ -8462,11 +8790,7 @@ mod tests {
             listening: true,
             chat: true,
         });
-        // the station without the turn asks for it in every session (ADR-0044)
-        assert!(station.engine().config().chat);
         assert_eq!(station.host_bandwidth(Some(500)), Ok(500));
-        // and a move to the other air keeps it
-        assert!(station.engine().config().chat);
         assert_eq!(station.bandwidth_hz(), 500);
         assert_eq!(station.bandwidth_status()["why"], "host");
         assert_eq!(station.bandwidth_status()["host_hz"], 500);
@@ -8492,10 +8816,8 @@ mod tests {
         assert!(refused.contains("a call is going out"), "{refused}");
         assert_eq!(station.bandwidth_hz(), 500);
         station.abort();
-        // the host goes, and takes its bandwidth with it once the station is quiet; the turn
-        // request stays, as it is in every session (ADR-0044)
+        // the host goes, and takes its bandwidth with it once the station is quiet
         station.set_host(HostPresence::default());
-        assert!(station.engine().config().chat);
         let rate = WIDE_2300.audio_rate as f64;
         let mut out = vec![0.0f32; 4096];
         for seed in 0..(30.0 * rate / 4096.0) as u32 {
@@ -8594,7 +8916,7 @@ mod tests {
             .expect("a station that may call, calls");
         air.run(40.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected(), "the answer-only station answered");
-        assert_eq!(air.a.role(), Role::Irs);
+        assert_eq!(air.a.role(), Role::Slave);
     }
 
     #[test]

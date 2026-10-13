@@ -50,6 +50,12 @@ pub const DEVICE_LATENCY_S: f64 = 0.25;
 pub trait AudioIo {
     /// Take whatever has been captured since the last call.
     fn capture(&mut self) -> Vec<f32>;
+    /// Captured samples lost just before what the last `capture` returned, since the last
+    /// call: a capture queue that falls behind drops its oldest audio, so all of it lies ahead
+    /// of the next sample taken. The station's clock moves on by it (`Station::skip_captured`).
+    fn capture_gap(&mut self) -> usize {
+        0
+    }
     /// Queue samples to play.
     fn playback(&mut self, samples: &[f32]);
     /// How many samples are waiting to be played.
@@ -311,6 +317,10 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, AudioError> {
 /// The streams stop when this is dropped.
 pub struct SoundCard {
     captured: Queue,
+    /// The capture queue's drops already counted into a gap (`capture_gap`).
+    capture_dropped: usize,
+    /// Captured samples lost ahead of what `capture` returned, not yet taken.
+    gap: usize,
     to_play: Queue,
     playback_limit: usize,
     /// The capture stream. Held so it keeps running; cpal stops a stream when it is dropped.
@@ -407,6 +417,8 @@ impl SoundCard {
 
         Ok(Self {
             captured,
+            capture_dropped: 0,
+            gap: 0,
             to_play,
             playback_limit,
             _input: input,
@@ -422,10 +434,17 @@ impl SoundCard {
 
 impl AudioIo for SoundCard {
     fn capture(&mut self) -> Vec<f32> {
-        self.captured
-            .lock()
-            .map(|mut shared| shared.samples.drain(..).collect())
-            .unwrap_or_default()
+        let Ok(mut shared) = self.captured.lock() else {
+            return Vec::new();
+        };
+        // under the one lock: what the queue dropped came before what it holds
+        self.gap += shared.dropped - self.capture_dropped;
+        self.capture_dropped = shared.dropped;
+        shared.samples.drain(..).collect()
+    }
+
+    fn capture_gap(&mut self) -> usize {
+        std::mem::take(&mut self.gap)
     }
 
     fn playback(&mut self, samples: &[f32]) {

@@ -21,8 +21,9 @@ pub struct HostPresence {
     pub attached: bool,
     /// It said `LISTEN ON` (or `LISTEN CQ`, or `CHAT ON`, which includes it): answer calls.
     pub listening: bool,
-    /// It said `CHAT ON`. The turn request it once switched on is in every session now
-    /// (ADR-0044); what it still decides is the KISS programs' priority (ADR-0019).
+    /// It said `CHAT ON`. It once switched on the turn request (ADR-0027), which granted slots
+    /// have no use for (ADR-0069); what it still decides is the KISS programs' priority
+    /// (ADR-0019).
     pub chat: bool,
 }
 

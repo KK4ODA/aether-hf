@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use aether_link::LinkConfig;
+use aether_link::GrantConfig;
 use aetherd::{
     audio::{AudioIo, DEVICE_LATENCY_S, Loopback, SoundCard, list_devices},
     config::{Config, EXAMPLE, PttConfig},
@@ -547,9 +547,9 @@ fn station_config(
         record_tx_audio: config.record.tx_audio,
         playback_lead_s: DEVICE_LATENCY_S,
         callsign: config.callsign.clone(),
-        link: LinkConfig {
+        link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
-            ..LinkConfig::default()
+            ..GrantConfig::default()
         },
         // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)
         max_mode_setting: Some(config.radio.max_mode),
@@ -1101,6 +1101,12 @@ fn serve(
         station.device_played(audio.played());
         station.device_latency(audio.output_latency_s());
         let captured = aetherd::waits::timed(aetherd::waits::Wait::Card, || audio.capture());
+        // audio the card's queue lost ahead of this block: the station's clock moves past it,
+        // or every slot after a stall would be answered that much late
+        let gap = audio.capture_gap();
+        if gap > 0 {
+            station.skip_captured(gap);
+        }
         let idle = captured.is_empty();
         if !idle {
             last_audio = std::time::Instant::now();

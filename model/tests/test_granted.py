@@ -25,8 +25,8 @@ from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.frames import (
     CONNECT_BODY_8_BYTES,
     CONNECT_BODY_BYTES,
-    GRANTED_VERSION,
     PROTOCOL_VERSION,
+    TURNS_VERSION,
     ConnectBody,
     GrantFrame,
     GrantKind,
@@ -161,7 +161,7 @@ def test_the_connect_body_of_protocol_8_declares_the_radio() -> None:
         "W4ODA",
         "KK4XYZ",
         caps=with_level(0x03, 2),
-        version=GRANTED_VERSION,
+        version=PROTOCOL_VERSION,
         snr_db=-7.0,
         turnaround_s=0.23,
         identifier_s=6.2,
@@ -174,9 +174,9 @@ def test_the_connect_body_of_protocol_8_declares_the_radio() -> None:
     assert back.identifier_s == pytest.approx(6.5)
     assert level_of(back.caps) == 2 and back.caps & 0x07 == 0x03
     # protocol 7's body is two bytes shorter and reads as protocol 7
-    old = ConnectBody("W4ODA", "KK4XYZ", version=PROTOCOL_VERSION).encode()
+    old = ConnectBody("W4ODA", "KK4XYZ", version=TURNS_VERSION).encode()
     assert len(old) == CONNECT_BODY_BYTES
-    assert ConnectBody.decode(old).version == PROTOCOL_VERSION
+    assert ConnectBody.decode(old).version == TURNS_VERSION
     assert ConnectBody.decode(old).turnaround_s == 0.0
 
 

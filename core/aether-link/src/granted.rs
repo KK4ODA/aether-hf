@@ -49,8 +49,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use crate::{
     engine::{Action, LadderRung, ProbeResult, State},
     frames::{
-        CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, GRANTED_VERSION,
-        GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS, ProbeBody, WINDOW, bandwidth_code,
+        CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, GrantFrame,
+        GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
         bandwidth_hz_of, data_capacity, decode_data, encode_data, in_window, level_of,
         pack_callsign, seq_after, seq_distance, with_level,
     },
@@ -1344,6 +1344,31 @@ impl GrantedEngine {
         self.config.max_mode = rung;
     }
 
+    /// How long after this station keys its radiation starts: the daemon's lead and the sound
+    /// card's output latency, as the card reports it once it runs. What the engine keys an
+    /// answer that much ahead of its slot by, and measures its own lateness against `KEY` with.
+    pub const fn set_tx_latency_s(&mut self, seconds: f64) {
+        self.timing.tx_latency_s = seconds;
+    }
+
+    /// This station's Morse identifier's length, 0 for none — what the next call or acceptance
+    /// declares, so the master grants it the time (07-protocol-8.md §5.4).
+    pub const fn set_identifier_s(&mut self, seconds: f64) {
+        self.config.identifier_s = seconds;
+    }
+
+    /// This station's radio: how long after it stops sending it hears again — what the next
+    /// call or acceptance declares.
+    pub const fn set_turnaround_s(&mut self, seconds: f64) {
+        self.config.turnaround_s = seconds;
+    }
+
+    /// Whether this station's Morse identifier is due and not yet placed.
+    #[must_use]
+    pub const fn identifier_due(&self) -> bool {
+        self.identifier_due
+    }
+
     /// Another air from the next session on (ADR-0026).
     ///
     /// # Errors
@@ -1918,7 +1943,7 @@ impl GrantedEngine {
             src: self.my_call.clone(),
             dst: self.remote_call.clone(),
             caps: with_level(self.config.capabilities, u8::try_from(level).unwrap_or(3)),
-            version: GRANTED_VERSION,
+            version: PROTOCOL_VERSION,
             snr_db: None,
             turnaround_s: self.config.turnaround_s,
             identifier_s: self.config.identifier_s,
@@ -2010,7 +2035,7 @@ impl GrantedEngine {
     }
 
     fn version_ok(&mut self, cb: &ConnectBody, size: usize, verb: &str) -> bool {
-        if cb.version == GRANTED_VERSION && size >= CONNECT_BODY_8_BYTES {
+        if cb.version == PROTOCOL_VERSION && size >= CONNECT_BODY_8_BYTES {
             return true;
         }
         self.event(
@@ -3010,7 +3035,7 @@ impl GrantedEngine {
                 self.config.capabilities,
                 u8::try_from(self.need_level).unwrap_or(3),
             ),
-            version: GRANTED_VERSION,
+            version: PROTOCOL_VERSION,
             snr_db: answer.snr_db,
             turnaround_s: self.config.turnaround_s,
             identifier_s: self.config.identifier_s,

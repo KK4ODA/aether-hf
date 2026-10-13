@@ -25,6 +25,7 @@ class Fake:
         self.mine, theirs = socket.socketpair()
         self.station = cs.Station("?", theirs, 0, 0, 0)
         self.heard: list[np.ndarray] = []
+        self.lost = 0  # samples the server said were lost ahead of a block (``MSG_GAP``)
 
     def play(self, samples: np.ndarray) -> None:
         self.mine.sendall(struct.pack("<BI", cs.MSG_PLAY, len(samples)))
@@ -37,10 +38,19 @@ class Fake:
     def ready(self, n: int = 1) -> None:
         self.mine.sendall(bytes([cs.MSG_READY]) * n)  # one write: a socketpair counts writes
 
+    def recv(self, n: int) -> bytes:
+        got = b""
+        while len(got) < n:
+            got += self.mine.recv(n - len(got))
+        return got
+
     def take_block(self) -> None:
-        head = b""
-        while len(head) < 21:
-            head += self.mine.recv(21 - len(head))
+        head = self.recv(1)
+        while head[0] == cs.MSG_GAP:
+            (lost,) = struct.unpack("<Q", self.recv(8))
+            self.lost += lost
+            head = self.recv(1)
+        head += self.recv(20)
         _, _, _, n = struct.unpack("<BQQI", head)
         body = b""
         while len(body) < 4 * n:
@@ -296,6 +306,18 @@ def test_a_stall_longer_than_the_backlog_drops_the_oldest_audio() -> None:
     heard = len(np.concatenate(b.heard))
     assert heard == len(np.concatenate(a.heard)) - round(1.02 * RATE)
     assert srv.b.stall_dropped == round(1.02 * RATE)  # 3 s stalled and the block after, kept 2
+    assert b.lost == 0, "a daemon that greeted with AEC1 is told nothing of it"
+
+
+def test_a_daemon_that_reads_gaps_is_told_what_a_stall_dropped() -> None:
+    # its clock moves on by it, as a sound card's queue tells the run loop (`capture_gap`)
+    srv, a, b = server({})
+    srv.b.reads_gaps = True
+    srv.b.stall(10 * cs.TICK, round(3.0 * RATE))
+    run_stalling(srv, a, b, 4.0, {})
+    assert b.lost == srv.b.stall_dropped == round(1.02 * RATE)
+    # what it heard and what it lost add up to the air's time
+    assert len(np.concatenate(b.heard)) + b.lost == len(np.concatenate(a.heard))
 
 
 def test_a_machine_draws_its_stalls_from_the_seed() -> None:

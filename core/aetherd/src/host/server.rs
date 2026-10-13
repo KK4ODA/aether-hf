@@ -561,10 +561,10 @@ fn serve_commands(
                     let name = event.data["name"].as_str().unwrap_or("");
                     // A call the station answered while the host was not listening: hold its
                     // CONNECTED until LISTEN comes back rather than have it ignored. Only the
-                    // answering (IRS) side is gated by LISTEN — a call this host placed is never
-                    // held, LISTEN or no.
+                    // called station (the slave, ADR-0069) is gated by LISTEN — a call this host
+                    // placed is never held, LISTEN or no.
                     let detail = event.data["detail"].as_str().unwrap_or("");
-                    let called = detail.split_whitespace().nth(1) == Some("(irs)");
+                    let called = detail.split_whitespace().nth(1) == Some("(slave)");
                     if name == "connected"
                         && called
                         && (!host.listening || scan.late(Instant::now()))
@@ -736,7 +736,7 @@ fn report_state(
             // the simulated channel, when the called side never learned it had been called.
             let mut words = detail.split_whitespace();
             let remote = words.next().unwrap_or("").to_owned();
-            let called = words.next() == Some("(irs)");
+            let called = words.next() == Some("(slave)");
             // A session the panel started — a call, or a Test from the Session tab — is not
             // this program's: it placed no call and none came to it. Told of one, VarAC opened
             // it as its own, and its idle timer ended the operator's Test (ND1J, 2026-09-26).
@@ -1042,7 +1042,7 @@ mod tests {
                     seen_connect = false;
                     control.publish(&Event::new(
                         "state",
-                        json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
+                        json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
                     ));
                     // the peer's answer, then a third station's beacon, then one of the
                     // peer's frames that did not decode: one SN line among the three
@@ -1228,7 +1228,7 @@ mod tests {
                     // somebody called us: the modem reports the peer and our role
                     control.publish(&Event::new(
                         "state",
-                        json!({"name": "connected", "detail": "KK4XYZ (irs)"}),
+                        json!({"name": "connected", "detail": "KK4XYZ (slave)"}),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(2));
@@ -1301,7 +1301,7 @@ mod tests {
         // the station forms the session for the host while it is not listening
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "KK4XYZ (irs)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
         );
         // nothing of it reaches the host yet: a VERSION asked now is answered before any CONNECTED
         std::thread::sleep(Duration::from_millis(200));
@@ -1531,7 +1531,7 @@ mod tests {
         *state.lock().expect("state") = "connected";
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
         );
         assert!(
             client
@@ -1601,7 +1601,7 @@ mod tests {
                         // the call the program placed comes up
                         control.publish(&Event::new(
                             "state",
-                            json!({"name": "connected", "detail": "KK4XYZ (iss)", "callsign": "W4ODA"}),
+                            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
                         ));
                     }
                 }
@@ -1863,7 +1863,7 @@ mod tests {
         assert_eq!(params_of(&modem, "bandwidth.set"), vec![json!({"hz": 500})]);
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "KK4XYZ (irs)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
         );
         assert_eq!(
             client.expect(|l| l.starts_with("CONNECTED")),
@@ -1930,7 +1930,7 @@ mod tests {
         // the panel's session comes up, carries payload both ways, and the channel is keyed
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "ND1J (iss)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA"}),
         );
         modem.publish("data", json!({"data": to_base64(b"the panel's traffic")}));
         modem.publish(
