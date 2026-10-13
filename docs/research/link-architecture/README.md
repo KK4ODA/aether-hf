@@ -3,8 +3,8 @@
 This is an independent review of Aether HF's half-duplex link protocol, done on 2026-10-13.
 It asks whether the architecture can reach the reliability of a mature HF modem and, if not,
 what should replace it. It changes no production code. The research code is in
-[`research/link_arch/`](../../../research/link_arch/), and the draft decision is
-[ADR-0069](../../adr/0069-granted-slots.md), **proposed, not accepted**.
+[`research/link_arch/`](../../../research/link_arch/), and the decision is
+[ADR-0069](../../adr/0069-granted-slots.md), accepted for building on 2026-10-13.
 
 ## The three questions, answered first
 

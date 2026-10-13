@@ -1446,6 +1446,32 @@ the floor unless the peer's report clears the ordinary control threshold by 3 dB
 ADR-0034/0059's switches); the Morse identifier never after a burst's frames. Model first behind
 `LinkConfig.stated_answers`, then the port and PHY, judged on the link bench and the harness.
 
+**The architecture review and granted slots (2026-10-13, ADR-0069, accepted for building).**
+The author asked for an independent review of the link protocol, not another patch
+(`docs/research/link-architecture/`, research code in `research/link_arch/`: an adversarial
+simulator driving the real model engines, TLA+ models in `research/link_arch/tla/`, two
+prototype engines). Finding: the right to transmit was each station's private belief, acted on at
+times of its own choosing — ADR-0068 fixed *when a read burst is answered* (early answers gone)
+but left the receiver's unsolicited turn requests, answers sent late (`max(now, due)`, after the
+daemon's holds) and a turn that a lost TAKEN/TURN splits (TLC: both ISS with perfect carrier
+sense). The author's decision: **granted slots** — the caller is the master for the whole session
+and the only station that keys on its own initiative; every master transmission (a header, up to
+six data frames with ADR-0068's exact counts) grants the other one slot; the slave keys only in a
+slot granted by a frame it decoded in time to start it, and the keying gate refuses a late start
+(the forfeit); only decoded content changes protocol state; no turn, no TURN/OFFER/TAKEN/POLL,
+no turn request. ADR-0068 is superseded except its exact counts (§2.1). The cost is accepted
+(≈ ×1.10 protocol 7's completion time in the simulator's field profile, 9–13 % of bulk goodput at
++12 dB) as the price of no collisions; **nothing ships before it — built the best way, not the
+fastest; field builds hold still.** The spec is `04-formal-spec.md` (rules R1–R12, invariants
+I1–I5, assumptions S1–S7); the gated steps are ADR-0069 §5 / `06-recommendation.md` §4: (0)
+the harness made able to classify its collisions (transmission tags, radiated mask, overlaps split
+guard/VOX/radiated), (1) the model engine beside `LinkEngine`, not a switch in it, (2) the port and
+the daemon's gate, (3) the harness A/B with pre-registered criteria, (4) hardware in the loop and
+the air, (5) delete the turn machinery. A failing criterion stops the step; it is explained as a
+broken assumption or rule, with a trace, before anything changes. A new rule must name the
+invariant it restores and must not move a deadline on undecoded evidence. Port bug found on the
+way: `"closed (no disc ack)"` is not the spelling `LEFT_UNHEARD` holds in `engine.rs`.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
