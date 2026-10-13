@@ -151,6 +151,7 @@ def action_doc(a: object) -> dict[str, Any]:
             "duration_s": bits(a.duration_s),
             "cause": getattr(a, "cause", ""),
             "not_after": bits(getattr(a, "not_after", None)),
+            "not_before": bits(getattr(a, "not_before", None)),
             "identifier_s": bits(getattr(a, "identifier_s", 0.0)),
         }
     if isinstance(a, Deliver):

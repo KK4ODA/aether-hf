@@ -840,3 +840,36 @@ def test_a_transmission_split_evenly_between_two_rungs_is_judged_at_the_slower()
 
     assert abs(judged_at(9) - judged_at(12)) > 0.1
     assert engine.rate.margin_db == judged_at(9)
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_an_answer_is_decided_early_and_radiates_at_its_slot(air: str) -> None:
+    """A slot's answer is decided as soon as every frame its header stated has been reported,
+    so the daemon renders it while the slot has yet to start, and it radiates at the slot's
+    start all the same (``not_before``, 07-protocol-8.md §10)."""
+    a, b = _pair(AIRS[air], latency=KEY_S)
+    decided: list[tuple[float, SlotTransmit]] = []
+    drain = b.drain
+
+    def recorded() -> list[object]:
+        out = drain()
+        decided.extend((b.now, x) for x in out if isinstance(x, SlotTransmit))
+        return out
+
+    b.drain = recorded  # type: ignore[method-assign]
+    sim = TwoStationSim(
+        a, b, snr_db=12.0, seed=21, decode_latency=lambda *_: 0.12, key_lead=lambda _w: KEY_S
+    )
+    rng = random.Random(21)
+    assert _exchange(sim, a, b, _message(rng, 1500), _message(rng, 300)) is not None
+    answers = [(t, x) for t, x in decided if x.not_before is not None]
+    assert answers, "the slave answered in slots"
+    radiated = {round(t0, 6) for t0, _ in sim.radiated(1)}
+    ahead = []
+    for t, x in answers:
+        assert x.not_before is not None and x.not_after is not None
+        assert round(x.not_before, 6) in radiated, "it radiates at its slot's start"
+        ahead.append(x.not_before - KEY_S - t)
+    # decided a decode's spare budget ahead of the last moment: time the daemon renders in
+    assert sorted(ahead)[len(ahead) // 2] > 0.1
+    assert sim.overlaps() == []

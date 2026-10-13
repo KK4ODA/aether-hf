@@ -407,6 +407,10 @@ class AdvSim:
         if hold > 0.0:
             st.engine.on_tx_delayed(hold)
         t_key = max(at + hold, st.tx_free_at)
+        not_before = getattr(tx, "not_before", None)
+        if not_before is not None:
+            # an answer decided ahead of its slot is keyed its latency before the slot starts
+            t_key = max(t_key, not_before - timing.tx_latency_s)
         not_after = getattr(tx, "not_after", None)
         if not_after is not None and t_key + timing.tx_latency_s > not_after + 1e-9:
             # the keying gate: a transmission that cannot start in its slot is not sent

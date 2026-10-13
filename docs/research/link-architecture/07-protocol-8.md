@@ -327,9 +327,12 @@ Listed here so the model's interface already fits:
 * **`on_tx_done(frames_end)`.** The end of the last frame on the air, from the card's clock
   less the tail.
 * **The identifier, as §5.4:** the engine places it, and the daemon renders it first.
-* **Rendering ahead.** A slot's data frames are rendered while the header that grants it is
-  still arriving, so only the answer (a control frame, 4–20 ms) is rendered after the decode
-  (§11). A station whose decode, render and keying still exceed the constants asks for a level.
+* **Rendering ahead.** The engine decides a slot's answer as soon as what it says is final —
+  every data frame the header stated has been reported, decoded or not; an answer to a call, a
+  probe or a DISC at once — and hands it over with `not_before`, the slot's start. The daemon
+  renders it at once and keys it to radiate there. Decided about 0.2 s before the last moment
+  (median, the model's simulator), which is the render time four tone frames need (§11). A
+  station whose decode, render and keying still exceed the constants asks for a level.
 * **The capture path.** Received frames are placed on the air's clock: the card's reported input
   latency is taken off their times.
 * **The answer gap becomes the declared turnaround.** `[radio] turnaround_ms` is the operator's
@@ -430,3 +433,8 @@ each found by a test or a scenario and each kept inside the rules of ADR-0069 §
   frame was heard in, and an answer that moved the link to the floor left it a third as long
   as the rule says (`08-steps-0-and-1.md` §2.6).
 * **The engine's draws are SplitMix64**, so the port draws the same numbers from a seed.
+* **An answer is decided when it is final, and keyed at its slot** (§10, `not_before`). Deciding
+  at the last moment left the daemon no time to render. On the review's campaign: no overlap in
+  5 040 sessions, the field profile ×1.084 of protocol 7 where it was ×1.093, the hostile one
+  1.5–3.5 % faster (the daemon's holds fall before the slot), one cell 1 % slower (hostile-c
+  exchange).
