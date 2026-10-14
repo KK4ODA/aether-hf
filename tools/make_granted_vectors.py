@@ -741,6 +741,38 @@ def harq_limit() -> list[Recorder]:
     return [ra, rb]
 
 
+def rescued_count() -> list[Recorder]:
+    """Both stations' data pinned a little above the 500 Hz path: frames fail alone and are
+    rescued by HARQ, headers are left out, and every rescued copy's count reads as none to
+    follow (``count_misread``); half the slave's answers are lost, so the master too has only
+    the slave's data to go by. Neither station believes such a count (10-step-3.md §6)."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(21)
+    hits = random.Random(22)
+    snr = 4.0
+    table = a.timing.mode_threshold_db
+    pin = min((th, mode) for mode, th in table.items() if th >= snr + 1.5)[1]
+
+    def answers_lost(frame: TxFrame) -> float:
+        if frame.container is not Container.CONTROL:
+            return 0.0
+        if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
+            return 0.0
+        return -40.0 if hits.random() < 0.5 else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=snr, seed=21, count_misread=1.0, frame_snr_offset=answers_lost)
+    a.connect("KK4XYZ")
+    sim.run(until=30.0)
+    a.pin_mode(pin)
+    b.pin_mode(pin)
+    a.send(_message(rng, 1500))
+    b.send(_message(rng, 600))
+    sim.run(until=400.0)
+    a.disconnect()
+    sim.run(until=550.0)
+    return [ra, rb]
+
+
 def vox() -> list[Recorder]:
     """Radios keyed by VOX: each station declares a turnaround longer than the decode budget,
     and keys 0.1 s after its engine asks."""
@@ -805,6 +837,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "floor-memory": floor_memory,
     "answer-gap": answer_gap,
     "idle-identifier": idle_identifier,
+    "rescued-count": rescued_count,
 }
 
 

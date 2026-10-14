@@ -101,7 +101,10 @@ grant   = ans(fam) + n x frame(rung)                 (answer, then n data frames
 ```
 
 `LEVEL = (0, 0.5, 1, 2) s`. The slave computes `E` from the header's count, or from any decoded
-data frame's exact count (S1), whichever ends latest.
+data frame's exact count (S1), whichever ends latest — a data frame whose own copy decoded, not
+one HARQ rescued: the count rides in the chips, outside the codeword, and a copy too weak to
+decode alone can read it short ([10-step-3.md](10-step-3.md) §6.2). The master reads the
+slave's data frames the same way.
 
 **R3 — Forfeit.** The slave arms its transmission for `start − tx_latency`. If its engine
 learns of the grant after `start − tx_latency + slack`, it sends nothing. Independently, the
