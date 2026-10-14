@@ -669,6 +669,68 @@ def test_a_header_cut_before_it_could_be_read_grants_nothing(air: str) -> None:
     assert before > after + 2.0, "the old rule waited no longer: the test does not tell"
 
 
+@pytest.mark.parametrize("side", ["slave", "master"])
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_count_rescued_with_its_block_places_no_end(
+    air: str, side: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """10-step-3.md §6: on the scenario harness the first data frame of a transmission without
+    its header reached the slave too weak to decode alone. HARQ rescued its block, and its count,
+    read off that copy's chips outside the codeword, said none to follow where three did; the
+    slave answered over them. A count is believed only from a copy that decoded alone, by either
+    station. The sender's data is pinned a little above the path, so frames are rescued, and
+    every rescued copy's count reads as none to follow (``count_misread``). The master's case
+    needs the slave's answer lost — its stated count is the end otherwise — so half are."""
+    snr = {"2300": 8.0, "500": 4.0}[air]
+    table = _timing(AIRS[air]).mode_threshold_db
+    # the rung whose threshold is the nearest over the path by 1.5 dB or more
+    pin = min((th, mode) for mode, th in table.items() if th >= snr + 1.5)[1]
+
+    def overlapping_runs() -> int:
+        runs = 0
+        for seed in range(4):
+            a, b = _pair(AIRS[air])
+            sender, receiver = (a, 1) if side == "slave" else (b, 0)
+            hits = random.Random(900 + seed)
+
+            def answers_lost(frame: TxFrame, hits: random.Random = hits) -> float:
+                if side == "slave" or frame.container is not Container.CONTROL:
+                    return 0.0
+                if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
+                    return 0.0
+                return -40.0 if hits.random() < 0.5 else 0.0
+
+            sim = TwoStationSim(
+                a, b, snr_db=snr, seed=seed, count_misread=1.0, frame_snr_offset=answers_lost
+            )
+            message = _message(random.Random(seed), 600)
+            a.connect(b.my_call)
+            sim.run(until=30.0)
+            sender.pin_mode(pin)
+            sender.send(message)
+            if side == "master":
+                a.send(b"x" * 200)  # the master's headers grant the slave its room
+            t = sim.t
+            while t < 900.0 and len(sim.st[receiver].delivered) < len(message):
+                t += 5.0
+                sim.run(until=t)
+            assert bytes(sim.st[receiver].delivered) == message, "not all of it, in order"
+            runs += bool(sim.overlaps())
+        return runs
+
+    assert overlapping_runs() == 0, "a station radiated over the other's frames"
+    taken = GrantedEngine._take_data
+
+    def believed(self: GrantedEngine, frame: object) -> object:
+        rec = taken(self, frame)  # type: ignore[arg-type]
+        if rec.payload is not None:
+            rec.combined = False  # a rescued copy's count believed, as before the rule
+        return rec
+
+    monkeypatch.setattr(GrantedEngine, "_take_data", believed)
+    assert overlapping_runs() > 0, "no rescued count misled anyone: the test does not tell"
+
+
 @pytest.mark.parametrize("air", ["2300", "500"])
 def test_an_aborting_slave_answers_the_next_header_with_a_disc(air: str) -> None:
     a, b = _pair(AIRS[air])

@@ -112,6 +112,15 @@ class SimFrame:
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
         gained = prior + (_HARQ_GAIN_DB if buffer is not None else 0.0)
+        if self._draw <= self._success(gained):
+            return self.payload, gained
+        return None, gained
+
+    def decodes_alone(self) -> bool:
+        """Whether this copy decodes without an earlier one of its block."""
+        return self._draw <= self._success(0.0)
+
+    def _success(self, gained: float) -> float:
         threshold = self._threshold
         if threshold is None:
             threshold = AWGN_THRESHOLD_DB.get(self.mode, 0.0)
@@ -120,9 +129,7 @@ class SimFrame:
         else:
             judged = self.snr_db if self._judge_snr_db is None else self._judge_snr_db
             p = _success_prob(threshold, judged, gained)
-        if self._draw <= p:
-            return self.payload, gained
-        return None, gained
+        return p
 
 
 @dataclass(order=True)
@@ -178,6 +185,7 @@ class TwoStationSim:
         rx_recovery_s: tuple[float, float] = (0.0, 0.0),
         phantoms_per_min: float = 0.0,
         phantom_trusted: float = 0.05,
+        count_misread: float = 0.0,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -242,6 +250,12 @@ class TwoStationSim:
         frame's container and when it started. A fade that lets one kind of frame through and
         not another — the called station's data lost while its control frames arrive — is
         what turned KE4QCM's session of 2026-09-25 into two stations holding the turn."""
+        self.count_misread = count_misread
+        """The share of data frames too weak to decode alone whose count a receiver reads as
+        none to follow: a weak copy's chips read a quarter turn off. On the scenario harness a
+        frame HARQ rescued at -1.5 dB carried three to follow read as none (10-step-3.md §6).
+        Unset, every count is read as sent; drawn only when set, so a run without it is the
+        run it always was."""
 
     def _synthetic_frame(
         self, frame: TxFrame, snr_db: float, t_start: float, t_end: float
@@ -262,7 +276,7 @@ class TwoStationSim:
         cap = self.floor_reading_cap_db
         if floor and cap is not None and snr_db > cap:
             judge_snr_db, snr_db = snr_db, cap
-        return SimFrame(
+        sf = SimFrame(
             container=frame.container,
             mode=frame.mode,
             rv=frame.rv,
@@ -281,6 +295,14 @@ class TwoStationSim:
                 else frame.follows
             ),
         )
+        if (
+            self.count_misread > 0.0
+            and sf.follows
+            and not sf.decodes_alone()
+            and self.rng.random() < self.count_misread
+        ):
+            sf.follows = 0
+        return sf
 
     # ── scheduling ────────────────────────────────────────────────────
 

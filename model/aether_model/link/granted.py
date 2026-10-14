@@ -1573,7 +1573,9 @@ class GrantedEngine:
             return
         self._heard(frame)
         self._ack_owed = True
-        if frame.follows is not None and frame.follows < MAX_FOLLOWS:
+        if frame.follows is not None and frame.follows < MAX_FOLLOWS and not rec.combined:
+            # a count rescued with its block is not believed (the note at _take_data): the
+            # master waits for the slot's latest end
             floor = self.timing.is_floor(frame.mode)
             self._state_end(frame.t_end + frame.follows * (frame.t_end - frame.t_start), floor)
         elif self._slot is not None:
@@ -1861,8 +1863,14 @@ class GrantedEngine:
         if rec.payload is not None:
             self._heard(frame)
             self._measure(frame)
-            if self._m_end is None and frame.follows is not None and frame.follows < MAX_FOLLOWS:
-                # the header was not read: the transmission's end is the one this frame states
+            if (
+                self._m_end is None
+                and not rec.combined
+                and frame.follows is not None
+                and frame.follows < MAX_FOLLOWS
+            ):
+                # the header was not read: the transmission's end is the one this frame states —
+                # if its own copy decoded (the note at _take_data)
                 self._m_end = frame.t_end + frame.follows * (frame.t_end - frame.t_start)
                 self._m_last_floor = self.timing.is_floor(frame.mode)
                 self._schedule_slave()
@@ -2244,6 +2252,13 @@ class GrantedEngine:
             self._recommended = max(0, min(self._cap(), ctl.rung))
 
     # ── receiving data ────────────────────────────────────────────────
+
+    # A frame's count rides in its chips, outside the codeword, so a CRC that passes vouches
+    # for the payload and not for the count. A copy that decodes alone was read well enough for
+    # its count too; a copy HARQ rescued was not — it is the earlier copies that decoded — and
+    # on the scenario harness one read three frames to follow as none: the slave answered over
+    # them (10-step-3.md §6). Such a count places no end: the slave keeps waiting for one it can
+    # believe (a silent slot at worst), the master for the slot's latest end.
 
     def _take_data(self, frame: SoftFrame) -> _RxRecord:
         """A data frame of the transmission being received: decoded alone, or combined with an

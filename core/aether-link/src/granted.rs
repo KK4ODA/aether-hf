@@ -2486,11 +2486,15 @@ impl GrantedEngine {
         if index.is_none_or(|i| self.rx[i].payload.is_none()) {
             return;
         }
+        let rescued = index.is_some_and(|i| self.rx[i].combined);
         self.heard(frame);
         self.ack_owed = true;
         if let Some(follows) = frame.follows
             && follows < MAX_FOLLOWS
+            && !rescued
         {
+            // a count rescued with its block is not believed (the note at `take_data`): the
+            // master waits for the slot's latest end
             let floor = self.timing.is_floor(frame.mode);
             let end = frame.t_end + f64::from(follows) * (frame.t_end - frame.t_start);
             self.state_end(end, floor);
@@ -2859,13 +2863,16 @@ impl GrantedEngine {
         }
         let index = self.take_data(soft, frame);
         if index.is_some_and(|i| self.rx[i].payload.is_some()) {
+            let rescued = index.is_some_and(|i| self.rx[i].combined);
             self.heard(frame);
             self.measure(frame);
             if self.m_end.is_none()
+                && !rescued
                 && let Some(follows) = frame.follows
                 && follows < MAX_FOLLOWS
             {
-                // the header was not read: the transmission's end is the one this frame states
+                // the header was not read: the transmission's end is the one this frame states —
+                // if its own copy decoded (the note at `take_data`)
                 self.m_end = Some(frame.t_end + f64::from(follows) * (frame.t_end - frame.t_start));
                 self.m_last_floor = self.timing.is_floor(frame.mode);
                 self.schedule_slave();
@@ -3442,6 +3449,13 @@ impl GrantedEngine {
     }
 
     // ── receiving data ────────────────────────────────────────────────
+
+    // A frame's count rides in its chips, outside the codeword, so a CRC that passes vouches for
+    // the payload and not for the count. A copy that decodes alone was read well enough for its
+    // count too; a copy HARQ rescued was not — it is the earlier copies that decoded — and on the
+    // scenario harness one read three frames to follow as none: the slave answered over them
+    // (10-step-3.md §6). Such a count places no end: the slave keeps waiting for one it can
+    // believe (a silent slot at worst), the master for the slot's latest end.
 
     /// A data frame of the transmission being received: decoded alone, or combined with an
     /// earlier copy of its block, its sequence number inferred from its slot (as `LinkEngine`).
