@@ -118,6 +118,12 @@ GRID_TOLERANCE_S = 0.15
 transmission's: the receiver places a frame to a few milliseconds, propagation adds 20."""
 MAX_DATA = 6
 """Data frames in one transmission (three bits count them in the control frame)."""
+HEADER_UNDECODABLE_SHARE = 0.4
+"""How far into a transmission's first frame, a control frame, a cut still leaves nothing of
+the transmission readable (10-step-3.md §3.6). A tone control frame decodes only from two of its
+three sync blocks (ADR-0049), and the middle one begins past 45 % of the frame; an ordinary
+control frame is coded at rate ½ at the most robust, and 60 % of its symbols lost leaves nothing
+to decode. The daemon reports such a cut with :meth:`GrantedEngine.on_tx_cut_unread`."""
 OPEN_WINDOW_S = (4.0, 10.0)
 """An idle link's open window, after an ordinary and after a floor header."""
 
@@ -271,6 +277,12 @@ class GrantConfig:
     that is only ever silent cannot tell idle from dead."""
     silence_levels_after: int = 2
     """Silent slots in a row after which a master raises the gap level one step."""
+    floor_answer_memory: int = 0
+    """Answer slots looked back over: while any of the last this many went silent, a header asks
+    for the slave's answers on the floor (10-step-3.md §3.4). The readings that otherwise decide
+    the family come only from frames that decoded, and miss what kills a short ordinary answer
+    and spares a floor one — a PACTOR station's bursts on a lopsided path. 0: only after two
+    silent slots in a row."""
     on_time_to_lower: int = 4
     """Slots answered in a row after which a master lowers the silence level one step."""
     need_ease_after: int = 6
@@ -487,6 +499,8 @@ class GrantedEngine:
         the first one's start, how many, their family."""
         self._ack_history: list[_AckSnapshot] = []
         # the master
+        self._recent_silent: list[bool] = []
+        """Whether each of the last answer slots went silent, the latest last."""
         self._slot = None
         self._level_asked = 0
         self._silence_level = 0
@@ -778,6 +792,25 @@ class GrantedEngine:
         if granted is not None and granted is self._slot and not granted.final:
             self._slot.final = True
             self._open_slot(now if frames_end is None else frames_end)
+
+    def on_tx_cut_unread(self, now: float) -> None:
+        """A transmission was cut — an abort, the key watchdog — before any frame of it could
+        be read: its first frame a control frame not :data:`HEADER_UNDECODABLE_SHARE` of the
+        way out (10-step-3.md §3.6). The other station learned nothing from it, so it granted
+        nothing. No slot waits on it, and what waited for this station's own transmission to
+        end — the master's next key, an abort's DISC — waits only for the cut. Reported as
+        ending where its frames would have (``on_tx_done``), it held a Test's leaving DISC 29 s
+        for the slot of a header nobody had read."""
+        self.now = max(self.now, now)
+        if not self._in_flight:
+            return
+        granted = self._in_flight.pop(0)
+        if granted is None or granted is not self._slot or granted.final:
+            return
+        self._slot = None
+        self._hold_until = self.now
+        if self.role is Role.MASTER and self.state in (State.CONNECTED, State.DISCONNECTING):
+            self._arm_at("proceed", self.now)
 
     def on_tx_dropped(self, now: float) -> None:
         """The keying gate did not start a transmission: it would have begun past its
@@ -1582,6 +1615,9 @@ class GrantedEngine:
         if self._rx:
             self._observe(self._rx)
         self._restart_rx()
+        if not slot.open_window:
+            memory = self.cfg.floor_answer_memory
+            self._recent_silent = [*self._recent_silent, not slot.heard][-memory:] if memory else []
         if slot.heard:
             self._silent = 0
             self._answered_run += 1
@@ -1648,7 +1684,7 @@ class GrantedEngine:
     def _send_header(self) -> None:
         rung = self._recommend(self._slave_floor_only)
         n, open_window, index = self._grant_size(rung)
-        wanted = self._wants_floor() or self._silent >= 2
+        wanted = self._wants_floor() or self._silent >= 2 or any(self._recent_silent)
         elide = self._elide(n, open_window, wanted)
         hdr_floor = self._hdr_floor or self._silent >= 2 or self._floor_only()
         ident_s = self._take_identifier()
