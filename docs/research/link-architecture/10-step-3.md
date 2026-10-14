@@ -248,3 +248,26 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   reported as ending at the cut, and the DISC goes after the previous slot. A header cut after its
   end still anchors the slot it stated, as now. Neither moves a slot the other station can
   hold.
+
+### 3.7 A call lost in a contest (C2, `40m-rtty-contest-2300`)
+
+* **What happened.** Seed 8019: the Test's call timed out after 120 s, and the called station
+  was left connected. Protocol 7 connected on the same seed.
+* **The record.**
+  * The probe was held 29.7 s for a clear channel. The Test's 30 s probe deadline counts from
+    its request, so it reported "no answer" just as the answer arrived. Protocol 7's Test did
+    the same.
+  * Protocol 8's first try waited out that answer (ADR-0016's rule). Protocol 7's went at once,
+    radiated over the answer, and was not heard.
+  * The called station accepted both of protocol 8's tries. Both acceptances were lost to the
+    contest at the caller.
+  * The second try was held 25.6 s for a clear channel, into the contest's longest busy stretch.
+  * Protocol 7's tries came every 10 s, and its third acceptance was read.
+* **What it is.** Nothing radiated over anything. A hostile channel, carrier sense on a busy
+  frequency, and a Test whose deadlines count from a request rather than from the transmission.
+  Protocol 8 spaces a call's tries by the acceptance slot it grants, which put its second try
+  behind the busy stretch. To be judged after the runs:
+  * the Test's probe and call deadlines counted from the transmission, which is shared with
+    protocol 7;
+  * whether protocol 8's call spacing costs connections. This is read from every seed's call
+    times, not from this one.
