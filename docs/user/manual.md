@@ -192,7 +192,10 @@ the sound card's own noise.
 - **Compress**: off by default. It compresses the whole session, so on a weak path one lost
   frame can spoil the rest. Use it only on a solid link.
 - **Busy channel**: *wait for a clear channel before calling*, and how far above the noise floor
-  counts as busy (6 dB by default).
+  counts as busy (6 dB by default). With it on, a call, probe or beacon also waits while Aether
+  hears two other stations in a session. It waits through the pauses between their
+  transmissions, at least 4 s after the last one it heard. It stops waiting when the session
+  ends. Its own answers never wait: they go in their slot.
 - **Turnaround**: how long after your radio stops sending it hears again. 0 for a radio keyed
   by CAT, a serial line or a host program. With VOX (a SignaLink), set its delay time plus
   100 ms. Aether tells the other station, which waits that long before it answers. Up to 1500 ms.
