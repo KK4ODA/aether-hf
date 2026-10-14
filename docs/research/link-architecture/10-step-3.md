@@ -295,6 +295,17 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   * The failing runs kept their audio. Replaying the slave's recording frame by frame says
     whether those frames decode offline. If they do, the live receiver lost them; if they do
     not, it was the channel and the rate controller.
+* **The replay (seed 5042): the channel and the ladder.**
+  * `aetherd --replay` on the slave's recording gives the live outcome, frame for frame. The
+    receiver lost nothing.
+  * Rung 3 failed at −6.0 to +1.7 dB. Rung 2 decoded at −5.7 dB and up.
+  * On this NVIS path, `tone4x100-75` is far weaker than its place on the ladder.
+* **Shared by both arms.** Across the ten seeds both send rung 3 heavily: on this scenario
+  149 frames (protocol 7) against 181 (protocol 8). On `80m-floor-top-start-500` it is 248
+  against 259.
+* **Not a protocol 8 rule.** It is the calibration of the 500 Hz middle kinds on fading paths:
+  the rate table and the fading pipe's penalty for them. That is a P9 item, after Step 3. Nothing
+  changes for it in this round.
 
 ### 3.6 A header cut before its end held the DISC back (C2, `80m-floor-top-start-500`)
 
@@ -351,11 +362,104 @@ that fails without it:
 4. **Floor answers after a silent slot (§3.4).** Model first, then the port and the replay.
    Judged on the link bench and on the PACTOR scenario's ten seeds before it is taken.
 5. **A reservation from another session's frames (§3.2, I1 for a station outside the
-   session).** Model first: what a decoded header or answer of another session says about the
-   channel. Then the daemon's carrier sense uses it.
-6. **The weak path (§3.5):** the replay decides whether there is anything to change.
+   session).** What a decoded frame of another session says about the channel, used by the
+   daemon's carrier sense. It turned out to need no session rule, so it is the daemon's alone
+   (§5.5).
+6. **The weak path (§3.5):** the replay found the receiver blameless, and the rung 3 weakness is
+   shared with protocol 7: a P9 calibration item, not this round's.
 
 Not in this round: the Test's deadlines (§3.7). They are shared with protocol 7, and changing
 them for one arm would bias the comparison. They are fixed after Step 3, for both.
 
 Then protocol 8's arm runs again in full, against the same protocol 7 baseline (§1.4).
+
+## 5. The changes, as made
+
+Each change has a test that fails without it. Each was checked by switching the change off
+and watching the test fail.
+
+### 5.1 The keying gate on the air's clock (§3.1)
+
+* **The measure.** `CaptureLag` in `station.rs` compares the card's playback clock with the
+  station's clock. It takes the least of their distance as the baseline, which may creep up
+  1 ms a second for the drift between two cards. The excess is what the card has captured and
+  the station has not processed: the backlog.
+* **The gate.** It judges `not_before` and `not_after` on `now + backlog + radiation latency`.
+  A drop now says how far behind the air the station was.
+* **The same lead on a real card.** It is the time the receiver spent on a long pass. The run
+  loop reads the card's clock before it hands the card audio, so the gate sees that lead too.
+* **The test.** `a_station_catching_up_after_a_stall_judges_its_slot_on_the_airs_clock` stalls the
+  called station for 1.5 s as the caller's frames end. It then feeds it the pile a block a pass,
+  with the card's clock held where the stall ended, as the channel server does. Without the lag
+  the station keys the answer; with it, the answer is dropped.
+* **The old stall test's control case.** It runs the stall without skipping the lost audio.
+  It now drops the late answer too.
+
+### 5.2 Only calls and probes wait for the channel (§3.3)
+
+* **The rule.** `held_for_busy` holds an engine transmission only when it carries a
+  `ConnectReq` or a `Probe` (`starts_an_exchange`). A DISC, an answer and a header go without the
+  hold, an abort's DISC among them.
+* **The test.** `an_aborts_disc_does_not_wait_for_a_clear_channel`: the caller aborts with
+  `wait_for_clear` on and the channel kept busy. The other station hears it leave.
+
+### 5.3 A header cut before it could be read grants nothing (§3.6)
+
+* **The engine (model first).** A new input, `on_tx_cut_unread`, voids the slot of the
+  transmission cut. What waited for that transmission's end waits only for the cut: the master's
+  next key, an abort's DISC.
+  * `HEADER_UNDECODABLE_SHARE` (0.4) is held in both suites. Before 40 % of a tone control frame
+    only its first sync block has gone out. An ordinary control frame at rate ½ that has lost
+    60 % of its symbols cannot decode.
+  * `TwoStationSim.cut` cuts a station's transmission on the air, as the daemon's abort does.
+  * The replay gained a `cut-header` session; a planted bug in the port's input fails it.
+* **The daemon.** The key window records where the header lies. An abort, a watchdog trip or a
+  failed transmitter reports a cut that came before 40 % of the header with the new input; a
+  later cut still anchors the slot the header stated (09 §2.2).
+* **The tests.**
+  * Model, both airs: `test_a_header_cut_before_it_could_be_read_grants_nothing`. The DISC follows
+    the cut, and under the old report it waits over 2 s longer.
+  * Daemon: `an_abort_that_cuts_a_header_before_it_can_be_read_grants_nothing`, which cuts a tenth
+    into an ordinary header. The DISC waits 11.4 s with the rule off.
+
+### 5.4 Floor answers after silence (§3.4)
+
+* **The setting.** `GrantConfig.floor_answer_memory` (model first, then the port). While any of
+  the last *N* answer slots went silent, a header asks for the slave's answers on the floor. The
+  replay gained a `floor-memory` session; a planted bug in the port fails it.
+* **The model's simulator.** The slave's ordinary answers were killed two times in three and its
+  floor ones spared. Seconds to deliver 3 kB, with the silent slots in brackets:
+
+| air | memory 0 | 1 | 2 | 4 | 8 |
+|---|---:|---:|---:|---:|---:|
+| 2300 Hz | 70 (3) | 50 (1) | 55 (1) | 55 (1) | 55 (1) |
+| 500 Hz | 125 (5) | 105 (3) | 100 (3) | 90 (2) | 90 (1) |
+
+* **The link bench.** It has no QRM of that kind. The geometric mean over the grid's sessions,
+  against memory 0, fading pipe:
+
+| air | memory 1 | memory 4 |
+|---|---:|---:|
+| 2300 Hz | ×1.003 | ×1.004 |
+| 500 Hz | ×0.997 | ×1.002 |
+
+  All 28 sessions completed in every arm.
+* **The harness.** *To be filled in from the A/B of memory 0 and memory 4.*
+
+### 5.5 A session heard holds this station's calls (§3.2)
+
+* **The rule.** `station/reserve.rs`. A frame this station decodes of a session not its own
+  holds its own calls, probes and beacons, through `channel_clear`:
+  * at least 4 s past it (`RESERVE_GAP_S`), over the 3.55 s that is the longest quiet inside a
+    session;
+  * 7.5 s past a DISC, for its DISC_ACK;
+  * as long as the longest gap heard between that activity's frames, which covers a side this
+    station cannot hear;
+  * until a DISC_ACK, or 45 s of nothing heard (`RESERVE_MAX_S`).
+
+  Frames of this station's own session, its last one included, are the engine's. Only decoded
+  frames count, as with 802.11's network allocation vector.
+* **Where it lives.** It is carrier sense for initiations, in the daemon beside the busy
+  detector, and touches no session rule; the model has no third station to apply it to.
+* **The manual.** *Busy channel* says so.
+* **The tests.** The module's own, and `a_session_heard_between_other_stations_holds_this_stations_calls`.
