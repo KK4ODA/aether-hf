@@ -112,7 +112,61 @@ The A/B stops (06 §4).
 
 ## 2. The runs
 
-*To be written from the runs.*
+Both arms ran all 44 scenarios at ten seeds each, from 2026-10-13 20:12Z to 2026-10-14 05:26Z.
+Nothing had to be run again: every run left its record. The CSVs are
+`research/link_arch/results/step3_p7.csv` and `step3_p8.csv`.
+`uv run python research/link_arch/step3.py judge research/link_arch/results/step3_p7.csv
+research/link_arch/results/step3_p8.csv` prints the per-scenario table.
+
+### 2.1 The verdict: Step 3 fails
+
+| criterion | holds | value |
+|---|---|---|
+| C1a radiated overlaps (protocol 8) | **no** | 17, in 8 of 440 runs |
+| C1b deaf hits counted (protocol 8) | **no** | 3.2 s |
+| C2 completion, scenario by scenario | **no** | four scenarios short (below) |
+| C3 air time, every class ≤ ×1.15 | yes | 2300 Hz ×1.018, 500 Hz ×1.042, band ×1.006, gateway ×1.056, robustness ×0.856 |
+| C3 air time, pooled ≤ ×1.10 | yes | ×0.995 |
+| C4 Test message rate ≥ ×0.85 | yes | ×1.053 over 12 scenarios |
+| C4 Test file rate ≥ ×0.85 | yes | ×1.124 over 12 scenarios |
+
+The scenarios short on C2, completed of ten:
+
+| scenario | protocol 7 | protocol 8 | why (§3) |
+|---|---:|---:|---|
+| `80m-poor-500-pactor-signalink` | 10 | 5 | ordinary answers lost (§3.4) |
+| `40m-rtty-contest-2300` | 9 | 6 | the abort's DISC held (§3.3), a call lost (§3.7) |
+| `80m-leave-together-500` | 9 | 7 | a slow weak path (§3.5) |
+| `80m-floor-top-start-500` | 10 | 9 | a cut header held the DISC (§3.6) |
+
+### 2.2 The two arms side by side
+
+| | protocol 7 | protocol 8 |
+|---|---:|---:|
+| runs completed | 418 / 440 | 427 / 440 |
+| radiated overlaps counted | 245 (272 s), in 82 runs | 17 (18 s), in 8 runs |
+| deaf hits counted | 238 s | 3.2 s |
+| deaf hits reported (a radio breaking S4) | 50 s | 36 s |
+| keyed into a VOX hold (reported) | 100 s | 36 s |
+| keyed inside a guard (reported) | 68 s | 8 s |
+
+* **Every one of protocol 8's 17 overlaps is one of two kinds.**
+  * Eleven are ND1J's call into the gateway's session (§3.2, four seeds).
+  * Six are the slow station keying 0.27–0.29 s after a stall ended (§3.1, five seeds).
+  * In none did the two stations of a session overlap on their own timing.
+* **Every counted deaf hit is one of the same two.** The reported ones are the undeclared VOX
+  hold of `80m-vox-caller-learned-gap-500`.
+* **Protocol 7 fails both VOX-caller scenarios in every seed** (a message does not arrive).
+  Protocol 8 completes all twenty. The declared turnaround takes `80m-vox-caller-declared-500`
+  from 650 s to 249 s.
+* **Where protocol 8 is slower,** the scenario is a weak 500 Hz path or a busy gateway:
+  * `80m-floor-top-start-500` ×1.26;
+  * `40m-wide-calls-narrow-unprobed` ×1.26;
+  * `40m-gateway-busy-when-called-2300` ×1.23;
+  * `80m-flutter-500` ×1.20;
+  * `80m-asymmetric-500` ×1.15.
+
+  No class bound is crossed.
 
 ### Changes to the judge after the registration
 
@@ -231,6 +285,16 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   high on such paths, or this seed's fades fell on its rung-3 frames, is read from all ten seeds'
   message times when the runs end, before any rule is named. Seed 6042 failed the same way;
   protocol 7 completed it.
+* **Across the ten seeds.** Where both arms delivered, protocol 8 was not slower (median 218 s
+  against 232 s). The difference is the tail.
+  * At the slave, the three failing seeds have one thing in common: rung 3 (`tone4x100-75`)
+    decoded 2 of 13, 1 of 23 and 2 of 17. Rung 2 decoded nearly every frame, and OFDM rung 4
+    about half.
+  * The model puts rung 3 several decibels *below* rung 4 on NVIS and Moderate paths (ADR-0049's
+    note), so a rung 3 that decodes worse than rung 4 is not the path's doing.
+  * The failing runs kept their audio. Replaying the slave's recording frame by frame says
+    whether those frames decode offline. If they do, the live receiver lost them; if they do
+    not, it was the channel and the rate controller.
 
 ### 3.6 A header cut before its end held the DISC back (C2, `80m-floor-top-start-500`)
 
@@ -271,3 +335,27 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
     protocol 7;
   * whether protocol 8's call spacing costs connections. This is read from every seed's call
     times, not from this one.
+
+## 4. What comes next
+
+Each failure is named in §3. The changes, in the order they will be made, each with a test
+that fails without it:
+
+1. **The keying gate on the air's clock (§3.1, S2).** The daemon: the gate's `now` is the
+   processed clock plus the capture backlog, measured as the card's playback clock's lead over
+   it beyond its steady value.
+2. **Only calls and probes wait for the channel (§3.3).** The daemon's `held_for_busy` judges a
+   transmission by what it is, not by the engine's state.
+3. **A header cut before its end grants nothing (§3.6).** The daemon reports such a
+   transmission as ending at the cut.
+4. **Floor answers after a silent slot (§3.4).** Model first, then the port and the replay.
+   Judged on the link bench and on the PACTOR scenario's ten seeds before it is taken.
+5. **A reservation from another session's frames (§3.2, I1 for a station outside the
+   session).** Model first: what a decoded header or answer of another session says about the
+   channel. Then the daemon's carrier sense uses it.
+6. **The weak path (§3.5):** the replay decides whether there is anything to change.
+
+Not in this round: the Test's deadlines (§3.7). They are shared with protocol 7, and changing
+them for one arm would bias the comparison. They are fixed after Step 3, for both.
+
+Then protocol 8's arm runs again in full, against the same protocol 7 baseline (§1.4).
