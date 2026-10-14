@@ -131,6 +131,7 @@ fn config(doc: &Value) -> GrantConfig {
         turnaround_s: num(&doc["turnaround_s"]),
         identifier_s: num(&doc["identifier_s"]),
         answer_gap_s: num(&doc["answer_gap_s"]),
+        floor_answer_memory: int(&doc["floor_answer_memory"]),
         decode_budget_s: pair(&doc["decode_budget_s"]),
         key_s: num(&doc["key_s"]),
         guard_s: num(&doc["guard_s"]),
@@ -491,6 +492,7 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
             ),
             "on_tx_done" => engine.on_tx_done(num(&entry["now"]), opt(&entry["frames_end"])),
             "on_tx_dropped" => engine.on_tx_dropped(num(&entry["now"])),
+            "on_tx_cut_unread" => engine.on_tx_cut_unread(num(&entry["now"])),
             "on_tx_delayed" => engine.on_tx_delayed(num(&entry["seconds"])),
             other => panic!("{at}: unknown input {other}"),
         }

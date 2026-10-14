@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import heapq
 import math
 import random
 from dataclasses import replace
@@ -536,6 +537,95 @@ def test_an_aborting_master_leaves_and_the_slave_hears_it(air: str) -> None:
     assert b.state is State.IDLE
     assert sim.events(1)[-1] == "disconnected:peer disconnected"
     assert sim.overlaps() == []
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> None:
+    """10-step-3.md §3.4: on `80m-poor-500-pactor-signalink` a PACTOR station's bursts killed the
+    slave's short ordinary answers (4 read of 15) and spared its floor ones (6 of 6), and the
+    readings, from decoded frames alone, kept asking for ordinary ones; half the seeds ran out of
+    time. With ``floor_answer_memory`` the master asks for floor answers while any recent slot
+    went silent: fewer slots go silent and the transfer is quicker."""
+
+    def run(memory: int) -> tuple[int, float]:
+        a, b = _pair(AIRS[air], floor_answer_memory=memory)
+        rng = random.Random(7)
+
+        def bursts(frame: TxFrame) -> float:
+            # two in three of the slave's ordinary answers lost; nothing else touched
+            if frame.container is not Container.CONTROL or frame.floor:
+                return 0.0
+            if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
+                return 0.0
+            return -40.0 if rng.random() < 2 / 3 else 0.0
+
+        sim = TwoStationSim(a, b, snr_db=8.0, seed=7, frame_snr_offset=bursts)
+        a.connect("KK4XYZ")
+        a.send(bytes(rng.randrange(256) for _ in range(3000)))
+        t = 0.0
+        while len(sim.st[1].delivered) < 3000 and t < 900.0:
+            t += 5.0
+            sim.run(until=t)
+        assert len(sim.st[1].delivered) == 3000, "the transfer did not finish"
+        return a.stats.silent_slots, t
+
+    silent_before, t_before = run(0)
+    silent_after, t_after = run(4)
+    assert silent_after < silent_before, (silent_before, silent_after)
+    assert t_after < t_before, (t_before, t_after)
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_header_cut_before_it_could_be_read_grants_nothing(air: str) -> None:
+    """10-step-3.md §3.6: a Test's abort cut the master's floor header 1 s into its 3.2 s; the
+    master waited out the slot that header would have granted, 29 s, and its DISC went unheard.
+    Cut before it could be read, a header grants nothing: the DISC follows the cut."""
+
+    def run(read_rule: bool) -> tuple[float, bool, list[tuple[float, float]]]:
+        a, b = _pair(AIRS[air])
+        sim = TwoStationSim(a, b, snr_db=8.0, seed=3)
+        a.connect("KK4XYZ")
+        a.send(b"q" * 4000)
+        st = sim.st[0]
+        # a long transmission, a header first, its first tenth out; the simulator stops at its
+        # last event, so the steps keep a clock of their own
+        t = 0.0
+        while t < 120.0:
+            t += 0.02
+            sim.run(until=t)
+            sim.t = max(sim.t, t)
+            first = st.first_frame
+            if (
+                first is not None
+                and first[2]
+                and first[0] <= t < first[0] + 0.1 * (first[1] - first[0])
+                and st.tx_end - t > 3.0
+            ):
+                break
+        else:
+            pytest.fail("no long transmission with a header first")
+        cut_at = sim.t
+        if read_rule:
+            sim.cut(0)
+        else:
+            # the rule as it was: reported as ending where its frames would have
+            whole = st.tx_end
+            sim._q = [ev for ev in sim._q if not (ev.kind == "tx_done" and ev.who == 0)]
+            heapq.heapify(sim._q)
+            st.tx_end = cut_at
+            st.busy[-1] = (st.busy[-1][0], cut_at)
+            a.on_tx_done(cut_at, whole)
+        a.abort()
+        sim.run(until=sim.t + 120.0)
+        disc = next((t0 for t0, _ in st.busy if t0 >= cut_at - 1e-9), math.inf)
+        return disc - cut_at, b.state is State.IDLE, sim.overlaps()
+
+    after, left, overlaps = run(True)
+    assert after < 3.0, f"the DISC waited {after:.1f} s for the slot of an unread header"
+    assert left, "the slave did not hear the master leave"
+    assert overlaps == []
+    before, _, _ = run(False)
+    assert before > after + 2.0, "the old rule waited no longer: the test does not tell"
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])

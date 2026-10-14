@@ -47,7 +47,7 @@ from typing import cast
 
 from aether_model.link.engine import Deliver, Event, LinkEngine, Transmit
 from aether_model.link.fading import FadingPipe, success_probability
-from aether_model.link.granted import GrantedEngine
+from aether_model.link.granted import HEADER_UNDECODABLE_SHARE, GrantedEngine
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -147,6 +147,9 @@ class _Station:
     """What the station radiated: one interval a transmission, its identifier included."""
     dropped: list[float] = field(default_factory=list)
     """When the keying gate refused a transmission that would have started late."""
+    first_frame: tuple[float, float, bool] | None = None
+    """The transmission on the air's first frame: its start, its end, and whether it is a
+    control frame — what :meth:`TwoStationSim.cut` judges a cut by."""
 
 
 class TwoStationSim:
@@ -320,8 +323,11 @@ class TwoStationSim:
         timing = st.engine.timing
         key_up = t + self.key_limit_s if self.key_limit_s is not None else float("inf")
         t += getattr(tx, "identifier_s", 0.0)  # the Morse identifier goes first
+        st.first_frame = None
         for frame in tx.frames:
             dur = timing.frame_s(frame)
+            if st.first_frame is None:
+                st.first_frame = (t, t + dur, frame.container is Container.CONTROL)
             if t >= key_up - 1e-9:
                 break  # the key is up: nothing more goes out
             cut = t + dur > key_up + 1e-9
@@ -339,6 +345,53 @@ class TwoStationSim:
             t += dur
         st.tx_end = t
         self._push(t, "tx_done", who)
+
+    def cut(self, who: int) -> None:
+        """Cut station ``who``'s transmission on the air now, as the daemon's abort or key
+        watchdog does. What has not gone out never does, the frame on the air arrives cut, and
+        the engine is told where the transmission ended: at the cut, as never read, when its
+        first frame was a control frame not :data:`HEADER_UNDECODABLE_SHARE` of the way out
+        (10-step-3.md §3.6); otherwise where its frames would have ended, which is where a
+        header the other station read anchors the slot (09-step-2.md §2.2)."""
+        st = self.st[who]
+        now = self.t
+        if now >= st.tx_end - 1e-9:
+            return
+        kept: list[_Ev] = []
+        for ev in self._q:
+            if ev.kind == "tx_done" and ev.who == who:
+                continue
+            if ev.kind in ("arrive", "preamble") and ev.who == 1 - who:
+                if ev.kind == "arrive":
+                    frame, t0, t1, _ = cast("tuple[TxFrame, float, float, bool]", ev.data)
+                else:
+                    t0 = cast("tuple[float, float, float, Container]", ev.data)[0]
+                if t0 >= now - 1e-9 and t0 >= st.busy[-1][0] - 1e-9:
+                    continue  # not begun: never sent
+                if ev.kind == "arrive" and t1 > now + 1e-9:
+                    # on the air at the cut: it arrives cut
+                    kept.append(_Ev(ev.t, ev.seq, ev.kind, ev.who, (frame, t0, t1, True)))
+                    continue
+            kept.append(ev)
+        heapq.heapify(kept)
+        self._q = kept
+        whole_end = st.tx_end
+        st.tx_end = now
+        st.busy[-1] = (st.busy[-1][0], now)
+        engine = st.engine
+        first = st.first_frame
+        unread = (
+            first is not None
+            and first[2]
+            and now < first[0] + HEADER_UNDECODABLE_SHARE * (first[1] - first[0])
+        )
+        if isinstance(engine, GrantedEngine) and unread:
+            engine.on_tx_cut_unread(now)
+        elif isinstance(engine, GrantedEngine):
+            engine.on_tx_done(now, whole_end)
+        else:
+            engine.on_tx_done(now)
+        self._pump(who, now)
 
     def _busy(self, who: int, t0: float, t1: float) -> bool:
         deaf = self.rx_recovery_s[who]

@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.engine import Deliver, Event, Transmit
 from aether_model.link.fading import FadingPipe
+from aether_model.link.frames import GrantFrame, GrantKind
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
@@ -121,6 +122,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "turnaround_s": bits(c.turnaround_s),
         "identifier_s": bits(c.identifier_s),
         "answer_gap_s": bits(c.answer_gap_s),
+        "floor_answer_memory": c.floor_answer_memory,
         "decode_budget_s": [bits(x) for x in c.decode_budget_s],
         "key_s": bits(c.key_s),
         "guard_s": bits(c.guard_s),
@@ -308,6 +310,7 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
     },
     "on_tx_done": lambda now, frames_end=None: {"now": bits(now), "frames_end": bits(frames_end)},
     "on_tx_dropped": lambda now: {"now": bits(now)},
+    "on_tx_cut_unread": lambda now: {"now": bits(now)},
     "on_tx_delayed": lambda seconds: {"seconds": bits(seconds)},
 }
 
@@ -439,6 +442,64 @@ def dead_path() -> list[Recorder]:
     a.connect("KK4XYZ")
     a.send(b"z" * 3000)
     sim.run(until=1200.0)
+    return [ra, rb]
+
+
+def floor_memory() -> list[Recorder]:
+    """The slave's short ordinary answers killed two times in three, its floor ones spared — a
+    PACTOR station's bursts (10-step-3.md §3.4) — and the master asking for floor answers while
+    any of its last four slots went silent."""
+    a, b, ra, rb = _pair(NARROW, floor_answer_memory=4)
+    rng = random.Random(23)
+    hits = random.Random(24)
+
+    def bursts(frame: TxFrame) -> float:
+        if frame.container is not Container.CONTROL or frame.floor:
+            return 0.0
+        if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
+            return 0.0
+        return -40.0 if hits.random() < 2 / 3 else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=23, frame_snr_offset=bursts)
+    _exchange(sim, a, b, _message(rng, 2000), _message(rng, 300))
+    return [ra, rb]
+
+
+def cut_header() -> list[Recorder]:
+    """The master's transmission cut a tenth into its header (10-step-3.md §3.6), then the
+    abort: nothing was granted, and the DISC follows the cut. Then a watchdog-like cut of a
+    header in a session that goes on: the master keys again at once."""
+    a, b, ra, rb = _pair(WIDE)
+    rng = random.Random(21)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=21)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 6000))
+    st = sim.st[0]
+
+    def header_begun() -> None:
+        t = start = sim.t
+        while t < start + 200.0:
+            t += 0.02
+            sim.run(until=t)
+            sim.t = max(sim.t, t)
+            first = st.first_frame
+            if (
+                first is not None
+                and first[2]
+                and first[0] <= t < first[0] + 0.1 * (first[1] - first[0])
+                and st.tx_end - t > 2.0
+            ):
+                return
+        raise RuntimeError("no transmission with a header first")
+
+    header_begun()
+    sim.cut(0)
+    sim.run(until=sim.t + 10.0)
+    a.send(_message(rng, 6000))
+    header_begun()
+    sim.cut(0)
+    a.abort()
+    sim.run(until=sim.t + 60.0)
     return [ra, rb]
 
 
@@ -736,6 +797,8 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "stranded": stranded,
     "harq-limit": harq_limit,
     "vox": vox,
+    "cut-header": cut_header,
+    "floor-memory": floor_memory,
     "answer-gap": answer_gap,
     "idle-identifier": idle_identifier,
 }

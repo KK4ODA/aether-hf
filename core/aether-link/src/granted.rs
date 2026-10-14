@@ -81,6 +81,13 @@ pub const LEVELS_S: [f64; 4] = [0.0, 0.5, 1.0, 2.0];
 pub const GRID_TOLERANCE_S: f64 = 0.15;
 /// Data frames in one transmission (three bits count them in the control frame).
 pub const MAX_DATA: usize = 6;
+/// How far into a transmission's first frame, a control frame, a cut still leaves nothing of
+/// the transmission readable (10-step-3.md §3.6). A tone control frame decodes only from two of
+/// its three sync blocks (ADR-0049), and the middle one begins past 45 % of the frame; an
+/// ordinary control frame is coded at rate ½ at the most robust, and 60 % of its symbols lost
+/// leaves nothing to decode. The daemon reports such a cut with
+/// [`GrantedEngine::on_tx_cut_unread`].
+pub const HEADER_UNDECODABLE_SHARE: f64 = 0.4;
 /// An idle link's open window, after an ordinary and after a floor header.
 pub const OPEN_WINDOW_S: [f64; 2] = [4.0, 10.0];
 
@@ -243,6 +250,12 @@ pub struct GrantConfig {
     pub keepalive_s: f64,
     /// Silent slots in a row after which a master raises the gap level one step.
     pub silence_levels_after: usize,
+    /// Answer slots looked back over: while any of the last this many went silent, a header
+    /// asks for the slave's answers on the floor (10-step-3.md §3.4). The readings that
+    /// otherwise decide the family come only from frames that decoded, and miss what kills a
+    /// short ordinary answer and spares a floor one — a PACTOR station's bursts on a lopsided
+    /// path. 0: only after two silent slots in a row.
+    pub floor_answer_memory: usize,
     /// Slots answered in a row after which a master lowers the silence level one step.
     pub on_time_to_lower: usize,
     /// Slots answered on time after which a slave asks for one level less.
@@ -288,6 +301,7 @@ impl Default for GrantConfig {
             open_window_s: OPEN_WINDOW_S,
             keepalive_s: 10.0,
             silence_levels_after: 2,
+            floor_answer_memory: 0,
             on_time_to_lower: 4,
             need_ease_after: 6,
         }
@@ -715,6 +729,8 @@ pub struct GrantedEngine {
     level_asked: usize,
     silence_level: usize,
     silent: usize,
+    /// Whether each of the last answer slots went silent, the latest last.
+    recent_silent: VecDeque<bool>,
     answered_run: usize,
     /// Frames the slave said it has queued; `None` before its first answer.
     slave_want: Option<usize>,
@@ -854,6 +870,7 @@ impl GrantedEngine {
             level_asked: 0,
             silence_level: 0,
             silent: 0,
+            recent_silent: VecDeque::new(),
             answered_run: 0,
             slave_want: None,
             slave_leaves: false,
@@ -912,6 +929,7 @@ impl GrantedEngine {
         self.level_asked = 0;
         self.silence_level = 0;
         self.silent = 0;
+        self.recent_silent.clear();
         self.answered_run = 0;
         self.slave_want = None;
         self.slave_leaves = false;
@@ -1448,6 +1466,32 @@ impl GrantedEngine {
                 slot.final_ = true;
             }
             self.open_slot(frames_end.unwrap_or(now));
+        }
+    }
+
+    /// A transmission was cut — an abort, the key watchdog — before any frame of it could be
+    /// read: its first frame a control frame not [`HEADER_UNDECODABLE_SHARE`] of the way out
+    /// (10-step-3.md §3.6). The other station learned nothing from it, so it granted nothing.
+    /// No slot waits on it, and what waited for this station's own transmission to end — the
+    /// master's next key, an abort's DISC — waits only for the cut. Reported as ending where
+    /// its frames would have ([`Self::on_tx_done`]), it held a Test's leaving DISC 29 s for the
+    /// slot of a header nobody had read.
+    pub fn on_tx_cut_unread(&mut self, now: f64) {
+        self.now = self.now.max(now);
+        let Some(granted) = self.in_flight.pop_front() else {
+            return;
+        };
+        let current = self.slot.as_ref().map(|s| (s.id, s.final_));
+        if let (Some(id), Some((slot_id, false))) = (granted, current)
+            && id == slot_id
+        {
+            self.slot = None;
+            self.hold_until = self.now;
+            if self.role == Role::Master
+                && matches!(self.state, State::Connected | State::Disconnecting)
+            {
+                self.deadlines.set(Timer::Proceed, self.now);
+            }
         }
     }
 
@@ -2499,6 +2543,12 @@ impl GrantedEngine {
             self.observe(&records);
         }
         self.restart_rx();
+        if !slot.open_window {
+            self.recent_silent.push_back(!slot.heard);
+            while self.recent_silent.len() > self.config.floor_answer_memory {
+                self.recent_silent.pop_front();
+            }
+        }
         if slot.heard {
             self.silent = 0;
             self.answered_run += 1;
@@ -2583,7 +2633,8 @@ impl GrantedEngine {
     fn send_header(&mut self) {
         let rung = self.recommend(self.slave_floor_only);
         let (n, open_window, index) = self.grant_size(rung);
-        let wanted = self.wants_floor() || self.silent >= 2;
+        let wanted =
+            self.wants_floor() || self.silent >= 2 || self.recent_silent.iter().any(|&s| s);
         let mut elide = self.elide(n, open_window, wanted);
         let hdr_floor = self.hdr_floor || self.silent >= 2 || self.floor_only();
         let ident_s = self.take_identifier();
