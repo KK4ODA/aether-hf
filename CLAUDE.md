@@ -1543,8 +1543,7 @@ station's clock on (`AudioIo::capture_gap`, `Station::skip_captured`; the channe
 an `AEC2` daemon with `MSG_GAP`), or a station that fell behind answered late past a gate on the
 same slipped clock; and (model first) a called station's Disconnect closes without the caller's
 own queue (ADR-0023's receiving station; `80m-leave-together-500`). **Schema 12**
-(`09-step-2.md` §3; the branch bumped to `0.2.0-beta.106` for it, **no tag, no release, `master`
-untouched** — the author's choice): `[radio] turnaround_ms` (0–1500, live; Setup step 4
+(`09-step-2.md` §3; the version bumped to `0.2.0-beta.106` for it): `[radio] turnaround_ms` (0–1500, live; Setup step 4
 *Turnaround*) is declared in the call and acceptance; `answer_gap_ms` stays for a peer slower
 than it declares, the larger of it and the learned gap (ADR-0054) handed to the engine each pass
 (`set_answer_gap`, model first): the master keys no sooner than the gap after the slave's
@@ -1553,7 +1552,34 @@ writes each daemon the schema its build reads (`schema_of`, from `--example-conf
 VOX radio keys on audio, not on the daemon's silent lead and tail (the "29 collisions" of
 `80m-poor-500-pactor-signalink` were that). Step 3 judges radiated overlaps and frames keyed into
 a deaf receiver, not `max_collisions`. Owed: the capture path's input latency (measure in Step
-4). **Next: Step 3, the harness A/B against protocol 7's 10-seed baseline.**
+4).
+**Step 3, the harness A/B (`10-step-3.md`; 2026-10-13/14).** Criteria registered before the runs
+(§1: C1a no radiated overlap, C1b no frame keyed into a receiver keeping S4, C2 completion per
+scenario ≥ protocol 7's, C3 air time ≤ ×1.15 a class and ×1.10 pooled, C4 Test rates ≥ ×0.85),
+judged by `research/link_arch/step3.py` (`collect`, `judge`) on 44 scenarios × 10 seeds an arm.
+First run: protocol 7 245 radiated overlaps in 82 of 440 runs, protocol 8 17 in 8 — all a third
+station's call into a session or a slow station keying after a stall — and four scenarios short
+on C2. Fixed (§5): the keying gate judges the slot on the air's clock (`CaptureLag`: the card's
+playback clock's lead over the station's, beyond its steady value); only calls and probes wait
+for a clear channel (`starts_an_exchange`); a header cut before 40 % of it grants nothing
+(`on_tx_cut_unread`, `HEADER_UNDECODABLE_SHARE`, model first); floor answers while any of the last
+4 slots went silent (`floor_answer_memory`); frames whose answer went unheard wait for an answer,
+not a blind resend, for one silent slot (`hold_unknown`); and a session heard holds this
+station's own calls (`station/reserve.rs`, NAV-like: 4 s past a frame, 7.5 s past a DISC, the
+longest gap learned, until a `DISC_ACK` or 45 s). Rerun: 438/440 completed (protocol 7 418), one
+overlap — a count read short off a frame HARQ rescued in a headerless transmission, so a count
+is now believed only from a copy that decoded alone (both roles, model first; R2 amended;
+`TwoStationSim(count_misread=…)`; the replay's `rescued-count` session;
+`research/link_arch/count_reading.py`: 0 of 2 939 counts wrong when the frame decoded alone, 65
+of 3 721 when it did not) — and the PACTOR scenario 9/10 against 10/10, its message 225–298 s
+against 195–264 s on a 300 s budget, which **the author ruled the accepted cost** with no third
+run; C3 ×1.000 pooled, C4 ×1.03/×1.02. `bench/baselines/scenarios.csv` is protocol 8's (the
+rerun's runs). **v0.2.0-beta.106 is the first protocol 8 build** (link protocol 8: protocol 7
+stations cannot connect to it, and its notes say "Update required"). **Next: Step 4** — hardware
+in the loop on the mini PC at the radio (capture latency, slow passes), then the air with the
+testers; then Step 5 (delete the turn machinery). Also owed: the Test's deadlines counted from
+the transmission (§3.7, both protocols), and the 500 Hz fading scenarios (`80m-flutter-500`'s
+message ×0.77).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

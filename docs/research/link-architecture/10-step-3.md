@@ -505,3 +505,124 @@ and watching the test fail.
   * The replay's `floor-memory` session runs both settings. Planted bugs in the port's marking,
     clearing and bound each fail it.
 
+
+## 6. The rerun
+
+Protocol 8's arm ran again in full on `b330ccc` (the changes of §5), against the same protocol 7
+baseline, from 2026-10-14 08:46Z to 13:52Z. The CSV is
+`research/link_arch/results/step3_p8_rerun.csv`; the judge is run as in §2, on it.
+
+### 6.1 The verdict: Step 3 fails again, by one overlap and one run
+
+| criterion | holds | value |
+|---|---|---|
+| C1a radiated overlaps (protocol 8) | **no** | 1, in 1 of 440 runs |
+| C1b deaf hits counted (protocol 8) | **no** | 0.41 s, the same overlap |
+| C2 completion, scenario by scenario | **no** | `80m-poor-500-pactor-signalink` 9 < 10 |
+| C3 air time, every class ≤ ×1.15 | yes | 2300 Hz ×1.028, 500 Hz ×1.016, band ×1.060, gateway ×1.059, robustness ×0.859 |
+| C3 air time, pooled ≤ ×1.10 | yes | ×1.000 |
+| C4 Test message rate ≥ ×0.85 | yes | ×1.029 over 12 scenarios |
+| C4 Test file rate ≥ ×0.85 | yes | ×1.016 over 12 scenarios |
+
+| | protocol 7 | protocol 8, first run | protocol 8, rerun |
+|---|---:|---:|---:|
+| runs completed | 418 / 440 | 427 / 440 | 438 / 440 |
+| radiated overlaps counted | 245 (272 s), in 82 runs | 17 (18 s), in 8 runs | 1 (2.4 s), in 1 run |
+| deaf hits counted | 238 s | 3.2 s | 0.41 s |
+| keyed into a VOX hold (reported) | 100 s | 36 s | 35 s |
+| keyed inside a guard (reported) | 68 s | 8 s | 0.4 s |
+
+* **Every failure of §3 is gone.** The third station's call into a session, the slow station's
+  late key, the held DISC, the cut header: none in 440 runs. The PACTOR scenario went from 5 of
+  ten to 9.
+* **The two runs that did not complete:**
+  * `40m-rtty-contest-2300` seed 8019: the Test's call timed out on the busy contest channel
+    (§3.7). Protocol 7 also completed 9 of 10 there, so C2 holds for it.
+  * `80m-poor-500-pactor-signalink` seed 9008: §6.3.
+
+### 6.2 A count rescued with its block (C1, `80m-trimode-gateway-client-vanishes-500`, seed 8046)
+
+* **What happened.** In the second session, ND1J (the client) was the master, KK4ODA (the
+  gateway) the slave, at 500 Hz on NVIS, 8 dB.
+  * At 537.4 s (air time) the master sent a header and five data frames at rung 4. The slave read
+    the header and none of the data, and answered in its slot at 547.1 s.
+  * At 551.0 s the master sent the next transmission without its header (R7: the last slot was
+    heard, nothing changed): four data frames, retransmissions at RV 2, counts 3, 2, 1, 0.
+  * The first of them reached the slave at −1.5 dB. It did not decode alone. HARQ combined it
+    with the block's two earlier copies, and the block decoded (`harq_rescues` 2).
+  * Its count read **0**, where the master had sent 3. The slave took that as the
+    transmission's end, granted itself the answer slot after it, and keyed at 552.8 s over the
+    master's three remaining frames: 2.4 s radiated together.
+* **What it is.** A broken assumption. R2 (04 §4) places the end of a transmission whose
+  header was not read "from any decoded data frame's exact count (S1)". That assumes a decoded frame's count
+  is read right. The count rides in the frame's chips, a quarter turn per frame, outside the
+  codeword. The CRC vouches for the payload, not for the count. A copy that decodes alone was
+  read well enough for both. A copy HARQ rescued was not: it is the earlier copies that decoded.
+* **Measured on the modem.** Every OFDM data frame through the channel, detector and
+  demodulator: 500 Hz at rungs 4, 5 and 7, 2 300 Hz at rungs 7 and 9, AWGN, NVIS, Moderate and
+  Poor, −6 to +3 dB, RV 0, 2 or 3, 100 frames a cell (`research/link_arch/count_reading.py`,
+  `results/count_reading.txt`). Of the frames whose mode and RV read right:
+
+| frame | counts read wrong | read short (the unsafe way) |
+|---|---:|---:|
+| decoded alone | 0 of 2 939 | 0 |
+| did not decode alone | 65 of 3 721 | 36 |
+
+* **The rule (model first, then the port).** A count is believed only from a frame whose own
+  copy decoded. A rescued frame's payload is kept as before; its count places no end.
+  * The slave, without a readable header, waits for a frame it can believe. At worst it does not
+    answer: a silent slot, which the master already handles.
+  * The master, without the slave's answer, waits for the slot's latest end.
+  * The rule restores I1. It moves no deadline on undecoded evidence; it takes one piece of
+    evidence away.
+* **The simulator.** `TwoStationSim(count_misread=…)`: the share of data frames too weak to
+  decode alone whose count reads as none to follow. Drawn only when set, so every other run is
+  the run it was.
+* **The tests.**
+  * `test_a_count_rescued_with_its_block_places_no_end`, both airs, both sides. The sender's
+    data is pinned a little above the path, so frames are rescued; on the master's side half the
+    slave's answers are lost. With the rule, no overlap in any run. With the rule undone inside
+    the test, overlaps in every case. The sweep behind it, eight seeds a cell, rule undone:
+    overlaps in 3–4 of 8 runs (2 300 Hz) and 7 of 8 (500 Hz) on the slave's side, 4–8 of 8 on
+    the master's; with the rule, none.
+  * The replay gained a `rescued-count` session. A port that believed a rescued count, in either
+    role, fails it.
+* **The link bench** (fading pipe, both airs, against the same build without the rule): 84 of 84
+  sessions completed either way; 75 and 79 identical; air time ×1.005 at 2 300 Hz and ×1.001 at
+  500 Hz.
+
+### 6.3 The PACTOR path at its budget (C2, `80m-poor-500-pactor-signalink`)
+
+* **What happened.** Seed 9008: the 2 kB message had 1 873 bytes across when its 300 s of air ran
+  out. No overlap, no deaf hit, no protocol fault: six silent slots to the PACTOR station and the
+  crashes, and two stretches on the tone rungs, as on the seeds that finished.
+* **The times.** Seconds to deliver the message, by seed:
+
+| arm | 8 | 1008 | 2008 | 3008 | 4008 | 5008 | 6008 | 7008 | 8008 | 9008 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| protocol 7 | 264 | 239 | 237 | 203 | 224 | 195 | 249 | 249 | 247 | 227 |
+| protocol 8, rerun | 298 | 258 | 255 | 246 | 271 | 277 | 237 | 297 | 225 | > 300 |
+
+* **Where the time goes.** Over the first 260 s of the message both protocols keep the radios
+  keyed alike (222–228 s against 224–230 s), and protocol 8's silences between transmissions are
+  shorter (median 0.62 s against 0.78 s). The difference is what is keyed: a header and an answer
+  every exchange, the answers on the floor after a silent slot (§5.4). That is the per-exchange
+  cost ADR-0069 accepted, about a tenth.
+* **What it is.** No broken rule or assumption: the cost, at a budget that sits 14 % above
+  protocol 7's slowest run. Two of protocol 8's nine finished within 3 s of it. C2, scenario by
+  scenario with no tolerance, cannot tell a cost the ADR accepted from a fault on such a
+  scenario: another draw passes or fails by chance.
+
+### 6.4 The author's decision, and what comes next
+
+The author's decision, 2026-10-14: the PACTOR shortfall of §6.3 is the cost ADR-0069 accepted,
+and a third full run is not justified. With it Step 3 closes:
+
+* **C2** holds but for `80m-poor-500-pactor-signalink`, ruled the accepted cost. The criterion
+  stays as registered; the ruling is the author's, on the evidence of §6.3.
+* **C1** fails on one overlap, whose cause §6.2 names and whose rule is in. The rule is checked by
+  a model test that overlaps without it, by the replay, and by the link bench; not by the
+  harness's whole arm again, which §1.4 asked for and the author waived.
+* **C3 and C4** hold.
+
+Next is Step 4: hardware in the loop and the air, on a beta.
