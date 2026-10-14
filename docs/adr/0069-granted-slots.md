@@ -7,6 +7,10 @@ of completion time, 9–13 % of bulk goodput at high SNR) is the price of no col
 nothing ships before it — it is built the best way possible, not the fastest. It supersedes
 ADR-0068's turn model and answer timing (its §2.2–2.4). It is built in the gated steps of §5, and
 judged on the harness and the air before any build reaches a tester.
+**Step 3 closed, 2026-10-14** (`docs/research/link-architecture/10-step-3.md` §6): the rerun's
+one overlap was a count read short off a frame HARQ rescued, and its rule is in; the one PACTOR
+run short of protocol 7 the author ruled the accepted cost. By the author's decision the first
+build of it, `v0.2.0-beta.106`, goes to the beta channel for Step 4, the air with the testers.
 
 ## 1. Context
 
