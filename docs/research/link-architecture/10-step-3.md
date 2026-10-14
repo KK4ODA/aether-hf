@@ -172,6 +172,11 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   session that decodes it knows the channel is spoken for until the slot's latest end and the
   master's next key: a reservation, as 802.11's NAV. A rule of that kind names I1 extended to
   every station that hears the session, and it moves no deadline on undecoded evidence.
+* **A harder case: a station that does not hear one side** (seed 5062). ND1J keyed its call
+  3 s into the master's six-frame transmission, after 37.8 s of waiting: not in a gap but over
+  a transmission it should have heard. Its carrier sense did not see the other client. A
+  reservation helps only as far as ND1J decodes the gateway's own frames: the answers it grants
+  and is granted.
 
 ### 3.3 An abort's DISC waited for a clear channel (C2, `40m-rtty-contest-2300`)
 
@@ -210,3 +215,18 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
 
   Either is judged on the link bench and the harness before it is taken. Neither moves a
   deadline: only the family of a frame changes.
+* **Seeds 3008 and 5008** are the same: 10 silent slots in 3008. Protocol 7 completed all of the
+  scenario's seeds so far.
+
+### 3.5 A slow weak path (C2, `80m-leave-together-500`)
+
+* **What happened.** Seed 5042, in the second session: a 1 kB message on an NVIS path at about
+  −4 dB did not arrive within 300 s. Protocol 8 took 338 s; protocol 7 delivered the same seed's
+  in 222 s. Both arms fail seed 1042 the same way.
+* **The record.** The slave decoded 21 of the 64 data frames it detected. The other 43 include
+  noise detections at rungs the master never sent, which do not count (07 §12). Of the real
+  ones, rung 3 decoded 2 of 17 across RV 0, 2 and 3. Rung 2 decoded 11 of 11. Protocol 7 tried
+  rung 3 eleven times, never decoded it, and settled on rungs 1–2.
+* **Open.** The path is one where the rung chosen decides the time. Whether protocol 8 asks too
+  high on such paths, or this seed's fades fell on its rung-3 frames, is read from all ten seeds'
+  message times when the runs end, before any rule is named.
