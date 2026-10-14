@@ -548,7 +548,7 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
     went silent: fewer slots go silent and the transfer is quicker."""
 
     def run(memory: int) -> tuple[int, float]:
-        a, b = _pair(AIRS[air], floor_answer_memory=memory)
+        a, b = _pair(AIRS[air], floor_answer_memory=memory, hold_unknown=False)
         rng = random.Random(7)
 
         def bursts(frame: TxFrame) -> float:

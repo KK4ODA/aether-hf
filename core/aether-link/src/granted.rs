@@ -254,12 +254,14 @@ pub struct GrantConfig {
     /// asks for the slave's answers on the floor (10-step-3.md §3.4). The readings that
     /// otherwise decide the family come only from frames that decoded, and miss what kills a
     /// short ordinary answer and spares a floor one — a PACTOR station's bursts on a lopsided
-    /// path. 0: only after two silent slots in a row.
+    /// path. 0: only after two silent slots in a row. 4 by the harness (10-step-3.md §5.4).
     pub floor_answer_memory: usize,
     /// Frames whose answer went unheard are held back until an answer says what became of
     /// them, not resent blind (10-step-3.md §3.4). The next transmission carries new data, or no
-    /// data at all — a header granting an answer, a poll. On the PACTOR path the slave decoded
-    /// more frames than protocol 7's and still finished later: copies of frames it had.
+    /// data at all — a header granting an answer, a poll. A second silent slot in a row sends
+    /// them again: answers not getting through must not stop the data too. On the PACTOR path
+    /// the slave decoded more frames than protocol 7's and still finished later: copies of
+    /// frames it had.
     pub hold_unknown: bool,
     /// Slots answered in a row after which a master lowers the silence level one step.
     pub on_time_to_lower: usize,
@@ -306,8 +308,8 @@ impl Default for GrantConfig {
             open_window_s: OPEN_WINDOW_S,
             keepalive_s: 10.0,
             silence_levels_after: 2,
-            floor_answer_memory: 0,
-            hold_unknown: false,
+            floor_answer_memory: 4,
+            hold_unknown: true,
             on_time_to_lower: 4,
             need_ease_after: 6,
         }
@@ -3273,11 +3275,13 @@ impl GrantedEngine {
         }
         let mode = self.burst_mode();
         let recommendation = self.recommended.min(self.cap());
-        // what an unheard answer would have said is not resent blind: it waits for an answer
+        // what an unheard answer would have said is not resent blind: it waits for an answer —
+        // through one silent slot. Two in a row and the answers are not getting through, and
+        // the frames go again rather than not at all
         let unacked: Vec<u8> = self
             .unacked()
             .into_iter()
-            .filter(|s| self.records.get(s).is_some_and(|r| !r.unknown))
+            .filter(|s| self.silent >= 2 || self.records.get(s).is_some_and(|r| !r.unknown))
             .collect();
         for &s in &unacked {
             let Some((tx_count, rec_mode, body_len)) = self

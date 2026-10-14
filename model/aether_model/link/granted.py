@@ -277,17 +277,18 @@ class GrantConfig:
     that is only ever silent cannot tell idle from dead."""
     silence_levels_after: int = 2
     """Silent slots in a row after which a master raises the gap level one step."""
-    hold_unknown: bool = False
+    hold_unknown: bool = True
     """Frames whose answer went unheard are held back until an answer says what became of
     them, not resent blind (10-step-3.md §3.4). The next transmission carries new data, or no
-    data at all — a header granting an answer, a poll. On the PACTOR path the slave decoded
-    more frames than protocol 7's and still finished later: copies of frames it had."""
-    floor_answer_memory: int = 0
+    data at all — a header granting an answer, a poll. A second silent slot in a row sends them
+    again: answers not getting through must not stop the data too. On the PACTOR path the slave
+    decoded more frames than protocol 7's and still finished later: copies of frames it had."""
+    floor_answer_memory: int = 4
     """Answer slots looked back over: while any of the last this many went silent, a header asks
     for the slave's answers on the floor (10-step-3.md §3.4). The readings that otherwise decide
     the family come only from frames that decoded, and miss what kills a short ordinary answer
     and spares a floor one — a PACTOR station's bursts on a lopsided path. 0: only after two
-    silent slots in a row."""
+    silent slots in a row. 4 by the harness (10-step-3.md §5.4)."""
     on_time_to_lower: int = 4
     """Slots answered in a row after which a master lowers the silence level one step."""
     need_ease_after: int = 6
@@ -2149,8 +2150,12 @@ class GrantedEngine:
             return []
         mode = self._burst_mode()
         recommendation = min(self._recommended, self._cap())
-        # what an unheard answer would have said is not resent blind: it waits for an answer
-        unacked = [s for s in self._unacked() if not self._records[s].unknown]
+        # what an unheard answer would have said is not resent blind: it waits for an answer —
+        # through one silent slot. Two in a row and the answers are not getting through, and
+        # the frames go again rather than not at all
+        unacked = self._unacked()
+        if self._silent < 2:
+            unacked = [s for s in unacked if not self._records[s].unknown]
         for s in unacked:
             rec = self._records[s]
             due = (
