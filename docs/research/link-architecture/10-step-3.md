@@ -444,7 +444,23 @@ and watching the test fail.
 | 500 Hz | ×0.997 | ×1.002 |
 
   All 28 sessions completed in every arm.
-* **The harness.** *To be filled in from the A/B of memory 0 and memory 4.*
+* **The harness.** One build per setting, otherwise this branch's. The PACTOR scenario ran at
+  its ten seeds and four others at five each. Every setting completed every run of the other
+  four. Medians of air time:
+
+| setting | PACTOR completed | `80m-lopsided-acks-500` | `80m-qsb-dropout-500` | `80m-weak-500` | `40m-good-throughput-2300` |
+|---|---:|---:|---:|---:|---:|
+| memory 0 | 5 / 10 | 481 s | 479 s | 173 s | 104 s |
+| memory 4 | 8 / 10 | 431 s | 479 s | 173 s | 104 s |
+| hold only (§5.6) | 6 / 10 | 451 s | 453 s | 173 s | 104 s |
+| memory 4 and the hold | **9 / 10** | 473 s | 479 s | 173 s | 104 s |
+
+* **The default is 4, with the hold (§5.6).**
+* **What is left on the PACTOR path is speed.** With both, protocol 8 delivers the message in
+  225–298 s (median about 253 s) against protocol 7's 195–264 s (median 238 s), and the
+  scenario's budget is 300 s. That 5–10 % is the per-exchange cost of granted slots that
+  ADR-0069 accepted (×1.10 in the review's field profile). A scenario with a budget can still
+  tip at its edge.
 
 ### 5.5 A session heard holds this station's calls (§3.2)
 
@@ -463,3 +479,29 @@ and watching the test fail.
   detector, and touches no session rule; the model has no third station to apply it to.
 * **The manual.** *Busy channel* says so.
 * **The tests.** The module's own, and `a_session_heard_between_other_stations_holds_this_stations_calls`.
+
+### 5.6 Frames whose answer went unheard wait for an answer (§3.4)
+
+* **What the record showed.** On the PACTOR path the master sent 110–160 data frames where
+  protocol 7 sent 46–129. The slave decoded more of them than protocol 7's did (60–89 against
+  39–71) and still finished later. After a silent slot the master resent that whole
+  transmission, and the slave had most of it.
+* **The rule.** `GrantConfig.hold_unknown` (model first, then the port). Frames sent in a
+  transmission whose answer went unheard are *unknown*. The next transmission carries new data,
+  or no data at all (a poll), and the next answer's bitmap says what to resend.
+* **Bounded to one silent slot.** A second silent slot in a row sends the frames again: answers
+  that do not get through must not stop the data too. Unbounded, a session whose radios
+  swallowed every answer delivered nothing (`_gap_session`'s control run), where resending
+  had kept the data flowing one way.
+* **Measured.**
+  * The model's simulator, with a third of all frames lost and two in three of the ordinary
+    answers, six seeds: 3 kB took 578 s against 717 s at 2 300 Hz, and 1 032 s against
+    1 234 s at 500 Hz (memory 4 both, with and without the hold), in about a fifth fewer frames.
+  * The link bench: within 2 % on both airs, every session completed.
+  * The harness: the table in §5.4. Those runs had the hold before it was bounded; the
+    rerun of protocol 8's arm measures the rule as it stands.
+* **The tests.**
+  * `test_frames_whose_answer_went_unheard_are_not_resent_blind`, four seeds on each air.
+  * The replay's `floor-memory` session runs both settings. Planted bugs in the port's marking,
+    clearing and bound each fail it.
+
