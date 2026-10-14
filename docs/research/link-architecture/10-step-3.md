@@ -229,4 +229,22 @@ every kind of failure at once. Then protocol 8's arm runs again in full.
   rung 3 eleven times, never decoded it, and settled on rungs 1–2.
 * **Open.** The path is one where the rung chosen decides the time. Whether protocol 8 asks too
   high on such paths, or this seed's fades fell on its rung-3 frames, is read from all ten seeds'
-  message times when the runs end, before any rule is named.
+  message times when the runs end, before any rule is named. Seed 6042 failed the same way;
+  protocol 7 completed it.
+
+### 3.6 A header cut before its end held the DISC back (C2, `80m-floor-top-start-500`)
+
+* **What happened.** Seed 6061: the Test's budget ran out while the master was transmitting a
+  floor header and three floor data frames. The abort cut the transmission 1.04 s in, inside the
+  3.2 s header. The master's DISC went 29 s later, as the run ended, and the slave was still
+  connected. Protocol 7 completed the seed.
+* **The rule, as built.** A cut transmission is reported to the engine as ending where its
+  frames would have (09 §2.2: the other station anchors its slot on what the header stated).
+  The engine then waits out the slot that header granted before its DISC.
+* **What the record shows.** The slave decoded no header (it never answered), and could not
+  have: a frame cut before its end does not decode (S1). Nothing was granted, so there was no
+  slot to wait out.
+* **What restores it.** A header cut before its own end grants nothing. The transmission is
+  reported as ending at the cut, and the DISC goes after the previous slot. A header cut after its
+  end still anchors the slot it stated, as now. Neither moves a slot the other station can
+  hold.
