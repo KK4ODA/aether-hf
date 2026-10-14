@@ -26,6 +26,7 @@ mod datagrams;
 mod fieldtest;
 mod gaps;
 mod host;
+mod reserve;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
 };
@@ -47,7 +48,7 @@ use aether_link::{
         ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
         unpack_callsign, with_bandwidth,
     },
-    granted::Role,
+    granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
 use aether_phy::{
     AudioToBaseband, BasebandToAudio, Complex, Modem, Received, StreamingReceiver,
@@ -327,6 +328,23 @@ struct KeyWindow {
     frames_samples: usize,
     /// Where its last frame ends on the air if it plays whole, set when it is keyed.
     whole_end: Option<f64>,
+    /// Samples of its audio, from the first, where its header begins and ends. `None` with no
+    /// header first.
+    header_samples: Option<(usize, usize)>,
+    /// Where on the air its header begins and ends, set when it is keyed.
+    header_on_air: Option<(f64, f64)>,
+}
+
+impl KeyWindow {
+    /// Whether a transmission whose radiation stopped at `radiated_until` was cut before any
+    /// frame of it could be read: its header not [`HEADER_UNDECODABLE_SHARE`] of the way out
+    /// (10-step-3.md §3.6). Then it granted nothing. Otherwise a header the other station may
+    /// have read anchors the slot it stated, wherever the cut fell (09-step-2.md §2.2).
+    fn cut_unread(&self, radiated_until: f64) -> bool {
+        self.header_on_air.is_some_and(|(start, end)| {
+            radiated_until < start + HEADER_UNDECODABLE_SHARE * (end - start)
+        })
+    }
 }
 
 /// Why a burst of frames was queued and when: the account of the air a harness keeps
@@ -889,6 +907,48 @@ impl PlaybackClock {
     }
 }
 
+/// How far the audio this station has processed trails the air (10-step-3.md §3.1).
+///
+/// The station's clock is the audio it has processed. The sound card's playback clock keeps
+/// real time, so the two stand a fixed distance apart while the station keeps up — and further
+/// by whatever the card has captured that the station has not yet processed: the pile a slow
+/// pass leaves, or the newest seconds a stalled computer kept. The keying gate judges a slot on
+/// the air's clock, the station's plus this backlog; on the station's alone, a station catching
+/// up after a stall keyed an answer 1.84 s past its slot, over the other station
+/// (`80m-slow-machine-500`, six times in ten seeds).
+#[derive(Debug, Default, Clone, Copy)]
+struct CaptureLag {
+    /// The playback clock less the station's clock at its least: the distance while the
+    /// station keeps up, which a backlog only adds to. It may creep up by
+    /// [`CLOCK_CREEP`] for the two clocks' drift, and drops at once to a smaller reading.
+    baseline: Option<f64>,
+    /// The station's clock at the last reading.
+    at: f64,
+    /// The backlog at the last reading, in seconds.
+    lag_s: f64,
+}
+
+/// How fast the playback clock may gain on the capture clock without it counting as a backlog:
+/// seconds a second. Two cards' crystals differ by 100 ppm at most; a backlog builds a
+/// thousand times faster.
+const CLOCK_CREEP: f64 = 1e-3;
+
+impl CaptureLag {
+    /// A reading of the playback clock, in seconds, against the station's.
+    fn read(&mut self, played_s: f64, now: f64) {
+        let distance = played_s - now;
+        let baseline = match self.baseline {
+            Some(least) if distance >= least => {
+                least + (distance - least).min(CLOCK_CREEP * (now - self.at).max(0.0))
+            }
+            _ => distance,
+        };
+        self.baseline = Some(baseline);
+        self.at = now;
+        self.lag_s = (distance - baseline).max(0.0);
+    }
+}
+
 /// One station: link engine, physical layer, radio.
 pub struct Station<P: Ptt> {
     config: StationConfig,
@@ -901,6 +961,10 @@ pub struct Station<P: Ptt> {
     from_audio: AudioToBaseband,
     ptt: PttWatchdog<P>,
     busy: BusyDetector,
+    /// How far the audio processed trails the air ([`CaptureLag`]).
+    capture_lag: CaptureLag,
+    /// The channel held by another session this station heard, which its own calls wait out.
+    reservation: reserve::Reservation,
     /// Audio waiting for the sound card, at unit level; the transmit level is applied as
     /// it leaves, which is what lets the level change under a tone that is playing.
     playback: VecDeque<f32>,
@@ -1125,6 +1189,8 @@ impl<P: Ptt> Station<P> {
             from_audio: AudioToBaseband::new(params),
             ptt: PttWatchdog::new(ptt, config.max_key_s),
             busy,
+            capture_lag: CaptureLag::default(),
+            reservation: reserve::Reservation::default(),
             playback: VecDeque::new(),
             baseband_seen: 0,
             muted: VecDeque::new(),
@@ -1248,6 +1314,17 @@ impl<P: Ptt> Station<P> {
     /// behaviour: release on drain.
     pub fn device_played(&mut self, played: u64) {
         self.clock.device_played = Some(played);
+        let rate = self.config.params.audio_rate as f64;
+        let now = self.now();
+        self.capture_lag.read(played as f64 / rate, now);
+    }
+
+    /// How far the audio this station has processed trails the air, in seconds: what the card
+    /// has captured and the station not yet processed ([`CaptureLag`]). 0 for a harness that
+    /// reports no playback clock.
+    #[must_use]
+    pub const fn capture_lag_s(&self) -> f64 {
+        self.capture_lag.lag_s
     }
 
     /// Where the sound card's playback clock will stand once everything handed to it so far
@@ -1668,9 +1745,11 @@ impl<P: Ptt> Station<P> {
             self.clock.flush_device = true;
             self.clock.cut_short = true;
             // the engine's transmission cut here is over; the slot its header granted is
-            // where the header said, which is where the other station looks for it
+            // where the header said, which is where the other station looks for it — unless
+            // the cut came before the header could be read
             if let Some(window) = self.keying.take() {
-                self.engine.on_tx_done(self.now(), window.whole_end);
+                let now = self.now();
+                self.report_cut(&window, now);
             }
         } else if self.keying.is_some() && !self.transmitting && !self.playback.is_empty() {
             // rendered and waiting for its slot: it goes no further
@@ -1753,8 +1832,8 @@ impl<P: Ptt> Station<P> {
         if !was_transmitting && self.keying.is_some() {
             self.discard_waiting_link();
         } else if let Some(window) = self.keying.take() {
-            // cut short: the slot it granted stays where its header said
-            self.engine.on_tx_done(now, window.whole_end);
+            // cut short: the slot it granted stays where its header said, if it was read
+            self.report_cut(&window, now);
         }
         self.drop_link_pending();
         self.playback.clear();
@@ -2499,7 +2578,7 @@ impl<P: Ptt> Station<P> {
             // the engine's transmission on the air first, then those queued behind it; the
             // slot it granted stays where its header said
             if let Some(window) = self.keying.take() {
-                self.engine.on_tx_done(now, window.whole_end);
+                self.report_cut(&window, now);
             }
             self.drop_link_pending();
             self.pending.clear();
@@ -2580,6 +2659,8 @@ impl<P: Ptt> Station<P> {
             if let Some(window) = &mut self.keying {
                 window.whole_end =
                     Some(now + output_latency + window.frames_samples as f64 / audio_rate);
+                let at = |samples: usize| now + output_latency + samples as f64 / audio_rate;
+                window.header_on_air = window.header_samples.map(|(a, b)| (at(a), at(b)));
             }
             if let Some(tag) = self.tx_tag.take() {
                 self.tx_tags.push(tag);
@@ -2612,6 +2693,19 @@ impl<P: Ptt> Station<P> {
         Ok(count)
     }
 
+    /// Tell the engine of its transmission cut short at `now`. The audio already past the
+    /// station's queue still leaves the card, so radiation stops the card's output latency
+    /// after the cut. Cut before it could be read, it granted nothing; otherwise it ended where
+    /// its frames would have, which is where the other station places the slot it granted.
+    fn report_cut(&mut self, window: &KeyWindow, now: f64) {
+        let radiated_until = now + self.radiation_latency_s() - self.config.key_lead_s;
+        if window.cut_unread(radiated_until) {
+            self.engine.on_tx_cut_unread(now);
+        } else {
+            self.engine.on_tx_done(now, window.whole_end);
+        }
+    }
+
     /// How long after the key comes up a transmission starts radiating: the silence of the
     /// keying lead, then the sound card's output latency — its own report once it runs, the
     /// assumed playback lead until then.
@@ -2631,7 +2725,8 @@ impl<P: Ptt> Station<P> {
         if self.playback.is_empty() {
             return true;
         }
-        let radiates_at = now + self.radiation_latency_s();
+        // on the air's clock: the station's, plus what it has captured and not yet processed
+        let radiates_at = now + self.capture_lag_s() + self.radiation_latency_s();
         if window
             .not_before
             .is_some_and(|earliest| radiates_at < earliest - 1e-6)
@@ -2654,9 +2749,18 @@ impl<P: Ptt> Station<P> {
             self.tx_tag = None;
             self.stats.dropped_late += 1;
             self.engine.on_tx_dropped(now);
+            let behind = self.capture_lag_s();
+            let why = if behind >= 0.05 {
+                format!(" — the station {:.0} ms behind the air", behind * 1000.0)
+            } else {
+                String::new()
+            };
             self.note(
                 "dropped",
-                &format!("an answer {:.0} ms past its slot: not sent", late * 1000.0),
+                &format!(
+                    "an answer {:.0} ms past its slot: not sent{why}",
+                    late * 1000.0
+                ),
             );
             if let Some(recording) = &mut self.recording {
                 let state = format!("{:?}", self.engine.state());
@@ -3156,6 +3260,7 @@ impl<P: Ptt> Station<P> {
             }
         }
         self.learn_from(&report, now);
+        self.note_other_session(control, payload, now);
         // a piece of somebody's datagram: joined with the others, and named by the first
         if report.kind == "datagram"
             && let Some(piece) = payload
@@ -3496,10 +3601,14 @@ impl<P: Ptt> Station<P> {
             return true;
         };
         let in_turn = match next {
-            Outgoing::Link(tx) => {
-                tx.window.not_after.is_some()
-                    || matches!(self.engine.state(), State::Connected | State::Disconnecting)
-            }
+            // a transmission of the engine's waits for the channel only when it starts an
+            // exchange: a call or a probe, a retry included. Everything else belongs to an
+            // exchange already under way — an answer in its slot, the master's next
+            // transmission, a DISC, an abort's among them, which the engine sends once it is
+            // Idle — and a slot is used or forfeited. Judged on the engine's state, an abort's
+            // DISC waited 29 s for a contest to clear and the other station never heard it
+            // (10-step-3.md §3.3)
+            Outgoing::Link(tx) => !starts_an_exchange(&tx.frames),
             // silence radiates nothing, so a keying test does not wait for the channel; a
             // datagram has had its own channel access already: the client's DCD and persistence
             Outgoing::Audio { silent: true, .. } | Outgoing::Datagram { .. } => true,
@@ -3590,7 +3699,7 @@ impl<P: Ptt> Station<P> {
             ));
         }
 
-        let Some(baseband) = self.modulate(&frames) else {
+        let Some((baseband, first_frame)) = self.modulate(&frames) else {
             // nothing of an engine transmission goes out: the engine is told, as for a drop
             if link.is_some() {
                 self.engine.on_tx_dropped(now);
@@ -3613,10 +3722,19 @@ impl<P: Ptt> Station<P> {
             // goes where the engine put it — ahead of them, in time it was granted.
             let before = self.identifier;
             let carried = self.link_identifier(now, audio_rate, identifier_s, &frames);
+            // where in the transmission its header lies, for a cut that may come before it can
+            // be read
+            let header =
+                (frames.first().map(|f| f.container) == Some(Container::Control)).then(|| {
+                    let start = self.playback.len();
+                    let len = rendered.len() * first_frame / baseband.len();
+                    (start, start + len)
+                });
             self.playback.extend(rendered);
             self.keying = Some(KeyWindow {
                 identifier_before: carried.then_some(before),
                 frames_samples: self.playback.len(),
+                header_samples: header,
                 ..window
             });
         } else {
@@ -3630,9 +3748,11 @@ impl<P: Ptt> Station<P> {
         self.tx_tag = Some(self.tag(now, origin, &frames, with_id));
     }
 
-    /// The frames' baseband, back to back; `None` when there is nothing to send.
-    fn modulate(&mut self, frames: &[aether_link::TxFrame]) -> Option<Vec<Complex>> {
+    /// The frames' baseband, back to back, and the first frame's share of it; `None` when there
+    /// is nothing to send.
+    fn modulate(&mut self, frames: &[aether_link::TxFrame]) -> Option<(Vec<Complex>, usize)> {
         let mut baseband: Vec<Complex> = Vec::new();
+        let mut first = 0;
         for frame in frames {
             let burst = match frame.container {
                 // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
@@ -3651,7 +3771,12 @@ impl<P: Ptt> Station<P> {
                 }
             };
             match burst {
-                Ok(samples) => baseband.extend(samples),
+                Ok(samples) => {
+                    baseband.extend(samples);
+                    if first == 0 {
+                        first = baseband.len();
+                    }
+                }
                 // The engine only ever asks for payloads it sized from this same table, so
                 // this cannot happen without a bug; dropping the frame keeps a bug off the
                 // air rather than transmitting something malformed.
@@ -3662,7 +3787,7 @@ impl<P: Ptt> Station<P> {
                 }
             }
         }
-        (!baseband.is_empty()).then_some(baseband)
+        (!baseband.is_empty()).then_some((baseband, first))
     }
 
     /// [`Self::render_identifier`], with its account of the air.
@@ -4843,11 +4968,48 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() != State::Idle && self.engine.state() != State::Connecting {
             return true;
         }
-        self.busy.settled() && !self.busy.busy(now)
+        // a session this station heard holds the channel through the quiet between its
+        // transmissions, which the busy detector does not bridge (10-step-3.md §3.2)
+        self.busy.settled() && !self.busy.busy(now) && !self.reservation.holds(now)
+    }
+
+    /// A decoded frame of a session not this station's holds the channel ([`Self::other_session`]).
+    fn note_other_session(&mut self, control: bool, payload: Option<&[u8]>, now: f64) {
+        if let Some(heard) = payload.and_then(|p| self.other_session(control, p)) {
+            self.reservation.heard(now, heard);
+        }
+    }
+
+    /// What a decoded frame says of a session not this station's: a frame of one under way, or
+    /// of one starting between two other stations, a DISC, a `DISC_ACK`. `None` for this
+    /// station's own session — the last one too, whose stray frames are the engine's to answer
+    /// — and for what belongs to no session: a beacon, a probe, a datagram.
+    fn other_session(&self, control: bool, payload: &[u8]) -> Option<reserve::Heard> {
+        let ours = self.engine.session();
+        if control {
+            let frame = GrantFrame::decode(payload).ok()?;
+            if frame.session == ours & 0x7F {
+                return None;
+            }
+            return Some(match frame.kind {
+                aether_link::GrantKind::Disc => reserve::Heard::Leaving,
+                aether_link::GrantKind::DiscAck => reserve::Heard::Over,
+                _ => reserve::Heard::Session,
+            });
+        }
+        let (header, body) = decode_data(payload).ok()?;
+        match header.kind {
+            DataKind::Data if header.session != ours => Some(reserve::Heard::Session),
+            DataKind::ConnectReq | DataKind::ConnectAck => {
+                let connect = ConnectBody::decode(&body).ok()?;
+                let mine = |call: &str| self.engine.callsigns.iter().any(|c| c == call);
+                (!mine(&connect.src) && !mine(&connect.dst)).then_some(reserve::Heard::Session)
+            }
+            _ => None,
+        }
     }
 }
 
-/// Whether a queued burst is a beacon: one data frame of kind `Beacon`.
 /// Whether a transmission sets up a contact — a call, an acceptance, a probe or its answer —
 /// and so carries no identifier (ADR-0055).
 fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
@@ -4865,6 +5027,19 @@ fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
     })
 }
 
+/// Whether a transmission starts an exchange on the station's own initiative — a call or a
+/// probe, a retry included — and so waits for a clear channel. The rest of the engine's
+/// transmissions belong to an exchange under way (10-step-3.md §3.3).
+fn starts_an_exchange(frames: &[aether_link::TxFrame]) -> bool {
+    frames.iter().any(|frame| {
+        frame.container == Container::Data
+            && decode_data(&frame.payload).is_ok_and(|(header, _)| {
+                matches!(header.kind, DataKind::ConnectReq | DataKind::Probe)
+            })
+    })
+}
+
+/// Whether a queued burst is a beacon: one data frame of kind `Beacon`.
 fn is_beacon(frames: &[aether_link::TxFrame]) -> bool {
     frames.len() == 1
         && frames[0].container == Container::Data
@@ -6693,6 +6868,71 @@ mod tests {
     }
 
     #[test]
+    fn a_station_catching_up_after_a_stall_judges_its_slot_on_the_airs_clock() {
+        // the harness (`80m-slow-machine-500`, Step 3 §3.1): after a stall the capture kept its
+        // newest seconds, the station processed them a block a pass, and between two of them
+        // it keyed the answer to frames it had read before the stall — on its own clock, 1.84 s
+        // behind the air — over the caller's next transmission. The gate judges a slot on the
+        // air's clock: the station's, plus what it has captured and not yet processed
+        let message: Vec<u8> = (0..4000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        air.a.send(&message);
+        // the caller's transmission read, and over: the called station's slot is about to open
+        air.run(60.0, |a, b| a.transmitting() && b.received_len() > 0);
+        air.run(30.0, |a, _| !a.transmitting());
+        assert!(!air.a.transmitting() && !air.b.transmitting());
+        // the called station's computer stops for 1.5 s; the caller's card plays on
+        let rate = WIDE_2300.audio_rate as f64;
+        let blocks = (1.5 * rate / air.block as f64) as usize;
+        let mut pile = Vec::new();
+        let mut from_a = vec![0.0f32; air.block];
+        for _ in 0..blocks {
+            let start = air.played;
+            air.a.device_played(start);
+            air.played += air.block as u64;
+            let handed = air.a.playback(&mut from_a).expect("playback");
+            air.a.device_drains_at(start + handed as u64);
+            let mut to_a = vec![0.0f32; air.block];
+            let mut to_b = vec![0.0f32; air.block];
+            for index in 0..air.block {
+                to_b[index] = from_a[index].mul_add(air.gain, air.noise() * air.noise_sigma);
+                to_a[index] = air.noise() * air.noise_sigma;
+            }
+            air.a.capture(&to_a).expect("capture");
+            pile.push(to_b);
+        }
+        // it catches up a block a pass, the air held where the stall ended, as the channel
+        // server holds it; nothing it keys in the meantime may radiate past its slot
+        let dropped = air.b.stats.dropped_late;
+        let mut keyed = false;
+        let mut out = vec![0.0f32; air.block];
+        for block in &pile {
+            air.b.device_played(air.played);
+            air.b.capture(block).expect("capture");
+            air.b.device_played(air.played);
+            let handed = air.b.playback(&mut out).expect("playback");
+            air.b.device_drains_at(air.played + handed as u64);
+            keyed |= air.b.transmitting();
+        }
+        assert!(
+            !keyed,
+            "the called station keyed an answer whose slot had passed on the air"
+        );
+        assert!(
+            air.b.stats.dropped_late > dropped,
+            "the late answer was not dropped"
+        );
+        // and the session goes on
+        air.run(120.0, |_, b| b.received_len() >= message.len());
+        assert_eq!(air.b.received_len(), message.len(), "the message crossed");
+    }
+
+    #[test]
     fn a_station_that_fell_behind_moves_its_clock_past_the_audio_it_lost() {
         // the scenario harness's slow machine (Step 2): after a stall the capture queue kept
         // the newest two seconds and dropped the rest, the station's clock — the audio it had
@@ -6714,10 +6954,13 @@ mod tests {
             !keyed_over,
             "an answer went out over the caller after the stall"
         );
-        let (behind, _, dropped) = stalled_session(false, 3.5);
+        // without the move the station's clock stays behind the air; the keying gate, reading
+        // the card's clock against it, still drops the late answer (10-step-3.md §3.1)
+        let (behind, keyed_over, dropped) = stalled_session(false, 3.5);
+        assert!(behind > 1.4, "the harness's stall: {behind:.2} s");
         assert!(
-            behind > 1.4 && dropped == 0,
-            "the harness's stall: {behind:.2} s, {dropped}"
+            dropped >= 1 && !keyed_over,
+            "behind the air and not moved, the answer still went: {dropped} dropped"
         );
     }
 
@@ -6772,6 +7015,66 @@ mod tests {
     }
 
     #[test]
+    fn an_abort_that_cuts_a_header_before_it_can_be_read_grants_nothing() {
+        // the harness (`80m-floor-top-start-500`, Step 3 §3.6): a Test's abort cut a floor
+        // header 1 s into its 3.2 s, the master waited out the slot that header would have
+        // granted — 29 s of floor frames — and its DISC went as the run ended, unheard. A header
+        // cut before it could be read granted nothing; its slot is measured from the cut
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        let message: Vec<u8> = (0..6000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
+            .collect();
+        air.a.send(&message);
+        // a transmission with a header first and frames after it, long enough that its stated
+        // end is seconds away
+        let rate = WIDE_2300.audio_rate as f64;
+        let headed = |a: &Station<NullPtt>| {
+            a.transmitting()
+                && a.keying.is_some_and(|w| {
+                    w.header_samples.is_some() && w.frames_samples as f64 / rate > 3.0
+                })
+        };
+        air.run(60.0, |a, _| headed(a));
+        assert!(headed(&air.a), "a long transmission with a header first");
+        // into the header, a block at a time, until a tenth of it has radiated: past its start,
+        // well short of the point it could be read
+        let radiated =
+            |a: &Station<NullPtt>| a.now() + a.radiation_latency_s() - a.config.key_lead_s;
+        let (start, end) = air
+            .a
+            .keying
+            .and_then(|w| w.header_on_air)
+            .expect("keyed with a header first");
+        while radiated(&air.a) < start + 0.1 * (end - start) {
+            air.run(0.09, |_, _| false);
+        }
+        assert!(
+            radiated(&air.a) < start + 0.35 * (end - start),
+            "a block past a third of the header"
+        );
+        let cut_at = air.a.now();
+        air.a.abort();
+        let mut disc_at = None;
+        let mut keyed_over = false;
+        air.run(30.0, |a, b| {
+            keyed_over |= a.transmitting() && b.transmitting();
+            if disc_at.is_none() && a.transmitting() {
+                disc_at = Some(a.now());
+            }
+            disc_at.is_some() && !a.transmitting()
+        });
+        let after = disc_at.expect("the DISC never went") - cut_at;
+        assert!(
+            after < 3.0,
+            "the DISC waited {after:.1} s, for the slot of a header nobody could read"
+        );
+        assert!(!keyed_over, "the DISC went over the other station");
+    }
+
+    #[test]
     fn an_abort_waits_out_the_slot_it_granted() {
         // the scenario harness (ADR-0065): a Test whose budget ran out keyed its DISC 1.4 s
         // into the other station's acknowledgement, which it had heard arriving; both were lost.
@@ -6794,6 +7097,37 @@ mod tests {
             !keyed_over,
             "the DISC went over the frame it heard arriving"
         );
+    }
+
+    #[test]
+    fn an_aborts_disc_does_not_wait_for_a_clear_channel() {
+        // the harness (`40m-rtty-contest-2300`, Step 3 §3.3): a Test's budget ran out, the
+        // master aborted, and its leaving DISC waited 29 s for the contest to clear — the engine
+        // was Idle by then, and the hold took the DISC for a station starting something of its
+        // own. The other station never heard it and was still connected at the end. A DISC ends
+        // an exchange already under way: only calls and probes wait for the channel
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        // the operator's politeness, which the harness's wire turns off
+        air.a.config.wait_for_clear = true;
+        air.a.send(&[0x5A; 400]);
+        air.run(5.0, |_, _| false);
+        air.a.abort();
+        let mut sent_disc = false;
+        // the channel busy throughout, as the contest kept it
+        for _ in 0..200 {
+            let now = air.a.now();
+            air.a.busy.mark_frame(now, 3.0);
+            air.run(0.1, |_, _| false);
+            sent_disc |= air.a.transmitting() && air.a.state() == State::Idle;
+            if !air.b.connected() {
+                break;
+            }
+        }
+        assert!(sent_disc, "the leaving DISC was held for the busy channel");
+        assert!(!air.b.connected(), "the other station never heard it leave");
     }
 
     #[test]
@@ -7522,7 +7856,7 @@ mod tests {
         let identifier_s = station.identifier_length_s();
         let rate = station.config.params.audio_rate as f64;
         let room = (identifier_s * rate).round() as usize;
-        let alone = station
+        let (alone, _) = station
             .modulate(std::slice::from_ref(&frame))
             .expect("a frame");
         station.pending.push_back(Outgoing::Link(LinkTx {
@@ -9416,6 +9750,98 @@ mod tests {
             later,
         );
         assert!(station.receiving(), "a decoded frame lights the lamp");
+    }
+
+    #[test]
+    fn a_session_heard_between_other_stations_holds_this_stations_calls() {
+        // the harness (`40m-gateway-busy-when-called-2300`, Step 3 §3.2): a client that had
+        // waited 108 s for a gateway's session to end called in the 0.6 s between two of its
+        // transmissions, and the session's next three went over the call. A frame decoded of a
+        // session not this station's holds its own calls through the quiet inside a session
+        use super::reserve::{Heard, RESERVE_GAP_S};
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let ours = station.engine.session() & 0x7F;
+        let other = ours ^ 0x15;
+        let control = |kind| GrantFrame::new(kind, other).encode();
+        assert_eq!(
+            station.other_session(true, &control(aether_link::GrantKind::Header)),
+            Some(Heard::Session)
+        );
+        assert_eq!(
+            station.other_session(true, &control(aether_link::GrantKind::Answer)),
+            Some(Heard::Session)
+        );
+        assert_eq!(
+            station.other_session(true, &control(aether_link::GrantKind::Disc)),
+            Some(Heard::Leaving)
+        );
+        assert_eq!(
+            station.other_session(true, &control(aether_link::GrantKind::DiscAck)),
+            Some(Heard::Over)
+        );
+        let own = GrantFrame::new(aether_link::GrantKind::Header, ours).encode();
+        assert_eq!(
+            station.other_session(true, &own),
+            None,
+            "this station's own session is the engine's"
+        );
+        let call = |src: &str, dst: &str| {
+            let body = ConnectBody {
+                src: src.to_owned(),
+                dst: dst.to_owned(),
+                caps: 0,
+                version: aether_link::frames::PROTOCOL_VERSION,
+                snr_db: None,
+                turnaround_s: 0.0,
+                identifier_s: 0.0,
+            }
+            .encode()
+            .expect("a body");
+            let header = DataHeader {
+                kind: DataKind::ConnectReq,
+                seq: 0,
+                session: 9,
+            };
+            encode_data(&header, &body, 64).expect("a frame")
+        };
+        assert_eq!(
+            station.other_session(false, &call("N4CCC", "KK4XYZ")),
+            Some(Heard::Session),
+            "a call between two other stations starts a session"
+        );
+        assert_eq!(station.other_session(false, &call("N4CCC", "W4ODA")), None);
+
+        // and this station's own call waits it out
+        for i in 0..80 {
+            station.capture(&quiet_block(i)).expect("capture");
+        }
+        assert!(station.busy_detector().settled());
+        let heard_at = station.now();
+        station.reservation.heard(heard_at, Heard::Session);
+        assert!(!station.channel_clear(heard_at));
+        station.connect("KK4XYZ").expect("idle");
+        let mut out = vec![0.0f32; 4096];
+        let mut went = None;
+        for i in 0..400 {
+            if station.playback(&mut out).expect("playback") > 0 {
+                went = Some(station.now());
+                break;
+            }
+            station.capture(&quiet_block(1000 + i)).expect("capture");
+        }
+        let went = went.expect("the call never went");
+        assert!(
+            went - heard_at >= RESERVE_GAP_S - 0.1,
+            "the call went {:.2} s after the other session's frame",
+            went - heard_at
+        );
     }
 
     #[test]
