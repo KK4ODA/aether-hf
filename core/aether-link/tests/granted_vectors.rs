@@ -132,6 +132,7 @@ fn config(doc: &Value) -> GrantConfig {
         identifier_s: num(&doc["identifier_s"]),
         answer_gap_s: num(&doc["answer_gap_s"]),
         floor_answer_memory: int(&doc["floor_answer_memory"]),
+        hold_unknown: doc["hold_unknown"].as_bool().expect("hold_unknown"),
         decode_budget_s: pair(&doc["decode_budget_s"]),
         key_s: num(&doc["key_s"]),
         guard_s: num(&doc["guard_s"]),

@@ -277,6 +277,11 @@ class GrantConfig:
     that is only ever silent cannot tell idle from dead."""
     silence_levels_after: int = 2
     """Silent slots in a row after which a master raises the gap level one step."""
+    hold_unknown: bool = False
+    """Frames whose answer went unheard are held back until an answer says what became of
+    them, not resent blind (10-step-3.md §3.4). The next transmission carries new data, or no
+    data at all — a header granting an answer, a poll. On the PACTOR path the slave decoded
+    more frames than protocol 7's and still finished later: copies of frames it had."""
     floor_answer_memory: int = 0
     """Answer slots looked back over: while any of the last this many went silent, a header asks
     for the slave's answers on the floor (10-step-3.md §3.4). The readings that otherwise decide
@@ -324,6 +329,8 @@ class _TxRecord:
     tx_count: int = 0
     acked: bool = False
     reencoded: int = 0
+    unknown: bool = False
+    """Sent in a transmission whose answer went unheard: whether it arrived is not known."""
 
     @property
     def sent(self) -> bool:
@@ -1632,6 +1639,9 @@ class GrantedEngine:
         self.stats.silent_slots += 1
         self._silent += 1
         self._answered_run = 0
+        if slot.data and self.cfg.hold_unknown:
+            for s in self._unacked():
+                self._records[s].unknown = True
         if (
             self._silent >= self.cfg.silence_levels_after
             and self._silence_level < len(self.cfg.levels_s) - 1
@@ -2139,7 +2149,8 @@ class GrantedEngine:
             return []
         mode = self._burst_mode()
         recommendation = min(self._recommended, self._cap())
-        unacked = self._unacked()
+        # what an unheard answer would have said is not resent blind: it waits for an answer
+        unacked = [s for s in self._unacked() if not self._records[s].unknown]
         for s in unacked:
             rec = self._records[s]
             due = (
@@ -2211,6 +2222,8 @@ class GrantedEngine:
             decoded = sum(1 for s in fresh if ctl.received(s))
             self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, ctl.snr_db))
         progress = False
+        for rec in self._records.values():
+            rec.unknown = False  # the answer says what arrived
         for s, rec in list(self._records.items()):
             if not rec.acked and rec.sent and ctl.received(s):
                 rec.acked = True

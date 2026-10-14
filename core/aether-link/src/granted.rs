@@ -256,6 +256,11 @@ pub struct GrantConfig {
     /// short ordinary answer and spares a floor one — a PACTOR station's bursts on a lopsided
     /// path. 0: only after two silent slots in a row.
     pub floor_answer_memory: usize,
+    /// Frames whose answer went unheard are held back until an answer says what became of
+    /// them, not resent blind (10-step-3.md §3.4). The next transmission carries new data, or no
+    /// data at all — a header granting an answer, a poll. On the PACTOR path the slave decoded
+    /// more frames than protocol 7's and still finished later: copies of frames it had.
+    pub hold_unknown: bool,
     /// Slots answered in a row after which a master lowers the silence level one step.
     pub on_time_to_lower: usize,
     /// Slots answered on time after which a slave asks for one level less.
@@ -302,6 +307,7 @@ impl Default for GrantConfig {
             keepalive_s: 10.0,
             silence_levels_after: 2,
             floor_answer_memory: 0,
+            hold_unknown: false,
             on_time_to_lower: 4,
             need_ease_after: 6,
         }
@@ -358,6 +364,8 @@ struct TxRecord {
     tx_count: usize,
     acked: bool,
     reencoded: usize,
+    /// Sent in a transmission whose answer went unheard: whether it arrived is not known.
+    unknown: bool,
 }
 
 impl TxRecord {
@@ -2570,6 +2578,13 @@ impl GrantedEngine {
         self.stats.silent_slots += 1;
         self.silent += 1;
         self.answered_run = 0;
+        if slot.data && self.config.hold_unknown {
+            for s in self.unacked() {
+                if let Some(rec) = self.records.get_mut(&s) {
+                    rec.unknown = true;
+                }
+            }
+        }
         if self.silent >= self.config.silence_levels_after
             && self.silence_level < self.config.levels_s.len() - 1
         {
@@ -3258,7 +3273,12 @@ impl GrantedEngine {
         }
         let mode = self.burst_mode();
         let recommendation = self.recommended.min(self.cap());
-        let unacked = self.unacked();
+        // what an unheard answer would have said is not resent blind: it waits for an answer
+        let unacked: Vec<u8> = self
+            .unacked()
+            .into_iter()
+            .filter(|s| self.records.get(s).is_some_and(|r| !r.unknown))
+            .collect();
         for &s in &unacked {
             let Some((tx_count, rec_mode, body_len)) = self
                 .records
@@ -3329,6 +3349,7 @@ impl GrantedEngine {
                     tx_count: 0,
                     acked: false,
                     reencoded: 0,
+                    unknown: false,
                 },
             );
             self.tx_next = seq_after(self.tx_next, 1);
@@ -3391,6 +3412,9 @@ impl GrantedEngine {
             });
         }
         let mut progress = false;
+        for rec in self.records.values_mut() {
+            rec.unknown = false; // the answer says what arrived
+        }
         for (&s, rec) in &mut self.records {
             if !rec.acked && rec.sent() && ctl.received(s) {
                 rec.acked = true;

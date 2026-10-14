@@ -576,6 +576,47 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
+def test_frames_whose_answer_went_unheard_are_not_resent_blind(air: str) -> None:
+    """10-step-3.md §3.4: on the PACTOR path protocol 8's slave decoded more frames than protocol
+    7's and still finished later — the master resent every frame of a transmission whose answer
+    it had not heard, and the slave had most of them. With ``hold_unknown`` those frames wait for
+    an answer to say what arrived: fewer frames for the same bytes, and sooner."""
+
+    def run(hold: bool, seed: int) -> tuple[int, float]:
+        a, b = _pair(AIRS[air], floor_answer_memory=4, hold_unknown=hold)
+        rng = random.Random(seed)
+        hits = random.Random(100 + seed)
+
+        def bursts(frame: TxFrame) -> float:
+            if (
+                frame.container is Container.CONTROL
+                and not frame.floor
+                and GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER
+            ):
+                return -40.0 if hits.random() < 2 / 3 else 0.0
+            return -40.0 if hits.random() < 1 / 3 else 0.0
+
+        sim = TwoStationSim(a, b, snr_db=8.0, seed=seed, frame_snr_offset=bursts)
+        message = bytes(rng.randrange(256) for _ in range(3000))
+        a.connect("KK4XYZ")
+        a.send(message)
+        t = 0.0
+        while len(sim.st[1].delivered) < len(message) and t < 1500.0:
+            t += 5.0
+            sim.run(until=t)
+        assert bytes(sim.st[1].delivered) == message, "not all of it, in order"
+        return a.stats.frames_sent, t
+
+    # four seeds: one transfer is a draw of the bursts, and either rule can be the luckier
+    blind = [run(False, seed) for seed in range(4)]
+    held = [run(True, seed) for seed in range(4)]
+    sent = (sum(n for n, _ in blind), sum(n for n, _ in held))
+    took = (sum(t for _, t in blind), sum(t for _, t in held))
+    assert sent[1] < sent[0], sent
+    assert took[1] < took[0], took
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
 def test_a_header_cut_before_it_could_be_read_grants_nothing(air: str) -> None:
     """10-step-3.md §3.6: a Test's abort cut the master's floor header 1 s into its 3.2 s; the
     master waited out the slot that header would have granted, 29 s, and its DISC went unheard.

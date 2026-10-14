@@ -123,6 +123,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "identifier_s": bits(c.identifier_s),
         "answer_gap_s": bits(c.answer_gap_s),
         "floor_answer_memory": c.floor_answer_memory,
+        "hold_unknown": bool(c.hold_unknown),
         "decode_budget_s": [bits(x) for x in c.decode_budget_s],
         "key_s": bits(c.key_s),
         "guard_s": bits(c.guard_s),
@@ -449,16 +450,19 @@ def floor_memory() -> list[Recorder]:
     """The slave's short ordinary answers killed two times in three, its floor ones spared — a
     PACTOR station's bursts (10-step-3.md §3.4) — and the master asking for floor answers while
     any of its last four slots went silent."""
-    a, b, ra, rb = _pair(NARROW, floor_answer_memory=4)
+    a, b, ra, rb = _pair(NARROW, floor_answer_memory=4, hold_unknown=True)
     rng = random.Random(23)
     hits = random.Random(24)
 
     def bursts(frame: TxFrame) -> float:
-        if frame.container is not Container.CONTROL or frame.floor:
-            return 0.0
-        if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
-            return 0.0
-        return -40.0 if hits.random() < 2 / 3 else 0.0
+        # a third of every frame lost, and two in three of the slave's ordinary answers
+        if (
+            frame.container is Container.CONTROL
+            and not frame.floor
+            and GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER
+        ):
+            return -40.0 if hits.random() < 2 / 3 else 0.0
+        return -40.0 if hits.random() < 1 / 3 else 0.0
 
     sim = TwoStationSim(a, b, snr_db=8.0, seed=23, frame_snr_offset=bursts)
     _exchange(sim, a, b, _message(rng, 2000), _message(rng, 300))
