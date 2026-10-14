@@ -8,6 +8,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 15m-equatorial-flutter-2300,6054,band,True,,110.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,39.2
 15m-equatorial-flutter-2300,7054,band,True,,116.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,42.9
 15m-equatorial-flutter-2300,8054,band,True,,113.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,42.7
+15m-equatorial-flutter-2300,9054,band,True,,96.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,35.8
 15m-old-rig-offset-500,57,band,True,,251.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,87.1
 15m-old-rig-offset-500,1057,band,True,,209.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,74.6
 15m-old-rig-offset-500,2057,band,True,,184.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,64.4
@@ -17,6 +18,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 15m-old-rig-offset-500,6057,band,True,,190.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.8
 15m-old-rig-offset-500,7057,band,True,,158.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.5
 15m-old-rig-offset-500,8057,band,True,,243.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,90.4
+15m-old-rig-offset-500,9057,band,True,,151.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,55.7
 15m-opening-closes-2300,55,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,243.9
 15m-opening-closes-2300,1055,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,262.5
 15m-opening-closes-2300,2055,robustness,True,,716.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,255.6
@@ -26,6 +28,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 15m-opening-closes-2300,6055,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,253.0
 15m-opening-closes-2300,7055,robustness,True,,716.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,268.4
 15m-opening-closes-2300,8055,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,275.3
+15m-opening-closes-2300,9055,robustness,True,,716.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,273.3
 20m-dx-500,58,band,True,,482.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,148.8
 20m-dx-500,1058,band,True,,450.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,151.9
 20m-dx-500,2058,band,True,,435.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,145.1
@@ -35,6 +38,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 20m-dx-500,6058,band,True,,551.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,184.4
 20m-dx-500,7058,band,True,,537.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,187.8
 20m-dx-500,8058,band,True,,528.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,186.3
+20m-dx-500,9058,band,True,,444.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,155.3
 20m-dx-moderate-2300,51,band,True,,361.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,650.2,637.5,120.9
 20m-dx-moderate-2300,1051,band,True,,420.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,558.4,241.3,155.2
 20m-dx-moderate-2300,2051,band,True,,442.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,579.8,477.2,162.1
@@ -44,6 +48,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 20m-dx-moderate-2300,6051,band,True,,409.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,650.2,621.6,151.2
 20m-dx-moderate-2300,7051,band,True,,344.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,227.9,465.3,131.1
 20m-dx-moderate-2300,8051,band,True,,433.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,396.9,491.4,168.1
+20m-dx-moderate-2300,9051,band,True,,330.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,325.1,452.4,126.2
 20m-ft8-neighbours-2300,56,band,True,,146.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,100.5
 20m-ft8-neighbours-2300,1056,band,True,,89.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.8
 20m-ft8-neighbours-2300,2056,band,True,,73.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.4
@@ -53,6 +58,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 20m-ft8-neighbours-2300,6056,band,True,,109.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,78.8
 20m-ft8-neighbours-2300,7056,band,True,,116.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,90.0
 20m-ft8-neighbours-2300,8056,band,True,,69.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.8
+20m-ft8-neighbours-2300,9056,band,True,,89.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,69.0
 20m-long-path-echo-2300,53,band,True,,66.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,24.0
 20m-long-path-echo-2300,1053,band,True,,80.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.2
 20m-long-path-echo-2300,2053,band,True,,58.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.1
@@ -62,6 +68,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 20m-long-path-echo-2300,6053,band,True,,76.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,26.5
 20m-long-path-echo-2300,7053,band,True,,71.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,27.9
 20m-long-path-echo-2300,8053,band,True,,71.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.3
+20m-long-path-echo-2300,9053,band,True,,98.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,38.2
 20m-polar-path-2300,52,band,True,,206.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.8
 20m-polar-path-2300,1052,band,True,,159.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,56.3
 20m-polar-path-2300,2052,band,True,,162.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,53.6
@@ -71,6 +78,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 20m-polar-path-2300,6052,band,True,,157.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.1
 20m-polar-path-2300,7052,band,True,,202.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,73.4
 20m-polar-path-2300,8052,band,True,,171.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,64.8
+20m-polar-path-2300,9052,band,True,,246.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,94.9
 40m-abort-and-recall-2300,43,robustness,True,,87.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,31.1
 40m-abort-and-recall-2300,1043,robustness,True,,79.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,28.9
 40m-abort-and-recall-2300,2043,robustness,True,,88.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.8
@@ -80,6 +88,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-abort-and-recall-2300,6043,robustness,True,,89.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,34.0
 40m-abort-and-recall-2300,7043,robustness,True,,80.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.6
 40m-abort-and-recall-2300,8043,robustness,True,,88.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,35.7
+40m-abort-and-recall-2300,9043,robustness,True,,90.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,36.1
 40m-drift-and-clocks-2300,15,2300 Hz,True,,233.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,620.6,692.8,83.0
 40m-drift-and-clocks-2300,1015,2300 Hz,True,,291.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,517.2,493.6,114.5
 40m-drift-and-clocks-2300,2015,2300 Hz,True,,382.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,714.8,469.2,148.5
@@ -89,6 +98,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-drift-and-clocks-2300,6015,2300 Hz,True,,393.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,714.8,422.1,152.6
 40m-drift-and-clocks-2300,7015,2300 Hz,True,,329.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,458.9,449.9,135.1
 40m-drift-and-clocks-2300,8015,2300 Hz,True,,256.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,393.5,553.8,108.7
+40m-drift-and-clocks-2300,9015,2300 Hz,True,,313.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,654.8,437.9,131.5
 40m-gateway-busy-when-called-2300,62,gateway,True,,143.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,82.8
 40m-gateway-busy-when-called-2300,1062,gateway,True,,209.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,134.0
 40m-gateway-busy-when-called-2300,2062,gateway,True,,152.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,97.5
@@ -98,6 +108,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-gateway-busy-when-called-2300,6062,gateway,True,,167.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,104.8
 40m-gateway-busy-when-called-2300,7062,gateway,True,,163.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,110.4
 40m-gateway-busy-when-called-2300,8062,gateway,True,,149.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,99.1
+40m-gateway-busy-when-called-2300,9062,gateway,True,,144.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,98.5
 40m-gateway-client-vanishes-2300,41,gateway,True,,348.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,115.4
 40m-gateway-client-vanishes-2300,1041,gateway,True,,340.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,123.7
 40m-gateway-client-vanishes-2300,2041,gateway,True,,340.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,123.0
@@ -107,6 +118,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-gateway-client-vanishes-2300,6041,gateway,True,,339.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,121.8
 40m-gateway-client-vanishes-2300,7041,gateway,True,,340.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,128.3
 40m-gateway-client-vanishes-2300,8041,gateway,True,,344.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,129.9
+40m-gateway-client-vanishes-2300,9041,gateway,True,,345.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,132.1
 40m-gateway-three-clients-2300,61,gateway,True,,217.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,192.5
 40m-gateway-three-clients-2300,1061,gateway,True,,213.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,205.7
 40m-gateway-three-clients-2300,2061,gateway,True,,224.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,214.4
@@ -116,6 +128,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-gateway-three-clients-2300,6061,gateway,True,,173.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,165.6
 40m-gateway-three-clients-2300,7061,gateway,True,,219.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,215.9
 40m-gateway-three-clients-2300,8061,gateway,True,,202.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,207.0
+40m-gateway-three-clients-2300,9061,gateway,True,,213.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,216.1
 40m-good-2300-rtty-crashes,9,2300 Hz,True,,334.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,447.7,374.8,125.3
 40m-good-2300-rtty-crashes,1009,2300 Hz,True,,372.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,345.2,258.8,150.9
 40m-good-2300-rtty-crashes,2009,2300 Hz,True,,490.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,448.4,242.4,199.6
@@ -125,6 +138,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-good-2300-rtty-crashes,6009,2300 Hz,True,,364.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,328.2,208.6,147.4
 40m-good-2300-rtty-crashes,7009,2300 Hz,True,,436.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,402.8,240.0,184.7
 40m-good-2300-rtty-crashes,8009,2300 Hz,True,,473.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,377.7,237.6,206.1
+40m-good-2300-rtty-crashes,9009,2300 Hz,True,,259.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,235.0,469.2,111.1
 40m-good-throughput-2300,20,2300 Hz,True,,102.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,35.8
 40m-good-throughput-2300,1020,2300 Hz,True,,100.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,37.9
 40m-good-throughput-2300,2020,2300 Hz,True,,105.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,40.6
@@ -134,6 +148,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-good-throughput-2300,6020,2300 Hz,True,,96.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,37.6
 40m-good-throughput-2300,7020,2300 Hz,True,,98.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,38.5
 40m-good-throughput-2300,8020,2300 Hz,True,,101.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,39.1
+40m-good-throughput-2300,9020,2300 Hz,True,,101.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,40.3
 40m-hidden-vara-2300,12,2300 Hz,True,,105.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,39.8
 40m-hidden-vara-2300,1012,2300 Hz,True,,148.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,58.8
 40m-hidden-vara-2300,2012,2300 Hz,True,,132.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.6
@@ -143,6 +158,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-hidden-vara-2300,6012,2300 Hz,True,,138.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,55.5
 40m-hidden-vara-2300,7012,2300 Hz,True,,162.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.5
 40m-hidden-vara-2300,8012,2300 Hz,True,,66.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.9
+40m-hidden-vara-2300,9012,2300 Hz,True,,126.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,52.7
 40m-long-attachment-cwid-2300,44,robustness,True,,911.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,304.3
 40m-long-attachment-cwid-2300,1044,robustness,True,,948.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,322.9
 40m-long-attachment-cwid-2300,2044,robustness,True,,895.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,306.8
@@ -152,6 +168,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-long-attachment-cwid-2300,6044,robustness,True,,949.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,325.0
 40m-long-attachment-cwid-2300,7044,robustness,True,,852.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,288.3
 40m-long-attachment-cwid-2300,8044,robustness,True,,1017.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,383.3
+40m-long-attachment-cwid-2300,9044,robustness,True,,841.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,309.1
 40m-moderate-2300-vara-qrm,7,2300 Hz,True,,297.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,383.5,541.9,125.0
 40m-moderate-2300-vara-qrm,1007,2300 Hz,True,,328.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,466.0,756.9,145.5
 40m-moderate-2300-vara-qrm,2007,2300 Hz,True,,406.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,434.8,579.8,181.0
@@ -161,6 +178,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-moderate-2300-vara-qrm,6007,2300 Hz,True,,464.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,503.8,342.9,208.9
 40m-moderate-2300-vara-qrm,7007,2300 Hz,True,,443.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,365.1,312.9,195.3
 40m-moderate-2300-vara-qrm,8007,2300 Hz,True,,409.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,509.5,478.5,210.1
+40m-moderate-2300-vara-qrm,9007,2300 Hz,True,,396.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,466.0,348.5,192.0
 40m-rtty-contest-2300,19,2300 Hz,True,,563.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,272.0,122.3,273.5
 40m-rtty-contest-2300,1019,2300 Hz,True,,492.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,376.1,103.5,239.6
 40m-rtty-contest-2300,2019,2300 Hz,True,,552.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,166.4,124.0,271.2
@@ -170,6 +188,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-rtty-contest-2300,6019,2300 Hz,True,,510.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,160.3,102.2,252.0
 40m-rtty-contest-2300,7019,2300 Hz,True,,458.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,107.5,337.2,222.3
 40m-rtty-contest-2300,8019,2300 Hz,False,test aborted: the call timed out; ended none/none; left idle/connected,182.1,0,0.0,0,0.0,0.0,,0.0,0.0,aborted: the call timed out,,,110.0
+40m-rtty-contest-2300,9019,2300 Hz,True,,512.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,191.0,294.4,272.5
 40m-trimode-gateway-2300,45,gateway,True,,60.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.7
 40m-trimode-gateway-2300,1045,gateway,True,,64.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,23.8
 40m-trimode-gateway-2300,2045,gateway,True,,80.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.9
@@ -179,6 +198,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-trimode-gateway-2300,6045,gateway,True,,72.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,27.1
 40m-trimode-gateway-2300,7045,gateway,True,,59.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,22.5
 40m-trimode-gateway-2300,8045,gateway,True,,64.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,28.6
+40m-trimode-gateway-2300,9045,gateway,True,,61.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,24.0
 40m-wide-calls-narrow,22,2300 Hz,True,,182.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.4
 40m-wide-calls-narrow,1022,2300 Hz,True,,206.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,76.9
 40m-wide-calls-narrow,2022,2300 Hz,True,,178.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,65.9
@@ -188,6 +208,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-wide-calls-narrow,6022,2300 Hz,True,,146.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,48.6
 40m-wide-calls-narrow,7022,2300 Hz,True,,147.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,50.3
 40m-wide-calls-narrow,8022,2300 Hz,True,,150.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,58.2
+40m-wide-calls-narrow,9022,2300 Hz,True,,153.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,59.7
 40m-wide-calls-narrow-unprobed,23,2300 Hz,True,,226.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,78.7
 40m-wide-calls-narrow-unprobed,1023,2300 Hz,True,,255.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,87.6
 40m-wide-calls-narrow-unprobed,2023,2300 Hz,True,,222.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,76.3
@@ -197,6 +218,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-wide-calls-narrow-unprobed,6023,2300 Hz,True,,295.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,98.7
 40m-wide-calls-narrow-unprobed,7023,2300 Hz,True,,190.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,62.9
 40m-wide-calls-narrow-unprobed,8023,2300 Hz,True,,233.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,83.6
+40m-wide-calls-narrow-unprobed,9023,2300 Hz,True,,245.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,90.7
 40m-winlink-exchange-2300,31,2300 Hz,True,,73.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,27.5
 40m-winlink-exchange-2300,1031,2300 Hz,True,,70.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,27.1
 40m-winlink-exchange-2300,2031,2300 Hz,True,,81.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,31.4
@@ -206,6 +228,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 40m-winlink-exchange-2300,6031,2300 Hz,True,,76.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.0
 40m-winlink-exchange-2300,7031,2300 Hz,True,,78.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,27.7
 40m-winlink-exchange-2300,8031,2300 Hz,True,,76.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,29.8
+40m-winlink-exchange-2300,9031,2300 Hz,True,,75.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,30.7
 80m-asymmetric-500,11,500 Hz,True,,284.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,54.4,41.6,97.2
 80m-asymmetric-500,1011,500 Hz,True,,408.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,57.5,49.9,141.0
 80m-asymmetric-500,2011,500 Hz,True,,310.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,47.5,75.7,117.1
@@ -215,6 +238,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-asymmetric-500,6011,500 Hz,True,,525.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,77.5,24.3,183.7
 80m-asymmetric-500,7011,500 Hz,True,,366.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,82.1,78.7,123.0
 80m-asymmetric-500,8011,500 Hz,True,,534.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,74.4,62.3,201.2
+80m-asymmetric-500,9011,500 Hz,True,,374.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,93.0,60.1,142.0
 80m-band-closes-2300,14,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,136.7
 80m-band-closes-2300,1014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,140.7
 80m-band-closes-2300,2014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,165.6
@@ -224,6 +248,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-band-closes-2300,6014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,140.6
 80m-band-closes-2300,7014,2300 Hz,True,,416.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,135.7
 80m-band-closes-2300,8014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,154.3
+80m-band-closes-2300,9014,2300 Hz,True,,416.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,151.6
 80m-called-again-cwid-500,62,robustness,True,,174.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,58.2
 80m-called-again-cwid-500,1062,robustness,True,,170.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.3
 80m-called-again-cwid-500,2062,robustness,True,,128.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,47.8
@@ -233,6 +258,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-called-again-cwid-500,6062,robustness,True,,168.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.6
 80m-called-again-cwid-500,7062,robustness,True,,157.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,49.7
 80m-called-again-cwid-500,8062,robustness,True,,138.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,52.7
+80m-called-again-cwid-500,9062,robustness,True,,190.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,70.4
 80m-floor-top-start-500,61,500 Hz,True,,468.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,73.9,50.9,157.1
 80m-floor-top-start-500,1061,500 Hz,True,,432.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,62.6,60.4,149.8
 80m-floor-top-start-500,2061,500 Hz,True,,425.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,62.6,49.1,163.9
@@ -242,6 +268,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-floor-top-start-500,6061,500 Hz,True,,552.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,73.9,62.6,191.2
 80m-floor-top-start-500,7061,500 Hz,True,,544.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,73.9,41.1,191.8
 80m-floor-top-start-500,8061,500 Hz,True,,563.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,73.9,30.0,211.2
+80m-floor-top-start-500,9061,500 Hz,True,,477.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,57.9,42.1,173.5
 80m-flutter-500,21,500 Hz,True,,498.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,42.1,34.1,163.5
 80m-flutter-500,1021,500 Hz,True,,430.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,61.0,44.5,146.0
 80m-flutter-500,2021,500 Hz,True,,432.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,54.8,52.8,158.2
@@ -251,6 +278,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-flutter-500,6021,500 Hz,True,,479.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,68.6,39.2,165.7
 80m-flutter-500,7021,500 Hz,True,,345.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,64.9,70.7,119.7
 80m-flutter-500,8021,500 Hz,True,,455.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,71.6,50.3,165.8
+80m-flutter-500,9021,500 Hz,True,,450.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,72.4,55.0,160.3
 80m-leave-together-500,42,robustness,True,,297.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,93.3
 80m-leave-together-500,1042,robustness,True,,318.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,104.1
 80m-leave-together-500,2042,robustness,True,,285.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,93.1
@@ -260,6 +288,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-leave-together-500,6042,robustness,True,,326.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,108.2
 80m-leave-together-500,7042,robustness,True,,360.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,121.4
 80m-leave-together-500,8042,robustness,True,,343.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,119.2
+80m-leave-together-500,9042,robustness,True,,327.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,111.6
 80m-lopsided-acks-500,59,500 Hz,True,,548.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,57.1,48.4,176.7
 80m-lopsided-acks-500,1059,500 Hz,True,,515.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,71.2,47.9,177.4
 80m-lopsided-acks-500,2059,500 Hz,True,,355.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,57.6,53.8,119.7
@@ -269,6 +298,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-lopsided-acks-500,6059,500 Hz,True,,367.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,66.1,61.1,130.3
 80m-lopsided-acks-500,7059,500 Hz,True,,399.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,47.6,32.6,141.5
 80m-lopsided-acks-500,8059,500 Hz,True,,510.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,51.7,52.9,189.1
+80m-lopsided-acks-500,9059,500 Hz,True,,368.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,45.9,45.1,131.9
 80m-nvis-disturbed-500,24,500 Hz,True,,242.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,75.4
 80m-nvis-disturbed-500,1024,500 Hz,True,,236.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,76.4
 80m-nvis-disturbed-500,2024,500 Hz,True,,325.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,104.4
@@ -278,6 +308,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-nvis-disturbed-500,6024,500 Hz,True,,253.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,84.8
 80m-nvis-disturbed-500,7024,500 Hz,True,,234.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,78.8
 80m-nvis-disturbed-500,8024,500 Hz,True,,213.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,75.5
+80m-nvis-disturbed-500,9024,500 Hz,True,,224.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,75.6
 80m-nvis-evening-500,6,500 Hz,True,,451.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,31.4,14.2,183.8
 80m-nvis-evening-500,1006,500 Hz,True,,458.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,36.4,24.9,198.2
 80m-nvis-evening-500,2006,500 Hz,True,,461.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,28.9,20.9,199.3
@@ -287,6 +318,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-nvis-evening-500,6006,500 Hz,True,,506.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,40.3,41.3,223.8
 80m-nvis-evening-500,7006,500 Hz,True,,495.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,30.4,25.8,216.1
 80m-nvis-evening-500,8006,500 Hz,True,,538.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,40.0,19.0,248.6
+80m-nvis-evening-500,9006,500 Hz,True,,467.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,36.4,26.9,211.5
 80m-offset-500,16,500 Hz,True,,152.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,47.3
 80m-offset-500,1016,500 Hz,True,,198.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,65.3
 80m-offset-500,2016,500 Hz,True,,174.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,60.1
@@ -296,6 +328,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-offset-500,6016,500 Hz,True,,134.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,46.5
 80m-offset-500,7016,500 Hz,True,,198.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,66.2
 80m-offset-500,8016,500 Hz,True,,220.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,79.6
+80m-offset-500,9016,500 Hz,True,,132.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,46.2
 80m-poor-500-pactor-signalink,8,500 Hz,True,,389.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,139.4
 80m-poor-500-pactor-signalink,1008,500 Hz,True,,348.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,129.7
 80m-poor-500-pactor-signalink,2008,500 Hz,True,,355.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,138.9
@@ -305,6 +338,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-poor-500-pactor-signalink,6008,500 Hz,True,,287.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,109.0
 80m-poor-500-pactor-signalink,7008,500 Hz,True,,387.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,141.9
 80m-poor-500-pactor-signalink,8008,500 Hz,True,,291.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,113.7
+80m-poor-500-pactor-signalink,9008,500 Hz,False,a message did not arrive; ended none/none,404.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,165.6
 80m-qsb-dropout-500,13,500 Hz,True,,495.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,160.5
 80m-qsb-dropout-500,1013,500 Hz,True,,462.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,149.9
 80m-qsb-dropout-500,2013,500 Hz,True,,480.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,163.7
@@ -314,6 +348,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-qsb-dropout-500,6013,500 Hz,True,,641.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,215.1
 80m-qsb-dropout-500,7013,500 Hz,True,,538.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,172.6
 80m-qsb-dropout-500,8013,500 Hz,True,,515.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,176.4
+80m-qsb-dropout-500,9013,500 Hz,True,,469.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,161.8
 80m-slow-machine-500,81,robustness,True,,403.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,121.3,73.5,138.8
 80m-slow-machine-500,1081,robustness,True,,435.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,67.9,51.3,154.8
 80m-slow-machine-500,2081,robustness,True,,411.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,52.5,84.1,155.0
@@ -323,6 +358,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-slow-machine-500,6081,robustness,True,,459.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,76.5,82.1,173.4
 80m-slow-machine-500,7081,robustness,True,,451.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,101.8,67.1,157.6
 80m-slow-machine-500,8081,robustness,True,,516.8,0,0.0,0,0.0,0.0,,0.0,0.0,complete,76.7,80.7,188.6
+80m-slow-machine-500,9081,robustness,True,,486.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,58.8,47.9,181.2
 80m-thunderstorm-agc-2300,17,2300 Hz,True,,361.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,321.3,341.0,131.6
 80m-thunderstorm-agc-2300,1017,2300 Hz,True,,283.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,503.8,191.9,103.7
 80m-thunderstorm-agc-2300,2017,2300 Hz,True,,232.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,460.5,518.8,87.3
@@ -332,6 +368,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-thunderstorm-agc-2300,6017,2300 Hz,True,,387.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,447.7,371.1,151.0
 80m-thunderstorm-agc-2300,7017,2300 Hz,True,,289.2,0,0.0,0,0.0,0.0,,0.0,0.0,complete,509.5,459.8,106.2
 80m-thunderstorm-agc-2300,8017,2300 Hz,True,,397.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,527.2,357.8,153.6
+80m-thunderstorm-agc-2300,9017,2300 Hz,True,,339.1,0,0.0,0,0.0,0.0,,0.0,0.0,complete,486.7,354.3,131.0
 80m-trimode-gateway-client-vanishes-500,46,gateway,True,,657.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,218.4
 80m-trimode-gateway-client-vanishes-500,1046,gateway,True,,762.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,259.8
 80m-trimode-gateway-client-vanishes-500,2046,gateway,True,,651.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,229.5
@@ -341,6 +378,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-trimode-gateway-client-vanishes-500,6046,gateway,True,,833.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,301.0
 80m-trimode-gateway-client-vanishes-500,7046,gateway,True,,754.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,257.4
 80m-trimode-gateway-client-vanishes-500,8046,gateway,True,,773.2,1,2.439,0,0.41,0.0,ND1J 0.300 s counted (timer:answer); KK4ODA 0.110 s counted (timer:proceed),0.0,0.4,,,,274.8
+80m-trimode-gateway-client-vanishes-500,9046,gateway,True,,700.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,240.3
 80m-vara-on-frequency-500,23,500 Hz,True,,209.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,86.6
 80m-vara-on-frequency-500,1023,500 Hz,True,,121.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,53.5
 80m-vara-on-frequency-500,2023,500 Hz,True,,126.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,54.5
@@ -350,6 +388,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-vara-on-frequency-500,6023,500 Hz,True,,186.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,84.9
 80m-vara-on-frequency-500,7023,500 Hz,True,,168.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,71.2
 80m-vara-on-frequency-500,8023,500 Hz,True,,185.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,83.0
+80m-vara-on-frequency-500,9023,500 Hz,True,,183.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,76.9
 80m-vox-caller-declared-500,71,robustness,True,,253.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,84.7
 80m-vox-caller-declared-500,1071,robustness,True,,290.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,99.3
 80m-vox-caller-declared-500,2071,robustness,True,,277.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,95.2
@@ -359,6 +398,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-vox-caller-declared-500,6071,robustness,True,,271.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,100.0
 80m-vox-caller-declared-500,7071,robustness,True,,238.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,80.1
 80m-vox-caller-declared-500,8071,robustness,True,,267.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,96.3
+80m-vox-caller-declared-500,9071,robustness,True,,277.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,93.4
 80m-vox-caller-learned-gap-500,71,robustness,True,,454.1,0,0.0,0,0.0,3.604,KE4QCM 3.604 s S4 broken (frame+timer:answer),3.604,0.0,,,,151.3
 80m-vox-caller-learned-gap-500,1071,robustness,True,,487.1,0,0.0,0,0.0,3.32,KE4QCM 3.320 s S4 broken (frame+timer:answer),3.32,0.0,,,,165.7
 80m-vox-caller-learned-gap-500,2071,robustness,True,,496.1,0,0.0,0,0.0,3.604,KE4QCM 3.604 s S4 broken (frame+timer:answer),3.604,0.0,,,,177.7
@@ -368,6 +408,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-vox-caller-learned-gap-500,6071,robustness,True,,443.1,0,0.0,0,0.0,2.772,KE4QCM 2.772 s S4 broken (frame+timer:answer),2.772,0.0,,,,161.0
 80m-vox-caller-learned-gap-500,7071,robustness,True,,525.1,0,0.0,0,0.0,3.878,KE4QCM 3.878 s S4 broken (frame+timer:answer),3.878,0.0,,,,175.3
 80m-vox-caller-learned-gap-500,8071,robustness,True,,408.1,0,0.0,0,0.0,3.32,KE4QCM 3.320 s S4 broken (frame),3.32,0.0,,,,145.7
+80m-vox-caller-learned-gap-500,9071,robustness,True,,476.1,0,0.0,0,0.0,3.604,KE4QCM 3.604 s S4 broken (frame+timer:answer),3.604,0.0,,,,158.4
 80m-weak-500,18,500 Hz,True,,173.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.4
 80m-weak-500,1018,500 Hz,True,,210.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,71.7
 80m-weak-500,2018,500 Hz,True,,173.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,62.8
@@ -377,6 +418,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-weak-500,6018,500 Hz,True,,147.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.4
 80m-weak-500,7018,500 Hz,True,,168.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,57.5
 80m-weak-500,8018,500 Hz,True,,147.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,52.6
+80m-weak-500,9018,500 Hz,True,,147.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,51.8
 80m-winlink-exchange-500,32,500 Hz,True,,373.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,113.2
 80m-winlink-exchange-500,1032,500 Hz,True,,364.2,0,0.0,0,0.0,0.0,,0.0,0.0,,,,113.8
 80m-winlink-exchange-500,2032,500 Hz,True,,312.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,103.2
@@ -386,6 +428,7 @@ base,seed,class,completed,failures,air_s,rf_counted,rf_counted_s,rf_initiations,
 80m-winlink-exchange-500,6032,500 Hz,True,,298.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,104.2
 80m-winlink-exchange-500,7032,500 Hz,True,,341.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,113.3
 80m-winlink-exchange-500,8032,500 Hz,True,,291.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,97.5
+80m-winlink-exchange-500,9032,500 Hz,True,,276.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,93.5
 quick-awgn-2300,1,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,16.1
 quick-awgn-2300,1001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,15.5
 quick-awgn-2300,2001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,16.7
@@ -395,3 +438,4 @@ quick-awgn-2300,5001,2300 Hz,True,,48.0,0,0.0,0,0.0,0.0,,0.0,0.0,,,,15.7
 quick-awgn-2300,6001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,15.4
 quick-awgn-2300,7001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,16.6
 quick-awgn-2300,8001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,17.2
+quick-awgn-2300,9001,2300 Hz,True,,48.1,0,0.0,0,0.0,0.0,,0.0,0.0,,,,17.4
