@@ -5,7 +5,7 @@ contact, what the readings mean, and what to try when something goes wrong. The 
 this folder go deeper on one subject each, and this manual links to them rather than repeating
 them.
 
-It describes **0.2.0-beta.106**. When the application changes, this manual changes in the same
+It describes **0.2.0-beta.107**. When the application changes, this manual changes in the same
 commit (see *Keeping this manual current* at the end).
 
 ## Contents
