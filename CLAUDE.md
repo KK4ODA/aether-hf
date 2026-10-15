@@ -1660,10 +1660,19 @@ both rules off for 500 Hz slave side, which ADR-0073 alone now guards. Outside t
 of its limit (`note_slow_keying`, `keying_late` in recordings, `late` in the bundle's `keying`),
 and `metrics.sending_rung`/`receiving_rung` (`Station::data_rungs`) for the speed chart's two
 rate lines (*sending at* in the TX colour, *receiving at* in RX; goodput both ways). Harness
-scenario `80m-weak-both-ways-ladder-500` (ND1J's second morning). **Change 2 (R9's silence step)
-is held**: its one measured case was the Test's ladder leftovers, and report 12 §21 proposes the
-Test instead — the ladder after the file, a ladder frame measured once and then re-encoded at the
-recommendation, the Test ending after the last rung — for the author to decide.
+scenario `80m-weak-both-ways-ladder-500` (ND1J's second morning). v0.2.0-beta.109 carries it;
+**a cloud session's GitHub access refuses tag pushes (HTTP 403)**, so a release tag cut there is
+the author's to push.
+**ADR-0074 (the author's decision on report 12 §21, in place of change 2):** the Test runs probe →
+call → message → file → **ladder** → disconnect, so its message and file rates are the link's
+own; the file leaves the ladder `LADDER_RESERVE_S` (150 s), the ladder starts no rung with under
+`LADDER_RUNG_LEFT_S` (60 s) left and starts under the fastest rung the transfers were
+acknowledged at (`start_ladder`), and the run moves to the disconnect at the last rung's answer
+(`TestRun::ladder_over`), the leftovers going within the disconnect's drain; `file_reserve_s`,
+`file_rate_bps` and `message_rung_rate` are gone. Engine (model first, no wire change): a frame
+sent at a pinned rung is re-encoded at the recommendation after its first copy (`_TxRecord.pinned`,
+`TxRecord::pinned`) — the copy was the measurement. R9's silence step is unchanged. ADR-0073's
+header test now makes its RV 2/3 copies with a fade of the session's data, not the ladder.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

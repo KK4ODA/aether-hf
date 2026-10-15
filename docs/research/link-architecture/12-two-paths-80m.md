@@ -116,8 +116,8 @@ times and numbers in the sidecars.
    contradicts.
 
 **Built after the author's go (2026-10-15): changes 1 and 3 as ADR-0073, and 4 and 5 beside
-it. Change 2 is held:** the author asked whether the Test's design, not the rule, is what
-needs changing, and §21 finds that it is.
+it. Change 2 is not made:** the author asked whether the Test's design, not the rule, is what
+needs changing; §21 finds that it is, and the Test was redesigned instead (ADR-0074).
 
 **Not recommended after the second look:**
 
@@ -1316,6 +1316,6 @@ new frame kind and an answer field: a protocol change, for some later bump.
 copies, decoded or not. New Tests' file rates will read higher than old ones on weak paths,
 because the old ones carried the ladder's leftovers. The log should mark the build that changed it.
 
-**Nothing of §21 is built.** It changes what a Test measures, so it waits on the author. The
-harness scenario `80m-weak-both-ways-ladder-500` (ND1J's path of the second morning) is the test
-bed for it.
+**Built after the author's go (2026-10-15) as ADR-0074**: items 1–4 as written, with the file
+leaving the ladder 150 s of the budget. Judged on the harness's 14 Test scenarios against
+beta.109 (ADR-0074 §5).
