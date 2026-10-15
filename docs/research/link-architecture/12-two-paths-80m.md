@@ -51,7 +51,7 @@ times and numbers in the sidecars.
     Message and file 58/55 and 40/32 bit/s. 80 m towards noon, as the author expected.
 * **21 of the 22 silent slots were headerless transmissions at the Test's pinned ladder rungs**,
   or retransmissions of those frames. That is report 11's change 4 again, now on three more
-  sessions. The 22nd was a poll the slave never detected.
+  sessions; §12.1 finds which part of it pays. The 22nd was a poll the slave never detected.
 
 **The author's questions, in short.**
 
@@ -96,20 +96,34 @@ times and numbers in the sidecars.
 * **ADR-0072** (the disconnect's minute) was not exercised. Every Test ended with its queue
   empty.
 
-**What I would change, ranked** (details in §12):
+**What I would change, ranked** (details and evidence in §12; revised after a second look, §12.1):
 
-1. *Protocol rule (R7).* Keep the header on any transmission above the rung the slave last
-   recommended. It would have saved most of 21 silent slots: about 40–50 s of each morning Test.
+1. *Protocol rule (R7).* Never leave the header out of a transmission no frame of which can decode
+   on its own: only RV 2 copies, or RV 3 copies on a rung where RV 3 never decodes alone
+   (ADR-0043). The slave can then read no count (R2), so the slot is silent by construction. That
+   was 8 of the 21 silent slots. It would have saved about 5, 14 and 19 s and costs nothing.
 2. *Protocol rule (R9).* Do not step the master's rung down for silence on a transmission sent
-   above the recommendation (the ladder and its leftovers). The master-side twin of ADR-0020.
+   above the slave's recommendation (the ladder and its leftovers). After 20 of the 21 silent
+   slots the next answer recommended the same rung or a higher one. In morning 2 the step put two
+   of the file's bursts at rungs 0 and 1 (about 27 s). The master-side twin of ADR-0020.
 3. *Rate rule.* Offer only rungs that carry more *data* than every rung below them. That drops
-   500 Hz rung 4.
-4. *Transmitter only, no wire change.* Pad frames with a fixed pseudo-random filler, not zeros.
-   Better, scramble the payload (a wire change).
-5. *Daemon.* Do not feed capture skips to `capture_gap`. Do say when a keying's handover runs far
+   500 Hz rung 4 and changes nothing at 2 300 Hz. Bulk transfers 0–13 % faster on the fading pipe;
+   short ones unchanged (20 bytes ×1.005, 45 bytes ×0.98).
+4. *Daemon.* Do not feed capture skips to `capture_gap`. Do say when a keying's handover runs far
    over the learned render and key.
-6. *Panel.* The speed chart's "mode rate" is the station's own sending rung, not the rung of the
-   data it is moving (§16).
+5. *Panel.* The speed chart's "mode rate" is the station's own sending rung, not the rung of the
+   data it is moving (§16). The manual says goodput is "always below" it, which this session
+   contradicts.
+
+**Not recommended after the second look:**
+
+* *The header on every transmission above the recommendation* (the first version of change 1):
+  it breaks even. 18 such transmissions were answered anyway and would each pay a 3.2 s header:
+  net −0.3, −2.4 and +16.6 s. Changes 1 and 2 together take what it would, for less.
+* *A pseudo-random filler in place of zero padding*: in the model it decodes no better on noise
+  or fading, and under a strong carrier on the bottom tone the zero-padded frame decodes *more*
+  often. Zero padding does not raise an OFDM frame's peaks either; the first version of this
+  report said it did. It only changes how a tone frame looks (§19).
 
 **Tools changed in this step** (all with tests):
 
@@ -515,9 +529,10 @@ other station's frames):
 * **Net**: about even in morning 1 and a small gain in morning 2, before the knock-on. That
   knock-on includes morning 2's rung (§17).
 * **Every loss fell on a transmission above KK4ODA-1's last recommendation**, as in report 11.
-  Keeping the header there costs 3.2 s a time on the floor, about what each silent slot's wait
-  and poll cost (4.6 + 6.4 s). It would have cost nothing on the transmissions at or under the
-  recommendation, which were answered.
+  None of the 16 headerless transmissions at or under it went silent.
+* **What a kept header would trade.** It costs 3.2 s on the floor. A silent slot costs its wait
+  (4.6 s) and a poll (3.2 s); a header in its place saves the wait, about 4.6 s net. §12.1 counts
+  it per transmission.
 
 ## 11. Where the time went (question 9)
 
@@ -581,13 +596,44 @@ below has been changed. The tool changes are made (§0).
 
 | # | change | kind | cost | what it buys |
 |---|---|---|---|---|
-| 1 | Keep the header on a transmission whose data are above the rung the slave last recommended (report 11's change 4) | *protocol rule* (R7) | tiny | Most of 21 silent slots in three sessions: about 41 s + 8 polls in morning 1 and 50 s + 9 polls in morning 2, against 3.2 s per header kept. Judge on `80m-local-rfi-ladder-500` and a scenario of this morning's path (§14) |
-| 2 | Do not step the master's rung down for a silent slot whose data went above the slave's recommendation (pinned, or retransmissions keeping a pinned rung) | *protocol rule* (R9), model first | small | Morning 2's file at rungs 2–3 from its first burst: about 1–2 bursts (26–52 s) of its 128 s |
-| 3 | `usable_modes` compares the data a frame carries after its header, not the PHY payload | *rate rule* (R9), model first | tiny | 500 Hz rung 4 (QPSK ⅓: 91 data bit/s, below rung 3's 107, from 7 dB further up) is no longer offered. Fading pipe: +0 to +13 % from −2 to +2 dB on every class, nothing worse (§18) |
-| 4 | Pad DATA frames with a fixed pseudo-random filler instead of zeros, in the model and the port (`encode_data`), vectors regenerated | transmitter only; the receiver ignores padding, so no wire change | small | No more one-tone frames on the four-tone kinds (§19); the same for OFDM's padded frames, whose identical symbols raise the peak. Better still, scramble the whole payload, but that is a wire change for a protocol bump |
-| 5 | Do not hand capture skips to `capture_gap`. Log a line when a keying's handover runs 100 ms past its learned render and key, with the skips beside it | daemon | small | A stall on the station's own audio is named on the day, not found in a two-sided analysis |
-| 6 | The speed chart's mode-rate line shows the rung of the data moving: the other station's while this one receives | panel and manual | small | The chart stops comparing two directions (§16) |
-| 7 | Gate's last mile: judge `not_after` once the first sample leaves the card | daemon | medium | S2 by construction after the key too. Margins here say it can wait |
+| 1 | Keep the header on a transmission no frame of which can decode alone: RV 1/2 copies only, or RV 3 on a rung where it never decodes alone (the 36 bit/s tone rung, the 500 Hz OFDM rate-⅔ rungs; ADR-0043) | *protocol rule* (R7), model first | tiny | 8 silent slots that R7 and R2 together made certain: about 5, 14 and 19 s, at no cost (§12.1). Judge on `80m-local-rfi-ladder-500` and a scenario of this morning's path (§14) |
+| 2 | Do not step the master's rung down for a silent slot whose data went above the slave's recommendation (pinned, or retransmissions keeping a pinned rung) | *protocol rule* (R9), model first | small | Morning 2's file at rungs 2–3 from its first burst: about 1–2 bursts (26–52 s) of its 128 s. The next answer contradicted the step after 20 of the 21 silent slots |
+| 3 | `usable_modes` compares the data a frame carries after its header, not the PHY payload | *rate rule* (R9), model first | tiny | 500 Hz rung 4 (QPSK ⅓: 91 data bit/s, below rung 3's 107, from 7 dB further up) is no longer offered; the 2 300 Hz ladder is unchanged. Fading pipe: +0 to +13 % from −2 to +2 dB on every class, nothing worse (§18); single short transfers unchanged (§18.3) |
+| 4 | Do not hand capture skips to `capture_gap`. Log a line when a keying's handover runs 100 ms past its learned render and key, with the skips beside it | daemon | small | A stall on the station's own audio is named on the day, not found in a two-sided analysis |
+| 5 | The speed chart's mode-rate line shows the rung of the data moving: the other station's while this one receives | panel and manual | small | The chart stops comparing two directions (§16) |
+| 6 | Gate's last mile: judge `not_after` once the first sample leaves the card | daemon | medium | S2 by construction after the key too. Margins here say it can wait |
+| — | *Not recommended:* the header on every transmission above the recommendation | protocol rule (R7) | 3.2 s a header | Breaks even (§12.1) |
+| — | *Not recommended:* a pseudo-random filler in place of zero padding | transmitter only | small | No decoding gain in the model; only the look (§19) |
+
+### 12.1 The second look: what each header change buys
+
+Each headerless data transmission of the three sessions (`slots.py`'s records), against the rung
+KK4ODA-1 had last recommended to ND1J. A header kept saves a silent slot's wait (4.6 s on the
+floor, 1.9–4.6 s ordinary last night) and costs its own air (3.2 s floor, 0.43 s ordinary) on a
+transmission that would have been answered anyway.
+
+| | last night | morning 1 | morning 2 |
+|---|---|---|---|
+| headerless, at or under the recommendation | 1, none silent | 7, none silent | 8, none silent |
+| (a) no frame can decode alone | 1 silent | 3 silent | 4 silent |
+| (b) the rest above the recommendation | 1 silent, 5 answered | 5 silent, 8 answered | 7 silent, 5 answered |
+| a header on (a): net | +4.6 s | +14.0 s | +18.6 s |
+| a header on (b) as well: net, beyond (a) | −0.3 s | −2.4 s | +16.6 s |
+
+* **(a) is a defect in how two rules meet, not a judgement call.** R7 leaves the header out only
+  when "the exact counts locate the end". Since Step 3, R2 believes a count only from a copy that
+  decoded alone. An RV 2 copy never decodes alone. So a headerless transmission of RV 2 copies
+  grants nothing whatever the SNR, and the slave stays silent, correctly. The rule that restores
+  R7's premise: elide only when at least one frame could decode alone. It adds a header, which is
+  decoded evidence; it moves no deadline.
+* **(b) is a bet**, and these sessions say it does not pay on its own. Its one gain, in morning 2,
+  is mostly the silence step that followed (change 2 takes it without the headers).
+* **Change 2's evidence.** After each of the 21 silent data slots the next answer KK4ODA-1 sent
+  recommended the same rung (19), one higher (1) or one lower (1, after its poll too was lost).
+  The step put the master two below every time. It cost air only where new data went out before
+  that answer: morning 2 at 445.8 and 482.0 s.
+* **Not covered by either**: the 22nd silent slot, an ordinary poll lost at −7 dB after a silent
+  slot (morning 1, 366.1 s). R9 puts polls on the floor only after two. One case; no change asked.
 
 ## 13. Comparison (question 10)
 
@@ -694,7 +740,7 @@ trials; no keying or interference charged):
 * **Against the beta.106 end of the same pair** (last night), the medians are within 10 ms. The
   floor answers last night were mostly rendered ahead too.
 
-**S2 still holds by margin after the key** (§12, change 7).
+**S2 still holds by margin after the key** (§12, change 6).
 
 ### 15.2 Capture skips (ADR-0071 §3): can they go to `capture_gap`?
 
@@ -718,7 +764,7 @@ trials; no keying or interference charged):
 * The receiver loses nothing from a loss during its own transmission anyway: it is muted.
 * The case that matters, a loss inside a frame being received, has not been seen with a report
   beside it.
-* Keep the report (it is right when it speaks), and add change 5 of §12.
+* Keep the report (it is right when it speaks), and add change 4 of §12.
 
 ### 15.3 ADR-0070: a tone frame whose first sync block faded
 
@@ -764,7 +810,7 @@ The screenshot is KK4ODA-1's panel after morning 1. Its counters match the sidec
   between them is the ladder: pinned frames failing, and silent slots.
 * After the session the mode returned to 0 (tone-24, 36 bit/s), which the Status tab shows.
 
-**So the chart compares two directions.** §12's change 6 proposes plotting the rung of the data
+**So the chart compares two directions.** §12's change 5 proposes plotting the rung of the data
 being moved. Not built: it changes what an operator sees and the manual with it.
 
 ## 17. Question 1: the speed ladder
@@ -967,6 +1013,17 @@ out in rung LIKE's frame and fades as LIKE does. Four variants, each against the
   * An OFDM-framed middle rung loses most: 12 carriers in 500 Hz have little diversity.
 * **Not offering rung 4 gains 0–13 % where the gap is and never loses.** It is the cheapest
   change on the table: `usable_modes` counting the data after the header. It is §12's change 3.
+  * Counted that way, the 500 Hz air loses rung 4 and nothing else; the 2 300 Hz ladder is the
+    same either way.
+  * Rung 4 is there by history: before ADR-0015 put the four-tone kinds under it, it sat
+    directly above tone-36 (49 data bit/s) and earned its place. Against tone4x100-75 it wins
+    by payload (114 against 112 bit/s) and loses by data (91 against 107), because its 3-byte
+    DATA header is a fifth of a 15-byte frame.
+  * **Short transfers, where its 1-second frames might win**: one transfer of 20, 45, 100 or 300
+    bytes a session, the same grid (four classes, −6 to +2 dB, ten trials). Pooled time without
+    rung 4: ×1.005, ×0.982, ×0.954, ×0.953. The 20-byte cells go both ways (4 faster, 4 slower
+    by over 5 %); none of the others is slower by over 5 %. A chat session's many short lines
+    were not run: the chat bench drives protocol 7's engine only.
   * The replays show nothing, because these sessions' recommendations reached rung 4 only during
     the Test's pinned ladder.
   * The whole effect is in the fading pipe, where the controller climbs onto rung 4 and loses
@@ -1026,11 +1083,25 @@ point near −1 dB on Moderate and −2 dB on Poor.
   ND1J's frames.
 * **The panel**: no. The audio shows it.
 
-**It cost nothing.** Every lopsided frame decoded. But the spectrum depends on the data, and an
-OFDM frame of zero padding sends the same symbol on every carrier, which raises its peak. §12's
-change 4 proposes a fixed pseudo-random filler instead of zeros. It is a transmitter-only change:
-the receiver reads only the body. A scrambler over the whole payload is the clean fix, for a
-protocol bump.
+**It cost nothing.** Every lopsided frame decoded.
+
+**Would a pseudo-random filler be better? Measured in the model, no.**
+
+* **Every tone kind does it.** The strongest 10 Hz of a frame with a 4-byte body holds 10–43 %
+  of its energy zero-padded (500 Hz rungs 0–3; 8–27 % on the 2 300 Hz tone rungs), against
+  1–10 % for a full frame. A filler brings it back to the full frame's.
+* **OFDM frames do not.** Their peaks are the same within 0.3 dB with zero padding, a filler or
+  a full body (rungs 5, 7, 10, 12): the first version of this section said otherwise.
+* **Decoding is the same or better zero-padded.** tone4x100-75 with a 4-byte body, genie timing,
+  150 frames a point, zero padding against a filler: AWGN −13 dB 143 and 145; Moderate −5 and
+  −3 dB 138/137 and 148/145; Poor −5 dB 138/141. With a carrier on the bottom tone (1350 Hz) at
+  −3 dB and 0 dB re the signal, the zero-padded frames decode 120 and 43 times against 38 and 0:
+  the carrier lands on the tone most of their symbols use. On the top tone, 47 against 56 and 0
+  against 0.
+* **So the only reason left is the look**: an operator sees a lopsided frame, and the busy
+  detector flags it as a peaked passband. Neither costs anything during a session. A scrambler
+  over the whole payload is the standard hygiene, for a protocol bump if one comes for other
+  reasons.
 
 ![The lopsided frames in KK4ODA-1's audio, and the share of each four-tone frame's symbols on each tone](figures/12-lopsided.png)
 

@@ -1642,7 +1642,10 @@ low rates were the learned margin at its cap (night), the 7.8 dB gap between nar
 (morning 1) and R9's silence step on leftover ladder retransmissions (morning 2). The lopsided
 signal is the codec's zero padding on the four-tone kinds (no scrambler). The Morse between the
 morning sessions was ND1J's ADR-0055 setup identifier after a hand probe. Proposals ranked in the
-report's summary (details §12), none built: they wait on the author. Tools: `two_sides.py --from-loops` (the offset from the loop
+report's summary (details §12; §12.1 the second look: keep the header where no frame can decode
+alone — R7 and R2 together made 8 silent slots certain —, no silence step above the
+recommendation, no 500 Hz rung 4; a filler for the zero padding decodes no better), none built:
+they wait on the author. Tools: `two_sides.py --from-loops` (the offset from the loop
 latencies, its steps and drift), `air_account.py --sidecars MASTER SLAVE`, `bench_link.py
 --rung` (a hypothetical rung for counterfactual replays), `tools/ladder_table.py` (each air's
 ladder, thresholds and gaps, read from the model), and `fetch_uploads.py` resumes; the upload
