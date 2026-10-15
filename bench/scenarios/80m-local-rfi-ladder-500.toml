@@ -1,0 +1,45 @@
+name = "80m-local-rfi-ladder-500"
+description = """80 m at 500 Hz on WC4Y's path of 2026-10-14, protocol 8's first session on the air
+(docs/research/link-architecture/11-step-4-first-air.md): the caller is heard at about −1 dB on
+a Moderate path (its tone frames read −4, its OFDM frames 0) and hears the other station's floor
+answers at about −4. Local RFI at the called station twice takes its side of the path down for
+some seconds — a comb of swept carriers 2.6 minutes into the Test, the noise floor up with static
+crashes 5.5 minutes in — over the Test's ladder, whose pinned OFDM rungs above the path go with
+their header left out. Seven slots went silent on the air, none answered late or overlapped."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 1014
+
+[stations.a]
+callsign = "WC4Y"
+[stations.a.radio]
+rx_recovery_ms = 60
+
+[stations.b]
+callsign = "KK4ODA"
+[stations.b.radio]
+rx_recovery_ms = 50
+
+[path]
+profile = "moderate"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -1.0
+level = [[160, 0], [162, -8], [178, -8], [180, 0], [330, 0], [332, -6], [344, -6], [346, 0]]
+[path.b_to_a]
+snr_db = -4.0
+
+[crashes]
+at = "both"
+rate_per_s = 0.3
+peak_db = 20.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 3
