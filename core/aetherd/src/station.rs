@@ -1738,10 +1738,41 @@ impl<P: Ptt> Station<P> {
     }
 
     /// Close the session in order: a sending station once everything queued has been
-    /// acknowledged, a receiving one between the other station's bursts (ADR-0023).
+    /// acknowledged, a receiving one between the other station's bursts (ADR-0023) — for no
+    /// longer than the engine's drain limit (ADR-0072). With something still queued the log
+    /// says how much, how long it may take at most, and that Abort closes at once: on a slow
+    /// path a queue took minutes, and Disconnect looked broken.
     pub fn disconnect(&mut self) {
+        let asked = self.engine.disconnect_requested();
         self.engine.disconnect();
+        let queued = self.engine.tx_pending_bytes();
+        if !asked && queued > 0 {
+            if let Some(left) = self.leave_in_s() {
+                // the master closes at its limit; a slave's request is read an answer later,
+                // and the master counts from there
+                let bound = if self.engine.role() == Role::Master {
+                    "at most"
+                } else {
+                    "about"
+                };
+                self.note(
+                    "closing",
+                    &format!(
+                        "{queued} bytes still queued go first, for {bound} {left:.0} s; \
+                         Abort closes at once"
+                    ),
+                );
+            }
+        }
         self.pump();
+    }
+
+    /// Seconds until a disconnect asked for stops waiting for what is queued (ADR-0072), or
+    /// `None` when none was asked. A slave's figure is a floor: the master counts from when it
+    /// reads the request.
+    #[must_use]
+    pub fn leave_in_s(&self) -> Option<f64> {
+        self.engine.leave_by().map(|by| (by - self.now()).max(0.0))
     }
 
     /// Close the session now: what is left of a burst goes with it, and one DISC goes out.
@@ -7880,6 +7911,61 @@ mod tests {
             air.a.stats.cw_ids - ids.0,
             air.b.stats.cw_ids - ids.1,
         )
+    }
+
+    #[test]
+    fn a_disconnect_with_data_queued_says_how_long_it_may_take_and_that_abort_is_at_once() {
+        // The soak of 2026-10-15: on slow paths a disconnect waited 30–40 minutes for its
+        // queue. It now waits a minute at most (ADR-0072), and says so when it is asked.
+        let mut air = Air::new(1.0, 0.0005);
+        air.run(4.0, |_, _| false);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected(), "no session");
+        assert_eq!(
+            air.a.leave_in_s(),
+            None,
+            "a limit before a disconnect was asked"
+        );
+        // bytes deflate cannot shrink: a repeated byte would cross in a frame
+        let mut x = 0x9e37_79b9_u32;
+        let noise: Vec<u8> = (0..20_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x.to_le_bytes()[0]
+            })
+            .collect();
+        air.a.send(&noise);
+        air.a.take_events();
+        air.a.disconnect();
+        let events = air.a.take_events();
+        let said: Vec<_> = events
+            .iter()
+            .filter(|e| e.starts_with("closing:"))
+            .collect();
+        assert_eq!(said.len(), 1, "{events:?}");
+        assert!(
+            said[0].contains("bytes still queued go first, for at most 60 s")
+                && said[0].contains("Abort closes at once"),
+            "{said:?}"
+        );
+        let left = air.a.leave_in_s().expect("the limit");
+        assert!((59.0..=60.001).contains(&left), "{left}");
+        // asked again: the limit is not moved, and nothing more is said
+        air.run(5.0, |_, _| false);
+        air.a.take_events();
+        air.a.disconnect();
+        assert!(
+            !air.a
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("closing:")),
+            "said twice"
+        );
+        let later = air.a.leave_in_s().expect("the limit");
+        assert!(later < left - 4.0, "the limit moved: {left} then {later}");
     }
 
     #[test]

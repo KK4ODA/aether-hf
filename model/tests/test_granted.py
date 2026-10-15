@@ -455,6 +455,50 @@ def test_the_slave_asks_to_leave_and_the_master_closes() -> None:
     assert sim.events(0)[-1] == "disconnected:closed"
 
 
+def test_a_disconnect_on_a_slow_path_closes_within_its_minute_and_says_what_it_left() -> None:
+    """ADR-0072, from the nightly soak of 2026-10-15: on three slow paths (27–49 bit/s) with
+    6–15 kB queued, Disconnect waited for the queue while every exchange still acknowledged a
+    little of it, so the patience that ends a stalled drain (ADR-0039) never ran out — the
+    sessions would have closed 30–40 minutes later. The drain now ends a minute after the
+    disconnect was asked, at the master's next opportunity, and the master says what it left."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=4)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    assert a.state is State.CONNECTED
+    message = bytes(range(256)) * 60
+    a.send(message)
+    sim.run(until=80.0)
+    a.disconnect()
+    asked = sim.t
+    drain = GrantConfig().disc_drain_s
+    # the engine counts from its own clock: the last moment it was given
+    assert a.leave_by == pytest.approx(a.now + drain)
+    sim.run(until=asked + drain + 90.0)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    left = [e for e in sim.events(0) if e.startswith("disconnect:")]
+    assert len(left) == 1, sim.events(0)
+    assert "bytes not delivered" in left[0] and "after the disconnect was asked" in left[0]
+    assert sim.events(0)[-1] == "disconnected:closed"
+    assert 0 < len(sim.delivered(1)) < len(message)
+    assert a.leave_by is None
+
+
+def test_a_disconnect_with_a_small_queue_still_delivers_it_and_says_nothing() -> None:
+    """The limit is for a queue that will not drain in a minute; one that does goes whole, as
+    before, and nothing is said to have been left."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=4)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.send(b"seventy-three" * 4)
+    a.disconnect()
+    sim.run(until=sim.t + 120.0)
+    assert sim.delivered(1) == b"seventy-three" * 4
+    assert not [e for e in sim.events(0) if e.startswith("disconnect:")], sim.events(0)
+    assert sim.events(0)[-1] == "disconnected:closed"
+
+
 def test_the_slave_asking_to_leave_stops_the_masters_own_data() -> None:
     """The called station's Disconnect closes the session at the master's next opportunity,
     with what the called station still had delivered first and the master's own queue left

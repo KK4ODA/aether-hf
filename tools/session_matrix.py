@@ -606,8 +606,11 @@ def step(run: Run, text: str) -> bool:
             120,
         )
     if word == "send":
-        # queued and left to go: what happens to it is for the steps after to see
-        call(a.control, "send", {"data": base64.b64encode(incompressible(int(arg), 7)).decode()})
+        # queued and left to go: what happens to it is for the steps after to see; `send b N`
+        # queues it at the called station
+        who, _, n = arg.rpartition(" ")
+        sender = b if who == "b" else a
+        call(sender.control, "send", {"data": base64.b64encode(incompressible(int(n), 7)).decode()})
         return True
     if word == "message?":
         # a message that may fail — through an outage, say: reported, not judged

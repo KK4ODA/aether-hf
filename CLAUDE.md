@@ -1614,6 +1614,21 @@ ladder, QSB, VOX, PACTOR, the polar path): 30/30 pass, no RF overlap, nothing sl
 baseline. The same audio through both rules (a scratch bench, ADR-0070 §3): 1 622 frames
 after noise, silence or the mute found 796 → 1 183 (the mute's 400: 0 → 384), 768 with the first
 block faded 6–30 dB 365 → 751, no false detection in either, and 40 minutes of noise none.
+**ADR-0072 (2026-10-15, after beta.107; the author: cap it, but tell the operator, or Disconnect
+looks broken, and say Abort closes now).** The nightly soak (run 33) left three sessions open on
+slow paths (12–31 bit/s, 6–15 kB queued): ADR-0039's patience restarts at every acknowledgement,
+so a path that still delivered never closed. Model first: `GrantConfig.disc_drain_s` (60 s) from
+the request — the caller's own, or when it decodes the called station's `flag` — then the DISC at
+the next `proceed`, with a `disconnect` event saying what was left (`_say_left`: "<n> bytes not
+delivered; …", "the other station's last <m> frames not received; …", "closing <t> s after the
+disconnect was asked"); `leave_by()`; liveness L6 in `04-formal-spec.md`. Port and the replay's
+`slow-drain` session. Daemon: a `closing` log line when Disconnect is pressed with data queued
+("… for at most 60 s; Abort closes at once"; "about" at the called station), `status.leave_in_s`.
+Panel: the banner and the line under the call buttons count it down; the ended banner says what
+was left (kept red, as every ended session). **The benches lift it** (`bench_link.py` and the
+research campaigns send and disconnect at once, so the wait is their transfer: `disc_drain_s =
+inf`). Harness: `80m-disconnect-slow-drain-500` (`send b N` queues at the called station); the
+three soak seeds end idle, air 1065/1153/1083 → 572/665/583 s.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -330,8 +330,11 @@ def run_point(
     b: LinkEngine | GrantedEngine
     if engine == "granted":
         # protocol 8 (ADR-0069): its gaps are its protocol's constants, and the pipe charges no
-        # keying, so this measures the header and the slot's cost, not keying's
-        gcfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
+        # keying, so this measures the header and the slot's cost, not keying's. The session
+        # sends and disconnects at once, so the disconnect's wait is the transfer: the minute an
+        # operator's disconnect waits (ADR-0072) is lifted unless `--link` sets it
+        knobs = {"disc_drain_s": math.inf, **(link or {})}
+        gcfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **knobs)  # type: ignore[arg-type]
         a = GrantedEngine("W4ODA", timing, gcfg, seed=seed)
         b = GrantedEngine("KK4XYZ", timing, gcfg, seed=seed + 1)
     else:

@@ -1,0 +1,62 @@
+name = "80m-disconnect-slow-drain-500"
+description = """80m at 500 Hz on a fluttering path, lopsided (+6.7 dB one way, +1 dB the other)
+with two VARA-class stations beside it: the soak of 2026-10-15 (seed 33, scenario 1). Each
+operator queues more than the path carries in a minute and presses Disconnect a minute later —
+the caller first, then, in a second session, the called station. Before ADR-0072 a disconnect
+waited for its queue as long as anything moved, 30–40 minutes on these paths; now it closes a
+minute after it was asked, says what it left, and both stations are idle within the harness's
+two minutes for a disconnect."""
+tags = ["80m", "robustness"]
+bandwidth = 500
+seconds = 1500
+seed = 330002
+connect_within_s = 180
+
+[stations.a]
+callsign = "KK4ODA"
+
+[stations.a.radio]
+rx_recovery_ms = 150
+vox_hold_ms = 600
+agc = "fast"
+
+[stations.b]
+callsign = "W4XYZ"
+answer_gap_ms = 500
+
+[stations.b.radio]
+rx_recovery_ms = 280
+
+[path]
+profile = "flutter"
+snr_db = 6.7
+cfo_hz = -31.3
+sro_ppm = -94.0
+delay_ms = 70.0
+
+[path.b_to_a]
+snr_db = 1.1
+
+[script]
+steps = [
+    "connect", "send 15000", "wait 60", "disconnect",
+    "connect", "send b 15000", "wait 60", "disconnect b",
+]
+
+[expect]
+connected = true
+idle = true
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "a"
+audio_hz = 1603
+power_db = -8
+profile = "moderate"
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "both"
+audio_hz = 2582
+power_db = -15
+profile = "poor"

@@ -267,8 +267,12 @@ Type the other station's callsign, with its SSID if it uses one, then:
 - **Connect**: call it and start a session. Calls go out on the tone floor first.
 - **Disconnect**: send what is queued, then close. At the station that was called, it sends
   what that station has queued and asks the caller to close; the caller stops sending and
-  closes. While calling it reads **Stop calling**.
-- **Abort**: drop the session at once, sending nothing more.
+  closes. It waits a minute at most: past that the session closes anyway. While it waits, the
+  banner and the line under the buttons say how much is still queued and how many seconds are
+  left. When the session ends, the banner says what did not get through. While calling it reads
+  **Stop calling**.
+- **Abort**: drop the session at once, sending nothing more. Use it when you cannot wait for
+  Disconnect.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
   you and how well, both ways.
 - **Beacon**: puts your callsign on the air once, on the tone floor, addressed to nobody, so
@@ -504,6 +508,10 @@ and run **Set drive** again.
 - Probe first: it tells you whether either of you hears the other at all.
 - After four unanswered tries at 2300 Hz to a station not known to run 2300 Hz, Aether tries at
   500 Hz.
+
+**Disconnect does not close the session at once.** It sends what is still queued first. On a
+slow path that can take a while, so it waits a minute at most, then closes anyway. The banner
+counts the seconds down. To close now, press **Abort**.
 
 **The other station keys by VOX (a SignaLink) and keeps calling after I answer.** Set the **answer
 gap** in step 4 to 500–800 ms. Aether learns a gap for such a station by itself, but setting it

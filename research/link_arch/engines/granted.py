@@ -22,13 +22,16 @@ GRANT_KINDS = ("hdr", "ans", "disc", "disc_ack")
 
 def config_for(air: AirInterface, knobs: tuple[float, ...], arm: str = "granted") -> GrantConfig:
     """The engine as every arm is configured: the air's ladder, the 26 s key limit, and the
-    profile's figures for the protocol's constants (both stations hold the same)."""
+    profile's figures for the protocol's constants (both stations hold the same). The bulk
+    workload disconnects as it sends, so the disconnect's minute (ADR-0072) is lifted: the
+    campaigns measure the transfer, as they did before it."""
     cfg = GrantConfig(
         max_mode=air.n_rungs - 1,
         capabilities=bandwidth_capabilities(air.params),
         max_burst_s=26.0,
         turnaround_s=knobs[0],
         slack_s=knobs[1],
+        disc_drain_s=float("inf"),
     )
     if len(knobs) > 2:
         cfg.decode_budget_s = (knobs[2], knobs[3])

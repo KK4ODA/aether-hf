@@ -176,6 +176,11 @@ pub struct GrantConfig {
     pub disc_patience_exchanges: f64,
     /// The least of that patience, seconds.
     pub disc_patience_s: f64,
+    /// The longest a disconnect waits for what is still queued, counted from when it was
+    /// asked: past it the master sends its DISC at its next opportunity, delivered or not, and
+    /// says what it left (ADR-0072). A slow path that still delivers never runs out of the
+    /// patience — the soak of 2026-10-15 drew three that would have taken 30–40 minutes.
+    pub disc_drain_s: f64,
     /// DISCs an aborting master says, one a slot, while nothing answers (ADR-0052).
     pub leave_repeats: usize,
     /// A call heard in the ordinary family less than this above the ordinary control frame's
@@ -279,6 +284,7 @@ impl Default for GrantConfig {
             disc_retries: 3,
             disc_patience_exchanges: 2.0,
             disc_patience_s: 20.0,
+            disc_drain_s: 60.0,
             leave_repeats: 3,
             floor_answer_margin_db: 12.0,
             answer_floor_margin_db: 3.0,
@@ -721,6 +727,9 @@ pub struct GrantedEngine {
     disc_requested: bool,
     disc_tries: usize,
     patience_until: Option<f64>,
+    /// When a disconnect was asked: by this station's operator, or — for the master — when it
+    /// first read the slave's request (ADR-0072).
+    leave_since: Option<f64>,
     ladder_pending: Option<(usize, Vec<u8>)>,
     rate: RateController,
     asked: Option<usize>,
@@ -866,6 +875,7 @@ impl GrantedEngine {
             disc_requested: false,
             disc_tries: 0,
             patience_until: None,
+            leave_since: None,
             ladder_pending: None,
             rate,
             asked: None,
@@ -924,6 +934,7 @@ impl GrantedEngine {
         self.disc_requested = false;
         self.disc_tries = 0;
         self.patience_until = None;
+        self.leave_since = None;
         self.ladder_pending = None;
         self.rate = rate_controller_for(&self.timing, self.config.rate);
         self.asked = None;
@@ -1072,6 +1083,19 @@ impl GrantedEngine {
     #[must_use]
     pub fn disconnect_requested(&self) -> bool {
         self.disc_requested && self.state == State::Connected
+    }
+
+    /// When, at the latest, a disconnect asked for stops waiting for what is queued (engine
+    /// time); the DISC goes at the master's next opportunity after it. `None` when none was
+    /// asked. A slave's counts from its own request; the master's count starts when it reads
+    /// it, an answer later.
+    #[must_use]
+    pub fn leave_by(&self) -> Option<f64> {
+        if self.state != State::Connected {
+            return None;
+        }
+        self.leave_since
+            .map(|since| since + self.config.disc_drain_s)
     }
 
     /// Payload bytes queued or sent and not yet acknowledged.
@@ -1255,14 +1279,18 @@ impl GrantedEngine {
         Ok(())
     }
 
-    /// Orderly close. The master finishes what it has queued, and what the slave has, or runs
-    /// out of patience (ADR-0039), then sends DISC; the slave asks to leave in its next answer
-    /// and the master closes the session.
+    /// Orderly close. The master finishes what it has queued, and what the slave has, for no
+    /// longer than `disc_drain_s` from now (ADR-0072) or its patience with nothing moving
+    /// (ADR-0039), then sends DISC; the slave asks to leave in its next answer and the master
+    /// closes the session.
     pub fn disconnect(&mut self) {
         if self.state == State::Idle {
             return;
         }
         self.disc_requested = true;
+        if self.leave_since.is_none() {
+            self.leave_since = Some(self.now);
+        }
         if self.role == Role::Slave && self.window.is_some() {
             self.cause = "disconnect";
             self.try_window();
@@ -2453,6 +2481,9 @@ impl GrantedEngine {
         self.hdr_floor = ctl.fam || self.floor_only();
         self.possible = Families::of(frame.floor);
         self.slave_leaves = ctl.flag;
+        if ctl.flag && self.leave_since.is_none() {
+            self.leave_since = Some(self.now);
+        }
         if ctl.count == 0 {
             self.slave_floor_only = ctl.data_floor;
         }
@@ -2534,7 +2565,8 @@ impl GrantedEngine {
     /// master's own queue when the disconnect is its own; when the slave asked, its operator
     /// has stopped receiving, and what the master has not delivered stays undelivered
     /// (ADR-0023's receiving station; `80m-leave-together-500`). Either waits no longer than
-    /// the patience (ADR-0039).
+    /// the drain's limit from when the disconnect was asked (ADR-0072) or the patience with
+    /// nothing moving (ADR-0039), and says what it leaves.
     fn can_leave(&mut self) -> bool {
         let own_done = self.all_acknowledged() || self.slave_leaves;
         if own_done && self.slave_want.unwrap_or(0) == 0 && self.max_seen.is_none() {
@@ -2543,7 +2575,41 @@ impl GrantedEngine {
         if self.patience_until.is_none() {
             self.patience_until = Some(self.now + self.disc_patience());
         }
-        self.patience_until.is_some_and(|until| self.now >= until)
+        let since = *self.leave_since.get_or_insert(self.now);
+        if self.now >= since + self.config.disc_drain_s {
+            let why = format!("{:.0} s after the disconnect was asked", self.now - since);
+            self.say_left(&why);
+            return true;
+        }
+        if self.patience_until.is_some_and(|until| self.now >= until) {
+            let why = format!("nothing acknowledged for {:.0} s", self.disc_patience());
+            self.say_left(&why);
+            return true;
+        }
+        false
+    }
+
+    /// What a closing master leaves behind, said once as it decides to close: its own queue
+    /// when the disconnect is its own, and what the slave still said it had.
+    fn say_left(&mut self, why: &str) {
+        let mut left = Vec::new();
+        let own = if self.slave_leaves {
+            0
+        } else {
+            self.tx_undelivered_bytes()
+        };
+        if own > 0 {
+            left.push(format!("{own} bytes not delivered"));
+        }
+        let theirs = self.slave_want.unwrap_or(0);
+        if theirs > 0 {
+            left.push(format!(
+                "the other station's last {theirs} frames not received"
+            ));
+        }
+        if !left.is_empty() {
+            self.event("disconnect", format!("{}; closing {why}", left.join("; ")));
+        }
     }
 
     /// What the slave sent in the slot goes to the rate controller; silence is counted and

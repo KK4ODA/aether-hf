@@ -102,6 +102,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "disc_retries": c.disc_retries,
         "disc_patience_exchanges": bits(c.disc_patience_exchanges),
         "disc_patience_s": bits(c.disc_patience_s),
+        "disc_drain_s": bits(c.disc_drain_s),
         "leave_repeats": c.leave_repeats,
         "floor_answer_margin_db": bits(c.floor_answer_margin_db),
         "answer_floor_margin_db": bits(c.answer_floor_margin_db),
@@ -549,6 +550,28 @@ def leaving() -> list[Recorder]:
     return [ra, rb]
 
 
+def slow_drain() -> list[Recorder]:
+    """A disconnect on a slow path with more queued than a minute carries (ADR-0072): the
+    master's own, then — in a second session — the slave's, which the master's limit counts
+    from the answer it read the request in. Each closes with what it left said."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(43)
+    sim = TwoStationSim(a, b, snr_db=0.0, seed=43)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.send(_message(rng, 12000))
+    sim.run(until=80.0)
+    a.disconnect()
+    sim.run(until=260.0)
+    a.connect("KK4XYZ")
+    sim.run(until=300.0)
+    b.send(_message(rng, 12000))
+    sim.run(until=340.0)
+    b.disconnect()
+    sim.run(until=560.0)
+    return [ra, rb]
+
+
 def probes() -> list[Recorder]:
     """Probes answered, across bandwidths, and unanswered; a call to nobody."""
     timing = phy_timing(WIDE.params)
@@ -822,6 +845,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "dead-path": dead_path,
     "aborts": aborts,
     "leaving": leaving,
+    "slow-drain": slow_drain,
     "probes": probes,
     "identifiers": identifiers,
     "ladder": ladder,

@@ -152,7 +152,7 @@ function onEvent(frame) {
         chime("up");
         focusComposer();
       } else if (data.name === "disconnected") {
-        const left = leftBehind ? `. ${leftBehind}` : "";
+        const left = leftBehind ? `. ${leftBehindText(leftBehind)}` : "";
         leftBehind = "";
         showBanner("ended", `Session ended: ${data.detail}${left}`, 15000);
         chime("down");
@@ -186,7 +186,7 @@ function onEvent(frame) {
       // a sender that left without what the path would not carry says how much (ADR-0039)
       if (data.name === "disconnect") leftBehind = data.detail ?? "";
       // what the banner shows moves with these at once, not at the next poll
-      if (["probe", "test", "beacon", "disconnect"].includes(data.name)) refreshStatus();
+      if (["probe", "test", "beacon", "disconnect", "closing"].includes(data.name)) refreshStatus();
       break;
     case "regulatory":
       onRegulatory(data);
@@ -385,9 +385,29 @@ function showBanner(state, text, hideAfterMs = 0) {
   }
 }
 
-// What a sender that left without the rest of its queue said it left (ADR-0039), for the
-// banner that says the session ended.
+// What a sender that left without the rest of its queue said it left (ADR-0039, ADR-0072),
+// for the banner that says the session ended.
 let leftBehind = "";
+
+// The modem's sentence ("10228 bytes not delivered; closing 61 s after the disconnect was
+// asked") as the ended banner says it: what was left, then why, in brackets.
+function leftBehindText(said) {
+  const text = said.replace(/; closing (.*)$/, " ($1)");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// What a disconnect still waits for and for how long at most (ADR-0072): on a slow path a
+// queue took minutes, and the operator took Disconnect for broken. A slave's limit is a floor
+// — the master counts from when it reads the request — so it says "about".
+function drainText(status) {
+  const bytes = status.queued_bytes ?? 0;
+  const what = bytes > 0 ? `${formatBytes(bytes)} still queued go first` : "what is still queued goes first";
+  const left = status.leave_in_s;
+  if (left == null) return what;
+  if (left < 1) return `${what}; closing at the next chance`;
+  const bound = status.role === "master" ? "at most" : "about";
+  return `${what}, for ${bound} ${Math.ceil(left)} s more`;
+}
 
 // The station probed last from this panel, for the banner: the status says a probe is out,
 // not to whom.
@@ -410,8 +430,8 @@ function bannerFor(status) {
     return [
       "closing",
       status.role === "master"
-        ? `Disconnecting from ${who}: what is still queued goes first. Abort closes now.`
-        : `Disconnecting from ${who}: the next answer asks it to close…`,
+        ? `Disconnecting from ${who}: ${drainText(status)}. Abort closes now.`
+        : `Disconnecting from ${who}: the next answer asks it to close; ${drainText(status)}. Abort closes now.`,
     ];
   }
   if (status.state === "connected") {
@@ -575,12 +595,12 @@ function applyClosing(status) {
   button.textContent = calling ? "Stop calling" : "Disconnect";
   button.title = calling
     ? "Stop calling: no session has come up, so there is nothing to close"
-    : "Close the session: what is queued is sent first; the called station asks the caller to close in its next answer";
+    : "Close the session: what is queued is sent first, for a minute at most, then the session closes and says what was left. The called station asks the caller to close in its next answer. Abort closes at once";
   let note = "";
   if (status.closing) {
     note = status.role === "master"
-      ? "Closing: what is still queued goes first, then the disconnect. Abort closes at once."
-      : "Closing: the next answer asks the other station to close. Abort closes at once.";
+      ? `Closing: ${drainText(status)}, then the disconnect. Abort closes at once.`
+      : `Closing: the next answer asks the other station to close; ${drainText(status)}. Abort closes at once.`;
   } else if (status.state === "disconnecting") {
     note = "Closing: waiting for the other station to answer the disconnect.";
   }
