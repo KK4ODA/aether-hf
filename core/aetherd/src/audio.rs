@@ -90,6 +90,11 @@ pub trait AudioIo {
     fn output_latency_s(&self) -> Option<f64> {
         None
     }
+    /// What the capture stream's own timestamps say it skipped or repeated since the device
+    /// was opened ([`CaptureSkips`]). None from a backend that keeps no timestamps.
+    fn capture_skips(&self) -> CaptureSkips {
+        CaptureSkips::default()
+    }
     /// An account of the transmission whose samples are queued next (one line of JSON,
     /// `Station::take_tags`): a harness's channel server puts it on the air beside them, so a
     /// collision can be put down to its two transmissions (ADR-0069 §5). A sound card has
@@ -139,6 +144,67 @@ impl core::fmt::Display for AudioError {
 
 impl core::error::Error for AudioError {}
 
+/// A jump in the capture timestamps smaller than this is their own jitter, not audio: a
+/// quarter of a tone symbol. The losses that made a tone frame slip at the mini PC on
+/// 2026-10-14 were 35 and 40 ms.
+pub const SKIP_MIN_S: f64 = 0.01;
+
+/// What a capture stream's own timestamps say of the audio between its callbacks
+/// (ADR-0071 §3; 11-step-4-first-air.md §4.4 and §12, change 2).
+///
+/// Each callback says when its first sample was captured. The next one's should be that
+/// much later again as the samples it held last time take; a later one means the device's
+/// clock moved past audio that never arrived, an earlier one audio delivered twice. The queue
+/// cannot see either — it counts only what it drops itself — and the receiver hears the audio
+/// either side spliced together: on 2026-10-14 a tone frame lost that way was never decoded,
+/// and nothing said why. This is a report only: whether the timestamps of a USB codec on
+/// Windows see such a loss at all is what it is for (§14), so the station's clock is not
+/// moved by it.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct CaptureSkips {
+    /// Jumps forward: audio the device's clock moved past that never arrived.
+    pub lost: usize,
+    /// What they came to, in seconds.
+    pub lost_s: f64,
+    /// The largest of them, in seconds.
+    pub largest_s: f64,
+    /// Jumps back: audio delivered twice over, or a clock that stepped back.
+    pub repeated: usize,
+    /// What they came to, in seconds.
+    pub repeated_s: f64,
+}
+
+impl CaptureSkips {
+    /// A callback whose first sample was captured `elapsed_s` after the previous callback's,
+    /// which held `frames` frames at `rate` Hz.
+    pub fn note(&mut self, elapsed_s: f64, frames: usize, rate: f64) {
+        if !elapsed_s.is_finite() || rate <= 0.0 {
+            return;
+        }
+        let jump = elapsed_s - frames as f64 / rate;
+        if jump >= SKIP_MIN_S {
+            self.lost += 1;
+            self.lost_s += jump;
+            self.largest_s = self.largest_s.max(jump);
+        } else if jump <= -SKIP_MIN_S {
+            self.repeated += 1;
+            self.repeated_s -= jump;
+        }
+    }
+}
+
+/// Seconds from `earlier` to `later`, negative if `later` is the earlier of the two.
+fn seconds_between(earlier: cpal::StreamInstant, later: cpal::StreamInstant) -> f64 {
+    later.duration_since(&earlier).map_or_else(
+        || {
+            -earlier
+                .duration_since(&later)
+                .map_or(0.0, |d| d.as_secs_f64())
+        },
+        |d| d.as_secs_f64(),
+    )
+}
+
 /// A bounded queue shared with a sound-card callback.
 #[derive(Debug, Default)]
 struct Shared {
@@ -152,6 +218,8 @@ struct Shared {
     starved: usize,
     /// The longest callback-to-device delay the device has reported, in seconds.
     latency_s: Option<f64>,
+    /// What the capture stream's timestamps said it skipped (the capture queue only).
+    skips: CaptureSkips,
 }
 
 type Queue = Arc<Mutex<Shared>>;
@@ -175,6 +243,10 @@ fn fill_playback(shared: &mut Shared, data: &mut [f32], channels: usize) {
 
 fn push_bounded(queue: &Queue, samples: &[f32], limit: usize) {
     let Ok(mut shared) = queue.lock() else { return };
+    push_into(&mut shared, samples, limit);
+}
+
+fn push_into(shared: &mut Shared, samples: &[f32], limit: usize) {
     shared.samples.extend(samples);
     if shared.samples.len() > limit {
         let excess = shared.samples.len() - limit;
@@ -370,13 +442,25 @@ impl SoundCard {
         let to_play: Queue = Arc::new(Mutex::new(Shared::default()));
 
         let capture_queue = Arc::clone(&captured);
+        let in_rate = f64::from(in_config.sample_rate.0);
+        // when the last callback's first sample was captured, and how many it held
+        let mut last: Option<(cpal::StreamInstant, usize)> = None;
         let input = input_device
             .build_input_stream(
                 &in_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                move |data: &[f32], info: &cpal::InputCallbackInfo| {
                     // one channel is all a radio gives; taking the first is honest and cheap
                     let mono: Vec<f32> = data.iter().step_by(in_channels).copied().collect();
-                    push_bounded(&capture_queue, &mono, limit);
+                    let Ok(mut shared) = capture_queue.lock() else {
+                        return;
+                    };
+                    let captured_at = info.timestamp().capture;
+                    if let Some((at, frames)) = last {
+                        let elapsed = seconds_between(at, captured_at);
+                        shared.skips.note(elapsed, frames, in_rate);
+                    }
+                    last = Some((captured_at, mono.len()));
+                    push_into(&mut shared, &mono, limit);
                 },
                 |error| eprintln!("aetherd: capture stream: {error}"),
                 None,
@@ -467,6 +551,12 @@ impl AudioIo for SoundCard {
 
     fn output_latency_s(&self) -> Option<f64> {
         self.to_play.lock().ok().and_then(|shared| shared.latency_s)
+    }
+
+    fn capture_skips(&self) -> CaptureSkips {
+        self.captured
+            .lock()
+            .map_or_else(|_| CaptureSkips::default(), |shared| shared.skips)
     }
 
     fn drains_at(&self) -> u64 {
@@ -697,6 +787,31 @@ impl AudioIo for Silence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_jump_in_the_capture_timestamps_is_audio_lost_and_jitter_is_not() {
+        // the mini PC of 2026-10-14 (11-step-4-first-air.md §4.4): 10 ms callbacks at 48 kHz,
+        // then 35 ms of audio gone between two of them, and later 40 ms
+        let rate = 48_000.0;
+        let mut skips = CaptureSkips::default();
+        for elapsed in [0.010, 0.0103, 0.0097, 0.012, 0.008] {
+            skips.note(elapsed, 480, rate);
+        }
+        assert_eq!(skips, CaptureSkips::default(), "jitter counted");
+        skips.note(0.045, 480, rate);
+        skips.note(0.050, 480, rate);
+        assert_eq!(skips.lost, 2);
+        assert!((skips.lost_s - 0.075).abs() < 1e-9, "{skips:?}");
+        assert!((skips.largest_s - 0.040).abs() < 1e-9, "{skips:?}");
+        // audio delivered twice: the next callback's first sample was captured before the end
+        // of the last one's
+        skips.note(-0.010, 480, rate);
+        assert_eq!(skips.repeated, 1);
+        assert!((skips.repeated_s - 0.020).abs() < 1e-9, "{skips:?}");
+        // a backend's nonsense is no evidence
+        skips.note(f64::NAN, 480, rate);
+        assert_eq!((skips.lost, skips.repeated), (2, 1));
+    }
 
     #[test]
     fn the_playback_callback_counts_its_clock_and_the_silence_it_had_to_play() {

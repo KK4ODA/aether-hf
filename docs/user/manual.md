@@ -383,6 +383,10 @@ The **Log** is everything the modem and the panel reported since the panel opene
 Filters: *All*, *Problems*, *Rules*, *Sessions*, *Beacons*. **Clear** empties the panel's copy;
 the modem's own log file is kept.
 
+A `keying` line says how long your radio takes to key and how long Aether takes to prepare a
+transmission. Aether starts its transmissions that much sooner, so its answers reach the air on
+time. The line comes back only when those times change.
+
 **Send files…** is how anything leaves your station. Choose what to do:
 
 - **Send my files to the Aether project**: one zip of your logs, the diagnostic bundle and the
@@ -514,6 +518,12 @@ station. Use the radio's AGC on FAST or AUTO, or off; SLOW confuses the noise fl
 lopsided path, where the other station hears you much worse than you hear it, slows every
 exchange. More power, a better antenna or another band helps more than any setting. If the
 Frames table shows many failed frames at good SNR, check the receive level and the drive.
+
+**The log says the sound card's capture skipped some milliseconds.** Your computer or its USB
+audio lost a moment of what the radio sent it. A frame across the gap may not decode, and Aether
+asks for it again. Once in a session is nothing to act on. If it happens often, close other
+programs, plug the radio into a USB port on the computer itself rather than a hub, and turn off
+USB power saving. Send your files to the project too: these lines are being studied.
 
 **A host program says nothing is connected, or VARA is missing.** Check **Host programs** is on in
 step 5 and the program points at 127.0.0.1 and the right port. With *host program* keying, the
