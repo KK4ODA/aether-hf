@@ -813,6 +813,11 @@ fn state_name(station: &Station<Box<dyn Ptt>>) -> String {
 struct AudioLosses {
     dropped: usize,
     starved: usize,
+    skips: aetherd::audio::CaptureSkips,
+    /// The capture skips as the log last said them, and when: a backend whose timestamps
+    /// jitter past the threshold would otherwise write a line every pass.
+    skips_said: aetherd::audio::CaptureSkips,
+    skips_said_at: Option<std::time::Instant>,
 }
 
 /// Report what the sound card lost since the last pass: captured audio the modem could not
@@ -823,7 +828,7 @@ fn note_audio_losses(
     daemon: &mut DaemonState,
     audio: &dyn AudioIo,
     sample_rate: u32,
-    station: &Station<Box<dyn Ptt>>,
+    station: &mut Station<Box<dyn Ptt>>,
     reported: &mut AudioLosses,
 ) {
     let dropped = audio.dropped();
@@ -854,6 +859,57 @@ fn note_audio_losses(
         );
         reported.starved = starved;
         daemon.starved_audio = starved as u64;
+    }
+    // what the capture stream's own timestamps say it skipped: a report only, until a station
+    // has shown that they see the losses at all (ADR-0071 §3). Every one goes to the recording,
+    // where it is placed; the log says them at most every `LOOP_STALL_LOG_INTERVAL`
+    let skips = audio.capture_skips();
+    if skips.lost > reported.skips.lost {
+        let lost = skips.lost_s - reported.skips.lost_s;
+        station.record_event("capture_skip", &format!("lost {lost:.3}"));
+    }
+    if skips.repeated > reported.skips.repeated {
+        let repeated = skips.repeated_s - reported.skips.repeated_s;
+        station.record_event("capture_skip", &format!("repeated {repeated:.3}"));
+    }
+    reported.skips = skips;
+    daemon.capture_skips = skips;
+    let said = reported.skips_said;
+    let due = reported
+        .skips_said_at
+        .is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL);
+    if skips == said || !due {
+        return;
+    }
+    reported.skips_said = skips;
+    reported.skips_said_at = Some(std::time::Instant::now());
+    if skips.lost > said.lost {
+        let ms = (skips.lost_s - said.lost_s) * 1000.0;
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "the sound card's capture skipped {ms:.0} ms of audio, by its own timestamps: the \
+                 receiver heard the audio either side run together, and a frame across it may be \
+                 lost ({} such skips so far, the largest {:.0} ms)",
+                skips.lost,
+                skips.largest_s * 1000.0
+            ),
+            &state_name(station),
+        );
+    }
+    if skips.repeated > said.repeated {
+        let ms = (skips.repeated_s - said.repeated_s) * 1000.0;
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "the sound card's capture timestamps went back {ms:.0} ms: audio delivered twice, \
+                 or a clock that stepped ({} so far)",
+                skips.repeated
+            ),
+            &state_name(station),
+        );
     }
 }
 
@@ -969,6 +1025,16 @@ fn fill_card(
     last_ptt_fault: &mut Option<std::time::Instant>,
 ) {
     let mut buffer = vec![0.0f32; block];
+    // Render first, reading the card's clock either side: what the render took, the air took
+    // with it, so the keying gate judges the start on a fresh reading and the engine learns
+    // how long renders take (`station/latency.rs`). A harness whose clock stands still while
+    // the daemon works reads none.
+    let before = audio.played();
+    if station.render_pending() {
+        let after = audio.played();
+        station.render_took(after.saturating_sub(before));
+        station.device_played(after);
+    }
     while audio.queued() < backlog {
         let count = match station.playback(&mut buffer) {
             Ok(count) => count,

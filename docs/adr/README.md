@@ -75,3 +75,4 @@ context → decision → alternatives considered → consequences.
 | [0068](0068-the-answer-goes-when-the-burst-says.md) | The answer goes when the burst says, never when the receiver guesses | superseded by 0069 except §2.1 (the exact counts) |
 | [0069](0069-granted-slots.md) | Granted slots — one master per session; the other station keys only in a slot it was granted | accepted for building (from the architecture review in `docs/research/link-architecture/`) |
 | [0070](0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md) | A tone frame whose first sync block faded stands on its other two | accepted |
+| [0071](0071-the-keying-latency-counts-the-radio-and-the-render.md) | A station's keying latency counts its radio and its render | accepted |

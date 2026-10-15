@@ -115,6 +115,8 @@ pub struct DaemonState {
     /// Samples of silence the sound card played inside a transmission because the modem
     /// had not handed it the next ones in time, since the start: holes on the air.
     pub starved_audio: u64,
+    /// What the capture stream's own timestamps say it skipped or repeated, since the start.
+    pub capture_skips: crate::audio::CaptureSkips,
     /// The slowest pass of the run loop so far, in milliseconds, and what it was doing.
     pub loop_slowest_ms: f64,
     /// Which phase the slowest pass spent its time in: `commands`, `capture`, `playback`.
@@ -223,6 +225,7 @@ impl DaemonState {
             audio: String::new(),
             dropped_audio: 0,
             starved_audio: 0,
+            capture_skips: crate::audio::CaptureSkips::default(),
             loop_slowest_ms: 0.0,
             loop_slowest_phase: String::new(),
             loop_stalls: 0,
@@ -986,6 +989,8 @@ fn diagnostics<P: Ptt>(
         // KISS program was attached is often the first question a report raises
         "status": daemon_status(station, daemon.as_deref()),
         "capabilities": capabilities(station.params()),
+        // how long a transmission takes from decision to the air, as this station has learned
+        "keying": station.keying_report(),
         "devices": devices,
         "config": Value::Null,
         "path": Value::Null,
@@ -1009,6 +1014,13 @@ fn diagnostics<P: Ptt>(
                 "description": daemon.audio,
                 "dropped_samples": daemon.dropped_audio,
                 "starved_samples": daemon.starved_audio,
+                // by the capture stream's own timestamps (ADR-0071 §3)
+                "capture_skips": daemon.capture_skips.lost,
+                "capture_skipped_ms": (daemon.capture_skips.lost_s * 10_000.0).round() / 10.0,
+                "capture_largest_skip_ms":
+                    (daemon.capture_skips.largest_s * 10_000.0).round() / 10.0,
+                "capture_repeats": daemon.capture_skips.repeated,
+                "capture_repeated_ms": (daemon.capture_skips.repeated_s * 10_000.0).round() / 10.0,
             }),
         );
         object.insert(

@@ -26,6 +26,7 @@ mod datagrams;
 mod fieldtest;
 mod gaps;
 mod host;
+mod latency;
 mod reserve;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
@@ -412,6 +413,10 @@ const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
 /// Room kept past the sound card's own reported delay before the key comes up: its
 /// report is of the buffer, not the codec and the cable after it (ADR-0038).
 const DEVICE_LATENCY_MARGIN_S: f64 = 0.03;
+
+/// How far the waits learned for keying and rendering (`latency.rs`) must move the engine's
+/// keying latency before the log says so again.
+const LATENCY_NOTE_STEP_S: f64 = 0.01;
 
 /// The least the keyed tail keeps for the card, whatever it reports: a report of nothing is
 /// a host that does not know, not a card with no buffer.
@@ -1011,6 +1016,16 @@ pub struct Station<P: Ptt> {
     /// How long a sample takes to leave the sound card after its callback, as the card
     /// reports it (`AudioIo::output_latency_s`); `None` until it does, or for one that cannot.
     device_latency_s: Option<f64>,
+    /// The waits between deciding a transmission and its first sample leaving the card that the
+    /// card's report leaves out: the radio's keying command and the render (`latency.rs`).
+    latency: latency::KeyingLatency,
+    /// What the engine was last told of this station's keying latency beyond the lead and the
+    /// card, as logged, so a change is said once.
+    latency_said_s: f64,
+    /// The keying command's wait for the transmission now running, and its render on the
+    /// card's clock when the run loop measured one, for the recording's `tx_end`.
+    key_waited_s: f64,
+    rendered_s: Option<f64>,
     /// The two playback clocks and how the transmission now running stands against them.
     clock: PlaybackClock,
     /// The exact audio of the transmission now running, when the operator asked for it
@@ -1209,6 +1224,10 @@ impl<P: Ptt> Station<P> {
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
             device_latency_s: None,
+            latency: latency::KeyingLatency::default(),
+            latency_said_s: 0.0,
+            key_waited_s: 0.0,
+            rendered_s: None,
             clock: PlaybackClock::default(),
             tx_capture: None,
             pending: VecDeque::new(),
@@ -2648,14 +2667,35 @@ impl<P: Ptt> Station<P> {
                 );
                 return Ok(0);
             }
+            // the radio's keying command holds the run loop until the radio has answered (a
+            // CAT round trip), and the card plays on meanwhile: the wait is learned, and this
+            // transmission's start judged on the wait it took (`latency.rs`)
+            let asked = std::time::Instant::now();
             self.ptt.key(now)?;
+            let waited = asked.elapsed().as_secs_f64();
+            self.latency.key.push(waited);
+            self.key_waited_s = waited;
+            self.tell_engine_latency();
+            let starts_at = now + self.capture_lag_s() + waited;
+            if let Some(latest) = self.keying.and_then(|window| window.not_after) {
+                let radiates_at = starts_at + self.radiation_latency_s();
+                if radiates_at > latest + 1e-6 {
+                    // S2 by construction: the key is up and nothing has been played, so letting
+                    // it go again radiates nothing (ADR-0071)
+                    self.ptt.unkey(now)?;
+                    self.drop_late(now, radiates_at - latest);
+                    return Ok(0);
+                }
+            }
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
             // where its frames end if it plays whole: the slot it grants is anchored there, by
-            // the other station on what its header stated, whatever cuts it short
+            // the other station on what its header stated, whatever cuts it short — from where
+            // the air's clock stands once the key is up, then the card's output latency
             let audio_rate = self.config.params.audio_rate as f64;
-            let output_latency = self.radiation_latency_s() - self.config.key_lead_s;
+            let output_latency =
+                starts_at - now + self.radiation_latency_s() - self.config.key_lead_s;
             if let Some(window) = &mut self.keying {
                 window.whole_end =
                     Some(now + output_latency + window.frames_samples as f64 / audio_rate);
@@ -2725,51 +2765,65 @@ impl<P: Ptt> Station<P> {
         if self.playback.is_empty() {
             return true;
         }
-        // on the air's clock: the station's, plus what it has captured and not yet processed
-        let radiates_at = now + self.capture_lag_s() + self.radiation_latency_s();
+        // on the air's clock: the station's, plus what it has captured and not yet processed —
+        // the render just done among it, read off the card's clock — then the radio's keying
+        // command, the key lead and the card. Held while even the fastest recent command would
+        // put it on the air early; refused if the typical one would put it past its slack (and
+        // judged again with the wait measured, once the key is up: `playback`)
+        let keyed_at = now + self.capture_lag_s() + self.radiation_latency_s();
         if window
             .not_before
-            .is_some_and(|earliest| radiates_at < earliest - 1e-6)
+            .is_some_and(|earliest| keyed_at + self.latency.key.least() < earliest - 1e-6)
         {
             return false;
         }
+        let radiates_at = keyed_at + self.latency.key.typical();
         if window
             .not_after
             .is_some_and(|latest| radiates_at > latest + 1e-6)
         {
             let late = radiates_at - window.not_after.unwrap_or(radiates_at);
-            if let Some(before) = window.identifier_before {
-                self.identifier = before;
-                self.stats.cw_ids = self.stats.cw_ids.saturating_sub(1);
-            }
-            self.playback.clear();
-            self.authorized = None;
-            self.keying = None;
-            self.tx_capture = None;
-            self.tx_tag = None;
-            self.stats.dropped_late += 1;
-            self.engine.on_tx_dropped(now);
-            let behind = self.capture_lag_s();
-            let why = if behind >= 0.05 {
-                format!(" — the station {:.0} ms behind the air", behind * 1000.0)
-            } else {
-                String::new()
-            };
-            self.note(
-                "dropped",
-                &format!(
-                    "an answer {:.0} ms past its slot: not sent{why}",
-                    late * 1000.0
-                ),
-            );
-            if let Some(recording) = &mut self.recording {
-                let state = format!("{:?}", self.engine.state());
-                recording.event(now, "dropped", &format!("late {late:.3}"), &state);
-            }
-            self.pump();
+            self.drop_late(now, late);
             return false;
         }
         true
+    }
+
+    /// Drop the rendered transmission waiting to be keyed, which would start radiating `late`
+    /// seconds past its slack: not sent at all, and the engine told.
+    fn drop_late(&mut self, now: f64, late: f64) {
+        let Some(window) = self.keying else {
+            return;
+        };
+        if let Some(before) = window.identifier_before {
+            self.identifier = before;
+            self.stats.cw_ids = self.stats.cw_ids.saturating_sub(1);
+        }
+        self.playback.clear();
+        self.authorized = None;
+        self.keying = None;
+        self.tx_capture = None;
+        self.tx_tag = None;
+        self.stats.dropped_late += 1;
+        self.engine.on_tx_dropped(now);
+        let behind = self.capture_lag_s();
+        let why = if behind >= 0.05 {
+            format!(" — the station {:.0} ms behind the air", behind * 1000.0)
+        } else {
+            String::new()
+        };
+        self.note(
+            "dropped",
+            &format!(
+                "an answer {:.0} ms past its slot: not sent{why}",
+                late * 1000.0
+            ),
+        );
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(now, "dropped", &format!("late {late:.3}"), &state);
+        }
+        self.pump();
     }
 
     /// The transmission is over — its queue drained and, by the card's clock, its last
@@ -2811,13 +2865,18 @@ impl<P: Ptt> Station<P> {
                 now,
                 "tx_end",
                 &format!(
-                    "played {} drains_at {} tail {:.3} latency {} deaf_for {:.3}{}",
+                    "played {} drains_at {} tail {:.3} latency {} deaf_for {:.3} key {:.3} \
+                     render {}{}",
                     seconds(self.clock.device_played).unwrap_or_else(|| "-".into()),
                     seconds(self.clock.drains_at).unwrap_or_else(|| "-".into()),
                     tail_s,
                     self.device_latency_s
                         .map_or_else(|| "-".to_owned(), |s| format!("{s:.3}")),
                     self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S,
+                    self.key_waited_s,
+                    self.rendered_s
+                        .take()
+                        .map_or_else(|| "-".to_owned(), |s| format!("{s:.3}")),
                     if cut { " cut" } else { "" },
                 ),
                 &state,
@@ -2844,8 +2903,91 @@ impl<P: Ptt> Station<P> {
     pub fn device_latency(&mut self, seconds: Option<f64>) {
         if let Some(s) = seconds.filter(|s| s.is_finite() && *s >= 0.0 && *s < 1.0) {
             self.device_latency_s = Some(s);
-            self.engine.set_tx_latency_s(self.radiation_latency_s());
+            self.tell_engine_latency();
         }
+    }
+
+    /// Render what is queued to go next, if nothing is on the air or waiting to be keyed, and
+    /// say whether that was a transmission of the engine's. The run loop reads the sound card's
+    /// clock either side ([`Self::render_took`]) and again before the keying gate judges it: a
+    /// render that took the card's clock on took the air's with it (`latency.rs`).
+    pub fn render_pending(&mut self) -> bool {
+        if self.transmitting || !self.playback.is_empty() {
+            return false;
+        }
+        let now = self.now();
+        self.start_pending(now);
+        !self.playback.is_empty() && self.keying.is_some()
+    }
+
+    /// How long, in samples of the sound card's playback clock, the render of a transmission
+    /// of the engine's took ([`Self::render_pending`]).
+    pub fn render_took(&mut self, samples: u64) {
+        let seconds = samples as f64 / self.config.params.audio_rate as f64;
+        self.latency.render.push(seconds);
+        self.rendered_s = Some(seconds);
+        self.tell_engine_latency();
+    }
+
+    /// Put a line in the session recording, when one is running: what the run loop learns of
+    /// the audio that the station cannot see itself.
+    pub fn record_event(&mut self, event: &str, detail: &str) {
+        let now = self.now();
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(now, event, detail, &state);
+        }
+    }
+
+    /// What this station has learned of its keying, for the diagnostic bundle: the key lead,
+    /// the card's reported output latency, the radio's keying command and the render (typical,
+    /// fastest and slowest of the recent ones), and the latency the engine is told — in ms.
+    #[must_use]
+    pub fn keying_report(&self) -> serde_json::Value {
+        let ms = |s: f64| (s * 10_000.0).round() / 10.0;
+        let recent = |r: &latency::Recent| {
+            serde_json::json!({
+                "typical_ms": ms(r.typical()),
+                "least_ms": ms(r.least()),
+                "most_ms": ms(r.most()),
+                "count": r.count(),
+            })
+        };
+        serde_json::json!({
+            "lead_ms": ms(self.config.key_lead_s),
+            "card_ms": self.device_latency_s.map(ms),
+            "key": recent(&self.latency.key),
+            "render": recent(&self.latency.render),
+            "engine_latency_ms": ms(self.engine_latency_s()),
+        })
+    }
+
+    /// The engine's own keying latency: from deciding a transmission to its radiation — the key
+    /// lead and the card's output latency, and the radio's keying command and the render as
+    /// they typically take (`latency.rs`). An answer is decided that much ahead of its slot, and
+    /// the master keys that much ahead of where its transmission belongs.
+    fn engine_latency_s(&self) -> f64 {
+        self.radiation_latency_s() + self.latency.typical_s()
+    }
+
+    /// Tell the engine its keying latency, and say it in the log when what was learned moves it
+    /// by [`LATENCY_NOTE_STEP_S`] or more.
+    fn tell_engine_latency(&mut self) {
+        self.engine.set_tx_latency_s(self.engine_latency_s());
+        let waits = self.latency.typical_s();
+        if (waits - self.latency_said_s).abs() < LATENCY_NOTE_STEP_S {
+            return;
+        }
+        self.latency_said_s = waits;
+        let detail = format!(
+            "the radio takes {:.0} ms to key and a transmission {:.0} ms to render; \
+             transmissions now start {:.0} ms after they are decided, and are decided that much \
+             ahead",
+            self.latency.key.typical() * 1000.0,
+            self.latency.render.typical() * 1000.0,
+            self.engine_latency_s() * 1000.0,
+        );
+        self.note("keying", &detail);
     }
 
     /// The silence the key stays down for after a burst's last sample (ADR-0038). It covers
@@ -3469,6 +3611,13 @@ impl<P: Ptt> Station<P> {
                         cause,
                         queued_s: self.now(),
                     };
+                    // A transmission the engine keys at once — the master's, a call, a probe —
+                    // it reckons on the air its keying latency from now, and places what it
+                    // grants from there. That latency counts the typical render and keying
+                    // command, so one that goes faster than typical waits for it: on the air no
+                    // sooner than the engine reckoned, never early (`latency.rs`).
+                    let not_before =
+                        not_before.or_else(|| Some(self.now() + self.engine_latency_s()));
                     self.pending.push_back(Outgoing::Link(LinkTx {
                         frames,
                         origin,
@@ -10028,5 +10177,168 @@ mod tests {
         assert_eq!(station.datagram_status()["incomplete_dropped"], 1);
         let received = station.take_received_datagrams();
         assert!(received.is_empty(), "{received:?}");
+    }
+
+    /// A radio whose keying command takes `key_s` to answer, as a CAT round trip does.
+    #[derive(Debug, Default)]
+    struct SlowPtt {
+        key_s: f64,
+        keys: usize,
+        releases: usize,
+    }
+
+    impl Ptt for SlowPtt {
+        fn key(&mut self) -> Result<(), PttError> {
+            std::thread::sleep(std::time::Duration::from_secs_f64(self.key_s));
+            self.keys += 1;
+            Ok(())
+        }
+
+        fn unkey(&mut self) -> Result<(), PttError> {
+            self.releases += 1;
+            Ok(())
+        }
+
+        fn describe(&self) -> String {
+            "a slow CAT port".to_owned()
+        }
+    }
+
+    fn slow_station(key_s: f64) -> Station<SlowPtt> {
+        Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            SlowPtt {
+                key_s,
+                ..SlowPtt::default()
+            },
+            1,
+        )
+    }
+
+    /// Queue a transmission of the engine's kind — one ordinary control frame — with its window.
+    fn queue_link<P: Ptt>(
+        station: &mut Station<P>,
+        not_before: Option<f64>,
+        not_after: Option<f64>,
+    ) {
+        station.pending.push_back(Outgoing::Link(LinkTx {
+            frames: vec![aether_link::TxFrame {
+                container: Container::Control,
+                payload: vec![0x11; 7],
+                mode: 0,
+                rv: 0,
+                floor: false,
+                follows: 0,
+            }],
+            origin: Origin::station("test"),
+            window: KeyWindow {
+                not_before,
+                not_after,
+                ..KeyWindow::default()
+            },
+            identifier_s: 0.0,
+        }));
+    }
+
+    #[test]
+    fn the_radios_keying_wait_is_learned_and_the_engine_told() {
+        // protocol 8's first session on the air (11-step-4-first-air.md §4.1): the FTDX10's
+        // `TX1;` held the run loop 19 ms at every key, and nobody counted it — the engine
+        // decided its answers that much too late, and the gate judged their start that much
+        // early
+        let mut station = slow_station(0.03);
+        let before = station.engine_latency_s();
+        queue_link(&mut station, None, None);
+        station.device_played(0);
+        let mut out = vec![0.0f32; 480];
+        assert!(station.playback(&mut out).expect("playback") > 0);
+        assert!(station.transmitting());
+        let learned = station.latency.key.typical();
+        assert!((0.03..0.06).contains(&learned), "learned {learned}");
+        assert!((station.engine_latency_s() - before - learned).abs() < 1e-9);
+        assert!(
+            station.events.iter().any(|e| e.starts_with("keying:")),
+            "{:?}",
+            station.events
+        );
+        assert_eq!(
+            station.keying_report()["key"]["count"],
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
+    fn a_key_that_comes_up_past_the_slack_sends_nothing() {
+        // S2 by construction (11-step-4-first-air.md §12): nothing learned yet, the gate expects
+        // the key at once; the radio takes 60 ms, which puts the start 30 ms past the answer's
+        // slack. The key goes down again with nothing played and the engine is told it was
+        // dropped — and the next such answer is refused before the key, the wait now known
+        let mut station = slow_station(0.06);
+        let latest = station.now() + station.radiation_latency_s() + 0.03;
+        queue_link(&mut station, None, Some(latest));
+        station.device_played(0);
+        let mut out = vec![0.0f32; 480];
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        assert!(!station.transmitting());
+        assert!(out.iter().all(|&x| x == 0.0), "something was played");
+        assert_eq!(station.stats.dropped_late, 1);
+        assert_eq!(
+            (station.ptt.inner().keys, station.ptt.inner().releases),
+            (1, 1)
+        );
+        let latest = station.now() + station.radiation_latency_s() + 0.03;
+        queue_link(&mut station, None, Some(latest));
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        assert_eq!(station.stats.dropped_late, 2);
+        assert_eq!(
+            station.ptt.inner().keys,
+            1,
+            "keyed when the wait said it would be late"
+        );
+    }
+
+    #[test]
+    fn a_transmission_the_engine_keys_at_once_goes_no_sooner_than_it_reckoned() {
+        // the engine is told the typical render and keying wait, and places what it grants from
+        // where it reckons its transmission goes on the air; one rendered faster than typical
+        // waits for the rest, so a wait learned long never puts a transmission on the air early
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let rate = station.config.params.audio_rate as f64;
+        station.render_took((0.08 * rate) as u64);
+        let queued = station.now();
+        station.connect("KK4XYZ").expect("idle");
+        let block = 480;
+        let mut played = 0u64;
+        let silence = vec![0.0f32; block];
+        let mut out = vec![0.0f32; block];
+        let mut keyed_at = None;
+        for _ in 0..100 {
+            station.device_played(played);
+            let handed = station.playback(&mut out).expect("playback");
+            station.device_drains_at(played + handed as u64);
+            if station.transmitting() {
+                keyed_at = Some(station.now());
+                break;
+            }
+            played += block as u64;
+            station.capture(&silence).expect("capture");
+        }
+        let waited = keyed_at.expect("the call went out") - queued;
+        assert!(
+            (0.08 - 0.011..0.08 + 0.011).contains(&waited),
+            "keyed {waited:.3} s after the engine decided"
+        );
     }
 }

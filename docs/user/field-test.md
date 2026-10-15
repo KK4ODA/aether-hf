@@ -96,6 +96,16 @@ and there was a hole on the air; it should never appear (a whole burst is queued
 it is rendered, ADR-0010), and if it does the `loop:` line beside it says which part of
 the modem's pass took the time. Both counts are in the diagnostic bundle.
 
+Two lines are about the timing of a session's answers (ADR-0071). `keying: the radio takes N ms
+to key and a transmission M ms to render` is what the station has learned of its own radio and
+computer; it starts its transmissions that much sooner, and says so again only when the times
+change. The diagnostic bundle's `keying` has the recent waits. `audio: the sound card's capture
+skipped N ms of audio, by its own timestamps` means the card's capture timestamps jumped past
+audio that never arrived: the receiver heard the audio either side run together, and a frame
+across it may be lost. The bundle's `audio` counts these, and the recording marks each one
+(`capture_skip`). A recording made with both stations' audio, read with `tools/two_sides.py`,
+shows such a loss as a step in the offset between the two recordings.
+
 ## 3. What a session should be
 
 | Step | Who | What to send |
