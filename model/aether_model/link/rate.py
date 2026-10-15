@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from aether_model.link.frames import DATA_HEADER
+
 AWGN_THRESHOLD_DB: dict[int, float] = {
     0: -19.0,
     1: -17.3,
@@ -165,12 +167,17 @@ def usable_modes(
     payload: Mapping[int, float] = PAYLOAD_BYTES,
     frame_s: Mapping[int, float] | None = FRAME_S,
 ) -> list[int]:
-    """Modes on the throughput/threshold Pareto front, ascending. ``payload`` is bytes per
-    frame; given ``frame_s`` (air time per mode) the comparison is bytes per second, which
-    is what tells the floor's long frames from the ordinary ones."""
+    """Modes on the throughput/threshold Pareto front, ascending. ``payload`` is a frame's PHY
+    payload in bytes; given ``frame_s`` (air time per mode) the comparison is bytes per second,
+    which is what tells the floor's long frames from the ordinary ones.
+
+    A mode is worth the data a DATA frame carries in it, after the frame's 3-byte header
+    (ADR-0073). Counted by the payload, the 500 Hz air's QPSK ⅓ (15 bytes in 1.054 s) beat
+    tone4x100-75 (75 bytes in 5.36 s), 114 bit/s to 112, and was offered from 7 dB further up;
+    after the header it carries 91 bit/s to the tone rung's 107."""
 
     def worth(m: int) -> float:
-        return payload[m] / (frame_s[m] if frame_s is not None else 1.0)
+        return max(0.0, payload[m] - DATA_HEADER) / (frame_s[m] if frame_s is not None else 1.0)
 
     out = []
     for m, thr in thresholds.items():

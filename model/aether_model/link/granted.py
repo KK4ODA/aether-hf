@@ -124,6 +124,12 @@ the transmission readable (10-step-3.md §3.6). A tone control frame decodes onl
 three sync blocks (ADR-0049), and the middle one begins past 45 % of the frame; an ordinary
 control frame is coded at rate ½ at the most robust, and 60 % of its symbols lost leaves nothing
 to decode. The daemon reports such a cut with :meth:`GrantedEngine.on_tx_cut_unread`."""
+READABLE_ALONE_RVS = frozenset({0})
+"""The redundancy versions a copy decodes alone in on every rung: what R7 needs before it may
+leave a header out, since a count is believed only from a copy that decoded alone (R2). RV 1
+and 2 never decode alone, and RV 3 only on the rungs whose RV 3 carries every systematic bit
+(ADR-0043): on ND1J's Tests of 2026-10-15 every headerless transmission of RV 2 and 3 copies
+went silent, eight of the 21 silent slots (ADR-0073)."""
 OPEN_WINDOW_S = (4.0, 10.0)
 """An idle link's open window, after an ordinary and after a floor header."""
 
@@ -1750,8 +1756,14 @@ class GrantedEngine:
             data = self._data_frames(room - self._ctl_s(hdr_floor))
         # the header is left out only of a transmission that carries no fewer data frames for
         # it: capped at the four whose counts can anchor it, the 15-byte rung of the 500 Hz
-        # air sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB)
-        elide = elide and 0 < len(data) <= MAX_FOLLOWS + 1
+        # air sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB).
+        # And only where a count can anchor it at all: the slave believes a count only from a
+        # copy that decoded alone (R2), and only an RV 0 copy can on every rung (ADR-0073)
+        elide = (
+            elide
+            and 0 < len(data) <= MAX_FOLLOWS + 1
+            and any(f.rv in READABLE_ALONE_RVS for f in data)
+        )
         level = 0 if elide else self.level
         slave_ident = self._slave_id_due and not elide
         if not elide:

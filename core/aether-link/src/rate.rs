@@ -114,10 +114,15 @@ pub fn usable_modes_of(thresholds: &[f64], payload: &[usize]) -> Vec<usize> {
 }
 
 /// Modes on the throughput/threshold Pareto front of any table, ascending, comparing bytes
-/// per second — what tells the floor's long frames from the ordinary ones.
+/// per second — what tells the floor's long frames from the ordinary ones. `payload` is a
+/// frame's PHY payload; a mode is worth the data a DATA frame carries in it after its 3-byte
+/// header (ADR-0073): counted by the payload, the 500 Hz air's QPSK ⅓ (15 bytes in 1.054 s)
+/// beat tone4x100-75 (75 bytes in 5.36 s), 114 bit/s to 112, and was offered from 7 dB further
+/// up; after the header it carries 91 bit/s to the tone rung's 107.
 #[must_use]
 pub fn usable_modes_by_rate(thresholds: &[f64], payload: &[usize], frame_s: &[f64]) -> Vec<usize> {
-    let worth = |m: usize| payload[m] as f64 / frame_s[m];
+    let worth =
+        |m: usize| payload[m].saturating_sub(crate::frames::DATA_HEADER) as f64 / frame_s[m];
     (0..thresholds.len())
         .filter(|&m| {
             !(0..thresholds.len()).any(|other| {

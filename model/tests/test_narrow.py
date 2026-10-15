@@ -136,13 +136,15 @@ def test_narrow_mode_table() -> None:
     # the rate controller's copies agree with the ladder
     assert {r.index: r.payload_bytes for r in NARROW.ladder} == NARROW_PAYLOAD_BYTES
     assert set(NARROW_AWGN_THRESHOLD_DB) == {r.index for r in NARROW.ladder}
+    # rung 4 (QPSK 1/3) carries less data after its header than tone4x100-75 does, from 7 dB
+    # further up: it is offered no more (ADR-0073)
     assert usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)[:6] == [
         0,
         1,
         2,
         3,
-        4,
         5,
+        6,
     ]
 
 

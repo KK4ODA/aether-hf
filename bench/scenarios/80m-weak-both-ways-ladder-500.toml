@@ -1,0 +1,39 @@
+name = "80m-weak-both-ways-ladder-500"
+description = """80 m at 500 Hz on ND1J's path of 2026-10-15 15:42Z (the second morning Test,
+docs/research/link-architecture/12-two-paths-80m.md): the caller is heard at about −5 dB and
+hears the other station's floor answers at about −10, so every answer and header goes on the
+floor and the link runs the four-tone rungs. A Test session: its ladder pins OFDM rungs the path
+cannot carry, sent without their header, and their retransmissions at RV 2 and 3 — which never
+decode alone, so they can grant nothing — went silent eight times in three sessions on the air;
+a silence step after the last of them sent the file's first bursts at rungs 0 and 1."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 1015
+
+[stations.a]
+callsign = "ND1J"
+[stations.a.radio]
+rx_recovery_ms = 20
+
+[stations.b]
+callsign = "KK4ODA"
+[stations.b.radio]
+rx_recovery_ms = 50
+
+[path]
+profile = "good"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -5.0
+level = [[330, 0], [334, -6], [360, -6], [364, 0]]
+[path.b_to_a]
+snr_db = -10.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
