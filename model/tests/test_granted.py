@@ -951,32 +951,276 @@ def test_no_transmission_outlasts_the_key_limit(air: str) -> None:
         assert max(e - s for s, e in sim.radiated(who)) <= 12.0 + 1e-9
 
 
-def test_the_identifier_goes_where_the_engine_puts_it() -> None:
-    """The master's ahead of its header; the slave's ahead of its answer, in a slot granted
-    with its time once it said the identifier was due; neither ever over the other."""
-    a, b = _pair(WIDE, identifier_s=6.0)
-    sim = TwoStationSim(a, b, snr_db=10.0, seed=8)
-    keyed: list[tuple[int, SlotTransmit]] = []
+# ── the closing identifier (ADR-0075) ─────────────────────────────────
+
+
+def _on_air(sim: TwoStationSim) -> list[list[SlotTransmit]]:
+    """Every transmission each station radiated, in order — the keying gate's drops left out."""
+    sent: list[list[SlotTransmit]] = [[], []]
     orig = sim._launch
 
     def spy(who: int, at: float, tx: object) -> None:
-        if isinstance(tx, SlotTransmit) and tx.identifier:
-            keyed.append((who, tx))
+        dropped = len(sim.st[who].dropped)
+        orig(who, at, tx)  # type: ignore[arg-type]
+        if len(sim.st[who].dropped) == dropped:
+            sent[who].append(tx)  # type: ignore[arg-type]
+
+    sim._launch = spy  # type: ignore[method-assign]
+    return sent
+
+
+def _kind(tx: SlotTransmit) -> str:
+    """A transmission by what it is: ``id`` alone, a control frame's kind, ``data``."""
+    if not tx.frames:
+        return "id"
+    first = tx.frames[0]
+    if first.container is Container.CONTROL:
+        return GrantFrame.decode(first.payload).kind.name.lower()
+    return "data"
+
+
+def _ends_with_identifiers(sim: TwoStationSim, sent: list[list[SlotTransmit]]) -> None:
+    """Each station's last transmission ends with its closing identifier, nothing of either
+    went over the other's, and no identifier went anywhere but at a session's end: behind a
+    DISC_ACK, or alone."""
+    for who in (0, 1):
+        assert sent[who], f"station {who} sent nothing"
+        last = sent[who][-1]
+        assert last.identifier, (who, [_kind(t) for t in sent[who]])
+        for tx in sent[who]:
+            if tx.identifier:
+                assert _kind(tx) in ("disc_ack", "id"), (who, _kind(tx))
+    assert sim.overlaps() == []
+
+
+def _lost(kind: GrantKind, count: int | None = None):  # type: ignore[no-untyped-def]
+    """A frame offset that loses control frames of one kind: the first ``count``, or all."""
+    seen = [0]
+
+    def offset(frame: TxFrame) -> float:
+        if frame.container is not Container.CONTROL:
+            return 0.0
+        if GrantFrame.decode(frame.payload).kind is not kind:
+            return 0.0
+        seen[0] += 1
+        return -60.0 if count is None or seen[0] <= count else 0.0
+
+    return offset
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+@pytest.mark.parametrize("closing", ["master", "slave", "both"])
+def test_a_session_ends_with_both_identifiers_last(air: str, closing: str) -> None:
+    """ADR-0075: the DISC, then the slave's DISC_ACK with its identifier right behind it in the
+    time the DISC granted, then the master's identifier on its own once that slot is over —
+    each station's identifier the last thing it sends, whoever asked to close."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=21)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    a.send(b"m" * 800)
+    b.send(b"s" * 300)
+    sim.run(until=150.0)
+    assert sim.delivered(1) == b"m" * 800 and sim.delivered(0) == b"s" * 300
+    if closing in ("master", "both"):
+        a.disconnect()
+    if closing in ("slave", "both"):
+        b.disconnect()
+    sim.run(until=sim.t + 120.0)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert sim.events(0)[-1] == "disconnected:closed"
+    _ends_with_identifiers(sim, sent)
+    assert [_kind(t) for t in sent[1][-1:]] == ["disc_ack"]
+    assert [_kind(t) for t in sent[0][-2:]] == ["disc", "id"]
+    # one identifier each, and none before the close
+    assert [sum(t.identifier for t in sent[w]) for w in (0, 1)] == [1, 1]
+    # the master's went after the slave's had ended
+    slave_end = sim.radiated(1)[-1][1]
+    assert sim.radiated(0)[-1][0] >= slave_end
+    assert not a.identifier_owed and not b.identifier_owed
+    # in time the closing exchange left it: listening would only wait out the other's hangover
+    assert not sent[0][-1].listen_first
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_the_slave_starts_nothing_until_the_masters_identifier_is_over(air: str) -> None:
+    """A probe the slave makes the moment its DISC_ACK and identifier are handed over waits for
+    the master's identifier: nothing it starts on its own goes over it (ADR-0075)."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=30)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.disconnect()
+    t = sim.t
+    while b.state is not State.IDLE and t < 200.0:
+        t += 0.05
+        sim.run(until=t)
+    b.probe("W4ODA")
+    sim.run(until=sim.t + 120.0)
+    kinds = [_kind(tx) for tx in sent[1]]
+    assert kinds[-2:] == ["disc_ack", "data"], kinds
+    master_id = next(
+        span for tx, span in zip(sent[0], sim.radiated(0), strict=True) if not tx.frames
+    )
+    assert sim.radiated(1)[-1][0] >= master_id[1]
+    assert sim.overlaps() == []
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_lost_disc_ack_is_answered_again_identifier_and_all(air: str) -> None:
+    """The master missed the first DISC_ACK and said DISC again: the slave answers each one with
+    its DISC_ACK and its identifier, so its identifier stays the last thing it sent."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=22, frame_snr_offset=_lost(GrantKind.DISC_ACK, 1))
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.disconnect()
+    sim.run(until=sim.t + 150.0)
+    assert sim.events(0)[-1] == "disconnected:closed"
+    _ends_with_identifiers(sim, sent)
+    assert [_kind(t) for t in sent[1]].count("disc_ack") == 2
+    assert [_kind(t) for t in sent[0]].count("disc") == 2
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_master_that_gives_up_on_the_disc_ack_identifies_after_the_last_slot(air: str) -> None:
+    """Every DISC_ACK lost: the master leaves after three DISCs and identifies once the last
+    one's slot can no longer be in use — which covers the slave's identifier behind it — and,
+    having read nothing of the other station at the end, listens first."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=23, frame_snr_offset=_lost(GrantKind.DISC_ACK))
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.disconnect()
+    sim.run(until=sim.t + 200.0)
+    assert sim.events(0)[-1] == "disconnected:closed (no DISC_ACK)"
+    _ends_with_identifiers(sim, sent)
+    assert [_kind(t) for t in sent[1]].count("disc_ack") == 3
+    assert sent[0][-1].listen_first and _kind(sent[0][-1]) == "id"
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_an_aborting_master_identifies_once_it_has_left(air: str) -> None:
+    """ADR-0052's DISC on the floor, answered by the slave's DISC_ACK and identifier; the
+    master's identifier after it."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=24)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    a.send(b"q" * 4000)
+    sim.run(until=30.0)
+    a.abort()
+    sim.run(until=sim.t + 150.0)
+    assert b.state is State.IDLE
+    _ends_with_identifiers(sim, sent)
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_an_aborting_slave_is_closed_by_the_master_so_both_identify(air: str) -> None:
+    """The slave left: it answers the next header with a DISC, the master closes with a DISC of
+    its own, and the slave's DISC_ACK carries its identifier — both stations' identifiers come
+    last, in time both can count on."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=25)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    a.send(b"q" * 4000)
+    sim.run(until=30.0)
+    b.abort()
+    sim.run(until=sim.t + 150.0)
+    assert a.state is State.IDLE
+    assert sim.events(0)[-1] == "disconnected:peer disconnected"
+    _ends_with_identifiers(sim, sent)
+    kinds = [_kind(t) for t in sent[1]]
+    assert kinds[-2:] == ["disc", "disc_ack"]
+
+
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_a_dead_path_ends_with_each_identifier_on_its_own(air: str) -> None:
+    """The path dies mid-session: the master ends "no response" and identifies after its last
+    slot; the slave times out and identifies on its own. Each listens first (ADR-0075): the
+    other may have given up first and be sending its own."""
+    a, b = _pair(AIRS[air], identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_schedule=lambda t: 8.0 if t < 30.0 else -60.0, seed=26)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    a.send(b"z" * 6000)
+    sim.run(until=1200.0)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert sim.events(0)[-1] == "disconnected:no response"
+    assert sim.events(1)[-1] == "disconnected:link timeout"
+    _ends_with_identifiers(sim, sent)
+    assert sent[0][-1].listen_first and _kind(sent[0][-1]) == "id"
+    assert sent[1][-1].listen_first and _kind(sent[1][-1]) == "id"
+
+
+def test_a_peer_that_calls_again_gets_no_identifier_between_its_sessions() -> None:
+    """ADR-0055 §4 kept: a session the caller ended by calling again goes on in the new one — no
+    identifier from the called station between them, and the caller's own, owed for the old
+    session, is not sent when it calls the same station back."""
+    a, b = _pair(WIDE, identifier_s=5.5)
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=27)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    sim.run(until=20.0)
+    a.abort()
+    a._left = None  # say nothing about leaving: the call is the only news
+    a._disarm("leave")
+    a.connect("KK4XYZ")
+    sim.run(until=sim.t + 60.0)
+    assert any(e == "disconnected:W4ODA called again" for e in sim.events(1))
+    assert a.state is State.CONNECTED and b.state is State.CONNECTED
+    assert not any(t.identifier for t in sent[0] + sent[1])
+    a.disconnect()
+    sim.run(until=sim.t + 120.0)
+    _ends_with_identifiers(sim, sent)
+
+
+def test_a_station_that_sends_no_identifier_ends_as_before() -> None:
+    """A station that declared none (a non-US callsign with the setting off) ends with its
+    DISC_ACK; the other's identifier still comes last of all."""
+    a, b = _pair(WIDE, identifier_s=5.5)
+    b.set_identifiers({"KK4XYZ": 0.0})
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=28)
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    sim.run(until=30.0)
+    a.disconnect()
+    sim.run(until=sim.t + 120.0)
+    assert [_kind(t) for t in sent[1][-1:]] == ["disc_ack"]
+    assert not any(t.identifier for t in sent[1])
+    assert sent[0][-1].identifier and _kind(sent[0][-1]) == "id"
+    assert sim.overlaps() == []
+
+
+def test_the_identifier_declared_is_the_callsign_the_session_runs_under() -> None:
+    """The identifier sends the session's callsign, so its length — and whether there is one —
+    follows it: a call made as another of the station's callsigns declares that one's."""
+    a, b = _pair(WIDE)
+    a.set_callsigns(["W4ODA", "W4ODA-12"])
+    a.set_identifiers({"W4ODA": 4.0, "W4ODA-12": 6.5})
+    calls: list[ConnectBody] = []
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=29)
+    orig = sim._launch
+
+    def spy(who: int, at: float, tx: object) -> None:
+        frames = tx.frames  # type: ignore[attr-defined]
+        if who == 0 and frames and frames[0].container is Container.DATA:
+            body = frames[0].payload
+            if body[0] >> 5 == 1:
+                from aether_model.link.frames import decode_data
+
+                calls.append(ConnectBody.decode(decode_data(body)[1]))
         orig(who, at, tx)  # type: ignore[arg-type]
 
     sim._launch = spy  # type: ignore[method-assign]
-    a.connect("KK4XYZ")
-    a.send(b"i" * 2000)
+    a.connect("KK4XYZ", as_call="W4ODA-12")
     sim.run(until=20.0)
-    a.set_identifier_due()
-    b.set_identifier_due()
-    sim.run(until=sim.t + 60.0)
-    who = {w for w, _ in keyed}
-    assert who == {0, 1}
-    for _, tx in keyed:
-        assert tx.identifier_s == 6.0
-        assert tx.duration_s == pytest.approx(6.0 + sum(a.timing.frame_s(f) for f in tx.frames))
-    assert sim.overlaps() == []
+    assert calls and calls[0].identifier_s == 6.5
+    assert b._peer_identifier_s == 6.5
 
 
 def test_a_line_typed_at_an_idle_slave_goes_in_the_open_window() -> None:

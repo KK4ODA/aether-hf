@@ -1,0 +1,38 @@
+name = "40m-closing-identifiers-2300"
+description = """40m at 2300 Hz, both stations under US callsigns, so both send the Morse
+identifier whatever their setting says (ADR-0075, as VARA HF does). Five sessions, each ended a
+different way: the caller closes, the called station asks to leave, the caller aborts a
+transfer, the called station aborts one, and the path dies until both time out. However a
+session ends, each station's identifier is the last thing it sends for it — the slave's right
+behind its DISC_ACK, the master's on its own once that slot is over — and nothing goes over
+anything (`[expect] identifiers_last`, judged on the account of the air)."""
+tags = ["40m", "robustness", "identifier", "mixed"]
+bandwidth = 2300
+seconds = 2400
+seed = 74
+
+[stations.a]
+callsign = "W4ODA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 9.0
+cfo_hz = 2.0
+
+[script]
+steps = [
+    "connect", "message 1500", "disconnect",
+    "connect", "reply 800", "disconnect b",
+    "connect", "send 8000", "wait 12", "abort",
+    "connect", "send 8000", "wait 12", "abort b",
+    "connect", "send 4000", "wait 6", "outage 240", "wait_clear", "wait_idle 300",
+]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+identifiers_last = true
+max_collisions = 0

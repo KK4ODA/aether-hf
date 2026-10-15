@@ -1109,6 +1109,18 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
         "callsigns.set" => set_callsigns(station, params, id),
         "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
+        // the identifier for a callsign, by the station's one rule (ADR-0075)
+        "identifier.check" => {
+            let fallback = station.identifier_status()["callsign"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            let call = params
+                .get("callsign")
+                .and_then(Value::as_str)
+                .unwrap_or(&fallback);
+            Response::ok(id, station.identifier_check(call))
+        }
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
         "beacon" => beacon(station, params, id),
         "beacon.every" => beacon_every(station, params, id),
@@ -1968,6 +1980,8 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "watchdog_trips": station.stats.watchdog_trips,
         "beacons_sent": station.stats.beacons_sent,
         "beacons_heard": station.stats.beacons_heard,
+        // Morse identifiers sent: each session's closing one, and a setup's on its own (ADR-0075)
+        "cw_ids": station.stats.cw_ids,
         // calls and probes kept unanswered for want of the host program's LISTEN ON (ADR-0026)
         "calls_unanswered": station.stats.calls_unanswered,
         "probes_sent": stats.probes_sent,

@@ -4,6 +4,11 @@
 `setup_at`, `append_cw_id(…, setup)`, `advance_identifier`, `sets_up_contact`, `SETUP_ID_WAIT_S`).
 No wire change, no configuration key.
 
+**Superseded in part by ADR-0075** (2026-10-15): §2.2 (the ten minutes), §2.3 (the DISC or
+DISC_ACK carries it) and §2.5 (beacons and datagrams) no longer hold. A session is identified once,
+at its end, each station's identifier the last thing it sends; beacons and datagrams carry none.
+§2.1, §2.4 and the §4 amendment stand.
+
 ## 1. Context
 
 The Morse identifier (`[radio] cw_id`) went on a transmission whenever ten minutes had passed since

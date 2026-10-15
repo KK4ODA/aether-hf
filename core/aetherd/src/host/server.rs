@@ -76,6 +76,11 @@ const KEEPALIVE: Duration = Duration::from_secs(10);
 /// How long the command reader blocks before giving the notification path a turn.
 const POLL: Duration = Duration::from_millis(50);
 
+/// The longest a host's `DISCONNECTED` waits for the station's closing identifier (ADR-0075):
+/// a slave whose session ended without a DISC sends it on its own a link timeout on, listening
+/// first. Past it the host is told anyway — it must not wait for ever.
+const CLOSING_ID_WAIT: Duration = Duration::from_secs(150);
+
 /// A running VARA-compatible host interface. Stops when dropped.
 pub struct HostServer {
     /// The command port, after any port-zero assignment.
@@ -438,6 +443,11 @@ fn serve_commands(
     // is listening, so the notification waits for the next LISTEN on (ADR-0051, the RMS Trimode
     // bench 2026-10-07).
     let mut pending_connected: Option<serde_json::Value> = None;
+    // A `DISCONNECTED` held for the station's closing identifier (ADR-0075): told the session
+    // is over, VarAC goes back to its calling frequency, a scanning Trimode changes channel and
+    // Winlink Express may place its next call — over the Morse that ends the session. Said once
+    // the identifier has gone out (`identified`), or after `CLOSING_ID_WAIT` whatever happened.
+    let mut disconnect_held: Option<Instant> = None;
     let mut scan = Scan::default();
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
@@ -580,6 +590,35 @@ fn serve_commands(
                     if name == "disconnected" {
                         pending_connected = None;
                     }
+                    // The program's own session ended: it hears DISCONNECTED once the station's
+                    // closing identifier has gone out — the last thing the station sends for
+                    // the session, which a host keying the radio keys too (ADR-0075)
+                    if name == "identified" {
+                        if disconnect_held.take().is_some()
+                            && !say(&mut writer, &Notification::Disconnected.line())
+                        {
+                            return;
+                        }
+                        continue;
+                    }
+                    if name == "disconnected"
+                        && event.data["identifier_pending"].as_bool() == Some(true)
+                        && (connected_to.is_some() || calling)
+                    {
+                        if trace {
+                            eprintln!("host (DISCONNECTED held for the closing identifier)");
+                        }
+                        connected_to = None;
+                        calling = false;
+                        disconnect_held = Some(Instant::now());
+                        continue;
+                    }
+                    if name == "connected"
+                        && disconnect_held.take().is_some()
+                        && !say(&mut writer, &Notification::Disconnected.line())
+                    {
+                        return;
+                    }
                     if !report_state(
                         &event.data,
                         &host,
@@ -686,6 +725,14 @@ fn serve_commands(
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // ── a DISCONNECTED held too long ──────────────────────────────
+        if disconnect_held.is_some_and(|since| since.elapsed() >= CLOSING_ID_WAIT) {
+            disconnect_held = None;
+            if !say(&mut writer, &Notification::Disconnected.line()) {
+                return;
             }
         }
 

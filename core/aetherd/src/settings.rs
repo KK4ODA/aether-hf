@@ -423,7 +423,6 @@ max_mode = 19
 compress = false
 cw_id = false
 cw_id_wpm = 20.0
-cw_id_interval_s = 600.0
 
 [control]
 enabled = true

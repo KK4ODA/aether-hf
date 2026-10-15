@@ -71,8 +71,9 @@ header; when it does not, a banner names the port and what the radio answered.
 **Closing the window stops the modem.** When that would interrupt something — a session,
 a Test session, a call, a probe, a transmission — the application asks first and names
 it; *Keep running* leaves everything as it was. If you close anyway, the modem ends a
-session on the air before it stops (a disconnect, and your callsign in Morse when it is
-set to identify), which can take a quarter of a minute after the window has gone. A
+session on the air before it stops (a disconnect, the other station's answer, and each
+station's callsign in Morse when it identifies), which can take about 20 seconds after the
+window has gone. A
 daemon the application did not start (a gateway service) runs on, and closing asks
 nothing.
 

@@ -205,9 +205,17 @@ the sound card's own noise.
   when a station keeps calling again after being answered.
 - **Longest key**: the watchdog's limit on one transmission, 30 s by default. Aether sizes its
   bursts to fit inside it.
-- **Morse ID**: off by default. Aether's frames carry both callsigns; whether that satisfies
-  your licence is your call. Under the US rules an automatic identifier goes no faster than
-  20 wpm, whatever is set here.
+- **Morse ID**: your callsign in Morse at the end of each session. It is the last thing your
+  station sends for the session, after the other station's goodbye. Nothing during a session
+  sends one, and neither do calls, probes, beacons or KISS frames.
+  - A US callsign always sends it. The box is ticked and greyed out, with the note *Required for
+    US callsigns (§97.119)*. What you had set is kept for any other callsign.
+  - Any other callsign: your choice, off by default.
+  - A call or probe that leads to no session is identified 30 s after, on its own.
+  - The US rules cap an automatic identifier at 20 wpm, whatever is set here. The line beside the
+    speed says so when it applies.
+  - A US station identifies only at the end. A session longer than ten minutes is not identified
+    in between: see *FCC regulatory controls*.
 - **Band edges**: the margin kept between your signal and a segment's edge (50 Hz by default),
   for dial error and the radio's transmit chain. **Band-plan guidance** says when a
   transmission the rules allow is outside the voluntary band plan's digital areas.
@@ -271,8 +279,10 @@ Type the other station's callsign, with its SSID if it uses one, then:
   closes. It waits a minute at most: past that the session closes anyway. While it waits, the
   banner and the line under the buttons say how much is still queued and how many seconds are
   left. When the session ends, the banner says what did not get through. While calling it reads
-  **Stop calling**.
-- **Abort**: drop the session at once, sending nothing more. Use it when you cannot wait for
+  **Stop calling**. Each station that identifies sends its Morse ID last: the other station's
+  right after its goodbye, then yours.
+- **Abort**: drop the session at once. Aether sends no more data: it only tells the other
+  station it has gone, then sends your Morse ID if you identify. Use it when you cannot wait for
   Disconnect.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
   you and how well, both ways.

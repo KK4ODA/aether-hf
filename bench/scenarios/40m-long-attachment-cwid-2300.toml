@@ -1,7 +1,8 @@
 name = "40m-long-attachment-cwid-2300"
-description = """40m at 2300 Hz, a 60 kB Winlink attachment on a moderate path with both stations
-identifying in Morse every ten minutes: the identifier falls due mid-session, more than once,
-and must not break a burst, a turn or the key watchdog."""
+description = """40m at 2300 Hz, a 60 kB Winlink attachment on a moderate path between two
+identifying stations. Until ADR-0075 the ten-minute identifier fell due mid-session, more than
+once, and must not break a burst or the key watchdog; now nothing identifies inside a session,
+and the forty minutes end with both closing identifiers last."""
 tags = ["40m", "robustness", "long"]
 bandwidth = 2300
 seconds = 3000
@@ -11,11 +12,9 @@ transfer_s = 2400
 [stations.a]
 callsign = "W4TGA"
 cw_id = true
-cw_id_interval_s = 600.0
 [stations.b]
 callsign = "KK4ODA"
 cw_id = true
-cw_id_interval_s = 600.0
 
 [path]
 profile = "moderate"
@@ -30,4 +29,5 @@ connected = true
 delivered = true
 clean_end = true
 idle = true
+identifiers_last = true
 max_collisions = 6

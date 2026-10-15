@@ -267,9 +267,15 @@ pub enum Action {
         /// the daemon renders it while the slot has yet to start and keys it to radiate here
         /// (07-protocol-8.md §10); `None`, as soon as it can. Protocol 7's engine sets none.
         not_before: Option<f64>,
-        /// The station's Morse identifier goes first, this long, ahead of the frames: the
-        /// engine of protocol 8 places it (07-protocol-8.md §5.4). Counted in `duration_s`.
+        /// The station's closing Morse identifier, this long with the moment of silence that
+        /// parts it from the frames: after the frames — behind a `DISC_ACK`, in the time every
+        /// DISC grants it — or alone, with no frames; the last thing the station sends for the
+        /// session. The engine of protocol 8 places it (ADR-0075). Counted in `duration_s`.
         identifier_s: f64,
+        /// A transmission made outside every slot, which no protocol rule keeps clear: the
+        /// closing identifier of a station that could not be given a slot for it. The daemon
+        /// waits for a clear channel, as it does for a call (ADR-0075). Protocol 7 sets none.
+        listen_first: bool,
     },
     /// Deliver these payload bytes to the application, in order.
     Deliver(Vec<u8>),
@@ -1497,6 +1503,7 @@ impl LinkEngine {
             not_after: None,
             not_before: None,
             identifier_s: 0.0,
+            listen_first: false,
         });
         // The link timeout spans four exchanges at the family the link runs in, and was
         // reckoned only when a frame arrived: a sender whose OFDM bursts went unanswered

@@ -4,6 +4,10 @@
 (`aether-link` `engine.rs`) and the daemon (`core/aetherd/src/station.rs`: `held_for_busy`,
 `append_cw_id`). The frames and the link protocol are unchanged.
 
+**Superseded in part by ADR-0075** (2026-10-15): the waits for the other station's identifier are
+gone. Each station's identifier is the last thing it sends for a session, behind the DISC_ACK
+or alone after the slot, so nothing of the session follows one.
+
 ## 1. Context
 
 KK4ODA-1 closed a short chat session with ND1J on 7.082 MHz at 500 Hz (2026-09-25,

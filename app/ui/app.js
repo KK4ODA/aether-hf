@@ -651,6 +651,48 @@ function applyBeacon(beacon) {
 // ND1J set a faster speed and heard 20 wpm whatever he set, and nothing said why.
 let identifierMax = null;
 
+// The operator's own Morse ID setting (`radio.cw_id`), and why the callsign in Setup requires
+// the identifier whatever it says — the daemon's one rule, asked by `identifier.check`
+// (ADR-0075). A US callsign shows the box ticked and greyed out; the setting is kept as it was
+// and saved as it was, for any other callsign.
+let cwidSetting = false;
+let cwidRequired = null;
+let cwidChecked = null;
+
+function showCwid() {
+  const box = $("radio-cwid");
+  const note = $("cwid-required");
+  const forced = cwidRequired !== null;
+  box.disabled = forced;
+  box.checked = forced || cwidSetting;
+  note.hidden = !forced;
+  if (forced) note.textContent = cwidRequired;
+  const why = forced
+    ? `${cwidRequired}: this callsign identifies in Morse at the end of every session, whatever the box says`
+    : "Send this station's callsign in Morse at the end of each session: the last thing it sends for the session";
+  box.title = why;
+  $("radio-cwid-box").title = why;
+  showCwidCap();
+}
+
+// Ask the daemon whether the callsign in Setup requires the identifier, once the typing stops.
+let cwidTimer = null;
+function checkCwidRequired() {
+  clearTimeout(cwidTimer);
+  cwidTimer = setTimeout(async () => {
+    const callsign = $("wz-call").value.trim().toUpperCase() || liveConfig.callsign || "";
+    if (callsign === cwidChecked) return;
+    try {
+      const verdict = await call("identifier.check", { callsign });
+      cwidChecked = callsign;
+      cwidRequired = verdict.forced ? (verdict.reason ?? "Required for US callsigns (§97.119)") : null;
+    } catch {
+      cwidRequired = null; // a daemon from before ADR-0075: the setting alone decides
+    }
+    showCwid();
+  }, 300);
+}
+
 function showCwidCap() {
   const note = $("cwid-sent");
   const wpm = Number($("radio-cwid-wpm").value);
@@ -2602,9 +2644,11 @@ async function loadConfig() {
   $("radio-max-key").value = String(radio.max_key_s ?? 30);
   $("radio-answer-gap").value = String(radio.answer_gap_ms ?? 0);
   $("radio-turnaround").value = String(radio.turnaround_ms ?? 0);
-  $("radio-cwid").checked = radio.cw_id === true;
-  $("radio-cwid-interval").value = String(radio.cw_id_interval_s ?? 600);
+  cwidSetting = radio.cw_id === true;
   $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
+  cwidChecked = null;
+  showCwid();
+  checkCwidRequired();
   // the rules this station operates under (ADR-0018): nothing is assumed, and a field the
   // file leaves empty stays on "choose…"
   const rules = liveConfig.regulatory ?? {};
@@ -2685,7 +2729,6 @@ const SETTING_NAMES = {
   "radio.answer_gap_ms": "answer gap",
   "radio.turnaround_ms": "turnaround",
   "radio.cw_id": "Morse ID",
-  "radio.cw_id_interval_s": "Morse ID interval",
   "radio.cw_id_wpm": "Morse speed",
   "regulatory.edge_margin_hz": "band edges",
   "regulatory.band_plan": "band-plan guidance",
@@ -2951,7 +2994,6 @@ function formChanges() {
   for (const [id, key] of [
     ["radio-busy-db", "radio.busy_threshold_db"],
     ["radio-max-key", "radio.max_key_s"],
-    ["radio-cwid-interval", "radio.cw_id_interval_s"],
     ["radio-cwid-wpm", "radio.cw_id_wpm"],
   ]) {
     const value = numberIn(id);
@@ -2962,7 +3004,8 @@ function formChanges() {
   if (gap !== null) changes["radio.answer_gap_ms"] = Math.round(gap);
   const turnaround = numberIn("radio-turnaround");
   if (turnaround !== null) changes["radio.turnaround_ms"] = Math.round(turnaround);
-  changes["radio.cw_id"] = $("radio-cwid").checked;
+  // the operator's own setting, never the box a US callsign ticks (ADR-0075)
+  changes["radio.cw_id"] = cwidSetting;
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
@@ -3652,8 +3695,7 @@ function numberWithin(id, low, high) {
 // here is wrong" rather than "you did this": a busy threshold, a key limit and a Morse
 // schedule that parse, a host port a program can reach.
 function checkModemSettings() {
-  const morse = !$("radio-cwid").checked
-    || (numberWithin("radio-cwid-interval", 10, 3600) && numberWithin("radio-cwid-wpm", 5, 40));
+  const morse = !$("radio-cwid").checked || numberWithin("radio-cwid-wpm", 5, 40);
   const ok = numberWithin("radio-busy-db", 0, 60) && numberWithin("radio-max-key", 1, 600)
     && numberWithin("radio-answer-gap", 0, 2000) && numberWithin("radio-turnaround", 0, 1500)
     && morse;
@@ -4936,7 +4978,11 @@ function wire() {
   wireMismatch();
   wireDebug();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
-  $("radio-cwid").addEventListener("change", showCwidCap);
+  $("radio-cwid").addEventListener("change", () => {
+    // the box is the setting only where the callsign leaves it to the operator
+    if (cwidRequired === null) cwidSetting = $("radio-cwid").checked;
+    showCwid();
+  });
   $("btn-probe").addEventListener("click", async () => {
     const remote = $("remote").value.trim().toUpperCase();
     if (!remote) {
@@ -5090,7 +5136,7 @@ function wire() {
   for (const id of ["dev-in", "dev-out", "dev-ptt", "ptt-line", "ptt-protocol", "ptt-baud", "ptt-civ", "ptt-gpio", "ptt-address"]) {
     $(id).addEventListener("change", interfaceEdited);
   }
-  for (const id of ["radio-busy-db", "radio-max-key", "radio-answer-gap", "radio-turnaround", "radio-cwid", "radio-cwid-interval", "radio-cwid-wpm"]) {
+  for (const id of ["radio-busy-db", "radio-max-key", "radio-answer-gap", "radio-turnaround", "radio-cwid", "radio-cwid-wpm"]) {
     $(id).addEventListener("input", checkModemSettings);
   }
   for (const id of ["host-port", "update-channel", "host-enabled", "kiss-enabled", "kiss-host", "kiss-port"]) {
@@ -5113,6 +5159,7 @@ function wire() {
     $("wz-call-note").textContent = plausible
       ? `Will go on the air as ${value}.`
       : "Letters, digits, - and /; up to nine characters.";
+    checkCwidRequired();
     writeConfig();
   });
   $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));

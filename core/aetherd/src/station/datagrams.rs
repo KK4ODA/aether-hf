@@ -246,7 +246,7 @@ impl<P: Ptt> Station<P> {
         let number = self.datagrams.next_number();
         let pieces = fragments(&carried, number, capacity).map_err(invalid)?;
         let frame_s = timing.data_frame_s_for(rung);
-        let per_burst = ((burst_limit_s(&self.config, false) / frame_s).floor() as usize).max(1);
+        let per_burst = ((burst_limit_s(&self.config) / frame_s).floor() as usize).max(1);
         let frames: Vec<aether_link::TxFrame> = pieces
             .into_iter()
             .map(|payload| aether_link::TxFrame {

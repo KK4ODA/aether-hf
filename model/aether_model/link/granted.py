@@ -186,9 +186,15 @@ class SlotTransmit(Transmit):
     keying latency after — so the daemon renders it in the meantime and keys it to start
     radiating here (07-protocol-8.md §10). ``None``: as soon as it can."""
     identifier_s: float = 0.0
-    """The station's Morse identifier goes first, this long, ahead of the frames: inside the
-    master's own time, or inside a slot granted with its time (07-protocol-8.md §5.4). Already
-    counted in :attr:`duration_s`."""
+    """The station's closing Morse identifier, this long, and the moment of silence that parts
+    it from the frames: after the frames — behind a DISC_ACK, in the time every DISC grants it —
+    or alone, with no frames; the last thing the station sends for the session (ADR-0075).
+    Already counted in :attr:`duration_s`."""
+    listen_first: bool = False
+    """A transmission made outside every slot, which no protocol rule keeps clear: the closing
+    identifier of a station that could not be given a slot for it — a slave whose session timed
+    out, or whose left session never closed. The daemon waits for a clear channel, as it does
+    for a call (ADR-0075)."""
     cause: str = ""
     """What set the transmission going (a timer, a frame, a command): for the harness's account
     of the air, never for the protocol."""
@@ -265,8 +271,13 @@ class GrantConfig:
     """This station's radio: how long after it stops sending it hears again (VOX hold and
     receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s."""
     identifier_s: float = 0.0
-    """This station's Morse identifier's length, 0 for none. Declared at the connection, so the
-    master grants the time for it."""
+    """This station's closing Morse identifier's length, 0 for none: declared at the connection,
+    so the master grants the slave's in the DISC_ACK's slot and the slave knows how long the
+    master's lasts (ADR-0075). The length for every callsign not in :attr:`identifiers`."""
+    identifiers: dict[str, float] = field(default_factory=dict)
+    """The identifier's length by the callsign a session runs under: the daemon's, since the
+    identifier sends that callsign and whether one is sent at all can follow it (a US callsign
+    always identifies). Set by :meth:`GrantedEngine.set_identifiers`."""
     answer_gap_s: float = 0.0
     """The least time between the end of the other station's frames and this station radiating:
     the operator's ``[radio] answer_gap_ms``, or what this station learned the other needs
@@ -420,8 +431,6 @@ class _Answer:
     snr_db: float | None = None
     room_s: float = 0.0
     """Data time granted after the answer."""
-    ident: bool = False
-    """The slot includes this station's identifier time."""
 
 
 # ── the engine ────────────────────────────────────────────────────────
@@ -457,9 +466,10 @@ class GrantedEngine:
         self._cause = ""
         self._slot: _Slot | None = None
         """The slot this station granted last — a call's, a probe's, a header's, a DISC's."""
-        self._in_flight: list[_Slot | None] = []
+        self._in_flight: list[tuple[_Slot | None, float]] = []
         """This station's transmissions handed over and not yet done, in order, each with the
-        slot it granted: ``on_tx_done`` reports where that slot's granting transmission ended."""
+        slot it granted — ``on_tx_done`` reports where that slot's granting transmission ended —
+        and the closing identifier it carries behind a DISC_ACK, owed again if it is dropped."""
         self._hold_until = 0.0
         """Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
         while idle keys before this: the last slot it granted may still be in use."""
@@ -469,7 +479,19 @@ class GrantedEngine:
         DISC_ACK; otherwise a header is answered with a DISC — ADR-0052)."""
         self._leave_repeats = 0
         self._call_jitter = 0.0
-        self._identifier_due = False
+        self._my_ident_s = 0.0
+        """This station's closing identifier's length for the session under way or just ended:
+        what its call or acceptance declared, so what the other station reckons with."""
+        self._id_owed = 0.0
+        """The closing identifier of a session that has ended, not yet handed over: its length,
+        or 0 (ADR-0075)."""
+        self._id_alone = False
+        """Whether the owed identifier goes on its own initiative — no slot could be had for it
+        — rather than in time the closing exchange left this station."""
+        self._id_listen = False
+        """Whether the owed identifier listens first: one on its own, and a master's after a
+        session in which it read the other station no more — that station may be sending its
+        own (ADR-0075)."""
         self._probing: str | None = None
         self._probe_unsent = False
         self.last_probe: ProbeResult | None = None
@@ -503,6 +525,9 @@ class GrantedEngine:
         self.peer_capabilities = 0
         self._peer_turnaround_s = 0.0
         self._peer_identifier_s = 0.0
+        self._peer_left = False
+        """The master read the slave's DISC: the slave has left, and the master closes the
+        session with its own so that the slave's closing identifier gets its slot (ADR-0075)."""
         self._disc_requested = False
         self._disc_tries = 0
         self._patience_until: float | None = None
@@ -598,7 +623,15 @@ class GrantedEngine:
         if self.state is not State.IDLE:
             raise RuntimeError("already in a session")
         self._calling_as(as_call)
-        self.remote_call = remote_call.upper()
+        remote = remote_call.upper()
+        if self._id_owed > 0.0 and remote == self.remote_call:
+            # the station calls back the one it just lost: the communication goes on, and is
+            # identified at the end of the session this call opens (ADR-0055 §4, ADR-0075)
+            self._drop_identifier()
+        elif self._id_owed > 0.0:
+            # another station: the last communication's identifier goes now, ahead of the call
+            self._arm_at("ident", max(self.now, self._hold_until))
+        self.remote_call = remote
         self.session = self._new_session_number()
         self.state = State.CONNECTING
         self.role = Role.NONE
@@ -606,8 +639,11 @@ class GrantedEngine:
         self._left = None
         self._disarm("leave")
         self._reset_session()
+        self._my_ident_s = self._ident_for(self.my_call)
         self._cause = "connect"
-        if self.now >= self._hold_until - 1e-9:
+        # an identifier still owed to another station's session goes first: the call waits
+        # for it, as for the last slot this station granted
+        if self.now >= self._hold_until - 1e-9 and "ident" not in self._deadlines:
             self._send_connect()
         else:
             self._arm_at("connect", self._hold_until)
@@ -630,11 +666,13 @@ class GrantedEngine:
             raise RuntimeError("a probe is already out")
         self._calling_as(as_call)
         self._probing = remote_call.upper()
+        if self._id_owed > 0.0:
+            self._arm_at("ident", max(self.now, self._hold_until))  # it goes first
         self.last_probe = None
         self.stats.probes_sent += 1
         self._cause = "probe"
         self._probe_unsent = True
-        if self.now >= self._hold_until - 1e-9:
+        if self.now >= self._hold_until - 1e-9 and "ident" not in self._deadlines:
             self._send_probe()
         else:
             self._arm_at("probe", self._hold_until)
@@ -680,6 +718,8 @@ class GrantedEngine:
         if was_master and self._left is not None:
             self._leave_repeats = self.cfg.leave_repeats
             self._arm_at("leave", max(self.now, self._hold_until))
+        elif was_master:
+            self._identify_after_leaving()
 
     def send(self, data: bytes) -> None:
         self._tx_queue += data
@@ -693,12 +733,25 @@ class GrantedEngine:
         session with. From the next key as the master, the next answer as the slave."""
         self.cfg.answer_gap_s = max(0.0, seconds)
 
-    def set_identifier_due(self, due: bool = True) -> None:
-        """The daemon's word that this station's Morse identifier is due (07-protocol-8.md
-        §5.4). The engine places it — ahead of the master's next header, or ahead of the
-        slave's answer in the next slot granted with its time; the slave says in its answers
-        that it is due — and clears it once placed."""
-        self._identifier_due = due
+    def set_identifier_s(self, seconds: float) -> None:
+        """This station's closing identifier's length for every callsign not given its own
+        (:attr:`GrantConfig.identifier_s`): from the next call or acceptance on."""
+        self.cfg.identifier_s = max(0.0, seconds)
+
+    def set_identifiers(self, lengths: dict[str, float]) -> None:
+        """The closing identifier's length by callsign (:attr:`GrantConfig.identifiers`), 0
+        for a callsign that sends none: from the next call or acceptance on. A session keeps the
+        length its call or acceptance declared, which is what the other station reckons with."""
+        self.cfg.identifiers = {c.strip().upper(): max(0.0, s) for c, s in lengths.items()}
+
+    def _ident_for(self, call: str) -> float:
+        return self.cfg.identifiers.get(call.upper(), self.cfg.identifier_s)
+
+    @property
+    def identifier_owed(self) -> bool:
+        """Whether a session's closing identifier is owed and not yet handed over: the daemon
+        tells a host program the session is over only once it has gone out (ADR-0075)."""
+        return self._id_owed > 0.0
 
     def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
         """As :meth:`LinkEngine.pin_mode`: this station's own new data goes at ``mode`` until
@@ -827,7 +880,7 @@ class GrantedEngine:
         self.now = max(self.now, now)
         if not self._in_flight:
             return
-        granted = self._in_flight.pop(0)
+        granted, _ = self._in_flight.pop(0)
         if granted is not None and granted is self._slot and not granted.final:
             self._slot.final = True
             self._open_slot(now if frames_end is None else frames_end)
@@ -843,7 +896,8 @@ class GrantedEngine:
         self.now = max(self.now, now)
         if not self._in_flight:
             return
-        granted = self._in_flight.pop(0)
+        granted, ident = self._in_flight.pop(0)
+        self._owe_again(ident)
         if granted is None or granted is not self._slot or granted.final:
             return
         self._slot = None
@@ -856,7 +910,8 @@ class GrantedEngine:
         ``not_after``, and nothing of it was sent."""
         self.now = max(self.now, now)
         if self._in_flight:
-            self._in_flight.pop(0)
+            _, ident = self._in_flight.pop(0)
+            self._owe_again(ident)
         self.stats.dropped += 1
 
     def on_tx_delayed(self, seconds: float) -> None:
@@ -956,9 +1011,14 @@ class GrantedEngine:
             else:
                 self._end_session("link timeout")
         elif name == "connect":
-            self._retry_connect()
+            if self.now < self._hold_until - 1e-9:
+                self._arm_at("connect", self._hold_until)  # a closing identifier went first
+            else:
+                self._retry_connect()
         elif name == "probe":
-            if self._probe_unsent:
+            if self._probe_unsent and self.now < self._hold_until - 1e-9:
+                self._arm_at("probe", self._hold_until)
+            elif self._probe_unsent:
                 self._send_probe()
             elif self._probing is not None:
                 self.actions.append(Event("probe", f"{self._probing}: no answer"))
@@ -969,6 +1029,8 @@ class GrantedEngine:
             self._key_answer()
         elif name == "leave":
             self._repeat_leave()
+        elif name == "ident":
+            self._send_identifier()
 
     # ── timing ────────────────────────────────────────────────────────
 
@@ -1152,10 +1214,11 @@ class GrantedEngine:
         not_after: float | None = None,
         not_before: float | None = None,
         identifier_s: float = 0.0,
+        listen_first: bool = False,
         granting: _Slot | None = None,
     ) -> float:
-        """Hand a transmission over; returns where its frames end on the air, as far as this
-        engine knows."""
+        """Hand a transmission over; returns where it ends on the air, as far as this engine
+        knows. An identifier goes after the frames (ADR-0075)."""
         dur = identifier_s + sum(self.timing.frame_s(f) for f in frames)
         self.actions.append(
             SlotTransmit(
@@ -1164,10 +1227,11 @@ class GrantedEngine:
                 not_after=not_after,
                 not_before=not_before,
                 identifier_s=identifier_s,
+                listen_first=listen_first,
                 cause=self._cause,
             )
         )
-        self._in_flight.append(granting)
+        self._in_flight.append((granting, identifier_s if frames else 0.0))
         self.stats.transmissions += 1
         on_air = self.now + self._own_latency()
         if not_before is not None:
@@ -1177,23 +1241,13 @@ class GrantedEngine:
     def _control(self, ctl: GrantFrame, floor: bool) -> TxFrame:
         return TxFrame(Container.CONTROL, ctl.encode(), floor=floor)
 
-    def _take_identifier(self) -> float:
-        """This station's identifier, when it is due and there is one: placed, and so no longer
-        due."""
-        if not self._identifier_due or self.cfg.identifier_s <= 0.0:
-            return 0.0
-        self._identifier_due = False
-        return self.cfg.identifier_s
-
     # ── slots this station grants ─────────────────────────────────────
 
-    def _key_granting(
-        self, slot: _Slot, frames: list[TxFrame], *, identifier_s: float = 0.0
-    ) -> None:
+    def _key_granting(self, slot: _Slot, frames: list[TxFrame]) -> None:
         """Key a transmission that grants a slot, and wait for the slot — placed from this
         engine's estimate of the transmission's end until ``on_tx_done`` says where it was."""
         self._slot = slot
-        end = self._transmit(frames, identifier_s=identifier_s, granting=slot)
+        end = self._transmit(frames, granting=slot)
         self._open_slot(end)
 
     def _open_slot(self, end: float) -> None:
@@ -1270,7 +1324,7 @@ class GrantedEngine:
             caps=with_level(self.cfg.capabilities, level),
             version=PROTOCOL_VERSION,
             turnaround_s=self.cfg.turnaround_s,
-            identifier_s=self.cfg.identifier_s,
+            identifier_s=self._my_ident_s,
         ).encode()
         mode = self.robust_mode(floor)
         payload = encode_data(
@@ -1391,11 +1445,15 @@ class GrantedEngine:
         self, header: DataHeader, req: ConnectBody, frame: SoftFrame, start: float
     ) -> None:
         self.my_call = req.dst
+        # an identifier still owed for an earlier session is not sent now: an acceptance cannot
+        # wait for it, and this session ends with one (ADR-0075)
+        self._drop_identifier()
         self.remote_call = req.src
         self.session = header.session
         self._left = None
         self._disarm("leave")
         self._reset_session()
+        self._my_ident_s = self._ident_for(self.my_call)
         self.peer_capabilities = req.caps & ~CAP_LEVEL_MASK & 0xFF
         self._peer_turnaround_s = req.turnaround_s
         self._peer_identifier_s = req.identifier_s
@@ -1560,11 +1618,19 @@ class GrantedEngine:
             self.peer_snr_db = ctl.snr_db
         if ctl.kind is GrantKind.DISC_ACK:
             if self.state is State.DISCONNECTING:
-                self._end_session("closed")
+                # the slave's closing identifier follows its DISC_ACK, as long as it declared
+                # (ADR-0075): its transmission ends there, and the master's identifier goes
+                # after it, whatever the slot's latest end
+                self._state_end(frame.t_end + self._peer_identifier_s, frame.floor)
+                self._end_session("peer disconnected" if self._peer_left else "closed")
             return
         if ctl.kind is GrantKind.DISC:
-            # the slave has left (an abort, a left session's answer): nothing to answer
-            self._end_session("peer disconnected")
+            # the slave has left (an abort, a left session's answer). The master closes with a
+            # DISC of its own, whose slot carries the slave's closing identifier (ADR-0075);
+            # ended here, neither station's identifier had a place both could count on
+            self._peer_left = True
+            self.state = State.DISCONNECTING
+            self._state_end(frame.t_end, frame.floor)
             return
         if ctl.kind is not GrantKind.ANSWER:
             return
@@ -1626,7 +1692,10 @@ class GrantedEngine:
             return
         if self.state is State.DISCONNECTING:
             if self._disc_tries >= self.cfg.disc_retries:
-                self._end_session("closed (no DISC_ACK)")
+                self._end_session(
+                    "peer disconnected" if self._peer_left else "closed (no DISC_ACK)",
+                    unread=True,
+                )
                 return
             self._send_disc()
             return
@@ -1732,7 +1801,8 @@ class GrantedEngine:
     def _elide(self, n: int, open_window: bool, wanted: bool) -> bool:
         """Whether this transmission may go without its header (R7): data only, nothing granted
         beyond an answer, the gap at level 0, nothing to acknowledge or recommend anew, the last
-        slot heard, no identifier, and the answer's family one the slave surely holds."""
+        slot heard, no identifier time asked for, and the answer's family one the slave surely
+        holds."""
         return (
             self.cfg.elide
             and not open_window
@@ -1743,7 +1813,6 @@ class GrantedEngine:
             and self._possible == {wanted}
             and not self._ack_owed
             and not self._slave_id_due
-            and not self._identifier_due
             and self._has_work()
         )
 
@@ -1753,8 +1822,7 @@ class GrantedEngine:
         wanted = self._wants_floor() or self._silent >= 2 or any(self._recent_silent)
         elide = self._elide(n, open_window, wanted)
         hdr_floor = self._hdr_floor or self._silent >= 2 or self._floor_only()
-        ident_s = self._take_identifier()
-        room = math.inf if self.cfg.max_burst_s is None else self.cfg.max_burst_s - ident_s
+        room = math.inf if self.cfg.max_burst_s is None else self.cfg.max_burst_s
         data: list[TxFrame] = []
         if not open_window:
             data = self._data_frames(room - self._ctl_s(hdr_floor))
@@ -1769,6 +1837,8 @@ class GrantedEngine:
             and any(f.rv in READABLE_ALONE_RVS for f in data)
         )
         level = 0 if elide else self.level
+        # a slave of an earlier build asks for its ten-minute identifier's time, and is given
+        # it: this build sends none inside a session (ADR-0075), and asks for none
         slave_ident = self._slave_id_due and not elide
         if not elide:
             self._possible.add(wanted)
@@ -1819,12 +1889,12 @@ class GrantedEngine:
                 granted=n,
             ),
             frames,
-            identifier_s=ident_s,
         )
 
     def _send_disc(self) -> None:
-        """DISC grants the DISC_ACK's slot with the slave's identifier time — its closing
-        identifier goes ahead of the DISC_ACK. The master's own goes ahead of its first DISC."""
+        """DISC grants the DISC_ACK's slot with the slave's identifier time: its closing
+        identifier goes right behind the DISC_ACK. The master's goes on its own once that slot
+        is over (ADR-0075), the last thing either station sends for the session."""
         self._disc_tries += 1
         wanted = self._wants_floor() or self._silent >= 1
         floor = self._hdr_floor or self._silent >= 1 or self._floor_only()
@@ -1837,9 +1907,6 @@ class GrantedEngine:
             ident=self._peer_identifier_s > 0,
             snr_db=self._heard_db,
         )
-        ident_s = self.cfg.identifier_s if self._disc_tries == 1 else 0.0
-        if ident_s:
-            self._identifier_due = False
         self._possible.add(wanted)
         answer_floors = frozenset(self._possible | {wanted})
         self._key_granting(
@@ -1852,7 +1919,6 @@ class GrantedEngine:
                 granter_turnaround_s=self.cfg.turnaround_s,
             ),
             [self._control(ctl, floor)],
-            identifier_s=ident_s,
         )
 
     # ── the slave ─────────────────────────────────────────────────────
@@ -1969,15 +2035,13 @@ class GrantedEngine:
             self._window = (start, start + window, floor)
             self._answer = None
             self._disarm("answer")
-            if self._has_work() or self._disc_requested or self._identifier_due:
+            if self._has_work() or self._disc_requested:
                 self._try_window()
             return
         self._window = None
         room = 0.0
-        ident = False
         if grant is not None:
             room = grant.n * self._frame_s(self.timing.is_floor(grant.rung))
-            ident = grant.ident
         self._schedule(
             _Answer(
                 what="ans",
@@ -1987,7 +2051,6 @@ class GrantedEngine:
                 session=self.session,
                 anchor=self._m_end,
                 room_s=room,
-                ident=ident,
             )
         )
 
@@ -2056,7 +2119,7 @@ class GrantedEngine:
         elif answer.what == "ans" and self.state is State.CONNECTED and self.role is Role.SLAVE:
             self._answered_end = answer.anchor
             self._send_answer(
-                answer.floor, answer.room_s, answer.not_after, answer.ident, not_before=answer.start
+                answer.floor, answer.room_s, answer.not_after, not_before=answer.start
             )
 
     def _try_window(self) -> None:
@@ -2069,22 +2132,20 @@ class GrantedEngine:
             self._answer = _Answer("window", start, end, floor)
             self._arm_at("answer", start - self._own_latency())
             return
-        if not (self._has_work() or self._disc_requested or self._identifier_due):
+        if not (self._has_work() or self._disc_requested):
             return
-        ident = self._identifier_due and self.cfg.identifier_s > 0
-        room = end - on_air - self._ctl_s(floor) - (self.cfg.identifier_s if ident else 0.0)
+        room = end - on_air - self._ctl_s(floor)
         if room < 0:
             return
         self._window = None
         self._answered_end = self._m_end
-        self._send_answer(floor, room, None, ident, window_end=end)
+        self._send_answer(floor, room, None, window_end=end)
 
     def _send_answer(
         self,
         floor: bool,
         room_s: float,
         not_after: float | None,
-        ident: bool,
         *,
         window_end: float | None = None,
         not_before: float | None = None,
@@ -2093,9 +2154,8 @@ class GrantedEngine:
         self._restart_rx()
         if snr is not None:
             self._heard_db = snr
-        ident_s = self._take_identifier() if ident else 0.0
         if self.cfg.max_burst_s is not None:
-            room_s = min(room_s, self.cfg.max_burst_s - self._ctl_s(floor) - ident_s)
+            room_s = min(room_s, self.cfg.max_burst_s - self._ctl_s(floor))
         data = self._data_frames(room_s)
         ctl = GrantFrame(
             GrantKind.ANSWER,
@@ -2107,7 +2167,8 @@ class GrantedEngine:
             level=self._asked_level(),
             fam=self._wants_floor(),
             flag=self._disc_requested,
-            ident=self._identifier_due and self.cfg.identifier_s > 0,
+            # no identifier is ever due inside a session (ADR-0075): the bit asks for none
+            ident=False,
             snr_db=self._heard_db,
             rung=self._recommend(),
             n=min(7, self._queued_frames()),
@@ -2115,9 +2176,9 @@ class GrantedEngine:
         )
         frames = [self._control(ctl, floor), *data]
         if window_end is not None:
-            dur = ident_s + sum(self.timing.frame_s(f) for f in frames)
+            dur = sum(self.timing.frame_s(f) for f in frames)
             not_after = window_end - dur
-        self._transmit(frames, not_after=not_after, not_before=not_before, identifier_s=ident_s)
+        self._transmit(frames, not_after=not_after, not_before=not_before)
 
     def _data_floor_only(self) -> bool:
         """Whether this station's data can go only on the tone floor: its ceiling, or the rung
@@ -2139,7 +2200,7 @@ class GrantedEngine:
             version=PROTOCOL_VERSION,
             snr_db=answer.snr_db,
             turnaround_s=self.cfg.turnaround_s,
-            identifier_s=self.cfg.identifier_s,
+            identifier_s=self._my_ident_s,
         ).encode()
         mode = self.robust_mode(answer.floor)
         payload = encode_data(
@@ -2168,12 +2229,18 @@ class GrantedEngine:
         )
 
     def _send_disc_answer(self, answer: _Answer) -> None:
+        """A DISC_ACK, and right behind it this station's closing identifier — the last thing it
+        sends for the session, in the time every DISC grants it (07-protocol-8.md §5.4: the
+        DISC_ACK's slot always includes the identifier the slave declared). A DISC heard again
+        is answered again, identifier and all, so the identifier stays last (ADR-0075). Or a
+        DISC, to a left session's header, after which the other station closes."""
         kind = GrantKind.DISC_ACK if answer.what == "disc_ack" else GrantKind.DISC
         ctl = GrantFrame(kind, answer.session & 0x7F, snr_db=answer.snr_db)
         ident_s = 0.0
-        if kind is GrantKind.DISC_ACK and answer.ident and self.cfg.identifier_s > 0:
-            ident_s = self.cfg.identifier_s  # the closing identifier, in the slot's time
-            self._identifier_due = False
+        if kind is GrantKind.DISC_ACK and self._my_ident_s > 0.0:
+            ident_s = self._my_ident_s
+            self._id_owed = 0.0
+            self._disarm("ident")
         if kind is GrantKind.DISC:
             self.stats.left_answered += 1
         self._transmit(
@@ -2182,6 +2249,20 @@ class GrantedEngine:
             not_before=answer.start,
             identifier_s=ident_s,
         )
+        if ident_s:
+            self._hold_until = max(self._hold_until, self._closing_hold(answer.start))
+
+    def _closing_hold(self, start: float) -> float:
+        """The latest the other station's closing identifier can be on the air, after a DISC_ACK
+        of this station's that answered in a slot starting at ``start``: the slot's latest end
+        as that station may reckon it — its slack, a floor DISC_ACK, this station's identifier —
+        the wait that follows, at the top gap level with room for a slow keying, and the other's
+        declared identifier (ADR-0075). Nothing this station starts on its own keys before it:
+        a call answered or made into the other's identifier would go over it."""
+        cfg = self.cfg
+        latest = start + cfg.slack_s + self._ctl_s(True) + self._my_ident_s
+        wait = max(self._budget(True), cfg.turnaround_s) + cfg.guard_s + cfg.levels_s[-1]
+        return latest + wait + cfg.key_s + cfg.slack_s + self._peer_identifier_s
 
     def _answer_disc(self, ctl: GrantFrame, frame: SoftFrame, kind: GrantKind) -> None:
         """A DISC_ACK to a DISC, or a DISC to a left session's header: in the slot the frame
@@ -2198,7 +2279,6 @@ class GrantedEngine:
                 session=ctl.session,
                 anchor=end,
                 snr_db=frame.snr_db,
-                ident=ctl.ident,
             )
         )
 
@@ -2523,9 +2603,19 @@ class GrantedEngine:
         if ctl.kind is GrantKind.DISC_ACK:
             self._left = None
             self._disarm("leave")
+            slot = self._slot
+            if slot is not None and slot.kind == "leave" and self._in_slot(frame):
+                # an aborting master's DISC answered: the slave's identifier follows the
+                # DISC_ACK, and this station's own goes after it (ADR-0075)
+                self._state_end(frame.t_end + self._peer_identifier_s, frame.floor)
+            self._identify_after_leaving()
             return
         if self.state is State.CONNECTING:
             return  # a call of this station's is out: its slot is the one that matters
+        if self._id_owed > 0.0 and self._id_alone:
+            # the other station is still there: its next words may close the session properly,
+            # and this station's identifier is not sent over it on its own (ADR-0075)
+            self._arm_at("ident", self.now + self._exchange_s())
         if ctl.kind is GrantKind.DISC:
             self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
         elif ctl.kind is GrantKind.HEADER and not disc_heard:
@@ -2535,6 +2625,7 @@ class GrantedEngine:
         """An aborting master's DISC, from idle: on the floor, granting the DISC_ACK's slot, up
         to :attr:`GrantConfig.leave_repeats` times, each once the last one's slot is over."""
         if self._left is None or self.state is not State.IDLE or self._leave_repeats <= 0:
+            self._identify_after_leaving()
             return
         if self.now < self._hold_until - 1e-9:
             self._arm_at("leave", self._hold_until)
@@ -2542,9 +2633,16 @@ class GrantedEngine:
         session, until, _ = self._left
         if self.now > until:
             self._left = None
+            self._identify_after_leaving()
             return
         self._leave_repeats -= 1
-        ctl = GrantFrame(GrantKind.DISC, session & 0x7F, fam=True, level=self._silence_level)
+        ctl = GrantFrame(
+            GrantKind.DISC,
+            session & 0x7F,
+            fam=True,
+            level=self._silence_level,
+            ident=self._peer_identifier_s > 0,
+        )
         self._key_granting(
             _Slot(
                 kind="leave",
@@ -2558,19 +2656,90 @@ class GrantedEngine:
         )
         if self._leave_repeats > 0:
             self._arm_at("leave", self._hold_until)
+        else:
+            self._identify_after_leaving()
 
-    def _end_session(self, reason: str, *, disc_heard: bool = False) -> None:
+    # ── the closing identifier (ADR-0075) ─────────────────────────────
+
+    def _identify_after_leaving(self) -> None:
+        """An aborting master's leaving is over — its DISC answered, or the last one's slot
+        past: its closing identifier goes once that slot can no longer be in use."""
+        if self._id_owed > 0.0 and not self._id_alone and self.state is State.IDLE:
+            self._arm_at("ident", max(self.now, self._hold_until))
+
+    def _send_identifier(self) -> None:
+        """The closing identifier on its own: a master's, once the last slot it granted is
+        over, or a station's that no slot could be had for, listening first. Nothing of the
+        session follows it."""
+        length = self._id_owed
+        if length <= 0.0:
+            return
+        if self.state is not State.IDLE and not (
+            self.state is State.CONNECTING and self._connect_tries == 0
+        ):
+            return  # a session is under way: it ends with an identifier of its own
+        if self.now < self._hold_until - 1e-9:
+            self._arm_at("ident", self._hold_until)
+            return
+        self._id_owed = 0.0
+        end = self._transmit([], identifier_s=length, listen_first=self._id_listen)
+        # a call or a probe of this station's, and an answer to another's, waits for it
+        self._hold_until = max(self._hold_until, end)
+
+    def _drop_identifier(self) -> None:
+        """No identifier for the session just ended: the communication goes on in a new one."""
+        self._id_owed = 0.0
+        self._disarm("ident")
+
+    def _owe_again(self, ident: float) -> None:
+        """A DISC_ACK that carried the closing identifier did not go out: the identifier is owed
+        again — behind the next DISC_ACK, or on its own if no DISC comes (ADR-0075)."""
+        if ident <= 0.0 or self.state is not State.IDLE or self._id_owed > 0.0:
+            return
+        self._id_owed = ident
+        self._id_alone = True
+        self._id_listen = True
+        self._arm_at("ident", self.now + self._exchange_s())
+
+    def _end_session(self, reason: str, *, disc_heard: bool = False, unread: bool = False) -> None:
         left = None
         if self.state is not State.CONNECTING and (reason in LEFT_UNHEARD or disc_heard):
             left = (self.session, self.now + self._link_timeout(), disc_heard)
+        # a session that came up ends with this station's closing identifier — unless the other
+        # station ended it by calling again, which goes on in the session its call opens
+        # (ADR-0055 §4); a call never answered is the daemon's to identify (ADR-0055)
+        owes = (
+            self.state is not State.CONNECTING
+            and self._my_ident_s > 0.0
+            and not reason.endswith(" called again")
+        )
+        was_master = self.role is Role.MASTER
         self.ended_peer_snr_db = self.peer_snr_db
         kept = (self._peer_turnaround_s, self._peer_identifier_s, self._silence_level)
         self.state = State.IDLE
         self.role = Role.NONE
         self._disarm("connect")
+        self._disarm("ident")
         self._reset_session()
         self._tx_queue = bytearray()
         # what answering or leaving the old session in its slots still needs
         self._peer_turnaround_s, self._peer_identifier_s, self._silence_level = kept
         self._left = left
+        self._id_owed = self._my_ident_s if owes else 0.0
         self.actions.append(Event("disconnected", reason))
+        if not owes:
+            return
+        # where the closing identifier goes (ADR-0075): the master's once the last slot it
+        # granted can no longer be in use — an aborting master's once its leaving is over; a
+        # slave's behind its DISC_ACK, or on its own, listening first, when nothing of the
+        # session is heard for an exchange — a live master keys at least that often — and at
+        # once when the session timed out, since nothing can come
+        self._id_alone = not was_master
+        # a master that read nothing of the other station at the end listens before its own: the
+        # other may have given the session up first and be sending its identifier alone
+        self._id_listen = self._id_alone or unread or reason in ("no response", "link timeout")
+        if was_master and reason != "aborted":
+            self._arm_at("ident", max(self.now, self._hold_until))
+        elif not was_master:
+            quiet = reason == "link timeout" or left is None
+            self._arm_at("ident", self.now if quiet else self.now + self._exchange_s())

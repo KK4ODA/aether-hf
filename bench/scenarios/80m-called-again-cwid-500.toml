@@ -1,12 +1,10 @@
 name = "80m-called-again-cwid-500"
 description = """80 m at 500 Hz, KQ4SAX's evening of 2026-10-12: the caller loses the session
-without the other station hearing it go (an outage while it aborts) and calls again, and the
-called station identifies in Morse. The new call ends the old session (ADR-0056); the end of
-that session must not put the station's identifier on the air right behind its acceptance,
-where the caller's first move goes (ADR-0055 §4: one collision on each of three draws before).
-What remains on some draws is the session's end: the leaving station's DISC retry fires as the
-answer it has not finished decoding ends, over the closing identifier behind it — the timing
-ADR-0068 replaces."""
+without the other station hearing it go (an outage while it aborts) and calls again; both are US
+callsigns, so both identify (ADR-0075). The new call ends the old session (ADR-0056), which
+continues the communication: the called station sends no identifier between the two sessions —
+none right behind its acceptance, where the caller's first move goes (ADR-0055 §4: one collision
+on each of three draws before) — and both close the second session with their identifiers last."""
 tags = ["80m", "robustness"]
 bandwidth = 500
 seconds = 1200

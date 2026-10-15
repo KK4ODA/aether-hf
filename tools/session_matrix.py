@@ -148,8 +148,7 @@ bandwidth = {bandwidth}
 wait_for_clear = {wait_for_clear}
 answer_gap_ms = {answer_gap_ms}{turnaround}
 max_mode = {max_mode}
-cw_id = {cw_id}
-cw_id_interval_s = {cw_id_interval_s}
+cw_id = {cw_id}{cw_id_interval}
 
 [host]
 enabled = {host}
@@ -193,6 +192,12 @@ class Station:
     process: subprocess.Popen[bytes]
     log: Path
     host_port: int = 0
+    schema: int = 0
+    """The configuration schema its build reads: 13 and up place the Morse identifier last
+    (ADR-0075), which the account of the air is held to."""
+    identifies: bool | None = None
+    """Whether it sends a closing identifier, by its own rule (``status.identifier``), read at
+    the end of the run; ``None`` for a build that does not say."""
 
     def status(self) -> dict:
         return dict(call(self.control, "status")["result"])
@@ -355,6 +360,19 @@ class Host:
                     self.connected = True
                 elif line.startswith("DISCONNECTED"):
                     self.connected = False
+                    self._check_identified()
+
+    def _check_identified(self) -> None:
+        """ADR-0075: a host hears ``DISCONNECTED`` once its station's closing identifier has
+        gone out — told sooner, VarAC changes frequency and Trimode scans over the Morse."""
+        if self.station.schema < 13:
+            return
+        with contextlib.suppress(OSError, KeyError, ValueError):
+            if (self.station.status().get("identifier") or {}).get("pending"):
+                self.problems.append(
+                    f"{self.station.who}: DISCONNECTED at {self.run.air_s():.1f} s, before its "
+                    "closing identifier"
+                )
 
     def _read_data(self) -> None:
         while not self.closed:
@@ -433,10 +451,18 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         schema = schema_of(binary)
         # a radio's declared turnaround (schema 12, granted slots): what its operator set
         turnaround = f"\nturnaround_ms = {int(cfg.get('turnaround_ms', 0))}" if schema >= 12 else ""
+        # the Morse identifier's interval, gone with schema 13 (ADR-0075): an older build reads
+        # it, and a scenario may set it for one
+        cw_id_interval = (
+            f"\ncw_id_interval_s = {float(cfg.get('cw_id_interval_s', 600.0))}"
+            if schema < 13
+            else ""
+        )
         config.write_text(
             STATION_TOML.format(
-                schema=min(schema, 12),
+                schema=min(schema, 13),
                 turnaround=turnaround,
+                cw_id_interval=cw_id_interval,
                 callsign=callsign,
                 tx_level=cfg.get("tx_level", 0.25),
                 bandwidth=cfg.get("bandwidth", sc.get("bandwidth", 2300)),
@@ -450,7 +476,6 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 control=control,
                 record=record.as_posix(),
                 cw_id=str(cfg.get("cw_id", False)).lower(),
-                cw_id_interval_s=float(cfg.get("cw_id_interval_s", 600.0)),
                 host=str(bool(cfg.get("host", False))).lower(),
                 host_port=host_port,
             ),
@@ -462,7 +487,7 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
             stdout=log.open("wb"),
             stderr=subprocess.STDOUT,
         )
-        run.stations[who] = Station(who, callsign, control, process, log, host_port)
+        run.stations[who] = Station(who, callsign, control, process, log, host_port, schema)
     for st in run.stations.values():
         for _ in range(200):
             try:
@@ -482,7 +507,13 @@ DEFAULT_CALLSIGNS = {"a": "W4ODA", "b": "KK4XYZ", "c": "N4CCC", "d": "N4DDD", "e
 
 
 def all_idle(run: Run) -> bool:
-    return all(st.status()["state"] == "idle" for st in run.stations.values())
+    """Every station idle, with no closing identifier still to go out (ADR-0075): a master's
+    goes after the session has ended, and a run stopped first would cut it off."""
+
+    def settled(status: dict) -> bool:
+        return status["state"] == "idle" and not (status.get("identifier") or {}).get("pending")
+
+    return all(settled(st.status()) for st in run.stations.values())
 
 
 def step(run: Run, text: str) -> bool:
@@ -643,7 +674,9 @@ def step(run: Run, text: str) -> bool:
         # both stations back to idle by themselves — the link timeout, after an outage
         return run.wait("back to idle", lambda: all_idle(run), float(arg))
     if word == "abort":
-        call(a.control, "abort")
+        # ``abort b``: the called station drops the session; it answers the caller's next
+        # header with a DISC, and the caller closes the session (ADR-0052, ADR-0075)
+        call((b if arg == "b" else a).control, "abort")
         if arg == "a":
             # the caller alone: in an outage the other station never hears it go, and stays in
             # the session until its link timeout or the caller's next call
@@ -669,6 +702,59 @@ def session_ends(run: Run) -> list[str]:
     return ends
 
 
+def identifier_faults(run: Run, report: dict, *, last: bool) -> list[str]:
+    """ADR-0075 on the account of the air, for each station of a build that places the Morse
+    identifier last (schema 13 and up): an identifier goes only alone or behind a DISC_ACK —
+    never inside a session, on a beacon or a datagram — and nothing of a session is keyed after
+    the identifier that closed it (a DISC_ACK said again carries it again). With ``last`` (the
+    scenario's ``[expect] identifiers_last``): every session a station that identifies was in
+    ends with its identifier, and one that does not identify sends none."""
+    faults = []
+    accounts = report.get("stations", {})
+    for who, st in run.stations.items():
+        if st.schema < 13:
+            continue
+        sent = sorted(accounts.get(who, {}).get("transmissions", []), key=lambda t: t["air_s"])
+        # each session's own transmissions — its frames, and the identifier that closes it —
+        # by the session number the station's account gives them, the last one standing
+        lasts: dict[int, dict] = {}
+        identified: set[int] = set()
+        took_part: set[int] = set()
+        for tx in sent:
+            frames = tx.get("frames") or []
+            kind = frames[0].get("kind", "?") if frames else "id"
+            session = int(tx.get("session", 0))
+            if tx.get("role") in ("Master", "Slave"):
+                took_part.add(session)
+            if tx.get("cw_id"):
+                if kind not in ("id", "DiscAck"):
+                    faults.append(f"{who}: an identifier on {kind} at {tx['air_s']:.1f} s")
+                identified.add(session)
+                lasts[session] = tx
+            elif kind in SESSION_FRAMES:
+                lasts[session] = tx
+        for session in sorted(identified):
+            tx = lasts[session]
+            if not tx.get("cw_id"):
+                kind = (tx.get("frames") or [{}])[0].get("kind", "?")
+                faults.append(
+                    f"{who}: {kind} of session {session} at {tx['air_s']:.1f} s, after its "
+                    "identifier"
+                )
+        if not last or st.identifies is None:
+            continue
+        if st.identifies:
+            for session in sorted(took_part - identified):
+                faults.append(f"{who}: session {session} did not end with its identifier")
+        elif identified:
+            faults.append(f"{who}: an identifier from a station that sends none")
+    return faults
+
+
+SESSION_FRAMES = frozenset({"Header", "Answer", "Disc", "DiscAck", "Data"})
+"""The frames a session's own transmissions carry: what may not follow its closing identifier."""
+
+
 def judge(run: Run, ends: list[str]) -> dict:
     sc = run.scenario
     expect = sc.get("expect", {})
@@ -691,6 +777,7 @@ def judge(run: Run, ends: list[str]) -> dict:
     failures = invariants
     for host in run.hosts.values():
         failures += host.problems
+    failures += identifier_faults(run, report, last=bool(expect.get("identifiers_last")))
     if expect.get("connected") and not run.connected:
         failures.append("did not connect")
     if expect.get("delivered") and not run.delivered_ok:
@@ -826,7 +913,10 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | N
         ends = session_ends(run)
         for st in run.stations.values():
             try:
-                run.final_states.append(str(st.status()["state"]))
+                status = st.status()
+                run.final_states.append(str(status["state"]))
+                enabled = (status.get("identifier") or {}).get("enabled")
+                st.identifies = None if enabled is None else bool(enabled)
             except (OSError, KeyError, ValueError):
                 run.final_states.append("unknown")
     finally:

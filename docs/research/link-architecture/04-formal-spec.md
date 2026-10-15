@@ -50,6 +50,7 @@ needs more, and says so.
 | S5 | A transmission never lasts longer than its frames say | the key-time watchdog can only cut it short | safety |
 | S6 | A decoded frame reaches the engine within the family's decode budget `D_f` | the receiver's measured latency; **slower stations ask for a wider gap level** (§4 R8) | liveness only: a later decode forfeits the slot (no answer, no overlap) |
 | S7 | Loss runs are finite: within `max_retries` slots, some header and some answer get through | the channel | liveness only |
+| S8 | A station that hears another transmitting does not key over it, for at most 15 s | the daemon's busy detector holds a transmission marked `listen_first` (`held_for_busy`), as it holds a call | the closing identifier sent without a closing exchange (R13), only where the two stations hear each other; where they do not, which is why such a session ended, an overlap is possible and harms neither |
 
 Frames may be lost, decoded late, duplicated, or detected without content (phantoms). Only
 **decoded content** changes protocol state. A detection, an announcement or a silence never
@@ -88,7 +89,8 @@ acceptance slot uses (§4 R11).
 ## 4. Rules
 
 **R1 — One initiator.** Only the master starts a transmission on its own initiative. The
-slave transmits only under R2, R11 (acceptance) and R10 (DISC_ACK).
+slave transmits only under R2, R11 (acceptance) and R10 (DISC_ACK, and its closing identifier
+behind it), and after the session under R13.
 
 **R2 — The slot.** A master transmission ending at `E` grants one slot:
 
@@ -162,6 +164,8 @@ the 500 Hz air's rung 4).
 * The master stops waiting for its own queue after `max(20 s, link timeout / 2)` without
   progress.
 * A station that left answers its old session's DISC again from idle, in that DISC's slot.
+* A DISC grants the DISC_ACK's slot with the slave's declared identifier time added; the
+  slave's closing identifier goes behind its DISC_ACK, inside that slot (R13).
 * Each station's link timer is `max(45 s, 4 x the longest exchange)`. An exchange is two
   key-limited transmissions plus two floor control frames and gaps, about 244 s. The master
   also ends after `max_retries` silent slots in a row ("no response").
@@ -173,6 +177,29 @@ the 500 Hz air's rung 4).
 * Tries alternate families, the floor first.
 * The level rises one step every second try, so a slow called station is reached.
 * A call from the same station under a new session number restarts the slave.
+
+**R13 — The closing identifier** (ADR-0075). Each station's Morse identifier is the last thing
+it sends for a session, and nothing in a session carries one before it.
+
+* The slave's goes behind its DISC_ACK, in the DISC's slot (R10). A DISC heard again is
+  answered again, identifier and all.
+* The master's goes alone, at `T + heard_by(f)` where `T` is the DISC_ACK's stated end plus the
+  slave's declared identifier, or at `end_max + heard_by(f*)` with no DISC_ACK read: R4's own
+  deadline, with the identifier counted in the slot.
+* After a DISC_ACK of its own, the slave starts nothing until the latest the master's
+  identifier can end: that slot's `end_max`, the master's wait at the top level with a slow key,
+  and the master's declared identifier.
+* A session that ends without a closing exchange (a link timeout, the master gone, a DISC_ACK
+  that did not go out) is identified by each station alone, after carrier sense (S8): the slave
+  at once after a link timeout, one exchange later after leaving a session still heard; the
+  master after its last slot, listening first too when it read nothing of the slave at the end
+  ("no response", a link timeout, every DISC unanswered), since the slave may have given up
+  first and be sending its own.
+* A session ended by a call from the same peer (R11) owes none: the communication goes on.
+
+It keeps I1: every identifier keys in a slot the other station granted and keeps, after a slot
+that can no longer be in use, or on a channel heard clear. No deadline moves on undecoded
+evidence: `T` is a decoded frame's stated end, and the slave's hold counts from its own slot.
 
 **R12 — Open windows.** When neither side has anything to send, the header grants an open
 window of `4 s x 2^k` (the floor's is 2.5 times that), with `k ≤ window_doublings`. The slave
@@ -236,8 +263,10 @@ stateDiagram-v2
 | Listening | slave frame decoded | began before `tx_end` | keep its content only | Listening |
 | Listening | `proceed` | disconnect requested and allowed | DISC (grants a DISC_ACK slot) | Leaving |
 | Listening | `proceed` | slot heard nothing, retries > max | end "no response" | Idle |
-| Leaving | DISC_ACK in slot | — | end "closed" | Idle |
-| Leaving | `proceed` | 3 DISCs sent | end "closed (no DISC_ACK)", remember as left | Idle |
+| Leaving | DISC_ACK in slot | — | end "closed"; arm `ident` = its end + the slave's identifier + heard_by (R13) | Idle |
+| Leaving | `proceed` | 3 DISCs sent | end "closed (no DISC_ACK)", remember as left; arm `ident` = `end_max` + heard_by | Idle |
+| Listening | slave DISC decoded | this session | end of slot = its end; DISC (grants a DISC_ACK slot) | Leaving |
+| Idle | `ident` timer | identifier owed, nothing granted still open | the closing identifier, alone | Idle |
 | any | `link` timer | — | end "link timeout" | Idle |
 | any | detection, announcement, phantom | — | **nothing** | — |
 
@@ -251,8 +280,9 @@ stateDiagram-v2
 | Armed | `answer` timer | `now ≤ start − tx_latency + slack` | ANS (+ up to n data at the recommended rung), `not_after = start + slack` | Anchored |
 | Armed | — | decoded too late | forfeit (count it) | Anchored |
 | Window | `send()` or slot reached | something queued; fits | ANS + data, `not_after = window_end − duration` | Anchored |
-| Anchored | DISC decoded | this session | DISC_ACK in the DISC's slot; end "peer disconnected" | Idle |
-| any | `link` timer | — | end "link timeout" | Idle |
+| Anchored | DISC decoded | this session | DISC_ACK in the DISC's slot, the closing identifier behind it; end "peer disconnected"; hold own initiatives to the master's identifier's latest end (R13) | Idle |
+| any | `link` timer | — | end "link timeout"; the closing identifier alone, after carrier sense | Idle |
+| Idle | `ident` timer | identifier owed (the DISC_ACK did not go out, or none was asked for an exchange) | the closing identifier alone, after carrier sense | Idle |
 | any | detection, announcement, phantom | — | **nothing** | — |
 
 ## 7. Invariants
@@ -271,6 +301,10 @@ stateDiagram-v2
 4. A transmission belonging to an older slot started before that slot's `end_max`. That is
    before the master keyed again (R4), and it ends within its own grant.
 5. Clock and propagation differences are inside `guard` (S3).
+6. A closing identifier (R13): the slave's is inside its DISC_ACK's grant (point 1); the
+   master's keys at R4's own deadline with that grant counted (point 2); the slave starts
+   nothing until the master's can be over; and one sent without a closing exchange waits for a
+   clear channel (S8).
 
 TLC checks NoOverlap in `GrantedSlots_safe` (8 272 states) and `GrantedSlots_safe_big`
 (103 780 states, latency up to five ticks). The simulator checks it on the air in every run of

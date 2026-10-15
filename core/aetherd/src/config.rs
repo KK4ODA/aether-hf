@@ -311,25 +311,19 @@ pub struct RadioSection {
     /// most, until the stream carries its own integrity check.
     #[serde(default)]
     pub compress: bool,
-    /// Identify in Morse at the end of a transmission. Off by default: Aether's own frames
-    /// carry both callsigns, and whether that satisfies the local rules is something only the
-    /// operator knows.
+    /// Identify in Morse at the end of each session, the last thing the station sends for it
+    /// (ADR-0075). The operator's choice for a callsign that does not require it, off by
+    /// default; a US callsign identifies whatever this says, as VARA HF does — computed from
+    /// the callsign (`cwid::required_for`), never written here.
     #[serde(default)]
     pub cw_id: bool,
     /// Morse speed in words per minute.
     #[serde(default = "default_cw_wpm")]
     pub cw_id_wpm: f64,
-    /// Longest a station may transmit without identifying, in seconds.
-    #[serde(default = "default_cw_interval")]
-    pub cw_id_interval_s: f64,
 }
 
 fn default_cw_wpm() -> f64 {
     20.0
-}
-
-fn default_cw_interval() -> f64 {
-    600.0
 }
 
 fn default_max_key() -> f64 {
@@ -392,7 +386,6 @@ impl Default for RadioSection {
             compress: false,
             cw_id: false,
             cw_id_wpm: default_cw_wpm(),
-            cw_id_interval_s: default_cw_interval(),
         }
     }
 }
@@ -914,7 +907,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -938,6 +931,7 @@ pub const MIGRATIONS: &[Migration] = &[
     answer_gap,
     debug_mode,
     turnaround,
+    identifier_at_the_end,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1081,8 +1075,21 @@ fn debug_mode(_table: &mut toml::Table) {}
 /// other station's frames; the step is for going back (`<name>.bak-v11`).
 fn turnaround(_table: &mut toml::Table) {}
 
+/// Schema 12 → 13, the closing identifier (ADR-0075): `radio.cw_id_interval_s` goes. Nothing
+/// identifies inside a session any more — the Morse identifier is the last thing each station
+/// sends at its end — so a ten-minute interval means nothing, and every table refuses a key it
+/// does not know. `radio.cw_id` keeps the operator's choice as written: a US callsign
+/// identifies whatever it says, computed, never written into the file.
+fn identifier_at_the_end(table: &mut toml::Table) {
+    if let Some(toml::Value::Table(radio)) = table.get_mut("radio") {
+        radio.remove("cw_id_interval_s");
+    }
+}
+
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
+/// Schema 5 → 6's guess at a file's regulatory profile, and frozen with that step; whether a
+/// callsign must send the Morse identifier is `cwid::required_for`'s to say (ADR-0075).
 #[must_use]
 pub fn is_us_callsign(call: &str) -> bool {
     let base = call
@@ -1340,7 +1347,11 @@ impl Config {
                 "[sim] listen and connect are alternatives; set one of them".into(),
             ));
         }
-        if self.radio.cw_id && !(5.0..=40.0).contains(&self.radio.cw_id_wpm) {
+        // the speed is checked when an identifier will go out: the setting on, or a callsign
+        // that requires one whatever it says (ADR-0075)
+        let identifies =
+            self.radio.cw_id || crate::cwid::required_for(&self.callsign).is_some();
+        if identifies && !(5.0..=40.0).contains(&self.radio.cw_id_wpm) {
             return Err(ConfigError::Invalid(format!(
                 "cw_id_wpm is {}; below 5 an identifier takes longer than the transmission \
                  and above 40 very few people can copy it",
@@ -1478,7 +1489,6 @@ pub const LIVE_KEYS: &[&str] = &[
     // the identifier is rendered at each transmission, so its settings apply to the next
     "radio.cw_id",
     "radio.cw_id_wpm",
-    "radio.cw_id_interval_s",
     "record.auto",
     "record.notes",
     "record.send_to_project",
@@ -1764,11 +1774,11 @@ max_mode = 19
 # it is deflate over the whole session, so on a weak path one corrupted frame can desync the
 # stream and spoil the rest.
 compress = false
-# Identify in Morse at the end of a transmission. Off by default: Aether's frames carry both
-# callsigns, and whether that satisfies your licence conditions is your call, not the modem's.
+# Identify in Morse at the end of each session: the last thing the station sends for it. A US
+# callsign always does, whatever this says (§97.119, as VARA HF does); for any other callsign
+# it is your call, off by default.
 cw_id = false
 cw_id_wpm = 20.0
-cw_id_interval_s = 600.0
 
 [control]
 # The modem's own interface: JSON over WebSocket at ws://<bind>/v1, or POST /v1/<method>.
@@ -2055,9 +2065,31 @@ mod tests {
             let text = format!("callsign = \"W4ODA\"\n[radio]\ncw_id = true\n{bad}\n");
             assert!(Config::parse(&text).is_err(), "accepted {bad}");
         }
-        // the speed is only checked when it will actually be used
-        let unused = "callsign = \"W4ODA\"\n[radio]\ncw_id_wpm = 200.0\n";
+        // the speed is only checked when it will actually be used: a US callsign identifies
+        // whatever the setting says (ADR-0075), any other only when asked to
+        let unused = "callsign = \"VE3XYZ\"\n[radio]\ncw_id_wpm = 200.0\n";
         assert!(Config::parse(unused).is_ok());
+        let required = "callsign = \"W4ODA\"\n[radio]\ncw_id_wpm = 200.0\n";
+        assert!(Config::parse(required).is_err(), "a US callsign's speed went unchecked");
+    }
+
+    #[test]
+    fn schema_13_retires_the_identifier_interval() {
+        // ADR-0075: nothing identifies inside a session, so the ten-minute interval means
+        // nothing; a file that has it is brought forward without it, the setting kept as written
+        let text = "schema_version = 12\ncallsign = \"KK4ODA\"\n[radio]\ncw_id = false\n\
+                    cw_id_wpm = 18.0\ncw_id_interval_s = 300.0\n";
+        let config = Config::parse(text).expect("a schema 12 file reads");
+        assert!(!config.radio.cw_id, "the setting is not rewritten");
+        assert!((config.radio.cw_id_wpm - 18.0).abs() < 1e-9);
+        let saved = toml::to_string_pretty(&config).expect("write");
+        assert!(!saved.contains("cw_id_interval_s"), "{saved}");
+        // and a current file cannot carry it
+        let current = format!(
+            "schema_version = {SCHEMA_VERSION}\ncallsign = \"KK4ODA\"\n[radio]\n\
+             cw_id_interval_s = 300.0\n"
+        );
+        assert!(Config::parse(&current).is_err());
     }
 
     #[test]

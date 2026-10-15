@@ -564,7 +564,9 @@ fn station_config(
             wpm: config.radio.cw_id_wpm,
             ..aetherd::cwid::CwId::default()
         }),
-        cw_id_interval_s: config.radio.cw_id_interval_s,
+        // a US callsign identifies whatever the setting says, at this speed (ADR-0075)
+        cw_id_wpm: config.radio.cw_id_wpm,
+        keyed_by_host: matches!(config.ptt, PttConfig::Host { .. }),
         operator: config.operator.clone(),
         regulatory: regulatory_settings(config, simulated),
         // a host program keys the radio when it hears PTT ON, and the audio waits for it
@@ -1261,9 +1263,10 @@ fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
     }
 }
 
-/// The longest a stop waits for a session's DISC and identifier to leave the air: a floor
-/// control frame is 3.2 s and a callsign in Morse at 20 wpm about six.
-const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(12);
+/// The longest a stop waits for a session's end to leave the air (ADR-0075): this station's
+/// DISC on the floor (3.2 s), the other station's DISC_ACK (3.2 s) with its identifier behind
+/// it, then this station's own — a callsign in Morse at 20 wpm is about six seconds.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(22);
 
 /// Whether a daemon asked to stop may go now. A session is ended on the air first: its DISC,
 /// so the other station is not left to time out, and — when this one identifies — the
@@ -1285,7 +1288,23 @@ fn wound_down(
         station.abort();
         *wind_down = Some(std::time::Instant::now());
     }
-    wind_down.is_none_or(|since| station.quiescent() || since.elapsed() >= WIND_DOWN)
+    let Some(since) = *wind_down else {
+        return true;
+    };
+    if station.quiescent() {
+        return true;
+    }
+    if since.elapsed() < WIND_DOWN {
+        return false;
+    }
+    daemon.log.record(
+        Level::Warn,
+        "daemon",
+        "stopping before the session's end was all on the air: the other station may time \
+         out, and the closing identifier may not have gone",
+        &state_name(station),
+    );
+    true
 }
 
 /// The way out: the log says why, the stations heard and the sessions are written, the
@@ -1364,8 +1383,12 @@ fn publish_station(
                 serde_json::to_value(mismatch).unwrap_or(serde_json::Value::Null),
             ));
         }
+        // a session's end is news to a host program once nothing more of it goes on the air:
+        // `identified` says its closing identifier has gone out, and `disconnected` whether
+        // one is still to come (ADR-0075)
+        let comings_and_goings = ["connected", "disconnected", "role", "identified"];
         control.publish(&Event::new(
-            if name == "connected" || name == "disconnected" || name == "role" {
+            if comings_and_goings.contains(&name) {
                 "state"
             } else {
                 "log"
@@ -1378,6 +1401,7 @@ fn publish_station(
                 // caller asked for, so a host cannot know it without being told
                 "callsign": station.engine().my_call,
                 "remote": station.engine().remote_call,
+                "identifier_pending": station.closing_identifier_pending(),
             }),
         ));
     }

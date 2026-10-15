@@ -18,7 +18,9 @@ to 2026-09-24. The sections that matter:
 |---|---|---|
 | §97.3(a)(8) | what "bandwidth" means (26 dB) | [§97.3](https://www.ecfr.gov/current/title-47/section-97.3) |
 | §97.3(a)(6), §97.109 | automatic, local and remote control | [§97.109](https://www.ecfr.gov/current/title-47/section-97.109) |
-| §97.119(b)(1) | a CW identifier sent by an automatic device: 20 wpm at most | [§97.119](https://www.ecfr.gov/current/title-47/section-97.119) |
+| §97.119(a) | the call sign at the end of each communication, and at least every 10 minutes during one | [§97.119](https://www.ecfr.gov/current/title-47/section-97.119) |
+| §97.119(b) | how: (1) CW — an automatic device at 20 wpm at most; (3) "a RTTY emission using a specified digital code" for data | [§97.119](https://www.ecfr.gov/current/title-47/section-97.119) |
+| §97.309(a) | the specified digital codes: Baudot, AMTOR, ASCII; (a)(4) any publicly documented technique carrying one | [§97.309](https://www.ecfr.gov/current/title-47/section-97.309) |
 | §97.203(d) | where a beacon may be automatically controlled | [§97.203](https://www.ecfr.gov/current/title-47/section-97.203) |
 | §97.221 | automatically controlled digital stations | [§97.221](https://www.ecfr.gov/current/title-47/section-97.221) |
 | §97.301 | which frequencies each license class may use | [§97.301](https://www.ecfr.gov/current/title-47/section-97.301) |
@@ -159,7 +161,7 @@ whether that reaches the 60 m segment too is not clear, so Aether reads it as ex
 Tests at the control point — the tune tone, drive bursts, the keying test — are judged as a
 locally controlled station's: somebody is at the radio when they are pressed.
 
-## Beacons and the Morse identifier
+## Beacons and identification
 
 * A **beacon** — one frame with your callsign, addressed to nobody, on the tone floor — is
   judged like any other transmission. **A station under automatic control sends none** — not
@@ -168,12 +170,60 @@ locally controlled station's: somebody is at the radio when they are pressed.
   controlled only on 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so
   never for Aether's data) and a few segments above 6 m (ADR-0024). An answer-only station sends
   no beacon at all.
-* The **Morse identifier** (`cw_id`, off by default: Aether's frames carry both callsigns, and
-  §97.119(b)(3) accepts a documented digital code) is judged as a CW emission at the dial it
-  goes out on. It is sent at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent
-  by an automatic device: a faster setting is held to 20, and Setup step 4 and the log say so.
-  A session's end is identified once, and a station waits out the other station's identifier
-  before it keys (ADR-0022).
+* A beacon carries no Morse identifier. Its frame carries your callsign.
+
+### The Morse identifier
+
+* **When it goes** (ADR-0075, as VARA HF does it): once a session, at the end. It is the last
+  thing each station sends for the session, however the session ends.
+  * In a normal close the station that answers the goodbye sends its identifier right behind
+    the answer, and the station that said goodbye sends its own after that.
+  * After an abort or a lost path, each station sends its identifier on its own, after listening
+    for a clear channel for up to 15 s.
+  * Nothing during a session sends one, and neither do calls, acceptances, probes, probe answers,
+    beacons or KISS frames.
+  * A call or probe that leads to no session is identified on its own, 30 s after.
+* **Who sends it.** A US callsign always does, whatever *Morse ID* says in Setup and whatever a
+  host program's `CWID OFF` says. VARA HF forces it for US callsigns too. Any other callsign
+  sends it only if *Morse ID* is ticked; it is off by default. *US* is decided from the callsign
+  the identifier sends, by where the station operates:
+  * the prefixes AA–AL, K, N and W are US;
+  * an SSID (`-1`), `-T`/`-R`, and `/P`, `/M`, `/MM`, `/QRP` or a bare digit change nothing;
+  * a reciprocal prefix in front decides (`W4/G4ABC` is US, `VE3/KK4ODA` is not), as does a
+    location after the callsign (`G4ABC/W4` is US, `KK4ODA/VE3` is not). §97.119(g) puts the
+    indicator in front, and after the callsign for a Canadian licence; both are read.
+* **How it is sent.** It is judged as a CW emission at the dial it goes out on, a 1 500 Hz tone.
+  It goes at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent by an automatic
+  device. A faster setting is held to 20, and Setup step 4 and the log say so.
+
+### What identifies a long session
+
+§97.119(a) asks for the call sign at the end of each communication **and at least every 10
+minutes during it**. What Aether and the host programs send, as of this release:
+
+* **Aether's own frames.** Calls, acceptances, probes, probe answers, beacons and KISS datagrams
+  carry the callsigns. They are packed in Aether's own 6-bit code (`pack_callsign` in the air
+  interface), not Baudot, AMTOR or ASCII. Session frames (data, acknowledgements and the
+  goodbye) carry none.
+* **Aether's Morse identifier**: at the end only. Nothing in Aether identifies a session between
+  its call and its end.
+* **VarAC**: its *Call ID interval* setting sends `DE <your callsign>` as chat text on its own
+  schedule. Aether carries that text as data, inside its own frames, and compressed if
+  *Compress* is on (off by default).
+* **Winlink (B2F, Winlink Express, Pat, RMS Trimode)**: the callsigns are exchanged at the start
+  of the session. Nothing after that identifies it.
+* **The panel's sessions and Tests**: nothing after the call.
+
+**So a session longer than ten minutes is not identified in Morse between its call and its end.**
+Only VarAC's *Call ID interval* text identifies one in between, and only if you set it.
+
+Whether text or callsigns inside Aether's frames meet §97.119(b)(3) is an open question. That
+rule names "a RTTY emission using a specified digital code". Aether's air interface is publicly
+documented (§97.309(a)(4) allows such a technique to carry a specified code). But its callsign
+packing is not one of the specified codes. PACTOR and ARDOP put the callsigns in their own
+frames and treat that as identification. No FCC or ARRL statement on the point was found.
+Aether adds nothing to fill the gap. If your sessions run past ten minutes, how you identify
+during them is your call.
 
 ## 60 m
 

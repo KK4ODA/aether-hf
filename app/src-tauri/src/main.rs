@@ -55,9 +55,9 @@ const CONTROL: &str = "127.0.0.1:8515";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How long to let the daemon stop before killing it: time to end a session on the air
-/// first — a DISC and the identifier, twelve seconds at most (`WIND_DOWN` in `aetherd`) —
-/// and then release the radio.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+/// first — a DISC, the other station's answer and both closing identifiers, 22 seconds at most
+/// (`WIND_DOWN` in `aetherd`) — and then release the radio.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The exit status with which the daemon asks to be started again (`RESTART_EXIT_CODE` in
 /// `aetherd`; `EX_TEMPFAIL`). Any other exit is a stop, or a failure.

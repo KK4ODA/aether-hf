@@ -761,11 +761,24 @@ the other station is not capped by it, and each station caps the recommendation 
 its own.
 
 Data frames carry no callsign. A station that identifies in Morse (the reference daemon: a
-1 500 Hz tone, at most 20 wpm under US rules) appends its identifier to a transmission — its
-first, one each interval (ten minutes by default), and one when a session ends, exactly once
-however it ends — and sizes its bursts to leave room for it (ADR-0017). No frame announces an
-identifier: at the end of a session a station waits out the other's, for at most 15 s, before
-its `DISC` or `DISC_ACK` (ADR-0022).
+1 500 Hz tone, at most 20 wpm under US rules; on for a US callsign whatever its setting) does
+it once a session, at the end, and its identifier is the last thing it sends for the session
+(ADR-0075). Nothing inside a session carries one, and neither do calls, acceptances, probes,
+probe answers, beacons or datagrams. Under link protocol 8 (granted slots,
+`../research/link-architecture/07-protocol-8.md` §5.4) the connect request and its acceptance
+each state the sender's identifier length, and every `DISC` grants the other station its
+`DISC_ACK` plus that length:
+
+* the station that answers a `DISC` sends its identifier right behind its `DISC_ACK`, inside that
+  slot, and starts nothing of its own until the other's identifier can be over;
+* the station that sent the `DISC` keys its own on its own once the slot is over;
+* a session that ends without that exchange (a link timeout, a `DISC` never answered) is
+  identified by each station on its own, after listening for a clear channel for up to 15 s;
+* a session ended by the same station calling again is not identified: the communication goes
+  on in the new one.
+
+A contact that went no further than its setup (a call or a probe) is identified on its own,
+30 s after (ADR-0055 §4).
 
 ### 7.3 Capability negotiation
 
@@ -921,9 +934,6 @@ them.
 * A call on the tone floor is heard by a station of either bandwidth; negotiating across
   the two is not specified.
 * The wide (2.75 kHz) bandwidth variant.
-* Announcing a Morse identifier: no frame says that one follows, or for how long, so the
-  other station's next session frame is not held for one sent mid-session (ADR-0022 §3; the
-  DISC's unused base and bitmap could carry it).
 * Formal test vectors published alongside this document; the audio vectors in `vectors/` (the
   2 300 Hz OFDM frames) and the cross-validation vectors under `core/*/tests/data/` (the
   500 Hz and tone-floor frames and the link formats as well) serve that purpose today but are

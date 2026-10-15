@@ -116,10 +116,17 @@ pub struct StationConfig {
     /// Offer stream compression in the connect handshake. Used only if the peer offers it
     /// too; a station that cannot decompress must never be sent a compressed stream.
     pub compress: bool,
-    /// Identify in Morse at the end of a transmission, and how. `None` for not at all, which
-    /// is the default: Aether's own frames carry both callsigns, and whether that satisfies
-    /// the local rules is something only the operator knows.
+    /// The operator's Morse identifier setting (`[radio] cw_id`), and how it is sent: `None` for
+    /// off, the default. A station operating under a United States callsign identifies at the
+    /// end of every session whatever this says (`cwid::required_for`, ADR-0075), at
+    /// [`cw_id_wpm`](Self::cw_id_wpm); for any other callsign this is the operator's choice.
     pub cw_id: Option<CwId>,
+    /// The speed the identifier is sent at when a callsign requires it and the setting is off
+    /// (`[radio] cw_id_wpm`).
+    pub cw_id_wpm: f64,
+    /// The host program keys the radio (`[ptt] kind = "host"`, ADR-0025): with none attached,
+    /// nothing this station sends reaches the air, which the log says of a closing identifier.
+    pub keyed_by_host: bool,
     /// Where session recordings go. `None` means recording is refused.
     pub record_dir: Option<std::path::PathBuf>,
     /// Record every session on its own: start when one connects, stop when it ends. For a
@@ -131,9 +138,6 @@ pub struct StationConfig {
     /// What every recording that starts on its own should say about the station: the band,
     /// the antenna, whatever the operator would have written down had they been there.
     pub record_notes: String,
-    /// Longest a station may transmit without a Morse identifier, in seconds. Ignored when
-    /// `cw_id` is `None`. Ten minutes is the common regulatory figure.
-    pub cw_id_interval_s: f64,
     /// Who and where, for the field log a recording becomes.
     pub operator: crate::config::OperatorSection,
     /// Keep the exact audio of every transmission, as handed to the sound card, under
@@ -170,11 +174,12 @@ impl Default for StationConfig {
             turnaround_s: 0.0,
             compress: true,
             cw_id: None,
+            cw_id_wpm: CwId::default().wpm,
+            keyed_by_host: false,
             record_dir: None,
             record_auto: false,
             record_host_sessions: false,
             record_notes: String::new(),
-            cw_id_interval_s: 600.0,
             operator: crate::config::OperatorSection::default(),
             record_tx_audio: false,
             // a harness checks nothing; the daemon always builds this from the file
@@ -310,8 +315,12 @@ struct LinkTx {
     origin: Origin,
     /// When its radiation may start: no sooner than `not_before`, no later than `not_after`.
     window: KeyWindow,
-    /// The Morse identifier's time ahead of the frames, the engine's placement.
+    /// The closing Morse identifier after the frames, or alone: the engine's placement
+    /// (ADR-0075).
     identifier_s: f64,
+    /// Made outside every slot — a closing identifier no slot could be had for: it waits for a
+    /// clear channel as a call does.
+    listen_first: bool,
 }
 
 /// When a transmission may radiate, on the station's clock: an answer in a slot from the
@@ -321,12 +330,14 @@ struct LinkTx {
 struct KeyWindow {
     not_before: Option<f64>,
     not_after: Option<f64>,
-    /// Where the Morse identifier stood before this transmission's own was counted, when it
-    /// carries one: put back if the gate drops it, since nothing of it went out.
-    identifier_before: Option<IdentifierState>,
-    /// Samples of its audio, from the first, to the end of its last frame: the keying's lead,
-    /// the identifier, the frames.
+    /// It carries a closing identifier that was counted as sent: uncounted if the gate drops it,
+    /// since nothing of it went out.
+    identifier: bool,
+    /// Samples of its audio, from the first, to the end of its last frame: the keying's lead and
+    /// the frames.
     frames_samples: usize,
+    /// Samples after the last frame before the tail: the closing identifier behind a `DISC_ACK`.
+    trailing_samples: usize,
     /// Where its last frame ends on the air if it plays whole, set when it is keyed.
     whole_end: Option<f64>,
     /// Samples of its audio, from the first, where its header begins and ends. `None` with no
@@ -378,19 +389,13 @@ const KEY_TIME_MARGIN_S: f64 = 1.0;
 const CW_ID_GAP_S: f64 = 0.1;
 
 /// The longest a burst of frames may be on the air, so that the whole transmission — the
-/// keying's lead, the frames, the Morse identifier when `with_id` says one rides on it, and
-/// the tail — ends inside the key watchdog's limit (ADR-0017). Six tone frames are 32 s; the
-/// watchdog cut the last of every full tone burst on the air, and the link fell to the floor
-/// for it. Never less than one OFDM frame's worth, so an extreme setting still sends
-/// something.
-fn burst_limit_s(config: &StationConfig, with_id: bool) -> f64 {
-    let identifier = config.cw_id.filter(|_| with_id).map_or(0.0, |cw| {
-        let rate = config.params.audio_rate as f64;
-        // the identifier and the moment of silence before it (`append_cw_id`)
-        cw.audio(&config.callsign, rate).len() as f64 / rate + CW_ID_GAP_S
-    });
-    (config.max_key_s - config.key_lead_s - config.key_tail_s - identifier - KEY_TIME_MARGIN_S)
-        .max(1.1)
+/// keying's lead, the frames and the tail — ends inside the key watchdog's limit (ADR-0017).
+/// Six tone frames are 32 s; the watchdog cut the last of every full tone burst on the air,
+/// and the link fell to the floor for it. Never less than one OFDM frame's worth, so an
+/// extreme setting still sends something. The closing identifier behind a `DISC_ACK` is the
+/// engine's to fit (ADR-0075).
+fn burst_limit_s(config: &StationConfig) -> f64 {
+    (config.max_key_s - config.key_lead_s - config.key_tail_s - KEY_TIME_MARGIN_S).max(1.1)
 }
 
 /// How much of a frame that did not decode may lie under this station's own transmission
@@ -450,10 +455,11 @@ const DRIVE_GAP_S: f64 = 5.0;
 /// the drive so an operator who sets the level by the tone has set the identifier too.
 const CW_ID_RELATIVE_LEVEL: f64 = 0.8;
 
-/// The longest the identifier that ends a session on its own waits out the other station's
-/// Morse identifier, which no frame announces — ten characters at 10 wpm take about thirteen
-/// seconds. Longer, and what holds the channel is not an identifier, and the session is
-/// identified rather than held open.
+/// The longest an identifier sent on its own waits for a clear channel, whatever
+/// `wait_for_clear` says — the other station's own identifier, which no frame announces, takes
+/// about thirteen seconds for ten characters at 10 wpm. Longer, and what holds the channel is
+/// not an identifier: §97.119 asks for this one at the end of the communication, and a host
+/// program is told the session is over only once it has gone out (ADR-0075).
 const OTHER_ID_WAIT_MAX_S: f64 = 15.0;
 
 /// Why a station under automatic control sends no beacon (ADR-0024).
@@ -751,28 +757,27 @@ pub const PREROLL_S: f64 = 30.0;
 /// resolved looks its messages up there — and held between two calls of `take_deliveries`.
 const RECENT_DELIVERIES: usize = 32;
 
-/// Where the Morse identifier stands (§97.119).
-#[derive(Debug, Clone, Copy, Default)]
+/// Where the Morse identifier stands (§97.119, ADR-0075). A session's closing identifier is the
+/// engine's to place — the last thing each station sends for the session — and nothing inside a
+/// session, a beacon or a datagram carries one. What the station keeps is the contact that went
+/// no further than its setup, and whether a closing identifier is still to go out.
+#[derive(Debug, Clone, Default)]
 struct IdentifierState {
-    /// When the last one went out, in station time.
-    last: Option<f64>,
-    /// Whether this station has transmitted since it last identified.
-    transmitted_since: bool,
-    /// A session ended after transmitting since the last identifier: the next transmission
-    /// carries one whatever the interval says, or one goes out on its own.
-    final_due: bool,
-    /// When the communication under way — a call, and the session it opens — first
-    /// transmitted, in station time: its ten minutes count from there, not from an identifier
-    /// an hour before it (§97.119(a): at the end of each communication and at least every ten
-    /// minutes during it). Counted from the last identifier, the first try of a call after a
-    /// quiet spell carried one, and the other station's answer waited it out (KK4ODA calling
-    /// KO4WX, 2026-10-09).
-    communication_began: Option<f64>,
-    /// When this station last sent something that sets up a contact — a call, an acceptance, a
-    /// probe or its answer — which carries no identifier (ADR-0055). A contact that goes no
-    /// further — a probe answered and no call, a call never answered — is identified on its own
-    /// once the station has been idle [`SETUP_ID_WAIT_S`] since.
+    /// When this station last sent something that sets up a contact outside a session — a
+    /// call, a probe or its answer — which carries no identifier (ADR-0055), and the callsign
+    /// it went as. A contact that goes no further — a probe answered and no call, a call never
+    /// answered — is identified on its own once the station has been idle [`SETUP_ID_WAIT_S`]
+    /// since; a session it opens is identified at its end.
     setup_at: Option<f64>,
+    setup_call: String,
+    /// A session's closing identifier was still to go out at the last pass: a host program
+    /// hears `DISCONNECTED` once it has (ADR-0075).
+    closing: bool,
+    /// What became of the last closing identifier: what the `identified` event says.
+    outcome: Option<String>,
+    /// The callsign whose required identifier the log last said goes out though the setting is
+    /// off: said once at start and once when the callsign changes.
+    noted_required: Option<String>,
 }
 
 /// How long after a contact-setup transmission that led to no session the station waits,
@@ -1211,7 +1216,7 @@ impl<P: Ptt> Station<P> {
             max_burst_s: config
                 .link
                 .max_burst_s
-                .or_else(|| Some(burst_limit_s(&config, false))),
+                .or_else(|| Some(burst_limit_s(&config))),
             turnaround_s: config.turnaround_s,
             ..config.link.clone()
         };
@@ -1315,8 +1320,10 @@ impl<P: Ptt> Station<P> {
             stats: StationStats::default(),
             config,
         };
-        // a speed set above what the rules allow is sent at their limit, and said so at start
+        // a speed set above what the rules allow is sent at their limit, and said so at start,
+        // as is an identifier the callsign requires with the setting off (ADR-0075)
         station.note_identifier_speed();
+        station.note_required_identifier();
         station.refresh_identifier_length();
         station
     }
@@ -1640,6 +1647,9 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() == State::Idle {
             self.engine.set_callsigns(calls)?;
             self.pending_callsigns = None;
+            // the identifier sends the callsign: its length, and whether there is one, follow it
+            self.refresh_identifier_length();
+            self.note_required_identifier();
             return Ok(true);
         }
         // validated now, so a host is not told OK for a list the engine will refuse later
@@ -1881,13 +1891,15 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// Nothing on the air, nothing queued for it, and no session: a station that may stop.
+    /// Nothing on the air, nothing queued for it, no session, and no closing identifier still to
+    /// go out (ADR-0075): a station that may stop.
     #[must_use]
     pub fn quiescent(&self) -> bool {
         !self.transmitting
             && self.playback.is_empty()
             && self.pending.is_empty()
             && self.engine.state() == State::Idle
+            && !self.engine.identifier_owed()
     }
 
     /// Stop transmitting and release the radio, now.
@@ -2008,7 +2020,7 @@ impl<P: Ptt> Station<P> {
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
         self.set_regulatory(config.regulatory.settings());
-        // the identifier: on, off, its speed and interval, from the next transmission on
+        // the identifier: on, off and its speed, from the next session on
         let tone_hz = self
             .config
             .cw_id
@@ -2018,31 +2030,65 @@ impl<P: Ptt> Station<P> {
             tone_hz,
             ..CwId::default()
         });
-        self.config.cw_id_interval_s = config.radio.cw_id_interval_s;
+        self.config.cw_id_wpm = config.radio.cw_id_wpm;
+        self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
         self.refresh_burst_cap(self.now());
         self.note_identifier_speed();
         self.refresh_identifier_length();
     }
 
-    /// The speed the Morse identifier is sent at: the one set, or the rules' limit on an
+    /// The Morse identifier this station sends when it identifies as `call` (ADR-0075): the
+    /// operator's when the setting is on, and — for a callsign that requires one
+    /// (`cwid::required_for`: a US callsign) — one at the operator's speed whatever the
+    /// setting says. `None`: this callsign sends none.
+    #[must_use]
+    pub fn identifier_for(&self, call: &str) -> Option<CwId> {
+        self.config.cw_id.or_else(|| {
+            crate::cwid::required_for(call).map(|_| CwId {
+                wpm: self.config.cw_id_wpm,
+                ..CwId::default()
+            })
+        })
+    }
+
+    /// The callsign this station identifies with now: the session's, or the first of its
+    /// callsigns when none is under way.
+    fn identifying_call(&self) -> String {
+        if self.engine.state() == State::Idle {
+            self.engine
+                .callsigns
+                .first()
+                .cloned()
+                .unwrap_or_else(|| self.engine.my_call.clone())
+        } else {
+            self.engine.my_call.clone()
+        }
+    }
+
+    /// The speed an identifier set to `cw` is sent at: the one set, or the rules' limit on an
     /// automatic identifier when that is lower (§97.119(b)(1): 20 wpm).
+    fn sent_wpm(&self, cw: CwId) -> f64 {
+        self.policy
+            .cw_id_max_wpm()
+            .map_or(cw.wpm, |max| cw.wpm.min(max))
+    }
+
+    /// The speed the Morse identifier is sent at for the callsign the station identifies with
+    /// now; `None` when it sends none.
     #[must_use]
     pub fn identifier_wpm(&self) -> Option<f64> {
-        let cw = self.config.cw_id?;
-        Some(
-            self.policy
-                .cw_id_max_wpm()
-                .map_or(cw.wpm, |max| cw.wpm.min(max)),
-        )
+        self.identifier_for(&self.identifying_call())
+            .map(|cw| self.sent_wpm(cw))
     }
 
     /// Say once, when it is so, that the identifier goes slower than set. ND1J set a faster
     /// speed and heard the same 20 wpm every time: the rules' limit was applied and never
     /// mentioned.
     pub fn note_identifier_speed(&mut self) {
-        let (Some(cw), Some(sent)) = (self.config.cw_id, self.identifier_wpm()) else {
+        let Some(cw) = self.identifier_for(&self.identifying_call()) else {
             return;
         };
+        let sent = self.sent_wpm(cw);
         if sent < cw.wpm {
             self.note(
                 "identifier",
@@ -2055,16 +2101,58 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The identifier's part of `status`: whether it is on, the speed set and the speed
-    /// sent, and the interval.
+    /// Say once at start, and once each time the callsign changes, that the identifier goes out
+    /// though the setting is off, and why (ADR-0075).
+    fn note_required_identifier(&mut self) {
+        let call = self.identifying_call();
+        let required = crate::cwid::required_for(&call);
+        if self.config.cw_id.is_some() || required.is_none() {
+            self.identifier.noted_required = None;
+            return;
+        }
+        if self.identifier.noted_required.as_deref() == Some(call.as_str()) {
+            return;
+        }
+        let reason = required.map_or("", crate::cwid::Required::reason);
+        self.note(
+            "identifier",
+            &format!(
+                "the Morse ID goes out as {call} at the end of every session though its setting \
+                 is off. {reason}"
+            ),
+        );
+        self.identifier.noted_required = Some(call);
+    }
+
+    /// The identifier's part of `status`: whether it is sent for the callsign the station
+    /// identifies with now, whether the callsign requires it and why, the operator's setting,
+    /// the speed set and the speed sent, and whether a session's closing identifier is still
+    /// to go out.
     #[must_use]
     pub fn identifier_status(&self) -> serde_json::Value {
+        let mut status = self.identifier_check(&self.identifying_call());
+        status["pending"] = serde_json::Value::Bool(self.closing_identifier_pending());
+        status
+    }
+
+    /// What the identifier would be for `call` with the station's settings — `identifier.check`,
+    /// which the panel asks of a callsign typed in Setup, so the one rule (`cwid::required_for`)
+    /// decides there too: whether one is sent, whether the callsign requires it and why, the
+    /// operator's setting, and the speeds.
+    #[must_use]
+    pub fn identifier_check(&self, call: &str) -> serde_json::Value {
+        let call = call.trim().to_ascii_uppercase();
+        let required = crate::cwid::required_for(&call);
+        let cw = self.identifier_for(&call);
         serde_json::json!({
-            "enabled": self.config.cw_id.is_some(),
-            "wpm": self.config.cw_id.map(|cw| cw.wpm),
-            "sent_wpm": self.identifier_wpm(),
+            "enabled": cw.is_some(),
+            "setting": self.config.cw_id.is_some(),
+            "forced": required.is_some(),
+            "reason": required.map(crate::cwid::Required::reason),
+            "callsign": call,
+            "wpm": cw.map_or(self.config.cw_id_wpm, |cw| cw.wpm),
+            "sent_wpm": cw.map(|cw| self.sent_wpm(cw)),
             "max_wpm": self.policy.cw_id_max_wpm(),
-            "interval_s": self.config.cw_id_interval_s,
         })
     }
 
@@ -2656,12 +2744,12 @@ impl<P: Ptt> Station<P> {
             self.absorb(&baseband, now);
         }
         self.note_busy_transition(now);
+        self.reservation.channel(now, self.busy.busy(now));
         self.trace_after_release(&baseband, now);
         self.sample_passband(now);
 
         self.refresh_burst_cap(now);
         self.refresh_ceiling(false);
-        self.advance_link_identifier(now);
         self.engine.set_answer_gap(self.answer_gap_s());
         self.engine.tick(now);
         if self.ptt.poll(now)? == WatchdogState::Tripped {
@@ -2926,9 +3014,10 @@ impl<P: Ptt> Station<P> {
         let Some(window) = self.keying else {
             return;
         };
-        if let Some(before) = window.identifier_before {
-            self.identifier = before;
+        if window.identifier {
+            // nothing of it went out: the engine owes it again, behind the next DISC_ACK
             self.stats.cw_ids = self.stats.cw_ids.saturating_sub(1);
+            self.identifier.outcome = None;
         }
         self.playback.clear();
         self.authorized = None;
@@ -3020,8 +3109,11 @@ impl<P: Ptt> Station<P> {
         // on the air: the tail's silence before the release less, the card's output latency
         // more (07-protocol-8.md §3.4). The slot the transmission granted is measured from
         // there, as the other station measures it from the frames it hears end.
-        if self.keying.take().is_some() {
-            let frames_end = now - tail_s + self.radiation_latency_s() - self.config.key_lead_s;
+        if let Some(window) = self.keying.take() {
+            // the frames end before the closing identifier behind them (ADR-0075)
+            let trailing = window.trailing_samples as f64 / self.config.params.audio_rate as f64;
+            let frames_end =
+                now - tail_s - trailing + self.radiation_latency_s() - self.config.key_lead_s;
             self.engine.on_tx_done(now, Some(frames_end));
         }
         self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
@@ -3658,6 +3750,8 @@ impl<P: Ptt> Station<P> {
     /// A session came up: its coders, its account, its notes for the history, and the
     /// engine's stream counted from nothing again.
     fn session_began(&mut self, detail: &str) {
+        // the contact its setup began is this session now, identified at its end (ADR-0075)
+        self.identifier.setup_at = None;
         let agreed = negotiated(
             offered_capabilities(self.config.compress),
             self.engine.peer_capabilities(),
@@ -3695,19 +3789,14 @@ impl<P: Ptt> Station<P> {
     /// A session ended, however it ended: its identifier falls due, it joins the history,
     /// what it did not deliver is said to be undelivered, and its coders go.
     fn session_ended(&mut self, detail: &str) {
-        // The end of a communication is identified, whatever ended it — except a session the
-        // same station ended by calling again (ADR-0056): it lost the session, not the
-        // contact, and the communication goes on in the session its call opens, identified at
-        // that one's end or ten minutes in. Identified here, the identifier went on the air
-        // behind the new call's acceptance, over the caller's first move (KQ4SAX,
-        // 2026-10-12; `80m-called-again-cwid-500`).
-        if !detail.ends_with(" called again") {
-            if self.config.cw_id.is_some() && self.identifier.transmitted_since {
-                self.identifier.final_due = true;
-            }
-            self.identifier.communication_began = None;
+        // A session that came up is identified at its end by the engine, the last thing each
+        // station sends for it (ADR-0075) — except one the same station ended by calling again
+        // (ADR-0056), which goes on in the session its call opens. A call that went nowhere is
+        // a contact that went no further than its setup: identified on its own after
+        // `SETUP_ID_WAIT_S` idle (ADR-0055 §4).
+        if self.link.is_some() {
+            self.identifier.setup_at = None;
         }
-        self.identifier.setup_at = None;
         if detail == "no answer" {
             let called = self.engine.remote_call.clone();
             let now = self.now();
@@ -3731,7 +3820,37 @@ impl<P: Ptt> Station<P> {
         if let Some(calls) = self.pending_callsigns.take() {
             // validated when they were given; the engine is idle now
             let _ = self.engine.set_callsigns(&calls);
+            self.refresh_identifier_length();
+            self.note_required_identifier();
         }
+    }
+
+    /// Whether a session's closing identifier is still to go out (ADR-0075): owed by the
+    /// engine, handed over and queued, or on the air now.
+    #[must_use]
+    pub fn closing_identifier_pending(&self) -> bool {
+        self.engine.identifier_owed()
+            || self
+                .pending
+                .iter()
+                .any(|next| matches!(next, Outgoing::Link(tx) if tx.identifier_s > 0.0))
+            || self.keying.is_some_and(|window| window.identifier)
+    }
+
+    /// Say when a session's closing identifier has gone out — or will not — so that a host
+    /// program hears `DISCONNECTED` once nothing more of the session is to go on the air
+    /// (ADR-0075).
+    fn note_closing_identifier(&mut self) {
+        let pending = self.closing_identifier_pending();
+        if self.identifier.closing && !pending {
+            let outcome = self
+                .identifier
+                .outcome
+                .take()
+                .unwrap_or_else(|| "the closing identifier is not sent".to_owned());
+            self.note("identified", &outcome);
+        }
+        self.identifier.closing = pending;
     }
 
     /// Take what the engine has decided and act on it.
@@ -3745,6 +3864,7 @@ impl<P: Ptt> Station<P> {
                     not_after,
                     not_before,
                     identifier_s,
+                    listen_first,
                     ..
                 } => {
                     let origin = Origin {
@@ -3767,6 +3887,7 @@ impl<P: Ptt> Station<P> {
                             ..KeyWindow::default()
                         },
                         identifier_s,
+                        listen_first,
                     }));
                 }
                 Action::Deliver(bytes) => {
@@ -3834,18 +3955,7 @@ impl<P: Ptt> Station<P> {
             notes.heard_there_db = Some(heard);
         }
         self.note_arrivals();
-        // a DISC or DISC_ACK of ours still to go carries the identifier; a session that
-        // ended in silence — a link timeout, a peer that closed without a word — gets one
-        // on its own, after whatever is on the air now
-        if self.identifier.final_due
-            && !self
-                .pending
-                .iter()
-                .any(|next| matches!(next, Outgoing::Frames(..) | Outgoing::Link(..)))
-        {
-            self.identifier.final_due = false;
-            self.pending.push_back(Outgoing::Identifier);
-        }
+        self.note_closing_identifier();
         self.account();
     }
 
@@ -3881,9 +3991,11 @@ impl<P: Ptt> Station<P> {
     ///
     /// Under granted slots (ADR-0069) nothing of a session's waits for the channel, and
     /// nothing answered in a slot does: the master keys only once the slot it granted is over,
-    /// the slave only in its slot, and a held answer would only miss it. What does wait is what
-    /// this station starts outside a session — a call, a probe, a beacon, a datagram, the Morse
-    /// identifier on its own — and that only while `wait_for_clear` says so.
+    /// the slave only in its slot, and a held answer would only miss it — nor does the master's
+    /// closing identifier, in time the closing exchange left it (ADR-0075). What does wait is
+    /// what this station starts outside a session — a call, a probe, a beacon, a datagram, the
+    /// Morse identifier on its own — and that only while `wait_for_clear` says so; an
+    /// identifier on its own waits for busy too, for at most [`OTHER_ID_WAIT_MAX_S`].
     fn held_for_busy(&mut self, now: f64) -> bool {
         self.drop_beacons_in_session();
         let Some(next) = self.pending.front() else {
@@ -3897,18 +4009,25 @@ impl<P: Ptt> Station<P> {
             // Idle — and a slot is used or forfeited. Judged on the engine's state, an abort's
             // DISC waited 29 s for a contest to clear and the other station never heard it
             // (10-step-3.md §3.3)
-            Outgoing::Link(tx) => !starts_an_exchange(&tx.frames),
+            Outgoing::Link(tx) => !tx.listen_first && !starts_an_exchange(&tx.frames),
             // silence radiates nothing, so a keying test does not wait for the channel; a
             // datagram has had its own channel access already: the client's DCD and persistence
             Outgoing::Audio { silent: true, .. } | Outgoing::Datagram { .. } => true,
             _ => false,
         };
-        let busy_for_id = matches!(next, Outgoing::Identifier)
-            && self.busy.busy(now)
-            && self
-                .held_from
-                .is_none_or(|from| now - from < OTHER_ID_WAIT_MAX_S);
-        let polite = !in_turn && self.config.wait_for_clear && !self.channel_clear(now);
+        let alone = matches!(next, Outgoing::Identifier)
+            || matches!(next, Outgoing::Link(tx) if tx.listen_first);
+        let waited_out = self
+            .held_from
+            .is_some_and(|from| now - from >= OTHER_ID_WAIT_MAX_S);
+        let busy_for_id = alone && self.busy.busy(now) && !waited_out;
+        // an identifier waits for a clear channel no longer than the wait above: §97.119 asks
+        // for it at the end of the communication, and a host program waits for it
+        let id_waited_out = alone && waited_out;
+        let polite = !in_turn
+            && self.config.wait_for_clear
+            && !self.channel_clear(now)
+            && !id_waited_out;
         if !in_turn && (polite || busy_for_id) {
             self.stats.deferred_for_busy += 1;
             // a call's next try, a probe's wait move with it, or a try fires against a call
@@ -3949,6 +4068,8 @@ impl<P: Ptt> Station<P> {
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
         let mut link: Option<(KeyWindow, f64)> = None;
         let (frames, origin) = match outgoing {
+            // the engine's closing identifier on its own (ADR-0075)
+            Outgoing::Link(tx) if tx.frames.is_empty() => return self.render_link_identifier(now, &tx),
             Outgoing::Link(tx) => {
                 link = Some((tx.window, tx.identifier_s));
                 (tx.frames, tx.origin)
@@ -4020,11 +4141,15 @@ impl<P: Ptt> Station<P> {
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         if let Some((window, identifier_s)) = link {
-            // Nothing follows a link transmission's frames: the other station's slot starts
-            // after them, or this station's own after its answer's (ADR-0069). The identifier
-            // goes where the engine put it — ahead of them, in time it was granted.
-            let before = self.identifier;
-            let carried = self.link_identifier(now, audio_rate, identifier_s, &frames);
+            // a call, a probe or its answer outside a session sets up a contact: one that goes no
+            // further is identified on its own (ADR-0055); an acceptance opens a session, which
+            // the engine identifies at its end
+            if sets_up_contact(&frames)
+                && matches!(self.engine.state(), State::Idle | State::Connecting)
+            {
+                self.identifier.setup_at = Some(now);
+                self.identifier.setup_call.clone_from(&self.engine.my_call);
+            }
             // where in the transmission its header lies, for a cut that may come before it can
             // be read
             let header =
@@ -4034,15 +4159,22 @@ impl<P: Ptt> Station<P> {
                     (start, start + len)
                 });
             self.playback.extend(rendered);
+            let frames_samples = self.playback.len();
+            // Nothing else follows a link transmission's frames — the other station's slot
+            // starts after them, or this station's own after its answer's (ADR-0069) — but the
+            // closing identifier behind a DISC_ACK, in the time every DISC grants it: the last
+            // thing this station sends for the session (ADR-0075)
+            let carried = self.link_identifier(now, audio_rate, identifier_s);
             self.keying = Some(KeyWindow {
-                identifier_before: carried.then_some(before),
-                frames_samples: self.playback.len(),
+                identifier: carried,
+                frames_samples,
+                trailing_samples: self.playback.len() - frames_samples,
                 header_samples: header,
                 ..window
             });
         } else {
+            // a beacon, a datagram, a drive burst: no identifier (ADR-0075)
             self.playback.extend(rendered);
-            self.append_cw_id(now, audio_rate, sets_up_contact(&frames));
             self.keying = None;
         }
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
@@ -4220,23 +4352,74 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The Morse identifier on its own, inside the keying's lead and tail: the end of a
-    /// session no DISC of this station's carried it for.
+    /// The Morse identifier on its own, inside the keying's lead and tail, for a contact that
+    /// went no further than its setup (ADR-0055 §4): as the callsign the setup went as.
     fn render_identifier(&mut self, now: f64) {
         let audio_rate = self.config.params.audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
-        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-        self.identifier.final_due = true;
-        self.append_cw_id(now, audio_rate, false);
-        if self.playback.len() == lead {
-            // nothing to say after all — no identifier set any more, or none that fits the
-            // key: key nothing, and owe nothing, or the next pass would queue it again
-            self.playback.clear();
-            self.identifier.final_due = false;
+        let call = self.identifier.setup_call.clone();
+        // nothing to say after all — no identifier for that callsign, or the rules refuse it
+        // now: key nothing
+        let Some(audio) = self.identifier_audio_for(&call, now, audio_rate) else {
             return;
-        }
+        };
+        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+        self.playback.extend(audio);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+        self.identified(now);
+    }
+
+    /// The engine's closing identifier on its own (ADR-0075): a master's once the last slot it
+    /// granted is over, or a station's no slot could be had for. An engine transmission like any
+    /// other, followed to its end; one with nothing to send — the rules refuse it now, or the
+    /// host program that keys the radio has gone — is reported done at once, and the log says
+    /// why.
+    fn render_link_identifier(&mut self, now: f64, tx: &LinkTx) {
+        let audio_rate = self.config.params.audio_rate as f64;
+        let lead = (self.config.key_lead_s * audio_rate) as usize;
+        let tail = (self.tail_s() * audio_rate) as usize;
+        let call = self.engine.my_call.clone();
+        let audio = if self.unkeyable_identifier() {
+            None
+        } else {
+            self.identifier_audio_for(&call, now, audio_rate)
+        };
+        let Some(audio) = audio else {
+            self.identifier
+                .outcome
+                .get_or_insert_with(|| "the closing identifier is not sent".to_owned());
+            self.engine.on_tx_done(now, None);
+            self.pump();
+            return;
+        };
+        let room = (tx.identifier_s * audio_rate).round() as usize;
+        self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+        let frames_samples = self.playback.len();
+        self.playback.extend(audio.into_iter().take(room.max(1)));
+        self.keying = Some(KeyWindow {
+            identifier: true,
+            frames_samples,
+            trailing_samples: self.playback.len() - frames_samples,
+            ..tx.window
+        });
+        self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+        self.identified(now);
+        self.identifier.outcome = Some(format!("the closing identifier went out as {call}"));
+        self.tx_tag = Some(self.tag(now, tx.origin, &[], true));
+    }
+
+    /// Whether nothing would key the radio for an identifier now: the host program keys it and
+    /// none is attached. Said in the log, once a session ends with an identifier owed.
+    fn unkeyable_identifier(&mut self) -> bool {
+        if !self.config.keyed_by_host || self.host_attached() {
+            return false;
+        }
+        let why = "the closing identifier did not go out: the host program keys the radio, and \
+                   none is attached";
+        self.identifier.outcome = Some(why.to_owned());
+        self.note("identifier", why);
+        true
     }
 
     /// Raw audio goes out as it is, inside the same keying and lead and tail as a burst, so
@@ -4484,105 +4667,23 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// Put a Morse identifier at the end of this transmission, if one is due.
-    ///
-    /// It goes inside the same keying, after the data and before the tail, which is what an
-    /// identifier is: part of the transmission it identifies. That also means it counts
-    /// against the key-time watchdog like everything else, which is correct — a station is
-    /// transmitting either way.
-    ///
-    /// `setup`: the transmission sets up a contact — a call, an acceptance, a probe or its
-    /// answer — and carries none (ADR-0055): §97.119(a) asks for an identifier at the end of
-    /// each communication and every ten minutes during it, and one on a call or an answer is one
-    /// the other station has to wait out before it can reply. KK4ODA-1's first transmission
-    /// after a restart was a probe's answer, and it carried the identifier (2026-10-10).
-    fn append_cw_id(&mut self, now: f64, audio_rate: f64, setup: bool) {
-        self.append_cw_id_at(now, audio_rate, setup, None);
-    }
-
-    /// [`append_cw_id`](Self::append_cw_id), or with `ahead` — the samples of frames to follow
-    /// it in the same keying — ahead of them (ADR-0068 §2.5).
-    fn append_cw_id_at(&mut self, now: f64, audio_rate: f64, setup: bool, ahead: Option<usize>) {
-        if self.config.cw_id.is_none() {
-            return;
-        }
-        if (setup || self.engine.state() != State::Idle)
-            && self.identifier.communication_began.is_none()
-        {
-            self.identifier.communication_began = Some(now);
-        }
-        if setup {
-            self.identifier.setup_at = Some(now);
-            self.identifier.transmitted_since = true;
-            return;
-        }
-        if !self.id_due_by(now) {
-            self.identifier.transmitted_since = true;
-            return;
-        }
-        let Some(audio) = self.identifier_audio(now, audio_rate) else {
-            self.identifier.transmitted_since = true;
-            return;
-        };
-        // a moment of silence so the identifier is not run into the data
-        let gap = (CW_ID_GAP_S * audio_rate) as usize;
-        // Bursts are sized to leave it room from a minute before it falls due; one that
-        // does not — an operator's own `max_burst_s`, a watchdog setting just lowered —
-        // passes it to the next transmission rather than taking the burst over the key's
-        // limit, where the watchdog would cut both.
-        let on_air = (self.playback.len() + gap + audio.len() + ahead.unwrap_or(0)) as f64
-            / audio_rate
-            + self.tail_s();
-        if on_air > self.config.max_key_s - KEY_TIME_MARGIN_S / 2.0 {
-            self.identifier.transmitted_since = true;
-            return;
-        }
-        // The engine timed its wait for an answer from the end of the frames: the answer
-        // comes after the identifier — and after the other station's busy detector has let
-        // it go, which holds a channel for its hangover past the last of the energy — and a
-        // wait that ran out inside it put a repeat straight behind it, over the answer. Ahead
-        // of the frames it moves them and everything timed from them by its own length.
-        let hang = if ahead.is_some() {
-            0.0
-        } else {
-            self.busy.config().hang_s
-        };
-        self.engine
-            .on_tx_delayed((gap + audio.len()) as f64 / audio_rate + hang);
-        if ahead.is_some() {
-            self.playback.extend(audio);
-            self.playback.extend(std::iter::repeat_n(0.0f32, gap));
-        } else {
-            self.playback.extend(std::iter::repeat_n(0.0f32, gap));
-            self.playback.extend(audio);
-        }
-        self.identified(now);
-    }
-
     /// The Morse identifier went out now.
-    fn identified(&mut self, now: f64) {
-        self.identifier.last = Some(now);
+    fn identified(&mut self, _now: f64) {
         self.stats.cw_ids += 1;
-        self.identifier.transmitted_since = false;
-        self.identifier.final_due = false;
         self.identifier.setup_at = None;
-        if self.engine.state() == State::Idle {
-            // the communication it ends is over
-            self.identifier.communication_began = None;
-        }
     }
 
-    /// The Morse identifier's audio at the speed it goes out, judged as the CW emission it is
-    /// (ADR-0018): it rides inside a transmission's keying, so the gate's leave for the
-    /// transmission covers its data, not this. `None` when there is none to send, or the rules
-    /// refuse it now — the refusal reported, and the identifier left owed.
-    fn identifier_audio(&mut self, now: f64, audio_rate: f64) -> Option<Vec<f32>> {
-        let cw = self.config.cw_id?;
+    /// The Morse identifier's audio for `call` at the speed it goes out, judged as the CW
+    /// emission it is (ADR-0018): behind a `DISC_ACK` it rides inside a transmission's keying, so
+    /// the gate's leave for the transmission covers its data, not this. `None` when that
+    /// callsign sends none, or the rules refuse it now — the refusal reported.
+    fn identifier_audio_for(&mut self, call: &str, now: f64, audio_rate: f64) -> Option<Vec<f32>> {
+        let cw = self.identifier_for(call)?;
         let cw = crate::cwid::CwId {
             level: CW_ID_RELATIVE_LEVEL,
             // an identifier keyed by an automatic device is sent no faster than the rules
             // allow (§97.119(b)(1): 20 wpm)
-            wpm: self.identifier_wpm().unwrap_or(cw.wpm),
+            wpm: self.sent_wpm(cw),
             ..cw
         };
         let identifier = Transmission {
@@ -4594,103 +4695,79 @@ impl<P: Ptt> Station<P> {
         let situation = self.situation(false);
         let decision = self.policy.evaluate(&situation, &identifier);
         if !decision.allowed() {
+            self.identifier.outcome = Some(format!(
+                "the closing identifier is not sent: {}",
+                decision.summary
+            ));
             self.report_decision(&decision, now);
             return None;
         }
-        let audio = cw.audio(&self.engine.my_call, audio_rate);
+        let audio = cw.audio(call, audio_rate);
         (!audio.is_empty()).then_some(audio)
     }
 
-    /// How long the Morse identifier keeps the radio keyed, with the moment of silence that
-    /// parts it from the frames; 0 for none. What this station declares in its call or
-    /// acceptance, so the master grants it the time (07-protocol-8.md §5.4), and what the
-    /// engine counts in a transmission it places one in.
-    fn identifier_length_s(&self) -> f64 {
-        let (Some(cw), Some(wpm)) = (self.config.cw_id, self.identifier_wpm()) else {
+    /// How long the Morse identifier for `call` keeps the radio keyed, with the moment of
+    /// silence that parts it from the frames; 0 when that callsign sends none. What a call or an
+    /// acceptance under that callsign declares, so the master grants the slave's in the
+    /// `DISC_ACK`'s slot and the slave waits out the master's (ADR-0075).
+    fn identifier_length_for(&self, call: &str) -> f64 {
+        let Some(cw) = self.identifier_for(call) else {
             return 0.0;
         };
         let rate = self.config.params.audio_rate as f64;
-        let cw = crate::cwid::CwId { wpm, ..cw };
-        cw.audio(&self.engine.my_call, rate).len() as f64 / rate + CW_ID_GAP_S
+        let cw = crate::cwid::CwId {
+            wpm: self.sent_wpm(cw),
+            ..cw
+        };
+        cw.audio(call, rate).len() as f64 / rate + CW_ID_GAP_S
     }
 
-    /// Tell the engine how long the identifier is, after anything that may change it: on or
-    /// off, its speed, the rules' limit on it.
+    /// Tell the engine how long the identifier is for each of the station's callsigns, after
+    /// anything that may change it: on or off, its speed, the rules' limit on it, the callsigns.
     fn refresh_identifier_length(&mut self) {
-        let seconds = self.identifier_length_s();
-        self.engine.set_identifier_s(seconds);
-    }
-
-    /// The identifier the engine placed ahead of a link transmission's frames (07-protocol-8.md
-    /// §5.4): `identifier_s` of audio — the identifier and the moment of silence after it —
-    /// counted in the transmission's air time and, in a slot, in the time the master granted.
-    /// One the rules refuse leaves silence of its length, so the frames still go where the
-    /// engine put them. A call, an acceptance, a probe or its answer carries none and starts
-    /// the communication's count (ADR-0055). Whether one went out.
-    fn link_identifier(
-        &mut self,
-        now: f64,
-        audio_rate: f64,
-        identifier_s: f64,
-        frames: &[aether_link::TxFrame],
-    ) -> bool {
-        if self.config.cw_id.is_none() {
-            return false;
-        }
-        let setup = sets_up_contact(frames);
-        if (setup || self.engine.state() != State::Idle)
-            && self.identifier.communication_began.is_none()
-        {
-            self.identifier.communication_began = Some(now);
-        }
-        if setup {
-            self.identifier.setup_at = Some(now);
-        }
-        if identifier_s <= 0.0 {
-            self.identifier.transmitted_since = true;
-            return false;
-        }
-        let room = (identifier_s * audio_rate).round() as usize;
-        let start = self.playback.len();
-        let audio = self.identifier_audio(now, audio_rate);
-        let sent = audio.is_some();
-        if let Some(audio) = audio {
-            self.playback.extend(audio.into_iter().take(room));
-        }
-        self.playback.resize(start + room, 0.0);
-        if sent {
-            self.identified(now);
-        } else {
-            self.identifier.transmitted_since = true;
-        }
-        sent
-    }
-
-    /// Tell the engine when this station's Morse identifier falls due in a session: the engine
-    /// places it — ahead of the master's next header, ahead of the slave's answer in a slot
-    /// granted with its time (07-protocol-8.md §5.4). One handed over and not yet rendered is
-    /// not due again; outside a session the station's own rules place it.
-    fn advance_link_identifier(&mut self, now: f64) {
-        let placed = self
-            .pending
+        let lengths: Vec<(String, f64)> = self
+            .engine
+            .callsigns
             .iter()
-            .any(|next| matches!(next, Outgoing::Link(tx) if tx.identifier_s > 0.0));
-        let due = matches!(self.engine.state(), State::Connected | State::Disconnecting)
-            && !placed
-            && self.id_due_by(now);
-        if due != self.engine.identifier_due() {
-            self.engine.set_identifier_due(due);
+            .map(|call| (call.clone(), self.identifier_length_for(call)))
+            .collect();
+        self.engine.set_identifiers(&lengths);
+        self.engine
+            .set_identifier_s(lengths.first().map_or(0.0, |(_, seconds)| *seconds));
+    }
+
+    /// The closing identifier the engine placed after a link transmission's frames — behind a
+    /// `DISC_ACK`, in the time every DISC grants it (ADR-0075): the moment of silence that parts
+    /// it from the frames and the identifier, inside `identifier_s`, which the engine counted
+    /// in the transmission's air time. One the rules refuse, or that nothing would key, is left
+    /// out: silence radiates nothing, and nothing of the session comes after it. Whether one
+    /// went out.
+    fn link_identifier(&mut self, now: f64, audio_rate: f64, identifier_s: f64) -> bool {
+        if identifier_s <= 0.0 || self.unkeyable_identifier() {
+            return false;
         }
+        let call = self.engine.my_call.clone();
+        let Some(audio) = self.identifier_audio_for(&call, now, audio_rate) else {
+            return false;
+        };
+        let room = (identifier_s * audio_rate).round() as usize;
+        let gap = ((CW_ID_GAP_S * audio_rate) as usize).min(room);
+        self.playback.extend(std::iter::repeat_n(0.0f32, gap));
+        self.playback.extend(audio.into_iter().take(room - gap));
+        self.identified(now);
+        self.identifier.outcome = Some(format!("the closing identifier went out as {call}"));
+        true
     }
 
     /// A contact that went no further than its setup — a probe answered and no call after it,
     /// a call never answered, a probe this station answered and no call came — is identified
-    /// on its own once the station has been idle [`SETUP_ID_WAIT_S`] (ADR-0055).
+    /// on its own once the station has been idle [`SETUP_ID_WAIT_S`] (ADR-0055), as the callsign
+    /// the setup went as: whenever that callsign identifies, a US one always (ADR-0075).
     fn advance_identifier(&mut self, now: f64) {
         let Some(at) = self.identifier.setup_at else {
             return;
         };
-        if self.config.cw_id.is_none() || !self.identifier.transmitted_since {
+        if self.identifier_for(&self.identifier.setup_call).is_none() {
             self.identifier.setup_at = None;
             return;
         }
@@ -4698,28 +4775,13 @@ impl<P: Ptt> Station<P> {
             || self.engine.probing()
             || self.transmitting
             || !self.pending.is_empty()
+            || self.closing_identifier_pending()
             || now - at < SETUP_ID_WAIT_S
         {
             return;
         }
         self.identifier.setup_at = None;
         self.pending.push_back(Outgoing::Identifier);
-    }
-
-    /// Whether a Morse identifier will be due by station time `t`: the end of a session, or
-    /// ten minutes into a communication — a call and its session counted from their first
-    /// transmission, so neither a call nor its acceptance carries one; a transmission of no
-    /// session (a beacon, a probe or its answer, a datagram) from the last identifier, as each
-    /// is a communication of its own.
-    fn id_due_by(&self, t: f64) -> bool {
-        let interval = self.config.cw_id_interval_s;
-        let since = match (self.identifier.communication_began, self.identifier.last) {
-            (Some(began), Some(last)) => Some(began.max(last)),
-            (Some(began), None) => Some(began),
-            (None, last) => last,
-        };
-        self.config.cw_id.is_some()
-            && (self.identifier.final_due || since.is_none_or(|since| t - since >= interval))
     }
 
     /// Size the engine's transmissions to the key. The engine keeps the identifier's room
@@ -4730,7 +4792,7 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.engine
-            .set_max_burst_s(Some(burst_limit_s(&self.config, false)));
+            .set_max_burst_s(Some(burst_limit_s(&self.config)));
     }
 
     // ── the regulatory gate (ADR-0018) ───────────────────────────────────
@@ -4799,6 +4861,20 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// The Morse identifier as the rules class it: a CW emission at its tone.
+    fn identifier_transmission(&self, call: &str) -> Transmission {
+        Transmission {
+            what: "the Morse identifier".to_owned(),
+            kind: EmissionKind::Cw,
+            audio: Edges::tone(
+                self.identifier_for(call)
+                    .map_or(AUDIO_CENTER_HZ, |c| c.tone_hz),
+                crate::regulatory::occupancy::CW_HALF_WIDTH_HZ,
+            ),
+            direction: self.session_direction.unwrap_or(Direction::Originate),
+        }
+    }
+
     /// What a queued transmission is, as the rules class it: how wide, and who began it.
     fn transmission_of(&self, outgoing: &Outgoing) -> Result<Transmission, String> {
         let air = self.occupancy.ok_or_else(|| {
@@ -4808,6 +4884,10 @@ impl<P: Ptt> Station<P> {
             )
         })?;
         match outgoing {
+            // the engine's closing identifier on its own (ADR-0075)
+            Outgoing::Link(LinkTx { frames, .. }) if frames.is_empty() => {
+                Ok(self.identifier_transmission(&self.engine.my_call))
+            }
             Outgoing::Link(LinkTx { frames, .. })
             | Outgoing::Frames(frames, _)
             | Outgoing::Drive(frames)
@@ -4835,15 +4915,7 @@ impl<P: Ptt> Station<P> {
                     direction,
                 })
             }
-            Outgoing::Identifier => Ok(Transmission {
-                what: "the Morse identifier".to_owned(),
-                kind: EmissionKind::Cw,
-                audio: Edges::tone(
-                    self.config.cw_id.map_or(AUDIO_CENTER_HZ, |c| c.tone_hz),
-                    crate::regulatory::occupancy::CW_HALF_WIDTH_HZ,
-                ),
-                direction: self.session_direction.unwrap_or(Direction::Originate),
-            }),
+            Outgoing::Identifier => Ok(self.identifier_transmission(&self.identifier.setup_call)),
             Outgoing::Audio { silent: true, .. } => Ok(Transmission {
                 what: "a keying test".to_owned(),
                 kind: EmissionKind::Nothing,
@@ -4965,7 +5037,6 @@ impl<P: Ptt> Station<P> {
                 }
                 self.pump();
             }
-            Some(Outgoing::Identifier) => self.identifier.final_due = false,
             Some(Outgoing::Datagram {
                 reference, last, ..
             }) => self.refuse_datagram(reference, last, &why),
@@ -5931,9 +6002,12 @@ mod tests {
         gain: f32,
         noise_sigma: f32,
         state: u64,
-        /// The harness's playback clock: blocks taken from the stations so far, across
-        /// every `run` — a sound card's clock does not restart between calls either.
-        played: u64,
+        /// Each station's sound card's playback clock: blocks taken from it so far, across
+        /// every `run` — a sound card's clock does not restart between calls either. One a
+        /// station each: one not run (`run_a_alone`) does not move, as a station's card does
+        /// not play on while its daemon stands still — shared, `b` came back to a card 45 s
+        /// ahead of its own audio, and its gate dropped every answer as late.
+        played: [u64; 2],
     }
 
     impl Air {
@@ -5963,7 +6037,7 @@ mod tests {
                 gain,
                 noise_sigma,
                 state: 0x1234_5678_9abc_def0,
-                played: 0,
+                played: [0, 0],
             }
         }
 
@@ -5995,9 +6069,9 @@ mod tests {
             let mut out = vec![0.0f32; self.block];
             let silence = vec![0.0f32; self.block];
             for _ in 0..blocks {
-                let start = self.played;
+                let start = self.played[0];
                 self.a.device_played(start);
-                self.played += self.block as u64;
+                self.played[0] += self.block as u64;
                 let handed = self.a.playback(&mut out).expect("playback");
                 self.a.device_drains_at(start + handed as u64);
                 self.a.capture(&silence).expect("capture");
@@ -6021,14 +6095,15 @@ mod tests {
                 // the harness is the sound card: every block it takes has played by the
                 // time it takes the next, which is the clock the key is released against,
                 // and it plays what a station handed it from the start of the block
-                let start = self.played;
-                self.a.device_played(start);
-                self.b.device_played(start);
-                self.played += self.block as u64;
+                let [start_a, start_b] = self.played;
+                self.a.device_played(start_a);
+                self.b.device_played(start_b);
+                self.played[0] += self.block as u64;
+                self.played[1] += self.block as u64;
                 let handed_a = self.a.playback(&mut from_a).expect("playback");
                 let handed_b = self.b.playback(&mut from_b).expect("playback");
-                self.a.device_drains_at(start + handed_a as u64);
-                self.b.device_drains_at(start + handed_b as u64);
+                self.a.device_drains_at(start_a + handed_a as u64);
+                self.b.device_drains_at(start_b + handed_b as u64);
 
                 let mut to_b = vec![0.0f32; self.block];
                 let mut to_a = vec![0.0f32; self.block];
@@ -7036,18 +7111,23 @@ mod tests {
                 <= 30.0
         );
         assert_eq!(plain.engine.burst_capacity(ofdm), 6);
-        // the engine keeps an identifier's room itself, in the transmission it places one in
-        // (07-protocol-8.md §5.4): the limit is the key's whether or not one falls due, and the
-        // identifier's length is what the station declares
+        // the engine keeps the closing identifier's room itself, behind a DISC_ACK in the time
+        // the DISC granted (ADR-0075): the limit is the key's, identifying or not, and the
+        // identifier's length is what the station declares — a US callsign one whatever the
+        // setting says
         let mut identifying = station(30.0, Some(CwId::default()));
         assert_eq!(identifying.engine.burst_capacity(tone), 5);
-        identifying.identifier.final_due = true;
         identifying.refresh_burst_cap(2.0);
         assert_eq!(identifying.engine.burst_capacity(tone), 5);
         let declared = identifying.engine.config().identifier_s;
         assert!(
-            (declared - identifying.identifier_length_s()).abs() < 1e-9 && declared > 1.0,
+            (declared - identifying.identifier_length_for("KK4ODA-1")).abs() < 1e-9
+                && declared > 1.0,
             "declared {declared:.2} s"
+        );
+        assert!(
+            (plain.engine.config().identifier_s - declared).abs() < 1e-9,
+            "a US callsign declares its identifier with the setting off too"
         );
         // and the limit follows the setting, live
         let mut longer = station(30.0, None);
@@ -7139,9 +7219,11 @@ mod tests {
         let mut pile = Vec::new();
         let mut from_a = vec![0.0f32; air.block];
         for _ in 0..blocks {
-            let start = air.played;
+            // the stalled station's card plays on with the caller's
+            let start = air.played[0];
             air.a.device_played(start);
-            air.played += air.block as u64;
+            air.played[0] += air.block as u64;
+            air.played[1] += air.block as u64;
             let handed = air.a.playback(&mut from_a).expect("playback");
             air.a.device_drains_at(start + handed as u64);
             let mut to_b = vec![0.0f32; air.block];
@@ -7195,9 +7277,11 @@ mod tests {
         let mut pile = Vec::new();
         let mut from_a = vec![0.0f32; air.block];
         for _ in 0..blocks {
-            let start = air.played;
+            // the stalled station's card plays on with the caller's
+            let start = air.played[0];
             air.a.device_played(start);
-            air.played += air.block as u64;
+            air.played[0] += air.block as u64;
+            air.played[1] += air.block as u64;
             let handed = air.a.playback(&mut from_a).expect("playback");
             air.a.device_drains_at(start + handed as u64);
             let mut to_a = vec![0.0f32; air.block];
@@ -7215,11 +7299,11 @@ mod tests {
         let mut keyed = false;
         let mut out = vec![0.0f32; air.block];
         for block in &pile {
-            air.b.device_played(air.played);
+            air.b.device_played(air.played[1]);
             air.b.capture(block).expect("capture");
-            air.b.device_played(air.played);
+            air.b.device_played(air.played[1]);
             let handed = air.b.playback(&mut out).expect("playback");
-            air.b.device_drains_at(air.played + handed as u64);
+            air.b.device_drains_at(air.played[1] + handed as u64);
             keyed |= air.b.transmitting();
         }
         assert!(
@@ -7649,28 +7733,25 @@ mod tests {
     }
 
     #[test]
-    fn an_identifier_inside_a_burst_is_judged_as_the_cw_it_is() {
-        // the Morse identifier rides inside a data burst's keying, after the data the gate
-        // judged: it is judged again as CW before it is appended, so a profile that allowed
-        // the data but not CW there keeps it out of the burst
+    fn a_closing_identifier_is_judged_as_the_cw_it_is() {
+        // the closing identifier rides behind the slave's DISC_ACK and alone after the master's
+        // last slot (ADR-0075): it is judged as CW before it goes, so a profile that allows the
+        // data but not CW there keeps it off the air, says so, and the session still closes
         use crate::regulatory::{ControlMode, Policy};
-        let identifying = |regulatory| StationConfig {
-            callsign: "W4ODA".to_owned(),
-            wait_for_clear: false,
-            cw_id: Some(CwId::default()),
-            regulatory,
-            ..StationConfig::default()
-        };
-        let mut lawful = Station::new(
-            identifying(under_us_rules(14_078_000, ControlMode::Local)),
-            NullPtt::default(),
-            1,
+        let rules = || under_us_rules(14_078_000, ControlMode::Local);
+        let mut lawful = Air::with(1.0, 0.0005, |config| StationConfig {
+            regulatory: rules(),
+            ..config
+        });
+        lawful.a.connect("KK4XYZ").expect("idle");
+        lawful.run(60.0, |a, b| a.connected() && b.connected());
+        lawful.a.disconnect();
+        lawful.run(120.0, |a, b| a.quiescent() && b.quiescent());
+        assert_eq!(
+            (lawful.a.stats.cw_ids, lawful.b.stats.cw_ids),
+            (1, 1),
+            "both closing identifiers go out where CW is allowed"
         );
-        // a beacon is a communication of its own and carries the identifier; a call no longer
-        // does (ADR-0055)
-        lawful.beacon(None).expect("idle");
-        run_alone(&mut lawful, 8.0, |s| s.stats.cw_ids > 0);
-        assert_eq!(lawful.stats.cw_ids, 1, "the beacon carries the identifier");
 
         let mut profile =
             crate::regulatory::profile::load("us-fcc-part97").expect("the profile reads");
@@ -7679,26 +7760,37 @@ mod tests {
                 privilege.emissions = Some(vec!["data".to_owned()]);
             }
         }
-        let mut station = Station::new(
-            identifying(under_us_rules(14_078_000, ControlMode::Local)),
-            NullPtt::default(),
-            1,
-        );
-        station.set_policy(Policy::Rules(std::sync::Arc::new(profile)));
-        station.beacon(None).expect("idle");
-        run_alone(&mut station, 8.0, Station::transmitting);
-        assert!(
-            station.transmitting(),
-            "the beacon itself is lawful and keyed"
-        );
-        assert_eq!(station.stats.cw_ids, 0, "but it carries no identifier");
-        assert!(
-            station
-                .take_regulatory_reports()
-                .iter()
-                .any(|d| d.what == "the Morse identifier" && !d.allowed()),
-            "and the refusal is reported"
-        );
+        let profile = std::sync::Arc::new(profile);
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            regulatory: rules(),
+            ..config
+        });
+        air.a.set_policy(Policy::Rules(profile.clone()));
+        air.b.set_policy(Policy::Rules(profile));
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected(), "the session itself is lawful");
+        air.a.disconnect();
+        air.run(120.0, |a, b| a.quiescent() && b.quiescent());
+        assert_eq!(air.a.state(), State::Idle);
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (0, 0));
+        for station in [&mut air.a, &mut air.b] {
+            assert!(
+                station
+                    .take_regulatory_reports()
+                    .iter()
+                    .any(|d| d.what == "the Morse identifier" && !d.allowed()),
+                "the refusal is reported"
+            );
+            assert!(
+                station
+                    .take_events()
+                    .iter()
+                    .any(|e| e.starts_with("identified:the closing identifier is not sent")),
+                "and a host program is told the session is over all the same"
+            );
+            assert!(!station.closing_identifier_pending());
+        }
     }
 
     #[test]
@@ -7888,53 +7980,93 @@ mod tests {
         assert!(air.a.take_finished_sessions().is_empty(), "taken once");
     }
 
-    #[test]
-    fn a_session_ends_with_an_identifier_however_it_ends() {
-        // §97.119: the end of each communication is identified. An identifier rode only on a
-        // transmission that fell due by the interval, so a session that ended in silence —
-        // the peer's application closed, the link timed out — ended without one
-        let identifying = |config: StationConfig| StationConfig {
-            cw_id: (config.callsign == "W4ODA").then(CwId::default),
-            ..config
-        };
+    /// What a station keyed, by its accounts of the air (`take_tags`): each transmission's
+    /// first frame's kind — `id` for an identifier alone — and whether it carried the Morse
+    /// identifier.
+    fn keyed(station: &mut Station<NullPtt>) -> Vec<(String, bool)> {
+        station
+            .take_tags()
+            .iter()
+            .map(|tag| {
+                let tag: serde_json::Value = serde_json::from_str(tag).expect("a tag");
+                let kind = tag["frames"]
+                    .as_array()
+                    .and_then(|frames| frames.first())
+                    .map_or_else(
+                        || "id".to_owned(),
+                        |frame| frame["kind"].as_str().unwrap_or("?").to_owned(),
+                    );
+                (kind, tag["cw_id"].as_bool() == Some(true))
+            })
+            .collect()
+    }
 
-        // an orderly close: the end identifies, once — the call does not (ADR-0055: §97.119(a)
-        // asks for the end of a communication and every ten minutes during it, and an
-        // identifier on a call is one the other station's answer has to wait out)
-        let mut air = Air::with(1.0, 0.0005, identifying);
+    /// Each station's last transmission ends with its closing identifier, and none before it
+    /// carried one (ADR-0075).
+    fn ends_with_its_identifier(station: &mut Station<NullPtt>, last: &str) {
+        let keyed = keyed(station);
+        let call = station.engine.my_call.clone();
+        assert_eq!(
+            keyed.last(),
+            Some(&(last.to_owned(), true)),
+            "{call} did not end with its identifier: {keyed:?}"
+        );
+        assert!(
+            keyed[..keyed.len() - 1].iter().all(|(_, id)| !id),
+            "{call} identified before the end: {keyed:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_ends_with_both_identifiers_last_however_it_ends() {
+        // ADR-0075, the licensee's decision: at the end of a session the Morse identifier is
+        // the very last thing each station sends, however the session ends; both callsigns
+        // here are US ones, so both identify with the setting off (VARA HF's rule)
+        let both_idle = |a: &Station<NullPtt>, b: &Station<NullPtt>| a.quiescent() && b.quiescent();
+
+        // an orderly close: the DISC, the slave's DISC_ACK with its identifier behind it, the
+        // master's identifier on its own once that slot is over — nothing on the call
+        let mut air = Air::new(1.0, 0.0005);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         air.a.send(&[0x42; 300]);
         air.a.disconnect();
-        air.run(120.0, |a, b| {
-            a.state() == State::Idle && b.state() == State::Idle && a.quiescent()
-        });
-        air.run(10.0, |_, _| false);
-        assert_eq!(air.a.stats.cw_ids, 1, "one at the end, none on the call");
-        assert_eq!(air.b.stats.cw_ids, 0, "the other station does not identify");
+        air.run(150.0, both_idle);
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 1));
+        ends_with_its_identifier(&mut air.a, "id");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
 
-        // the peer goes silent mid-session: the link times out, and the identifier goes
-        // out on its own
-        let mut air = Air::with(1.0, 0.0005, identifying);
+        // the slave asks to leave: the same order
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.b.disconnect();
+        air.run(150.0, both_idle);
+        ends_with_its_identifier(&mut air.a, "id");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
+
+        // the peer goes silent mid-session: the master ends after its last slot and identifies
+        // on its own
+        let mut air = Air::new(1.0, 0.0005);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         air.a.send(&[0x42; 3000]);
         air.run(3.0, |_, _| false);
         let before = air.a.stats.cw_ids;
         air.run_a_alone(400.0, |a| a.state() == State::Idle && a.quiescent());
-        assert_eq!(air.a.state(), State::Idle, "the link timed out");
+        assert_eq!(air.a.state(), State::Idle, "the session ended");
         assert_eq!(air.a.stats.cw_ids, before + 1, "the end was identified");
+        ends_with_its_identifier(&mut air.a, "id");
 
-        // an abort mid-burst: the burst is cut, the DISC carries the identifier, and the
-        // peer hears the DISC rather than timing out
-        let mut air = Air::with(1.0, 0.0005, identifying);
+        // an abort mid-burst: the burst is cut, the DISC goes on the floor and is answered with
+        // the slave's DISC_ACK and identifier, and the master's identifier comes last
+        let mut air = Air::new(1.0, 0.0005);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         air.a.send(&[0x42; 3000]);
         air.run(20.0, |a, _| a.transmitting());
-        let before = air.a.stats.cw_ids;
         air.a.abort();
-        air.run(30.0, |a, b| b.state() == State::Idle && a.quiescent());
+        air.run(90.0, both_idle);
         assert_eq!(air.b.state(), State::Idle);
         assert!(
             air.b
@@ -7943,8 +8075,50 @@ mod tests {
                 .any(|e| e == "disconnected:peer disconnected"),
             "the peer heard the DISC"
         );
-        assert_eq!(air.a.stats.cw_ids, before + 1);
+        ends_with_its_identifier(&mut air.a, "id");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
         assert_eq!(air.a.stats.watchdog_trips, 0);
+
+        // the slave aborts: it answers the next header with a DISC, the master closes with a
+        // DISC of its own so that the slave's identifier has its slot, and identifies last
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 3000]);
+        air.run(5.0, |_, _| false);
+        air.b.abort();
+        air.run(150.0, both_idle);
+        assert!(
+            air.a
+                .take_events()
+                .iter()
+                .any(|e| e == "disconnected:peer disconnected"),
+            "the master closed the session the slave left"
+        );
+        ends_with_its_identifier(&mut air.a, "id");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
+    }
+
+    #[test]
+    fn a_station_whose_callsign_needs_no_identifier_ends_as_before() {
+        // a non-US callsign with the setting off sends none: its DISC_ACK is its last word,
+        // and the US station's identifier still comes last of all
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            callsign: if config.callsign == "KK4XYZ" {
+                "VE3XYZ".to_owned()
+            } else {
+                config.callsign
+            },
+            ..config
+        });
+        air.a.connect("VE3XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.disconnect();
+        air.run(150.0, |a, b| a.quiescent() && b.quiescent());
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 0));
+        ends_with_its_identifier(&mut air.a, "id");
+        let keyed = keyed(&mut air.b);
+        assert_eq!(keyed.last(), Some(&("DiscAck".to_owned(), false)), "{keyed:?}");
     }
 
     #[test]
@@ -7990,12 +8164,9 @@ mod tests {
     }
 
     /// Two identifying stations, the called one waiting for a clear channel, and `a` closes
-    /// the session; whether `a`'s interval has run out is `a_due`. How many times `a` keyed
-    /// from its DISC on, in how many blocks both were keyed at once, and how many identifiers
-    /// each sent meanwhile.
-    fn close_between_identifying_stations(
-        a_due: bool,
-    ) -> (Vec<String>, usize, usize, usize, usize) {
+    /// the session. How many times `a` keyed from its DISC on, in how many blocks both were
+    /// keyed at once, and how many identifiers each sent meanwhile.
+    fn close_between_identifying_stations() -> (Vec<String>, usize, usize, usize, usize) {
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
             cw_id: Some(CwId::default()),
             wait_for_clear: config.callsign == "KK4XYZ",
@@ -8008,12 +8179,6 @@ mod tests {
         air.run(60.0, |_, b| b.received_len() >= 2);
         air.run(3.0, |a, _| !a.transmitting() && a.pending.is_empty());
         air.a.take_events();
-        if a_due {
-            // the interval has run out — the session has been going ten minutes and more since
-            // the last identifier
-            air.a.identifier.last = Some(-1.0e6);
-            air.a.identifier.communication_began = Some(-1.0e6);
-        }
         let ids = (air.a.stats.cw_ids, air.b.stats.cw_ids);
         air.a.disconnect();
         let (mut overlap, mut a_keyings, mut was_keyed) = (0usize, 0usize, false);
@@ -8097,39 +8262,31 @@ mod tests {
         // its retries went out over ND1J's DISC_ACK and then over his Morse identifier. His
         // station waits for a clear channel, and by the time its DISC_ACK was queued its
         // session was over — so the DISC it answered, which marks the channel busy for two
-        // seconds, held the answer past the caller's retry. Under granted slots the closing
-        // identifiers go ahead of the frames that end the session (07-protocol-8.md §5.4): the
-        // master's ahead of its first DISC, the slave's ahead of its DISC_ACK, in the slot the
-        // DISC granted with its time — whether or not the interval has run out.
-        for due in [false, true] {
-            let (events, keyings, overlap, a_ids, b_ids) = close_between_identifying_stations(due);
-            assert!(
-                events.iter().any(|e| e == "disconnected:closed"),
-                "the DISC_ACK was not heard: {events:?}"
-            );
-            assert_eq!(
-                keyings, 1,
-                "the DISC carried the identifier, and nothing was repeated (due {due})"
-            );
-            assert_eq!(
-                overlap, 0,
-                "the two stations were keyed at once (due {due})"
-            );
-            assert_eq!(
-                (a_ids, b_ids),
-                (1, 1),
-                "each closing identifier once (due {due})"
-            );
-        }
+        // seconds, held the answer past the caller's retry. Under granted slots the slave's
+        // closing identifier goes behind its DISC_ACK in the slot the DISC granted with its
+        // time, and the master's after that slot (ADR-0075): the DISC once, the master's
+        // identifier once, nothing over anything.
+        let (events, keyings, overlap, a_ids, b_ids) = close_between_identifying_stations();
+        assert!(
+            events.iter().any(|e| e == "disconnected:closed"),
+            "the DISC_ACK was not heard: {events:?}"
+        );
+        assert_eq!(
+            keyings, 2,
+            "the DISC, then the identifier, and nothing was repeated"
+        );
+        assert_eq!(overlap, 0, "the two stations were keyed at once");
+        assert_eq!((a_ids, b_ids), (1, 1), "each closing identifier once");
     }
 
     #[test]
-    fn an_identifier_owed_but_impossible_is_dropped_not_queued_for_ever() {
-        // the operator turns identification off after a session that owed one: nothing is
-        // keyed, and the station does not queue the identifier again on every pass
+    fn an_identifier_no_longer_wanted_is_dropped_not_queued_for_ever() {
+        // a probe that led nowhere owes an identifier after SETUP_ID_WAIT_S; the operator of a
+        // non-US station turns identification off meanwhile: nothing is keyed, and the station
+        // does not queue the identifier again on every pass
         let mut station = Station::new(
             StationConfig {
-                callsign: "W4ODA".to_owned(),
+                callsign: "VE3XYZ".to_owned(),
                 wait_for_clear: false,
                 cw_id: Some(CwId::default()),
                 ..StationConfig::default()
@@ -8137,91 +8294,126 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        station.identifier.final_due = true;
+        station.probe("KK4XYZ", None).expect("idle");
+        run_alone(&mut station, 10.0, Station::transmitting);
+        run_alone(&mut station, 10.0, |s| !s.transmitting());
+        assert!(station.identifier.setup_at.is_some(), "the probe set up a contact");
         station.config.cw_id = None;
-        run_alone(&mut station, 2.0, |_| false);
+        run_alone(&mut station, SETUP_ID_WAIT_S + 10.0, |_| false);
         assert!(station.quiescent());
-        assert!(!station.identifier.final_due);
+        assert!(station.identifier.setup_at.is_none());
         assert_eq!(station.stats.cw_ids, 0);
     }
 
     #[test]
-    fn a_station_identifies_in_morse_when_asked_to_and_not_otherwise() {
-        // Off by default: a station that identifies when it need not is spending air time,
-        // and one that fails to when it must is breaking the rules. Only the operator knows
-        // which applies, so the daemon does not guess.
-        let quiet = Station::new(
-            StationConfig {
-                callsign: "W4ODA".to_owned(),
-                wait_for_clear: false,
-                ..StationConfig::default()
-            },
-            NullPtt::default(),
-            1,
-        );
+    fn a_us_callsign_identifies_whatever_its_setting_and_any_other_only_when_asked() {
+        // ADR-0075, as VARA HF does: a station operating under a US callsign always sends its
+        // Morse identifier; for any other callsign it is the operator's choice, off by default.
+        // The setting itself is never rewritten: the forcing is computed
+        let station = |callsign: &str, cw_id: Option<CwId>| {
+            Station::new(
+                StationConfig {
+                    callsign: callsign.to_owned(),
+                    wait_for_clear: false,
+                    cw_id,
+                    ..StationConfig::default()
+                },
+                NullPtt::default(),
+                1,
+            )
+        };
+        let mut us = station("W4ODA", None);
+        assert!(us.config.cw_id.is_none(), "the setting is left as it is");
+        let status = us.identifier_status();
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["setting"], false);
+        assert_eq!(status["forced"], true);
+        assert_eq!(status["reason"], "Required for US callsigns (§97.119)");
+        assert_eq!(status["callsign"], "W4ODA");
+        assert!(us.engine.config().identifier_s > 1.0, "the call declares it");
+        let events = us.take_events();
         assert!(
-            quiet.config.cw_id.is_none(),
-            "it identified without being asked"
+            events.iter().any(|e| e.starts_with("identifier:the Morse ID goes out as W4ODA")
+                && e.ends_with("Required for US callsigns (§97.119)")),
+            "said at start: {events:?}"
         );
 
-        let mut station = Station::new(
-            StationConfig {
-                callsign: "W4ODA".to_owned(),
-                wait_for_clear: false,
-                cw_id: Some(CwId::default()),
-                ..StationConfig::default()
-            },
-            NullPtt::default(),
-            1,
-        );
-        station.beacon(None).expect("idle");
-        let mut out = vec![0.0f32; 4096];
-        for _ in 0..400 {
-            station.playback(&mut out).expect("playback");
-            station.capture(&vec![0.0f32; 4096]).expect("capture");
-            if station.stats.cw_ids > 0 {
-                break;
-            }
-        }
-        assert_eq!(station.stats.cw_ids, 1, "the identifier never went out");
+        let elsewhere = station("VE3XYZ", None);
+        let status = elsewhere.identifier_status();
+        assert_eq!(status["enabled"], false);
+        assert_eq!(status["forced"], false);
+        assert!(status["reason"].is_null());
+        assert!(elsewhere.engine.config().identifier_s.abs() < 1e-12);
+
+        let asked = station("VE3XYZ", Some(CwId::default()));
+        let status = asked.identifier_status();
+        assert_eq!((status["enabled"].as_bool(), status["forced"].as_bool()), (Some(true), Some(false)));
+
+        // a US station's probe that leads nowhere is identified on its own, setting off
+        us.probe("KK4XYZ", None).expect("idle");
+        run_alone(&mut us, SETUP_ID_WAIT_S + 30.0, |s| s.stats.cw_ids > 0);
+        assert_eq!(us.stats.cw_ids, 1, "the identifier never went out");
     }
 
     #[test]
-    fn the_identifier_the_engine_places_goes_ahead_of_the_frames() {
-        // 07-protocol-8.md §5.4: the other station's slot starts after this station's frames,
-        // so the identifier never follows them; the engine places it ahead of them, in time it
-        // counted, and the daemon renders exactly that much: the identifier, then silence
+    fn the_log_says_once_that_a_us_callsign_identifies_though_the_setting_is_off() {
+        let mut station = idle_station();
+        let said = |events: Vec<String>| {
+            events
+                .iter()
+                .filter(|e| e.starts_with("identifier:the Morse ID goes out as"))
+                .count()
+        };
+        assert_eq!(said(station.take_events()), 1, "said at start");
+        station.note_required_identifier();
+        assert_eq!(said(station.take_events()), 0, "said once");
+        station.set_callsigns(&["KK4ODA".to_owned()]).expect("callsigns");
+        assert_eq!(said(station.take_events()), 1, "said again for the new callsign");
+        station.set_callsigns(&["VE3XYZ".to_owned()]).expect("callsigns");
+        assert_eq!(said(station.take_events()), 0, "nothing to say for a non-US callsign");
+        assert_eq!(station.identifier_status()["enabled"], false);
+    }
+
+    #[test]
+    fn the_closing_identifier_goes_behind_the_frames() {
+        // ADR-0075: the slave's closing identifier follows its DISC_ACK, in the time the DISC
+        // granted; the daemon renders the frames, a moment of silence, then the identifier, and
+        // the frames' end it reports to the engine is before it
         let mut station = Station::new(
             StationConfig {
                 callsign: "W4ODA".to_owned(),
                 wait_for_clear: false,
-                cw_id: Some(CwId::default()),
                 ..StationConfig::default()
             },
             NullPtt::default(),
             1,
         );
-        let mut header = GrantFrame::new(aether_link::GrantKind::Header, 7);
-        header.count = 0;
+        let ack = GrantFrame::new(aether_link::GrantKind::DiscAck, 7);
         let frame = aether_link::TxFrame {
             container: Container::Control,
-            payload: header.encode().to_vec(),
+            payload: ack.encode().to_vec(),
             mode: 0,
             rv: 0,
             floor: false,
             follows: 0,
         };
-        let identifier_s = station.identifier_length_s();
+        let identifier_s = station.identifier_length_for("W4ODA");
         let rate = station.config.params.audio_rate as f64;
-        let room = (identifier_s * rate).round() as usize;
         let (alone, _) = station
             .modulate(std::slice::from_ref(&frame))
             .expect("a frame");
+        let frames = {
+            let mut chain = station.to_audio.clone();
+            let mut out = chain.process(&alone);
+            out.extend(chain.flush());
+            out.len()
+        };
         station.pending.push_back(Outgoing::Link(LinkTx {
             frames: vec![frame],
             origin: Origin::station("test"),
             window: KeyWindow::default(),
             identifier_s,
+            listen_first: false,
         }));
         station.render_next(1.0);
         assert_eq!(station.stats.cw_ids, 1);
@@ -8232,31 +8424,28 @@ mod tests {
         .audio("W4ODA", rate);
         let queued: Vec<f32> = station.playback.iter().copied().collect();
         let lead = (station.config.key_lead_s * rate) as usize;
-        assert_eq!(
-            &queued[lead..lead + id.len()],
-            id.as_slice(),
-            "ahead of the frames, right after the key's lead"
-        );
+        let gap = (CW_ID_GAP_S * rate) as usize;
+        let window = station.keying.expect("an engine transmission");
+        assert_eq!(window.frames_samples, lead + frames, "the frames first");
+        assert!(window.identifier);
         assert!(
-            queued[lead + id.len()..lead + room]
+            queued[lead + frames..lead + frames + gap]
                 .iter()
                 .all(|&x| x == 0.0),
-            "silence for the rest of its time"
+            "a moment of silence"
         );
-        let frames = station.to_audio.process(&alone).len();
-        assert!(
-            queued.len() >= lead + room + frames,
-            "the frames follow its time: {} of {}",
-            queued.len(),
-            lead + room + frames
+        assert_eq!(
+            &queued[lead + frames + gap..lead + frames + gap + id.len()],
+            id.as_slice(),
+            "then the identifier"
         );
+        assert_eq!(window.trailing_samples, gap + id.len());
     }
 
     #[test]
-    fn in_a_session_both_stations_identify_where_the_engine_puts_it() {
-        // the master ahead of its next header; the slave says its identifier is due in its
-        // answer, and the master grants it the time ahead of its next one (07-protocol-8.md
-        // §5.4): both go out, the message crosses, and no slot is missed for them
+    fn nothing_inside_a_session_carries_an_identifier() {
+        // ADR-0075: no Morse during a session — the ten-minute identifier is gone, and the
+        // session ends with both stations' closing identifiers
         let message = vec![0x3Cu8; 600];
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
             cw_id: Some(CwId::default()),
@@ -8265,32 +8454,67 @@ mod tests {
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
-        let ids = (air.a.stats.cw_ids, air.b.stats.cw_ids);
-        for station in [&mut air.a, &mut air.b] {
-            let interval = station.config.cw_id_interval_s;
-            let now = station.now();
-            station.identifier.communication_began = Some(now - interval - 1.0);
-            station.identifier.last = None;
-        }
         air.a.send(&message);
         air.b.send(&message);
-        // the slave's takes an exchange more: its answer says it is due, the next header grants
-        // it the time
         air.run(180.0, |a, b| {
-            a.received_len() >= message.len()
-                && b.received_len() >= message.len()
-                && a.stats.cw_ids > ids.0
-                && b.stats.cw_ids > ids.1
+            a.received_len() >= message.len() && b.received_len() >= message.len()
         });
         assert_eq!(air.a.received_len(), message.len());
         assert_eq!(air.b.received_len(), message.len());
-        assert!(air.a.stats.cw_ids > ids.0, "the master never identified");
-        assert!(air.b.stats.cw_ids > ids.1, "the slave never identified");
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (0, 0));
+        assert!(keyed(&mut air.a).iter().chain(keyed(&mut air.b).iter()).all(|(_, id)| !id));
+        air.a.disconnect();
+        air.run(150.0, |a, b| a.quiescent() && b.quiescent());
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 1));
         for station in [&air.a, &air.b] {
             assert_eq!(station.stats.watchdog_trips, 0);
             assert_eq!(station.stats.dropped_late, 0);
             assert_eq!(station.engine().stats.forfeits, 0);
         }
+    }
+
+    #[test]
+    fn a_host_hears_the_session_is_over_once_the_identifier_has_gone_out() {
+        // ADR-0075: told DISCONNECTED, VarAC returns to its calling frequency and a scanning
+        // Trimode changes channel — over the Morse. The station says `disconnected` with the
+        // identifier still to come, and `identified` once it has gone out
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.take_events();
+        air.b.take_events();
+        air.a.disconnect();
+        let mut ended = [None, None];
+        let mut pending_at_end = [false, false];
+        let mut identified = [None, None];
+        let mut t = 0.0;
+        air.run(150.0, |a, b| {
+            t += 4096.0 / WIDE_2300.audio_rate as f64;
+            for (i, station) in [a, b].into_iter().enumerate() {
+                if ended[i].is_none() && station.state() == State::Idle {
+                    ended[i] = Some(t);
+                    pending_at_end[i] = station.closing_identifier_pending();
+                }
+                if identified[i].is_none() && ended[i].is_some() && !station.closing_identifier_pending()
+                {
+                    identified[i] = Some(t);
+                }
+            }
+            a.quiescent() && b.quiescent()
+        });
+        assert_eq!(pending_at_end, [true, true], "an identifier was still to come at the end");
+        for (station, call) in [(&mut air.a, "W4ODA"), (&mut air.b, "KK4XYZ")] {
+            let events = station.take_events();
+            let end = events.iter().position(|e| e.starts_with("disconnected:"));
+            let out = events
+                .iter()
+                .position(|e| *e == format!("identified:the closing identifier went out as {call}"));
+            assert!(
+                matches!((end, out), (Some(end), Some(out)) if out > end),
+                "{call}: {events:?}"
+            );
+        }
+        assert!(identified[0] > identified[1], "the master's identifier is the last of all");
     }
 
     #[test]
@@ -8324,44 +8548,32 @@ mod tests {
     }
 
     #[test]
-    fn the_identifier_does_not_repeat_inside_its_interval() {
-        // it is an identifier, not a beacon; sending it on every transmission would waste a
-        // large fraction of a slow link
+    fn a_beacon_carries_no_identifier() {
+        // ADR-0075: beacons and KISS frames carry no Morse — a beacon names its station in its
+        // own frame — whatever the setting and the callsign say
         let mut station = Station::new(
             StationConfig {
                 callsign: "W4ODA".to_owned(),
                 wait_for_clear: false,
                 cw_id: Some(CwId::default()),
-                cw_id_interval_s: 600.0,
                 ..StationConfig::default()
             },
             NullPtt::default(),
             1,
         );
-        // beacons one after another: each a communication of its own, identified by the
-        // interval (a call no longer carries one, ADR-0055)
         let mut out = vec![0.0f32; 4096];
-        for _ in 0..1200 {
+        for _ in 0..400 {
             let _ = station.beacon(None);
             station.playback(&mut out).expect("playback");
             station.capture(&vec![0.0f32; 4096]).expect("capture");
         }
         assert!(
-            station.now() > 60.0,
-            "the test did not run long enough to matter"
-        );
-        assert!(
             station.stats.transmissions > 1,
-            "only {} transmission(s), so there was nothing to repeat over",
+            "only {} transmission(s)",
             station.stats.transmissions
         );
-        assert_eq!(
-            station.stats.cw_ids,
-            1,
-            "it identified {} times in {:.0} s with a 600 s interval",
-            station.stats.cw_ids,
-            station.now()
-        );
+        assert_eq!(station.stats.cw_ids, 0, "a beacon carried the identifier");
+        assert!(!station.closing_identifier_pending());
     }
 
     #[test]
@@ -8564,11 +8776,10 @@ mod tests {
         .expect("parses");
         config.radio.cw_id = true;
         config.radio.cw_id_wpm = 18.0;
-        config.radio.cw_id_interval_s = 300.0;
         assert!(crate::config::LIVE_KEYS.contains(&"radio.cw_id_wpm"));
         station.apply_live(&config);
         assert_eq!(station.config.cw_id.map(|cw| cw.wpm), Some(18.0));
-        assert!((station.config.cw_id_interval_s - 300.0).abs() < 1e-9);
+        assert!((station.config.cw_id_wpm - 18.0).abs() < 1e-9);
         config.radio.cw_id = false;
         station.apply_live(&config);
         assert!(station.config.cw_id.is_none());
@@ -10464,6 +10675,7 @@ mod tests {
                 ..KeyWindow::default()
             },
             identifier_s: 0.0,
+            listen_first: false,
         }));
     }
 

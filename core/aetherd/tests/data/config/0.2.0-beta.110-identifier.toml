@@ -1,0 +1,38 @@
+# As beta.110 wrote a US station with the Morse identifier set as it shipped: schema 12, the
+# last with `radio.cw_id_interval_s` (ADR-0075 retires it; the identifier is the last thing a
+# session sends, and a US callsign sends it whatever `cw_id` says).
+schema_version = 12
+callsign = "KK4ODA-1"
+
+[operator]
+grid = "EM73tv"
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.158
+
+[ptt]
+kind = "cat"
+port = "COM4"
+protocol = "yaesu"
+baud = 38400
+
+[radio]
+bandwidth = 500
+max_mode = 14
+wait_for_clear = true
+answer_gap_ms = 0
+turnaround_ms = 300
+cw_id = false
+cw_id_wpm = 20.0
+cw_id_interval_s = 600.0
+
+[host]
+enabled = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "local"
+license_class = "extra"
+sideband = "usb"
