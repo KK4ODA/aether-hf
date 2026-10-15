@@ -13,7 +13,9 @@ that folder. ``revokeReadKey`` in the script turns reading back off.
 
 ``get`` takes a file id, or any part of a name ``list`` shows (``KQ4SAX``, ``20261012``); a
 part that matches several files takes them all. Each file comes in 8 MB pieces, is checked
-against the size Drive reports, and is skipped when already downloaded whole. ``--extract``
+against the size Drive reports, and is skipped when already downloaded whole. A piece the script
+answers with no data, or whose connection drops, is asked for again (``TRIES``), and a download
+that stopped carries on from the end of its ``.part`` file. ``--extract``
 unpacks each zip beside it into a folder of the same name.
 
 The script's address is the one built into the program (``upload::PROJECT_ENDPOINT``);
@@ -27,6 +29,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -38,6 +41,13 @@ ENDPOINT = (
 )
 PIECE = 8 * 1024 * 1024
 """The script's own limit for one ``read`` (``READ_PIECE`` in Code.gs)."""
+TRIES = 6
+"""How often a request is made before giving up. The script sometimes answers a ``read`` with
+no data, or the connection is reset mid-answer; asking again a little later gets it."""
+
+
+class Unanswered(RuntimeError):
+    """The script answered with something other than JSON: a passing fault, worth asking again."""
 
 
 def ask(payload: dict[str, object]) -> dict:
@@ -59,16 +69,31 @@ def ask(payload: dict[str, object]) -> dict:
     try:
         answer: dict = json.loads(text)
     except json.JSONDecodeError:
-        sys.exit(
+        raise Unanswered(
             "The upload script answered with a web page, not JSON: is the new version deployed?"
-        )
+        ) from None
     if answer.get("ok") is not True:
         sys.exit(f"The upload script refused: {answer.get('error')}")
     return answer
 
 
+def asked_again(payload: dict[str, object], what: str, wait_s: float = 5.0) -> dict:
+    """:func:`ask`, asked again after a dropped connection or an answer that is not JSON.
+    The script answers one request at a time: two downloads at once get 404s and empty
+    listings, so run one ``get`` at a time."""
+    for attempt in range(1, TRIES + 1):
+        try:
+            return ask(payload)
+        except (OSError, Unanswered) as error:
+            why = f"{type(error).__name__}: {error}"
+        if attempt < TRIES:
+            print(f"  {what}: {why}; asking again", flush=True)
+            time.sleep(wait_s * attempt)
+    sys.exit(f"{what}: {why}, {TRIES} times")
+
+
 def listing(days: int) -> list[dict]:
-    return list(ask({"action": "list", "days": days}).get("files", []))
+    return list(asked_again({"action": "list", "days": days}, "the listing").get("files", []))
 
 
 def matching(wanted: str, files: list[dict]) -> list[dict]:
@@ -76,21 +101,39 @@ def matching(wanted: str, files: list[dict]) -> list[dict]:
     return exact or [f for f in files if wanted.lower() in f["name"].lower()]
 
 
-def download(file: dict, out: Path) -> Path:
+def piece(file: dict, offset: int, length: int, wait_s: float = 5.0) -> bytes:
+    """One piece of a file, asked for again after an empty answer or a dropped connection."""
+    for attempt in range(1, TRIES + 1):
+        try:
+            answer = ask({"action": "read", "id": file["id"], "offset": offset, "length": length})
+            data = base64.b64decode(answer.get("data", ""))
+            if data:
+                return data
+            why = "no data"
+        except (OSError, Unanswered) as error:
+            why = f"{type(error).__name__}: {error}"
+        if attempt < TRIES:
+            print(f"  {file['name']}: {why} at {offset}; asking again", flush=True)
+            time.sleep(wait_s * attempt)
+    sys.exit(f"{file['name']}: {why} at {offset}, {TRIES} times")
+
+
+def download(file: dict, out: Path, wait_s: float = 5.0) -> Path:
     path = out / file["name"].replace("/", "_")
     size = int(file["size"])
     if path.exists() and path.stat().st_size == size:
         print(f"have {path.name} ({size / 1e6:.1f} MB)")
         return path
     part = path.with_name(path.name + ".part")
-    with part.open("wb") as f:
-        offset = 0
+    # A .part left by a run that stopped holds the file's first bytes: carry on from its end.
+    offset = part.stat().st_size if part.exists() and part.stat().st_size <= size else 0
+    with part.open("ab" if offset else "wb") as f:
+        if offset:
+            print(f"  {path.name}: resuming at {offset / 1e6:.1f} MB", flush=True)
         while offset < size:
-            answer = ask({"action": "read", "id": file["id"], "offset": offset, "length": PIECE})
-            data = base64.b64decode(answer.get("data", ""))
-            if not data:
-                sys.exit(f"{file['name']}: no data at {offset} of {size}")
+            data = piece(file, offset, min(PIECE, size - offset), wait_s)
             f.write(data)
+            f.flush()
             offset += len(data)
             print(f"  {path.name}: {offset / 1e6:.1f} of {size / 1e6:.1f} MB", flush=True)
     if part.stat().st_size != size:
