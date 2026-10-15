@@ -148,7 +148,9 @@ one level after six on-time decodes.
 follows. A slot granted for data and heard silent steps the master's rung down `silence_step`
 (2). Two silent slots step the slave's rung down, and put headers and answers on the floor.
 Retransmissions follow the RV sequence 0, 0, 2, 3 (ADR-0043). Re-encoding and the hopeless
-rule are kept (ADR-0038). A rung is offered only if no other carries as much *data* — after the
+rule are kept (ADR-0038). A frame sent at a rung pinned to measure it (the Test's ladder) is
+re-encoded at the recommendation after its first copy, if the recommendation is lower: the copy
+was the measurement, and the sender follows the recommendation from then on (ADR-0074). A rung is offered only if no other carries as much *data* — after the
 DATA frame's 3-byte header — per second of air from a threshold no higher (ADR-0073: it drops
 the 500 Hz air's rung 4).
 

@@ -123,27 +123,31 @@ The one-button version of §3, for volunteers. Put the other station's callsign 
 **Call** on the Session tab and press **Test session**. The modem then runs, and records,
 a fixed sequence: a probe (both directions' SNR), a call, a message (512 B to 2 kB, sized
 to how well the probe says you are heard, and sent in the session's first burst when the probe
-was answered), the **mode ladder** — a short burst at every mode
-from a rung under the fastest the message was acknowledged at (the message has just shown the
-slower ones carrying data; the log says *ladder from rung N: the
-message ran at rung M*), each one's acknowledgement kept as a rung, until three rungs in a row fail — then a file sized to about two
-minutes at the measured rate (at least 256 B), if the budget leaves room, and an orderly
-disconnect. About five minutes of transmitting, ten at most: the message and the file
-are sized to what the path can do (how the other station hears you, from the probe's
-answer, sizes the message; the message's measured rate sizes the file to about two
-minutes' worth of what is left; a file the path slows under ends when the budget does, and the
-report gives the bytes it carried), the run keeps to a time budget, and **Stop test** — the
-same button while it runs — ends it at once, keeping what was learned. The ladder runs
-before the file: with the file first, three tests with ND1J on a slow path spent the whole
-budget on the transfers and never reached a rung (2026-09-25). And the ladder leaves the file
-its time: it starts no rung once only the file's time is left (the log says *ladder stopped
-after N rungs: the time left is the file's*). On a slow path the file is what two minutes
-carry, as little as 256 bytes, rather than a kilobyte the budget cannot fit.
+was answered), a file sized to about two minutes at the message's rate (at least 256 B), then the
+**mode ladder** — a short burst at every mode from a rung under the fastest the message and file
+were acknowledged at (the log says *ladder from rung N: the transfers ran at rung M*), each
+one's acknowledgement kept as a rung, until three rungs in a row fail — and an orderly
+disconnect. About five minutes of transmitting, ten at most: the message and the file are sized
+to what the path can do, the run keeps to a time budget, and **Stop test** — the same button
+while it runs — ends it at once, keeping what was learned.
+
+**The transfers go first, the ladder last** (ADR-0074). The message and file are measured the
+way an operator's transfer would go, before anything is pinned, so the rates the Test reports
+are the link's own. The ladder pins rungs the link would not choose: each ladder frame is sent
+once at its rung — that copy is the measurement — and a frame that failed goes on at the rung
+the other station asks for, as any data would. After the last rung's answer the Test
+disconnects without waiting for the ladder's leftovers. Through 0.2.0-beta.109 the ladder ran
+between the message and the file, sent its failed frames again at the rung that had failed,
+and on a weak path left the file behind its leftovers (ND1J's Tests of 2026-10-15, report 12
+§21): file rates from those builds read low on weak paths. The file leaves the ladder its time
+(two and a half minutes); a ladder short of time stops (*ladder stopped after N rungs: the
+budget ran out*), and a file the path slows under ends when the budget does, the report giving
+the bytes it carried.
 
 Both stations must run the same link protocol: a release that changes it says *Update
 required*, and a Test, like any call, does not connect across it.
 
-While it runs, the Session tab shows the step (*step 4 of 6, climbing the mode ladder*),
+While it runs, the Session tab shows the step (*step 5 of 6, climbing the mode ladder*),
 the time elapsed and the most the budget leaves — never a countdown, since how long a
 step takes is the path's to say — a bar for the bytes acknowledged or the rungs tried, the
 rung under test (*rung 3 (tone50-75), rung 4 of 20, 4 frames*), the fastest rung that has

@@ -766,8 +766,8 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
                 results["file"]["bps"].as_f64().is_some_and(|b| b > 0.0),
                 "{results}"
             );
-            // the ladder starts at the rung the message ran at and climbs, without a gap, to
-            // the operator's fastest mode
+            // the ladder, after the transfers (ADR-0074), starts at the rung they ran at and
+            // climbs, without a gap, to the operator's fastest mode
             let ladder = results["ladder"].as_array().expect("rungs");
             let modes: Vec<u64> = ladder.iter().filter_map(|r| r["mode"].as_u64()).collect();
             assert!(!modes.is_empty() && modes.last() == Some(&5), "{results}");

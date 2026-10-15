@@ -21,7 +21,7 @@ context → decision → alternatives considered → consequences.
 | [0014](0014-fast-tones.md) | Fast tones — the floor's frame with its data at 50 and 100 baud, the 2 300 Hz ladder's middle rungs; link protocol 3 | accepted |
 | [0015](0015-narrow-middle-kinds.md) | The narrow middle kinds — four tones at 100 baud inside the floor's 400 Hz, the 500 Hz ladder's middle rungs; contradicted sync symbols; link protocol 4 | accepted |
 | [0016](0016-calls-on-the-floor.md) | Calls, probes and beacons start on the tone floor; a reading from the floor is a lower bound | accepted (amends 0006 and 0009's connect rule) |
-| [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted |
+| [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted; the Test's order superseded by 0074 |
 | [0018](0018-the-regulatory-gate.md) | The regulatory gate — nothing is keyed without the policy's leave; the rules as data; the occupancy measured | accepted |
 | [0019](0019-datagrams-and-the-kiss-port.md) | Datagrams, and a KISS port that answers as VARA's does — another program's frame outside sessions; the VARA frame types; Winlink priority | accepted |
 | [0020](0020-what-a-failure-says.md) | What a failure says — the receiver learns only from frames that could tell it something: trusted SNRs, self-decodable or combined failures, not the sender's own choices | accepted |
@@ -78,3 +78,4 @@ context → decision → alternatives considered → consequences.
 | [0071](0071-the-keying-latency-counts-the-radio-and-the-render.md) | A station's keying latency counts its radio and its render | accepted |
 | [0072](0072-a-disconnect-waits-a-minute-at-most-and-says-so.md) | A disconnect waits a minute at most, and says so | accepted |
 | [0073](0073-a-header-where-no-copy-can-be-read-alone-and-rungs-counted-by-their-data.md) | A header where no copy can be read alone, and rungs counted by their data | accepted |
+| [0074](0074-the-test-measures-the-link-then-the-rungs.md) | The Test measures the link, then the rungs | accepted |

@@ -228,13 +228,14 @@ function noteTest(detail) {
 // line said "0 rungs" through three whole tests with ND1J that never reached the ladder,
 // which read as a ladder that would not climb.
 
-const TEST_STEPS = ["probe", "connect", "message", "ladder", "file", "disconnect"];
+// the transfers first, measured as the link runs, then the ladder (ADR-0074)
+const TEST_STEPS = ["probe", "connect", "message", "file", "ladder", "disconnect"];
 const TEST_STEP_NAMES = {
   probe: "probing",
   connect: "calling",
   message: "sending the message",
-  ladder: "climbing the mode ladder",
   file: "sending the file",
+  ladder: "climbing the mode ladder",
   disconnect: "disconnecting",
 };
 

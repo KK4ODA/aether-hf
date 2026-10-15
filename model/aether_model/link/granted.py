@@ -343,6 +343,10 @@ class _TxRecord:
     reencoded: int = 0
     unknown: bool = False
     """Sent in a transmission whose answer went unheard: whether it arrived is not known."""
+    pinned: bool = False
+    """Sent first at a rung pinned to measure it (the Test's ladder). Its first copy is the
+    measurement; after it, the frame goes on as data does, at the rung the other station asks for
+    (ADR-0074)."""
 
     @property
     def sent(self) -> bool:
@@ -2221,15 +2225,23 @@ class GrantedEngine:
             unacked = [s for s in unacked if not self._records[s].unknown]
         for s in unacked:
             rec = self._records[s]
-            due = (
-                self.cfg.reencode_early_after if self._hopeless(rec.mode) else self.cfg.max_combines
-            )
+            # a frame pinned for a measurement has made it with its first copy: from then on it
+            # goes as data goes, at the rung asked for, never again at the rung that failed — the
+            # Test's ladder had sent such frames again at RV 0, 2 and 3 before re-encoding them,
+            # 13 of the 21 silent slots of ND1J's Tests of 2026-10-15 (ADR-0074)
+            if rec.pinned:
+                due = 1
+            elif self._hopeless(rec.mode):
+                due = self.cfg.reencode_early_after
+            else:
+                due = self.cfg.max_combines
             if rec.tx_count >= due and recommendation < rec.mode:
                 target = self._reencode_target(len(rec.body), rec.mode, recommendation)
                 if target is not None:
                     rec.mode = target
                     rec.reencoded += rec.tx_count
                     rec.tx_count = 0
+                    rec.pinned = False
                     self.stats.frames_reencoded += 1
         family = self.timing.is_floor(mode)
         if unacked:
@@ -2257,7 +2269,7 @@ class GrantedEngine:
                 take -= 1  # the one length the container cannot carry
             body = bytes(self._tx_queue[:take])
             del self._tx_queue[:take]
-            rec = _TxRecord(self._tx_next, body, mode)
+            rec = _TxRecord(self._tx_next, body, mode, pinned=self._pinned is not None)
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
             seqs.append(rec.seq)

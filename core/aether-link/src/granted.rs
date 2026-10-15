@@ -380,6 +380,10 @@ struct TxRecord {
     reencoded: usize,
     /// Sent in a transmission whose answer went unheard: whether it arrived is not known.
     unknown: bool,
+    /// Sent first at a rung pinned to measure it (the Test's ladder). Its first copy is the
+    /// measurement; after it, the frame goes on as data does, at the rung the other station asks
+    /// for (ADR-0074).
+    pinned: bool,
 }
 
 impl TxRecord {
@@ -3368,14 +3372,20 @@ impl GrantedEngine {
             .filter(|s| self.silent >= 2 || self.records.get(s).is_some_and(|r| !r.unknown))
             .collect();
         for &s in &unacked {
-            let Some((tx_count, rec_mode, body_len)) = self
+            let Some((tx_count, rec_mode, body_len, pinned)) = self
                 .records
                 .get(&s)
-                .map(|r| (r.tx_count, r.mode, r.body.len()))
+                .map(|r| (r.tx_count, r.mode, r.body.len(), r.pinned))
             else {
                 continue;
             };
-            let due = if self.hopeless(rec_mode) {
+            // a frame pinned for a measurement has made it with its first copy: from then on it
+            // goes as data goes, at the rung asked for, never again at the rung that failed — the
+            // Test's ladder had sent such frames again at RV 0, 2 and 3 before re-encoding them,
+            // 13 of the 21 silent slots of ND1J's Tests of 2026-10-15 (ADR-0074)
+            let due = if pinned {
+                1
+            } else if self.hopeless(rec_mode) {
                 self.config.reencode_early_after
             } else {
                 self.config.max_combines
@@ -3386,6 +3396,7 @@ impl GrantedEngine {
                     rec.mode = target;
                     rec.reencoded += rec.tx_count;
                     rec.tx_count = 0;
+                    rec.pinned = false;
                     self.stats.frames_reencoded += 1;
                 }
             }
@@ -3438,6 +3449,7 @@ impl GrantedEngine {
                     acked: false,
                     reencoded: 0,
                     unknown: false,
+                    pinned: self.pinned.is_some(),
                 },
             );
             self.tx_next = seq_after(self.tx_next, 1);

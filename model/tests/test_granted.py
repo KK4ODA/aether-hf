@@ -30,8 +30,10 @@ from aether_model.link.frames import (
     PROTOCOL_VERSION,
     TURNS_VERSION,
     ConnectBody,
+    DataKind,
     GrantFrame,
     GrantKind,
+    decode_data,
     level_of,
     with_level,
 )
@@ -1002,12 +1004,21 @@ def test_a_bulk_transfer_leaves_out_headers_that_change_nothing() -> None:
 
 
 def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -> None:
-    """ND1J's Tests of 2026-10-15: the ladder's frames pinned above the path went again at RV 2
-    and 3 without their header, and the slave, which believes a count only from a copy that
-    decoded alone (R2), could grant itself nothing: eight silent slots. R7 now leaves a header
-    out only when an RV 0 copy goes with it (ADR-0073)."""
+    """ND1J's Tests of 2026-10-15: frames that had failed went again at RV 2 and 3 without their
+    header, and the slave, which believes a count only from a copy that decoded alone (R2), could
+    grant itself nothing: eight silent slots. R7 now leaves a header out only when an RV 0 copy
+    goes with it (ADR-0073). Here the master's data fades out mid-transfer, as a path does, and
+    the frames on the air when it went are sent again at their rung until re-encoded."""
     a, b = _pair(NARROW)
-    sim = TwoStationSim(a, b, snr_db=-5.0, seed=21)
+    fade = {"on": True}
+
+    def faded(frame: TxFrame) -> float:
+        # the session's data only: the call and every control frame get through
+        if not fade["on"] or frame.container is not Container.DATA:
+            return 0.0
+        return -30.0 if decode_data(frame.payload)[0].kind is DataKind.DATA else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=21, frame_snr_offset=faded)
     sent: list[list[TxFrame]] = []
     orig = sim._launch
 
@@ -1017,24 +1028,61 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
         orig(who, at, tx)  # type: ignore[arg-type]
 
     sim._launch = spy  # type: ignore[method-assign]
+    # a few frames, all of them on the air when the path goes: nothing new to send beside them
+    message = _message(random.Random(21), 100)
     a.connect("KK4XYZ")
-    sim.run(until=60.0)
-    for mode in (9, 10, 11):
-        a.pin_mode(mode, body_bytes=10)
-        a.send(b"L" * 40)
-        sim.run(until=sim.t + 120.0)
-        a.take_ladder()
-    a.pin_mode(None)
+    a.send(message)
+    sim.run(until=150.0)
+    fade["on"] = False
+    sim.run(until=sim.t + 300.0)
     copies = [
         tx
         for tx in sent
         if any(f.container is Container.DATA for f in tx)
         and all(f.rv not in READABLE_ALONE_RVS for f in tx if f.container is Container.DATA)
     ]
-    assert copies, "the pinned frames were never sent again past their RV 0 copies"
+    assert copies, "no frame was sent again past its RV 0 copies"
     assert all(tx[0].container is Container.CONTROL for tx in copies)
     # what R7 still leaves out is a transmission with a copy the slave can read a count from
     assert a.stats.headers_elided > 0
+    assert sim.delivered(1) == message
+    assert sim.overlaps() == []
+
+
+def test_a_ladder_frame_is_measured_once_and_then_goes_at_the_rung_asked_for() -> None:
+    """The Test's ladder pins a rung to measure it. ND1J's Tests of 2026-10-15 sent the frames
+    that failed again at that rung, at RV 0, 2 and 3, before re-encoding them: 13 of their 21
+    silent slots, and in the two morning Tests about 130 s of each ladder. A pinned frame's first
+    copy is the measurement; after it, the frame goes at the rung the slave asks for (ADR-0074)."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=-5.0, seed=22)
+    sent: list[TxFrame] = []
+    orig = sim._launch
+
+    def spy(who: int, at: float, tx: object) -> None:
+        if who == 0 and isinstance(tx, SlotTransmit):
+            sent.extend(f for f in tx.frames if f.container is Container.DATA)
+        orig(who, at, tx)  # type: ignore[arg-type]
+
+    sim._launch = spy  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    pinned = 9
+    a.pin_mode(pinned, body_bytes=10)
+    a.send(_message(random.Random(22), 40))
+    sim.run(until=sim.t + 120.0)
+    rungs = a.take_ladder()
+    a.pin_mode(None)
+    sim.run(until=sim.t + 300.0)
+    assert [r.mode for r in rungs] == [pinned] and rungs[0].decoded < rungs[0].frames
+    at_pinned: dict[int, int] = {}
+    for frame in sent:
+        if frame.mode == pinned:
+            seq = decode_data(frame.payload)[0].seq
+            at_pinned[seq] = at_pinned.get(seq, 0) + 1
+    assert at_pinned and max(at_pinned.values()) == 1, at_pinned
+    assert a.stats.frames_reencoded >= rungs[0].frames - rungs[0].decoded
+    assert len(sim.delivered(1)) == 40, "the ladder's frames still all arrive"
     assert sim.overlaps() == []
 
 

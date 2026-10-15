@@ -3,20 +3,31 @@
 //! ladder of frame error rates per mode on a real path.
 //!
 //! The sequence: a probe (both directions' SNR, ADR-0006); a session; a message of
-//! incompressible bytes, timed; the **mode ladder** — a short burst pinned at each mode from
-//! a rung under the fastest the message was acknowledged at, its acknowledgement kept as a rung, until three rungs in a row decode fewer
-//! than half their frames; a file, when the budget has room left; and an orderly
-//! disconnect. The ladder comes before the file: on a slow path the file used to take the
-//! whole budget, and three tests with ND1J (2026-09-25) never reached a rung. The other station
-//! needs nothing but to be listening: it answers the probe and the call and acknowledges
-//! what it decodes, as it would for any session. What the run learns goes into the
-//! recording's sidecar under `session.test`, with the operator's grid, rig, power and
-//! antenna from `[operator]` beside it, and `test.status` reports the same while it runs
-//! and after it ends.
+//! incompressible bytes, timed; a file, sized from the message's rate; the **mode ladder** —
+//! a short burst pinned at each mode from a rung under the fastest the transfers were
+//! acknowledged at, its acknowledgement kept as a rung, until three rungs in a row decode fewer
+//! than half their frames; and an orderly disconnect. The other station needs nothing but to be
+//! listening: it answers the probe and the call and acknowledges what it decodes, as it would
+//! for any session. What the run learns goes into the recording's sidecar under
+//! `session.test`, with the operator's grid, rig, power and antenna from `[operator]` beside
+//! it, and `test.status` reports the same while it runs and after it ends.
 //!
-//! The ladder's bodies are small on purpose: a frame at a mode the path cannot carry is
-//! re-encoded at a slower one once it has gone `max_combines` transmissions unacknowledged,
-//! and a body every mode can hold is what makes that possible.
+//! **The Test measures the link the way an operator uses it, then measures the rungs in a way
+//! that cannot disturb that** (ADR-0074). The message and the file go first, as any transfer
+//! would, and the rates the run reports are the link's own. The ladder comes after them: it
+//! pins rungs the link would not choose, and on ND1J's Tests of 2026-10-15, run between the
+//! message and the file, its frames that failed were sent again at the rung that failed, its
+//! leftovers ran into the file and stepped it down to the tone floor, and about 130 s of each
+//! weak Test went to delivering its filler. A ladder frame is now measured once — its first
+//! copy, in the rung's answer — and goes on at the rung the other station asks for, as data
+//! does (the engine, `pinned`); the run moves to the disconnect at the last rung's answer, not
+//! waiting for filler nobody reads (the disconnect's drain bounds it, ADR-0072). The file leaves
+//! the ladder its time ([`LADDER_RESERVE_S`]): with the file last, three Tests with ND1J on a
+//! slow path (2026-09-25) spent the budget on the transfers and never reached a rung.
+//!
+//! The ladder's bodies are small on purpose: a frame pinned at a rung the path cannot carry is
+//! re-encoded at the rung asked for, and a body every rung can hold is what makes that
+//! possible.
 
 use aether_link::State;
 use serde_json::{Value, json};
@@ -238,6 +249,16 @@ const LADDER_FAILS: usize = 3;
 /// How long the file should take at the rate the message measured.
 const FILE_TARGET_S: f64 = 120.0;
 
+/// The time the file leaves for the ladder that follows it. ND1J's weak-path Tests of
+/// 2026-10-15 took 140–170 s to measure their rungs (the four-tone rungs a 26 s exchange each,
+/// a failed rung half a minute more), and a ladder frame's leftovers now go at the rung asked
+/// for, once.
+const LADDER_RESERVE_S: f64 = 150.0;
+
+/// The least time left in the budget for the ladder to start another rung: a tone rung's
+/// measurement and its leftovers' one transmission, and the disconnect.
+const LADDER_RUNG_LEFT_S: f64 = 60.0;
+
 /// The message the probe's SNR earns, under the plan's ceiling: half a kilobyte on a
 /// path heard below 0 dB, a kilobyte below 6 dB or when the probe went unanswered, the
 /// ceiling above that. The message is the first transfer and the one that measures the
@@ -295,36 +316,6 @@ pub fn file_size_for(message_bps: f64, ceiling: usize, remaining_s: f64) -> usiz
     earned.min(ceiling)
 }
 
-/// The time the ladder leaves for the file: a kilobyte — or the ceiling when that is
-/// smaller — at the rate the message measured, but no more than the two minutes a file is sized
-/// for, the minute [`file_size_for`] keeps in hand, and half a minute for the rung that may be
-/// in flight when the ladder looks. On the 80 m asymmetric scenario a ladder that passed rung 10 ran until 30 s
-/// were left, and a kilobyte at 70 bit/s then timed out (the scenario harness, 2026-10-06).
-/// Nothing when there is no file, or no rate to size it by.
-#[must_use]
-pub fn file_reserve_s(message_bps: f64, ceiling: usize) -> f64 {
-    if ceiling == 0 || message_bps <= 0.0 {
-        return 0.0;
-    }
-    (1024.min(ceiling) as f64 * 8.0 / message_bps).min(FILE_TARGET_S) + 60.0 + 30.0
-}
-
-/// The rate the file is sized by: the message's, scaled down by how much less a second of air
-/// carries at the rung the link runs at now than at the rung it ran the message at — never up,
-/// since a rung the ladder has just reached has carried no transfer yet. The message is sent
-/// before the ladder, and a failure in the ladder below the rung the receiver had asked for is
-/// news of the path: on the 40 m crashes scenario (seed 9) the message went at rungs 9–11 at
-/// 502 bit/s, a static crash took one frame of rung 8, the link came out of the ladder at rung
-/// 7, and a file sized at the message's rate for two minutes needed four and ran the budget out
-/// (the scenario harness, 2026-10-08). `then` is `None` when the message's rung is not known.
-#[must_use]
-pub fn file_rate_bps(message_bps: f64, then: Option<f64>, now: f64) -> f64 {
-    match then {
-        Some(then) if then > 0.0 && now > 0.0 => message_bps * (now / then).min(1.0),
-        _ => message_bps,
-    }
-}
-
 /// A Test session in progress, or the last one run.
 #[derive(Debug, Clone)]
 pub struct TestRun {
@@ -364,9 +355,6 @@ pub struct TestRun {
     /// The message, queued with the call when the probe had sized it: what the outgoing
     /// buffer held before it, to take it back out if the call is not answered.
     message_queued: Option<usize>,
-    /// The bytes a second of air carried at the rung the link ran at when the message was
-    /// acknowledged: what [`file_rate_bps`] compares the rung after the ladder with.
-    message_rung_rate: Option<f64>,
     /// The ladder's rungs left out under the rung the message ran at, once it has run.
     ladder_skipped: Option<usize>,
     /// The fastest rung that passed, once one has.
@@ -405,7 +393,6 @@ impl TestRun {
             file_size: 0,
             acked_at_step: 0,
             message_queued: None,
-            message_rung_rate: None,
             ladder_skipped: None,
             highest_passed: None,
             adjustments: Vec::new(),
@@ -414,6 +401,14 @@ impl TestRun {
 
     fn remaining_s(&self, now: f64) -> f64 {
         self.plan.budget_s - (now - self.started_s)
+    }
+
+    /// Whether the rung just answered is the ladder's last: three failed in a row, the top
+    /// reached, or no time for another.
+    fn ladder_over(&self, now: f64) -> bool {
+        self.ladder_fails >= LADDER_FAILS
+            || self.ladder_next + 1 >= self.modes.len()
+            || self.remaining_s(now) < LADDER_RUNG_LEFT_S
     }
 
     /// Whether the run is still going.
@@ -493,12 +488,6 @@ const CONNECT_TIMEOUT_S: f64 = 120.0;
 const DISCONNECT_TIMEOUT_S: f64 = 90.0;
 
 impl<P: Ptt> Station<P> {
-    /// Payload bytes a second of air carries at `rung`: what [`file_rate_bps`] compares.
-    fn rung_rate(&self, rung: usize) -> f64 {
-        let timing = self.engine.timing();
-        timing.capacity(rung) as f64 / timing.data_frame_s_for(rung)
-    }
-
     /// Begin a Test session with another station. Refused on an answer-only station,
     /// during a session or a probe, and while a Test session is running.
     ///
@@ -793,11 +782,16 @@ impl<P: Ptt> Station<P> {
             }
             Step::Message | Step::File => {
                 let (bytes, salt, next) = if run.step == Step::Message {
-                    (run.message_size, 1, Step::Ladder)
+                    (run.message_size, 1, Step::File)
                 } else {
-                    (run.file_size, 2, Step::Disconnect)
+                    (run.file_size, 2, Step::Ladder)
                 };
                 if bytes == 0 {
+                    if run.step == Step::Message {
+                        self.size_test_file(run, now);
+                    } else {
+                        self.start_ladder(run);
+                    }
                     run.enter(next, now);
                 } else if !run.entered {
                     run.acked_at_step = self.engine.stats.bytes_acked;
@@ -825,31 +819,10 @@ impl<P: Ptt> Station<P> {
                     );
                     if run.step == Step::Message {
                         run.message = Some(transfer);
-                        run.message_rung_rate = Some(self.rung_rate(self.engine.current_mode()));
-                        // the ladder starts a rung under the one the message ran at: the
-                        // rungs below have just carried the message, and climbing them again
-                        // cost WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth
-                        // of its budget, before the ladder learned anything new. The rung is
-                        // the fastest the message was acknowledged at, not the recommendation
-                        // at its end: two lost retries at the end of WC4Y's message of
-                        // 2026-10-11 had stepped that down from 3 to 1, and the ladder climbed
-                        // rungs 0-3 again for 105 s
-                        let rung = self
-                            .engine
-                            .top_acked_mode()
-                            .unwrap_or_else(|| self.engine.current_mode());
-                        let skip = skipped_rungs(&run.modes, rung);
-                        run.ladder_skipped = Some(skip);
-                        run.ladder_next = skip;
-                        if skip > 0 {
-                            let from = run.modes[skip];
-                            let why =
-                                format!("ladder from rung {from}: the message ran at rung {rung}");
-                            self.note("test", &why);
-                            run.adjustments.push(why);
-                        }
+                        self.size_test_file(run, now);
                     } else {
                         run.file = Some(transfer);
+                        self.start_ladder(run);
                     }
                     run.enter(next, now);
                 } else if since > transfer_timeout_s(bytes).min(run.remaining_s(now) + 60.0) {
@@ -863,10 +836,10 @@ impl<P: Ptt> Station<P> {
                         .min(bytes);
                     self.abort();
                     if run.step == Step::File && acked > 0 {
-                        // the file is the last thing measured and is sized to what the budget
-                        // has left; a path that slows under it (a burst of RTTY in the
-                        // harness's contest scenario) still gave its rate, and the run, its
-                        // ladder above all, is not a failure for it
+                        // the file is sized to what the budget has left; a path that slows
+                        // under it (a burst of RTTY in the harness's contest scenario) still
+                        // gave its rate, and the run is not a failure for it — though the
+                        // ladder that would have followed has no time left
                         let transfer = Transfer {
                             bytes: acked,
                             seconds: since,
@@ -877,6 +850,10 @@ impl<P: Ptt> Station<P> {
                         );
                         self.note("test", &what);
                         run.adjustments.push(what);
+                        if run.plan.ladder {
+                            run.adjustments
+                                .push("ladder skipped: the file took the budget".to_owned());
+                        }
                         run.file = Some(transfer);
                         self.finish_test(run, "complete");
                         return;
@@ -888,15 +865,9 @@ impl<P: Ptt> Station<P> {
                 self.sync_test_report(run);
             }
             Step::Ladder => {
-                // a rung is started only with the file's time still in hand; one under way is
-                // seen through
-                let bps = file_rate_bps(
-                    run.message.map_or(0.0, |m| m.bps()),
-                    run.message_rung_rate,
-                    self.rung_rate(self.engine.current_mode()),
-                );
-                let reserve = file_reserve_s(bps, run.plan.file_bytes).max(30.0);
-                let out_of_time = !run.entered && run.remaining_s(now) < reserve;
+                // a rung is started only with the time for it and the disconnect still in
+                // hand; one under way is seen through
+                let out_of_time = !run.entered && run.remaining_s(now) < LADDER_RUNG_LEFT_S;
                 if !run.plan.ladder
                     || run.ladder_next >= run.modes.len()
                     || run.ladder_fails >= LADDER_FAILS
@@ -904,27 +875,14 @@ impl<P: Ptt> Station<P> {
                 {
                     if run.plan.ladder && out_of_time && run.ladder_next < run.modes.len() {
                         run.adjustments.push(format!(
-                            "ladder stopped after {} rungs: the time left is the file's",
+                            "ladder stopped after {} rungs: the budget ran out",
                             run.rungs.len()
                         ));
                     }
                     if run.plan.ladder {
                         self.note("test", &format!("ladder: {} rungs, done", run.rungs.len()));
                     }
-                    // the file is what the message's rate earns in about two minutes, in the
-                    // time the ladder left
-                    run.file_size = file_size_for(bps, run.plan.file_bytes, run.remaining_s(now));
-                    if run.file_size == 0 && run.plan.file_bytes > 0 {
-                        run.adjustments
-                            .push("file skipped: no time left".to_owned());
-                        self.note("test", "file skipped: no time left in the budget");
-                    } else if run.file_size < run.plan.file_bytes {
-                        run.adjustments.push(format!(
-                            "file {} bytes: {bps:.0} bit/s measured",
-                            run.file_size
-                        ));
-                    }
-                    run.enter(Step::File, now);
+                    run.enter(Step::Disconnect, now);
                 } else if !run.entered {
                     let mode = run.modes[run.ladder_next];
                     let _ = self.engine.pin_mode(Some(mode), Some(run.body_bytes));
@@ -968,9 +926,12 @@ impl<P: Ptt> Station<P> {
                         let _ = self.engine.pin_mode(None, None);
                         self.finish_test(run, "aborted: the session dropped during the ladder");
                     } else if run.rung_reported
-                        && self.engine.all_acknowledged()
-                        && self.outbound.is_empty()
+                        && (run.ladder_over(now)
+                            || (self.engine.all_acknowledged() && self.outbound.is_empty()))
                     {
+                        // a rung's frames are delivered before the next rung is pinned, so its
+                        // burst holds only fresh frames; after the last rung's answer they are
+                        // filler nobody reads, and go with the disconnect's drain (ADR-0072)
                         run.ladder_next += 1;
                         run.enter(Step::Ladder, now);
                     } else if since > RUNG_TIMEOUT_S {
@@ -1001,6 +962,50 @@ impl<P: Ptt> Station<P> {
                 }
             }
             Step::Done => {}
+        }
+    }
+
+    /// The file the message's rate earns: about two minutes' worth, in the time the budget has
+    /// left once the ladder that follows has its own ([`LADDER_RESERVE_S`]).
+    fn size_test_file(&mut self, run: &mut TestRun, now: f64) {
+        let bps = run.message.map_or(0.0, |m| m.bps());
+        let reserve = if run.plan.ladder {
+            LADDER_RESERVE_S
+        } else {
+            0.0
+        };
+        run.file_size = file_size_for(bps, run.plan.file_bytes, run.remaining_s(now) - reserve);
+        if run.file_size == 0 && run.plan.file_bytes > 0 {
+            run.adjustments
+                .push("file skipped: no time left".to_owned());
+            self.note("test", "file skipped: no time left in the budget");
+        } else if run.file_size < run.plan.file_bytes {
+            run.adjustments.push(format!(
+                "file {} bytes: {bps:.0} bit/s measured",
+                run.file_size
+            ));
+        }
+    }
+
+    /// Where the ladder starts: a rung under the fastest the transfers were acknowledged at. The
+    /// rungs below have just carried the message and the file, and climbing them again cost
+    /// WC4Y's Test of 2026-10-10 four tone rungs of 26 s each, a sixth of its budget, before the
+    /// ladder learned anything new. The fastest acknowledged, not the recommendation at the end:
+    /// two lost retries at the end of WC4Y's message of 2026-10-11 had stepped that down from 3
+    /// to 1, and the ladder climbed rungs 0-3 again for 105 s.
+    fn start_ladder(&mut self, run: &mut TestRun) {
+        let rung = self
+            .engine
+            .top_acked_mode()
+            .unwrap_or_else(|| self.engine.current_mode());
+        let skip = skipped_rungs(&run.modes, rung);
+        run.ladder_skipped = Some(skip);
+        run.ladder_next = skip;
+        if run.plan.ladder && skip > 0 {
+            let from = run.modes[skip];
+            let why = format!("ladder from rung {from}: the transfers ran at rung {rung}");
+            self.note("test", &why);
+            run.adjustments.push(why);
         }
     }
 
@@ -1120,37 +1125,13 @@ mod tests {
         assert_eq!(file_size_for(1000.0, 16_384, 90.0), 3584);
         assert_eq!(file_size_for(1000.0, 16_384, 45.0), 0);
         assert_eq!(file_size_for(1000.0, 0, 600.0), 0);
-        // the ladder keeps time for the least file at the measured rate: a kilobyte at
-        // 70 bit/s is 117 s, a minute in hand and half a minute for a rung in flight
-        assert!((file_reserve_s(70.0, 16_384) - (8192.0 / 70.0 + 90.0)).abs() < 1e-9);
-        assert!((file_reserve_s(70.0, 512) - (4096.0 / 70.0 + 90.0)).abs() < 1e-9);
-        // never more than the two minutes a file is sized for
-        assert!((file_reserve_s(19.0, 16_384) - (120.0 + 90.0)).abs() < 1e-9);
-        assert!(file_reserve_s(70.0, 0).abs() < f64::EPSILON);
-        assert!(file_reserve_s(0.0, 16_384).abs() < f64::EPSILON);
-        // and what it keeps is enough for that file
-        let left = file_reserve_s(70.0, 16_384) - 30.0;
-        let sized = file_size_for(70.0, 16_384, left);
-        assert_eq!(sized, 768); // a kilobyte's time, rounded down to 256 bytes
-        assert!(sized as f64 * 8.0 / 70.0 <= left - 60.0);
-    }
-
-    #[test]
-    fn the_file_is_sized_at_the_rung_the_ladder_left() {
-        // the 40 m crashes scenario: the message at rung 9 (95 bytes a frame), the link at rung
-        // 7 (46) after the ladder
-        let then = 95.0 / 1.054;
-        let now = 46.0 / 1.054;
-        assert!((file_rate_bps(502.0, Some(then), now) - 502.0 * 46.0 / 95.0).abs() < 1e-9);
-        // never up: a faster rung has carried no transfer yet
-        assert!((file_rate_bps(502.0, Some(now), then) - 502.0).abs() < f64::EPSILON);
-        // nothing known of the message's rung: its rate as measured
-        assert!((file_rate_bps(502.0, None, now) - 502.0).abs() < f64::EPSILON);
-        // and the file that leaves fits two minutes at that rate
-        assert_eq!(
-            file_size_for(file_rate_bps(502.0, Some(then), now), 16_384, 254.0),
-            3584
-        );
+        // the file leaves the ladder after it its time (ADR-0074): with five minutes left, the
+        // ladder's 150 s and the minute in hand leave the file 90 s — at 70 bit/s, 768 bytes
+        let sized = file_size_for(70.0, 16_384, 300.0 - LADDER_RESERVE_S);
+        assert_eq!(sized, 768);
+        assert!(sized as f64 * 8.0 / 70.0 + LADDER_RESERVE_S + 60.0 <= 300.0);
+        // with eight minutes left the file has its two minutes and the ladder its time
+        assert_eq!(file_size_for(70.0, 16_384, 480.0 - LADDER_RESERVE_S), 1024);
     }
 
     #[test]
@@ -1191,9 +1172,9 @@ mod tests {
             air.a.start_test(TestPlan::default()),
             Err("a test session is already running".to_owned())
         );
-        // what the panel is shown, step by step: the ladder before the file (ND1J's three
-        // tests spent their budgets on the transfers and never reached a rung), and while
-        // it climbs, the rung under test out of all of them
+        // what the panel is shown, step by step: the transfers first, measured as the link
+        // runs, then the ladder (ADR-0074), and while it climbs, the rung under test out of all
+        // of them
         let mut steps: Vec<String> = Vec::new();
         let mut during_ladder = Value::Null;
         let mut during_message = Value::Null;
@@ -1221,13 +1202,13 @@ mod tests {
                 "probe",
                 "connect",
                 "message",
-                "ladder",
                 "file",
+                "ladder",
                 "disconnect"
             ],
             "{steps:?}"
         );
-        // the ladder's first rung is the one the message ran at — on this clean wire well up
+        // the ladder's first rung is the one the transfers ran at — on this clean wire well up
         // the ladder — and the rungs under it count as done on the panel
         assert_eq!(during_ladder["ladder"]["total"], 20, "{during_ladder}");
         let first = during_ladder["ladder"]["testing"]
