@@ -1590,7 +1590,30 @@ two stations' recordings go on one clock by the envelope of a signal both heard 
 at 2.7–3 kHz, or another station — with `tools/two_sides.py` (offset, its steps, handover delays,
 loop latency, gaps on the air, each answer against its slot). `bench_link --replay` now honours
 `--engine`. Scenario `80m-local-rfi-ladder-500` is this path with the local RFI. The report's
-§12 ranks the changes; none made, the protocol-rule ones wait on the author.
+§12 ranks the changes; the protocol-rule ones (4, 5) wait on the author and more sessions.
+**Changes 1–3 made (2026-10-15, the author's go; no protocol rule, no wire change, beta.106
+interoperates).** ADR-0071: the daemon learns its radio's keying command (timed around
+`ptt.key`) and each engine transmission's render (on the card's playback clock either side of
+`Station::render_pending`, which `fill_card` calls first), the last nine of each to the
+millisecond (`station/latency.rs`; under half a millisecond is none, so `NullPtt` and the lockstep
+harness learn nothing); the engine is told lead + card + both medians (`engine_latency_s`); an
+engine transmission without a `not_before` gets one at the engine's reckoning (queued now + that
+latency: never early); the gate holds until the fastest recent key would not be early, refuses
+what the typical one would put past `not_after`, and once the key is up judges the start with the
+wait measured — past `not_after` the key goes down with nothing played (`dropped_late`; S2 by
+construction); a `keying` log line, the bundle's `keying`, `tx_end`'s `key`/`render`. The capture
+callback reports jumps of its capture timestamps ≥ 10 ms (`audio::CaptureSkips`: a warn line,
+recording event `capture_skip`, the bundle's `audio.capture_*`) — a report only, not fed to
+`capture_gap` until a two-sided recording shows the skips mark real losses. ADR-0070 (model
+first): a tone candidate refused only by arrivals at its own middle or end block, its first block
+not standing, is taken when its two best blocks are clean (`two_clean_blocks`, ADR-0049's
+condition); ADR-0014's early reading has one clean block. The probe's case passes in both suites,
+and a burst's first frame begun under the receiver's mute is found and decodes (ADR-0060's test
+now says so). Harness, ten scenarios × 3 seeds (the quick set, 500 Hz weak, floor-top, local-RFI
+ladder, QSB, VOX, PACTOR, the polar path): 30/30 pass, no RF overlap, nothing slower than the
+baseline. The same audio through both rules (a scratch bench, ADR-0070 §3): 1 622 frames
+after noise, silence or the mute found 796 → 1 183 (the mute's 400: 0 → 384), 768 with the first
+block faded 6–30 dB 365 → 751, no false detection in either, and 40 minutes of noise none.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

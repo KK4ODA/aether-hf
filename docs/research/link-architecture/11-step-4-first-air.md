@@ -51,6 +51,13 @@ Steps 0–3 are in [08-steps-0-and-1.md](08-steps-0-and-1.md), [09-step-2.md](09
   * The "VARA burst" was a PACTOR-II/III ARQ link, heard at both stations.
 * **No interference was decoded as an Aether frame.**
 
+**Since this report (2026-10-15):** changes 1–3 of §12 are made, at the author's word: the
+keying latency counts the radio's command and the render, and the capture timestamps are
+reported ([ADR-0071](../../adr/0071-the-keying-latency-counts-the-radio-and-the-render.md)); a tone
+frame whose first block faded stands on its other two
+([ADR-0070](../../adr/0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md)). None is a
+protocol rule. Changes 4–7 wait.
+
 ## 1. The session and the counters
 
 | | WC4Y (master) | KK4ODA-1 (slave) |
@@ -449,10 +456,12 @@ hits; it found the one case with 6. The offline detector confirmed and decoded a
 silence, and a burst's first frame comes out of a turnaround, so these are the frames most
 exposed.
 
-**What changes now.** The case is committed as a strict xfail:
+**What changes now.** The case was committed as a strict xfail:
 `test_a_frame_whose_first_block_faded_is_not_refused_by_its_own_middle_block` in
-`model/tests/test_tone.py`, marked `audit`. It names this finding. The fix is a receiver rule,
-so it is listed in §12 for the author's decision, not made.
+`model/tests/test_tone.py`, marked `audit`. The fix, change 3 of §12, was made the next day with
+the author's approval: [ADR-0070](../../adr/0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md).
+A candidate refused only by arrivals at its own later blocks, its first block faded, stands when
+two of its blocks are clean. The test passes in both suites.
 
 **Other tone frames.** Over both recordings, the offline detector confirms 40 tone frames at
 KK4ODA-1 and 31 at WC4Y. The only one the live stations missed is the probe. Three more
@@ -715,9 +724,14 @@ The Test's 458.9 s, on the common clock, accounted to the second:
 
 Neither cost a frame, and neither touches safety.
 
-**Changes, ranked by what each costs against what it buys.** None of them has been made, except
-the two tools listed under "Done" below. The two marked *protocol rule* need the author's
-decision first. The scenario for judging them is committed.
+**Changes, ranked by what each costs against what it buys.** When this report was written, none
+of them had been made, except the two tools listed under "Done" below. The two marked *protocol
+rule* need the author's decision first. The scenario for judging them is committed.
+
+**Made since (2026-10-15):** change 1 and change 2's first half (a report only; the station's
+clock is not moved) as [ADR-0071](../../adr/0071-the-keying-latency-counts-the-radio-and-the-render.md),
+and change 3 as [ADR-0070](../../adr/0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md).
+Changes 4–7 wait for more sessions.
 
 | # | change | kind | cost | what it buys |
 |---|---|---|---|---|
