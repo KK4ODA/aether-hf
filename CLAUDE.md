@@ -1634,6 +1634,19 @@ was left (kept red, as every ended session). **The benches lift it** (`bench_lin
 research campaigns send and disconnect at once, so the wait is their transfer: `disc_drain_s =
 inf`). Harness: `80m-disconnect-slow-drain-500` (`send b N` queues at the called station); the
 three soak seeds end idle, air 1065/1153/1083 → 572/665/583 s.
+**Step 4's second report (2026-10-15, `12-two-paths-80m.md`):** ND1J's three Tests to KK4ODA-1
+on 80 m at 500 Hz (last night beta.106, both mornings beta.108; ND1J runs an FTDX101MP on Yaesu
+CAT, not the IC-7300), both sides with audio. No overlap, forfeit or late drop; 21 of 22 silent
+slots were headerless transmissions at the Test's pinned ladder rungs (report 11's change 4); the
+low rates were the learned margin at its cap (night), the 7.8 dB gap between narrow rungs 3 and 5
+(morning 1) and R9's silence step on leftover ladder retransmissions (morning 2). The lopsided
+signal is the codec's zero padding on the four-tone kinds (no scrambler). The Morse between the
+morning sessions was ND1J's ADR-0055 setup identifier after a hand probe. Proposals ranked in the
+report's summary (details §12), none built: they wait on the author. Tools: `two_sides.py --from-loops` (the offset from the loop
+latencies, its steps and drift), `air_account.py --sidecars MASTER SLAVE`, `bench_link.py
+--rung` (a hypothetical rung for counterfactual replays), `tools/ladder_table.py` (each air's
+ladder, thresholds and gaps, read from the model), and `fetch_uploads.py` resumes; the upload
+script answers one request at a time, so run one `get` at a time.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
