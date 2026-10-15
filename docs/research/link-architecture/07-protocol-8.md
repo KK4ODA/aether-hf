@@ -203,13 +203,15 @@ The slave's transmission:
 
 * **A master's disconnect:**
   * it waits until its own queue is acknowledged, or for patience:
-    `max(20 s, 2 exchanges)` without progress (ADR-0039);
+    `max(20 s, 2 exchanges)` without progress (ADR-0039), and never longer than
+    `disc_drain_s` (60 s) from the request (ADR-0072), saying what it leaves;
   * then it sends DISC, which grants a DISC_ACK slot;
   * it ends on the DISC_ACK, or after three DISCs ("closed (no DISC_ACK)").
 * **A slave's disconnect:** it sets `flag` in its next ANS. The master then sends its DISC
   once what the slave still had is delivered; its own queue is left undelivered, since the
-  slave's operator has stopped receiving (ADR-0023's receiving station). Patience bounds it as
-  above. (Step 2 found the first wording, "as above, with the slave's queue counted too",
+  slave's operator has stopped receiving (ADR-0023's receiving station). Patience and the
+  drain's minute bound it as above, the minute counted from the ANS the master read the `flag`
+  in. (Step 2 found the first wording, "as above, with the slave's queue counted too",
   keeping a weak session going for minutes of the master's queue after both operators had
   pressed Disconnect: `09-step-2.md` §2.2.)
 * **Abort at the master:** it sends DISC at its next key opportunity (after the open slot's

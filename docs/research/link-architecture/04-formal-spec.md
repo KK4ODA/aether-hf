@@ -311,6 +311,15 @@ puts beyond reach is re-encoded early (ADR-0038).
 **L5 — Calls reach slow stations.** The acceptance slot's level rises every second try (R11),
 up to 2 s of extra gap.
 
+**L6 — A disconnect asked ends the session** (ADR-0072). "Allowed" in the `proceed` row below
+is: both queues delivered, or `disc_drain_s` (60 s) since the disconnect was asked, or the
+patience (ADR-0039) with nothing acknowledged. The drain's clock starts at the master's own
+request or when the master decodes the slave's `flag`, never on an undecoded frame. So the
+master's DISC goes within `disc_drain_s` and one exchange of the request, and the session ends on
+the DISC_ACK or after three DISCs. Before it, a slow path that still delivered restarted the
+patience at each acknowledgement and kept a session open as long as its queue lasted: 30–40
+minutes in the soak of 2026-10-15.
+
 ### Performance
 
 | Property | Bound |

@@ -1864,6 +1864,10 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         // a disconnect was asked for and the DISC has not gone yet: the sender finishing
         // what is queued, the receiver waiting for a burst to end (ADR-0023)
         "closing": engine.disconnect_requested(),
+        // seconds until that disconnect stops waiting for what is queued and closes anyway
+        // (ADR-0072); null when none was asked. A slave's is a floor: the master counts from
+        // when it reads the request
+        "leave_in_s": station.leave_in_s(),
         "channel_busy": station.channel_busy(),
         "compressing": station.compressing(),
         "compression_saving": station.compression_saving(),

@@ -76,3 +76,4 @@ context → decision → alternatives considered → consequences.
 | [0069](0069-granted-slots.md) | Granted slots — one master per session; the other station keys only in a slot it was granted | accepted for building (from the architecture review in `docs/research/link-architecture/`) |
 | [0070](0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md) | A tone frame whose first sync block faded stands on its other two | accepted |
 | [0071](0071-the-keying-latency-counts-the-radio-and-the-render.md) | A station's keying latency counts its radio and its render | accepted |
+| [0072](0072-a-disconnect-waits-a-minute-at-most-and-says-so.md) | A disconnect waits a minute at most, and says so | accepted |

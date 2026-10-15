@@ -211,6 +211,11 @@ class GrantConfig:
     """A leaving master gives up on what it has not got acknowledged after this many whole
     exchanges with nothing new acknowledged, or :attr:`disc_patience_s` (ADR-0039)."""
     disc_patience_s: float = 20.0
+    disc_drain_s: float = 60.0
+    """The longest a disconnect waits for what is still queued, counted from when it was asked:
+    past it the master sends its DISC at its next opportunity, delivered or not, and says what
+    it left (ADR-0072). A slow path that still delivers never runs out of the patience above —
+    the soak of 2026-10-15 drew three that would have taken 30–40 minutes."""
     leave_repeats: int = 3
     """DISCs an aborting master says, one a slot, while nothing answers (ADR-0052)."""
     floor_answer_margin_db: float = 12.0
@@ -491,6 +496,9 @@ class GrantedEngine:
         self._disc_requested = False
         self._disc_tries = 0
         self._patience_until: float | None = None
+        self._leave_since: float | None = None
+        """When a disconnect was asked: by this station's operator, or — for the master — when
+        it first read the slave's request (ADR-0072)."""
         self._ladder_pending: tuple[int, list[int]] | None = None
         self.rate = self._rate_controller()
         self._asked: int | None = None
@@ -622,12 +630,15 @@ class GrantedEngine:
             self._arm_at("probe", self._hold_until)
 
     def disconnect(self) -> None:
-        """Orderly close. The master finishes what it has queued, and what the slave has, or
-        runs out of patience (ADR-0039), then sends DISC; the slave asks to leave in its next
-        answer and the master closes the session."""
+        """Orderly close. The master finishes what it has queued, and what the slave has, for
+        no longer than :attr:`GrantConfig.disc_drain_s` from now (ADR-0072) or its patience with
+        nothing moving (ADR-0039), then sends DISC; the slave asks to leave in its next answer
+        and the master closes the session."""
         if self.state is State.IDLE:
             return
         self._disc_requested = True
+        if self._leave_since is None:
+            self._leave_since = self.now
         if self.role is Role.SLAVE and self._window is not None:
             self._cause = "disconnect"
             self._try_window()
@@ -635,6 +646,16 @@ class GrantedEngine:
     @property
     def disconnect_requested(self) -> bool:
         return self._disc_requested and self.state is State.CONNECTED
+
+    @property
+    def leave_by(self) -> float | None:
+        """When, at the latest, a disconnect asked for stops waiting for what is queued (engine
+        time); the DISC goes at the master's next opportunity after it. ``None`` when none was
+        asked. A slave's counts from its own request; the master's count starts when it reads
+        it, an answer later."""
+        if self._leave_since is None or self.state is not State.CONNECTED:
+            return None
+        return self._leave_since + self.cfg.disc_drain_s
 
     def abort(self) -> None:
         """Drop the session now. A master says DISC from idle, on the floor, at its next
@@ -1550,6 +1571,8 @@ class GrantedEngine:
         self._hdr_floor = ctl.fam or self._floor_only()
         self._possible = {frame.floor}
         self._slave_leaves = ctl.flag
+        if ctl.flag and self._leave_since is None:
+            self._leave_since = self.now
         if not ctl.count:
             self._slave_floor_only = ctl.data_floor
         self._slave_id_due = ctl.ident
@@ -1614,7 +1637,27 @@ class GrantedEngine:
             return True
         if self._patience_until is None:
             self._patience_until = self.now + self._disc_patience()
-        return self.now >= self._patience_until
+        if self._leave_since is None:
+            self._leave_since = self.now
+        if self.now >= self._leave_since + self.cfg.disc_drain_s:
+            self._say_left(f"{self.now - self._leave_since:.0f} s after the disconnect was asked")
+            return True
+        if self.now >= self._patience_until:
+            self._say_left(f"nothing acknowledged for {self._disc_patience():.0f} s")
+            return True
+        return False
+
+    def _say_left(self, why: str) -> None:
+        """What a closing master leaves behind, said once as it decides to close: its own
+        queue when the disconnect is its own, and what the slave still said it had."""
+        left = []
+        own = 0 if self._slave_leaves else self.tx_undelivered_bytes
+        if own:
+            left.append(f"{own} bytes not delivered")
+        if self._slave_want:
+            left.append(f"the other station's last {self._slave_want} frames not received")
+        if left:
+            self.actions.append(Event("disconnect", f"{'; '.join(left)}; closing {why}"))
 
     def _close_slot(self) -> None:
         """What the slave sent in the slot goes to the rate controller; silence is counted and

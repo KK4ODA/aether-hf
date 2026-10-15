@@ -20,7 +20,9 @@ def test_every_scenario_falls_in_one_registered_class() -> None:
         step3.scenario_class(tomllib.loads(p.read_text(encoding="utf-8")))
         for p in sorted(SCENARIOS.glob("*.toml"))
     )
-    assert classes == {"gateway": 5, "robustness": 8, "band": 7, "2300 Hz": 12, "500 Hz": 12}
+    # Step 3 registered 44 scenarios; 80m-local-rfi-ladder-500 (Step 4) and
+    # 80m-disconnect-slow-drain-500 (ADR-0072) came after it
+    assert classes == {"gateway": 5, "robustness": 9, "band": 7, "2300 Hz": 12, "500 Hz": 13}
 
 
 def test_a_run_completes_when_only_the_old_collision_count_failed() -> None:

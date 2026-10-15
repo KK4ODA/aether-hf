@@ -111,6 +111,7 @@ fn config(doc: &Value) -> GrantConfig {
         disc_retries: int(&doc["disc_retries"]),
         disc_patience_exchanges: num(&doc["disc_patience_exchanges"]),
         disc_patience_s: num(&doc["disc_patience_s"]),
+        disc_drain_s: num(&doc["disc_drain_s"]),
         leave_repeats: int(&doc["leave_repeats"]),
         floor_answer_margin_db: num(&doc["floor_answer_margin_db"]),
         answer_floor_margin_db: num(&doc["answer_floor_margin_db"]),
