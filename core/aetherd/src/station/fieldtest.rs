@@ -585,7 +585,7 @@ impl<P: Ptt> Station<P> {
     /// Whether a Test session is running.
     #[must_use]
     pub fn test_running(&self) -> bool {
-        self.test.as_ref().is_some_and(TestRun::running)
+        self.test_stepping || self.test.as_ref().is_some_and(TestRun::running)
     }
 
     /// The Test session, running or last run, as `test.status` reports it.
@@ -675,7 +675,9 @@ impl<P: Ptt> Station<P> {
             return;
         };
         if run.running() {
+            self.test_stepping = true;
             self.step_test(&mut run);
+            self.test_stepping = false;
         }
         self.test = Some(run);
     }
@@ -1352,6 +1354,59 @@ mod tests {
         );
         // and the run can be asked for again
         assert!(!air.a.abort_test());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_crawls_ends_the_run_with_its_report_in_the_sidecar() {
+        // ADR-0074's harness A/B, the RTTY contest's first draw: the file crawled under the
+        // RTTY, the run ended the session on its deadline, and the session's end closed the
+        // recording before the run wrote its report — the sidecar had no outcome and no file
+        let dir = std::env::temp_dir().join(format!("aether-test-crawl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut air = Air::new(1.0, 0.0005);
+        // every session recorded, as the harness's stations and many operators' are: the
+        // session's end is what closes such a recording
+        air.a.set_recording(Some(dir.clone()), true, "");
+        let plan = TestPlan {
+            remote: "KK4XYZ".to_owned(),
+            message_bytes: 300,
+            file_bytes: 16_384,
+            rung_frames: 2,
+            ..TestPlan::default()
+        };
+        air.a.start_test(plan).expect("idle");
+        air.run(400.0, |a, _| {
+            let brief = a.test_brief();
+            brief["step"] == "file" && brief["transfer"]["acked"].as_u64().is_some_and(|b| b > 0)
+        });
+        // the budget runs out under the file
+        let now = air.a.now();
+        let run = air.a.test.as_mut().expect("a run");
+        run.plan.budget_s = now - run.started_s - 70.0;
+        air.run(120.0, |a, _| !a.test_running());
+        let results = air.a.test_status()["results"].clone();
+        assert_eq!(results["outcome"], "complete", "{results}");
+        let carried = results["file"]["bytes"].as_u64().expect("the file's bytes");
+        assert!(carried > 0 && carried < 16_384, "{results}");
+        assert!(
+            results["adjustments"].as_array().is_some_and(|a| a
+                .iter()
+                .any(|x| x == "ladder skipped: the file took the budget")),
+            "{results}"
+        );
+        let sidecar = std::fs::read_dir(&dir)
+            .expect("recordings")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.extension().is_some_and(|x| x == "json") && p.to_string_lossy().contains("_test")
+            })
+            .expect("a sidecar named for the test");
+        let document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar).expect("read")).expect("json");
+        assert_eq!(document["session"]["test"]["outcome"], "complete");
+        assert_eq!(document["session"]["test"]["file"]["bytes"], carried);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

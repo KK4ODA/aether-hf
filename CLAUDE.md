@@ -1668,6 +1668,11 @@ acknowledged at (`start_ladder`), and the run moves to the disconnect at the las
 sent at a pinned rung is re-encoded at the recommendation after its first copy (`_TxRecord.pinned`,
 `TxRecord::pinned`) — the copy was the measurement. R9's silence step is unchanged. ADR-0073's
 header test now makes its RV 2/3 copies with a fade of the session's data, not the ladder.
+Harness A/B, 14 Test scenarios × 3 draws against beta.109: 42/42 pass, no overlaps, silent slots
+295 → 211, message ×1.00, file per-scenario median ×1.30 (lower where the old ladder had warmed
+the link up before the file). Found on the way: a Test that ended its session on a crawling
+file's deadline lost its report from the sidecar — the run is out of `Station::test` while it
+steps, so the session's end closed a record-every-session recording first; `test_stepping`.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
