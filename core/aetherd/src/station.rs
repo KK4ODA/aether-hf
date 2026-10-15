@@ -10185,11 +10185,16 @@ mod tests {
         key_s: f64,
         keys: usize,
         releases: usize,
+        /// How long the last key really took: a loaded machine sleeps longer than it is asked
+        /// to (a CI mac runner slept 80 ms for 30).
+        took_s: f64,
     }
 
     impl Ptt for SlowPtt {
         fn key(&mut self) -> Result<(), PttError> {
+            let began = std::time::Instant::now();
             std::thread::sleep(std::time::Duration::from_secs_f64(self.key_s));
+            self.took_s = began.elapsed().as_secs_f64();
             self.keys += 1;
             Ok(())
         }
@@ -10257,8 +10262,14 @@ mod tests {
         let mut out = vec![0.0f32; 480];
         assert!(station.playback(&mut out).expect("playback") > 0);
         assert!(station.transmitting());
+        // what the station learned is what the radio took, to the millisecond it keeps and the
+        // little the station's own timing adds around the call
         let learned = station.latency.key.typical();
-        assert!((0.03..0.06).contains(&learned), "learned {learned}");
+        let took = station.ptt.inner().took_s;
+        assert!(
+            took >= 0.03 && learned >= took - 0.001 && learned <= took + 0.05,
+            "learned {learned}, the radio took {took}"
+        );
         assert!((station.engine_latency_s() - before - learned).abs() < 1e-9);
         assert!(
             station.events.iter().any(|e| e.starts_with("keying:")),
