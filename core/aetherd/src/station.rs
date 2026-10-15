@@ -418,6 +418,16 @@ const DEVICE_LATENCY_MARGIN_S: f64 = 0.03;
 /// keying latency before the log says so again.
 const LATENCY_NOTE_STEP_S: f64 = 0.01;
 
+/// How late in its slot, by the station's own reckoning at the key, a transmission of the
+/// engine's goes on the air before the log says so, with what took the time; or how near its
+/// limit (`not_after`). ND1J's first morning Test of 2026-10-15: one answer of KK4ODA-1's
+/// rendered in 122 ms where 60 was typical, reached the air 281 ms into a 350 ms slack, and
+/// the log said only that the radio was keyed (12-two-paths-80m.md §4). The gate judges the
+/// start before the key; what stalls after it is unjudged, and S2 holds there by margin —
+/// how often the margin runs thin is what decides whether the gate must judge later.
+const SLOW_KEYING_LATE_S: f64 = 0.05;
+const SLOW_KEYING_MARGIN_S: f64 = 0.1;
+
 /// The least the keyed tail keeps for the card, whatever it reports: a report of nothing is
 /// a host that does not know, not a card with no buffer.
 const DEVICE_LATENCY_MIN_S: f64 = 0.05;
@@ -1026,6 +1036,9 @@ pub struct Station<P: Ptt> {
     /// card's clock when the run loop measured one, for the recording's `tx_end`.
     key_waited_s: f64,
     rendered_s: Option<f64>,
+    /// Transmissions of the engine's that went on the air late in their slots
+    /// ([`Self::note_slow_keying`]), for the diagnostic bundle's `keying`.
+    late_keyings: u32,
     /// The two playback clocks and how the transmission now running stands against them.
     clock: PlaybackClock,
     /// The exact audio of the transmission now running, when the operator asked for it
@@ -1086,6 +1099,12 @@ pub struct Station<P: Ptt> {
     link: Option<LinkAccount>,
     /// Bytes that crossed the air, with when, for the throughput reading.
     moved: VecDeque<(f64, usize)>,
+    /// The rung of the session data this station last sent, and last decoded from the other
+    /// station, each with when: what the speed chart draws its rate lines from. The rung this
+    /// station would send at is not what moves the bytes while it only answers: KK4ODA-1's chart
+    /// showed tone-36 under data arriving at tone4x100-75 (12-two-paths-80m.md §16).
+    data_sent: Option<(f64, usize)>,
+    data_heard: Option<(f64, usize)>,
     /// The engine's acknowledged-plus-delivered count when `moved` was last fed.
     crossed: usize,
     frequency: FrequencyCache,
@@ -1228,6 +1247,7 @@ impl<P: Ptt> Station<P> {
             latency_said_s: 0.0,
             key_waited_s: 0.0,
             rendered_s: None,
+            late_keyings: 0,
             clock: PlaybackClock::default(),
             tx_capture: None,
             pending: VecDeque::new(),
@@ -1257,6 +1277,8 @@ impl<P: Ptt> Station<P> {
             rx_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
+            data_sent: None,
+            data_heard: None,
             crossed: 0,
             frequency: FrequencyCache::default(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
@@ -1493,6 +1515,20 @@ impl<P: Ptt> Station<P> {
             .sum();
         let span = (now - link.started_s).clamp(1.0, THROUGHPUT_WINDOW_S);
         bytes as f64 * 8.0 / span
+    }
+
+    /// The rungs the session's data went at in the throughput's window: this station's last
+    /// data sent and the other station's last decoded, each `None` when none moved that way —
+    /// the speed chart's rate lines, one a direction, against a goodput counted both ways.
+    #[must_use]
+    pub fn data_rungs(&self) -> (Option<usize>, Option<usize>) {
+        let Some(link) = self.link else {
+            return (None, None);
+        };
+        let since = (self.now() - THROUGHPUT_WINDOW_S).max(link.started_s);
+        let recent =
+            |moved: Option<(f64, usize)>| moved.filter(|(t, _)| *t >= since).map(|(_, rung)| rung);
+        (recent(self.data_sent), recent(self.data_heard))
     }
 
     /// The dial frequency, when the keying interface can ask the radio.
@@ -2708,8 +2744,8 @@ impl<P: Ptt> Station<P> {
             self.key_waited_s = waited;
             self.tell_engine_latency();
             let starts_at = now + self.capture_lag_s() + waited;
+            let radiates_at = starts_at + self.radiation_latency_s();
             if let Some(latest) = self.keying.and_then(|window| window.not_after) {
-                let radiates_at = starts_at + self.radiation_latency_s();
                 if radiates_at > latest + 1e-6 {
                     // S2 by construction: the key is up and nothing has been played, so letting
                     // it go again radiates nothing (ADR-0071)
@@ -2718,6 +2754,7 @@ impl<P: Ptt> Station<P> {
                     return Ok(0);
                 }
             }
+            self.note_slow_keying(now, radiates_at, waited);
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
@@ -2818,6 +2855,61 @@ impl<P: Ptt> Station<P> {
             return false;
         }
         true
+    }
+
+    /// Say in the log, and in the recording, when a transmission of the engine's just keyed
+    /// starts radiating [`SLOW_KEYING_LATE_S`] or more after its slot opened, or within
+    /// [`SLOW_KEYING_MARGIN_S`] of its limit, by the station's own reckoning at the key: its
+    /// render, the radio's keying command and how far the station is behind the air, each
+    /// beside what it typically takes. What the sound card does after the key is not in it.
+    fn note_slow_keying(&mut self, now: f64, radiates_at: f64, key_s: f64) {
+        let Some(window) = self.keying else {
+            return;
+        };
+        let Some(opened) = window.not_before else {
+            return;
+        };
+        let late = radiates_at - opened;
+        let margin = window.not_after.map(|latest| latest - radiates_at);
+        if late < SLOW_KEYING_LATE_S && margin.is_none_or(|m| m >= SLOW_KEYING_MARGIN_S) {
+            return;
+        }
+        self.late_keyings += 1;
+        let ms = |seconds: f64| seconds * 1000.0;
+        let behind = self.capture_lag_s();
+        let detail = format!(
+            "a transmission on the air about {:.0} ms after its slot opened{}: rendered in {} \
+             (typically {:.0} ms), the radio keyed in {:.0} ms (typically {:.0} ms), the station \
+             {:.0} ms behind the air",
+            ms(late),
+            margin.map_or_else(String::new, |m| format!(
+                ", {:.0} ms inside its limit",
+                ms(m)
+            )),
+            self.rendered_s.map_or_else(
+                || "a pass not timed".to_owned(),
+                |r| format!("{:.0} ms", ms(r))
+            ),
+            ms(self.latency.render.typical()),
+            ms(key_s),
+            ms(self.latency.key.typical()),
+            ms(behind),
+        );
+        self.note("keying", &detail);
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(
+                now,
+                "keying_late",
+                &format!(
+                    "late {late:.3} margin {} render {} key {key_s:.3} behind {behind:.3}",
+                    margin.map_or_else(|| "-".to_owned(), |m| format!("{m:.3}")),
+                    self.rendered_s
+                        .map_or_else(|| "-".to_owned(), |r| format!("{r:.3}")),
+                ),
+                &state,
+            );
+        }
     }
 
     /// Drop the rendered transmission waiting to be keyed, which would start radiating `late`
@@ -2990,6 +3082,7 @@ impl<P: Ptt> Station<P> {
             "key": recent(&self.latency.key),
             "render": recent(&self.latency.render),
             "engine_latency_ms": ms(self.engine_latency_s()),
+            "late": self.late_keyings,
         })
     }
 
@@ -3460,21 +3553,29 @@ impl<P: Ptt> Station<P> {
         if report.decoded || report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED {
             self.rx_until = self.rx_until.max(now + 0.5);
         }
-        if let Some(notes) = &mut self.session_notes
-            && report.decoded
-            && report.from.as_deref() == Some(notes.remote.as_str())
-        {
-            notes.snr_db = Some(report.snr_db);
-            notes.best_snr_db = Some(
-                notes
-                    .best_snr_db
-                    .map_or(report.snr_db, |b| b.max(report.snr_db)),
-            );
-            if report.kind == "data" {
-                notes.top_rung_heard = Some(notes.top_rung_heard.map_or(rung, |t| t.max(rung)));
-            }
-        }
+        self.note_session_frame(&report, rung, now);
         self.reports.push(report);
+    }
+
+    /// A frame the session's other station sent, decoded: the session's notes for the history,
+    /// and the rung its data came in at for the speed chart.
+    fn note_session_frame(&mut self, report: &FrameReport, rung: usize, now: f64) {
+        let Some(notes) = &mut self.session_notes else {
+            return;
+        };
+        if !report.decoded || report.from.as_deref() != Some(notes.remote.as_str()) {
+            return;
+        }
+        notes.snr_db = Some(report.snr_db);
+        notes.best_snr_db = Some(
+            notes
+                .best_snr_db
+                .map_or(report.snr_db, |b| b.max(report.snr_db)),
+        );
+        if report.kind == "data" {
+            notes.top_rung_heard = Some(notes.top_rung_heard.map_or(rung, |t| t.max(rung)));
+            self.data_heard = Some((now, rung));
+        }
     }
 
     /// Note what crossed the air since last time, for the throughput reading: payload
@@ -3865,6 +3966,20 @@ impl<P: Ptt> Station<P> {
         };
         let ids_before = self.stats.cw_ids;
 
+        if link.is_some()
+            && let Some(rung) = frames
+                .iter()
+                .filter(|f| {
+                    // session data only: a call's acceptance is a DATA frame too
+                    f.container == Container::Data
+                        && decode_data(&f.payload)
+                            .is_ok_and(|(header, _)| header.kind == DataKind::Data)
+                })
+                .map(|f| f.mode)
+                .max()
+        {
+            self.data_sent = Some((now, rung));
+        }
         self.record_sent(&frames, now);
         if is_beacon(&frames) {
             self.beacon_sent();
@@ -8614,6 +8729,15 @@ mod tests {
             air.b.link().expect("still up").started_s < air.b.now(),
             "the session has lasted a while"
         );
+        // the chart's rate lines: the data went one way, at the caller's rung, and the called
+        // station only answered — its own rung moved no bytes (12-two-paths-80m.md §16)
+        let (sent, _) = air.a.data_rungs();
+        let (answered, heard) = air.b.data_rungs();
+        assert!(
+            sent.is_some() && heard == sent,
+            "{sent:?} sent, {heard:?} heard"
+        );
+        assert_eq!(answered, None);
 
         air.a.disconnect();
         air.run(60.0, |a, b| {
@@ -10366,6 +10490,46 @@ mod tests {
             station.keying_report()["key"]["count"],
             serde_json::json!(1)
         );
+    }
+
+    #[test]
+    fn a_transmission_late_in_its_slot_is_said_with_what_took_the_time() {
+        // ND1J's first morning Test of 2026-10-15 (12-two-paths-80m.md §4): one answer rendered
+        // in 122 ms where 60 was typical and reached the air 281 ms into its 350 ms slack, and
+        // the log said only "ptt: keyed"
+        let mut station = slow_station(0.03);
+        let now = station.now();
+        queue_link(&mut station, Some(now - 0.2), Some(now + 2.0));
+        station.device_played(0);
+        let mut out = vec![0.0f32; 480];
+        assert!(station.playback(&mut out).expect("playback") > 0);
+        let said: Vec<&String> = station
+            .events
+            .iter()
+            .filter(|e| e.contains("after its slot opened"))
+            .collect();
+        assert_eq!(said.len(), 1, "{:?}", station.events);
+        assert!(
+            said[0].starts_with("keying:") && said[0].contains("the radio keyed in"),
+            "{said:?}"
+        );
+        assert_eq!(station.keying_report()["late"], serde_json::json!(1));
+
+        // keyed where its slot opens: nothing to say
+        let mut station = slow_station(0.03);
+        let opens = station.now() + station.capture_lag_s() + station.radiation_latency_s();
+        queue_link(&mut station, Some(opens), Some(opens + 0.35));
+        station.device_played(0);
+        assert!(station.playback(&mut out).expect("playback") > 0);
+        assert!(
+            !station
+                .events
+                .iter()
+                .any(|e| e.contains("after its slot opened")),
+            "{:?}",
+            station.events
+        );
+        assert_eq!(station.keying_report()["late"], serde_json::json!(0));
     }
 
     #[test]

@@ -238,7 +238,8 @@ restarts the modem, which takes a few seconds; the panel comes back by itself. *
 puts every field back to what the modem is using.
 
 The folded **Running configuration** and **Mode table** at the bottom show what the modem is
-running now, and every rung of the current bandwidth with its rate and the SNR it needs.
+running now, and every rung of the current bandwidth with its rate and the SNR it needs. A greyed
+rung is one the modem never asks for: another rung carries as much data from a lower SNR.
 
 ## 5. Session
 
@@ -345,8 +346,10 @@ a bug report about the air should carry.
 
 - **Link**: the mode, SNR, throughput and session (who, and for how long).
 - **Channel**: signal above noise, tuning offset, receive level, and bytes still queued.
-- **History**: two charts. **Speed** is the session's bytes per second both ways against the
-  current mode's rate on the air. **SNR by frame** is every frame heard, what the other station
+- **History**: two charts. **Speed** is the session's bytes per second, both ways added
+  together. Two dashed lines show the rate on the air of the rung the data went at: **sending
+  at** (your data, in the transmit colour) and **receiving at** (the other station's data, in
+  the receive colour). Each line shows only while data moves that way. **SNR by frame** is every frame heard, what the other station
   reports hearing you at, and the current mode's threshold. Below them, **Channel and activity**
   is the received level over the last two minutes, with this station's transmissions ticked and
   the busy periods shaded.
@@ -390,6 +393,11 @@ the modem's own log file is kept.
 A `keying` line says how long your radio takes to key and how long Aether takes to prepare a
 transmission. Aether starts its transmissions that much sooner, so its answers reach the air on
 time. The line comes back only when those times change.
+
+A `keying` line that says *on the air about … ms after its slot opened* means one answer went
+out late, and says why: a slow render, a slow radio, or the computer falling behind. One now and
+then is harmless. Many in a session mean the computer is too busy: close other programs, or send
+your files to the project so we can look.
 
 **Send files…** is how anything leaves your station. Choose what to do:
 
@@ -467,7 +475,7 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 | **SNR** | Header, Link | What this receiver measured on the last frame it found, in a 3 kHz bandwidth. Negative numbers are normal on HF; the tone floor works below −14 dB. On a tone frame it is a lower bound and reads no higher than about 17 dB. |
 | **They hear you at** | Diagnostics, SNR chart | What the other station measured on your last burst, sent back in its acknowledgement or control frames. Compare it with your SNR: a big difference is a lopsided path. |
 | **Rung / Mode** | Header, Link | The step the sender is using, with its name and rate on the air. Rungs 0 and 1 are the tone floor. |
-| **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. It is always below the rung's rate: acknowledgements, turnarounds and retransmissions take their share. |
+| **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. Data going one way stays below the rate of the rung it went at: acknowledgements, turnarounds and retransmissions take their share. With data going both ways, the total can stand above either line. |
 | **Tuning** | Channel | The carrier offset the receiver removed from the last frame. Positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check. |
 | **Signal above noise** | Channel | The busy detector's reading: the received level over its learned noise floor. |
 | **Receive level** | Channel, Setup step 3 | The sound card's input. Aim for *Good*. |
@@ -479,7 +487,8 @@ The rungs, their rates and the SNR each needs are in Setup's **Mode table**, and
 [air-interface specification](../spec/air-interface.md#4-modes--the-ladder). Roughly: at
 **2300 Hz**, rungs 0–5 are tone kinds from 36 to 228 bit/s, and rungs 6–19 OFDM from about 200
 bit/s to 5.5 kbit/s. At **500 Hz**, rungs 0–3 are tone kinds from 36 to 112 bit/s, and rungs
-4–14 OFDM up to about 1 kbit/s.
+4–14 OFDM up to about 1 kbit/s. At 500 Hz the modem never asks for rung 4: after each frame's
+header it carries less than rung 3, from 7 dB more SNR. The Test's ladder still measures it.
 
 ## 14. Troubleshooting
 

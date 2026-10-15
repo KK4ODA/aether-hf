@@ -703,9 +703,20 @@ function applyMetrics(metrics) {
   if (metrics.throughput_bps !== undefined) {
     $("v-throughput").textContent = metrics.link ? formatRate(metrics.throughput_bps) : "—";
     const at = Date.now();
-    // speed is zero with no session; the mode's on-air rate is only meaningful in one
-    const rate = metrics.link ? (modeTable[currentMode]?.net_bit_rate ?? null) : null;
-    throughputHistory.push({ at, bps: metrics.link ? metrics.throughput_bps : 0, rate });
+    // speed is zero with no session; a rung's on-air rate is drawn only where data moved at
+    // it, each way: the rung this station would send at moves nothing while it only answers
+    // (KK4ODA-1's chart showed tone-36 under data arriving at tone4x100-75, report 12 §16).
+    // A daemon that does not say (before 0.2.0-beta.109) is drawn as before, its own rung
+    const rateOf = (rung) => (rung == null ? null : (modeTable[rung]?.net_bit_rate ?? null));
+    const told = metrics.sending_rung !== undefined;
+    const sending = metrics.link ? rateOf(told ? metrics.sending_rung : currentMode) : null;
+    const receiving = metrics.link && told ? rateOf(metrics.receiving_rung) : null;
+    throughputHistory.push({
+      at,
+      bps: metrics.link ? metrics.throughput_bps : 0,
+      sending,
+      receiving,
+    });
     while (throughputHistory.length && throughputHistory[0].at < at - SNR_SPAN_MS) throughputHistory.shift();
     if (throughputHistory.length > 1400) throughputHistory.shift();
   }
@@ -1149,9 +1160,10 @@ function selectStatusChart(which, chosen = false) {
 
 // ── connection speed, last ten minutes ──────────────────────────────
 //
-// The goodput the session is moving, both ways, against the on-air rate of the mode it
-// is running — so a curve well under the mode line means the link is the limit, not the
-// modem, and a curve near it means the mode is working as fast as it can.
+// The goodput the session is moving, both ways, against the on-air rate of the rung the data
+// went at, a line for each way it went — so a curve well under the line means the link is the
+// limit, not the modem, and a curve near it means the rung is working as fast as it can. With
+// data going both ways the goodput, a sum, can stand over either line.
 
 // The scale is logarithmic: a session runs from the tone floor's 22 bit/s to OFDM's
 // thousands, and on a linear scale everything under a few hundred was a line on the floor
@@ -1163,7 +1175,7 @@ function drawSpeedChart() {
   const now = Date.now();
   let high = 1000;
   for (const point of throughputHistory) {
-    high = Math.max(high, point.bps, point.rate ?? 0);
+    high = Math.max(high, point.bps, point.sending ?? 0, point.receiving ?? 0);
   }
   high = SPEED_TICKS.find((tick) => tick >= high) ?? high;
   const f = chartFrame(
@@ -1188,25 +1200,36 @@ function drawSpeedChart() {
     ctx.fillText(tick >= 1000 ? `${tick / 1000}k` : String(tick), CHART_LEFT - 6, y(tick));
   }
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
-  drawLegend(f, [[c.ink, "bit/s"], [c.ink2, "mode rate"], [c.accent, "goodput"]]);
+  drawLegend(f, [
+    [c.ink, "bit/s"],
+    [c.tx, "sending at"],
+    [c.rx, "receiving at"],
+    [c.accent, "goodput, both ways"],
+  ]);
 
-  // the mode's on-air rate: a faint dashed step, the ceiling the goodput works under
-  ctx.strokeStyle = withAlpha(c.ink2, 0.8);
-  ctx.lineWidth = 1;
-  ctx.setLineDash([2, 3]);
-  ctx.beginPath();
-  let started = false;
-  for (const point of throughputHistory) {
-    if (point.rate == null) {
-      started = false;
-      continue;
+  // the on-air rate of the rung the data went at, each way: a dashed step in the transmit and
+  // receive colours, drawn only while data moved that way — the ceiling each direction works
+  // under
+  const rateLine = (key, colour) => {
+    ctx.strokeStyle = withAlpha(colour, 0.85);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    let started = false;
+    for (const point of throughputHistory) {
+      if (point[key] == null) {
+        started = false;
+        continue;
+      }
+      if (started) ctx.lineTo(x(point.at), y(point[key]));
+      else ctx.moveTo(x(point.at), y(point[key]));
+      started = true;
     }
-    if (started) ctx.lineTo(x(point.at), y(point.rate));
-    else ctx.moveTo(x(point.at), y(point.rate));
-    started = true;
-  }
-  ctx.stroke();
-  ctx.setLineDash([]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  rateLine("sending", c.tx);
+  rateLine("receiving", c.rx);
 
   // the goodput itself, the reading that matters: a filled area under a thick accent line
   if (throughputHistory.length === 0) return;
