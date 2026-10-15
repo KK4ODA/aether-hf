@@ -129,6 +129,11 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    (WC4Y's Test of 2026-10-14), read from both stations' recordings on one clock: no overlap,
    the timing budgets measured on the mini PC, every silent slot and failed frame, the
    interference, and what to change, ranked.
+12. [12-two-paths-80m.md](12-two-paths-80m.md): Step 4, three more sessions on the air (ND1J's
+   Tests of 2026-10-15, one strong night path and two weak morning ones), read the same way:
+   still no overlap; the keying and render times ADR-0071 learns; every silent slot, 21 of 22
+   at headerless ladder rungs; and the author's questions on the speed ladder, a rung between
+   rungs 3 and 5, the lopsided signal and the Morse identifier.
 
 ## Reproduction
 
