@@ -26,7 +26,7 @@ context → decision → alternatives considered → consequences.
 | [0019](0019-datagrams-and-the-kiss-port.md) | Datagrams, and a KISS port that answers as VARA's does — another program's frame outside sessions; the VARA frame types; Winlink priority | accepted |
 | [0020](0020-what-a-failure-says.md) | What a failure says — the receiver learns only from frames that could tell it something: trusted SNRs, self-decodable or combined failures, not the sender's own choices | accepted |
 | [0021](0021-every-control-frame-says-how-it-hears.md) | Every control frame says how its sender hears the other station — a disconnect tells a station that only received how it was heard | accepted |
-| [0022](0022-the-end-of-a-session-waits-out-the-identifier.md) | The end of a session waits out the other station's identifier — no repeated DISC, answer or closing identifier over a Morse ID | accepted |
+| [0022](0022-the-end-of-a-session-waits-out-the-identifier.md) | The end of a session waits out the other station's identifier — no repeated DISC, answer or closing identifier over a Morse ID | accepted; the identifier waits superseded by 0075 |
 | [0023](0023-leaving-and-handing-over.md) | Leaving and handing over — a receiver's Disconnect leaves between bursts, the TURN waits for the longest first frame, and the caller keeps the turn | accepted |
 | [0024](0024-beacons-for-host-programs.md) | A beacon carries the name a host program gave it and its sender's bandwidth; no beacon under automatic control | accepted |
 | [0025](0025-the-host-program-can-own-the-radio.md) | The host program can own the radio — keying on PTT ON, as VARA is keyed | accepted |
@@ -59,7 +59,7 @@ context → decision → alternatives considered → consequences.
 | [0052](0052-a-session-ends-at-both-ends.md) | A session ends at both ends, and takes its data with it | accepted |
 | [0053](0053-the-callers-first-poll-offers-the-turn.md) | The caller's first poll offers the turn | accepted |
 | [0054](0054-each-stations-answer-gap-is-learned.md) | Each station's answer gap is learned from its asking again | accepted |
-| [0055](0055-nothing-that-sets-up-a-contact-carries-the-identifier.md) | Nothing that sets up a contact carries the Morse identifier: it goes at the end of each communication and every ten minutes during one; a station calling again continues the communication (§4) | accepted |
+| [0055](0055-nothing-that-sets-up-a-contact-carries-the-identifier.md) | Nothing that sets up a contact carries the Morse identifier: it goes at the end of each communication and every ten minutes during one; a station calling again continues the communication (§4) | accepted; §2.2, §2.3 and §2.5 superseded by 0075 |
 | [0056](0056-weak-calls-are-accepted-on-the-floor-and-a-repeat-call-ends-a-dead-session.md) | A weak call is accepted on the floor, and a station that calls again ends its dead session | accepted |
 | [0057](0057-a-call-to-another-ssid-is-shown.md) | A call to another SSID of the station's callsign is shown, and an unanswered call suggests one | accepted |
 | [0058](0058-an-unanswered-wide-call-goes-on-at-500-hz.md) | An unanswered wide call goes on at 500 Hz | accepted |
@@ -79,3 +79,4 @@ context → decision → alternatives considered → consequences.
 | [0072](0072-a-disconnect-waits-a-minute-at-most-and-says-so.md) | A disconnect waits a minute at most, and says so | accepted |
 | [0073](0073-a-header-where-no-copy-can-be-read-alone-and-rungs-counted-by-their-data.md) | A header where no copy can be read alone, and rungs counted by their data | accepted |
 | [0074](0074-the-test-measures-the-link-then-the-rungs.md) | The Test measures the link, then the rungs | accepted |
+| [0075](0075-the-morse-identifier-is-the-last-thing-a-session-sends.md) | The Morse identifier is the last thing a session sends: once, at the end, by each station; forced for US callsigns | accepted |

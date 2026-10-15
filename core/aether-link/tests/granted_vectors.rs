@@ -131,6 +131,12 @@ fn config(doc: &Value) -> GrantConfig {
         elide: doc["elide"].as_bool().expect("elide"),
         turnaround_s: num(&doc["turnaround_s"]),
         identifier_s: num(&doc["identifier_s"]),
+        identifiers: doc["identifiers"]
+            .as_object()
+            .expect("identifiers")
+            .iter()
+            .map(|(call, seconds)| (call.clone(), num(seconds)))
+            .collect(),
         answer_gap_s: num(&doc["answer_gap_s"]),
         floor_answer_memory: int(&doc["floor_answer_memory"]),
         hold_unknown: doc["hold_unknown"].as_bool().expect("hold_unknown"),
@@ -288,6 +294,7 @@ impl Replay<'_> {
                     not_after,
                     not_before,
                     identifier_s,
+                    listen_first,
                 } => w.get("transmit").is_some_and(|wf| {
                     let wf = wf.as_array().expect("frames");
                     frames.len() == wf.len()
@@ -300,6 +307,7 @@ impl Replay<'_> {
                         && close_opt(*not_after, opt(&w["not_after"]))
                         && close_opt(*not_before, opt(&w["not_before"]))
                         && close(*identifier_s, num(&w["identifier_s"]))
+                        && Some(*listen_first) == w["listen_first"].as_bool()
                 }),
                 Action::Deliver(data) => w.get("deliver").is_some_and(|b| *data == self.blob(b)),
                 Action::Event { name, detail } => {
@@ -414,6 +422,11 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         close_opt(e.peer_snr_db(), opt(&want["peer_snr_db"])),
         format!("{:?}", e.peer_snr_db()),
     );
+    check(
+        "identifier_owed",
+        want["identifier_owed"].as_bool() == Some(e.identifier_owed()),
+        e.identifier_owed().to_string(),
+    );
     for (name, value) in stats(&e.stats) {
         if int(&want["stats"][name]) != value {
             wrong.push(format!(
@@ -456,7 +469,25 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
             "disconnect" => engine.disconnect(),
             "abort" => engine.abort(),
             "send" => engine.send(&replay.blob(&entry["data"])),
-            "set_identifier_due" => engine.set_identifier_due(entry["due"].as_bool().expect("due")),
+            "set_callsigns" => {
+                let calls: Vec<&str> = entry["calls"]
+                    .as_array()
+                    .expect("calls")
+                    .iter()
+                    .map(|c| c.as_str().expect("call"))
+                    .collect();
+                engine.set_callsigns(&calls).expect("callsigns");
+            }
+            "set_identifier_s" => engine.set_identifier_s(num(&entry["seconds"])),
+            "set_identifiers" => {
+                let lengths: Vec<(String, f64)> = entry["lengths"]
+                    .as_object()
+                    .expect("lengths")
+                    .iter()
+                    .map(|(call, seconds)| (call.clone(), num(seconds)))
+                    .collect();
+                engine.set_identifiers(&lengths);
+            }
             "set_answer_gap" => engine.set_answer_gap(num(&entry["seconds"])),
             "pin_mode" => engine
                 .pin_mode(opt_int(&entry["mode"]), opt_int(&entry["body"]))

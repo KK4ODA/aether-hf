@@ -107,7 +107,9 @@ Pat's configuration, with Aether keying the radio.
 * **Where:** inside the data segments, away from FT8 and the other weak-signal frequencies;
   [frequency-plan.md](frequency-plan.md) proposes frequencies per band, and the Session tab's
   dial list has them. Aether listens before it transmits and waits for a clear channel.
-* **Identify** as you would with any data mode: Setup step 4's Morse ID, or by voice or CW.
+* **Identify**: a US callsign sends its Morse ID at the end of every session, whatever Setup
+  says. Any other callsign sends it if Setup step 4's *Morse ID* is ticked. Nothing identifies a
+  session in between: for a long one, see *FCC regulatory controls*.
 * **What you will see:** the banner across the top of every tab says what the station is doing
   (calling, connected, how a session ended); the **Status** tab shows the signal-to-noise ratio
   each way, the speed and the rung (how fast the link is running — it starts low and climbs);

@@ -1678,6 +1678,32 @@ Harness A/B, 14 Test scenarios × 3 draws against beta.109: 42/42 pass, no overl
 the link up before the file). Found on the way: a Test that ended its session on a crawling
 file's deadline lost its report from the sidecar — the run is out of `Station::test` while it
 steps, so the session's end closed a record-every-session recording first; `test_stepping`.
+**ADR-0075 (the author's decision as licensee, after beta.108: identify as VARA HF does).** Each
+station's Morse identifier is the last thing it sends for a session, once, at the end; nothing
+in a session, no beacon and no datagram carries one, and `cw_id_interval_s` is gone
+(configuration **schema 13**, `identifier_at_the_end`; fixture `0.2.0-beta.110-identifier.toml`).
+Engine, model first, no wire change: the slave's identifier goes behind its DISC_ACK in the time
+every DISC grants (`_send_disc_answer`), the master's alone after that slot (`ident` timer at the
+DISC_ACK's end + the slave's declared identifier, or `end_max`); the slave holds its own
+initiatives to the master's identifier's latest end (`_closing_hold`); a slave's DISC is answered
+by the master's DISC (`_peer_left`); with no closing exchange each identifies alone with
+`Transmit.listen_first` (`_id_listen`: a slave, an owed-again identifier, a master after "no
+response", a link timeout or every DISC unanswered); "called again" drops it. Per-callsign lengths
+(`set_identifiers`), `identifier_owed`; `set_identifier_due` is gone. **A US callsign always
+identifies** (`cwid::required_for`: AA–AL, K, N, W, by where the station operates — `W4/G4ABC`
+and `G4ABC/W4` US, `VE3/KK4ODA` and `KK4ODA/VE3` not; SSIDs, `-T`, `/P` ignored), whatever
+`cw_id` or a host's `CWID OFF` says; `cw_id` is never rewritten; `status.identifier` has
+`setting`/`forced`/`reason`/`pending`, `identifier.check {callsign}` serves the panel's greyed box
+and its note *Required for US callsigns (§97.119)*. The host adapter holds `DISCONNECTED` for the
+`identified` state event (150 s at most). A third station's reserve after another session's
+DISC_ACK lasts until the channel has been quiet 4 s (`Reservation::channel`, at most 40 s). The
+stop's wind-down is 22 s, the shell's kill 30 s, systemd's 30 s. Harness: `identifiers_last` in
+`[expect]` and the identifier invariants on every schema-13 station (`identifier_faults`),
+scenarios `40m-closing-identifiers-2300` (two US callsigns) and `-ve3-` (one non-US, ID off): five
+endings each. The tests' stations have US callsigns, so their sessions end with both
+identifiers; none needed a non-US callsign to keep its timing. Regulatory (reported, nothing changed): nothing in Aether identifies a
+session between its call and its end; `fcc-regulatory-controls.md` *What identifies a long
+session* says so.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

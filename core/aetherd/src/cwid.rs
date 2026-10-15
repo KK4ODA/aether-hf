@@ -1,15 +1,17 @@
-//! Morse identification (roadmap P3-6).
+//! Morse identification (roadmap P3-6, ADR-0075).
 //!
-//! A station has to say who it is. Aether's own frames carry both callsigns, so in a
-//! jurisdiction that accepts identification by the mode in use — the United States, under
-//! §97.119(b)(3), for a documented digital code — nothing more is needed. Elsewhere the rules
-//! are read more strictly, and a Morse identifier at the end of a transmission is the usual
-//! answer. It is also a courtesy on a shared band: anybody listening with an ear rather than
-//! a decoder learns who is transmitting.
+//! A station has to say who it is. Under link protocol 8 the callsigns are on the air only in a
+//! session's call and acceptance, a probe, a beacon and a datagram: a session's own frames carry
+//! a session number. So, as VARA HF does, a station operating under a **United States callsign
+//! always sends its Morse identifier** at the end of each session, whatever its setting or a
+//! host program's `CWID OFF` says ([`required_for`]). It is the last thing each station sends
+//! for the session; nothing inside a session, a beacon or a KISS frame carries one. It is also a
+//! courtesy on a shared band: anybody listening with an ear rather than a decoder learns who is
+//! transmitting.
 //!
-//! Off by default. A station that identifies when it does not need to is spending air time
-//! and annoying its neighbours; one that fails to when it must is breaking the rules. Only
-//! the operator knows which applies, so the daemon does not guess.
+//! For any other callsign it is the operator's choice, off by default. A station that
+//! identifies when it does not need to is spending air time; one that fails to when it must is
+//! breaking the rules. Only the operator knows which applies outside the United States.
 //!
 //! # Keying
 //!
@@ -92,6 +94,73 @@ impl Default for CwId {
             // below the data waveform, because it is an identifier and not the signal
             level: 0.2,
         }
+    }
+}
+
+/// Why a station sends its Morse identifier whatever its operator set (ADR-0075).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Required {
+    /// The station operates under a United States callsign: §97.119, and VARA HF's own rule,
+    /// which host programs and their operators expect of a modem in its place.
+    UnitedStates,
+}
+
+impl Required {
+    /// The reason, in the operator's words: the panel's note and `status.identifier`.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::UnitedStates => "Required for US callsigns (§97.119)",
+        }
+    }
+}
+
+/// Whether identifying as `callsign` requires the Morse identifier, and why: the one rule the
+/// station, the log, `status.identifier` and the panel (`identifier.check`) all use.
+///
+/// It goes by where the station operates, which is what decides whose rules apply: the
+/// callsign's own prefix, or the location a portable form names — a prefix in front
+/// (`W4/G4ABC`, `VE3/KK4ODA`) or a location after the callsign (`G4ABC/W4`, `KK4ODA/VE3`). A
+/// suffix with no digit (`/P`, `/M`, `/MM`, `/QRP`) or a bare call-area digit (`/4`) moves
+/// nothing. An SSID and VARA's `-T`/`-R` are not part of the callsign.
+#[must_use]
+pub fn required_for(callsign: &str) -> Option<Required> {
+    is_united_states(&location_of(callsign)).then_some(Required::UnitedStates)
+}
+
+/// The part of a callsign that says where its station operates (see [`required_for`]).
+fn location_of(callsign: &str) -> String {
+    let call = callsign.trim().to_ascii_uppercase();
+    let call = call.split('-').next().unwrap_or_default();
+    let parts: Vec<&str> = call.split('/').filter(|p| !p.is_empty()).collect();
+    let Some(base) = parts
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, part)| part.len())
+        .map(|(index, _)| index)
+    else {
+        return String::new();
+    };
+    // a prefix in front is where the station is; a location after the callsign has a letter
+    // and a digit (VE3, W4, KH6), where a modifier (P, MM, QRP) or a call area (4) does not
+    let names_a_place = |part: &str| {
+        part.chars().any(|c| c.is_ascii_digit()) && part.chars().any(|c| c.is_ascii_alphabetic())
+    };
+    let location = parts[..base]
+        .first()
+        .copied()
+        .or_else(|| parts[base + 1..].iter().copied().find(|p| names_a_place(p)))
+        .unwrap_or(parts[base]);
+    location.to_owned()
+}
+
+/// Whether a prefix is one the ITU allocates to the United States: AA–AL, K, N and W.
+fn is_united_states(prefix: &str) -> bool {
+    let mut chars = prefix.chars();
+    match (chars.next(), chars.next()) {
+        (Some('K' | 'N' | 'W'), _) => true,
+        (Some('A'), Some(second)) => ('A'..='L').contains(&second),
+        _ => false,
     }
 }
 
@@ -203,6 +272,48 @@ mod tests {
     use super::*;
 
     const RATE: f64 = 48_000.0;
+
+    #[test]
+    fn a_us_callsign_must_identify_and_any_other_may() {
+        // the ITU's allocations to the United States: AA–AL, K, N, W
+        for us in [
+            "KK4ODA", "W4ODA", "N7XYZ", "K0XYZ", "AA1ZZ", "AL7XX", "KH6XX", "KP4XX", "WD5EMA",
+            "kk4oda", " KK4ODA ",
+        ] {
+            assert_eq!(required_for(us), Some(Required::UnitedStates), "{us}");
+        }
+        for other in [
+            "VE3XYZ", "G4XYZ", "LU1XYZ", "PY2XYZ", "EA8XYZ", "VK2XYZ", "JA1XX", "XE1XX", "4X1AB",
+            "AM1XX", "A61XX", "", "/",
+        ] {
+            assert_eq!(required_for(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn an_ssid_and_a_suffix_that_names_no_place_change_nothing() {
+        for us in [
+            "KK4ODA-1", "KK4ODA-15", "KK4ODA-T", "KK4ODA-1-T", "KK4ODA/P", "KK4ODA/M",
+            "KK4ODA/MM", "KK4ODA/QRP", "KK4ODA/4", "KK4ODA/P-1",
+        ] {
+            assert!(required_for(us).is_some(), "{us}");
+        }
+        for other in ["G4ABC/P", "VE3XYZ-2", "G4ABC/MM"] {
+            assert!(required_for(other).is_none(), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_portable_form_goes_by_where_the_station_operates() {
+        // a US prefix in front, or a US location after the callsign: operating in the US
+        for us in ["W4/G4ABC", "K/G4ABC", "KH6/VE3XYZ", "G4ABC/W4", "VE3XYZ/KH6", "W4/G4ABC/P"] {
+            assert!(required_for(us).is_some(), "{us}");
+        }
+        // a US station operating elsewhere, either way of writing it: that country's rules
+        for other in ["VE3/KK4ODA", "KK4ODA/VE3", "VE3/KK4ODA/P", "KK4ODA/VE3/P", "G/KK4ODA"] {
+            assert!(required_for(other).is_none(), "{other}");
+        }
+    }
 
     #[test]
     fn every_character_a_callsign_can_hold_has_a_code() {

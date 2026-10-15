@@ -344,7 +344,7 @@ class TwoStationSim:
         st.busy.append((t, t + tx.duration_s))
         timing = st.engine.timing
         key_up = t + self.key_limit_s if self.key_limit_s is not None else float("inf")
-        t += getattr(tx, "identifier_s", 0.0)  # the Morse identifier goes first
+        identifier_s = getattr(tx, "identifier_s", 0.0)
         st.first_frame = None
         for frame in tx.frames:
             dur = timing.frame_s(frame)
@@ -365,6 +365,7 @@ class TwoStationSim:
                 self._push(t + sof, "preamble", 1 - who, (t, t + sof, dur, frame.container))
             self._push(t + dur, "arrive", 1 - who, (frame, t, t + dur, cut))
             t += dur
+        t += identifier_s  # the closing identifier, behind the frames or alone (ADR-0075)
         st.tx_end = t
         self._push(t, "tx_done", who)
 

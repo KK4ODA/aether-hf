@@ -1033,9 +1033,11 @@
                     on a weak path one lost frame can spoil the rest. The <strong>answer gap</strong> is the
                     least time between the end of the other station's frame and this one keying: leave
                     it at 0 unless the other station keys by VOX (a SignaLink), then 500–800 ms gives it
-                    time to get back to receive. The <strong>Morse ID</strong> is off
-                    by default — Aether's frames carry both callsigns, and whether that satisfies your
-                    licence is your call; under the US rules an automatically keyed identifier goes no
+                    time to get back to receive. The <strong>Morse ID</strong> goes at the end of each
+                    session: the last thing the station sends for it, never during a session, on a
+                    beacon or on a KISS frame. A US callsign always sends it (§97.119, as VARA HF does),
+                    so for one the box is ticked and greyed out; for any other callsign it is your
+                    choice, off by default. Under the US rules an automatically keyed identifier goes no
                     faster than 20 wpm (§97.119(b)(1)), whatever is set here. <strong>Band edges</strong>
                     keeps a margin between your signal and a segment's edge for dial error and the
                     radio's own transmit chain.
@@ -1078,11 +1080,10 @@
               </div>
               <div class="row">
                 <label for="radio-cwid">Morse ID</label>
-                <label class="check"><input id="radio-cwid" title="Send this station's callsign in Morse after a transmission" type="checkbox" /> identify in Morse, every</label>
-                <input id="radio-cwid-interval" title="Seconds between Morse identifications" type="text" inputmode="decimal" class="port" value="600" aria-label="Seconds between Morse identifications" />
-                <span class="sub">s at</span>
+                <label class="check" id="radio-cwid-box" title="Send this station's callsign in Morse at the end of each session: the last thing it sends for the session"><input id="radio-cwid" title="Send this station's callsign in Morse at the end of each session: the last thing it sends for the session" type="checkbox" aria-describedby="cwid-required" /> identify in Morse at the end of each session, at</label>
                 <input id="radio-cwid-wpm" title="Morse speed in words per minute; under the US rules an automatically keyed identifier goes no faster than 20 wpm" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
                 <span class="sub">wpm</span>
+                <span class="sub cwid-required" id="cwid-required" title="This callsign must identify in Morse: the box is ticked and cannot be turned off, and your own setting is kept for any other callsign" role="note" hidden>Required for US callsigns (§97.119)</span>
                 <span class="sub cwid-sent" id="cwid-sent" title="The speed the identifier is actually sent at, when the rules hold it below the speed set" role="status" aria-live="polite" hidden></span>
               </div>
               <div class="row">

@@ -234,21 +234,53 @@ The slave's transmission:
 
 ### 5.4 The Morse identifier
 
-The identifier never follows a frame whose end the other station anchors on.
+**Since ADR-0075 (the author's decision, after v0.2.0-beta.108):** a station identifies once
+per session, at its end, and the identifier is the last thing each station sends for it. Nothing
+inside a session carries one, and no frame is sent after one. The identifier length each station
+declares (connect body byte 18) is the one its own callsign needs, 0 for none.
 
-* **In a master transmission,** it goes ahead of the header, inside the master's own time.
-* **In a slave slot,** it goes ahead of the ANS, and only in a slot granted with `id`. The
-  slave says in its ANS that its identifier is due (`id`). The master grants the next slot with
-  the slave's declared identifier length (connect body byte 18) added. The slave's DISC_ACK slot
-  always includes it, which covers the closing identifier.
-* **The engine decides where an identifier goes; the daemon decides when one is due.**
-  * The daemon tells the engine (`set_identifier_due`).
-  * The engine marks the `Transmit` action that must carry it (`identifier: true`), and has
-    already counted its length in the transmission's air time.
-  * The daemon renders it first.
+* **A closing exchange** (either station's disconnect; R10):
+  * the master's DISC grants the DISC_ACK's slot with the slave's identifier time added, as it
+    always has;
+  * the slave sends its DISC_ACK and its identifier right behind it, in that slot;
+  * the master keys its own identifier alone once that slot is over: at the DISC_ACK's end plus
+    the slave's declared identifier and R4's wait, or at `end_max` if no DISC_ACK was read.
+* **A DISC heard again** is answered again, identifier and all, so the identifier stays last.
+* **The slave starts nothing of its own** (a call, a probe, an answer to another station) until
+  the master's identifier can be over: the slot's latest end, the master's wait at the top level
+  with a slow key, and the master's declared identifier.
+* **A slave's disconnect** (`flag`) is answered by the master's DISC, so it closes the same way.
+* **An abort.** An aborting master identifies after its last leave DISC's slot, or after the
+  DISC_ACK and the identifier behind it. An aborting slave's DISC is answered by the master's
+  closing DISC, so both identify.
+* **No closing exchange** (a link timeout, the master gone, a DISC_ACK never sent): each station
+  sends its identifier on its own, listening first (`Transmit.listen_first`: the daemon waits for
+  a clear channel up to 15 s, then sends). The master's goes after its last slot, and listens
+  first when it read nothing of the slave at the end ("no response", a link timeout, every DISC
+  unanswered). A slave that timed out sends it at once. A slave that
+  left a session still heard waits one exchange first, since the master's next words may close
+  it properly. A DISC_ACK that carried the identifier and did not go out (the gate dropped it,
+  the header was cut) owes it again, the same way.
+* **Called again** (ADR-0056): the session's identifier is dropped, since the communication goes
+  on in the new session; a call to another station sends the identifier first.
+* **Outside a session:** calls, acceptances, probes, probe answers, beacons and datagrams carry
+  no identifier. A contact that went no further than its setup is the daemon's to identify, on
+  its own, 30 s after (ADR-0055 §4).
 
-This replaces ADR-0055's placement rules for sessions. Outside sessions (calls, probes,
-beacons), the daemon's rules stay.
+Every rule here keys only where I1 already holds: in a slot the other station granted and
+reserves, after a slot the master granted is over, or on a channel the station hears clear. No
+deadline moves on undecoded evidence.
+
+**Wire compatibility:** none of this changes a frame. A protocol 8 station of v0.2.0-beta.106 to
+beta.108 sends its identifier ahead of its DISC_ACK, inside the same granted time, and grants the
+same slot for one. The master's wait (the DISC_ACK's end plus the declared identifier) covers an
+identifier on either side of it.
+
+The engine places the identifier; the daemon decides whether the station has one and how long it
+is (`set_identifiers`, per callsign) and renders it after the frames (`Transmit.identifier_s`).
+This replaces ADR-0055's placement rules for sessions and the mid-session identifier
+(`set_identifier_due`, the `id` bit in an ANS, which a station on this build still honours from
+an older one).
 
 ## 6. Outside a session
 
@@ -291,7 +323,7 @@ mirrors it in Step 2, and the daemon switches to it there. The daemon's present 
 
 | Kept, same meaning | Changed | Dropped (no counterpart) |
 |---|---|---|
-| `connect_as`, `connect_tries`, `connect_due`, `move_call` (ADR-0058), `probe`, `probing`, `last_probe`, `send`, `disconnect`, `disconnect_requested`, `abort`, `tick`, `next_deadline`, `on_frame`, `drain`, `state`, `session`, `connected`, `callsigns`/`set_callsigns`, `peer_capabilities`, `peer_snr_db`, `ended_peer_snr_db`, `rate_readings`, `current_mode`, `robust_mode`, `timing`, `config`, `set_air`, `set_max_mode`, `set_ceiling`/`ceiling`, `set_max_burst_s`, `burst_capacity`, `pin_mode`, `take_ladder`, `top_acked_mode`, `tx_pending_bytes`, `tx_undelivered_bytes`, `all_acknowledged`, `reset_stats`, `stats`, `on_tx_delayed` | `on_tx_done(frames_end)` (§3.4); `role()` returns `Master`/`Slave`/`None`; `Transmit` gains `not_after` (the gate's bound, §3.1) and `identifier`; `request_break` (§5.2); `set_identifier_due` (new, §5.4); `on_preamble` changes nothing in a session (calls and probes keep it as carrier information for their own next try) | `set_chat` (open windows), `acknowledgement_at` (the follow-on heed, ADR-0040), the turn's state, `transmitting` as a turn notion |
+| `connect_as`, `connect_tries`, `connect_due`, `move_call` (ADR-0058), `probe`, `probing`, `last_probe`, `send`, `disconnect`, `disconnect_requested`, `abort`, `tick`, `next_deadline`, `on_frame`, `drain`, `state`, `session`, `connected`, `callsigns`/`set_callsigns`, `peer_capabilities`, `peer_snr_db`, `ended_peer_snr_db`, `rate_readings`, `current_mode`, `robust_mode`, `timing`, `config`, `set_air`, `set_max_mode`, `set_ceiling`/`ceiling`, `set_max_burst_s`, `burst_capacity`, `pin_mode`, `take_ladder`, `top_acked_mode`, `tx_pending_bytes`, `tx_undelivered_bytes`, `all_acknowledged`, `reset_stats`, `stats`, `on_tx_delayed` | `on_tx_done(frames_end)` (§3.4); `role()` returns `Master`/`Slave`/`None`; `Transmit` gains `not_after` (the gate's bound, §3.1), `identifier_s` and `listen_first`; `request_break` (§5.2); `set_identifiers` and `identifier_owed` (new, §5.4); `on_preamble` changes nothing in a session (calls and probes keep it as carrier information for their own next try) | `set_chat` (open windows), `acknowledgement_at` (the follow-on heed, ADR-0040), the turn's state, `transmitting` as a turn notion |
 
 **Events kept:**
 
@@ -336,7 +368,8 @@ Listed here so the model's interface already fits. Built in Step 2
   (`on_tx_dropped`).
 * **`on_tx_done(frames_end)`.** The end of the last frame on the air, from the card's clock
   less the tail.
-* **The identifier, as §5.4:** the engine places it, and the daemon renders it first.
+* **The identifier, as §5.4:** the engine places it, and the daemon renders it after the
+  frames (ADR-0075; first, before it).
 * **Rendering ahead.** The engine decides a slot's answer as soon as what it says is final —
   every data frame the header stated has been reported, decoded or not; an answer to a call, a
   probe or a DISC at once — and hands it over with `not_before`, the slot's start. The daemon
@@ -443,7 +476,8 @@ each found by a test or a scenario and each kept inside the rules of ADR-0069 §
   answer: those are absolute, and a late answer is the gate's to drop.
 * **The closing identifier.** A DISC grants its DISC_ACK's slot with the slave's identifier time
   whenever the slave declared one; the slave puts it ahead of the DISC_ACK. The master's goes
-  ahead of its first DISC.
+  ahead of its first DISC. (Superseded by ADR-0075, §5.4: behind the DISC_ACK, and the master's
+  alone after the slot.)
 * **The link timeout is checked when it falls due** against whole exchanges of the family the
   link runs in then. Armed when a frame is heard, it had counted exchanges of the family that
   frame was heard in, and an answer that moved the link to the floor left it a third as long

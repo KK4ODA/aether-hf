@@ -122,6 +122,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "elide": c.elide,
         "turnaround_s": bits(c.turnaround_s),
         "identifier_s": bits(c.identifier_s),
+        "identifiers": {call: bits(s) for call, s in sorted(c.identifiers.items())},
         "answer_gap_s": bits(c.answer_gap_s),
         "floor_answer_memory": c.floor_answer_memory,
         "hold_unknown": bool(c.hold_unknown),
@@ -158,6 +159,7 @@ def action_doc(a: object) -> dict[str, Any]:
             "not_after": bits(getattr(a, "not_after", None)),
             "not_before": bits(getattr(a, "not_before", None)),
             "identifier_s": bits(getattr(a, "identifier_s", 0.0)),
+            "listen_first": bool(getattr(a, "listen_first", False)),
         }
     if isinstance(a, Deliver):
         return {"deliver": BLOBS(a.data)}
@@ -181,6 +183,7 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "connect_tries": e.connect_tries,
         "probing": e.probing,
         "peer_snr_db": bits(e.peer_snr_db),
+        "identifier_owed": e.identifier_owed,
         "stats": dict(vars(e.stats)),
     }
 
@@ -296,7 +299,11 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
     "disconnect": lambda: {},
     "abort": lambda: {},
     "send": lambda data: {"data": BLOBS(data)},
-    "set_identifier_due": lambda due=True: {"due": due},
+    "set_callsigns": lambda calls: {"calls": list(calls)},
+    "set_identifier_s": lambda seconds: {"seconds": bits(seconds)},
+    "set_identifiers": lambda lengths: {
+        "lengths": {call: bits(s) for call, s in sorted(lengths.items())}
+    },
     "set_answer_gap": lambda seconds: {"seconds": bits(seconds)},
     "pin_mode": lambda mode, body_bytes=None: {"mode": mode, "body": body_bytes},
     "take_ladder": lambda: {},
@@ -374,7 +381,9 @@ def _exchange(
         if not done and sim.delivered(1) == to_b and sim.delivered(0) == to_a:
             done = True
             a.disconnect()
-        if done and a.state.value == "idle" and b.state.value == "idle":
+        idle = a.state.value == "idle" and b.state.value == "idle"
+        if done and idle and not (a.identifier_owed or b.identifier_owed):
+            sim.run(until=t + 15.0)  # the closing identifiers go on the air
             break
 
 
@@ -434,8 +443,9 @@ def outage() -> list[Recorder]:
 
 
 def dead_path() -> list[Recorder]:
-    """A session whose path dies: no response at the master, a link timeout at the slave."""
-    a, b, ra, rb = _pair(NARROW)
+    """A session whose path dies: no response at the master, a link timeout at the slave —
+    each closing identifier on its own, the slave's listening first (ADR-0075)."""
+    a, b, ra, rb = _pair(NARROW, identifier_s=4.0)
 
     def schedule(t: float) -> float:
         return 6.0 if t < 40.0 else -60.0
@@ -509,8 +519,9 @@ def cut_header() -> list[Recorder]:
 
 
 def aborts() -> list[Recorder]:
-    """The master aborts mid-transfer and calls again; then the slave aborts."""
-    a, b, ra, rb = _pair(WIDE)
+    """The master aborts mid-transfer and calls again; then the slave aborts, and the master
+    closes the session for it. Both identify (ADR-0075)."""
+    a, b, ra, rb = _pair(WIDE, identifier_s=5.0)
     rng = random.Random(6)
     sim = TwoStationSim(a, b, snr_db=8.0, seed=6)
     a.connect("KK4XYZ")
@@ -529,8 +540,8 @@ def aborts() -> list[Recorder]:
 
 def leaving() -> list[Recorder]:
     """Mid-transfer, the slave asks to close: its last words go, the master's queue does not;
-    then, in a second session, both ask at once."""
-    a, b, ra, rb = _pair(NARROW)
+    then, in a second session, both ask at once. Both identify at each end."""
+    a, b, ra, rb = _pair(NARROW, identifier_s=3.5)
     rng = random.Random(41)
     sim = TwoStationSim(a, b, snr_db=2.0, seed=41)
     a.connect("KK4XYZ")
@@ -604,23 +615,57 @@ def probes() -> list[Recorder]:
 
 
 def identifiers() -> list[Recorder]:
-    """Both stations identify; their identifiers are placed in the master's time and in slots
-    granted with it, and close the session."""
+    """Both stations identify (ADR-0075): a close the master asks for, one the slave asks for,
+    a DISC_ACK lost once and then every time, and a call to another station while the last
+    session's identifier is still owed — it goes first. Never an identifier inside a session."""
     a, b, ra, rb = _pair(WIDE, identifier_s=4.5, turnaround_s=0.3)
     rng = random.Random(8)
-    sim = TwoStationSim(a, b, snr_db=10.0, seed=8)
+    lost = {"n": 0, "every": False}
+
+    def disc_acks(frame: TxFrame) -> float:
+        if frame.container is not Container.CONTROL:
+            return 0.0
+        if GrantFrame.decode(frame.payload).kind is not GrantKind.DISC_ACK:
+            return 0.0
+        lost["n"] += 1
+        return -60.0 if lost["every"] or lost["n"] == 3 else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=8, frame_snr_offset=disc_acks)
     a.connect("KK4XYZ")
     a.send(_message(rng, 2500))
     b.send(_message(rng, 2500))
-    t = 0.0
-    while t < 500.0:
-        t += 5.0
-        if t in (20.0, 60.0):
-            a.set_identifier_due(True)
-            b.set_identifier_due(True)
+    sim.run(until=90.0)
+    a.disconnect()
+    t = sim.t
+    while t < 150.0 and b.state.value != "idle":
+        t += 0.05
         sim.run(until=t)
-        if t == 120.0:
-            a.disconnect()
+    b.probe("W4ODA")  # at once: it waits out the master's identifier, behind its own
+    sim.run(until=180.0)
+    a.connect("KK4XYZ")
+    sim.run(until=210.0)
+    b.disconnect()
+    sim.run(until=260.0)
+    a.connect("KK4XYZ")  # its first DISC_ACK lost: the DISC said again
+    sim.run(until=300.0)
+    a.disconnect()
+    sim.run(until=390.0)
+    lost["every"] = True
+    a.connect("KK4XYZ")  # every DISC_ACK lost: the master gives up
+    sim.run(until=420.0)
+    a.disconnect()
+    sim.run(until=520.0)
+    lost["every"] = False
+    a.connect("KK4XYZ")
+    sim.run(until=550.0)
+    a.disconnect()
+    t = sim.t
+    while t < 700.0 and not (a.state.value == "idle" and a.identifier_owed):
+        t += 0.05
+        sim.run(until=t)
+    assert a.identifier_owed, "the call to another station must find the identifier owed"
+    a.connect("N0BODY")  # another station: the identifier still owed goes ahead of the call
+    sim.run(until=1000.0)
     return [ra, rb]
 
 
@@ -652,14 +697,19 @@ def ladder() -> list[Recorder]:
 
 def late_station() -> list[Recorder]:
     """A slave whose receiver reports every frame a second late and whose keying is often past
-    the slack: levels asked for, slots forfeited, transmissions dropped by the gate."""
-    a, b, ra, rb = _pair(WIDE)
+    the slack: levels asked for, slots forfeited, transmissions dropped by the gate — its first
+    DISC_ACK among them, so its identifier is owed again and goes behind the next (ADR-0075)."""
+    a, b, ra, rb = _pair(WIDE, identifier_s=4.0)
     rng = random.Random(10)
+    closing = {"disc_acks": 0}
 
     def latency(rx: int, _frame: TxFrame, _end: float) -> float:
         return 1.0 if rx == 1 else 0.1
 
     def lead(who: int) -> float:
+        if who == 1 and b.state.value == "idle" and closing["disc_acks"] == 0:
+            closing["disc_acks"] += 1
+            return 0.6  # the first DISC_ACK keyed past its slack
         return rng.choice([0.0, 0.2, 0.6]) if who == 1 else 0.05
 
     sim = TwoStationSim(a, b, snr_db=9.0, seed=10, decode_latency=latency, key_lead=lead)
@@ -680,8 +730,9 @@ def simultaneous() -> list[Recorder]:
 
 def called_again() -> list[Recorder]:
     """The caller loses the session (aborts unheard) and calls again: the old session ends and
-    the new call is answered; a delayed transmission moves the master's waits."""
-    a, b, ra, rb = _pair(WIDE)
+    the new call is answered, with no identifier between the sessions (ADR-0055 §4); a delayed
+    transmission moves the master's waits."""
+    a, b, ra, rb = _pair(WIDE, identifier_s=4.5)
     rng = random.Random(12)
 
     def unheard(rx: int, container: Container, t0: float) -> bool:
@@ -820,17 +871,19 @@ def answer_gap() -> list[Recorder]:
 
 
 def idle_identifier() -> list[Recorder]:
-    """An idle link: open windows, the slave's identifier falling due in one with nothing else
-    to say, and a line typed into another."""
+    """Identifiers by callsign: the master calls as its second callsign, whose identifier is
+    longer, and the slave sends none; an idle link's open windows; the slave asks to leave from
+    one, and the master's identifier is the only one."""
     a, b, ra, rb = _pair(WIDE, identifier_s=3.0)
+    a.set_callsigns(["W4ODA", "W4ODA-12"])
+    a.set_identifiers({"W4ODA": 3.0, "W4ODA-12": 5.5})
+    b.set_identifiers({"KK4XYZ": 0.0})
     sim = TwoStationSim(a, b, snr_db=10.0, seed=17)
-    a.connect("KK4XYZ")
+    a.connect("KK4XYZ", "W4ODA-12")
     sim.run(until=30.0)
-    b.set_identifier_due(True)
-    sim.run(until=70.0)
     b.send(b"a line typed at the slave")
-    sim.run(until=110.0)
-    a.disconnect()
+    sim.run(until=70.0)
+    b.disconnect()
     sim.run(until=300.0)
     return [ra, rb]
 

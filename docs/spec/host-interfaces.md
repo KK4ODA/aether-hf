@@ -82,7 +82,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `PUBLIC ON` / `PUBLIC OFF` | Whether the station may be listed publicly | Recorded |
 | `COMPRESSION OFF\|TEXT\|FILES\|ON` | What the host wants compressed | Recorded; see §5. `ON` is what Winlink Express sends and means `TEXT` |
 | `WINLINK SESSION` / `P2P SESSION` | Which kind of session is running | Recorded |
-| `CWID ON` / `CWID OFF` | Identify in Morse after a transmission | Recorded; see §5 |
+| `CWID ON` / `CWID OFF` | Identify in Morse at the end of each session | Recorded and answered `OK`; nothing changes (§5). Whether to identify is the operator's `[radio] cw_id` — except that a US callsign always identifies, `CWID OFF` or not (ADR-0075, as VARA HF does). Winlink Express and RMS Trimode say `CWID ON` at every start; VarAC says neither, and leaves the identifier to the modem |
 | `CQFRAME <source> <bandwidth>` | Sends a beacon, addressed to nobody, on the tone floor (the control API's `beacon`), under the name the host gave it when this station's callsign is its base — VarAC's `CQFRAME KK4ODA-9 500`, whose suffix means something to the program at the other end — and under the station's own callsign otherwise (ADR-0024) | `OK` once understood; a beacon the modem refuses — in a session, on an answer-only station, or by the rules (ADR-0018) — is not sent, and nothing more is said |
 | `TUNE ON` / `TUNE <seconds>` / `TUNE OFF` | Keys and plays a steady 1500 Hz tone at the transmit level, for an antenna tuner. Drive is set with real bursts (the panel's *Set drive*, the control API's `drive.set`): the waveform's peaks stand 6–7 dB above the tone's | `TUNE ON` (VarAC's TUNE button) is 10 s; `TUNE <seconds>` takes 0–30 and is held to 10; `TUNE OFF` cuts a tone short. `OK` once understood: a tone the modem refuses — in a session, on a busy channel, or by the rules — is not sent, and nothing more is said |
 | `TUNE ?` | → `TUNE <dB>`: the transmit level, in decibels below full scale (`20 log₁₀ audio.tx_level`) | VarAC asks after every connection, to keep a level per band. The scale VARA answers on is not published; decibels below full scale is the one a sine amplitude has an honest reading on |
@@ -108,7 +108,7 @@ Unsolicited, at any time.
 | `ENCRYPTION DISABLED` | After `CONNECTED`: the link carries no encryption, which VARA states of its links and is simply true of this modem |
 | `LINK REGISTERED` | After `ENCRYPTION DISABLED`: the station at the other end is not speed-limited, as VARA says of a registered peer. Nobody is: Aether has no registration |
 | `MISSING SOUNDCARD` | When a host attaches to a modem whose sound card would not open (it runs on silence and can neither hear nor transmit): VARA's word for a sound card that has gone, which a gateway's host acts on. `CANCELPENDING` is never sent: `PENDING` is said only as a session comes up, so there is no pending call to cancel |
-| `DISCONNECTED` | A session the host was told of with `CONNECTED` ended, or a call it placed ended without one (nobody answered, `ABORT`, `DISCONNECT`, the rules) — or, straight after the `OK` to a `CONNECT`, the modem refused the call. Once for each: a host that aborts a call and places another without waiting hears the first one's `DISCONNECTED` before the second one's `OK`. A call or session the host did not start — the panel's — is not reported |
+| `DISCONNECTED` | A session the host was told of with `CONNECTED` ended, or a call it placed ended without one (nobody answered, `ABORT`, `DISCONNECT`, the rules) — or, straight after the `OK` to a `CONNECT`, the modem refused the call. Once for each: a host that aborts a call and places another without waiting hears the first one's `DISCONNECTED` before the second one's `OK`. A call or session the host did not start — the panel's — is not reported. **After the closing Morse identifier** (ADR-0075): a session's end is said once this station's identifier — the last thing it sends for the session — has gone out, so that VarAC going back to its calling frequency, a scanning Trimode changing channel or Winlink Express placing its next call does not go over it; a host that keys the radio (`[ptt] kind = "host"`) is still attached and keys for it (`PTT ON`/`PTT OFF`). A station that sends no identifier says it at once; one whose identifier is held longer than 150 s says it then |
 | `BUFFER <bytes>` | The number of payload bytes still to send changed — and `BUFFER 0` once, as the first line a host hears when it attaches. VarAC sends nothing on the data port until it has heard how full the modem's buffer is (found on the bench: a ping sat for ninety seconds with both ends waiting) |
 | `BITRATE (<mode>) <bps> BPS` | The mode in use changed during a session: the mode index (VARA's "speed level") and its net bit rate, which a host shows as the link speed |
 | `REGISTERED <call>` | Sent before `CONNECTED` |
@@ -138,7 +138,7 @@ follow now is refused (`WRONG`) rather than accepted and not honoured: a client 
 500 Hz and got 2300 would be transmitting outside what its operator chose — a 2300 Hz signal
 on a 500 Hz calling frequency most of all.
 
-**Recorded but not yet acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
+**Recorded but not acted on**: `COMPRESSION`, `CWID`, `PUBLIC`, `WINLINK SESSION` /
 `P2P SESSION`, `DRIVELEVEL` (`CHAT` also governs the KISS port, §8.4, and so does
 `IGNOREKISSDCD`; `LISTEN`, `BW<n>` and `CHAT` are acted on, above). The setting is remembered and reported back, and the
 modem answers `OK` because the command was understood.
@@ -146,8 +146,12 @@ modem answers `OK` because the command was understood.
 Compression and Morse identification both exist (P3-6) but are configured on the station, not
 per host session: compression is negotiated with the *other station* in the connect handshake
 and cannot be turned on from one end alone, and whether to identify in Morse is a licence
-question for the operator rather than a runtime choice for a client. Wiring these commands to
-those settings is an open item.
+question for the operator rather than a runtime choice for a client — the operator's `[radio]
+cw_id` for a callsign that leaves it to them, and always for a US callsign (ADR-0075). So
+`CWID OFF` on a US station is answered `OK`, recorded, and changes nothing. The identifier
+goes at the end of each session, the last thing each station sends for it (ADR-0075); a VarAC
+operator who wants an identification during a long QSO sets VarAC's *Call ID interval*, which
+sends `DE <callsign>` in the chat as data.
 
 **Not a command here**: `PING` / `PINGACK`. VARA's published command set has none (that
 vocabulary is ARDOP's host protocol), and VarAC's ping is a short session over `CONNECT`,

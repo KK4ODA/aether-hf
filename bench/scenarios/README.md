@@ -30,7 +30,8 @@ agc_threshold_db = 12.0     # where it acts, above the noise the station hears
 agc_hang_ms = 100           # how long a gain cut holds before it recovers
 agc_decay_db_s = 40.0       # how fast it recovers
 
-cw_id = false               # [radio] cw_id, and cw_id_interval_s
+cw_id = false               # [radio] cw_id; a US callsign identifies whatever it says
+                            # (ADR-0075), and an older build reads cw_id_interval_s
 host = false                # a host (VARA-compatible) port, for the host-* steps
 
 [stations.b]                # the called station, the same keys
@@ -77,13 +78,16 @@ clean_end = true            # both sessions ended by DISC, not a timeout
 idle = true                 # both stations back to idle at the end, whatever happened
 max_collisions = 3          # times both radios were keyed at once
 min_message_bps = 75        # the Test's message at least this fast
+identifiers_last = true     # every session a station that identifies was in ends with its
+                            # Morse identifier, and one that sends none sends none (ADR-0075)
 ```
 
 Steps: `beacon`, `probe`, `connect`, `message N` (N incompressible bytes from a to b),
 `reply N` (from b to a), `test` (a Test session, a → b: it makes its own probe, call, message,
 mode ladder, file and disconnect, so it starts from idle), `wait S` (S seconds of air),
 `disconnect` (`disconnect b`: the called station leaves; `disconnect both`: at the same
-moment), `abort` (`abort a`: waits for the caller alone). For what goes wrong mid-session: `send N` (queued, not waited for; `send b N` at the called station),
+moment), `abort` (`abort a`: waits for the caller alone; `abort b`: the called station drops the
+session, and the caller closes it). For what goes wrong mid-session: `send N` (queued, not waited for; `send b N` at the called station),
 `message? N` (a message that may fail — reported, not judged), `outage S` (from now neither
 station hears the other for S seconds: a station switched off, a band gone), `wait_idle S`
 (both back to idle by themselves within S seconds of air). `stall WHO S` (that station's
@@ -120,7 +124,11 @@ wait for, `host-wait c` waits for it to come up — a call into a gateway busy w
 client (`40m-gateway-busy-when-called-2300`). Every client runs `--daemon`, `b` `--daemon-b`.
 
 **Always judged**, whatever `[expect]` says: a daemon that exits or panics, a station keyed
-longer than 32 s at once (a stuck key), a host told `CONNECTED` while not listening.
+longer than 32 s at once (a stuck key), a host told `CONNECTED` while not listening, a host told
+`DISCONNECTED` before its station's closing identifier went out, and — for a build that places
+the Morse identifier last (schema 13 and up, ADR-0075) — an identifier anywhere but alone or
+behind a `DISC_ACK`, or anything of a session keyed after the identifier that closed it. "Idle"
+everywhere means idle with no closing identifier still to go out.
 `tools/soak.py` draws random scenarios — every fading profile, offsets, drift, echoes, QSB, the
 other signals, AGCs, VOX, both bandwidths, aborts, outages, host programs — and judges them on
 these alone, plus being back to idle after the script has left (`--count`, `--seed`, `--jobs`;
@@ -135,8 +143,10 @@ included, and `nightly` marks the ones expected to pass there; `stress` (conditi
 break things — `--tag stress --jobs 4` by hand; not every one is expected to pass: on
 `80m-asymmetric-500` a file transfer after the Test's ladder stalls about one run in three, an
 open item); `20m`, `15m`, `40m` and `80m` the band; `robustness` and `gateway` what an operator
-or a gateway's day does to a session (aborts, outages, leaving together, a Morse identifier
-mid-transfer); `host` the host-program sessions; `band` the 20 m and 15 m paths (DX travel time,
+or a gateway's day does to a session (aborts, outages, leaving together, a long transfer
+between identifying stations); `identifier` the ways a session ends, each judged on its closing
+identifiers coming last (`40m-closing-identifiers-2300` with two US callsigns, `-ve3-` with one
+that sends none); `host` the host-program sessions; `band` the 20 m and 15 m paths (DX travel time,
 offsets that grow with the band, polar Doppler, equatorial flutter, long-path echoes, openings
 closing, FT8 beside the passband); `winlink` the Winlink-shaped exchanges (ADR-0044's and
 ADR-0047's measurements). `[test]` passes `test.start`'s parameters (`message_bytes`, `file_bytes`,

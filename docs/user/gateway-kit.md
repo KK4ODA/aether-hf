@@ -153,8 +153,10 @@ parts that matter:
 * It runs as its own unprivileged user in the `audio`, `dialout` and `plugdev` groups, with
   write access only to `/etc/aetherd`, where the daemon keeps everything beside its
   configuration. A gateway does not need root and must not have it.
-* `TimeoutStopSec=15s` with `SIGTERM`: the daemon catches the signal (from 0.2.0-beta.104; an
-  older daemon only caught SIGINT) and **releases the transmitter** before exiting. A station killed mid-burst leaves the radio keyed until
+* `TimeoutStopSec=30s` with `SIGTERM`: the daemon catches the signal (from 0.2.0-beta.104; an
+  older daemon only caught SIGINT), ends a session on the air (up to 22 s for the DISC, the
+  other station's answer and both Morse identifiers) and **releases the transmitter** before
+  exiting. A station killed mid-burst leaves the radio keyed until
   somebody notices, which on an unattended gateway can be a very long time.
 * `Nice=-5`: audio is soft real-time. Without it the modem is descheduled mid-burst on a busy
   machine and drops captured samples, which looks exactly like a bad band.
@@ -256,12 +258,17 @@ interface, not on the air: an Aether station cannot decode a VARA signal and nev
   calling frequency is the fastest way to make the mode unwelcome.
 * Leave `max_key_s` at 30 seconds unless you have a reason. It bounds a stuck key, and a
   stuck key on an unattended station is the worst thing this software can do.
-* If your licence requires identification in a particular form, turn on `cw_id`. Aether's
-  frames carry both callsigns, but whether that satisfies your licence conditions is your
-  call, not the modem's. With it on, every session's end is identified once, and a long
-  session at least every `cw_id_interval_s` (ten minutes) counted from its call; a call, an
-  acceptance, a probe or a probe's answer never carries one (ADR-0055); under the US rules the identifier
-  goes at 20 wpm at most (§97.119(b)(1)) whatever `cw_id_wpm` asks for, and the log says so.
+* **The Morse identifier** (ADR-0075). A US callsign identifies in Morse at the end of every
+  session whatever `cw_id` says, and the log says so at start when the setting is off. Any
+  other callsign identifies only with `cw_id = true`. The identifier is the last thing the
+  station sends for a session, after the client's goodbye and the client's own identifier.
+  Nothing inside a session carries one, and neither does a call, an acceptance, a probe, a
+  probe's answer, a beacon or a KISS frame. Under the US rules it goes at 20 wpm at most
+  (§97.119(b)(1)) whatever `cw_id_wpm` asks for, and the log says so. The host program hears
+  `DISCONNECTED` once the identifier has gone, so a scanning Trimode does not change channel
+  over it. Nothing identifies a session between its call and its end: a long B2F session is
+  identified only at its end. See `docs/user/fcc-regulatory-controls.md`, *What identifies a
+  long session*.
 * Leave a gateway **unattended only where the rules allow it** — the daemon enforces the
   sub-bands, but whether your station may run under automatic control at all, and on which
   bands, is yours to know.

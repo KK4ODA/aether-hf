@@ -2299,6 +2299,11 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   color: var(--status-warning);
 }
 
+/* a callsign that must identify: the box is ticked and greyed out, and this says why */
+.cwid-required {
+  color: var(--text-2);
+}
+
 /* step 6 stays at the foot of the window while the steps scroll past it */
 /* the save is a bar fixed to the foot of the tab, not a seventh plate floating over the
    sixth: it has the cabinet's colour, a strong rule above it and room under the last step */

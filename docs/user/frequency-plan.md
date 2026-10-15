@@ -125,11 +125,14 @@ These are on by default and should stay that way.
 * **A decoded frame marks the channel busy outright** — it is there whatever the level says.
   A merely *acquired* preamble does not: on a real band acquisition false-alarms many times a
   minute, and only a decode is evidence a phantom cannot produce.
-* **It does not key over the other station's identifier.** At a session's end each station
-  waits out the other's Morse ID (up to 15 s) before its own last frames and ID (ADR-0022).
+* **It does not key over the other station's identifier.** At a session's end the station that
+  answers the goodbye sends its Morse ID right behind its answer, in time the goodbye gave it,
+  and the other station sends its own after that. A station that has to identify without that
+  exchange listens for a clear channel first, for up to 15 s (ADR-0075).
 * **A key-time watchdog**, 30 seconds by default. It bounds a stuck transmitter, and the trip
   latches so a runaway cannot re-key by asking again. Every burst is sized to finish inside it,
-  the Morse ID included (ADR-0017), so on a working station the watchdog never fires.
+  so on a working station the watchdog never fires (ADR-0017). The Morse ID goes on its own or
+  behind a single short frame, never inside a burst.
 * **The rules before the key.** Under the US profile every transmission — a burst, a tune
   tone, a Morse ID — is judged against Part 97 at the dial the radio is on, and what the rules
   do not allow is not sent (ADR-0018).

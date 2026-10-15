@@ -30,9 +30,10 @@ Environment=AETHERD_SUPERVISED=1
 
 # The daemon catches this (and SIGINT) and releases the transmitter before exiting. Give it time to: a
 # station killed mid-burst leaves the radio keyed until somebody notices, which on an
-# unattended gateway can be a very long time.
+# unattended gateway can be a very long time. It ends a session on the air first: up to 22 s
+# for the DISC, the other station's answer and both closing Morse identifiers.
 KillSignal=SIGTERM
-TimeoutStopSec=15s
+TimeoutStopSec=30s
 
 Restart=on-failure
 RestartSec=5s

@@ -232,9 +232,15 @@ pub struct GrantConfig {
     /// This station's radio: how long after it stops sending it hears again (VOX hold and
     /// receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s.
     pub turnaround_s: f64,
-    /// This station's Morse identifier's length, 0 for none: declared at the connection, so the
-    /// master grants the time for it.
+    /// This station's closing Morse identifier's length, 0 for none: declared at the connection,
+    /// so the master grants the slave's in the `DISC_ACK`'s slot and the slave knows how long the
+    /// master's lasts (ADR-0075). The length for every callsign not in
+    /// [`identifiers`](Self::identifiers).
     pub identifier_s: f64,
+    /// The identifier's length by the callsign a session runs under: the daemon's, since the
+    /// identifier sends that callsign and whether one is sent at all can follow it (a US callsign
+    /// always identifies). Set by [`set_identifiers`](GrantedEngine::set_identifiers).
+    pub identifiers: BTreeMap<String, f64>,
     /// The least time between the end of the other station's frames and this station
     /// radiating: the operator's `[radio] answer_gap_ms`, or what this station learned the other
     /// needs (ADR-0036, ADR-0054). For a peer whose radio is slower to hear again than it
@@ -311,6 +317,7 @@ impl Default for GrantConfig {
             elide: true,
             turnaround_s: 0.0,
             identifier_s: 0.0,
+            identifiers: BTreeMap::new(),
             answer_gap_s: 0.0,
             decode_budget_s: DECODE_BUDGET_S,
             key_s: KEY_S,
@@ -577,8 +584,6 @@ struct Answer {
     snr_db: Option<f64>,
     /// Data time granted after the answer.
     room_s: f64,
-    /// The slot includes this station's identifier time.
-    ident: bool,
 }
 
 impl Answer {
@@ -593,20 +598,21 @@ impl Answer {
             remote: String::new(),
             snr_db: None,
             room_s: 0.0,
-            ident: false,
         }
     }
 }
 
-/// When a transmission may radiate, and what goes ahead of its frames.
+/// When a transmission may radiate, and what goes after its frames.
 #[derive(Debug, Clone, Copy, Default)]
 struct Keying {
     /// The latest its radiation may start (the keying gate's limit).
     not_after: Option<f64>,
     /// The earliest (the start of the slot it answers in).
     not_before: Option<f64>,
-    /// The identifier ahead of the frames.
+    /// The closing identifier after the frames, or alone (ADR-0075).
     identifier_s: f64,
+    /// Made outside every slot: the daemon listens first.
+    listen_first: bool,
 }
 
 impl Keying {
@@ -616,6 +622,7 @@ impl Keying {
             not_after: Some(answer.not_after),
             not_before: Some(answer.start),
             identifier_s,
+            listen_first: false,
         }
     }
 }
@@ -628,6 +635,7 @@ enum Timer {
     Proceed,
     Answer,
     Leave,
+    Ident,
 }
 
 impl Timer {
@@ -639,6 +647,7 @@ impl Timer {
             Self::Proceed => "timer:proceed",
             Self::Answer => "timer:answer",
             Self::Leave => "timer:leave",
+            Self::Ident => "timer:ident",
         }
     }
 }
@@ -697,8 +706,9 @@ pub struct GrantedEngine {
     slot: Option<Slot>,
     next_slot_id: u64,
     /// This station's transmissions handed over and not yet done, in order, each with the slot
-    /// it granted: `on_tx_done` reports where that slot's granting transmission ended.
-    in_flight: VecDeque<Option<u64>>,
+    /// it granted — `on_tx_done` reports where that slot's granting transmission ended — and the
+    /// closing identifier it carries behind a `DISC_ACK`, owed again if it is dropped.
+    in_flight: VecDeque<(Option<u64>, f64)>,
     /// Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
     /// while idle keys before this: the last slot it granted may still be in use.
     hold_until: f64,
@@ -707,7 +717,19 @@ pub struct GrantedEngine {
     left: Option<(u8, f64, bool)>,
     leave_repeats: usize,
     call_jitter: f64,
-    identifier_due: bool,
+    /// This station's closing identifier's length for the session under way or just ended:
+    /// what its call or acceptance declared, so what the other station reckons with.
+    my_ident_s: f64,
+    /// The closing identifier of a session that has ended, not yet handed over: its length, or 0
+    /// (ADR-0075).
+    id_owed: f64,
+    /// Whether the owed identifier goes on its own initiative — no slot could be had for it —
+    /// rather than in time the closing exchange left this station.
+    id_alone: bool,
+    /// Whether the owed identifier listens first: one on its own, and a master's after a session
+    /// in which it read the other station no more — that station may be sending its own
+    /// (ADR-0075).
+    id_listen: bool,
     probing: Option<String>,
     probe_unsent: bool,
     last_probe: Option<ProbeResult>,
@@ -734,6 +756,9 @@ pub struct GrantedEngine {
     peer_capabilities: u8,
     peer_turnaround_s: f64,
     peer_identifier_s: f64,
+    /// The master read the slave's DISC: the slave has left, and the master closes the session
+    /// with its own so that the slave's closing identifier gets its slot (ADR-0075).
+    peer_left: bool,
     disc_requested: bool,
     disc_tries: usize,
     patience_until: Option<f64>,
@@ -862,7 +887,10 @@ impl GrantedEngine {
             left: None,
             leave_repeats: 0,
             call_jitter: 0.0,
-            identifier_due: false,
+            my_ident_s: 0.0,
+            id_owed: 0.0,
+            id_alone: false,
+            id_listen: false,
             probing: None,
             probe_unsent: false,
             last_probe: None,
@@ -882,6 +910,7 @@ impl GrantedEngine {
             peer_capabilities: 0,
             peer_turnaround_s: 0.0,
             peer_identifier_s: 0.0,
+            peer_left: false,
             disc_requested: false,
             disc_tries: 0,
             patience_until: None,
@@ -941,6 +970,7 @@ impl GrantedEngine {
         self.peer_capabilities = 0;
         self.peer_turnaround_s = 0.0;
         self.peer_identifier_s = 0.0;
+        self.peer_left = false;
         self.disc_requested = false;
         self.disc_tries = 0;
         self.patience_until = None;
@@ -1229,6 +1259,15 @@ impl GrantedEngine {
             return Err("the callsign cannot be packed");
         }
         self.calling_as(as_call)?;
+        if self.id_owed > 0.0 && remote == self.remote_call {
+            // the station calls back the one it just lost: the communication goes on, and is
+            // identified at the end of the session this call opens (ADR-0055 §4, ADR-0075)
+            self.drop_identifier();
+        } else if self.id_owed > 0.0 {
+            // another station: the last communication's identifier goes now, ahead of the call
+            self.deadlines
+                .set(Timer::Ident, self.now.max(self.hold_until));
+        }
         self.remote_call = remote;
         self.session = self.new_session_number();
         self.state = State::Connecting;
@@ -1237,8 +1276,11 @@ impl GrantedEngine {
         self.left = None;
         self.deadlines.remove(Timer::Leave);
         self.reset_session();
+        self.my_ident_s = self.ident_for(&self.my_call.clone());
         self.cause = "connect";
-        if self.now >= self.hold_until - 1e-9 {
+        // an identifier still owed to another station's session goes first: the call waits
+        // for it, as for the last slot this station granted
+        if self.now >= self.hold_until - 1e-9 && self.deadlines.get(Timer::Ident).is_none() {
             self.send_connect();
         } else {
             self.deadlines.set(Timer::Connect, self.hold_until);
@@ -1277,11 +1319,16 @@ impl GrantedEngine {
         }
         self.calling_as(as_call)?;
         self.probing = Some(remote);
+        if self.id_owed > 0.0 {
+            // it goes first
+            self.deadlines
+                .set(Timer::Ident, self.now.max(self.hold_until));
+        }
         self.last_probe = None;
         self.stats.probes_sent += 1;
         self.cause = "probe";
         self.probe_unsent = true;
-        if self.now >= self.hold_until - 1e-9 {
+        if self.now >= self.hold_until - 1e-9 && self.deadlines.get(Timer::Ident).is_none() {
             self.send_probe();
         } else {
             self.deadlines.set(Timer::Probe, self.hold_until);
@@ -1322,6 +1369,8 @@ impl GrantedEngine {
             self.leave_repeats = self.config.leave_repeats;
             self.deadlines
                 .set(Timer::Leave, self.now.max(self.hold_until));
+        } else if was_master {
+            self.identify_after_leaving();
         }
     }
 
@@ -1339,13 +1388,6 @@ impl GrantedEngine {
     /// session with. From the next key as the master, the next answer as the slave.
     pub const fn set_answer_gap(&mut self, seconds: f64) {
         self.config.answer_gap_s = seconds.max(0.0);
-    }
-
-    /// The daemon's word that this station's Morse identifier is due. The engine places it —
-    /// ahead of the master's next header, or ahead of the slave's answer in the next slot
-    /// granted with its time — and clears it once placed.
-    pub const fn set_identifier_due(&mut self, due: bool) {
-        self.identifier_due = due;
     }
 
     /// This station's own new data goes at `mode` until unpinned — the Test's ladder, at either
@@ -1433,22 +1475,41 @@ impl GrantedEngine {
         self.timing.tx_latency_s = seconds;
     }
 
-    /// This station's Morse identifier's length, 0 for none — what the next call or acceptance
-    /// declares, so the master grants it the time (07-protocol-8.md §5.4).
+    /// This station's closing identifier's length for every callsign not given its own
+    /// ([`GrantConfig::identifier_s`]): from the next call or acceptance on.
     pub const fn set_identifier_s(&mut self, seconds: f64) {
-        self.config.identifier_s = seconds;
+        self.config.identifier_s = seconds.max(0.0);
+    }
+
+    /// The closing identifier's length by callsign ([`GrantConfig::identifiers`]), 0 for a
+    /// callsign that sends none: from the next call or acceptance on. A session keeps the length
+    /// its call or acceptance declared, which is what the other station reckons with.
+    pub fn set_identifiers<S: AsRef<str>>(&mut self, lengths: &[(S, f64)]) {
+        self.config.identifiers = lengths
+            .iter()
+            .map(|(call, seconds)| (call.as_ref().trim().to_ascii_uppercase(), seconds.max(0.0)))
+            .collect();
+    }
+
+    fn ident_for(&self, call: &str) -> f64 {
+        self.config
+            .identifiers
+            .get(&call.to_ascii_uppercase())
+            .copied()
+            .unwrap_or(self.config.identifier_s)
+    }
+
+    /// Whether a session's closing identifier is owed and not yet handed over: the daemon tells
+    /// a host program the session is over only once it has gone out (ADR-0075).
+    #[must_use]
+    pub fn identifier_owed(&self) -> bool {
+        self.id_owed > 0.0
     }
 
     /// This station's radio: how long after it stops sending it hears again — what the next
     /// call or acceptance declares.
     pub const fn set_turnaround_s(&mut self, seconds: f64) {
         self.config.turnaround_s = seconds;
-    }
-
-    /// Whether this station's Morse identifier is due and not yet placed.
-    #[must_use]
-    pub const fn identifier_due(&self) -> bool {
-        self.identifier_due
     }
 
     /// Another air from the next session on (ADR-0026).
@@ -1503,7 +1564,7 @@ impl GrantedEngine {
     /// is measured from it, as the other station measures it from the frames it hears end.
     pub fn on_tx_done(&mut self, now: f64, frames_end: Option<f64>) {
         self.now = self.now.max(now);
-        let Some(granted) = self.in_flight.pop_front() else {
+        let Some((granted, _)) = self.in_flight.pop_front() else {
             return;
         };
         let current = self.slot.as_ref().map(|s| (s.id, s.final_));
@@ -1526,9 +1587,10 @@ impl GrantedEngine {
     /// slot of a header nobody had read.
     pub fn on_tx_cut_unread(&mut self, now: f64) {
         self.now = self.now.max(now);
-        let Some(granted) = self.in_flight.pop_front() else {
+        let Some((granted, ident)) = self.in_flight.pop_front() else {
             return;
         };
+        self.owe_again(ident);
         let current = self.slot.as_ref().map(|s| (s.id, s.final_));
         if let (Some(id), Some((slot_id, false))) = (granted, current)
             && id == slot_id
@@ -1547,7 +1609,9 @@ impl GrantedEngine {
     /// and nothing of it was sent.
     pub fn on_tx_dropped(&mut self, now: f64) {
         self.now = self.now.max(now);
-        self.in_flight.pop_front();
+        if let Some((_, ident)) = self.in_flight.pop_front() {
+            self.owe_again(ident);
+        }
         self.stats.dropped += 1;
     }
 
@@ -1674,9 +1738,18 @@ impl GrantedEngine {
                     self.end_session("link timeout", false);
                 }
             }
-            Timer::Connect => self.retry_connect(),
+            Timer::Connect => {
+                if self.now < self.hold_until - 1e-9 {
+                    // a closing identifier went first
+                    self.deadlines.set(Timer::Connect, self.hold_until);
+                } else {
+                    self.retry_connect();
+                }
+            }
             Timer::Probe => {
-                if self.probe_unsent {
+                if self.probe_unsent && self.now < self.hold_until - 1e-9 {
+                    self.deadlines.set(Timer::Probe, self.hold_until);
+                } else if self.probe_unsent {
                     self.send_probe();
                 } else if let Some(remote) = self.probing.take() {
                     self.event("probe", format!("{remote}: no answer"));
@@ -1685,6 +1758,7 @@ impl GrantedEngine {
             Timer::Proceed => self.proceed(),
             Timer::Answer => self.key_answer(),
             Timer::Leave => self.repeat_leave(),
+            Timer::Ident => self.send_identifier(),
         }
     }
 
@@ -1896,10 +1970,17 @@ impl GrantedEngine {
 
     /// Hand a transmission over; returns where its frames end on the air, as far as this engine
     /// knows.
+    /// Hand a transmission over; returns where it ends on the air, as far as this engine knows.
+    /// An identifier goes after the frames (ADR-0075).
     fn transmit(&mut self, frames: Vec<TxFrame>, keying: Keying, granting: Option<u64>) -> f64 {
         // the frames' air time first, then the identifier: the model's association
         let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
         let dur = keying.identifier_s + frames_s;
+        let carried = if frames.is_empty() {
+            0.0
+        } else {
+            keying.identifier_s
+        };
         self.actions.push(Action::Transmit {
             frames,
             duration_s: dur,
@@ -1907,8 +1988,9 @@ impl GrantedEngine {
             not_after: keying.not_after,
             not_before: keying.not_before,
             identifier_s: keying.identifier_s,
+            listen_first: keying.listen_first,
         });
-        self.in_flight.push_back(granting);
+        self.in_flight.push_back((granting, carried));
         self.stats.transmissions += 1;
         let mut on_air = self.now + self.own_latency();
         if let Some(earliest) = keying.not_before {
@@ -1928,30 +2010,16 @@ impl GrantedEngine {
         }
     }
 
-    /// This station's identifier, when it is due and there is one: placed, and so no longer
-    /// due.
-    const fn take_identifier(&mut self) -> f64 {
-        if !self.identifier_due || self.config.identifier_s <= 0.0 {
-            return 0.0;
-        }
-        self.identifier_due = false;
-        self.config.identifier_s
-    }
-
     // ── slots this station grants ─────────────────────────────────────
 
     /// Key a transmission that grants a slot, and wait for the slot — placed from this engine's
     /// estimate of the transmission's end until `on_tx_done` says where it was.
-    fn key_granting(&mut self, mut slot: Slot, frames: Vec<TxFrame>, identifier_s: f64) {
+    fn key_granting(&mut self, mut slot: Slot, frames: Vec<TxFrame>) {
         self.next_slot_id += 1;
         slot.id = self.next_slot_id;
         let id = slot.id;
         self.slot = Some(slot);
-        let keying = Keying {
-            identifier_s,
-            ..Keying::default()
-        };
-        let end = self.transmit(frames, keying, Some(id));
+        let end = self.transmit(frames, Keying::default(), Some(id));
         self.open_slot(end);
     }
 
@@ -2075,7 +2143,7 @@ impl GrantedEngine {
             version: PROTOCOL_VERSION,
             snr_db: None,
             turnaround_s: self.config.turnaround_s,
-            identifier_s: self.config.identifier_s,
+            identifier_s: self.my_ident_s,
         };
         let mode = self.robust_mode(floor);
         let header = DataHeader {
@@ -2102,7 +2170,7 @@ impl GrantedEngine {
         );
         slot.level = level;
         slot.granter_turnaround_s = self.config.turnaround_s;
-        self.key_granting(slot, vec![Self::data_frame(payload, mode)], 0.0);
+        self.key_granting(slot, vec![Self::data_frame(payload, mode)]);
     }
 
     fn retry_connect(&mut self) {
@@ -2149,7 +2217,7 @@ impl GrantedEngine {
             families,
         );
         slot.level = level;
-        self.key_granting(slot, vec![Self::data_frame(payload, mode)], 0.0);
+        self.key_granting(slot, vec![Self::data_frame(payload, mode)]);
     }
 
     fn on_connect(&mut self, header: DataHeader, body: &[u8], frame: &Heard) {
@@ -2240,11 +2308,15 @@ impl GrantedEngine {
 
     fn accept_call(&mut self, header: DataHeader, req: &ConnectBody, frame: &Heard, start: f64) {
         self.my_call.clone_from(&req.dst);
+        // an identifier still owed for an earlier session is not sent now: an acceptance cannot
+        // wait for it, and this session ends with one (ADR-0075)
+        self.drop_identifier();
         self.remote_call.clone_from(&req.src);
         self.session = header.session;
         self.left = None;
         self.deadlines.remove(Timer::Leave);
         self.reset_session();
+        self.my_ident_s = self.ident_for(&req.dst);
         self.peer_capabilities = req.caps & !CAP_LEVEL_MASK;
         self.peer_turnaround_s = req.turnaround_s;
         self.peer_identifier_s = req.identifier_s;
@@ -2463,13 +2535,27 @@ impl GrantedEngine {
         match ctl.kind {
             GrantKind::DiscAck => {
                 if self.state == State::Disconnecting {
-                    self.end_session("closed", false);
+                    // the slave's closing identifier follows its DISC_ACK, as long as it
+                    // declared (ADR-0075): its transmission ends there, and the master's
+                    // identifier goes after it, whatever the slot's latest end
+                    self.state_end(frame.t_end + self.peer_identifier_s, frame.floor);
+                    let reason = if self.peer_left {
+                        "peer disconnected"
+                    } else {
+                        "closed"
+                    };
+                    self.end_session(reason, false);
                 }
                 return;
             }
             GrantKind::Disc => {
-                // the slave has left (an abort, a left session's answer): nothing to answer
-                self.end_session("peer disconnected", false);
+                // the slave has left (an abort, a left session's answer). The master closes
+                // with a DISC of its own, whose slot carries the slave's closing identifier
+                // (ADR-0075); ended here, neither station's identifier had a place both could
+                // count on
+                self.peer_left = true;
+                self.state = State::Disconnecting;
+                self.state_end(frame.t_end, frame.floor);
                 return;
             }
             GrantKind::Header => return,
@@ -2557,7 +2643,12 @@ impl GrantedEngine {
         }
         if self.state == State::Disconnecting {
             if self.disc_tries >= self.config.disc_retries {
-                self.end_session("closed (no DISC_ACK)", false);
+                let reason = if self.peer_left {
+                    "peer disconnected"
+                } else {
+                    "closed (no DISC_ACK)"
+                };
+                self.end_session_unread(reason);
                 return;
             }
             self.send_disc();
@@ -2711,7 +2802,8 @@ impl GrantedEngine {
 
     /// Whether this transmission may go without its header (R7): data only, nothing granted
     /// beyond an answer, the gap at level 0, nothing to acknowledge or recommend anew, the last
-    /// slot heard, no identifier, and the answer's family one the slave surely holds.
+    /// slot heard, no identifier time asked for, and the answer's family one the slave surely
+    /// holds.
     fn elide(&self, n: usize, open_window: bool, wanted: bool) -> bool {
         self.config.elide
             && !open_window
@@ -2722,7 +2814,6 @@ impl GrantedEngine {
             && self.possible == Families::of(wanted)
             && !self.ack_owed
             && !self.slave_id_due
-            && !self.identifier_due
             && self.has_work()
     }
 
@@ -2734,11 +2825,7 @@ impl GrantedEngine {
             self.wants_floor() || self.silent >= 2 || self.recent_silent.iter().any(|&s| s);
         let mut elide = self.elide(n, open_window, wanted);
         let hdr_floor = self.hdr_floor || self.silent >= 2 || self.floor_only();
-        let ident_s = self.take_identifier();
-        let room = self
-            .config
-            .max_burst_s
-            .map_or(f64::INFINITY, |limit| limit - ident_s);
+        let room = self.config.max_burst_s.unwrap_or(f64::INFINITY);
         let data = if open_window {
             Vec::new()
         } else {
@@ -2754,6 +2841,8 @@ impl GrantedEngine {
             && data.len() <= usize::from(MAX_FOLLOWS) + 1
             && data.iter().any(|f| READABLE_ALONE_RVS.contains(&f.rv));
         let level = if elide { 0 } else { self.level() };
+        // a slave of an earlier build asks for its ten-minute identifier's time, and is given it:
+        // this build sends none inside a session (ADR-0075), and asks for none
         let slave_ident = self.slave_id_due && !elide;
         if !elide {
             self.possible.insert(wanted);
@@ -2816,11 +2905,12 @@ impl GrantedEngine {
         };
         slot.data = carried;
         slot.granted = n;
-        self.key_granting(slot, frames, ident_s);
+        self.key_granting(slot, frames);
     }
 
-    /// DISC grants the `DISC_ACK`'s slot with the slave's identifier time — its closing
-    /// identifier goes ahead of the `DISC_ACK`. The master's own goes ahead of its first DISC.
+    /// DISC grants the `DISC_ACK`'s slot with the slave's identifier time: its closing identifier
+    /// goes right behind the `DISC_ACK`. The master's goes on its own once that slot is over
+    /// (ADR-0075), the last thing either station sends for the session.
     fn send_disc(&mut self) {
         self.disc_tries += 1;
         let wanted = self.wants_floor() || self.silent >= 1;
@@ -2831,14 +2921,6 @@ impl GrantedEngine {
         ctl.fam = wanted;
         ctl.ident = self.peer_identifier_s > 0.0;
         ctl.snr_db = self.heard_db;
-        let ident_s = if self.disc_tries == 1 {
-            self.config.identifier_s
-        } else {
-            0.0
-        };
-        if ident_s != 0.0 {
-            self.identifier_due = false;
-        }
         self.possible.insert(wanted);
         let answer_floors = self.possible.with(wanted);
         let mut slot = Slot::new(
@@ -2849,7 +2931,7 @@ impl GrantedEngine {
         );
         slot.level = level;
         slot.granter_turnaround_s = self.config.turnaround_s;
-        self.key_granting(slot, vec![Self::control(&ctl, floor)], ident_s);
+        self.key_granting(slot, vec![Self::control(&ctl, floor)]);
     }
 
     // ── the slave ─────────────────────────────────────────────────────
@@ -3009,23 +3091,20 @@ impl GrantedEngine {
             self.window = Some((start, start + window, floor));
             self.answer = None;
             self.deadlines.remove(Timer::Answer);
-            if self.has_work() || self.disc_requested || self.identifier_due {
+            if self.has_work() || self.disc_requested {
                 self.try_window();
             }
             return;
         }
         self.window = None;
         let mut room = 0.0;
-        let mut ident = false;
         if let Some(g) = grant {
             room = f64::from(g.n) * self.frame_s(self.timing.is_floor(usize::from(g.rung)));
-            ident = g.ident;
         }
         let mut answer = Answer::new(AnswerKind::Ans, start, start + self.config.slack_s, floor);
         answer.session = self.session;
         answer.anchor = m_end;
         answer.room_s = room;
-        answer.ident = ident;
         self.schedule(answer);
     }
 
@@ -3111,9 +3190,9 @@ impl GrantedEngine {
                 let keying = Keying {
                     not_after: Some(answer.not_after),
                     not_before: Some(answer.start),
-                    identifier_s: 0.0,
+                    ..Keying::default()
                 };
-                self.send_answer(answer.floor, answer.room_s, keying, answer.ident, None);
+                self.send_answer(answer.floor, answer.room_s, keying, None);
             }
             _ => {}
         }
@@ -3134,28 +3213,19 @@ impl GrantedEngine {
                 .set(Timer::Answer, start - self.own_latency());
             return;
         }
-        if !(self.has_work() || self.disc_requested || self.identifier_due) {
+        if !(self.has_work() || self.disc_requested) {
             return;
         }
-        let ident = self.identifier_due && self.config.identifier_s > 0.0;
-        let room =
-            end - on_air - self.ctl_s(floor) - if ident { self.config.identifier_s } else { 0.0 };
+        let room = end - on_air - self.ctl_s(floor);
         if room < 0.0 {
             return;
         }
         self.window = None;
         self.answered_end = self.m_end;
-        self.send_answer(floor, room, Keying::default(), ident, Some(end));
+        self.send_answer(floor, room, Keying::default(), Some(end));
     }
 
-    fn send_answer(
-        &mut self,
-        floor: bool,
-        room_s: f64,
-        keying: Keying,
-        ident: bool,
-        window_end: Option<f64>,
-    ) {
+    fn send_answer(&mut self, floor: bool, room_s: f64, keying: Keying, window_end: Option<f64>) {
         let snr = if self.rx.is_empty() {
             None
         } else {
@@ -3166,10 +3236,9 @@ impl GrantedEngine {
         if snr.is_some() {
             self.heard_db = snr;
         }
-        let ident_s = if ident { self.take_identifier() } else { 0.0 };
         let mut room_s = room_s;
         if let Some(limit) = self.config.max_burst_s {
-            room_s = room_s.min(limit - self.ctl_s(floor) - ident_s);
+            room_s = room_s.min(limit - self.ctl_s(floor));
         }
         let data = self.data_frames(room_s);
         // with no data after it, the bit says where this station's data can go: only on the
@@ -3189,7 +3258,7 @@ impl GrantedEngine {
             level: u8::try_from(self.asked_level()).unwrap_or(3),
             fam,
             flag: self.disc_requested,
-            ident: self.identifier_due && self.config.identifier_s > 0.0,
+            ident: false,
             base,
             bitmap,
             snr_db: self.heard_db,
@@ -3198,13 +3267,10 @@ impl GrantedEngine {
         };
         let mut frames = vec![Self::control(&ctl, floor)];
         frames.extend(data);
-        let mut keying = Keying {
-            identifier_s: ident_s,
-            ..keying
-        };
+        let mut keying = keying;
         if let Some(window_end) = window_end {
             let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
-            keying.not_after = Some(window_end - (ident_s + frames_s));
+            keying.not_after = Some(window_end - frames_s);
         }
         self.transmit(frames, keying, None);
     }
@@ -3237,7 +3303,7 @@ impl GrantedEngine {
             version: PROTOCOL_VERSION,
             snr_db: answer.snr_db,
             turnaround_s: self.config.turnaround_s,
-            identifier_s: self.config.identifier_s,
+            identifier_s: self.my_ident_s,
         };
         let mode = self.robust_mode(answer.floor);
         let header = DataHeader {
@@ -3283,6 +3349,11 @@ impl GrantedEngine {
         );
     }
 
+    /// A `DISC_ACK`, and right behind it this station's closing identifier — the last thing it
+    /// sends for the session, in the time every DISC grants it (07-protocol-8.md §5.4: the
+    /// `DISC_ACK`'s slot always includes the identifier the slave declared). A DISC heard again is
+    /// answered again, identifier and all, so the identifier stays last (ADR-0075). Or a DISC, to
+    /// a left session's header, after which the other station closes.
     fn send_disc_answer(&mut self, answer: &Answer) {
         let kind = if answer.what == AnswerKind::DiscAck {
             GrantKind::DiscAck
@@ -3292,9 +3363,10 @@ impl GrantedEngine {
         let mut ctl = GrantFrame::new(kind, answer.session & 0x7F);
         ctl.snr_db = answer.snr_db;
         let mut ident_s = 0.0;
-        if kind == GrantKind::DiscAck && answer.ident && self.config.identifier_s > 0.0 {
-            ident_s = self.config.identifier_s; // the closing identifier, in the slot's time
-            self.identifier_due = false;
+        if kind == GrantKind::DiscAck && self.my_ident_s > 0.0 {
+            ident_s = self.my_ident_s;
+            self.id_owed = 0.0;
+            self.deadlines.remove(Timer::Ident);
         }
         if kind == GrantKind::Disc {
             self.stats.left_answered += 1;
@@ -3304,6 +3376,22 @@ impl GrantedEngine {
             Keying::answering(answer, ident_s),
             None,
         );
+        if ident_s != 0.0 {
+            self.hold_until = self.hold_until.max(self.closing_hold(answer.start));
+        }
+    }
+
+    /// The latest the other station's closing identifier can be on the air, after a `DISC_ACK`
+    /// of this station's that answered in a slot starting at `start`: the slot's latest end as
+    /// that station may reckon it — its slack, a floor `DISC_ACK`, this station's identifier — the
+    /// wait that follows, at the top gap level with room for a slow keying, and the other's
+    /// declared identifier (ADR-0075). Nothing this station starts on its own keys before it: a
+    /// call answered or made into the other's identifier would go over it.
+    fn closing_hold(&self, start: f64) -> f64 {
+        let cfg = &self.config;
+        let latest = start + cfg.slack_s + self.ctl_s(true) + self.my_ident_s;
+        let wait = self.budget(true).max(cfg.turnaround_s) + cfg.guard_s + cfg.levels_s[3];
+        latest + wait + cfg.key_s + cfg.slack_s + self.peer_identifier_s
     }
 
     /// A `DISC_ACK` to a DISC, or a DISC to a left session's header: in the slot the frame
@@ -3335,7 +3423,6 @@ impl GrantedEngine {
         answer.session = ctl.session;
         answer.anchor = end;
         answer.snr_db = Some(frame.snr_db);
-        answer.ident = ctl.ident;
         self.schedule(answer);
     }
 
@@ -3846,10 +3933,26 @@ impl GrantedEngine {
         if ctl.kind == GrantKind::DiscAck {
             self.left = None;
             self.deadlines.remove(Timer::Leave);
+            let leaving = self
+                .slot
+                .as_ref()
+                .is_some_and(|slot| slot.kind == SlotKind::Leave);
+            if leaving && self.in_slot(frame) {
+                // an aborting master's DISC answered: the slave's identifier follows the
+                // DISC_ACK, and this station's own goes after it (ADR-0075)
+                self.state_end(frame.t_end + self.peer_identifier_s, frame.floor);
+            }
+            self.identify_after_leaving();
             return;
         }
         if self.state == State::Connecting {
             return; // a call of this station's is out: its slot is the one that matters
+        }
+        if self.id_owed > 0.0 && self.id_alone {
+            // the other station is still there: its next words may close the session properly,
+            // and this station's identifier is not sent over it on its own (ADR-0075)
+            self.deadlines
+                .set(Timer::Ident, self.now + self.exchange_s());
         }
         if ctl.kind == GrantKind::Disc {
             self.answer_disc(ctl, frame, GrantKind::DiscAck);
@@ -3862,9 +3965,11 @@ impl GrantedEngine {
     /// to `leave_repeats` times, each once the last one's slot is over.
     fn repeat_leave(&mut self) {
         let Some((session, until, _)) = self.left else {
+            self.identify_after_leaving();
             return;
         };
         if self.state != State::Idle || self.leave_repeats == 0 {
+            self.identify_after_leaving();
             return;
         }
         if self.now < self.hold_until - 1e-9 {
@@ -3873,12 +3978,14 @@ impl GrantedEngine {
         }
         if self.now > until {
             self.left = None;
+            self.identify_after_leaving();
             return;
         }
         self.leave_repeats -= 1;
         let mut ctl = GrantFrame::new(GrantKind::Disc, session & 0x7F);
         ctl.fam = true;
         ctl.level = u8::try_from(self.silence_level).unwrap_or(3);
+        ctl.ident = self.peer_identifier_s > 0.0;
         let mut slot = Slot::new(
             SlotKind::Leave,
             self.ctl_s(true) + self.peer_identifier_s,
@@ -3887,16 +3994,92 @@ impl GrantedEngine {
         );
         slot.level = self.silence_level;
         slot.granter_turnaround_s = self.config.turnaround_s;
-        self.key_granting(slot, vec![Self::control(&ctl, true)], 0.0);
+        self.key_granting(slot, vec![Self::control(&ctl, true)]);
         if self.leave_repeats > 0 {
             self.deadlines.set(Timer::Leave, self.hold_until);
+        } else {
+            self.identify_after_leaving();
         }
     }
 
+    // ── the closing identifier (ADR-0075) ─────────────────────────────
+
+    /// An aborting master's leaving is over — its DISC answered, or the last one's slot past:
+    /// its closing identifier goes once that slot can no longer be in use.
+    fn identify_after_leaving(&mut self) {
+        if self.id_owed > 0.0 && !self.id_alone && self.state == State::Idle {
+            self.deadlines
+                .set(Timer::Ident, self.now.max(self.hold_until));
+        }
+    }
+
+    /// The closing identifier on its own: a master's, once the last slot it granted is over, or
+    /// a station's that no slot could be had for, listening first. Nothing of the session
+    /// follows it.
+    fn send_identifier(&mut self) {
+        let length = self.id_owed;
+        if length <= 0.0 {
+            return;
+        }
+        if self.state != State::Idle
+            && !(self.state == State::Connecting && self.connect_tries == 0)
+        {
+            return; // a session is under way: it ends with an identifier of its own
+        }
+        if self.now < self.hold_until - 1e-9 {
+            self.deadlines.set(Timer::Ident, self.hold_until);
+            return;
+        }
+        self.id_owed = 0.0;
+        let keying = Keying {
+            identifier_s: length,
+            listen_first: self.id_listen,
+            ..Keying::default()
+        };
+        let end = self.transmit(Vec::new(), keying, None);
+        // a call or a probe of this station's, and an answer to another's, waits for it
+        self.hold_until = self.hold_until.max(end);
+    }
+
+    /// No identifier for the session just ended: the communication goes on in a new one.
+    fn drop_identifier(&mut self) {
+        self.id_owed = 0.0;
+        self.deadlines.remove(Timer::Ident);
+    }
+
+    /// A `DISC_ACK` that carried the closing identifier did not go out: the identifier is owed
+    /// again — behind the next `DISC_ACK`, or on its own if no DISC comes (ADR-0075).
+    fn owe_again(&mut self, ident: f64) {
+        if ident <= 0.0 || self.state != State::Idle || self.id_owed > 0.0 {
+            return;
+        }
+        self.id_owed = ident;
+        self.id_alone = true;
+        self.id_listen = true;
+        self.deadlines
+            .set(Timer::Ident, self.now + self.exchange_s());
+    }
+
     fn end_session(&mut self, reason: &str, disc_heard: bool) {
+        self.end_session_with(reason, disc_heard, false);
+    }
+
+    /// A master's session that ends with the other station unread: every DISC unanswered.
+    fn end_session_unread(&mut self, reason: &str) {
+        self.end_session_with(reason, false, true);
+    }
+
+    fn end_session_with(&mut self, reason: &str, disc_heard: bool, unread: bool) {
         let left = (self.state != State::Connecting
             && (LEFT_UNHEARD.contains(&reason) || disc_heard))
             .then(|| (self.session, self.now + self.link_timeout(), disc_heard));
+        // a session that came up ends with this station's closing identifier — unless the other
+        // station ended it by calling again, which goes on in the session its call opens
+        // (ADR-0055 §4); a call never answered is the daemon's to identify (ADR-0055)
+        let owes = self.state != State::Connecting
+            && self.my_ident_s > 0.0
+            && !reason.ends_with(" called again");
+        let was_master = self.role == Role::Master;
         self.ended_peer_snr_db = self.peer_snr_db;
         let kept = (
             self.peer_turnaround_s,
@@ -3906,6 +4089,7 @@ impl GrantedEngine {
         self.state = State::Idle;
         self.role = Role::None;
         self.deadlines.remove(Timer::Connect);
+        self.deadlines.remove(Timer::Ident);
         self.reset_session();
         self.tx_queue.clear();
         // what answering or leaving the old session in its slots still needs
@@ -3915,7 +4099,33 @@ impl GrantedEngine {
             self.silence_level,
         ) = kept;
         self.left = left;
+        self.id_owed = if owes { self.my_ident_s } else { 0.0 };
         self.event("disconnected", reason.to_owned());
+        if !owes {
+            return;
+        }
+        // where the closing identifier goes (ADR-0075): the master's once the last slot it
+        // granted can no longer be in use — an aborting master's once its leaving is over; a
+        // slave's behind its DISC_ACK, or on its own, listening first, when nothing of the
+        // session is heard for an exchange — a live master keys at least that often — and at
+        // once when the session timed out, since nothing can come
+        self.id_alone = !was_master;
+        // a master that read nothing of the other station at the end listens before its own: the
+        // other may have given the session up first and be sending its identifier alone
+        self.id_listen =
+            self.id_alone || unread || matches!(reason, "no response" | "link timeout");
+        if was_master && reason != "aborted" {
+            self.deadlines
+                .set(Timer::Ident, self.now.max(self.hold_until));
+        } else if !was_master {
+            let quiet = reason == "link timeout" || left.is_none();
+            let at = if quiet {
+                self.now
+            } else {
+                self.now + self.exchange_s()
+            };
+            self.deadlines.set(Timer::Ident, at);
+        }
     }
 }
 
