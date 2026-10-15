@@ -7,6 +7,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
@@ -148,3 +150,36 @@ def test_the_fetch_tool_reads_the_script_the_daemon_uploads_to() -> None:
     ]
     assert fetch_uploads.matching("kq4sax", files) == files[:1]
     assert fetch_uploads.matching("def", files) == files[1:]
+
+
+def test_the_fetch_tool_asks_again_and_carries_on_from_a_stopped_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import base64
+
+    import fetch_uploads
+
+    content = bytes(range(256)) * 40
+    monkeypatch.setattr(fetch_uploads, "PIECE", 4096)
+    asked: list[int] = []
+    faults = iter(["empty", "reset"])
+
+    def ask(payload: dict[str, object]) -> dict:
+        offset = int(payload["offset"])  # type: ignore[call-overload]
+        asked.append(offset)
+        if offset == 8192:
+            fault = next(faults, None)
+            if fault == "empty":
+                return {"ok": True, "data": ""}
+            if fault == "reset":
+                raise ConnectionResetError(104, "Connection reset by peer")
+        length = int(payload["length"])  # type: ignore[call-overload]
+        return {"ok": True, "data": base64.b64encode(content[offset : offset + length]).decode()}
+
+    monkeypatch.setattr(fetch_uploads, "ask", ask)
+    file = {"id": "abc", "name": "x.zip", "size": str(len(content))}
+    (tmp_path / "x.zip.part").write_bytes(content[:4096])
+    path = fetch_uploads.download(file, tmp_path, wait_s=0.0)
+    assert path.read_bytes() == content
+    assert asked == [4096, 8192, 8192, 8192]
+    assert not (tmp_path / "x.zip.part").exists()
