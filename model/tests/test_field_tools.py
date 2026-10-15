@@ -212,3 +212,70 @@ def test_the_replay_runs_the_engine_it_is_asked_for(tmp_path: Path) -> None:
     assert granted["engine"] == "granted" and granted["ok"] == 1
     assert granted["penalty_db"] == p7["penalty_db"]
     assert granted["goodput_bps"] != p7["goodput_bps"]
+
+
+def test_a_session_without_a_test_is_sized_from_its_own_frames(tmp_path: Path) -> None:
+    # the counters are the daemon's since it started: KK4ODA-1's second session of 2026-10-15
+    # carried both sessions' bytes in them, and its replay read the two as one
+    frames = [
+        {
+            "t_s": 10.0 + 6 * i,
+            "kind": "data",
+            "mode": 3,
+            "bytes": 75,
+            "decoded": i % 4 != 3,
+            "snr_3k_db": -5.0,
+        }
+        for i in range(12)
+    ]
+    document = {
+        "format": "aether-hf-session/4",
+        "audio": {"seconds": 100.0},
+        "session": {"callsign": "KK4ODA-1", "remote": "ND1J", "bandwidth_hz": 500},
+        "frames": frames,
+        "counters": {"bytes_delivered": 99999},
+    }
+    sidecar = tmp_path / "20261015-154232_KK4ODA-1_ND1J.json"
+    sidecar.write_text(json.dumps(document), encoding="utf-8")
+    row = bench_link.replay_sidecar(sidecar, seed=3, engine="granted")
+    assert row["bytes"] == 9 * 72
+    assert row["measured_bps"] == round(8 * 9 * 72 / 100.0, 1)
+
+
+def test_a_hypothetical_rung_takes_a_rungs_place_in_the_frame_it_borrows() -> None:
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.harness import phy_timing
+    from aether_model.link.phy import Container, TxFrame
+
+    rung = bench_link.parse_rung("4=93@-9.1~3")
+    assert rung == bench_link.Hypothetical(4, 93, -9.1, 3)
+    assert bench_link.parse_rung("6=40@-4") == bench_link.Hypothetical(6, 40, -4.0, 6)
+    timing = phy_timing(NARROW.params)
+    assert timing.floor_modes == 4
+    moved = bench_link.with_rung(timing, rung)
+    # the floor is the ladder's leading rungs: a floor-like rung 4 extends it
+    assert moved.floor_modes == 5 and moved.data_frame_s_for(4) == timing.data_frame_s_for(3)
+    assert moved.capacity(4) == 93 and moved.mode_threshold_db is not None
+    assert moved.mode_threshold_db[4] == -9.1 and moved.capacity(5) == timing.capacity(5)
+    # an ordinary-like rung in the floor's last place shortens it
+    shorter = bench_link.with_rung(timing, bench_link.Hypothetical(3, 20, -10.0, 5))
+    assert shorter.floor_modes == 3 and shorter.data_frame_s_for(3) == timing.data_frame_s
+    with pytest.raises(ValueError):
+        bench_link.with_rung(timing, bench_link.Hypothetical(6, 50, -9.0, 3))
+    frame = TxFrame(Container.DATA, b"", mode=4)
+    assert bench_link.like_frame(frame, rung).mode == 3
+    assert bench_link.like_frame(TxFrame(Container.DATA, b"", mode=5), rung).mode == 5
+    # a session runs on it, on the fading pipe too
+    row = bench_link.run_point(
+        "sim",
+        "moderate",
+        -2.0,
+        bytes(600),
+        5,
+        None,
+        air=NARROW,
+        fading=True,
+        engine="granted",
+        rung=rung,
+    )
+    assert row["ok"] == 1

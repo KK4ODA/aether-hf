@@ -30,6 +30,14 @@ The transfer is the size the session carried. What comes out is the goodput the 
 engines would have got on that path beside what the air delivered, and the fitted penalty,
 which is the on-air equivalent of ``channel_thresholds``.
 
+``--rung INDEX=BYTES@DB[~LIKE]`` asks what a rung the ladder does not have would have done:
+rung INDEX is replaced by one carrying BYTES a frame (the PHY payload, its DATA header in it)
+that decodes from DB on AWGN (its 10 % point), sent in the frame of rung LIKE — its air time,
+its family, and in ``--fading`` its calibrated fading behaviour and shape — so a point between
+two rungs can be put on the grid, the fading pipe or a recorded session (12-two-paths-80m.md
+§Q2). A floor-family LIKE can take the first ordinary rung's place (the floor is the ladder's
+leading rungs). The ``ideal_bps`` column still reads the real ladder.
+
 Output columns: backend, channel, snr_db (or ramp description), bytes, seconds, goodput_bps,
 ideal_bps, efficiency, mode_min/mode_max/mode_final, mode_changes, bursts, frames_sent,
 frames_resent, harq_rescues, ack_timeouts, ok.
@@ -46,19 +54,24 @@ import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
+# its neighbours (field_ingest for --replay) too: under `python -I`, the way a field upload is
+# analysed, the script's own directory is not on the path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aether_model.frame.modes import NARROW, TONE_CONTROL, WIDE, AirInterface
 from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
+from aether_model.link.frames import data_capacity
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing, two_modem_sim
-from aether_model.link.phy import Container, TxFrame
+from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     NARROW_AWGN_THRESHOLD_DB,
@@ -165,10 +178,12 @@ FADING_CSV = "bench/baselines/fading_pipe.csv"
 channel class."""
 
 
-def fading_pipe(csv_path: Path, air: AirInterface, channel: str, seed: int) -> FadingPipe:
+def fading_pipe(
+    csv_path: Path, air: AirInterface, channel: str, seed: int, rung: Hypothetical | None = None
+) -> FadingPipe:
     """A fading channel for one run: the class's two-ray process, shared by both stations,
     and each frame's calibrated effective-SNR mapping (P9-6). AWGN is the static channel,
-    judged on the same steep waterfall."""
+    judged on the same steep waterfall. A hypothetical rung (``--rung``) fades as its LIKE."""
     betas: dict[str, float] = {}
     if csv_path.exists():
         with csv_path.open(encoding="utf-8") as f:
@@ -177,10 +192,11 @@ def fading_pipe(csv_path: Path, air: AirInterface, channel: str, seed: int) -> F
                     betas[r["frame"]] = float(r["beta"])
     if channel != "awgn" and not betas:
         raise SystemExit(f"{csv_path}: no calibration for {channel}; run tools/calibrate_fading.py")
+    shape = shapes_for(air)
     return FadingPipe(
         SharedFading(channel, seed),
-        shapes_for(air),
-        lambda frame: betas.get(frame_key(frame, air), 1.0),
+        lambda frame: shape(like_frame(frame, rung)),
+        lambda frame: betas.get(frame_key(like_frame(frame, rung), air), 1.0),
         np.random.default_rng(seed + 99),
     )
 
@@ -296,6 +312,54 @@ def ideal_bps(thresholds: dict[int, float], snr_db: float, air: AirInterface = W
     return best
 
 
+@dataclass(frozen=True)
+class Hypothetical:
+    """A rung the ladder does not have, put in place of rung ``index`` (``--rung``)."""
+
+    index: int
+    payload_bytes: int
+    awgn_db: float
+    like: int
+    """The rung whose frame it goes out in: air time, family and fading behaviour."""
+
+
+def parse_rung(text: str) -> Hypothetical:
+    """``INDEX=BYTES@DB[~LIKE]``; LIKE defaults to INDEX (the rung's own frame)."""
+    index, rest = text.split("=", 1)
+    size, rest = rest.split("@", 1)
+    db, _, like = rest.partition("~")
+    return Hypothetical(int(index), int(size), float(db), int(like) if like else int(index))
+
+
+def with_rung(timing: PhyTiming, rung: Hypothetical) -> PhyTiming:
+    """``timing`` with rung ``rung.index`` replaced: its capacity, its AWGN point, and its family
+    that of ``rung.like`` — the floor being the ladder's leading rungs, a floor-like rung can
+    only take the first ordinary rung's place, and an ordinary-like one the last floor rung's."""
+    caps = dict(timing.data_capacity or {})
+    thresholds = dict(timing.mode_threshold_db or {})
+    if rung.index not in caps or rung.like not in caps:
+        raise ValueError(f"--rung {rung.index}~{rung.like}: no such rung on this air")
+    caps[rung.index] = rung.payload_bytes
+    thresholds[rung.index] = rung.awgn_db
+    floor = timing.floor_modes
+    if timing.is_floor(rung.like) and not timing.is_floor(rung.index):
+        if rung.index != floor:
+            raise ValueError(f"--rung: a floor-like rung can only replace rung {floor}")
+        floor += 1
+    elif not timing.is_floor(rung.like) and timing.is_floor(rung.index):
+        if rung.index != floor - 1:
+            raise ValueError(f"--rung: an ordinary-like rung can only replace rung {floor - 1}")
+        floor -= 1
+    return replace(timing, data_capacity=caps, mode_threshold_db=thresholds, floor_modes=floor)
+
+
+def like_frame(frame: TxFrame, rung: Hypothetical | None) -> TxFrame:
+    """The frame the fading pipe judges ``frame`` as: the hypothetical rung's LIKE."""
+    if rung is None or frame.container is not Container.DATA or frame.mode != rung.index:
+        return frame
+    return replace(frame, mode=rung.like)
+
+
 def table_for(air: AirInterface) -> tuple[dict[int, float], dict[int, float]]:
     """The measured AWGN thresholds and payloads of an air interface."""
     if air is NARROW:
@@ -324,8 +388,19 @@ def run_point(
     link: dict[str, float | int] | None = None,
     floor_cap: float | None = None,
     engine: str = "p7",
+    rung: Hypothetical | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
+    awgn_table = dict(table_for(air)[0])
+    if rung is not None:
+        if backend == "phy":
+            raise ValueError("--rung needs the sim backend: the modem has no such frame")
+        timing = with_rung(timing, rung)
+        awgn_table[rung.index] = rung.awgn_db
+        if thresholds is not None:
+            # a class's table shifts the rung as it shifts the frame it borrows
+            shift = thresholds.get(rung.like, awgn_table[rung.like]) - table_for(air)[0][rung.like]
+            thresholds = {**thresholds, rung.index: rung.awgn_db + shift}
     a: LinkEngine | GrantedEngine
     b: LinkEngine | GrantedEngine
     if engine == "granted":
@@ -368,11 +443,11 @@ def run_point(
             b,
             snr_db=snr_db,
             seed=seed,
-            thresholds=table_for(air)[0],
+            thresholds=awgn_table,
             snr_schedule=schedule,
             control_thresholds=control_thresholds_for(timing),
             frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
-            fading=fading_pipe(Path(FADING_CSV), air, channel, seed),
+            fading=fading_pipe(Path(FADING_CSV), air, channel, seed, rung),
             floor_reading_cap_db=floor_cap,
         )
     else:
@@ -381,7 +456,7 @@ def run_point(
             b,
             snr_db=snr_db,
             seed=seed,
-            thresholds=thresholds or table_for(air)[0],
+            thresholds=thresholds or awgn_table,
             snr_schedule=schedule,
             control_thresholds=controls,
             frame_snr_offset=peak_offsets(Path(PEAK_CSV), air) if peak else None,
@@ -545,9 +620,12 @@ def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, in
     ]
 
 
-def replay_sidecar(path: Path, seed: int, engine: str = "p7") -> dict[str, object]:
+def replay_sidecar(
+    path: Path, seed: int, engine: str = "p7", rung: Hypothetical | None = None
+) -> dict[str, object]:
     """One run of the engines against a recorded session: protocol 7's ``LinkEngine`` or
-    protocol 8's ``GrantedEngine`` (``engine``, as ``--engine`` names them)."""
+    protocol 8's ``GrantedEngine`` (``engine``, as ``--engine`` names them), on the real ladder
+    or with a hypothetical rung (``rung``) fitted with the same penalty."""
     from field_ingest import FORMATS
 
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -560,6 +638,8 @@ def replay_sidecar(path: Path, seed: int, engine: str = "p7") -> dict[str, objec
     observations = sidecar_observations(document)
     penalty = fit_penalty(observations, awgn)
     thresholds = {m: t + penalty for m, t in awgn.items()}
+    if rung is not None:
+        thresholds[rung.index] = rung.awgn_db + penalty
     controls = {k: t + penalty for k, t in control_thresholds_for(phy_timing(air.params)).items()}
     schedule = sidecar_schedule(document)
     snrs = [s for *_, s in observations] or [
@@ -572,9 +652,15 @@ def replay_sidecar(path: Path, seed: int, engine: str = "p7") -> dict[str, objec
         (float(t["bps"]) for t in reversed(transfers) if isinstance(t, dict) and t.get("bps")),
         None,
     )
-    counters = document.get("counters") or {}
     if size == 0:
-        size = int(counters.get("bytes_delivered") or 0)
+        # a session with no Test: the data it received, from its own frames — not the counters,
+        # which are the daemon's since it started and count every session it held (a station
+        # that answered two sessions read the second's rate as both)
+        size = sum(
+            data_capacity(int(f.get("bytes") or 0))
+            for f in document.get("frames") or []
+            if isinstance(f, dict) and f.get("kind") == "data" and f.get("decoded")
+        )
         seconds = float((document.get("audio") or {}).get("seconds") or 0.0)
         measured = 8.0 * size / seconds if size and seconds > 0 else None
     size = max(size, 512)
@@ -592,6 +678,7 @@ def replay_sidecar(path: Path, seed: int, engine: str = "p7") -> dict[str, objec
         schedule,
         controls,
         engine=engine,
+        rung=rung,
     )
     row["replay_of"] = path.stem
     row["engine"] = engine
@@ -681,11 +768,18 @@ def main() -> int:
         help="the link engine: protocol 7's LinkEngine, or protocol 8's GrantedEngine "
         "(ADR-0069); the pipe charges neither any keying",
     )
+    ap.add_argument(
+        "--rung",
+        type=parse_rung,
+        default=None,
+        help="INDEX=BYTES@DB[~LIKE]: a hypothetical rung in place of rung INDEX — BYTES a frame "
+        "from DB on AWGN, in rung LIKE's frame (air time, family, fading)",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
     if args.replay:
-        return replay_main(args.replay, args.trials, args.out, args.engine)
+        return replay_main(args.replay, args.trials, args.out, args.engine, args.rung)
 
     air = NARROW if args.bandwidth == 500 else WIDE
     fer_csv = args.fer_csv or (
@@ -729,6 +823,7 @@ def main() -> int:
                     link=link,
                     floor_cap=FLOOR_READING_CAP_DB.get(channel) if args.floor_cap else None,
                     engine=args.engine,
+                    rung=args.rung,
                 )
                 rows.append(row)
                 print(
@@ -750,11 +845,17 @@ def main() -> int:
     return 0
 
 
-def replay_main(sidecars: list[Path], trials: int, out: str, engine: str = "p7") -> int:
+def replay_main(
+    sidecars: list[Path],
+    trials: int,
+    out: str,
+    engine: str = "p7",
+    rung: Hypothetical | None = None,
+) -> int:
     rows: list[dict[str, object]] = []
     for sidecar in sidecars:
         for trial in range(trials):
-            row = replay_sidecar(sidecar, 100 + 7 * trial, engine)
+            row = replay_sidecar(sidecar, 100 + 7 * trial, engine, rung)
             rows.append(row)
             measured = row["measured_bps"]
             against = f"measured {measured} bps" if measured != "" else "no measured goodput"
