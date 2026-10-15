@@ -10523,8 +10523,10 @@ mod tests {
         );
         assert_eq!(station.keying_report()["late"], serde_json::json!(1));
 
-        // keyed where its slot opens: nothing to say
-        let mut station = slow_station(0.03);
+        // keyed where its slot opens: nothing to say. The radio keys at once here — a slow one's
+        // sleep is the machine's to stretch (a CI mac runner took 52 and 179 ms for 30), and
+        // anything past the 50 ms line is rightly said
+        let mut station = slow_station(0.0);
         let opens = station.now() + station.capture_lag_s() + station.radiation_latency_s();
         queue_link(&mut station, Some(opens), Some(opens + 0.35));
         station.device_played(0);
