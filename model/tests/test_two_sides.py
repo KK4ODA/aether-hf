@@ -170,3 +170,139 @@ def test_an_overlap_is_a_negative_gap() -> None:
     side_b = two_sides.Side("B", {}, np.zeros(1), FS, two_sides.NARROW, [j])
     [(first, second, gap)] = two_sides.gaps(side_a, side_b)
     assert (first.who, second.who) == ("A", "B") and gap == pytest.approx(-0.2)
+
+
+def _exchange(
+    steps_at: float | None = None, step: float = 0.0, drift_ppm: float = 0.0
+) -> tuple[two_sides.Side, two_sides.Side]:
+    """A master and a slave trading floor control frames every 8 s for six minutes, with no
+    audio both heard: B's recording clock is A's less OFFSET, less ``step`` from ``steps_at``
+    on (audio B lost), and running ``drift_ppm`` slow."""
+
+    def b_clock(t_a: float) -> float:
+        lost = step if steps_at is not None and t_a >= steps_at else 0.0
+        return (t_a - OFFSET) * (1.0 - drift_ppm * 1e-6) - lost
+
+    sides = {}
+    docs: dict[str, dict] = {w: {"events": [], "sent": [], "frames": []} for w in ("A", "B")}
+    t = 5.0
+    while t < 360.0:
+        for who in ("A", "B"):
+            other = "B" if who == "A" else "A"
+            key_a = t
+            rf = key_a + 0.1 + LATENCY + HANDOVER[who] + LOOP[who]
+            own = (lambda x: x) if who == "A" else b_clock
+            release_a = key_a + 0.1 + HANDOVER[who] + FLOOR_CTL + TAIL
+            docs[who]["events"] += [
+                {"event": "ptt", "detail": "keyed", "t_s": own(key_a)},
+                {"event": "ptt", "detail": "released", "t_s": own(release_a)},
+                {
+                    "event": "tx_end",
+                    "t_s": own(release_a),
+                    "detail": f"played 1 drains_at 1 tail {TAIL:.3f} latency {LATENCY:.3f}",
+                },
+            ]
+            docs[who]["sent"].append(
+                {"kind": "control", "floor": True, "mode": 0, "rv": 0, "t_s": own(key_a)}
+            )
+            heard_at = rf if other == "A" else b_clock(rf)
+            docs[other]["frames"].append(
+                {"kind": "control", "mode": 0, "decoded": True, "start_s": heard_at}
+            )
+            t = rf + FLOOR_CTL + 0.7
+        t += 1.0
+    for who, call in (("A", "MASTER"), ("B", "SLAVE")):
+        docs[who]["events"].sort(key=lambda e: e["t_s"])
+        docs[who]["frames"].sort(key=lambda f: f["start_s"])
+        doc = {"session": {"callsign": call, "bandwidth_hz": 500}, **docs[who]}
+        side = two_sides.Side(call, doc, np.zeros(1), FS, two_sides.NARROW)
+        side.keyings = two_sides.keyings(side)
+        sides[who] = side
+    return sides["A"], sides["B"]
+
+
+def test_the_loops_fix_the_offset_when_nothing_was_heard_by_both() -> None:
+    a, b = _exchange()
+    # the stamps are a few tenths off; the loops' sum does not care and their difference fixes it
+    two_sides.place(a, b, OFFSET + 0.2)
+    series = two_sides.loop_offsets(a, b, OFFSET + 0.2)
+    assert len(series) > 40
+    # the two radios differ by 5 ms (LOOP), so equal loops put the offset 2.5 ms off
+    skew = (LOOP["B"] - LOOP["A"]) / 2
+    assert all(p.offset == pytest.approx(OFFSET + skew, abs=1e-6) for p in series)
+    assert all(p.loop_sum_s == pytest.approx(LOOP["A"] + LOOP["B"], abs=1e-6) for p in series)
+    assert two_sides.offset_steps(series) == []
+
+
+def test_audio_one_recording_lost_is_a_step_in_the_loops_offset() -> None:
+    a, b = _exchange(steps_at=200.0, step=0.092, drift_ppm=40.0)
+    two_sides.place(a, b, OFFSET)
+    series = two_sides.loop_offsets(a, b, OFFSET)
+    [(before, after, jump)] = two_sides.offset_steps(series)
+    assert before < 200.0 <= after and after - before < 20.0
+    assert jump == pytest.approx(0.092, abs=0.003)
+    ppm = two_sides.drift_ppm(series, two_sides.offset_steps(series))
+    assert ppm == pytest.approx(40.0, abs=5.0)
+    # placed with the offset of its time, every keying reads its own loop again
+    along = two_sides.offset_along(series, OFFSET)
+    two_sides.place(a, b, along)
+    skew = (LOOP["B"] - LOOP["A"]) / 2
+    for side, who in ((a, "A"), (b, "B")):
+        for k in side.keyings[2:-2]:
+            assert k.loop_s == pytest.approx(LOOP[who] + (skew if who == "A" else -skew), abs=0.004)
+
+
+def test_a_transmission_is_placed_by_the_frames_recorded_of_it() -> None:
+    k = two_sides.Keying(
+        "A",
+        0.0,
+        30.0,
+        3.2 + 4 * 5.36,
+        TAIL,
+        LATENCY,
+        0.05,
+        sent=[("control", 0, 3.2)] + [("data", 3, 5.36)] * 4,
+    )
+    start = 0.3
+    heard = two_sides.Heard
+    # the header and the first data frame were never recorded: frames 2 and 4 place it
+    two_four = [heard(start + 3.2 + 5.36, "data", 3), heard(start + 3.2 + 3 * 5.36, "data", 3)]
+    assert two_sides.transmission_start(k, two_four, expected=0.25) == pytest.approx(start)
+    # a lone frame of a burst of one rung could be any of the four: its count says which
+    third = [heard(start + 3.2 + 2 * 5.36, "data", 3, follows=1)]
+    assert two_sides.transmission_start(k, third, expected=5.0) == pytest.approx(start)
+    # without a count, the position the key predicts
+    lone = [heard(start + 3.2 + 2 * 5.36, "data", 3)]
+    assert two_sides.transmission_start(k, lone, expected=0.25) == pytest.approx(start)
+    # detections that never decoded cannot outvote the frame that did
+    phantoms = [
+        heard(start - 0.3, "data", 3, decoded=False),
+        heard(start - 0.3 + 5.36, "data", 3, decoded=False),
+        heard(start + 3.2 + 3 * 5.36, "data", 3, follows=0),
+    ]
+    assert two_sides.transmission_start(k, phantoms, expected=0.0) == pytest.approx(start)
+    # a frame read as another kind fits nowhere
+    assert two_sides.transmission_start(k, [heard(5.0, "data", 9)], expected=0.25) is None
+
+
+def test_an_answer_belongs_to_the_last_transmission_before_it() -> None:
+    def keying(who: str, key: float, rf: float, frames: float) -> two_sides.Keying:
+        return two_sides.Keying(
+            who, key, key + frames + 0.3, frames, TAIL, LATENCY, 0.0, rf_start=rf
+        )
+
+    # the master's data went unanswered (a silent slot), it polled, and the poll was answered
+    master = two_sides.Side(
+        "M",
+        {"frames": []},
+        np.zeros(1),
+        FS,
+        two_sides.NARROW,
+        [keying("M", 0.0, 0.25, 4.22), keying("M", 6.3, 6.55, 0.43)],
+    )
+    answer_rf = 6.55 + 0.43 + 0.30 + 0.35 + 0.05 + 0.09
+    slave = two_sides.Side(
+        "S", {"frames": []}, np.zeros(1), FS, two_sides.NARROW, [keying("S", 7.6, answer_rf, 3.2)]
+    )
+    [row] = two_sides.answers(master, slave, 0.0)
+    assert row["master_key"] == 6.3 and row["late"] == pytest.approx(0.09)
