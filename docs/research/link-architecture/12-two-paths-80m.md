@@ -115,6 +115,10 @@ times and numbers in the sidecars.
    data it is moving (§16). The manual says goodput is "always below" it, which this session
    contradicts.
 
+**Built after the author's go (2026-10-15): changes 1 and 3 as ADR-0073, and 4 and 5 beside
+it. Change 2 is held:** the author asked whether the Test's design, not the rule, is what
+needs changing, and §21 finds that it is.
+
 **Not recommended after the second look:**
 
 * *The header on every transmission above the recommendation* (the first version of change 1):
@@ -1235,3 +1239,83 @@ From both stations' logs (UTC):
 
 **Separately**, whether KK4ODA-1 runs with `cw_id` off (§20.4) is a station setting, independent
 of 1–4.
+
+## 21. The Test's design (the author's question on change 2)
+
+The author, reading change 2: *isn't this pointing to how a Test session is designed? A Test
+should mimic real link behaviour.* It is. Three of the things this report found odd come from
+one design choice: **the ladder's frames are session data the link must deliver, sent at a rung
+chosen to fail.**
+
+### 21.1 What the ladder does now
+
+`fieldtest.rs`, for each rung from a little under the message's rung up:
+
+1. Pin the rung and send four frames of 10 bytes each (a body every rung can carry).
+2. The first answer measures the rung: how many of the four decoded. That is all the ladder
+   records (`field/ladders.csv`).
+3. Then wait until all four are delivered, before the next rung. A frame that failed goes again
+   **at its pinned rung**, at RV 0, 2 and 3, until it has gone `max_combines` times (or two, when
+   the peer's report puts the rung out of reach). Only then is it re-encoded at the
+   recommendation: one whole frame for its 10 bytes.
+4. Three failed rungs in a row end the ladder. Then comes the file. The last rung's frames, all
+   of which failed, are still waiting for delivery.
+
+### 21.2 What that cost on ND1J's Tests
+
+From ND1J's sidecars (the `test` events and the rungs' `seconds`):
+
+| | last night | morning 1 | morning 2 |
+|---|---|---|---|
+| the ladder, message done to file start | 49 s | 299 s | 272 s |
+| measuring: each rung to its first answer | 30 s | 170 s | 138 s |
+| delivering its 10-byte frames | 20 s | 130 s | 134 s |
+| frames re-encoded (a whole frame for 10 bytes) | 0 | 12 | 17 |
+| the last rung's frames still undelivered when the file began | none | none | 4 (rung 7) |
+
+The delivery is where the odd behaviour lives:
+
+* **The silent slots.** The resends at pinned rungs went without their header: 13 of the 21
+  silent slots (§12.1). With ADR-0073 the RV 2 and 3 ones now carry a header, so they are
+  answered. They still go at a rung that has just failed.
+* **The silence step.** In morning 2 the file began behind rung 7's leftovers. Their two silent
+  slots stepped ND1J's rung down, and the file's first bursts went at rungs 0 and 1 (§17.2).
+  That is change 2's whole measured case.
+* **The lopsided frames.** The re-encoded 10-byte bodies, padded to 75 bytes, are the frames
+  the author saw seven minutes into morning 1 (§19).
+* **The file's rate.** On a weak path the file the Test reports is not the link's rate. In
+  morning 2 it carried the ladder's leftovers and the step-down: 32 bit/s against the message's
+  40.
+
+### 21.3 A Test that behaves like the link
+
+The principle: **measure the link the way an operator uses it, then measure the rungs in a way
+that cannot disturb that measurement.**
+
+1. **The ladder after the file.** The two numbers people compare, the message and the file, are
+   then the link as it really runs. Nothing pinned has been sent yet when they are measured. The
+   file is sized to leave the ladder its time (`file_reserve_s` turns around), and the file's
+   rate no longer needs scaling for the ladder's after-effects (`file_rate_bps`). A change to
+   the daemon only.
+2. **A ladder frame is measured once.** After its first answer, or its silence, a frame that did
+   not decode goes on at the slave's recommendation, re-encoded at once. It is never sent again at
+   the rung that just failed. That is what the link would have done with those bytes. An engine
+   rule (master side, model first, no wire change). It removes the resends at pinned rungs: 10
+   transmissions in each morning, 35 and 32 s of air, 5 and 7 silent slots, 23 and 33 s of
+   waiting, before their polls.
+3. **The Test ends after the ladder's last answer.** It no longer waits to deliver filler nobody
+   reads. The disconnect's own drain (ADR-0072) bounds what is left to a minute.
+4. **Change 2 is then not needed.** Its one measured case is the ladder's leftovers running into
+   the file, which items 1 and 2 remove. The silence step stays as R9 has it. One rule fewer.
+
+**Later, if wanted: measurement frames that are not data.** A ladder frame of its own kind, which
+the slave counts in its answer and never delivers, would cost no delivery at all. That needs a
+new frame kind and an answer field: a protocol change, for some later bump.
+
+**What changes for the field log.** The ladder's results (`ladders.csv`) mean the same: first
+copies, decoded or not. New Tests' file rates will read higher than old ones on weak paths,
+because the old ones carried the ladder's leftovers. The log should mark the build that changed it.
+
+**Nothing of §21 is built.** It changes what a Test measures, so it waits on the author. The
+harness scenario `80m-weak-both-ways-ladder-500` (ND1J's path of the second morning) is the test
+bed for it.
