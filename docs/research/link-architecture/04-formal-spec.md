@@ -134,7 +134,10 @@ every family commanded since).
 * the level is 0;
 * the last slot was heard;
 * the answer family is the only one the slave may hold;
-* at most four data frames follow, so the exact counts locate the end.
+* at most four data frames follow, so the exact counts locate the end;
+* at least one of them is an RV 0 copy, the only version that decodes alone on every rung, so
+  the slave can read a count it believes (R2). A transmission of RV 1–3 copies alone grants
+  nothing without its header, whatever the SNR (ADR-0073).
 
 **R8 — Gap levels.** The slave measures how late its decodes arrive and asks for a level in
 every ANS. The master grants `max(asked, silence level)`. Two silent slots in a row raise the
@@ -145,7 +148,9 @@ one level after six on-time decodes.
 follows. A slot granted for data and heard silent steps the master's rung down `silence_step`
 (2). Two silent slots step the slave's rung down, and put headers and answers on the floor.
 Retransmissions follow the RV sequence 0, 0, 2, 3 (ADR-0043). Re-encoding and the hopeless
-rule are kept (ADR-0038).
+rule are kept (ADR-0038). A rung is offered only if no other carries as much *data* — after the
+DATA frame's 3-byte header — per second of air from a threshold no higher (ADR-0073: it drops
+the 500 Hz air's rung 4).
 
 **R10 — Ending.**
 
@@ -324,7 +329,7 @@ minutes in the soak of 2026-10-15.
 
 | Property | Bound |
 |---|---|
-| Control overhead | at most one control frame per master transmission (0.434 s ordinary, 3.2 s floor). It is left out when nothing changes and at most four frames follow (R7). One ANS per slot. |
+| Control overhead | at most one control frame per master transmission (0.434 s ordinary, 3.2 s floor). It is left out when nothing changes, at most four frames follow and one of them is an RV 0 copy (R7). One ANS per slot. |
 | Dead air per change of direction | `gap(f) = D_f + tx_latency + guard + turnaround` (field profile: 0.75 s ordinary, 1.10 s floor), plus `LEVEL[L]` for a slow station |
 | Recovery from a lost answer | one slot: the answer length plus `slack`, then the next header |
 | Burst amortisation | up to six data frames per master transmission (26 s key limit) |

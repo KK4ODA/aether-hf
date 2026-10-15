@@ -22,6 +22,7 @@ from dataclasses import replace
 import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
+from aether_model.link import granted as granted_module
 from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.frames import (
     CONNECT_BODY_8_BYTES,
@@ -37,6 +38,7 @@ from aether_model.link.frames import (
 from aether_model.link.granted import (
     DECODE_BUDGET_S,
     KEY_S,
+    READABLE_ALONE_RVS,
     SLACK_S,
     GrantConfig,
     GrantedEngine,
@@ -772,6 +774,11 @@ def test_a_count_rescued_with_its_block_places_no_end(
         return rec
 
     monkeypatch.setattr(GrantedEngine, "_take_data", believed)
+    if (air, side) == ("500", "slave"):
+        # ADR-0073 guards this case as well: here every transmission whose counts only rescued
+        # copies could carry was of RV 2 and 3 copies, and keeps its header now (16 seeds, no
+        # overlap with the rescued count believed). Without both rules the count misleads
+        monkeypatch.setattr(granted_module, "READABLE_ALONE_RVS", frozenset({0, 1, 2, 3}))
     assert overlapping_runs() > 0, "no rescued count misled anyone: the test does not tell"
 
 
@@ -990,6 +997,43 @@ def test_a_bulk_transfer_leaves_out_headers_that_change_nothing() -> None:
     sim = TwoStationSim(a, b, snr_db=14.0, seed=10)
     done = _exchange(sim, a, b, b"e" * 30000, b"")
     assert done is not None
+    assert a.stats.headers_elided > 0
+    assert sim.overlaps() == []
+
+
+def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -> None:
+    """ND1J's Tests of 2026-10-15: the ladder's frames pinned above the path went again at RV 2
+    and 3 without their header, and the slave, which believes a count only from a copy that
+    decoded alone (R2), could grant itself nothing: eight silent slots. R7 now leaves a header
+    out only when an RV 0 copy goes with it (ADR-0073)."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=-5.0, seed=21)
+    sent: list[list[TxFrame]] = []
+    orig = sim._launch
+
+    def spy(who: int, at: float, tx: object) -> None:
+        if who == 0 and isinstance(tx, SlotTransmit):
+            sent.append(list(tx.frames))
+        orig(who, at, tx)  # type: ignore[arg-type]
+
+    sim._launch = spy  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    for mode in (9, 10, 11):
+        a.pin_mode(mode, body_bytes=10)
+        a.send(b"L" * 40)
+        sim.run(until=sim.t + 120.0)
+        a.take_ladder()
+    a.pin_mode(None)
+    copies = [
+        tx
+        for tx in sent
+        if any(f.container is Container.DATA for f in tx)
+        and all(f.rv not in READABLE_ALONE_RVS for f in tx if f.container is Container.DATA)
+    ]
+    assert copies, "the pinned frames were never sent again past their RV 0 copies"
+    assert all(tx[0].container is Container.CONTROL for tx in copies)
+    # what R7 still leaves out is a transmission with a copy the slave can read a count from
     assert a.stats.headers_elided > 0
     assert sim.overlaps() == []
 

@@ -130,8 +130,11 @@ frame states how many frames of its transmission follow it, 0–3 (ADR-0068 §2.
 chips' quarter turn, or the tone frame's middle sync block. Three means *three or more*: a
 transmission of six data frames has three frames that state 3. Its end is known from the header
 (`count`) or from any of its last three frames (0, 1 or 2 follow). A header is left out only
-when at most four data frames follow (R7), and then too only the last three state the end
-exactly; a receiver that reads only the first holds no anchor and does not answer.
+when at most four data frames follow and one of them is an RV 0 copy (R7, ADR-0073), and then
+too only the last three state the end exactly; a receiver that reads only the first holds no
+anchor and does not answer. A count is believed only from a copy that decoded alone (R2), and
+RV 1 and 2 copies never do: without the RV 0 condition a transmission of them granted nothing
+by construction.
 
 ### 4.3 The connect body (CONNECT_REQ, CONNECT_ACK): 19 bytes
 

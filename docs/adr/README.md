@@ -77,3 +77,4 @@ context → decision → alternatives considered → consequences.
 | [0070](0070-a-frame-whose-first-block-faded-stands-on-its-other-two.md) | A tone frame whose first sync block faded stands on its other two | accepted |
 | [0071](0071-the-keying-latency-counts-the-radio-and-the-render.md) | A station's keying latency counts its radio and its render | accepted |
 | [0072](0072-a-disconnect-waits-a-minute-at-most-and-says-so.md) | A disconnect waits a minute at most, and says so | accepted |
+| [0073](0073-a-header-where-no-copy-can-be-read-alone-and-rungs-counted-by-their-data.md) | A header where no copy can be read alone, and rungs counted by their data | accepted |

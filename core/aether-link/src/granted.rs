@@ -88,6 +88,12 @@ pub const MAX_DATA: usize = 6;
 /// leaves nothing to decode. The daemon reports such a cut with
 /// [`GrantedEngine::on_tx_cut_unread`].
 pub const HEADER_UNDECODABLE_SHARE: f64 = 0.4;
+/// The redundancy versions a copy decodes alone in on every rung: what R7 needs before it may
+/// leave a header out, since a count is believed only from a copy that decoded alone (R2). RV 1
+/// and 2 never decode alone, and RV 3 only on the rungs whose RV 3 carries every systematic bit
+/// (ADR-0043): on ND1J's Tests of 2026-10-15 every headerless transmission of RV 2 and 3 copies
+/// went silent, eight of the 21 silent slots (ADR-0073).
+pub const READABLE_ALONE_RVS: [u8; 1] = [0];
 /// An idle link's open window, after an ordinary and after a floor header.
 pub const OPEN_WINDOW_S: [f64; 2] = [4.0, 10.0];
 
@@ -2736,8 +2742,13 @@ impl GrantedEngine {
         };
         // the header is left out only of a transmission that carries no fewer data frames for
         // it: capped at the four whose counts can anchor it, the 15-byte rung of the 500 Hz air
-        // sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB)
-        elide = elide && !data.is_empty() && data.len() <= usize::from(MAX_FOLLOWS) + 1;
+        // sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB). And only
+        // where a count can anchor it at all: the slave believes a count only from a copy that
+        // decoded alone (R2), and only an RV 0 copy can on every rung (ADR-0073)
+        elide = elide
+            && !data.is_empty()
+            && data.len() <= usize::from(MAX_FOLLOWS) + 1
+            && data.iter().any(|f| READABLE_ALONE_RVS.contains(&f.rv));
         let level = if elide { 0 } else { self.level() };
         let slave_ident = self.slave_id_due && !elide;
         if !elide {
