@@ -599,6 +599,18 @@ class ToneDetector:
             return True
         # a frame spoiled in one block — a slip or a burst of interference over it — still
         # stands on the other two when both are whole and uncontradicted (ADR-0049)
+        return self._two_clean(blocks, against)
+
+    def two_clean_blocks(self, x: ComplexArray, sync: ToneSync) -> bool:
+        """Whether the two best of a refined frame's sync blocks each have
+        :attr:`CLEAN_BLOCK_HITS` of their eight tones strongest and no contradiction: evidence
+        that is a frame's alone (ADR-0049), whatever its third block holds."""
+        kind = sync.kind
+        e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
+        blocks = _block_hits(e, kind, sync.rv, sync.middle)
+        return self._two_clean(blocks, self._block_contradictions(e, kind, sync.rv, sync.middle))
+
+    def _two_clean(self, blocks: list[int], against: list[int]) -> bool:
         best = sorted(range(len(blocks)), key=lambda b: blocks[b], reverse=True)[:2]
         return all(blocks[b] >= self.CLEAN_BLOCK_HITS and against[b] == 0 for b in best)
 
@@ -761,7 +773,10 @@ class ToneStream:
     announced as arriving starts inside it with a first block as strong as the candidate's
     whole: that is the hypothesis read a block-spacing early, its middle block on the
     frame's first and its first in the silence before the burst, which a fast kind's data
-    under its end block can carry past :meth:`ToneDetector.confirmed`."""
+    under its end block can carry past :meth:`ToneDetector.confirmed`. An arrival at one of
+    the candidate's own later blocks does not refuse it when the candidate's first block stands
+    (ADR-0060) or two of its blocks are clean (:meth:`ToneDetector.two_clean_blocks`): the
+    reading a block-spacing early has neither."""
 
     LOOKAHEAD = 4
     ANNOUNCE_LOOKAHEAD = 12
@@ -901,10 +916,17 @@ class ToneStream:
             near = [x[1] for x in self._candidates if abs(x[0] - h) <= self.LOOKAHEAD]
             if v < max(near) or self._overlaps((start, start + kind.samples), v):
                 continue
-            if self._announced_inside(start, kind, v, first=self._first_stands(h, i)):
+            if self._announced_inside(start, kind, v, first=True):
                 continue
+            # refused, if at all, by an arrival at one of its own later blocks: that is its own
+            # block read as a first when its first stands (ADR-0060), and when it does not, its
+            # own block too if two of its blocks are clean — a frame whose first block faded
+            # (ADR-0070) — or else the reading a block-spacing early (ADR-0014)
+            own = not self._first_stands(h, i) and self._announced_inside(start, kind, v)
             sync = self.det.refine(buf, kind, rv, start - abs0, c * self.det.bin_hz)
             if not self.det.confirmed(buf, sync):
+                continue
+            if own and not self.det.two_clean_blocks(buf, sync):
                 continue
             sync = replace(sync, start=sync.start + abs0)
             self._taken = [*self._taken, (sync.start, sync.start + kind.samples, v)][-16:]
@@ -974,12 +996,15 @@ class ToneStream:
         """Whether a frame announced as arriving starts inside a ``kind`` frame at ``start`` —
         more than a symbol after its start — with a first block at least ``statistic``.
 
-        With ``first`` — the candidate's own first block stands — an arrival at one of its
-        middle or end blocks is not one (ADR-0060): it is the candidate's own block read as a
-        first block, as happens whenever the frame's real start went unannounced, and counting
-        it let one lost frame take every later frame of its burst with it, each frame's
-        middle block refusing the next. Without it, such an arrival is the real frame and the
-        candidate the reading a block-spacing early (ADR-0014)."""
+        With ``first``, an arrival at one of the candidate's middle or end blocks is not one:
+        the caller has settled whether it is the candidate's own block read as a first block.
+        It is when the candidate's first block stands (ADR-0060), as happens whenever the
+        frame's real start went unannounced — counting it let one lost frame take every later
+        frame of its burst with it, each frame's middle block refusing the next — and when two
+        of the candidate's blocks are clean, its first faded (ADR-0070).
+        Otherwise the arrival is the real frame and the candidate the reading a block-spacing
+        early (ADR-0014), whose first block lies in the silence before the burst and whose end
+        block over the frame's data."""
         n = self.det.num.symbol_samples
         end = start + kind.samples
         own = [start + o * n for o in kind.block_offsets[1:]] if first else []

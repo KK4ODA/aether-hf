@@ -645,34 +645,34 @@ def test_a_burst_whose_first_frame_began_under_the_mute_is_not_lost_with_it() ->
     block, inside that false arrival, was refused as weaker; and the second frame itself was
     refused because an arrival — its own middle block — started inside it. Each frame's
     middle block refused the next, and five tone frames at -2 dB were lost to the end of the
-    burst. A candidate whose own first block stands is not refused by its own blocks."""
+    burst. A candidate whose own first block stands is not refused by its own blocks — and,
+    since ADR-0070, neither is one with two clean blocks, so the first frame,
+    its first block silent, is found and decodes too."""
     kind = M.TONE_DATA[1]
     rng = np.random.default_rng(0)
-    frames = [T.burst(kind, _payload(rng, kind), 0) for _ in range(3)]
+    payloads = [_payload(rng, kind) for _ in range(3)]
+    frames = [T.burst(kind, p, 0) for p in payloads]
     lead = 8000
     y = np.concatenate([np.zeros(lead, complex), *frames, np.zeros(8000, complex)])
     y += 0.3 * (rng.normal(size=len(y)) + 1j * rng.normal(size=len(y)))
     y[: lead + 4000] = 0  # the first half-second of the burst under the receiver's mute
     starts = [lead + i * kind.samples for i in range(3)]
     found = _streamed(y)
-    assert [any(abs(f.start - x) <= 8 for f in found) for x in starts] == [False, True, True]
+    assert [any(abs(f.start - x) <= 8 for f in found) for x in starts] == [True, True, True]
+    first = min(found, key=lambda f: f.start)
+    assert T.demodulate(y, kind, 0, first.start, first.cfo_hz).decode()[0] == payloads[0]
 
 
-@pytest.mark.audit
-@pytest.mark.xfail(
-    strict=True,
-    reason="11-step-4-first-air.md §6: a frame whose first sync block faded is refused by an "
-    "arrival at its own middle block, and the arrival is never a frame",
-)
 def test_a_frame_whose_first_block_faded_is_not_refused_by_its_own_middle_block() -> None:
     """WC4Y's probe of 2026-10-14, protocol 8's first session on the air: KK4ODA-1's audio held
     it clean, as strong as the call twelve seconds later that decoded at -6.2 dB, and the
     offline detector confirms it (blocks 3/8, 8/8, 7/8) — but its first 0.3 s arrived faded, so
     its first block did not stand. The stream announced its middle block as a frame arriving;
     that arrival, a first block stronger than the probe's whole, refused the probe (ADR-0014's
-    rule; ADR-0060 excuses a candidate's own blocks only when its first block stands). The
+    rule; ADR-0060 excused a candidate's own blocks only when its first block stood). The
     arrival was never a frame and the probe was never looked at again: unanswered, live and on
-    replay. A frame with two clean blocks of its own is a frame (ADR-0049)."""
+    replay (11-step-4-first-air.md §6). A frame with two clean blocks of its own is a frame
+    (ADR-0049), and its own later block does not refuse it."""
     kind = M.TONE_DATA[0]
     n = kind.num.symbol_samples
     rng = np.random.default_rng(0)

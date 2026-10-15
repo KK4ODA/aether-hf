@@ -1561,12 +1561,21 @@ impl ToneDetector {
             return true;
         }
         // a frame spoiled in one block still stands on the other two when both are whole
-        // and uncontradicted; the stable sort keeps the earlier block on a tie, as the model
-        let mut order = [0, 1, 2];
-        order.sort_by(|&a, &b| blocks[b].cmp(&blocks[a]));
-        order[..2]
-            .iter()
-            .all(|&b| blocks[b] >= TONE.clean_block_hits && against[b] == 0)
+        // and uncontradicted
+        two_clean(&blocks, &against)
+    }
+
+    /// Whether the two best of a refined frame's sync blocks each have `clean_block_hits` of
+    /// their eight tones strongest and no contradiction: evidence that is a frame's alone
+    /// (ADR-0049), whatever its third block holds. False if the frame runs past the buffer.
+    #[must_use]
+    pub fn two_clean_blocks(&self, samples: &[Complex], sync: &ToneSync) -> bool {
+        let Some(e) = tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()) else {
+            return false;
+        };
+        let blocks = block_hits_in(&e, sync.kind, sync.rv, sync.middle);
+        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle);
+        two_clean(&blocks, &against)
     }
 
     /// Sync symbols of `sync` whose strongest tone is not their own, holds at least
@@ -1659,6 +1668,17 @@ impl ToneDetector {
             follows,
         }
     }
+}
+
+/// Whether the two best blocks of `blocks` (hits per sync block) are each whole to
+/// `clean_block_hits` and uncontradicted (`against`); the stable sort keeps the earlier block
+/// on a tie, as the model's does.
+fn two_clean(blocks: &[usize; 3], against: &[usize; 3]) -> bool {
+    let mut order = [0, 1, 2];
+    order.sort_by(|&a, &b| blocks[b].cmp(&blocks[a]));
+    order[..2]
+        .iter()
+        .all(|&b| blocks[b] >= TONE.clean_block_hits && against[b] == 0)
 }
 
 /// Per sync block, the symbols whose own tone is the strongest of a frame's slot energies
@@ -1963,13 +1983,21 @@ impl ToneStream {
             if v < near || self.overlaps((start, start + kind.samples()), v) || start < abs0 {
                 continue;
             }
-            if self.announced_inside(start, kind, v, self.first_stands(h, i)) {
+            if self.announced_inside(start, kind, v, true) {
                 continue;
             }
+            // refused, if at all, by an arrival at one of its own later blocks: that is its own
+            // block read as a first when its first stands (ADR-0060), and when it does not, its
+            // own block too if two of its blocks are clean — a frame whose first block faded
+            // (ADR-0070) — or else the reading a block-spacing early (ADR-0014)
+            let own = !self.first_stands(h, i) && self.announced_inside(start, kind, v, false);
             let sync =
                 self.det
                     .refine(buffer, kind, rv, start - abs0, c as f64 * self.det.bin_hz());
             if !self.det.confirmed(buffer, &sync) {
+                continue;
+            }
+            if own && !self.det.two_clean_blocks(buffer, &sync) {
                 continue;
             }
             let sync = ToneSync {
@@ -2082,11 +2110,12 @@ impl ToneStream {
     /// a half-duplex burst never overlap, and the candidate is then the hypothesis read a
     /// block-spacing early, its middle block on that frame's first (ADR-0014).
     ///
-    /// With `first` — the candidate's own first block stands — an arrival at one of its
-    /// middle or end blocks is not one (ADR-0060): it is the candidate's own block read as a
-    /// first block, as happens whenever the frame's real start went unannounced, and counting
-    /// it let one lost frame take every later frame of its burst with it, each frame's middle
-    /// block refusing the next.
+    /// With `first`, an arrival at one of the candidate's middle or end blocks is not one: the
+    /// caller has settled whether it is the candidate's own block read as a first block. It is
+    /// when the candidate's first block stands (ADR-0060), as happens whenever the frame's real
+    /// start went unannounced — counting it let one lost frame take every later frame of its
+    /// burst with it, each frame's middle block refusing the next — and when two of the
+    /// candidate's blocks are clean, its first faded (ADR-0070).
     fn announced_inside(&self, start: usize, kind: &ToneKind, statistic: f64, first: bool) -> bool {
         let n = TONE.symbol_samples;
         let end = start + kind.samples();
@@ -2430,6 +2459,10 @@ mod tests {
     }
 
     /// Deterministic pseudo-noise, `scale` per component.
+    /// [`hiss`]'s scale for the faded-first-block test: about -8 dB in 3 kHz against a tone
+    /// frame at unit power.
+    const FADED_HISS: f64 = 5.0;
+
     fn hiss(n: usize, scale: f64, mut state: u64) -> Vec<Complex> {
         let mut next = move || {
             state ^= state << 13;
@@ -2543,7 +2576,57 @@ mod tests {
             .iter()
             .map(|&x| found.iter().any(|f| f.start.abs_diff(x) <= 8))
             .collect();
-        assert_eq!(heard, [false, true, true], "{found:?}");
+        // since ADR-0070 the first frame, its first block silent and its
+        // other two clean, is found too, and decodes
+        assert_eq!(heard, [true, true, true], "{found:?}");
+        let first = found.iter().min_by_key(|f| f.start).expect("first");
+        let frame = demodulate(&y, kind, 0, first.start, first.cfo_hz).expect("frame");
+        let (decoded, _) = codec(kind).decode(&frame.llr, 0, None).expect("decode");
+        assert_eq!(decoded, Some(payload(kind, 1)));
+    }
+
+    #[test]
+    fn a_frame_whose_first_block_faded_is_not_refused_by_its_own_middle_block() {
+        // WC4Y's probe of 2026-10-14 (11-step-4-first-air.md §6): its first 0.3 s arrived
+        // faded, so its first block did not stand; the stream announced its middle block as a
+        // frame arriving, and that arrival refused the probe, which was never looked at again.
+        // A frame with two clean blocks of its own is a frame (ADR-0049)
+        let kind = &data_kinds()[0];
+        let n = TONE.symbol_samples;
+        let mut x = burst(&codec(kind), &payload(kind, 5), 0).expect("burst");
+        let fade = 10f64.powf(-16.0 / 20.0);
+        for s in &mut x[..SYNC_SYMBOLS * n] {
+            *s = (s.0 * fade, s.1 * fade);
+        }
+        let lead = 8000;
+        let mut y: Vec<Complex> = vec![(0.0, 0.0); lead];
+        y.extend_from_slice(&x);
+        y.extend(std::iter::repeat_n((0.0, 0.0), 8000));
+        let noise = hiss(y.len(), FADED_HISS, 0x5851_f42d_4c95_7f2d);
+        for (s, h) in y.iter_mut().zip(noise) {
+            s.0 += h.0;
+            s.1 += h.1;
+        }
+        let det = ToneDetector::new();
+        let offline = det.detect(&y, 4);
+        assert_eq!(offline.len(), 1, "{offline:?}");
+        let hits = det.block_hits(&y, kind, 0, offline[0].start, offline[0].cfo_hz);
+        assert!(
+            hits[0] < TONE.min_first_hits
+                && hits[1] >= TONE.clean_block_hits
+                && hits[2] >= TONE.clean_block_hits,
+            "{hits:?}"
+        );
+        let mut stream = ToneStream::new();
+        let mut found = Vec::new();
+        for end in (160..=y.len()).step_by(160) {
+            found.extend(stream.feed(&y[..end], 0));
+        }
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].kind.name, found[0].rv), (kind.name, 0));
+        let frame = demodulate(&y, kind, 0, found[0].start, found[0].cfo_hz).expect("frame");
+        let (decoded, _) = codec(kind).decode(&frame.llr, 0, None).expect("decode");
+        assert_eq!(decoded, Some(payload(kind, 5)));
     }
 
     #[test]
