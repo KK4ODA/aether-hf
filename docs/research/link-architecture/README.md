@@ -125,6 +125,10 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    radio's declared turnaround, configuration schema 12.
 10. [10-step-3.md](10-step-3.md): Step 3, the harness A/B. Its criteria, made exact and
    committed before either arm ran (§1), then the runs and the verdict.
+11. [11-step-4-first-air.md](11-step-4-first-air.md): Step 4, the first session on the air
+   (WC4Y's Test of 2026-10-14), read from both stations' recordings on one clock: no overlap,
+   the timing budgets measured on the mini PC, every silent slot and failed frame, the
+   interference, and what to change, ranked.
 
 ## Reproduction
 

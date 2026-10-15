@@ -1580,6 +1580,22 @@ in the loop on the mini PC at the radio (capture latency, slow passes), then the
 testers; then Step 5 (delete the turn machinery). Also owed: the Test's deadlines counted from
 the transmission (§3.7, both protocols), and the 500 Hz fading scenarios (`80m-flutter-500`'s
 message ×0.77).
+**Step 4's first air session (2026-10-15, `11-step-4-first-air.md`):** WC4Y's Test to KK4ODA-1
+of 2026-10-14 23:59Z, 80 m at 500 Hz, both sides with audio. No overlap (0.61 s the least clear
+air), no forfeit, no late drop; answers reached the air 76–197 ms after their slots' starts,
+≥ 153 ms inside SLACK — the CAT round trip (`ThreadedPtt::key` blocks: Yaesu 19 ms, CI-V at
+9 600 Bd ~45–65), rendering an answer decided at the last moment (30–80 ms on the mini PC) and
+the radios' audio paths (~65–70 ms a station) are not in `radiation_latency_s`, so S2 holds by
+margin, not construction. Decode ≤ 155 ms on both machines. Seven silent slots, each with no
+grant decoded (five on elided headers, four of them on the Test's pinned ladder rungs). Found:
+the mini PC's capture lost 35 and 40 ms unreported (the sound-card backend ignores cpal's
+capture timestamps; one frame lost); the stream refuses a tone frame whose first sync block
+faded, on an arrival at its own middle block (the probe; strict xfail in `test_tone.py`). The
+two stations' recordings go on one clock by the envelope of a signal both heard — atmospherics
+at 2.7–3 kHz, or another station — with `tools/two_sides.py` (offset, its steps, handover delays,
+loop latency, gaps on the air, each answer against its slot). `bench_link --replay` now honours
+`--engine`. Scenario `80m-local-rfi-ladder-500` is this path with the local RFI. The report's
+§12 ranks the changes; none made, the protocol-rule ones wait on the author.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
