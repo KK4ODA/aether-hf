@@ -658,6 +658,41 @@ def test_a_burst_whose_first_frame_began_under_the_mute_is_not_lost_with_it() ->
     assert [any(abs(f.start - x) <= 8 for f in found) for x in starts] == [False, True, True]
 
 
+@pytest.mark.audit
+@pytest.mark.xfail(
+    strict=True,
+    reason="11-step-4-first-air.md §6: a frame whose first sync block faded is refused by an "
+    "arrival at its own middle block, and the arrival is never a frame",
+)
+def test_a_frame_whose_first_block_faded_is_not_refused_by_its_own_middle_block() -> None:
+    """WC4Y's probe of 2026-10-14, protocol 8's first session on the air: KK4ODA-1's audio held
+    it clean, as strong as the call twelve seconds later that decoded at -6.2 dB, and the
+    offline detector confirms it (blocks 3/8, 8/8, 7/8) — but its first 0.3 s arrived faded, so
+    its first block did not stand. The stream announced its middle block as a frame arriving;
+    that arrival, a first block stronger than the probe's whole, refused the probe (ADR-0014's
+    rule; ADR-0060 excuses a candidate's own blocks only when its first block stands). The
+    arrival was never a frame and the probe was never looked at again: unanswered, live and on
+    replay. A frame with two clean blocks of its own is a frame (ADR-0049)."""
+    kind = M.TONE_DATA[0]
+    n = kind.num.symbol_samples
+    rng = np.random.default_rng(0)
+    payload = _payload(rng, kind)
+    x = T.burst(kind, payload, 0)
+    x[: T.SYNC_SYMBOLS * n] *= 10 ** (-16.0 / 20)  # the first sync block faded
+    lead = 8000
+    y = np.concatenate((np.zeros(lead, complex), x, np.zeros(8000, complex)))
+    y = make_channel("awgn", snr_db=-8.0, fs=kind.num.fs, seed=0, signal_power=1.0).process(y)
+    det = T.ToneDetector()
+    offline = det.detect(y)
+    assert [(s.kind, s.rv) for s in offline] == [(kind, 0)], offline
+    hits = det.block_hits(y, kind, 0, offline[0].start, offline[0].cfo_hz)
+    assert hits[0] < det.MIN_FIRST_HITS and min(hits[1:]) >= det.CLEAN_BLOCK_HITS, hits
+    streamed = _streamed(y)
+    assert [(s.kind, s.rv) for s in streamed] == [(kind, 0)], streamed
+    frame = T.demodulate(y, kind, 0, streamed[0].start, streamed[0].cfo_hz)
+    assert frame.decode()[0] == payload
+
+
 def test_a_frame_taken_by_one_block_of_a_stronger_one_gives_way() -> None:
     """ADR-0060: a weak hypothesis whose last block is a real frame's first — its first and
     middle blocks on noise and on the silence of the receiver's own transmission — was taken
