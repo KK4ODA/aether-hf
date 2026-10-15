@@ -78,5 +78,55 @@ keeps them coming for ordinary data.
 
 ## 5. The harness A/B
 
-To be filled from the run of this change: the 14 scenarios that run a Test, three draws each,
+The 14 scenarios that run a Test, three draws each (`session_matrix.py --seeds 3`), this build
 against v0.2.0-beta.109's daemon.
+
+| | beta.109 | this build |
+|---|---|---|
+| runs passed | 42 of 42 | 42 of 42 |
+| radiated overlaps | 0 | 0 |
+| silent slots (the masters' counters) | 295 | 211 |
+| message rate | | the same (×1.00 median; it goes before the ladder either way) |
+| file rate, per-scenario median | | ×1.30 (×0.67 to ×1.88; lower in 4 of 14) |
+| the Test's length, per-scenario median | | ×1.01 (×0.83 to ×1.28) |
+
+Per scenario, the medians of three draws (message and file in bit/s):
+
+| scenario | file | ladder rungs | Test s |
+|---|---|---|---|
+| `80m-weak-both-ways-ladder-500` (ND1J's path) | 32 → 61 | 8 → 8 | 476 → 575 |
+| `80m-floor-top-start-500` | 48 → 84 | 7 → 8 | 454 → 423 |
+| `80m-asymmetric-500` | 60 → 82 | 7 → 6 | 342 → 355 |
+| `80m-flutter-500` | 50 → 74 | 7 → 10 | 412 → 529 |
+| `80m-lopsided-acks-500` | 59 → 68 | 8 → 9 | 478 → 535 |
+| `80m-slow-machine-500` | 62 → 76 | 6 → 7 | 448 → 491 |
+| `80m-local-rfi-ladder-500` | 78 → 72 | 10 → 7 | 463 → 420 |
+| `80m-nvis-evening-500` | 30 → 26 | 5 → 5 | 530 → 452 |
+| `20m-dx-moderate-2300` | 397 → 632 | 6 → 8 | 294 → 304 |
+| `40m-good-2300-rtty-crashes` | 196 → 338 | 7 → 6 | 346 → 340 |
+| `40m-moderate-2300-vara-qrm` | 489 → 555 | 8 → 7 | 282 → 279 |
+| `80m-thunderstorm-agc-2300` | 289 → 403 | 7 → 8 | 274 → 298 |
+| `40m-drift-and-clocks-2300` | 519 → 446 | 9 → 7 | 368 → 336 |
+| `40m-rtty-contest-2300` | 173 → 115 | 8 → 3 | 493 → 411 |
+
+* **The file is the link's own now.** It rose most where the ladder's leftovers had run into
+  it: ND1J's path ×1.9, the 40 m crashes ×1.7, the 20 m DX path ×1.6.
+* **Where it fell, the ladder had been warming the link up.** On the good 2 300 Hz paths the
+  old ladder's clean bursts at high rungs lowered the receiver's margin before the file: a climb
+  the link would not have made on its own. The new number is what an operator's transfer gets.
+* **A longer Test is the ladder getting its time.** Flutter's ladder tried 10 rungs where it
+  had 7: the old order stopped it to leave the file's time.
+* **One draw lost its ladder.** In the RTTY contest's first draw the file crawled under the RTTY
+  (87 bit/s) and ran to the budget, and the run ended without a ladder. On beta.109 the same draw
+  ran its ladder and then lost the file the same way. The transfers come first now; the report
+  says *ladder skipped: the file took the budget*.
+* **Within the nightly's baseline.** Every Test scenario's air time and rates lie inside its
+  stored ten-run range, so the nightly flags nothing slower.
+
+**Found by the A/B, and fixed (outside the protocol).** In three draws across both builds a file
+that crawled ended the session on the Test's deadline, and the sidecar had no outcome and no file:
+the session's end closed the recording (the harness's stations record every session) before the
+run wrote its report. While the Test steps, its run is out of the station, so the session-end
+handler took no Test to be running. It is now told (`test_stepping`), and the session history
+marks such a session a Test, which it had not.
+`a_file_that_crawls_ends_the_run_with_its_report_in_the_sidecar` fails without the fix.

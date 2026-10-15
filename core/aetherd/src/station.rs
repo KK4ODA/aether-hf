@@ -965,6 +965,9 @@ impl CaptureLag {
 }
 
 /// One station: link engine, physical layer, radio.
+// its flags are separate states of separate machinery (the transmitter, the keying test, a Test
+// taking a step), not one state spelled in bools
+#[allow(clippy::struct_excessive_bools)]
 pub struct Station<P: Ptt> {
     config: StationConfig,
     engine: GrantedEngine,
@@ -1056,6 +1059,10 @@ pub struct Station<P: Ptt> {
     record_notes: Option<String>,
     /// The Test session running, or the last one run (P6-7).
     test: Option<TestRun>,
+    /// A Test session is taking its next step: the run is out of `test` meanwhile, and what
+    /// it does — ending its session on a crawling transfer — must still see it running, or the
+    /// session's end closed the recording before the run wrote its report into the sidecar.
+    test_stepping: bool,
     /// Callsigns given while a session was up, to take effect when it ends.
     pending_callsigns: Option<Vec<String>>,
     delivered: Vec<u8>,
@@ -1257,6 +1264,7 @@ impl<P: Ptt> Station<P> {
             preroll_frames: std::collections::VecDeque::new(),
             record_notes: None,
             test: None,
+            test_stepping: false,
             pending_callsigns: None,
             delivered: Vec::new(),
             events: Vec::new(),
