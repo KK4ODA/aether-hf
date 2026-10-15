@@ -1639,12 +1639,26 @@ signal is the codec's zero padding on the four-tone kinds (no scrambler). The Mo
 morning sessions was ND1J's ADR-0055 setup identifier after a hand probe. Proposals ranked in the
 report's summary (details §12; §12.1 the second look: keep the header where no frame can decode
 alone — R7 and R2 together made 8 silent slots certain —, no silence step above the
-recommendation, no 500 Hz rung 4; a filler for the zero padding decodes no better), none built:
-they wait on the author. Tools: `two_sides.py --from-loops` (the offset from the loop
+recommendation, no 500 Hz rung 4; a filler for the zero padding decodes no better). Tools: `two_sides.py --from-loops` (the offset from the loop
 latencies, its steps and drift), `air_account.py --sidecars MASTER SLAVE`, `bench_link.py
 --rung` (a hypothetical rung for counterfactual replays), `tools/ladder_table.py` (each air's
 ladder, thresholds and gaps, read from the model), and `fetch_uploads.py` resumes; the upload
 script answers one request at a time, so run one `get` at a time.
+**ADR-0073 (the author's go on report 12's changes 1, 3, 4, 5; model first, no wire change):**
+R7 leaves a header out only when a data frame is an RV 0 copy (`READABLE_ALONE_RVS`): RV 1–2
+never decode alone, so a count R2 believes could not come from them and such a transmission
+granted nothing; `usable_modes` weighs a rung by the data after the DATA header, which drops the
+500 Hz rung 4 (QPSK ⅓, 91 bit/s against tone4x100-75's 107) and leaves 2 300 Hz unchanged.
+`test_a_count_rescued_with_its_block_places_no_end`'s check that it would see the hazard turns
+both rules off for 500 Hz slave side, which ADR-0073 alone now guards. Outside the protocol: a
+`keying` line when a transmission goes on the air ≥ 50 ms after its slot opened or within 100 ms
+of its limit (`note_slow_keying`, `keying_late` in recordings, `late` in the bundle's `keying`),
+and `metrics.sending_rung`/`receiving_rung` (`Station::data_rungs`) for the speed chart's two
+rate lines (*sending at* in the TX colour, *receiving at* in RX; goodput both ways). Harness
+scenario `80m-weak-both-ways-ladder-500` (ND1J's second morning). **Change 2 (R9's silence step)
+is held**: its one measured case was the Test's ladder leftovers, and report 12 §21 proposes the
+Test instead — the ladder after the file, a ladder frame measured once and then re-encoded at the
+recommendation, the Test ending after the last rung — for the author to decide.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
