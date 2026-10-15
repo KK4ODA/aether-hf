@@ -292,10 +292,15 @@ press **Test session**. It runs:
 1. a probe;
 2. a call;
 3. a message, sized to how well the probe says you are heard;
-4. a **ladder**: a short burst pinned at each rung, starting one rung under the fastest the
-   message was acknowledged at, until three rungs in a row fail;
-5. a file, sized to about two minutes at the measured rate (at least 256 bytes);
+4. a file, sized to about two minutes at the message's rate (at least 256 bytes);
+5. a **ladder**: a short burst pinned at each rung, starting one rung under the fastest the
+   message and file were acknowledged at, until three rungs in a row fail;
 6. a disconnect.
+
+The message and file go first, so the speeds the Test reports are the speeds you would get.
+The ladder then tries rungs the link would not choose by itself. Each ladder frame is tried
+once at its rung; a frame that fails goes again at the speed the other station asks for. After
+the last rung the Test disconnects without waiting for the ladder's leftovers.
 
 It takes about five minutes and stops itself at ten. The other station only has to be listening.
 Both stations must run the same bandwidth and protocol version. The result is recorded as two
@@ -588,7 +593,7 @@ what happened in an issue on GitHub or by email.
 - **Slot**: the time the calling station gives the called one to send in, after each of its own
   transmissions. The called station keys only in its slot; an answer that would start too late
   for it is not sent, so the two stations never key over each other.
-- **Test session**: the field test: probe, call, message, ladder, file, recorded.
+- **Test session**: the field test: probe, call, message, file, ladder, recorded.
 - **Turnaround**: how long after a radio stops sending it hears again. Each station tells the
   other its own, and the other waits that long before it answers.
 

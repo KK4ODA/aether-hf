@@ -3,6 +3,8 @@
 **Status:** accepted, 2026-09-25. Model first (`aether_model/link/engine.py`, `sim.py`), then
 the port (`aether-link`), then the daemon and the desktop application. No change to the frames
 or the link protocol: a beta.57 station and a beta.58 station connect and carry data.
+**The Test's order is superseded by ADR-0074** (2026-10-15): the ladder now runs after the file,
+which leaves it a reserve of the budget, so the transfers are measured as the link runs.
 
 ## 1. Context
 
