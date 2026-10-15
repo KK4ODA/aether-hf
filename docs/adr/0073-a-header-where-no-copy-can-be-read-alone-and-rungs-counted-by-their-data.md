@@ -89,9 +89,30 @@ Chat sessions were not run: the chat bench drives protocol 7's engine only.
 
 ## 4. The harness A/B
 
-To be filled from the run of this change: the new scenario `80m-weak-both-ways-ladder-500` (ND1J's
-path of the second morning) and twelve others, three draws each, against v0.2.0-beta.108's
-daemon.
+The daemon built from this change against the one before it, 13 scenarios, three draws each
+(`session_matrix.py --seeds 3`). The scenarios: the new `80m-weak-both-ways-ladder-500` (ND1J's
+path of the second morning), the 80 m 500 Hz Tests and exchanges (`floor-top-start`,
+`lopsided-acks`, `local-rfi-ladder`, `nvis-evening`, `weak`, `asymmetric`, `flutter`,
+`qsb-dropout`, `winlink-exchange`), and three at 2 300 Hz (`quick-awgn`, `40m-good-throughput`,
+`40m-winlink-exchange`).
+
+| | before | after |
+|---|---|---|
+| runs passed | 39 of 39 | 39 of 39 |
+| radiated overlaps | 0 | 0 |
+| headerless transmissions with no RV 0 copy (the masters' recordings) | 92 | 0 |
+| silent slots (the masters' counters) | 230 | 166 |
+| air time, pooled | | ×0.982 |
+| message rate (21 Test runs) | | median ×1.05, mean ×1.18; lower in 4 |
+| file rate (19 Test runs) | | median ×1.06, mean ×1.08; lower in 8 |
+
+* **Every transmission the rule targets now carries its header**, and a quarter of the silent
+  slots are gone. The rest are first copies at rungs the path cannot carry, mostly the Test's
+  pinned ladder (report 12 §21).
+* **Nothing overlapped and nothing failed.** The 2 300 Hz scenarios are unchanged to the second.
+* **The timing moved the right way, within the harness's spread.** One build on one scenario
+  and seed ran 435 and 521 s of air on two runs, so three draws judge only the pooled figures.
+  Step 3's thresholds (air ×1.10 pooled, Test rates ×0.85) hold with room.
 
 ## 5. Outside the protocol
 
