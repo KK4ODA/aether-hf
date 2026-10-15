@@ -542,8 +542,9 @@ def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, in
     ]
 
 
-def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
-    """One run of the engines against a recorded session."""
+def replay_sidecar(path: Path, seed: int, engine: str = "p7") -> dict[str, object]:
+    """One run of the engines against a recorded session: protocol 7's ``LinkEngine`` or
+    protocol 8's ``GrantedEngine`` (``engine``, as ``--engine`` names them)."""
     from field_ingest import FORMATS
 
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -576,9 +577,21 @@ def replay_sidecar(path: Path, seed: int) -> dict[str, object]:
     size = max(size, 512)
     payload = bytes((i * 37) % 256 for i in range(size))
     row = run_point(
-        "sim", "replay", mean_snr, payload, seed, thresholds, None, air, None, schedule, controls
+        "sim",
+        "replay",
+        mean_snr,
+        payload,
+        seed,
+        thresholds,
+        None,
+        air,
+        None,
+        schedule,
+        controls,
+        engine=engine,
     )
     row["replay_of"] = path.stem
+    row["engine"] = engine
     row["penalty_db"] = penalty
     row["observations"] = len(observations)
     row["measured_bps"] = "" if measured is None else round(measured, 1)
@@ -669,7 +682,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.replay:
-        return replay_main(args.replay, args.trials, args.out)
+        return replay_main(args.replay, args.trials, args.out, args.engine)
 
     air = NARROW if args.bandwidth == 500 else WIDE
     fer_csv = args.fer_csv or (
@@ -734,16 +747,16 @@ def main() -> int:
     return 0
 
 
-def replay_main(sidecars: list[Path], trials: int, out: str) -> int:
+def replay_main(sidecars: list[Path], trials: int, out: str, engine: str = "p7") -> int:
     rows: list[dict[str, object]] = []
     for sidecar in sidecars:
         for trial in range(trials):
-            row = replay_sidecar(sidecar, 100 + 7 * trial)
+            row = replay_sidecar(sidecar, 100 + 7 * trial, engine)
             rows.append(row)
             measured = row["measured_bps"]
             against = f"measured {measured} bps" if measured != "" else "no measured goodput"
             print(
-                f"{row['replay_of']}: replayed {row['goodput_bps']} bps ({against}), "
+                f"{row['replay_of']}: {engine} replayed {row['goodput_bps']} bps ({against}), "
                 f"penalty {row['penalty_db']:+.2f} dB over AWGN from {row['observations']} "
                 f"observations, modes {row['mode_min']}-{row['mode_max']}, ok={row['ok']}",
                 flush=True,

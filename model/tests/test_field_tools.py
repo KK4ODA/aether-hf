@@ -200,3 +200,15 @@ def test_the_replay_fits_the_penalty_the_ladder_shows(tmp_path: Path) -> None:
     assert row["penalty_db"] == penalty and row["measured_bps"] == 1310.7
     assert row["bytes"] == 2048 + 16384
     assert float(row["goodput_bps"]) > 0.0
+    assert row["engine"] == "p7"
+
+
+def test_the_replay_runs_the_engine_it_is_asked_for(tmp_path: Path) -> None:
+    # `--replay` once ignored `--engine` and always ran protocol 7's engine: protocol 8's first
+    # air session (11-step-4-first-air.md) was compared against the wrong prediction
+    sidecar = _sidecar(tmp_path)
+    granted = bench_link.replay_sidecar(sidecar, seed=3, engine="granted")
+    p7 = bench_link.replay_sidecar(sidecar, seed=3, engine="p7")
+    assert granted["engine"] == "granted" and granted["ok"] == 1
+    assert granted["penalty_db"] == p7["penalty_db"]
+    assert granted["goodput_bps"] != p7["goodput_bps"]
