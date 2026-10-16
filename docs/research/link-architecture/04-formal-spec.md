@@ -190,11 +190,16 @@ it sends for a session, and nothing in a session carries one before it.
   identifier can end: that slot's `end_max`, the master's wait at the top level with a slow key,
   and the master's declared identifier.
 * A session that ends without a closing exchange (a link timeout, the master gone, a DISC_ACK
-  that did not go out) is identified by each station alone, after carrier sense (S8): the slave
-  at once after a link timeout, one exchange later after leaving a session still heard; the
-  master after its last slot, listening first too when it read nothing of the slave at the end
-  ("no response", a link timeout, every DISC unanswered), since the slave may have given up
-  first and be sending its own.
+  that did not go out) is identified by each station alone, after carrier sense (S8): the master
+  after its last slot, listening first too when it read nothing of the slave at the end ("no
+  response", a link timeout, every DISC unanswered); the slave one exchange later after leaving
+  a session still heard, and after a link timeout an exchange and the master's declared
+  identifier later. A slave that timed out cannot hear the master, so carrier sense cannot part
+  them; the master gives up no later than its own link timeout after the last answer it can have
+  read, which lies inside the exchange after the frame that last armed the slave's timer, and
+  identifies then. Sent at once, the slave's identifier went over the master's last tries in 24
+  of 96 band-closing sessions on the model's simulator; with the wait, in none. This rests on the
+  two stations reckoning the link timeout alike (the same configuration); it is not a bound.
 * A session ended by a call from the same peer (R11) owes none: the communication goes on.
 
 It keeps I1: every identifier keys in a slot the other station granted and keeps, after a slot

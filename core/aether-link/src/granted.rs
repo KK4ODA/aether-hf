@@ -4107,8 +4107,7 @@ impl GrantedEngine {
         // where the closing identifier goes (ADR-0075): the master's once the last slot it
         // granted can no longer be in use — an aborting master's once its leaving is over; a
         // slave's behind its DISC_ACK, or on its own, listening first, when nothing of the
-        // session is heard for an exchange — a live master keys at least that often — and at
-        // once when the session timed out, since nothing can come
+        // session is heard for an exchange — a live master keys at least that often
         self.id_alone = !was_master;
         // a master that read nothing of the other station at the end listens before its own: the
         // other may have given the session up first and be sending its identifier alone
@@ -4117,9 +4116,17 @@ impl GrantedEngine {
         if was_master && reason != "aborted" {
             self.deadlines
                 .set(Timer::Ident, self.now.max(self.hold_until));
+        } else if !was_master && reason == "link timeout" {
+            // a slave that timed out cannot hear the master, so listening first cannot keep
+            // their identifiers apart: it waits until the master has given up and identified.
+            // The master gives up no later than its own link timeout after the last answer it
+            // can have read — this station's last slot, inside the exchange after the frame that
+            // last armed this station's timer — and identifies then (I1; the band-closes
+            // scenario's two identifiers met 0.6 s apart)
+            let at = self.now + self.exchange_s() + self.peer_identifier_s;
+            self.deadlines.set(Timer::Ident, at);
         } else if !was_master {
-            let quiet = reason == "link timeout" || left.is_none();
-            let at = if quiet {
+            let at = if left.is_none() {
                 self.now
             } else {
                 self.now + self.exchange_s()

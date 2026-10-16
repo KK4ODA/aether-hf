@@ -257,9 +257,10 @@ declares (connect body byte 18) is the one its own callsign needs, 0 for none.
   sends its identifier on its own, listening first (`Transmit.listen_first`: the daemon waits for
   a clear channel up to 15 s, then sends). The master's goes after its last slot, and listens
   first when it read nothing of the slave at the end ("no response", a link timeout, every DISC
-  unanswered). A slave that timed out sends it at once. A slave that
-  left a session still heard waits one exchange first, since the master's next words may close
-  it properly. A DISC_ACK that carried the identifier and did not go out (the gate dropped it,
+  unanswered). A slave that timed out waits an exchange and the master's declared identifier
+  first: it cannot hear the master, and the master gives up within that and identifies then. A
+  slave that left a session still heard waits one exchange first, since the master's next words
+  may close it properly. A DISC_ACK that carried the identifier and did not go out (the gate dropped it,
   the header was cut) owes it again, the same way.
 * **Called again** (ADR-0056): the session's identifier is dropped, since the communication goes
   on in the new session; a call to another station sends the identifier first.

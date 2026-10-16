@@ -53,10 +53,13 @@ station's identifier was still to come.
      identifier behind it, or after the last repeat's slot.
    * **No closing exchange** (a link timeout, "no response", every DISC unanswered, a DISC_ACK
      that did not go out): each station sends its identifier on its own, listening first
-     (`Transmit.listen_first`; the daemon waits for a clear channel up to 15 s). A slave that
-     timed out sends it at once; one that left a session still heard waits one exchange, since
-     the master's next words may close it properly. A master that read nothing of the slave at the
-     end listens too: the slave may have given up first and be sending its own.
+     (`Transmit.listen_first`; the daemon waits for a clear channel up to 15 s). A master that read
+     nothing of the slave at the end listens too: the slave may have given up first and be
+     sending its own. A slave that left a session still heard waits one exchange, since the
+     master's next words may close it properly. A slave that timed out waits an exchange and the
+     master's declared identifier: it cannot hear the master, so listening cannot part their
+     identifiers, and the master gives up no later than its own link timeout after the last
+     answer it can have read and identifies then (§4).
    * **Called again** (ADR-0056): no identifier between the sessions. The communication goes on
      in the new one (ADR-0055 §4); a call to another station sends the owed identifier first.
    * **A contact that went no further than its setup** is identified on its own 30 s after
