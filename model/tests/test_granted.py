@@ -1157,6 +1157,31 @@ def test_a_dead_path_ends_with_each_identifier_on_its_own(air: str) -> None:
     assert sent[1][-1].listen_first and _kind(sent[1][-1]) == "id"
 
 
+@pytest.mark.parametrize("air", ["2300", "500"])
+@pytest.mark.parametrize("close_at", [60.0, 140.0])
+def test_a_band_that_closes_ends_with_the_identifiers_apart(air: str, close_at: float) -> None:
+    """The band closes under a transfer (35 dB in 20 s): the master keeps trying until "no
+    response" and the slave times out. A timed-out slave cannot hear the master, so it waits
+    until the master can have given up and identified: an exchange and the master's declared
+    identifier (ADR-0075). Sent at once, it went over the master's last tries in 24 of 96 such
+    sessions, and in the harness's `80m-band-closes-2300` the two identifiers met 0.6 s apart."""
+    a, b = _pair(AIRS[air], identifier_s=4.5)
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_schedule=lambda t: 10.0 if t < close_at else 10 - 35 * min(1, (t - close_at) / 20),
+        seed=41,
+    )
+    sent = _on_air(sim)
+    a.connect("KK4XYZ")
+    a.send(b"z" * 16000)
+    sim.run(until=1500.0)
+    assert sim.events(1)[-1] == "disconnected:link timeout"
+    _ends_with_identifiers(sim, sent)
+    assert sim.overlaps() == []
+    assert sim.radiated(1)[-1][0] > sim.radiated(0)[-1][1]
+
+
 def test_a_peer_that_calls_again_gets_no_identifier_between_its_sessions() -> None:
     """ADR-0055 §4 kept: a session the caller ended by calling again goes on in the new one — no
     identifier from the called station between them, and the caller's own, owed for the old
