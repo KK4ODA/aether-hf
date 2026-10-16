@@ -897,7 +897,9 @@ The Phase 0–5 list this section used to hold is done; the history is in the co
     past a frame heard arriving; a DISC_ACK is a response and never waits for a clear channel;
     DISC, DISC_ACK and the closing identifier wait out the other station's Morse ID (≤ 15 s); an
     identifier appended to a burst moves the engine's timers. Open: the ten-minute identifier
-    mid-session (a frame field; a protocol change).
+    mid-session (a frame field; a protocol change). *Since ADR-0075 (2026-10-15) there is none:
+    each station identifies once, at the end, its identifier the last thing it sends, and the
+    waits are gone.*
 19. **Beacons on a timer, and the identifier's speed said** (done 2026-09-25, beta.67; ND1J's
     questions): `beacon.every {minutes}` (10–240, runtime only; each waits for an idle station
     and a clear channel and is skipped, not caught up, after two minutes; refused under
