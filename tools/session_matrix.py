@@ -294,7 +294,8 @@ class Host:
     port's bytes, read on threads of their own, and — for ``trimode`` — RMS Trimode's
     scanning, ``LISTEN`` off for half a second in every three and a half of air, which is
     what ADR-0051 was found by. A ``CONNECTED`` it is told while not listening is a fault, as
-    Trimode ignores one."""
+    Trimode ignores one. ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
+    ``-T`` alias in ``MYCALL``, never ``CWID``) and pings with ``host-ping``."""
 
     def __init__(self, run: Run, station: Station, kind: str) -> None:
         self.run, self.station, self.kind = run, station, kind
@@ -317,6 +318,17 @@ class Host:
         bw = "BW500" if run.scenario.get("bandwidth") == 500 else "BW2300"
         if kind == "trimode":
             opening = [f"MYCALL {station.callsign}", bw, "PUBLIC ON", "CWID ON", "LISTEN ON"]
+        elif kind == "varac":
+            opening = [
+                bw,
+                "CHAT ON",
+                "LISTEN ON",
+                "IGNOREKISSDCD ON",
+                "LISTEN CQ",
+                "VERSION",
+                f"MYCALL {station.callsign} {station.callsign}-T",
+                bw,
+            ]
         else:  # a Winlink Express client
             opening = [
                 "PUBLIC ON",
@@ -333,7 +345,7 @@ class Host:
 
     def send(self, line: str) -> None:
         if line.startswith("LISTEN"):
-            self.listening = line == "LISTEN ON"
+            self.listening = line != "LISTEN OFF"
         self.cmd.sendall((line + "\r").encode())
 
     def _read_cmd(self) -> None:
@@ -591,6 +603,38 @@ def step(run: Run, text: str) -> bool:
             float(run.scenario.get("connect_within_s", 180)),
         )
         return run.connected
+    if word == "host-ping":
+        # `host-ping [c]`: VarAC's ping — a CONNECT to the other program's `-T` alias, its one
+        # 14-byte report back, then the caller's DISCONNECT (host-interfaces.md §7)
+        who = arg or "a"
+        ha, hb = run.hosts[who], run.hosts["b"]
+        was = [h.heard(w) for h in (ha, hb) for w in ("CONNECTED", "DISCONNECTED")]
+        before = ha.received
+        began = run.air_s()
+        ha.send(f"CONNECT {run.stations[who].callsign} {b.callsign}-T")
+        run.connected = run.wait(
+            "ping connected",
+            lambda: ha.heard("CONNECTED") > was[0] and hb.heard("CONNECTED") > was[2],
+            float(run.scenario.get("connect_within_s", 180)),
+        )
+        if not run.connected:
+            return False
+        hb.data.sendall(b"Report: -03 dB")
+        ok = run.wait(
+            "ping report",
+            lambda: ha.received - before >= 14,
+            float(run.scenario.get("transfer_s", 300)),
+        )
+        ha.send("DISCONNECT")
+        ended = run.wait(
+            "ping disconnected",
+            lambda: ha.heard("DISCONNECTED") > was[1] and hb.heard("DISCONNECTED") > was[3],
+            120,
+        )
+        took = max(run.air_s() - began, 0.1)
+        run.transfers.append(f"ping {took:.0f} s" if ok and ended else "ping lost")
+        run.delivered_ok &= ok
+        return ok and ended
     if word == "host-call":
         # `host-call c`: the client calls the gateway and the script goes on — a call made
         # into a gateway busy with another client's session; `host-wait c` sees it through
