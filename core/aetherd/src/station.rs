@@ -4024,10 +4024,8 @@ impl<P: Ptt> Station<P> {
         // an identifier waits for a clear channel no longer than the wait above: §97.119 asks
         // for it at the end of the communication, and a host program waits for it
         let id_waited_out = alone && waited_out;
-        let polite = !in_turn
-            && self.config.wait_for_clear
-            && !self.channel_clear(now)
-            && !id_waited_out;
+        let polite =
+            !in_turn && self.config.wait_for_clear && !self.channel_clear(now) && !id_waited_out;
         if !in_turn && (polite || busy_for_id) {
             self.stats.deferred_for_busy += 1;
             // a call's next try, a probe's wait move with it, or a try fires against a call
@@ -4069,7 +4067,9 @@ impl<P: Ptt> Station<P> {
         let mut link: Option<(KeyWindow, f64)> = None;
         let (frames, origin) = match outgoing {
             // the engine's closing identifier on its own (ADR-0075)
-            Outgoing::Link(tx) if tx.frames.is_empty() => return self.render_link_identifier(now, &tx),
+            Outgoing::Link(tx) if tx.frames.is_empty() => {
+                return self.render_link_identifier(now, &tx);
+            }
             Outgoing::Link(tx) => {
                 link = Some((tx.window, tx.identifier_s));
                 (tx.frames, tx.origin)
@@ -8118,7 +8118,11 @@ mod tests {
         assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 0));
         ends_with_its_identifier(&mut air.a, "id");
         let keyed = keyed(&mut air.b);
-        assert_eq!(keyed.last(), Some(&("DiscAck".to_owned(), false)), "{keyed:?}");
+        assert_eq!(
+            keyed.last(),
+            Some(&("DiscAck".to_owned(), false)),
+            "{keyed:?}"
+        );
     }
 
     #[test]
@@ -8297,7 +8301,10 @@ mod tests {
         station.probe("KK4XYZ", None).expect("idle");
         run_alone(&mut station, 10.0, Station::transmitting);
         run_alone(&mut station, 10.0, |s| !s.transmitting());
-        assert!(station.identifier.setup_at.is_some(), "the probe set up a contact");
+        assert!(
+            station.identifier.setup_at.is_some(),
+            "the probe set up a contact"
+        );
         station.config.cw_id = None;
         run_alone(&mut station, SETUP_ID_WAIT_S + 10.0, |_| false);
         assert!(station.quiescent());
@@ -8330,11 +8337,16 @@ mod tests {
         assert_eq!(status["forced"], true);
         assert_eq!(status["reason"], "Required for US callsigns (§97.119)");
         assert_eq!(status["callsign"], "W4ODA");
-        assert!(us.engine.config().identifier_s > 1.0, "the call declares it");
+        assert!(
+            us.engine.config().identifier_s > 1.0,
+            "the call declares it"
+        );
         let events = us.take_events();
         assert!(
-            events.iter().any(|e| e.starts_with("identifier:the Morse ID goes out as W4ODA")
-                && e.ends_with("Required for US callsigns (§97.119)")),
+            events.iter().any(
+                |e| e.starts_with("identifier:the Morse ID goes out as W4ODA")
+                    && e.ends_with("Required for US callsigns (§97.119)")
+            ),
             "said at start: {events:?}"
         );
 
@@ -8347,7 +8359,10 @@ mod tests {
 
         let asked = station("VE3XYZ", Some(CwId::default()));
         let status = asked.identifier_status();
-        assert_eq!((status["enabled"].as_bool(), status["forced"].as_bool()), (Some(true), Some(false)));
+        assert_eq!(
+            (status["enabled"].as_bool(), status["forced"].as_bool()),
+            (Some(true), Some(false))
+        );
 
         // a US station's probe that leads nowhere is identified on its own, setting off
         us.probe("KK4XYZ", None).expect("idle");
@@ -8367,10 +8382,22 @@ mod tests {
         assert_eq!(said(station.take_events()), 1, "said at start");
         station.note_required_identifier();
         assert_eq!(said(station.take_events()), 0, "said once");
-        station.set_callsigns(&["KK4ODA".to_owned()]).expect("callsigns");
-        assert_eq!(said(station.take_events()), 1, "said again for the new callsign");
-        station.set_callsigns(&["VE3XYZ".to_owned()]).expect("callsigns");
-        assert_eq!(said(station.take_events()), 0, "nothing to say for a non-US callsign");
+        station
+            .set_callsigns(&["KK4ODA".to_owned()])
+            .expect("callsigns");
+        assert_eq!(
+            said(station.take_events()),
+            1,
+            "said again for the new callsign"
+        );
+        station
+            .set_callsigns(&["VE3XYZ".to_owned()])
+            .expect("callsigns");
+        assert_eq!(
+            said(station.take_events()),
+            0,
+            "nothing to say for a non-US callsign"
+        );
         assert_eq!(station.identifier_status()["enabled"], false);
     }
 
@@ -8462,7 +8489,12 @@ mod tests {
         assert_eq!(air.a.received_len(), message.len());
         assert_eq!(air.b.received_len(), message.len());
         assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (0, 0));
-        assert!(keyed(&mut air.a).iter().chain(keyed(&mut air.b).iter()).all(|(_, id)| !id));
+        assert!(
+            keyed(&mut air.a)
+                .iter()
+                .chain(keyed(&mut air.b).iter())
+                .all(|(_, id)| !id)
+        );
         air.a.disconnect();
         air.run(150.0, |a, b| a.quiescent() && b.quiescent());
         assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 1));
@@ -8495,26 +8527,35 @@ mod tests {
                     ended[i] = Some(t);
                     pending_at_end[i] = station.closing_identifier_pending();
                 }
-                if identified[i].is_none() && ended[i].is_some() && !station.closing_identifier_pending()
+                if identified[i].is_none()
+                    && ended[i].is_some()
+                    && !station.closing_identifier_pending()
                 {
                     identified[i] = Some(t);
                 }
             }
             a.quiescent() && b.quiescent()
         });
-        assert_eq!(pending_at_end, [true, true], "an identifier was still to come at the end");
+        assert_eq!(
+            pending_at_end,
+            [true, true],
+            "an identifier was still to come at the end"
+        );
         for (station, call) in [(&mut air.a, "W4ODA"), (&mut air.b, "KK4XYZ")] {
             let events = station.take_events();
             let end = events.iter().position(|e| e.starts_with("disconnected:"));
-            let out = events
-                .iter()
-                .position(|e| *e == format!("identified:the closing identifier went out as {call}"));
+            let out = events.iter().position(|e| {
+                *e == format!("identified:the closing identifier went out as {call}")
+            });
             assert!(
                 matches!((end, out), (Some(end), Some(out)) if out > end),
                 "{call}: {events:?}"
             );
         }
-        assert!(identified[0] > identified[1], "the master's identifier is the last of all");
+        assert!(
+            identified[0] > identified[1],
+            "the master's identifier is the last of all"
+        );
     }
 
     #[test]
