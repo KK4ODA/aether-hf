@@ -144,7 +144,65 @@ this. Filling the gap is the author's decision; nothing was added for it.
 
 ## 4. Measured
 
-*(the harness: filled in below once the runs are in)*
+**The model** (`model/tests/test_granted.py`): both identifiers last for every closing (master,
+slave, both, both airs), the slave holding its own initiatives until the master's identifier can
+be over, a lost DISC_ACK answered again with its identifier, the master giving up on the DISC_ACK,
+each abort, a dead path, a band that closes, calling again, a station that sends none, and the
+callsign a session runs under. Sent at once after a link timeout, a slave's identifier went over
+the master's last tries in 24 of 96 band-closing sessions (35 dB in 20 s, both airs, two sizes,
+three closing times, two fall rates, four seeds); with the wait of §2.2, in none.
+
+**The port** replays the model input by input (`granted_vectors.json`); the identifier sessions
+were extended until every rule here, removed from the port, failed the replay.
+
+**The harness**, three draws of all 50 scenarios on this build (`session_matrix.py --seeds 3`):
+150 of 150 pass, no radiated overlap (`tools/air_account.py`), and every run judged on the
+identifier invariants — an identifier only alone or behind a DISC_ACK, nothing of a session
+after the identifier that closed it, and with `identifiers_last` every session of an identifying
+station ending with its identifier. The host scenarios pass with each program told
+`DISCONNECTED` only after its station's identifier (the emulator checks `status.identifier`
+when it hears it): the Winlink client (`*-winlink-exchange-*`), the Trimode gateway and its
+clients (`40m-trimode-gateway-2300`, `80m-trimode-client-vanishes-500`, the three `40m-gateway-*`),
+and VarAC's chat and ping (`80m-varac-chat-and-ping-500`, new). The five endings of
+`40m-closing-identifiers-2300`, as the account of the air has them (W4ODA calls KK4ODA):
+
+| ending | the closing on the air (s) |
+|---|---|
+| the caller closes | W4ODA DISC 34.2–35.1 · KK4ODA DISC_ACK + Morse 35.4–40.4 · W4ODA Morse 41.1–44.8 |
+| the called station asks to leave | W4ODA DISC 69.4–70.3 · KK4ODA DISC_ACK + Morse 70.6–75.6 · W4ODA Morse 76.3–80.0 |
+| the caller aborts | W4ODA leave DISC (floor) 109.9–113.5 · KK4ODA DISC_ACK + Morse 113.8–121.6 · W4ODA Morse 122.3–126.0 |
+| the called station aborts | KK4ODA DISC 163.5–167.1 · W4ODA DISC 167.4–168.3 · KK4ODA DISC_ACK + Morse 168.6–173.5 · W4ODA Morse 174.3–178.0 |
+| the path dies (outage 196–436) | KK4ODA times out, Morse 383.3–387.7 · W4ODA "no response", Morse 452.6–456.3 |
+
+**What it costs.** From the end of the last DISC_ACK's frame, where a session ended before, to
+the end of the last identifier: a median 8.4 s a closing exchange (4.0–15.1 s over 213 closings),
+3.6 % of the scenarios' air time — by class, VOX 12.4 % (many short sessions), identifier 5.4 %,
+host programs 4.9 %, band 3.5 %, other 3.2 %, robustness 2.6 %, stress 2.4 %. Against master's
+daemon (beta.110) on the same scenarios the pooled air time is ×1.042; the per-class ratios
+(host programs ×1.07, stress ×1.06, VOX ×1.23, band ×0.92) carry the harness's spread between
+draws. The nightly's baseline was taken from these runs (`bench/baselines/scenarios.csv`).
+
+**Found on the way, and fixed:**
+
+* A third station waiting to call a gateway called in the 0.7 s between the gateway's
+  identifier and its client's (`40m-gateway-busy-when-called-2300`, 18 radiated overlaps): its
+  reserve ended at the DISC_ACK (§2.5).
+* Both stations of `80m-band-closes-2300` timed out on a path 25 dB under the noise and sent
+  their identifiers 0.6 s apart (§2.2, the timed-out slave's wait).
+* A stop's 12 s wind-down could not hold the end of a session (§2.6).
+* Two harness faults, neither the daemon's: a host emulator that connected before a loaded
+  daemon had opened its host port ended the whole run, and a torn read of the channel server's
+  air clock (0.0 s) timed a step out at once — it cost `80m-vox-caller-declared-500`'s third draw
+  a session.
+
+**Not removable: two stations that cannot hear each other.** A slave that timed out cannot hear
+the master, so nothing tells it the master has stopped. When the master retries long
+transmissions well past the slave's link timeout, the slave's identifier can fall on the
+master's last tries: the outage session above, 383.3–387.7 s against the master's 367.9–393.0 s.
+Neither station hears the other, so the session loses nothing, but the two radiate together and
+a third station hears both. The harness counts no overlap inside its scripted outages, and found
+none on any path the stations could hear. The wait of §2.2 rests on both stations working out the
+link timeout alike, which holds when their configurations match.
 
 ## 5. Wire compatibility, without a protocol bump
 
@@ -160,7 +218,19 @@ its DISC_ACK and ahead of its first DISC.
 * **Mid-session**: an older slave's request for an identifier slot (`id` in its ANS) is still
   granted.
 
-`tools/mixed_pair.py` against v0.2.0-beta.108's daemon, both ways round (§4).
+**`tools/mixed_pair.py` against v0.2.0-beta.108's daemon**, the seven scenarios tagged `mixed`
+(`40m-closing-identifiers-2300` among them), both ways round: 14 of 14 pass, no radiated overlap.
+beta.108 does not force the identifier, so its stations there sent none. With `cw_id = true` at
+both stations of the closing scenario:
+
+* **beta.108 calls this build:** passes, no radiated overlap.
+* **This build calls beta.108:** one collision, 16 radiated overlaps, in the session the called
+  station aborts. The beta.108 slave sends its closing identifier alone after its own abort,
+  while the master is still in the session and keying its next transmission.
+* **Two beta.108 stations do the same:** 38 radiated overlaps, and a later session failed to
+  connect.
+
+So the overlap is beta.108's own, and it ends when that station updates.
 
 ## 6. Configuration
 
