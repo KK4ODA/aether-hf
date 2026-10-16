@@ -109,9 +109,13 @@ on, the newest `backlog_s` of what it heard is kept, and it catches up when the 
 **Host programs** (`host = true` at a station): `host a client` attaches a Winlink Express-like
 program to a's host port (its opening line as the bench recorded it), `host b trimode` an RMS
 Trimode-like gateway that scans — `LISTEN` off half a second in every three and a half of air,
-and a `CONNECTED` it is told while not listening is a failure (ADR-0051). Then `host-connect`
-(a's program calls b), `host-send N` / `host-reply N` (bytes over the data ports, a → b and
-b → a) and `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`).
+and a `CONNECTED` it is told while not listening is a failure (ADR-0051), and `host a varac` a
+VarAC-like program (`CHAT ON`, its `-T` alias in `MYCALL`, no `CWID`). Then `host-connect`
+(a's program calls b), `host-ping` (VarAC's ping: a `CONNECT` to b's `-T` alias, a 14-byte report
+back, a's `DISCONNECT`), `host-send N` / `host-reply N` (bytes over the data ports, a → b and
+b → a) and `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`). A program
+told `DISCONNECTED` before its station's closing identifier has gone out is a failure
+(ADR-0075).
 
 **More stations** (`[stations.c]`, `[stations.d]`, …: other clients of the gateway `b`). Each
 receiver hears its main peer — `b` for a client, `a` for `b` — through the path with its noise,

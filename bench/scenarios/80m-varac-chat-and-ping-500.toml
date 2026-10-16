@@ -1,0 +1,37 @@
+name = "80m-varac-chat-and-ping-500"
+description = """80 m at 500 Hz, two VarAC copies on the host ports, as on the bench of 2026-10-07: a
+ping (a CONNECT to the other's `-T` alias, its 14-byte report, DISCONNECT), then a chat session
+with lines both ways. VarAC says no CWID; both callsigns are US, so both identify at the end of
+every session whatever the setting (ADR-0075), and each program hears DISCONNECTED only once its
+station's identifier has gone out — VarAC goes back to its calling frequency on it."""
+tags = ["80m", "host", "varac"]
+bandwidth = 500
+seconds = 900
+seed = 76
+
+[stations.a]
+callsign = "KK4ODA"
+host = true
+[stations.b]
+callsign = "WD5EMA"
+host = true
+
+[path]
+profile = "moderate"
+snr_db = 6.0
+cfo_hz = 3.0
+
+[script]
+steps = [
+  "host a varac", "host b varac",
+  "host-ping",
+  "host-connect", "host-send 60", "host-reply 80", "host-send 40", "host-reply 25",
+  "host-disconnect",
+]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+identifiers_last = true
+max_collisions = 0
