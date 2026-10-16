@@ -4058,6 +4058,17 @@ impl<P: Ptt> Station<P> {
         self.note("beacon", "dropped: a session started before it went out");
     }
 
+    /// A call, a probe or its answer outside a session sets up a contact: one that goes no
+    /// further is identified on its own (ADR-0055). An acceptance opens a session, which the
+    /// engine identifies at its end.
+    fn note_setup(&mut self, now: f64, frames: &[aether_link::TxFrame]) {
+        if sets_up_contact(frames) && matches!(self.engine.state(), State::Idle | State::Connecting)
+        {
+            self.identifier.setup_at = Some(now);
+            self.identifier.setup_call.clone_from(&self.engine.my_call);
+        }
+    }
+
     /// Take the transmission at the head of the queue — judged and allowed — and render it.
     fn render_next(&mut self, now: f64) {
         let Some(outgoing) = self.pending.pop_front() else {
@@ -4141,15 +4152,7 @@ impl<P: Ptt> Station<P> {
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
         if let Some((window, identifier_s)) = link {
-            // a call, a probe or its answer outside a session sets up a contact: one that goes no
-            // further is identified on its own (ADR-0055); an acceptance opens a session, which
-            // the engine identifies at its end
-            if sets_up_contact(&frames)
-                && matches!(self.engine.state(), State::Idle | State::Connecting)
-            {
-                self.identifier.setup_at = Some(now);
-                self.identifier.setup_call.clone_from(&self.engine.my_call);
-            }
+            self.note_setup(now, &frames);
             // where in the transmission its header lies, for a cut that may come before it can
             // be read
             let header =
