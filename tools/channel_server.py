@@ -821,7 +821,10 @@ def main() -> int:
             server.tick()
             if server.t % AUDIO_RATE < TICK:
                 if args.progress_file:
-                    args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
+                    # whole or not at all: a reader never sees the file empty
+                    staged = args.progress_file.with_suffix(".tmp")
+                    staged.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
+                    staged.replace(args.progress_file)
                 if args.command_file and args.command_file.exists():
                     lines = args.command_file.read_text(encoding="utf-8").splitlines()
                     for line in lines[commands_done:]:
