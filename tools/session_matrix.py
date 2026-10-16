@@ -241,6 +241,7 @@ class Run:
     hosts: dict[str, Host] = field(default_factory=dict)
     outage_until: float = 0.0
     resources: dict[str, list[tuple[float, int, int]]] = field(default_factory=dict)
+    air_read: float = 0.0
 
     def sample(self) -> None:
         """Note each daemon's memory, files and threads (after each round of a script)."""
@@ -255,10 +256,12 @@ class Run:
             f.write(line + "\n")
 
     def air_s(self) -> float:
-        try:
-            return float(self.progress.read_text(encoding="utf-8") or 0.0)
-        except (OSError, ValueError):
-            return 0.0
+        """The air time the channel server has reached. It only moves on: a read that finds the
+        file empty or half written keeps the last good one. A read of 0.0 at the start of a wait
+        had counted its budget from zero, and a step at 150 s of air timed out at once."""
+        with contextlib.suppress(OSError, ValueError):
+            self.air_read = max(self.air_read, float(self.progress.read_text(encoding="utf-8")))
+        return self.air_read
 
     def wait(self, what: str, done: object, air_s: float, *, note: bool = True) -> bool:
         """Poll ``done()`` until it holds or ``air_s`` more seconds of air have passed; a
