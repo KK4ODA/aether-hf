@@ -58,9 +58,11 @@ which ``tools/air_account.py`` turns into a collision's mechanism.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import faulthandler
 import json
 import math
+import signal
 import socket
 import struct
 import sys
@@ -94,6 +96,8 @@ MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP = 1, 2, 3, 4, 5, 6
 RADIATED_BLOCK = 48
 """Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
 zero, a keyed lead or tail of silence is all zeros."""
+RECV_CHUNK = 1 << 18
+"""The most read from a station's socket at once (256 kB): a burst's worth of messages a call."""
 STALL_REPORT_S = 30.0
 """Wall-clock seconds without a tick before the server says where it stands (:func:`watchdog`).
 A night's run once stood still at 277 s of air with both daemons waiting for their next block,
@@ -371,16 +375,32 @@ class Station:
     deaf_hits: dict[str, int] = field(
         default_factory=lambda: {"transmitting": 0, "own_silence": 0, "vox": 0, "recovering": 0}
     )
-    # what the server is reading from the station, for the watchdog
+    # what the server is reading from the station, and how much it has read, for the watchdog
     reading: str = "nothing yet"
+    bytes_read: int = 0
+    # what has come from the socket and not yet been taken, from ``at`` on
+    inbox: bytearray = field(default_factory=bytearray)
+    at: int = 0
+    chunk: memoryview = field(default_factory=lambda: memoryview(bytearray(RECV_CHUNK)), repr=False)
 
     def read_exact(self, n: int) -> bytes:
-        data = b""
-        while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
-            if not chunk:
+        """``n`` bytes of the stream. The socket is read in chunks as large as it holds, not a
+        message's piece at a time: a burst is hundreds of 3.8 kB messages, and the kernel's
+        buffer was being drained 1, 4 and 3 840 bytes at a time each time a connection stood
+        still in CI — the server mid-message, the station waiting for its next block (nightly
+        34 and 35). That is the reading known for TCP windows a kernel does not reopen; if the
+        air stands still again, the watchdog says what each end's kernel still held."""
+        while len(self.inbox) - self.at < n:
+            if self.at:
+                del self.inbox[: self.at]
+                self.at = 0
+            got = self.sock.recv_into(self.chunk)
+            if not got:
                 raise ConnectionError(self.name)
-            data += chunk
+            self.inbox += self.chunk[:got]
+            self.bytes_read += got
+        data = bytes(self.inbox[self.at : self.at + n])
+        self.at += n
         return data
 
     def until_ready(self) -> None:
@@ -773,12 +793,42 @@ def machine(st: Station, spec: dict, seed: int, who: str) -> None:
         st.rng = np.random.default_rng([seed, MACHINE_SEED, sum(map(ord, who))])
 
 
+def kernel_queues(server: Server) -> list[str]:
+    """Both ends of each station's connection as the kernel holds them (Linux): bytes waiting
+    to be sent and to be read, and the TCP timer running (``tr``: 1 retransmit, 4 zero-window
+    probe). A message cut short with nothing queued at either end is a sender that never sent
+    it; bytes queued while the reader waits is the transport."""
+    path = Path("/proc/net/tcp")
+    if not path.exists():
+        return []
+    ends: dict[tuple[int, int], str] = {}
+    for st in server.stations.values():
+        with contextlib.suppress(OSError):
+            here, there = st.sock.getsockname()[1], st.sock.getpeername()[1]
+            ends[(here, there)] = f"{st.name} server end"
+            ends[(there, here)] = f"{st.name} station end"
+    out = []
+    for line in path.read_text(encoding="ascii", errors="replace").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 7:
+            continue
+        local, remote = int(fields[1].split(":")[1], 16), int(fields[2].split(":")[1], 16)
+        if (local, remote) in ends:
+            tx, rx = (int(x, 16) for x in fields[4].split(":"))
+            out.append(
+                f"{ends[(local, remote)]}: state {fields[3]}, to send {tx} B, to read {rx} B, "
+                f"timer {fields[5]}, retransmits {fields[6]}"
+            )
+    return out
+
+
 def watchdog(server: Server) -> None:
     """Say once, when the air has stood still for :data:`STALL_REPORT_S`, where the server is —
-    the air time, what it is doing, what it is reading from each station and the READYs it is
-    owed — with every thread's stack. The main loop also arms ``faulthandler``'s own timer each
-    second of air, which dumps the stacks without needing the interpreter: if a loop holds it,
-    this thread cannot run."""
+    the air time, what it is doing, what it is reading from each station, the bytes read and
+    the READYs it is owed, and both ends of every connection in the kernel — with every
+    thread's stack. The main loop also arms ``faulthandler``'s own timer each second of air,
+    which dumps the stacks without needing the interpreter: if a loop holds it, this thread
+    cannot run."""
     last, said = -1, False
     while True:
         time.sleep(STALL_REPORT_S)
@@ -789,7 +839,8 @@ def watchdog(server: Server) -> None:
             continue
         said = True
         stations = "; ".join(
-            f"{st.name} owes {st.owed} READY, reading {st.reading}"
+            f"{st.name} owes {st.owed} READY, reading {st.reading}, {st.bytes_read} B read, "
+            f"{len(st.inbox) - st.at} B of them not yet taken"
             for st in server.stations.values()
         )
         print(
@@ -797,6 +848,8 @@ def watchdog(server: Server) -> None:
             f"{server.doing}; {stations}",
             flush=True,
         )
+        for line in kernel_queues(server):
+            print(f"  {line}", flush=True)
         faulthandler.dump_traceback(file=sys.stdout, all_threads=True)
         sys.stdout.flush()
 
@@ -861,6 +914,11 @@ def main() -> int:
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
     commands_done = 0
     threading.Thread(target=watchdog, args=(server,), daemon=True).start()
+    # a runner that gives up on a stalled air stops the server: the account of the air up to
+    # the stall is still written (the `finally` below), for the run that failed; a server run
+    # in a thread of something else leaves the signal to its host
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
         while server.t / AUDIO_RATE < limit:
             server.tick()
