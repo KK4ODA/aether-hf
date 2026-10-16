@@ -288,6 +288,22 @@ class Run:
             time.sleep(POLL_S)
 
 
+HOST_PORT_WAIT_S = 30.0
+"""How long a host program waits for a station's host port to open: a daemon on a loaded machine
+takes seconds to start its host interface, and a refused connection ended the whole run."""
+
+
+def _connect(port: int) -> socket.socket:
+    deadline = time.monotonic() + HOST_PORT_WAIT_S
+    while True:
+        try:
+            return socket.create_connection(("127.0.0.1", port), timeout=10)
+        except ConnectionRefusedError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
 class Host:
     """A host program on a station's VARA-compatible ports, as the programs on the bench were
     seen to speak them (``host-interfaces.md`` §7): the command port's lines and the data
@@ -299,8 +315,8 @@ class Host:
 
     def __init__(self, run: Run, station: Station, kind: str) -> None:
         self.run, self.station, self.kind = run, station, kind
-        self.cmd = socket.create_connection(("127.0.0.1", station.host_port), timeout=10)
-        self.data = socket.create_connection(("127.0.0.1", station.host_port + 1), timeout=10)
+        self.cmd = _connect(station.host_port)
+        self.data = _connect(station.host_port + 1)
         # connected: from now on a read waits as long as the session does (a reader that
         # timed out after 10 s quit, and a slow path's reply was never counted)
         self.cmd.settimeout(None)
