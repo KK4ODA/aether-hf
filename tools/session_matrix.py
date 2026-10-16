@@ -257,8 +257,9 @@ class Run:
 
     def air_s(self) -> float:
         """The air time the channel server has reached. It only moves on: a read that finds the
-        file empty or half written keeps the last good one. A read of 0.0 at the start of a wait
-        had counted its budget from zero, and a step at 150 s of air timed out at once."""
+        file empty or half written (a prefix of the digits, never more than the last reading)
+        keeps the last good one. A read of 0.0 at the start of a wait had counted its budget
+        from zero, and a step at 150 s of air timed out at once."""
         with contextlib.suppress(OSError, ValueError):
             self.air_read = max(self.air_read, float(self.progress.read_text(encoding="utf-8")))
         return self.air_read
