@@ -1688,7 +1688,9 @@ DISC_ACK's end + the slave's declared identifier, or `end_max`); the slave holds
 initiatives to the master's identifier's latest end (`_closing_hold`); a slave's DISC is answered
 by the master's DISC (`_peer_left`); with no closing exchange each identifies alone with
 `Transmit.listen_first` (`_id_listen`: a slave, an owed-again identifier, a master after "no
-response", a link timeout or every DISC unanswered); "called again" drops it. Per-callsign lengths
+response", a link timeout or every DISC unanswered), and a slave that timed out waits an exchange
+and the master's declared identifier first (it cannot hear the master; 24 of 96 band-closing
+model sessions overlapped without it); "called again" drops it. Per-callsign lengths
 (`set_identifiers`), `identifier_owed`; `set_identifier_due` is gone. **A US callsign always
 identifies** (`cwid::required_for`: AA–AL, K, N, W, by where the station operates — `W4/G4ABC`
 and `G4ABC/W4` US, `VE3/KK4ODA` and `KK4ODA/VE3` not; SSIDs, `-T`, `/P` ignored), whatever
@@ -1700,8 +1702,15 @@ DISC_ACK lasts until the channel has been quiet 4 s (`Reservation::channel`, at 
 stop's wind-down is 22 s, the shell's kill 30 s, systemd's 30 s. Harness: `identifiers_last` in
 `[expect]` and the identifier invariants on every schema-13 station (`identifier_faults`),
 scenarios `40m-closing-identifiers-2300` (two US callsigns) and `-ve3-` (one non-US, ID off): five
-endings each. The tests' stations have US callsigns, so their sessions end with both
-identifiers; none needed a non-US callsign to keep its timing. Regulatory (reported, nothing changed): nothing in Aether identifies a
+endings each, and `80m-varac-chat-and-ping-500` (a `host a varac` emulator and `host-ping`).
+Three draws of all 50 scenarios: 150/150, no radiated overlap; the closing costs a median 8.4 s
+(3.6 % of air, ×1.042 against beta.110); the nightly baseline is these runs. Mixed pairs against
+beta.108: 14/14 both ways; with both IDs on, a beta.108 slave that aborts keys its identifier
+over the master, as two beta.108 stations do. Residual: on a path neither station hears, a
+timed-out slave's identifier can fall on the master's last retries. Harness fixes: the host
+emulator waits for the host port, and the air clock survives a torn read of `channel.progress`
+(it had timed steps out at once). The tests' stations have US callsigns, so their sessions end
+with both identifiers; none needed a non-US callsign to keep its timing. Regulatory (reported, nothing changed): nothing in Aether identifies a
 session between its call and its end; `fcc-regulatory-controls.md` *What identifies a long
 session* says so.
 
