@@ -62,6 +62,13 @@ DEFAULT_DAEMON = (
 SCENARIOS = ROOT / "bench" / "scenarios"
 STUCK_KEY_S = 32.0
 """Longer keyed at once than this is a stuck key: the watchdog's 30 s, and its release."""
+STALL_S = 60.0
+"""Wall-clock seconds with the air standing still before a run is called stalled: a session runs
+at several times real time, so a minute without a second of air is nothing a slow pass explains."""
+STOP_WAIT_S = 30.0
+"""How long the runner waits for a daemon, and the channel, to stop before killing it: a daemon
+asked to stop mid-session takes up to its ``WIND_DOWN`` (22 s) to end the session on the air, and
+one killed sooner leaves its log and its recordings cut short."""
 POLL_S = 0.02
 """How often the runner looks: a host program answers within milliseconds of a delivery, and
 at several times real time a quarter second of wall clock was a second of air."""
@@ -242,6 +249,10 @@ class Run:
     outage_until: float = 0.0
     resources: dict[str, list[tuple[float, int, int]]] = field(default_factory=dict)
     air_read: float = 0.0
+    # what went wrong with the run itself, judged a failure whatever the scenario expects: the
+    # air standing still, or the runner's own error
+    faults: list[str] = field(default_factory=list)
+    stalled_at: float | None = None
 
     def sample(self) -> None:
         """Note each daemon's memory, files and threads (after each round of a script)."""
@@ -266,7 +277,10 @@ class Run:
 
     def wait(self, what: str, done: object, air_s: float, *, note: bool = True) -> bool:
         """Poll ``done()`` until it holds or ``air_s`` more seconds of air have passed; a
-        wait that runs out is noted unless ``note`` is false (a plain pause)."""
+        wait that runs out is noted unless ``note`` is false (a plain pause). Air that stands
+        still for a minute is a fault of the run, said once: every wait after it fails at once."""
+        if self.stalled_at is not None:
+            return False
         until = self.air_s() + air_s
         stalled_since = time.monotonic()
         last = self.air_s()
@@ -283,8 +297,9 @@ class Run:
                 return False
             if now > last:
                 last, stalled_since = now, time.monotonic()
-            elif time.monotonic() - stalled_since > 60:
-                self.notes.append(f"{what}: the channel stopped at {now:.0f} s")
+            elif time.monotonic() - stalled_since > STALL_S:
+                self.stalled_at = now
+                self.faults.append(f"the air stopped at {now:.0f} s ({what})")
                 return False
             if self.channel and self.channel.poll() is not None:
                 self.notes.append(f"{what}: the channel ended at {now:.0f} s")
@@ -827,7 +842,7 @@ def judge(run: Run, ends: list[str]) -> dict:
         report = json.loads((run.dir / "channel.json").read_text(encoding="utf-8"))
     collisions = len(report.get("collisions", []))
     # always judged, whatever the scenario expects: what must never happen
-    invariants = list(run.exited)
+    invariants = list(run.exited) + run.faults
     for st in run.stations.values():
         with contextlib.suppress(OSError):
             if "panicked" in st.log.read_text(encoding="utf-8", errors="replace"):
@@ -983,21 +998,28 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | N
                 st.identifies = None if enabled is None else bool(enabled)
             except (OSError, KeyError, ValueError):
                 run.final_states.append("unknown")
+    except Exception as error:
+        # one run's fault is that run's failure: a daemon that stopped answering raised out of a
+        # step, and the whole shard went with it — its other runs and its CSV (nightly 34)
+        run.faults.append(f"harness: {type(error).__name__}: {error}")
     finally:
         for host in run.hosts.values():
             host.close()
+        if run.channel and run.stalled_at is not None:
+            # the daemons are waiting on a channel that will not move: let them go first
+            run.channel.terminate()
         for st in run.stations.values():
             if st.process.poll() is not None:
                 run.exited.append(f"{st.who} exited ({st.process.returncode})")
             st.process.terminate()
         if run.channel:
             try:
-                run.channel.wait(timeout=10)
+                run.channel.wait(timeout=STOP_WAIT_S)
             except subprocess.TimeoutExpired:
                 run.channel.terminate()
         for st in run.stations.values():
             try:
-                st.process.wait(timeout=10)
+                st.process.wait(timeout=STOP_WAIT_S)
             except subprocess.TimeoutExpired:
                 st.process.kill()
     # the channel writes its account when the stations leave it

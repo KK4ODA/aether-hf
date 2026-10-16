@@ -132,7 +132,11 @@ longer than 32 s at once (a stuck key), a host told `CONNECTED` while not listen
 `DISCONNECTED` before its station's closing identifier went out, and — for a build that places
 the Morse identifier last (schema 13 and up, ADR-0075) — an identifier anywhere but alone or
 behind a `DISC_ACK`, or anything of a session keyed after the identifier that closed it. "Idle"
-everywhere means idle with no closing identifier still to go out.
+everywhere means idle with no closing identifier still to go out. So is the run itself: air that
+stands still for a minute of wall clock ("the air stopped at N s") and an error of the runner's
+own ("harness: …") fail that run alone, and the rest of the set goes on. A channel server whose
+air has stood still for 30 s writes to its `channel.log` what it was doing, what it was reading
+from each station and the READYs it was owed, with every thread's stack.
 `tools/soak.py` draws random scenarios — every fading profile, offsets, drift, echoes, QSB, the
 other signals, AGCs, VOX, both bandwidths, aborts, outages, host programs — and judges them on
 these alone, plus being back to idle after the script has left (`--count`, `--seed`, `--jobs`;
