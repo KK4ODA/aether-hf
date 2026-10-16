@@ -1264,7 +1264,7 @@ fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
 }
 
 /// The longest a stop waits for a session's end to leave the air (ADR-0075): this station's
-/// DISC on the floor (3.2 s), the other station's DISC_ACK (3.2 s) with its identifier behind
+/// DISC on the floor (3.2 s), the other station's `DISC_ACK` (3.2 s) with its identifier behind
 /// it, then this station's own — a callsign in Morse at 20 wpm is about six seconds.
 const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(22);
 

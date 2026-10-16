@@ -1349,8 +1349,7 @@ impl Config {
         }
         // the speed is checked when an identifier will go out: the setting on, or a callsign
         // that requires one whatever it says (ADR-0075)
-        let identifies =
-            self.radio.cw_id || crate::cwid::required_for(&self.callsign).is_some();
+        let identifies = self.radio.cw_id || crate::cwid::required_for(&self.callsign).is_some();
         if identifies && !(5.0..=40.0).contains(&self.radio.cw_id_wpm) {
             return Err(ConfigError::Invalid(format!(
                 "cw_id_wpm is {}; below 5 an identifier takes longer than the transmission \
@@ -2070,7 +2069,10 @@ mod tests {
         let unused = "callsign = \"VE3XYZ\"\n[radio]\ncw_id_wpm = 200.0\n";
         assert!(Config::parse(unused).is_ok());
         let required = "callsign = \"W4ODA\"\n[radio]\ncw_id_wpm = 200.0\n";
-        assert!(Config::parse(required).is_err(), "a US callsign's speed went unchecked");
+        assert!(
+            Config::parse(required).is_err(),
+            "a US callsign's speed went unchecked"
+        );
     }
 
     #[test]

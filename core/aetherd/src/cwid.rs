@@ -293,8 +293,16 @@ mod tests {
     #[test]
     fn an_ssid_and_a_suffix_that_names_no_place_change_nothing() {
         for us in [
-            "KK4ODA-1", "KK4ODA-15", "KK4ODA-T", "KK4ODA-1-T", "KK4ODA/P", "KK4ODA/M",
-            "KK4ODA/MM", "KK4ODA/QRP", "KK4ODA/4", "KK4ODA/P-1",
+            "KK4ODA-1",
+            "KK4ODA-15",
+            "KK4ODA-T",
+            "KK4ODA-1-T",
+            "KK4ODA/P",
+            "KK4ODA/M",
+            "KK4ODA/MM",
+            "KK4ODA/QRP",
+            "KK4ODA/4",
+            "KK4ODA/P-1",
         ] {
             assert!(required_for(us).is_some(), "{us}");
         }
@@ -306,11 +314,24 @@ mod tests {
     #[test]
     fn a_portable_form_goes_by_where_the_station_operates() {
         // a US prefix in front, or a US location after the callsign: operating in the US
-        for us in ["W4/G4ABC", "K/G4ABC", "KH6/VE3XYZ", "G4ABC/W4", "VE3XYZ/KH6", "W4/G4ABC/P"] {
+        for us in [
+            "W4/G4ABC",
+            "K/G4ABC",
+            "KH6/VE3XYZ",
+            "G4ABC/W4",
+            "VE3XYZ/KH6",
+            "W4/G4ABC/P",
+        ] {
             assert!(required_for(us).is_some(), "{us}");
         }
         // a US station operating elsewhere, either way of writing it: that country's rules
-        for other in ["VE3/KK4ODA", "KK4ODA/VE3", "VE3/KK4ODA/P", "KK4ODA/VE3/P", "G/KK4ODA"] {
+        for other in [
+            "VE3/KK4ODA",
+            "KK4ODA/VE3",
+            "VE3/KK4ODA/P",
+            "KK4ODA/VE3/P",
+            "G/KK4ODA",
+        ] {
             assert!(required_for(other).is_none(), "{other}");
         }
     }
