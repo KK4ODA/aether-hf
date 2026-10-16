@@ -58,11 +58,14 @@ which ``tools/air_account.py`` turns into a collision's mechanism.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import math
 import socket
 import struct
 import sys
+import threading
+import time
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -91,6 +94,10 @@ MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP = 1, 2, 3, 4, 5, 6
 RADIATED_BLOCK = 48
 """Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
 zero, a keyed lead or tail of silence is all zeros."""
+STALL_REPORT_S = 30.0
+"""Wall-clock seconds without a tick before the server says where it stands (:func:`watchdog`).
+A night's run once stood still at 277 s of air with both daemons waiting for their next block,
+and nothing said what the server was doing (nightly 34, 2026-10-16)."""
 
 
 # ── the channel, one direction ────────────────────────────────────────
@@ -364,6 +371,8 @@ class Station:
     deaf_hits: dict[str, int] = field(
         default_factory=lambda: {"transmitting": 0, "own_silence": 0, "vox": 0, "recovering": 0}
     )
+    # what the server is reading from the station, for the watchdog
+    reading: str = "nothing yet"
 
     def read_exact(self, n: int) -> bytes:
         data = b""
@@ -377,11 +386,14 @@ class Station:
     def until_ready(self) -> None:
         """Take what the station sends until it asks for its next block."""
         while True:
+            self.reading = "the next message"
             kind = self.read_exact(1)[0]
             if kind == MSG_READY:
                 return
+            self.reading = f"message {kind}"
             if kind == MSG_PLAY:
                 (n,) = struct.unpack("<I", self.read_exact(4))
+                self.reading = f"{n} samples to play"
                 samples = np.frombuffer(self.read_exact(4 * n), dtype="<f4").astype(np.float32)
                 self.queue.append(samples)
                 self.queued += n
@@ -491,6 +503,7 @@ class Server:
     def __init__(self, scenario: dict, stations: dict[str, Station]) -> None:
         self.scenario = scenario
         self.stations = stations
+        self.doing = "starting"  # for the watchdog
         self.a, self.b = stations["a"], stations["b"]
         seed = int(scenario.get("seed", 1))
         # (sender, receiver) → the path, and its gain against the receiver's floor
@@ -623,9 +636,11 @@ class Server:
         # that fell behind catches up before the air moves on — unless it is stalled now
         stalled = {who: st.stalled(self.t) for who, st in self.stations.items()}
         for st in self.stations.values():
+            self.doing = f"waiting on {st.name}"
             while st.owed > 0:
                 st.until_ready()
                 st.owed -= 1
+        self.doing = "making the air"
         audio: dict[str, np.ndarray] = {}
         keyed: dict[str, np.ndarray] = {}
         signal: dict[str, np.ndarray] = {}
@@ -674,6 +689,7 @@ class Server:
                 self.rf_overlaps[-1][1] = (t + 1) / AUDIO_RATE
                 self._rf_since = t
         for who, st in self.stations.items():
+            self.doing = f"sending {st.name} its block"
             st.deliver(self.t + TICK, heard[who], stalled[who])
         self.t += TICK
 
@@ -757,6 +773,34 @@ def machine(st: Station, spec: dict, seed: int, who: str) -> None:
         st.rng = np.random.default_rng([seed, MACHINE_SEED, sum(map(ord, who))])
 
 
+def watchdog(server: Server) -> None:
+    """Say once, when the air has stood still for :data:`STALL_REPORT_S`, where the server is —
+    the air time, what it is doing, what it is reading from each station and the READYs it is
+    owed — with every thread's stack. The main loop also arms ``faulthandler``'s own timer each
+    second of air, which dumps the stacks without needing the interpreter: if a loop holds it,
+    this thread cannot run."""
+    last, said = -1, False
+    while True:
+        time.sleep(STALL_REPORT_S)
+        if server.t != last:
+            last, said = server.t, False
+            continue
+        if said:
+            continue
+        said = True
+        stations = "; ".join(
+            f"{st.name} owes {st.owed} READY, reading {st.reading}"
+            for st in server.stations.values()
+        )
+        print(
+            f"stalled at {server.t / AUDIO_RATE:.2f} s of air for {STALL_REPORT_S:.0f} s: "
+            f"{server.doing}; {stations}",
+            flush=True,
+        )
+        faulthandler.dump_traceback(file=sys.stdout, all_threads=True)
+        sys.stdout.flush()
+
+
 def accept_station(listener: socket.socket, radios: dict) -> Station:
     sock, _ = listener.accept()
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -816,10 +860,12 @@ def main() -> int:
     server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
     commands_done = 0
+    threading.Thread(target=watchdog, args=(server,), daemon=True).start()
     try:
         while server.t / AUDIO_RATE < limit:
             server.tick()
             if server.t % AUDIO_RATE < TICK:
+                faulthandler.dump_traceback_later(2 * STALL_REPORT_S, file=sys.stdout)
                 if args.progress_file:
                     # written in place: a reader can catch it empty or half written, and keeps
                     # its last reading then (session_matrix's Run.air_s). Replacing it whole
@@ -842,6 +888,7 @@ def main() -> int:
     except (ConnectionError, OSError):
         pass
     finally:
+        faulthandler.cancel_dump_traceback_later()
         if args.report:
             args.report.write_text(json.dumps(server.report(), indent=1), encoding="utf-8")
         for st in on_air.values():
