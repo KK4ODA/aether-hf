@@ -30,9 +30,10 @@
       </h1>
       <!-- the display well: what an operator reads at a glance, on every tab -->
       <div class="strip" id="strip" title="The station at a glance: what it is doing, the dial, the rung and the signal">
+        <span class="strip-who" id="strip-who" data-state="disconnected" title="The other station in the call or session" hidden></span>
         <span class="strip-state" id="strip-state" data-state="disconnected" title="What the modem is doing now">Not connected</span>
         <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
-        <span class="strip-reading" id="strip-rung" title="The rung the sender is using and its rate on the air" hidden></span>
+        <span class="strip-reading" id="strip-rung" title="The rung the data is moving at and its rate on the air: ↓ while receiving, ↑ while sending" hidden></span>
         <span class="strip-reading" id="strip-snr" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz" hidden></span>
         <div class="indicators" role="group" aria-label="Indicators">
           <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
@@ -133,7 +134,10 @@
                 <details class="help-pop push-right" id="link-help" title="What the link readings mean">
                   <summary title="What the link readings mean" aria-label="What the link readings mean">?</summary>
                   <p>
-                    <strong>Mode</strong> is the rung the sender is using: its number, name and rate.
+                    <strong>Mode</strong> is the rung the data is moving at, with its name and rate:
+                    the other station's while this one receives, this station's while it sends,
+                    both when data goes both ways. With no data moving it is the rung this station
+                    would send at.
                     <strong>SNR</strong> is what this receiver measured on the last frame it found,
                     referenced to 3 kHz. <strong>Throughput</strong> counts application bytes both
                     ways over the last thirty seconds, with the session's total under it.
@@ -142,7 +146,7 @@
                 </details>
               </div>
               <div class="tiles" id="readings-link">
-                <div class="reading tile" title="The mode the sender is using now: its number, name and rate">
+                <div class="reading tile" title="The rung the data is moving at: the other station's while this one receives, this station's while it sends; with no data moving, the rung this station would send at">
                   <div class="label">Mode</div>
                   <div class="value" id="v-mode">—</div>
                   <div class="sub" id="v-mode-name"></div>
@@ -172,17 +176,21 @@
                 <details class="help-pop push-right" id="channel-help" title="What the channel readings mean">
                   <summary title="What the channel readings mean" aria-label="What the channel readings mean">?</summary>
                   <p>
-                    <strong>Signal above noise</strong> is the busy detector's reading: the received
-                    level over its learned noise floor. <strong>Tuning</strong> is the carrier offset the
+                    <strong>Signal above noise</strong> is the busy detector's reading: the level of
+                    its latest 25 ms of audio over its learned noise floor. Frames the modem finds
+                    never count as noise, so in a session the floor stays the band's own.
+                    <strong>Tuning</strong> is the carrier offset the
                     receiver removed from the last frame — positive means the other station is above
                     your dial; a few hertz is nothing, a hundred is a dial to check. <strong>Receive
-                    level</strong> is the sound card's input, which Setup step 3 helps you set.
+                    level</strong> is the sound card's input over the last 3 seconds, which Setup step
+                    3 helps you set; it is a longer window than the busy detector's, so the two can
+                    differ by a few decibels.
                     <strong>Queued</strong> is what is still waiting to be sent.
                   </p>
                 </details>
               </div>
               <div class="tiles" id="readings-channel">
-                <div class="reading tile" title="The busy detector's reading: the received level above its noise floor">
+                <div class="reading tile" title="The busy detector's reading: the level of its latest 25 ms of audio above its noise floor">
                   <div class="label">Signal above noise</div>
                   <div class="value" id="v-excess">—</div>
                   <div class="sub" id="v-floor"></div>
@@ -192,7 +200,7 @@
                   <div class="value" id="v-cfo">—</div>
                   <div class="sub" id="v-cfo-sub">offset of the last frame</div>
                 </div>
-                <div class="reading tile" title="The sound card's input level; Setup step 3 helps you set it">
+                <div class="reading tile" title="The sound card's input level over the last 3 seconds; Setup step 3 helps you set it">
                   <div class="label">Receive level</div>
                   <div class="value" id="v-rx-level">—</div>
                   <div class="sub" id="v-rx-level-sub"></div>
@@ -1395,7 +1403,7 @@
               <ul class="help-steps">
                 <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
                 <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
-                <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rate the sender is using; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
+                <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rung the data is moving at; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
                 <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
                 <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Every <strong>?</strong> opens the explanation for the box it sits in.</li>
               </ul>

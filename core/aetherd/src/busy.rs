@@ -105,6 +105,12 @@
 //!   between a phantom and a weak real frame (measured on the OTA-2 recordings: phantoms
 //!   to 1.54 over their threshold, a real frame at 1.38), so no gate on it is clean. The
 //!   only evidence a phantom can never produce is a decode;
+//! * a **frame the receiver found** — decoded or not, announced or reported — is no evidence
+//!   of the noise: its span is taken out of the floor (`explain`), the part already heard as
+//!   well. A weak station's frames sit under the margin and a tone frame's envelope is steady,
+//!   so in a session both stations' floors had become the other's signal; and since a decoded
+//!   frame's hold is a politeness, not a measurement, the quiet after the frame — in a session
+//!   the only quiet there is — counts as noise again (ADR-0076);
 //! * the detector is **told when this station transmits**, and discards those blocks. Its own
 //!   sidetone is not occupancy, and letting it into the floor estimate would poison it.
 
@@ -202,10 +208,17 @@ pub struct BusyDetector {
     /// made forty times a second on a 50 ms quantity and a display samples it twice a second,
     /// so the excursions that trip the threshold are the ones a display never shows.
     excess_peak_db: f64,
-    /// Raw power per block and whether it is evidence of the noise floor — steady, not
-    /// silence, and captured while the channel was not busy — newest last, capped at
-    /// `window_blocks`.
-    history: std::collections::VecDeque<(f64, bool)>,
+    /// Raw power per block, whether it is evidence of the noise floor — steady, not silence,
+    /// captured while no signal was measured on the channel and inside no frame the receiver
+    /// found — and when the block ended, newest last, capped at `window_blocks`.
+    history: std::collections::VecDeque<(f64, bool, f64)>,
+    /// Until when the level or the shape path last found a signal on the channel, with its
+    /// hangover: a frame's hold makes the channel busy without measuring anything, and does
+    /// not keep the quiet after the frame from the floor (ADR-0076).
+    signal_until: f64,
+    /// Until when a frame the receiver found or announced occupies the channel
+    /// ([`Self::explain`]): its blocks are the frame's, not noise.
+    explained_until: f64,
     partial: Vec<Complex>,
     /// Whether each of the last `ATTACK_WINDOW` blocks exceeded the threshold, newest last.
     over: std::collections::VecDeque<bool>,
@@ -305,6 +318,8 @@ impl BusyDetector {
             peaked: [false, false],
             shape_db: f64::NAN,
             busy_until: f64::NEG_INFINITY,
+            signal_until: f64::NEG_INFINITY,
+            explained_until: f64::NEG_INFINITY,
             level_db: f64::NEG_INFINITY,
             floor_db: f64::NEG_INFINITY,
             blocks_skipped: 0,
@@ -396,6 +411,44 @@ impl BusyDetector {
         self.over.clear();
     }
 
+    /// A frame the receiver found or announced occupies `from..until` on the detector's clock:
+    /// its blocks are the frame's energy, not the noise's, whatever the power measurement made
+    /// of them — those already taken in are taken back out of the floor, those still to come
+    /// stay out.
+    ///
+    /// A weak station's frames sit under the margin — at 0 dB in 3 kHz a 500 Hz signal lifts
+    /// the passband's power by 3 dB — and a tone frame's envelope is constant, so steady: on
+    /// WC4Y's Test of 2026-10-17 both stations' floors became the other's signal, KK4ODA-1's
+    /// −18 dBFS against a real −28 and WC4Y's −12 against −19, and the panel drew signal as
+    /// noise (13-wc4y-beta111.md §13.2). A detection that turns out to be noise only keeps a
+    /// stretch of noise out of the floor, which then holds; nothing is marked busy by this.
+    pub fn explain(&mut self, from: f64, until: f64) {
+        self.explained_until = self.explained_until.max(until);
+        let mut changed = false;
+        for entry in self.history.iter_mut().rev() {
+            if entry.2 <= from {
+                break;
+            }
+            changed |= entry.1;
+            entry.1 = false;
+        }
+        if changed {
+            self.refloor();
+        }
+    }
+
+    /// The floor from the evidence the window holds now; held as it is when there is none.
+    fn refloor(&mut self) {
+        if let Some(floor) = median(
+            self.history
+                .iter()
+                .filter(|&&(_, evidence, _)| evidence)
+                .map(|&(power, _, _)| power),
+        ) {
+            self.floor_db = 10.0 * floor.max(FLOOR).log10();
+        }
+    }
+
     /// Discard audio captured while this station was transmitting.
     ///
     /// A half-duplex station hears its own sidetone; letting that into the floor estimate
@@ -421,6 +474,10 @@ impl BusyDetector {
         while self.partial.len() - consumed >= self.block_samples {
             let block = &self.partial[consumed..consumed + self.block_samples];
             consumed += self.block_samples;
+            // where this block ended and began, on the caller's clock: `now` is the end of
+            // what was fed
+            let block_end = now - (self.partial.len() - consumed) as f64 / self.config.fs;
+            let block_start = block_end - self.config.block_s;
             let power = block
                 .iter()
                 .map(|&(re, im)| re.mul_add(re, im * im))
@@ -435,7 +492,7 @@ impl BusyDetector {
                     .iter()
                     .rev()
                     .take(STEADY_BLOCKS - 1)
-                    .map(|&(block, _)| block)
+                    .map(|&(block, _, _)| block)
                     .chain(std::iter::once(power));
                 let (low, high) = recent.fold((f64::INFINITY, 0.0_f64), |(lo, hi), p| {
                     (lo.min(p), hi.max(p))
@@ -451,7 +508,7 @@ impl BusyDetector {
             // becomes floor evidence if the channel was not busy when it was taken. A block
             // captured under a signal is not noise, however long the signal lasts.
             self.level_db = 10.0 * power.max(FLOOR).log10();
-            let was_busy = self.busy(now);
+            let was_signal = block_end < self.signal_until;
             let excess = self.level_db - self.floor_db;
             self.excess_peak_db = self.excess_peak_db.max(excess);
             let over = self.floor_db.is_finite() && excess >= self.config.threshold_db;
@@ -461,16 +518,21 @@ impl BusyDetector {
             }
             if self.over.iter().filter(|&&o| o).count() >= ATTACK_MAJORITY {
                 self.busy_until = self.busy_until.max(now + self.config.hang_s);
+                self.signal_until = self.signal_until.max(now + self.config.hang_s);
                 self.reason = Some(BusyReason::Level {
                     level_db: self.level_db,
                     floor_db: self.floor_db,
                 });
             }
-            // evidence of the floor: steady, not a muted card, and not under a signal — by
-            // level or by shape; the block that crosses the threshold is itself excluded,
-            // whether or not it goes on to make the channel busy
-            let evidence = steady && power > SILENCE && !was_busy && !over && !peaked_now;
-            self.history.push_back((power, evidence));
+            // evidence of the floor: steady, not a muted card, not under a signal — by level
+            // or by shape — and inside no frame the receiver found (`explain`); the block that
+            // crosses the threshold is itself excluded, whether or not it goes on to make the
+            // channel busy. A decoded frame's hold is not a signal measured: the quiet after the
+            // frame is the noise, and in a session it is the only quiet there is (ADR-0076)
+            let in_frame = block_start < self.explained_until;
+            let evidence =
+                steady && power > SILENCE && !was_signal && !over && !peaked_now && !in_frame;
+            self.history.push_back((power, evidence, block_end));
             if self.history.len() > self.window_blocks {
                 self.history.pop_front();
             }
@@ -478,8 +540,8 @@ impl BusyDetector {
             let floor = median(
                 self.history
                     .iter()
-                    .filter(|&&(_, evidence)| evidence)
-                    .map(|&(power, _)| power),
+                    .filter(|&&(_, evidence, _)| evidence)
+                    .map(|&(power, _, _)| power),
             );
             if let Some(floor) = floor {
                 self.floor_db = 10.0 * floor.max(FLOOR).log10();
@@ -496,7 +558,7 @@ impl BusyDetector {
                     let all = median(
                         self.history
                             .iter()
-                            .map(|&(power, _)| power)
+                            .map(|&(power, _, _)| power)
                             .filter(|&p| p > SILENCE),
                     );
                     if let Some(all) = all {
@@ -559,6 +621,7 @@ impl BusyDetector {
         let hold = self.busy(now) && self.peaked.iter().any(|&p| p);
         if attack || hold {
             self.busy_until = self.busy_until.max(now + self.config.hang_s);
+            self.signal_until = self.signal_until.max(now + self.config.hang_s);
             if attack {
                 self.reason = Some(BusyReason::Shape { peak_db });
             }
@@ -1647,6 +1710,63 @@ mod tests {
             matches!(detector.reason(), Some(BusyReason::Frame { .. })),
             "the frame's own blocks named it energy again: {:?}",
             detector.reason()
+        );
+    }
+
+    /// A session as the busy detector of a station in it hears it: the other station's
+    /// frames, a weak and steady signal 4.5 dB over the passband's noise (a 500 Hz signal at
+    /// about 0 dB in 3 kHz), 5.36 s each with 0.7 s of quiet between, each decoded at its end
+    /// and — with `explained` — announced a third of a second in, as the receiver does. The
+    /// floor at the end, in dB over the noise's own.
+    fn floor_after_a_session(explained: bool) -> f64 {
+        let config = BusyConfig::default();
+        let mut detector = BusyDetector::new(config);
+        let sigma = 0.01;
+        let mut now = feed(&mut detector, 8.0, sigma, 1, 0.0);
+        let noise_floor = detector.floor_db;
+        let signal = sigma * (1.0 + 10f64.powf(4.5 / 10.0)).sqrt();
+        for frame in 0..30u64 {
+            let start = now;
+            let end = start + 5.36;
+            let announced = start + 0.32;
+            let mut told = false;
+            while now < end {
+                if explained && !told && now >= announced {
+                    detector.explain(start, end);
+                    told = true;
+                }
+                now = feed(
+                    &mut detector,
+                    config.block_s,
+                    signal,
+                    100 + frame * 1000 + (now * 40.0) as u64,
+                    now,
+                );
+            }
+            if explained {
+                detector.explain(start, end);
+            }
+            detector.mark_frame(now + 0.15, 40.0);
+            now = feed(&mut detector, 0.7, sigma, 7 + frame, now);
+        }
+        detector.floor_db - noise_floor
+    }
+
+    #[test]
+    fn a_weak_stations_frames_do_not_become_the_noise_floor() {
+        // ADR-0076: on WC4Y's Test of 2026-10-17 both stations' floors became the other's
+        // signal (KK4ODA-1 −18 dBFS against a real −28), and with them the threshold and the
+        // panel's readings. Frames the receiver found are no noise, and the quiet after a
+        // decoded frame is, its hold notwithstanding
+        let without = floor_after_a_session(false);
+        let with = floor_after_a_session(true);
+        assert!(
+            without > 3.0,
+            "unexplained, the frames ratchet the floor up: {without:.1} dB — the test does not tell"
+        );
+        assert!(
+            with.abs() < 1.0,
+            "the floor learned the frames: {with:.1} dB over the noise"
         );
     }
 

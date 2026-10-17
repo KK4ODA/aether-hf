@@ -79,6 +79,10 @@ pub struct FrameRecord {
     /// absent for control and tone frames, and from a sidecar written before beta.80.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follows: Option<u8>,
+    /// The sound card's capture reported skipping audio inside the frame (ADR-0076): written
+    /// only when it did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capture_skip: bool,
 }
 
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
@@ -803,6 +807,7 @@ mod tests {
             decoded: true,
             bytes: 144,
             control: None,
+            capture_skip: false,
         });
         recording.sent(SentRecord {
             t_s: 11.8,

@@ -100,6 +100,10 @@ way: §1–§11 follow report 12's sections, then the author's two questions, th
    remove the leftovers altogether: about 93 s here.
 11. *The author's decision.* Send the Morse identifier without the SSID ("KK4ODA", 4.0 s).
 
+**Built after the author's go (2026-10-17, "yes to all") as ADR-0076**: changes 1–9 and 11, no
+wire change. Change 1 skips every rung the link never asks for, which at 500 Hz is rung 8 as well
+as rung 4 (and 6 and 13 at 2 300 Hz). Change 10 waits for the next protocol bump.
+
 And on the station: **the mini PC's capture** has skipped 279 times (9.4 s) since 2026-10-16
 10:38Z, mostly in the evening hours, and its loop has seen a sleeping thread wake 818 ms late.
 That is the machine, not the modem (§5).

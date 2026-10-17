@@ -135,6 +135,22 @@ impl Daemon {
         self.call("status", &json!({}))["result"].clone()
     }
 
+    /// Wait for both stations' recordings to have closed: a session's runs on past its end
+    /// until the closing identifiers have gone (ADR-0076), at most 30 s, and its sidecar is
+    /// complete only once closed.
+    fn wait_for_recordings_closed(&self, other: &Self) {
+        let deadline = Instant::now() + Duration::from_secs(45);
+        while !self.status()["recording"].is_null() || !other.status()["recording"].is_null() {
+            assert!(
+                Instant::now() < deadline,
+                "a recording stayed open: a={} b={}",
+                self.status()["recording"],
+                other.status()["recording"]
+            );
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
     fn wait_for_state(&self, other: &Self, state: &str, what: &str) {
         let deadline = Instant::now() + Duration::from_secs(60);
         while self.status()["state"] != state || other.status()["state"] != state {
@@ -271,6 +287,7 @@ fn two_daemons_complete_a_session_over_the_simulated_channel() {
     let closed = a.call("disconnect", &json!({}));
     assert_eq!(closed["ok"], true, "{closed}");
     a.wait_for_state(&b, "idle", "the session never closed");
+    a.wait_for_recordings_closed(&b);
 
     // and, with [record] auto on, both sides recorded the session
     assert_recorded(&dir, "W4ODA_KK4XYZ");
@@ -538,6 +555,7 @@ fn two_daemons_complete_a_session_at_500_hz() {
     let closed = a.call("disconnect", &json!({}));
     assert_eq!(closed["ok"], true, "{closed}");
     a.wait_for_state(&b, "idle", "the narrow session never closed");
+    a.wait_for_recordings_closed(&b);
     assert_recorded(&dir, "W4ODA_KK4XYZ");
     // the sidecar says which waveform, so a replay runs the right receiver
     let sidecar = std::fs::read_dir(dir.join("recordings"))
@@ -785,6 +803,7 @@ fn two_daemons_run_a_test_session_over_the_simulated_channel() {
         std::thread::sleep(Duration::from_millis(500));
     }
     a.wait_for_state(&b, "idle", "the session never closed");
+    a.wait_for_recordings_closed(&b);
     // the run recorded itself, under a name that says so
     let sidecars: Vec<PathBuf> = std::fs::read_dir(dir.join("recordings"))
         .expect("dir")

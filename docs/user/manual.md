@@ -73,9 +73,12 @@ before it keys the radio.
 
 Across the top is the **display well**, the station at a glance:
 
-- **State**: *Idle*, *Calling*, *Connected* (with the other station's callsign) or *Closing*.
+- **State**: *Idle*, *Calling*, *Connected* or *Closing*, with the other station's callsign in
+  front. In a narrow window the words shorten; the callsign does not.
 - **Dial**: the radio's frequency, when the radio can report it (CAT, rigctld or FLRig).
-- **Rung**: the rung the sender is using and its rate on the air.
+- **Rung**: the rung the data is moving at and its rate on the air: the other station's while
+  you receive (↓), yours while you send (↑), both when data goes both ways. With no data moving,
+  the rung your station would send at.
 - **SNR**: the signal-to-noise ratio of the last frame heard, in a 3 kHz bandwidth.
 - **Lamps**: **TX** while the radio is keyed, **RX** while a burst is arriving, **Busy** while
   the channel carries a signal.
@@ -208,12 +211,16 @@ the sound card's own noise.
 - **Morse ID**: your callsign in Morse at the end of each session. It is the last thing your
   station sends for the session, after the other station's goodbye. Nothing during a session
   sends one, and neither do calls, probes, beacons or KISS frames.
+  - It sends your callsign without its SSID: `KK4ODA-1` goes out as `KK4ODA`, and a `-T` or
+    `-R` is dropped too. The rules ask for your assigned call sign (§97.119), and the SSID is
+    not part of it. A `/` part such as `W4/G4ABC` or `/P` is kept.
   - A US callsign always sends it. The box is ticked and greyed out, with the note *Required for
     US callsigns (§97.119)*. What you had set is kept for any other callsign.
   - Any other callsign: your choice, off by default.
   - A call or probe that leads to no session is identified 30 s after, on its own.
-  - The US rules cap an automatic identifier at 20 wpm, whatever is set here. The line beside the
-    speed says so when it applies.
+  - The US rules cap an automatic identifier at 20 wpm, whatever is set here (§97.119(b)(1)).
+    The line beside the speed says so when it applies. 20 wpm can sound slow: a callsign is
+    long in Morse.
   - A US station identifies only at the end. A session longer than ten minutes is not identified
     in between: see *FCC regulatory controls*.
 - **Band edges**: the margin kept between your signal and a segment's edge (50 Hz by default),
@@ -224,7 +231,9 @@ the sound card's own noise.
 
 - **Updates**: which releases to be offered (*stable only*, *betas too*, *nightlies too*), and
   whether to check when the application starts.
-- **Recording**: record every session from connect to disconnect.
+- **Recording**: record every session from connect to disconnect, and on until the closing
+  Morse IDs have gone (yours, and the other station's when it identifies after you), at most
+  30 s after the end.
 - **Debug mode**: on by default. After each session that Winlink Express, Pat or VarAC runs
   through this station, its recording (with the audio), the logs and your settings (never a
   password) go to the Aether project, so problems on real paths can be found. Sessions you run
@@ -303,14 +312,17 @@ press **Test session**. It runs:
 2. a call;
 3. a message, sized to how well the probe says you are heard;
 4. a file, sized to about two minutes at the message's rate (at least 256 bytes);
-5. a **ladder**: a short burst pinned at each rung, starting one rung under the fastest the
-   message and file were acknowledged at, until three rungs in a row fail;
+5. a **ladder**: a short burst pinned at each rung the link uses, starting one rung under the
+   fastest the message and file were acknowledged at, until three rungs in a row fail;
 6. a disconnect.
 
 The message and file go first, so the speeds the Test reports are the speeds you would get.
-The ladder then tries rungs the link would not choose by itself. Each ladder frame is tried
-once at its rung; a frame that fails goes again at the speed the other station asks for. After
-the last rung the Test disconnects without waiting for the ladder's leftovers.
+The ladder then tries rungs the link would not choose by itself. It skips the rungs the link
+never uses: 4 and 8 at 500 Hz, 6 and 13 at 2300 Hz. Each ladder frame is tried once at its rung; a frame that fails goes
+again at the speed the other station asks for. A rung the other station did not answer at all
+is logged with no SNR (*at ? dB*). As soon as the last rung is answered the Test disconnects,
+without delivering the ladder's leftover test bytes. The other station may say the last frames
+were not received; for a Test that is expected.
 
 It takes about five minutes and stops itself at ten. The other station only has to be listening.
 Both stations must run the same bandwidth and protocol version. The result is recorded as two
@@ -362,12 +374,14 @@ a bug report about the air should carry.
 - **Link**: the mode, SNR, throughput and session (who, and for how long).
 - **Channel**: signal above noise, tuning offset, receive level, and bytes still queued.
 - **History**: two charts. **Speed** is the session's bytes per second, both ways added
-  together. Two dashed lines show the rate on the air of the rung the data went at: **sending
+  together, drawn only during a session. Two dashed lines show the rate on the air of the rung the data went at: **sending
   at** (your data, in the transmit colour) and **receiving at** (the other station's data, in
   the receive colour). Each line shows only while data moves that way. **SNR by frame** is every frame heard, what the other station
   reports hearing you at, and the current mode's threshold. Below them, **Channel and activity**
   is the received level over the last two minutes, with this station's transmissions ticked and
-  the busy periods shaded.
+  the busy periods shaded. Its dashed line is the busy detector's noise floor. Frames the modem
+  finds never count as noise, and the quiet after them does, so in a session the floor stays
+  the band's own and does not climb to the other station's signal.
 - **Counters**: totals since the modem started; **Reset counters** sets them back to zero.
 
 What each reading means is in section 13.
@@ -489,11 +503,11 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 |---|---|---|
 | **SNR** | Header, Link | What this receiver measured on the last frame it found, in a 3 kHz bandwidth. Negative numbers are normal on HF; the tone floor works below −14 dB. On a tone frame it is a lower bound and reads no higher than about 17 dB. |
 | **They hear you at** | Diagnostics, SNR chart | What the other station measured on your last burst, sent back in its acknowledgement or control frames. Compare it with your SNR: a big difference is a lopsided path. |
-| **Rung / Mode** | Header, Link | The step the sender is using, with its name and rate on the air. Rungs 0 and 1 are the tone floor. |
+| **Rung / Mode** | Header, Link | The step the data is moving at, with its name and rate on the air: the other station's while you receive, yours while you send, both (*sending / receiving*) when data goes both ways. With no data moving, the rung your station would send at. The low rungs are the tone floor. |
 | **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. Data going one way stays below the rate of the rung it went at: acknowledgements, turnarounds and retransmissions take their share. With data going both ways, the total can stand above either line. |
 | **Tuning** | Channel | The carrier offset the receiver removed from the last frame. Positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check. |
-| **Signal above noise** | Channel | The busy detector's reading: the received level over its learned noise floor. |
-| **Receive level** | Channel, Setup step 3 | The sound card's input. Aim for *Good*. |
+| **Signal above noise** | Channel | The busy detector's reading: the level of its latest 25 ms of audio over its learned noise floor. Frames the modem finds, decoded or not, never count as noise. |
+| **Receive level** | Channel, Setup step 3 | The sound card's input over the last 3 seconds. Aim for *Good*. It reads a longer window than *Signal above noise*, so the two can differ by a few decibels. |
 | **Queued** | Channel | Bytes still waiting to be sent. |
 | **Mode confidence** | Diagnostics | How clearly the last frame's mode was read. Below 1.3 is a guess. |
 | **Busy lamp** | Header | The channel carries a signal: the level over the threshold, a narrowband signal's shape, or a frame that decoded. |
@@ -502,8 +516,9 @@ The rungs, their rates and the SNR each needs are in Setup's **Mode table**, and
 [air-interface specification](../spec/air-interface.md#4-modes--the-ladder). Roughly: at
 **2300 Hz**, rungs 0–5 are tone kinds from 36 to 228 bit/s, and rungs 6–19 OFDM from about 200
 bit/s to 5.5 kbit/s. At **500 Hz**, rungs 0–3 are tone kinds from 36 to 112 bit/s, and rungs
-4–14 OFDM up to about 1 kbit/s. At 500 Hz the modem never asks for rung 4: after each frame's
-header it carries less than rung 3, from 7 dB more SNR. The Test's ladder still measures it.
+4–14 OFDM up to about 1 kbit/s. Some rungs are never asked for, because another carries as
+much or more from less SNR: 4 and 8 at 500 Hz (rung 4, after each frame's header, carries less
+than rung 3 from 7 dB more), 6 and 13 at 2300 Hz. The Test's ladder skips them too.
 
 ## 14. Troubleshooting
 
