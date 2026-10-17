@@ -4,8 +4,8 @@
 //!
 //! The sequence: a probe (both directions' SNR, ADR-0006); a session; a message of
 //! incompressible bytes, timed; a file, sized from the message's rate; the **mode ladder** —
-//! a short burst pinned at each mode from a rung under the fastest the transfers were
-//! acknowledged at, its acknowledgement kept as a rung, until three rungs in a row decode fewer
+//! a measurement at each mode from a rung under the fastest the transfers were acknowledged at,
+//! the other station's report of it kept as a rung, until three rungs in a row decode fewer
 //! than half their frames; and an orderly disconnect. The other station needs nothing but to be
 //! listening: it answers the probe and the call and acknowledges what it decodes, as it would
 //! for any session. What the run learns goes into the recording's sidecar under
@@ -14,24 +14,19 @@
 //!
 //! **The Test measures the link the way an operator uses it, then measures the rungs in a way
 //! that cannot disturb that** (ADR-0074). The message and the file go first, as any transfer
-//! would, and the rates the run reports are the link's own. The ladder comes after them: it
-//! pins rungs the link would not choose, and on ND1J's Tests of 2026-10-15, run between the
-//! message and the file, its frames that failed were sent again at the rung that failed, its
-//! leftovers ran into the file and stepped it down to the tone floor, and about 130 s of each
-//! weak Test went to delivering its filler. A ladder frame is now measured once — its first
-//! copy, in the rung's answer — and goes on at the rung the other station asks for, as data
-//! does (the engine, `pinned`); the run moves to the disconnect at the last rung's answer, and
-//! the disconnect delivers none of the filler still queued (ADR-0076: on WC4Y's Test of
-//! 2026-10-17 it had waited 26 s for 40 bytes nobody reads). The ladder climbs only the rungs
-//! the link uses: one another rung beats on both data rate and threshold is never recommended
-//! (ADR-0073), and measuring it measured nothing the link would do (the 500 Hz rungs 4 and 8 on
-//! that Test). The file leaves the ladder its time ([`LADDER_RESERVE_S`]): with the file last,
-//! three Tests with ND1J on a slow path (2026-09-25) spent the budget on the transfers and never
-//! reached a rung.
-//!
-//! The ladder's bodies are small on purpose: a frame pinned at a rung the path cannot carry is
-//! re-encoded at the rung asked for, and a body every rung can hold is what makes that
-//! possible.
+//! would, and the rates the run reports are the link's own. The ladder comes after them, and a
+//! rung is a **measurement** (ADR-0077, link protocol 9): frames of their own kind, filler the
+//! rung's full size, sent once in a transmission of their own, never delivered and never sent
+//! again; the other station's acknowledgement reports which arrived. The ladder had pinned the
+//! session's own data at each rung, so a frame that failed there was data still to deliver: on
+//! ND1J's Tests of 2026-10-15 those frames were sent again at the rung that failed, and on WC4Y's
+//! Test of 2026-10-17, re-encoded at the rung asked for, delivering them took 93 s of 435. Now a
+//! rung follows the last one's report at once, and the run moves to the disconnect at the last
+//! rung's. The ladder climbs only the rungs the link uses: one another rung beats on both data
+//! rate and threshold is never recommended (ADR-0073), and measuring it measured nothing the
+//! link would do (the 500 Hz rungs 4 and 8 on that Test). The file leaves the ladder its time
+//! ([`LADDER_RESERVE_S`]): with the file last, three Tests with ND1J on a slow path (2026-09-25)
+//! spent the budget on the transfers and never reached a rung.
 
 use aether_link::State;
 use serde_json::{Value, json};
@@ -204,18 +199,18 @@ impl Transfer {
     }
 }
 
-/// One rung of the ladder: a burst pinned at a mode and what came back for it.
+/// One rung of the ladder: a measurement at a mode and what the other station reported of it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rung {
-    /// The pinned mode.
+    /// The mode measured.
     pub mode: usize,
-    /// New frames the burst carried.
+    /// The measurement's frames.
     pub frames: usize,
-    /// Of those, the ones the other station acknowledged.
+    /// Of those, the ones the other station reported arrived.
     pub decoded: usize,
-    /// The SNR it measured on the burst.
+    /// The SNR it measured on them; `None` when the report came after a poll.
     pub snr_db: Option<f64>,
-    /// From the burst's send to its acknowledgement.
+    /// From the measurement's asking to its report.
     pub seconds: f64,
 }
 
@@ -284,12 +279,12 @@ const FILE_TARGET_S: f64 = 120.0;
 
 /// The time the file leaves for the ladder that follows it. ND1J's weak-path Tests of
 /// 2026-10-15 took 140–170 s to measure their rungs (the four-tone rungs a 26 s exchange each,
-/// a failed rung half a minute more), and a ladder frame's leftovers now go at the rung asked
-/// for, once.
+/// a failed rung half a minute more, most of it its leftovers); a rung is now its measurement's
+/// one exchange (ADR-0077).
 const LADDER_RESERVE_S: f64 = 150.0;
 
 /// The least time left in the budget for the ladder to start another rung: a tone rung's
-/// measurement and its leftovers' one transmission, and the disconnect.
+/// measurement, its report after a poll if its answer is lost, and the disconnect.
 const LADDER_RUNG_LEFT_S: f64 = 60.0;
 
 /// The message the probe's SNR earns, under the plan's ceiling: half a kilobyte on a
@@ -375,7 +370,6 @@ pub struct TestRun {
     ladder_next: usize,
     ladder_fails: usize,
     modes: Vec<usize>,
-    body_bytes: usize,
     recorded: bool,
     seed: u64,
     failure: Option<String>,
@@ -397,7 +391,7 @@ pub struct TestRun {
 }
 
 impl TestRun {
-    fn new(plan: TestPlan, now: f64, modes: Vec<usize>, body_bytes: usize, seed: u64) -> Self {
+    fn new(plan: TestPlan, now: f64, modes: Vec<usize>, seed: u64) -> Self {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
@@ -417,7 +411,6 @@ impl TestRun {
             ladder_next: 0,
             ladder_fails: 0,
             modes,
-            body_bytes,
             recorded: false,
             seed,
             failure: None,
@@ -434,14 +427,6 @@ impl TestRun {
 
     fn remaining_s(&self, now: f64) -> f64 {
         self.plan.budget_s - (now - self.started_s)
-    }
-
-    /// Whether the rung just answered is the ladder's last: three failed in a row, the top
-    /// reached, or no time for another.
-    fn ladder_over(&self, now: f64) -> bool {
-        self.ladder_fails >= LADDER_FAILS
-            || self.ladder_next + 1 >= self.modes.len()
-            || self.remaining_s(now) < LADDER_RUNG_LEFT_S
     }
 
     /// Whether the run is still going.
@@ -560,14 +545,6 @@ impl<P: Ptt> Station<P> {
             .min(ceiling))
             .filter(|m| usable.contains(m))
             .collect();
-        // a body every mode can carry, and one short of the length the container cannot
-        let body_bytes = modes
-            .iter()
-            .map(|&m| aether_link::frames::data_capacity(timing.capacity(m)))
-            .min()
-            .unwrap_or(16)
-            .saturating_sub(2)
-            .max(1);
         let now = self.now();
         let seed = self
             .engine
@@ -577,7 +554,7 @@ impl<P: Ptt> Station<P> {
                 h.rotate_left(5) ^ u64::from(b)
             })
             ^ (now * 1000.0) as u64;
-        let mut run = TestRun::new(plan, now, modes, body_bytes, seed);
+        let mut run = TestRun::new(plan, now, modes, seed);
         let name = format!(
             "{}_test",
             crate::record::session_name(&self.engine.my_call, Some(&run.plan.remote))
@@ -605,7 +582,6 @@ impl<P: Ptt> Station<P> {
             self.test = Some(run);
             return false;
         }
-        let _ = self.engine.pin_mode(None, None);
         if self.engine.state() == State::Idle {
             self.finish_test(&mut run, "stopped by the operator");
         } else {
@@ -923,15 +899,11 @@ impl<P: Ptt> Station<P> {
                     run.enter(Step::Disconnect, now);
                 } else if !run.entered {
                     let mode = run.modes[run.ladder_next];
-                    let _ = self.engine.pin_mode(Some(mode), Some(run.body_bytes));
-                    let data =
-                        run.test_bytes(run.plan.rung_frames * run.body_bytes, 16 + mode as u64);
-                    self.send(&data);
+                    let _ = self.engine.measure(mode, run.plan.rung_frames);
                     run.entered = true;
                 } else {
                     let mode = run.modes[run.ladder_next];
                     for rung in self.engine.take_ladder() {
-                        let _ = self.engine.pin_mode(None, None);
                         let rung = Rung {
                             mode: rung.mode,
                             frames: rung.frames,
@@ -961,19 +933,13 @@ impl<P: Ptt> Station<P> {
                         run.rung_reported = true;
                     }
                     if self.engine.state() != State::Connected {
-                        let _ = self.engine.pin_mode(None, None);
                         self.finish_test(run, "aborted: the session dropped during the ladder");
-                    } else if run.rung_reported
-                        && (run.ladder_over(now)
-                            || (self.engine.all_acknowledged() && self.outbound.is_empty()))
-                    {
-                        // a rung's frames are delivered before the next rung is pinned, so its
-                        // burst holds only fresh frames; after the last rung's answer they are
-                        // filler nobody reads, and go with the disconnect's drain (ADR-0072)
+                    } else if run.rung_reported {
+                        // a measurement leaves nothing to deliver: the next rung follows its
+                        // report at once (ADR-0077)
                         run.ladder_next += 1;
                         run.enter(Step::Ladder, now);
                     } else if since > RUNG_TIMEOUT_S {
-                        let _ = self.engine.pin_mode(None, None);
                         self.note("test", &format!("rung {mode}: timed out"));
                         let why = format!("aborted: rung {mode} timed out");
                         self.abort();
@@ -1047,11 +1013,11 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The Test's own disconnect: at once, with what is still queued left undelivered. After
-    /// the ladder that is its filler — frames that failed at a pinned rung, re-encoded at the
-    /// rung asked for, ten-odd bytes in a tone frame each — which nobody reads; WC4Y's Test of
-    /// 2026-10-17 waited 26 s of its 435 to deliver 40 such bytes (ADR-0076). The other station
-    /// may say the last frames did not arrive, which for a Test is so.
+    /// The Test's own disconnect: at once, with what is still queued left undelivered — a file
+    /// whose time ran out; the ladder's measurements leave nothing queued (ADR-0077). WC4Y's
+    /// Test of 2026-10-17 waited 26 s of its 435 to deliver 40 bytes of the old ladder's filler
+    /// (ADR-0076). The other station may say the last frames did not arrive, which for a Test
+    /// is so.
     fn close_test_session(&mut self) {
         let queued = self.engine.tx_pending_bytes();
         self.engine.disconnect_within(Some(0.0));
@@ -1192,7 +1158,7 @@ mod tests {
 
     #[test]
     fn the_test_bytes_are_incompressible_and_repeatable() {
-        let run = TestRun::new(TestPlan::default(), 0.0, vec![0], 16, 7);
+        let run = TestRun::new(TestPlan::default(), 0.0, vec![0], 7);
         let a = run.test_bytes(4096, 1);
         let b = run.test_bytes(4096, 1);
         let c = run.test_bytes(4096, 2);

@@ -17,8 +17,8 @@ retransmission is the *same codeword* under another redundancy version, and the 
 soft-combines them. That is why the header carries no burst position — the receiver takes
 the slot of a frame from its air time (frames of a burst are contiguous) and the end of a
 burst from the silence after it. Kinds carried in the DATA container: DATA (user bytes),
-CONNECT_REQ and CONNECT_ACK (callsigns do not fit a control frame), and — outside sessions —
-BEACON, PROBE, PROBE_ACK and DATAGRAM.
+MEASURE (a rung measured, never delivered: protocol 9), CONNECT_REQ and CONNECT_ACK (callsigns
+do not fit a control frame), and — outside sessions — BEACON, PROBE, PROBE_ACK and DATAGRAM.
 
 CONTROL container, 7 bytes::
 
@@ -83,6 +83,14 @@ class DataKind(Enum):
     every station that decodes it (ADR-0019). ``seq`` is the fragment's index in its high
     nibble and the last index in its low one; ``session`` is the datagram's number (1–255).
     See ``datagram.py``."""
+    MEASURE = 7
+    """A frame that measures a rung of the path (protocol 9, ADR-0077): filler at the rung
+    measured, sent once in a transmission of its own and never delivered or sent again. Its
+    ``seq`` is its index among the transmission's measurement frames, not a sequence number:
+    it takes none, so a frame of it that does not arrive leaves nothing to deliver. The other
+    station reports which arrived (:data:`REPORT`). The Test's ladder is built of them; it had
+    pinned the session's own data at each rung, and on WC4Y's Test of 2026-10-17 delivering the
+    rungs' failed frames took 93 s of 435 (13-wc4y-beta111.md §10)."""
 
 
 class DataFlags(IntFlag):
@@ -259,15 +267,19 @@ OFFER flag and an acknowledgement's TAKEN, which a station of version 6 would ta
 answer and an acknowledgement alone."""
 
 
-PROTOCOL_VERSION = 8
+GRANTED_VERSION = 8
+"""The first link protocol of granted slots (ADR-0069): the caller is the session's master and
+the only station that keys on its own initiative; every master transmission grants the other
+station one slot, defined by what it states; a station keys only in a slot granted by a frame it
+decoded in time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes
+are not version 7's, and neither is any of its timing."""
+
+PROTOCOL_VERSION = 9
 """The link protocol a station speaks, in the connect body's version byte; what a release
-states (``link_protocol``). 8, granted slots (ADR-0069): the caller is the session's master and
-the only
-station that keys on its own initiative; every master transmission grants the other station one
-slot, defined by what it states; a station keys only in a slot granted by a frame it decoded in
-time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes are not
-version 7's, and neither is any of its timing: a station of one ignores a call of the other, and
-says so."""
+states (``link_protocol``); a station ignores a call of another, and says so. 9 since the
+measurement frames (ADR-0077): a MEASURE frame, the control frame's ``measure`` bit in the place
+of version 8's identifier request inside a session, and an acknowledgement that reports a
+measurement (:data:`REPORT`), none of which a station of version 8 reads."""
 
 CAP_LEVEL_SHIFT = 3
 CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT
@@ -319,7 +331,7 @@ class ConnectBody:
             + pack_callsign(self.dst)
             + bytes([self.caps, self.version, snr & 0xFF])
         )
-        if self.version >= PROTOCOL_VERSION:
+        if self.version >= GRANTED_VERSION:
             turnaround = max(0, min(15, math.ceil(self.turnaround_s * 10 - 1e-9)))
             identifier = max(0, min(255, math.ceil(self.identifier_s * 2 - 1e-9)))
             out += bytes([turnaround, identifier])
@@ -333,7 +345,7 @@ class ConnectBody:
         snr = None if raw == SNR_UNKNOWN else float(raw - 256 if raw >= 128 else raw)
         version = body[2 * CALL_BYTES + 1]
         turnaround = identifier = 0.0
-        if version >= PROTOCOL_VERSION and len(body) >= CONNECT_BODY_8_BYTES:
+        if version >= GRANTED_VERSION and len(body) >= CONNECT_BODY_8_BYTES:
             turnaround = (body[2 * CALL_BYTES + 3] & 0x0F) / 10.0
             identifier = body[2 * CALL_BYTES + 4] / 2.0
         return cls(
@@ -477,6 +489,12 @@ class GrantKind(Enum):
 GRANT_SNR_UNKNOWN = 0x20
 """The six-bit SNR field's "not measured": −32 in two's complement, outside −31 … +31."""
 
+REPORT = 0x0001
+"""An acknowledgement's bitmap bit 0, set: the bitmap reports the other station's last
+measurement — bit ``i + 1`` set ⇔ its measurement frame ``i`` arrived — and acknowledges nothing
+at or above ``base`` (protocol 9, ADR-0077). In a plain acknowledgement the bit is always clear:
+``base`` is the first sequence number not received."""
+
 
 @dataclass(frozen=True)
 class GrantFrame:
@@ -484,7 +502,7 @@ class GrantFrame:
 
         0: kind (2) | count (3) | data family (1) | level (2)
         1: session (7) | fam (1)
-        2: flag (1) | id (1) | SNR (6)
+        2: flag (1) | id / measure (1) | SNR (6)
         3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
         6: rung (5) | n (3)
 
@@ -493,8 +511,13 @@ class GrantFrame:
     where the transmission ends. ``level``: in a header, the gap level of the slot it grants;
     in an answer, the level its sender needs. ``fam``: in a header, the family the answer goes
     in; in an answer, the family its sender needs headers in. ``flag``: the header's slot is an
-    open window; the answer asks to leave. ``ident``: the header's slot includes the slave's
-    Morse identifier; the answer says it is due. ``snr_db``: how the sender hears the other
+    open window; the answer asks to leave. ``ident`` (a DISC, a DISC_ACK): the slot includes
+    the slave's closing Morse identifier (ADR-0075). ``measure`` (a header, an answer; the same
+    bit, protocol 9): the data frames after this one are measurement frames (:class:`DataKind`
+    ``MEASURE``), and with none after it, the sender's last were and it has not read their
+    report — it sends no data until it has (ADR-0077). ``base``/``bitmap``: what the sender has
+    received of the other station's data, or with :data:`REPORT` set, which of its last
+    measurement's frames arrived. ``snr_db``: how the sender hears the other
     station, −31 … +31 dB (ADR-0021). ``rung``: recommended for the other station's data.
     ``n``: frames granted (or an open window's size step) / frames queued, at most 7.
     ``session`` is the session number's low seven bits: data frames carry all eight."""
@@ -507,6 +530,7 @@ class GrantFrame:
     fam: bool = False
     flag: bool = False
     ident: bool = False
+    measure: bool = False
     base: int = 0
     bitmap: int = 0
     snr_db: float | None = None
@@ -526,7 +550,7 @@ class GrantFrame:
                 | (int(self.data_floor) << 2)
                 | (self.level & 0x03),
                 ((self.session & 0x7F) << 1) | int(self.fam),
-                (int(self.flag) << 7) | (int(self.ident) << 6) | snr,
+                (int(self.flag) << 7) | (int(self.ident or self.measure) << 6) | snr,
                 self.base & 0xFF,
                 (self.bitmap >> 8) & 0xFF,
                 self.bitmap & 0xFF,
@@ -540,15 +564,19 @@ class GrantFrame:
             raise ValueError("short CONTROL payload")
         raw = payload[2] & 0x3F
         snr = None if raw == GRANT_SNR_UNKNOWN else float(raw - 64 if raw >= 32 else raw)
+        kind = GrantKind(payload[0] >> 6)
+        bit = bool(payload[2] & 0x40)
+        closing = kind in (GrantKind.DISC, GrantKind.DISC_ACK)
         return cls(
-            kind=GrantKind(payload[0] >> 6),
+            kind=kind,
             count=(payload[0] >> 3) & 0x07,
             data_floor=bool(payload[0] & 0x04),
             level=payload[0] & 0x03,
             session=payload[1] >> 1,
             fam=bool(payload[1] & 0x01),
             flag=bool(payload[2] & 0x80),
-            ident=bool(payload[2] & 0x40),
+            ident=bit and closing,
+            measure=bit and not closing,
             snr_db=snr,
             base=payload[3],
             bitmap=(payload[4] << 8) | payload[5],
@@ -557,11 +585,21 @@ class GrantFrame:
         )
 
     def received(self, seq: int) -> bool:
-        """Acknowledgement semantics, as :meth:`ControlFrame.received`."""
+        """Acknowledgement semantics, as :meth:`ControlFrame.received`; a report acknowledges
+        only what is below ``base``."""
         d = (seq - self.base) % SEQ_MOD
         if d >= WINDOW:
             return d >= SEQ_MOD // 2
-        return bool((self.bitmap >> d) & 1)
+        return not self.reports and bool((self.bitmap >> d) & 1)
+
+    @property
+    def reports(self) -> bool:
+        """Whether the bitmap reports the other station's last measurement (:data:`REPORT`)."""
+        return bool(self.bitmap & REPORT)
+
+    def measured(self, index: int) -> bool:
+        """In a report: whether the measurement's frame ``index`` arrived."""
+        return self.reports and 0 <= index < WINDOW - 1 and bool((self.bitmap >> (index + 1)) & 1)
 
 
 def seq_after(seq: int, n: int = 1) -> int:

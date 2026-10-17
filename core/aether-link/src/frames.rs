@@ -80,6 +80,12 @@ pub enum DataKind {
     /// fragment's index in its high nibble and the last index in its low one; `session` the
     /// datagram's number, 1–255. See [`crate::datagram`].
     Datagram,
+    /// A frame that measures a rung of the path (protocol 9, ADR-0077): filler at the rung
+    /// measured, sent once in a transmission of its own and never delivered or sent again. Its
+    /// `seq` is its index among the transmission's measurement frames, not a sequence number: it
+    /// takes none, so a frame of it that does not arrive leaves nothing to deliver. The other
+    /// station reports which arrived ([`REPORT`]).
+    Measure,
 }
 
 impl DataKind {
@@ -103,6 +109,7 @@ impl DataKind {
             Self::Probe => 4,
             Self::ProbeAck => 5,
             Self::Datagram => 6,
+            Self::Measure => 7,
         }
     }
 
@@ -115,6 +122,7 @@ impl DataKind {
             4 => Some(Self::Probe),
             5 => Some(Self::ProbeAck),
             6 => Some(Self::Datagram),
+            7 => Some(Self::Measure),
             _ => None,
         }
     }
@@ -305,6 +313,12 @@ pub fn encode_data(
     Ok(out)
 }
 
+/// The kind a DATA container's first byte names, read without the rest of it.
+#[must_use]
+pub fn data_kind(payload: &[u8]) -> Option<DataKind> {
+    payload.first().and_then(|&b| DataKind::from_bits(b >> 5))
+}
+
 /// Decode a DATA container into its header and body.
 ///
 /// # Errors
@@ -464,14 +478,20 @@ pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
 /// DATA header and an explicit length it fills the 24 bytes of the tone floor's slowest rung.
 pub const CONNECT_BODY_8_BYTES: usize = CONNECT_BODY_BYTES + 2;
 
+/// The first link protocol of granted slots (ADR-0069): the caller is the session's master and
+/// the only station that keys on its own initiative; every master transmission grants the other
+/// station one slot, defined by what it states; a station keys only in a slot granted by a frame
+/// it decoded in time. Its control frame ([`GrantFrame`]) and its connect body's two more bytes
+/// are not version 7's, and neither is any of its timing.
+pub const GRANTED_VERSION: u8 = 8;
+
 /// The link protocol a station speaks, in the connect body's version byte; what a release
-/// states (`link_protocol`) and the shell's `LINK_PROTOCOL` is held to. 8, granted slots
-/// (ADR-0069): the caller is the session's master and the only station that keys on its own
-/// initiative; every master transmission grants the other station one slot, defined by what it
-/// states; a station keys only in a slot granted by a frame it decoded in time. Its control
-/// frame ([`GrantFrame`]) and its connect body's two more bytes are not version 7's, and
-/// neither is any of its timing: a station of one ignores a call of the other, and says so.
-pub const PROTOCOL_VERSION: u8 = 8;
+/// states (`link_protocol`) and the shell's `LINK_PROTOCOL` is held to; a station ignores a
+/// call of another, and says so. 9 since the measurement frames (ADR-0077): a
+/// [`DataKind::Measure`] frame, the control frame's `measure` bit in the place of version 8's
+/// identifier request inside a session, and an acknowledgement that reports a measurement
+/// ([`REPORT`]), none of which a station of version 8 reads.
+pub const PROTOCOL_VERSION: u8 = 9;
 
 /// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
 /// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called
@@ -578,7 +598,7 @@ impl ConnectBody {
         out.push(self.caps);
         out.push(self.version);
         out.push(snr_byte(self.snr_db));
-        if self.version >= PROTOCOL_VERSION {
+        if self.version >= GRANTED_VERSION {
             // whole steps up, as the model's ceil less a hair: 0.25 s says 0.3, 0.2 says 0.2
             let turnaround = (self.turnaround_s * 10.0 - 1e-9).ceil().clamp(0.0, 15.0);
             let identifier = (self.identifier_s * 2.0 - 1e-9).ceil().clamp(0.0, 255.0);
@@ -598,7 +618,7 @@ impl ConnectBody {
         }
         let version = body[2 * CALL_BYTES + 1];
         let (turnaround_s, identifier_s) =
-            if version >= PROTOCOL_VERSION && body.len() >= CONNECT_BODY_8_BYTES {
+            if version >= GRANTED_VERSION && body.len() >= CONNECT_BODY_8_BYTES {
                 (
                     f64::from(body[2 * CALL_BYTES + 3] & 0x0F) / 10.0,
                     f64::from(body[2 * CALL_BYTES + 4]) / 2.0,
@@ -749,12 +769,18 @@ impl GrantKind {
 /// The six-bit SNR field's "not measured": −32 in two's complement, outside −31 … +31.
 pub const GRANT_SNR_UNKNOWN: u8 = 0x20;
 
+/// An acknowledgement's bitmap bit 0, set: the bitmap reports the other station's last
+/// measurement — bit `i + 1` set means its measurement frame `i` arrived — and acknowledges
+/// nothing at or above `base` (protocol 9, ADR-0077). In a plain acknowledgement the bit is
+/// always clear: `base` is the first sequence number not received.
+pub const REPORT: u16 = 0x0001;
+
 /// Protocol 8's control frame (ADR-0069): seven bytes, 56 bits.
 ///
 /// ```text
 /// 0: kind (2) | count (3) | data family (1) | level (2)
 /// 1: session (7) | fam (1)
-/// 2: flag (1) | id (1) | SNR (6)
+/// 2: flag (1) | id / measure (1) | SNR (6)
 /// 3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
 /// 6: rung (5) | n (3)
 /// ```
@@ -764,9 +790,13 @@ pub const GRANT_SNR_UNKNOWN: u8 = 0x20;
 /// the transmission ends. `level`: in a header, the gap level of the slot it grants; in an
 /// answer, the level its sender needs. `fam`: in a header, the family the answer goes in; in an
 /// answer, the family its sender needs headers in. `flag`: the header's slot is an open window;
-/// the answer asks to leave. `ident`: the header's slot includes the slave's Morse identifier;
-/// the answer says it is due. `snr_db`: how the sender hears the other station, −31 … +31 dB
-/// (ADR-0021). `rung`: recommended for the other station's data. `n`: frames granted (or an
+/// the answer asks to leave. `ident` (a DISC, a DISC_ACK): the slot includes the slave's closing
+/// Morse identifier (ADR-0075). `measure` (a header, an answer; the same bit, protocol 9): the
+/// data frames after this one are measurement frames ([`DataKind::Measure`]), and with none
+/// after it, the sender's last were and it has not read their report — it sends no data until
+/// it has (ADR-0077). `base`/`bitmap`: what the sender has received of the other station's
+/// data, or with [`REPORT`] set, which of its last measurement's frames arrived. `snr_db`: how
+/// the sender hears the other station, −31 … +31 dB (ADR-0021). `rung`: recommended for the other station's data. `n`: frames granted (or an
 /// open window's size step) / frames queued, at most 7. `session` is the session number's low
 /// seven bits: data frames carry all eight.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -786,8 +816,10 @@ pub struct GrantFrame {
     pub fam: bool,
     /// A header: the slot is an open window; an answer: its sender asks to leave.
     pub flag: bool,
-    /// A header: the slot includes the slave's identifier; an answer: its sender's is due.
+    /// A DISC or a DISC_ACK: the slot includes the slave's closing identifier.
     pub ident: bool,
+    /// A header or an answer: measurement frames follow, or the sender's last were.
+    pub measure: bool,
     /// Next sequence number the sender needs.
     pub base: u8,
     /// Bit *i* set means `base + i` has been received.
@@ -813,6 +845,7 @@ impl GrantFrame {
             fam: false,
             flag: false,
             ident: false,
+            measure: false,
             base: 0,
             bitmap: 0,
             snr_db: None,
@@ -834,7 +867,7 @@ impl GrantFrame {
                 | (u8::from(self.data_floor) << 2)
                 | (self.level & 0x03),
             ((self.session & 0x7F) << 1) | u8::from(self.fam),
-            (u8::from(self.flag) << 7) | (u8::from(self.ident) << 6) | snr,
+            (u8::from(self.flag) << 7) | (u8::from(self.ident || self.measure) << 6) | snr,
             self.base,
             ((self.bitmap >> 8) & 0xFF) as u8,
             (self.bitmap & 0xFF) as u8,
@@ -858,15 +891,19 @@ impl GrantFrame {
                 i16::from(raw)
             })
         });
+        let kind = GrantKind::from_bits(payload[0] >> 6);
+        let bit = payload[2] & 0x40 != 0;
+        let closing = matches!(kind, GrantKind::Disc | GrantKind::DiscAck);
         Ok(Self {
-            kind: GrantKind::from_bits(payload[0] >> 6),
+            kind,
             count: (payload[0] >> 3) & 0x07,
             data_floor: payload[0] & 0x04 != 0,
             level: payload[0] & 0x03,
             session: payload[1] >> 1,
             fam: payload[1] & 0x01 != 0,
             flag: payload[2] & 0x80 != 0,
-            ident: payload[2] & 0x40 != 0,
+            ident: bit && closing,
+            measure: bit && !closing,
             snr_db,
             base: payload[3],
             bitmap: (u16::from(payload[4]) << 8) | u16::from(payload[5]),
@@ -875,14 +912,27 @@ impl GrantFrame {
         })
     }
 
-    /// Acknowledgement semantics, as [`ControlFrame::received`].
+    /// Acknowledgement semantics, as [`ControlFrame::received`]; a report acknowledges only
+    /// what is below `base`.
     #[must_use]
     pub fn received(&self, seq: u8) -> bool {
         let distance = seq_distance(seq, self.base);
         if distance >= WINDOW {
             return distance >= SEQ_MOD / 2;
         }
-        (self.bitmap >> distance) & 1 == 1
+        !self.reports() && (self.bitmap >> distance) & 1 == 1
+    }
+
+    /// Whether the bitmap reports the other station's last measurement ([`REPORT`]).
+    #[must_use]
+    pub const fn reports(&self) -> bool {
+        self.bitmap & REPORT != 0
+    }
+
+    /// In a report: whether the measurement's frame `index` arrived.
+    #[must_use]
+    pub const fn measured(&self, index: usize) -> bool {
+        self.reports() && index < WINDOW - 1 && (self.bitmap >> (index + 1)) & 1 == 1
     }
 }
 
@@ -1113,6 +1163,10 @@ mod tests {
             DataKind::ConnectReq,
             DataKind::ConnectAck,
             DataKind::Beacon,
+            DataKind::Probe,
+            DataKind::ProbeAck,
+            DataKind::Datagram,
+            DataKind::Measure,
         ] {
             let header = DataHeader {
                 kind,
@@ -1127,10 +1181,19 @@ mod tests {
     #[test]
     fn malformed_frames_are_errors_not_panics() {
         assert!(matches!(decode_data(&[0, 1]), Err(FrameError::TooShort)));
+        // the kind's three bits are all in use since protocol 9: 7 is a measurement frame
         assert!(matches!(
             decode_data(&[0xE0, 0, 0]),
-            Err(FrameError::UnknownKind(7))
+            Ok((
+                DataHeader {
+                    kind: DataKind::Measure,
+                    ..
+                },
+                _
+            ))
         ));
+        assert_eq!(data_kind(&[0xE0]), Some(DataKind::Measure));
+        assert_eq!(data_kind(&[]), None);
         assert!(matches!(
             ControlFrame::decode(&[0, 1]),
             Err(FrameError::TooShort)

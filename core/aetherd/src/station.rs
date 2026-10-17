@@ -3777,6 +3777,10 @@ impl<P: Ptt> Station<P> {
                     }
                 }
                 DataKind::Data => report.from = ours(header.session),
+                DataKind::Measure => {
+                    report.kind = "measure";
+                    report.from = ours(header.session);
+                }
                 DataKind::Datagram => report.kind = "datagram",
             }
         }
@@ -5123,6 +5127,13 @@ impl<P: Ptt> Station<P> {
                 Ok(DataKind::Datagram) => {
                     ("a KISS client's datagram".to_owned(), Direction::Originate)
                 }
+                Ok(DataKind::Measure) => {
+                    let name = air.rungs.get(first.mode).map_or("", |r| r.name.as_str());
+                    (
+                        format!("a measurement at rung {} ({name})", first.mode),
+                        session,
+                    )
+                }
                 _ => {
                     let name = air.rungs.get(first.mode).map_or("", |r| r.name.as_str());
                     (
@@ -5539,7 +5550,9 @@ impl<P: Ptt> Station<P> {
         }
         let (header, body) = decode_data(payload).ok()?;
         match header.kind {
-            DataKind::Data if header.session != ours => Some(reserve::Heard::Session),
+            DataKind::Data | DataKind::Measure if header.session != ours => {
+                Some(reserve::Heard::Session)
+            }
             DataKind::ConnectReq | DataKind::ConnectAck => {
                 let connect = ConnectBody::decode(&body).ok()?;
                 let mine = |call: &str| self.engine.callsigns.iter().any(|c| c == call);

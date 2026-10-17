@@ -78,5 +78,7 @@ context → decision → alternatives considered → consequences.
 | [0071](0071-the-keying-latency-counts-the-radio-and-the-render.md) | A station's keying latency counts its radio and its render | accepted |
 | [0072](0072-a-disconnect-waits-a-minute-at-most-and-says-so.md) | A disconnect waits a minute at most, and says so | accepted |
 | [0073](0073-a-header-where-no-copy-can-be-read-alone-and-rungs-counted-by-their-data.md) | A header where no copy can be read alone, and rungs counted by their data | accepted |
-| [0074](0074-the-test-measures-the-link-then-the-rungs.md) | The Test measures the link, then the rungs | accepted |
+| [0074](0074-the-test-measures-the-link-then-the-rungs.md) | The Test measures the link, then the rungs | accepted; the pinned frame's re-encode superseded by 0077 |
 | [0075](0075-the-morse-identifier-is-the-last-thing-a-session-sends.md) | The Morse identifier is the last thing a session sends: once, at the end, by each station; forced for US callsigns | accepted |
+| [0076](0076-the-test-pays-only-for-what-it-measures-and-a-frame-is-no-noise.md) | The Test pays only for what it measures, and a frame is no noise | accepted; the ladder's leftovers superseded by 0077 |
+| [0077](0077-the-ladder-measures-with-frames-of-its-own.md) | The ladder measures with frames of its own: link protocol 9 | accepted |

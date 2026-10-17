@@ -364,10 +364,13 @@ def place(a: Side, b: Side, offset: Offset) -> None:
                 key = k.key + to_a
                 if key - GUESS_SLACK_S < start < k.release + to_a + 0.5:
                     follows = f.get("follows")
+                    # a decoded measurement frame (ADR-0077) is a data container, as the
+                    # sending side records it
+                    kind = "data" if f.get("kind") == "measure" else str(f.get("kind"))
                     heard.append(
                         Heard(
                             start,
-                            str(f.get("kind")),
+                            kind,
                             int(f.get("mode") or 0),
                             bool(f.get("decoded", True)),
                             int(follows) if isinstance(follows, int) else None,

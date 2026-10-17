@@ -1745,8 +1745,29 @@ a recording runs on past the session until the closing identifiers have gone (`R
 `two_daemons.rs`); the identifier sends `cwid::sent_as` (no SSID, `-T`/`-R`; `/` parts kept;
 `identifier.check` gains `sent_as`); the panel's Mode tile and well rung show the rung the data
 moves at (`applyRung`), the well keeps the callsign in `#strip-who`, the speed chart leaves a
-gap outside a session. Vectors: the `ladder-unheard` session. Change 10 (ladder frames that are
-not data) waits for the next protocol bump.
+gap outside a session. Vectors: the `ladder-unheard` session.
+**ADR-0077, link protocol 9 (report 13's change 10; the author: "it does not matter if changes
+modify what goes in the air", three users):** the Test's ladder measures with frames of their
+own — DATA kind `MEASURE` (7, the last free value), filler the rung's full size (`measure_body`,
+SplitMix64 from session and index), `seq` the index in its transmission, no sequence number,
+never delivered or resent. `measure(mode, frames)` (both engines; `measuring`; `take_ladder`
+returns the reports): alone in a transmission once nothing of the station's data is
+unacknowledged, no new data behind an asked one, as many as the transmission holds. The control
+frame's byte-2 bit 6 is `measure` in a header and an answer (protocol 8's in-session identifier
+request, dead since ADR-0075 — `_slave_id_due`/`Slot.ident_s` gone; `ident` stays the DISC's),
+set on every control frame until the report, and none carries data; a measurement's header is
+never elided. The report is an acknowledgement with bitmap bit 0 set (`REPORT`; bit `i+1` = frame
+`i`; `received()` then acknowledges only below `base`), sent in every acknowledgement until the
+measurer's data comes again. The receiver, learning of a measurement (the bit or a decoded
+`MEASURE`), clears its HARQ buffers (an unread measurement's sit under the seqs the next data
+takes) and keeps none for its failed frames. A silent measurement slot steps no rung; a dropped or
+unread-cut measurement is asked again (`_ask_again`). ADR-0074's `pinned` re-encode is gone;
+`pin_mode` stays for benches and tests. `GRANTED_VERSION` (8) is where the connect body's two
+bytes begin; `PROTOCOL_VERSION` and the shell's `LINK_PROTOCOL` are 9. The daemon: `fieldtest.rs`
+calls `measure` and starts the next rung at a report (`body_bytes` and `ladder_over` gone), frame
+reports have kind `measure`, `data_kind()` in `frames.rs`. Vectors: `measure-unread` (an unread
+measurement's buffers dropped before the data combines), and the `ladder`, `ladder-unheard` and
+`late-station` sessions measure.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

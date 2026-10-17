@@ -3419,7 +3419,8 @@ impl LinkEngine {
             | DataKind::Beacon
             | DataKind::Probe
             | DataKind::ProbeAck
-            | DataKind::Datagram => {
+            | DataKind::Datagram
+            | DataKind::Measure => {
                 return true;
             }
             DataKind::Data => {}
@@ -3921,7 +3922,7 @@ impl LinkEngine {
             DataKind::ConnectAck => self.handle_connect_ack(header, &body, snr_db),
             DataKind::Probe => self.handle_probe(&body, snr_db),
             DataKind::ProbeAck => self.handle_probe_ack(&body, snr_db),
-            DataKind::Data | DataKind::Beacon | DataKind::Datagram => {}
+            DataKind::Data | DataKind::Beacon | DataKind::Datagram | DataKind::Measure => {}
         }
     }
 

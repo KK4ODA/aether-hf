@@ -76,14 +76,16 @@ The control frame is seven bytes: one ordinary or tone-floor CONTROL frame (`Ctl
 | session | 6 | session number | the same |
 | fam | 1 | the family the answer must use | the family the slave needs headers in |
 | flag | 1 | the slot is an open window | the slave asks to end the session |
-| base, bitmap | 8 + 16 | selective acknowledgement of the slave's data | selective acknowledgement of the master's data |
+| measure | 1 | measurement frames follow, or the master's last were (R14) | the same, of the slave's |
+| base, bitmap | 8 + 16 | selective acknowledgement of the slave's data, or a report of its measurement (R14) | the same, of the master's |
 | snr | 8 | how the master hears the slave | how the slave hears the master |
 | rung | 5 | rung recommended for the slave's data | rung recommended for the master's data |
 | n | 3 | frames granted, or the open window's size index | frames queued, capped at 7 |
 
 Data frames are the model's frames unchanged. Each states how many frames of its transmission
 follow it, exactly, 0–3: the OFDM chips' quarter turn, or the tone frame's middle sync block
-(ADR-0068 §2.1). The connect body is ADR-0008's. Capability bits 3–4 carry the gap level the
+(ADR-0068 §2.1). Protocol 9 adds a DATA kind, the measurement frame (7, R14); the `measure`
+bit is the one protocol 8 gave the slave's identifier inside a session, which ADR-0075 retired. The connect body is ADR-0008's. Capability bits 3–4 carry the gap level the
 acceptance slot uses (§4 R11).
 
 ## 4. Rules
@@ -141,10 +143,12 @@ every family commanded since).
   the slave can read a count it believes (R2). A transmission of RV 1–3 copies alone grants
   nothing without its header, whatever the SNR (ADR-0073);
 * none of them goes above the rung the slave recommends, unless the header would go on the
-  floor. Data above the recommendation — the Test's ladder pins its rungs there — is a bet that
-  it decodes, and a transmission whose frames all fail grants nothing without its header: a
-  wait and a floor poll, where an ordinary header (0.434 s) would have been read (ADR-0076). A
-  floor header (3.2 s) broke even on weak paths, so it may still be left out.
+  floor. Data above the recommendation — copies still at the rung they first went at, data
+  pinned — is a bet that it decodes, and a transmission whose frames all fail grants nothing
+  without its header: a wait and a floor poll, where an ordinary header (0.434 s) would have
+  been read (ADR-0076). A floor header (3.2 s) broke even on weak paths, so it may still be
+  left out;
+* no measurement is under way (R14): its header says what its frames are.
 
 **R8 — Gap levels.** The slave measures how late its decodes arrive and asks for a level in
 every ANS. The master grants `max(asked, silence level)`. Two silent slots in a row raise the
@@ -155,9 +159,8 @@ one level after six on-time decodes.
 follows. A slot granted for data and heard silent steps the master's rung down `silence_step`
 (2). Two silent slots step the slave's rung down, and put headers and answers on the floor.
 Retransmissions follow the RV sequence 0, 0, 2, 3 (ADR-0043). Re-encoding and the hopeless
-rule are kept (ADR-0038). A frame sent at a rung pinned to measure it (the Test's ladder) is
-re-encoded at the recommendation after its first copy, if the recommendation is lower: the copy
-was the measurement, and the sender follows the recommendation from then on (ADR-0074). A rung is offered only if no other carries as much *data* — after the
+rule are kept (ADR-0038). A rung is measured with measurement frames (R14), not the session's
+data; a slot silent after a measurement steps nothing down. A rung is offered only if no other carries as much *data* — after the
 DATA frame's 3-byte header — per second of air from a threshold no higher (ADR-0073: it drops
 the 500 Hz air's rung 4).
 
@@ -210,6 +213,33 @@ it sends for a session, and nothing in a session carries one before it.
 It keeps I1: every identifier keys in a slot the other station granted and keeps, after a slot
 that can no longer be in use, or on a channel heard clear. No deadline moves on undecoded
 evidence: `T` is a decoded frame's stated end, and the slave's hold counts from its own slot.
+
+**R14 — Measurement** (ADR-0077, protocol 9). A station measures a rung — the Test's ladder —
+with measurement frames: DATA kind 7, filler the rung's full size, indexed 0–5 in the sequence
+number's place. They take no sequence number, are never delivered and never sent again.
+
+* A measurement goes in a transmission of its own, as many of its frames as the transmission
+  holds, and only once none of the station's data is unacknowledged; no new data goes while one
+  is asked for.
+* Its control frame — the master's header, the slave's answer — sets `measure`, and so does
+  every control frame of the station's until it reads the report; none of them carries data. A
+  measurement's header is never left out (R7).
+* The other station learns of it from `measure` or from a measurement frame it decodes, drops
+  every buffer it holds to combine — none can be of data, since none is in flight, and one kept
+  for a measurement frame would be combined with the data that takes the sequence number it was
+  inferred under — and keeps no buffer for a measurement frame that does not decode.
+* It reports in every acknowledgement it sends — `bitmap` bit 0 set, bit `i + 1` set for frame
+  `i` arrived — until a transmission of the measuring station's carries data. Bit 0 of a plain
+  acknowledgement is always clear, since `base` is the first sequence number not received, so a
+  report is never read as one: it acknowledges nothing at or above `base`.
+* A measurement's slot heard silent steps no rung down (R9): its header always goes, so the
+  silence says the header or the answer was lost. The report then follows the poll's answer, and
+  its SNR is not the rung's.
+* A measurement the keying gate drops, or cut before any of it could be read, is asked again.
+
+R14 moves no deadline and changes no slot: a measurement transmission is timed, granted and
+answered as any other (I1–I5 unchanged). It keeps the data stream exact: a measurement frame
+enters no sender's record and no receiver's buffer.
 
 **R12 — Open windows.** When neither side has anything to send, the header grants an open
 window of `4 s x 2^k` (the floor's is 2.5 times that), with `k ≤ window_doublings`. The slave

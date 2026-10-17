@@ -430,6 +430,11 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         want["identifier_owed"].as_bool() == Some(e.identifier_owed()),
         e.identifier_owed().to_string(),
     );
+    check(
+        "measuring",
+        want["measuring"].as_bool() == Some(e.measuring()),
+        e.measuring().to_string(),
+    );
     for (name, value) in stats(&e.stats) {
         if int(&want["stats"][name]) != value {
             wrong.push(format!(
@@ -495,6 +500,9 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
             "pin_mode" => engine
                 .pin_mode(opt_int(&entry["mode"]), opt_int(&entry["body"]))
                 .expect("pin"),
+            "measure" => engine
+                .measure(int(&entry["mode"]), int(&entry["frames"]))
+                .expect("measure"),
             "take_ladder" => {
                 let rungs = engine.take_ladder();
                 let want = entry["rungs"].as_array().expect("rungs");

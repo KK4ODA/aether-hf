@@ -90,7 +90,7 @@ pub struct FrameRecord {
 pub fn describe_control(payload: &[u8]) -> Option<String> {
     let frame = aether_link::GrantFrame::decode(payload).ok()?;
     Some(format!(
-        "{:?} session {} count {}{} level {} base {} bitmap {:#06x} rung {} n {} snr {}{}{}{}",
+        "{:?} session {} count {}{} level {} base {} bitmap {:#06x} rung {} n {} snr {}{}{}{}{}",
         frame.kind,
         frame.session,
         frame.count,
@@ -108,6 +108,7 @@ pub fn describe_control(payload: &[u8]) -> Option<String> {
         if frame.fam { " fam floor" } else { "" },
         if frame.flag { " flag" } else { "" },
         if frame.ident { " ident" } else { "" },
+        if frame.measure { " measure" } else { "" },
     ))
 }
 

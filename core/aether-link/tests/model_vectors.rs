@@ -58,6 +58,7 @@ fn data_kind(name: &str) -> DataKind {
         "PROBE" => DataKind::Probe,
         "PROBE_ACK" => DataKind::ProbeAck,
         "DATAGRAM" => DataKind::Datagram,
+        "MEASURE" => DataKind::Measure,
         other => panic!("unknown data kind {other}"),
     }
 }
@@ -299,6 +300,7 @@ fn grant_frame(case: &Value) -> GrantFrame {
         fam: case["fam"].as_bool().expect("fam"),
         flag: case["flag"].as_bool().expect("flag"),
         ident: case["ident"].as_bool().expect("ident"),
+        measure: case["measure"].as_bool().expect("measure"),
         base: int(case, "base") as u8,
         bitmap: int(case, "bitmap") as u16,
         snr_db: case["snr_db"].as_f64(),
@@ -319,17 +321,41 @@ fn grant_frames_match_the_model() {
         );
         let decoded = GrantFrame::decode(&expected).expect("decode");
         assert_eq!(decoded, grant_frame(&case["decoded"]), "{frame:?}: decoded");
-        for (index, want) in case["received"]
-            .as_array()
-            .expect("received")
-            .iter()
-            .enumerate()
-        {
-            let seq = (index * 13) as u8;
+        let received = case["received"].as_array().expect("received");
+        let sweep = 256usize.div_ceil(13);
+        for (index, want) in received.iter().enumerate() {
+            let seq = if index < sweep {
+                (index * 13) as u8
+            } else {
+                decoded.base.wrapping_add((index - sweep) as u8)
+            };
             assert_eq!(
                 decoded.received(seq),
                 want.as_bool().expect("flag"),
                 "received({seq})"
+            );
+        }
+        assert_eq!(
+            decoded.reports(),
+            case["reports"].as_bool().expect("reports"),
+            "{frame:?}: reports"
+        );
+        for (index, want) in case["measured"]
+            .as_array()
+            .expect("measured")
+            .iter()
+            .enumerate()
+        {
+            // the model's indices run from -1, the port's from 0
+            if index == 0 {
+                assert!(!want.as_bool().expect("flag"), "measured(-1)");
+                continue;
+            }
+            assert_eq!(
+                decoded.measured(index - 1),
+                want.as_bool().expect("flag"),
+                "measured({})",
+                index - 1
             );
         }
     }

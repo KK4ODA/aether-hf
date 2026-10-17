@@ -1,4 +1,5 @@
-"""Granted slots: the link engine of protocol 8 (ADR-0069).
+"""Granted slots: the link engine of protocols 8 and 9 (ADR-0069; 9 adds measurement frames,
+ADR-0077).
 
 One :class:`GrantedEngine` per station, beside :class:`~aether_model.link.engine.LinkEngine`
 (protocol 7). Like it, it is a pure state machine — :meth:`~GrantedEngine.on_frame`,
@@ -25,6 +26,11 @@ announcement or a silence moves no deadline. There is no turn, no TURN, OFFER, T
 turn request, and nothing to hand over. ``docs/research/link-architecture/07-protocol-8.md`` is
 the design, ``04-formal-spec.md`` the rules and their proof, ADR-0069 the decision.
 
+A station measures a rung (:meth:`GrantedEngine.measure`, the Test's ladder) with frames of their
+own kind: filler, alone in a transmission whose control frame says so, sent once and never
+delivered; they take no sequence number, the other station's acknowledgement reports which
+arrived, and the station's data waits for that report (protocol 9, ADR-0077).
+
 The slot, as both stations reckon it
 ------------------------------------
 After a transmission ending on the air at ``E`` whose last frame is of family ``f`` (ordinary or
@@ -48,6 +54,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TypedDict
 
 from aether_model.link.engine import (
     LEFT_UNHEARD,
@@ -68,6 +75,7 @@ from aether_model.link.frames import (
     MAX_BURST,
     MAX_FOLLOWS,
     PROTOCOL_VERSION,
+    REPORT,
     WINDOW,
     ConnectBody,
     DataHeader,
@@ -162,6 +170,24 @@ class Draws:
     def below(self, n: int) -> int:
         """Uniform in [0, n) (the modulo's bias is under 2**-56 for the engine's n)."""
         return self.next_u64() % n
+
+
+def measure_body(session: int, index: int, length: int) -> bytes:
+    """A measurement frame's filler: SplitMix64 from the session and the frame's index, so a
+    frame of every rung carries bytes that look like data — a body of zeros is not what data
+    sends, and on the four-tone kinds it is a lopsided spectrum (12-two-paths-80m.md §9)."""
+    draws = Draws(0x4D45_4153_5552_4500 | (session & 0xFF) << 8 | index & 0xFF)
+    out = bytearray()
+    while len(out) < length:
+        out += draws.next_u64().to_bytes(8, "big")
+    return bytes(out[:length])
+
+
+def _carries_measurement(frames: Sequence[TxFrame]) -> bool:
+    return any(
+        f.container is Container.DATA and f.payload[0] >> 5 == DataKind.MEASURE.value
+        for f in frames
+    )
 
 
 class Role(Enum):
@@ -269,7 +295,8 @@ class GrantConfig:
     """Leave the header out of a transmission it would change nothing in (R7)."""
     header_above_recommendation: bool = True
     """Keep the header on a transmission whose data goes above the rung the slave recommends —
-    the Test's ladder pins its rungs there — when the header is ordinary (ADR-0076). Left out,
+    copies still at the rung they first went at, data pinned (:meth:`GrantedEngine.pin_mode`) —
+    when the header is ordinary (ADR-0076). Left out,
     such a transmission granted nothing when none of its frames decoded: the two silent slots
     of WC4Y's Test of 2026-10-17, each a wait and a floor poll, where a 0.43 s header would have
     been read (13-wc4y-beta111.md §6). A floor header costs 3.2 s and broke even on ND1J's weak
@@ -361,10 +388,6 @@ class _TxRecord:
     reencoded: int = 0
     unknown: bool = False
     """Sent in a transmission whose answer went unheard: whether it arrived is not known."""
-    pinned: bool = False
-    """Sent first at a rung pinned to measure it (the Test's ladder). Its first copy is the
-    measurement; after it, the frame goes on as data does, at the rung the other station asks for
-    (ADR-0074)."""
 
     @property
     def sent(self) -> bool:
@@ -378,6 +401,11 @@ class _RxRecord:
     payload: bytes | None = None
     seq: int | None = None
     combined: bool = False
+
+
+class _AckFields(TypedDict):
+    base: int
+    bitmap: int
 
 
 @dataclass
@@ -403,10 +431,10 @@ class _Slot:
     level: int
     granter_turnaround_s: float
     open_window: bool = False
-    ident_s: float = 0.0
-    """The slave's identifier time granted: its answer starts that much into the slot."""
     data: bool = False
-    """The granting transmission carried data: a silent slot steps its rung down."""
+    """The granting transmission carried data: a silent slot steps its rung down. Measurement
+    frames are none: a measurement always carries its header, and the slot's silence says the
+    header or the answer was lost, not that the rung measured was too fast (ADR-0077)."""
     granted: int = 0
     tx_end: float = 0.0
     start: float = 0.0
@@ -444,7 +472,7 @@ class _Answer:
 
 
 class GrantedEngine:
-    """The link engine of protocol 8: granted slots (ADR-0069)."""
+    """The link engine of granted slots (ADR-0069), protocol 9 (ADR-0077)."""
 
     counts_on_floor = True
     """Tone frames carry their count too (ADR-0068 §2.1, kept): a simulated PHY delivers it."""
@@ -473,10 +501,11 @@ class GrantedEngine:
         self._cause = ""
         self._slot: _Slot | None = None
         """The slot this station granted last — a call's, a probe's, a header's, a DISC's."""
-        self._in_flight: list[tuple[_Slot | None, float]] = []
+        self._in_flight: list[tuple[_Slot | None, float, bool]] = []
         """This station's transmissions handed over and not yet done, in order, each with the
-        slot it granted — ``on_tx_done`` reports where that slot's granting transmission ended —
-        and the closing identifier it carries behind a DISC_ACK, owed again if it is dropped."""
+        slot it granted — ``on_tx_done`` reports where that slot's granting transmission ended —,
+        the closing identifier it carries behind a DISC_ACK, owed again if it is dropped, and
+        whether it carries a measurement, asked again if it is dropped."""
         self._hold_until = 0.0
         """Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
         while idle keys before this: the last slot it granted may still be in use."""
@@ -504,7 +533,8 @@ class GrantedEngine:
         self.last_probe: ProbeResult | None = None
         self.ended_peer_snr_db: float | None = None
         self.ladder: list[LadderRung] = []
-        """What each pinned transmission's acknowledgement reported (the Test's ladder)."""
+        """What the other station reported of each measurement (:meth:`measure`): the Test's
+        ladder."""
         self._pinned: int | None = None
         self._pin_body: int | None = None
         self._connect_tries = 0
@@ -543,10 +573,16 @@ class GrantedEngine:
         it first read the slave's request (ADR-0072)."""
         self._leave_drain_s = self.cfg.disc_drain_s
         """How long this session's disconnect waits for what is queued (:meth:`disconnect`)."""
-        self._ladder_pending: tuple[int, list[int]] | None = None
-        self._ladder_unheard = False
-        """The pinned transmission's slot went silent: the answer that reports its frames
-        follows a poll, and the SNR it carries is the poll's, not the rung's (ADR-0076)."""
+        self._measure_ask: tuple[int, int] | None = None
+        """A measurement asked for (:meth:`measure`) and not yet sent: its rung and frames."""
+        self._measure_out: tuple[int, int] | None = None
+        """A measurement sent and not yet reported: its rung and the frames it went with. Until
+        the report, this station sends no data, and every control frame of its says so (the
+        ``measure`` bit): the other station keeps the report for it, and whatever that station
+        holds to combine is of measurement frames, which it drops (ADR-0077)."""
+        self._measure_unheard = False
+        """The measurement's answer was not read: the report follows a poll, and the SNR it
+        carries is the poll's, not the rung's (ADR-0076)."""
         self.rate = self._rate_controller()
         self._asked: int | None = None
         # receiving, either role
@@ -561,6 +597,13 @@ class GrantedEngine:
         """Where that transmission's data frames are, as its opening control frame stated:
         the first one's start, how many, their family."""
         self._ack_history: list[_AckSnapshot] = []
+        self._measured: int | None = None
+        """The report of the other station's last measurement, as a bitmap (:data:`REPORT`):
+        what this station's acknowledgements carry from the measurement until the other
+        station's data comes again."""
+        self._rx_measure = False
+        """The transmission being received is a measurement: its frames are filler, and one that
+        does not decode is never sent again — nothing to combine it with."""
         # the master
         self._recent_silent: list[bool] = []
         """Whether each of the last answer slots went silent, the latest last."""
@@ -572,7 +615,6 @@ class GrantedEngine:
         self._slave_want: int | None = None
         """Frames the slave said it has queued; ``None`` before its first answer."""
         self._slave_leaves = False
-        self._slave_id_due = False
         self._slave_floor_only = False
         """The slave said its data can go only on the tone floor (an answer's ``data_floor``
         with no data after it)."""
@@ -778,13 +820,34 @@ class GrantedEngine:
 
     def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
         """As :meth:`LinkEngine.pin_mode`: this station's own new data goes at ``mode`` until
-        unpinned — the Test's ladder, at either end of a session."""
+        unpinned, in bodies of at most ``body_bytes`` — the benches' and the tests'. The Test's
+        ladder measures a rung with :meth:`measure` instead."""
         if mode is not None and mode not in (self.timing.data_capacity or {}):
             raise ValueError(f"mode {mode} is not in the table")
         if body_bytes is not None and body_bytes < 1:
             raise ValueError("body_bytes must be at least 1")
         self._pinned = mode
         self._pin_body = body_bytes if mode is not None else None
+
+    def measure(self, mode: int, frames: int) -> None:
+        """Measure ``mode`` on the path to the other station (ADR-0077): ``frames`` frames of
+        filler at it, in a transmission of their own as soon as all of this station's data is
+        acknowledged — as many as the transmission holds — never delivered and never sent again.
+        What the other station reports of them goes to :attr:`ladder`; this station's data waits
+        for the report. Asked again before it is sent, the later asking stands."""
+        if mode not in (self.timing.data_capacity or {}):
+            raise ValueError(f"mode {mode} is not in the table")
+        if frames < 1:
+            raise ValueError("a measurement takes at least one frame")
+        self._measure_ask = (mode, frames)
+        if self.role is Role.SLAVE and self._window is not None:
+            self._cause = "measure"
+            self._try_window()
+
+    @property
+    def measuring(self) -> bool:
+        """A measurement is asked for and not yet reported."""
+        return self._measure_ask is not None or self._measure_out is not None
 
     def take_ladder(self) -> list[LadderRung]:
         rungs, self.ladder = self.ladder, []
@@ -903,7 +966,7 @@ class GrantedEngine:
         self.now = max(self.now, now)
         if not self._in_flight:
             return
-        granted, _ = self._in_flight.pop(0)
+        granted, _, _ = self._in_flight.pop(0)
         if granted is not None and granted is self._slot and not granted.final:
             self._slot.final = True
             self._open_slot(now if frames_end is None else frames_end)
@@ -919,8 +982,9 @@ class GrantedEngine:
         self.now = max(self.now, now)
         if not self._in_flight:
             return
-        granted, ident = self._in_flight.pop(0)
+        granted, ident, measured = self._in_flight.pop(0)
         self._owe_again(ident)
+        self._ask_again(measured)
         if granted is None or granted is not self._slot or granted.final:
             return
         self._slot = None
@@ -933,9 +997,16 @@ class GrantedEngine:
         ``not_after``, and nothing of it was sent."""
         self.now = max(self.now, now)
         if self._in_flight:
-            _, ident = self._in_flight.pop(0)
+            _, ident, measured = self._in_flight.pop(0)
             self._owe_again(ident)
+            self._ask_again(measured)
         self.stats.dropped += 1
+
+    def _ask_again(self, measured: bool) -> None:
+        """A measurement that never reached the air is asked for again, not reported."""
+        if measured and self._measure_out is not None and self._measure_ask is None:
+            self._measure_ask, self._measure_out = self._measure_out, None
+            self._measure_unheard = False
 
     def on_tx_delayed(self, seconds: float) -> None:
         """The daemon is holding this station's last transmission. A slot is absolute and a
@@ -1254,7 +1325,9 @@ class GrantedEngine:
                 cause=self._cause,
             )
         )
-        self._in_flight.append((granting, identifier_s if frames else 0.0))
+        self._in_flight.append(
+            (granting, identifier_s if frames else 0.0, _carries_measurement(frames))
+        )
         self.stats.transmissions += 1
         on_air = self.now + self._own_latency()
         if not_before is not None:
@@ -1460,7 +1533,7 @@ class GrantedEngine:
             return True
         if self.role is Role.SLAVE and self._m_end is None and self._grant is None:
             self._heard(frame)
-            self._measure(frame)
+            self._measure_lateness(frame)
             self._schedule_acceptance(req, frame, start)
         return False
 
@@ -1483,7 +1556,7 @@ class GrantedEngine:
         self.state = State.CONNECTED
         self.role = Role.SLAVE
         self._heard(frame)
-        self._measure(frame)
+        self._measure_lateness(frame)
         # the request is the first measurement of how the caller is heard; a lower bound if it
         # came on the tone floor (ADR-0016)
         self.rate.seed(frame.snr_db, lower_bound=frame.floor)
@@ -1659,7 +1732,7 @@ class GrantedEngine:
             return
         slot = self._slot
         if slot is not None and not slot.open_window:
-            late = frame.t_start - slot.ident_s - slot.start - self.cfg.slack_s
+            late = frame.t_start - slot.start - self.cfg.slack_s
             if late > self._peer_late_s:
                 self._peer_late_s = late
             else:
@@ -1674,9 +1747,9 @@ class GrantedEngine:
             self._leave_since = self.now
         if not ctl.count:
             self._slave_floor_only = ctl.data_floor
-        self._slave_id_due = ctl.ident
         self._open_rx(frame, ctl.count, ctl.data_floor)
-        if ctl.count:
+        self._note_opening(ctl)
+        if ctl.count or ctl.measure:
             self._ack_owed = True
         last_floor = ctl.data_floor if ctl.count else frame.floor
         self._state_end(frame.t_end + ctl.count * self._frame_s(ctl.data_floor), last_floor)
@@ -1688,7 +1761,7 @@ class GrantedEngine:
                 # make that safe), its timing is not
                 payload, _ = frame.decode(None)
                 if payload is not None:
-                    self._accept(_RxRecord(frame, 0), payload)
+                    self._accept(_RxRecord(frame, 0), payload, late=True)
             return
         rec = self._take_data(frame)
         if rec.payload is None:
@@ -1787,8 +1860,8 @@ class GrantedEngine:
         self.stats.silent_slots += 1
         self._silent += 1
         self._answered_run = 0
-        if self._ladder_pending is not None:
-            self._ladder_unheard = True
+        if self._measure_out is not None:
+            self._measure_unheard = True
         if slot.data and self.cfg.hold_unknown:
             for s in self._unacked():
                 self._records[s].unknown = True
@@ -1805,7 +1878,7 @@ class GrantedEngine:
             self._end_session("no response")
 
     def _has_work(self) -> bool:
-        return bool(self._tx_queue) or bool(self._unacked())
+        return bool(self._tx_queue) or bool(self._unacked()) or self.measuring
 
     def _grant_size(self, rung: int) -> tuple[int, bool, int]:
         """(data frames granted, open window, window index): the master's policy (§5.2)."""
@@ -1818,7 +1891,7 @@ class GrantedEngine:
             return min(self.cfg.first_grant, fit), False, 0
         if self._slave_want > 0:
             return min(self._slave_want, fit), False, 0
-        idle = not self._has_work() and not self._disc_requested and not self._slave_id_due
+        idle = not self._has_work() and not self._disc_requested
         if idle and self.now - self._heard_at < self.cfg.keepalive_s:
             return 0, True, min(self.cfg.window_doublings, self._idle_windows)
         return 0, False, 0
@@ -1826,7 +1899,7 @@ class GrantedEngine:
     def _elide(self, n: int, open_window: bool, wanted: bool) -> bool:
         """Whether this transmission may go without its header (R7): data only, nothing granted
         beyond an answer, the gap at level 0, nothing to acknowledge or recommend anew, the last
-        slot heard, no identifier time asked for, and the answer's family one the slave surely
+        slot heard, no measurement under way, and the answer's family one the slave surely
         holds."""
         return (
             self.cfg.elide
@@ -1837,7 +1910,6 @@ class GrantedEngine:
             and self.level == 0
             and self._possible == {wanted}
             and not self._ack_owed
-            and not self._slave_id_due
             and self._has_work()
         )
 
@@ -1851,6 +1923,10 @@ class GrantedEngine:
         data: list[TxFrame] = []
         if not open_window:
             data = self._data_frames(room - self._ctl_s(hdr_floor))
+        # a measurement's frames, and every transmission until its report, say so in the
+        # header, which therefore always goes (ADR-0077)
+        measuring = self._measure_out is not None
+        elide = elide and not measuring
         # the header is left out only of a transmission that carries no fewer data frames for
         # it: capped at the four whose counts can anchor it, the 15-byte rung of the 500 Hz
         # air sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB).
@@ -1869,9 +1945,6 @@ class GrantedEngine:
             recommendation = min(self._recommended, self._cap())
             elide = elide and not any(f.mode > recommendation for f in data)
         level = 0 if elide else self.level
-        # a slave of an earlier build asks for its ten-minute identifier's time, and is given
-        # it: this build sends none inside a session (ADR-0075), and asks for none
-        slave_ident = self._slave_id_due and not elide
         if not elide:
             self._possible.add(wanted)
         answer_floors = set(self._possible | {wanted})
@@ -1883,8 +1956,6 @@ class GrantedEngine:
             grant_s = ans_s + n * self._frame_s(slave_floor)
             if n:
                 answer_floors.add(slave_floor)
-            if slave_ident:
-                grant_s += self._peer_identifier_s
         data_floor = bool(data) and self.timing.is_floor(data[0].mode)
         frames: list[TxFrame] = list(data)
         if elide:
@@ -1898,7 +1969,7 @@ class GrantedEngine:
                 level=level,
                 fam=wanted,
                 flag=open_window,
-                ident=slave_ident,
+                measure=measuring,
                 snr_db=self._heard_db,
                 rung=rung,
                 n=index if open_window else n,
@@ -1906,7 +1977,6 @@ class GrantedEngine:
             )
             frames.insert(0, self._control(ctl, hdr_floor))
             self._ack_owed = False
-            self._slave_id_due = False
         self._key_granting(
             _Slot(
                 kind="header",
@@ -1916,8 +1986,7 @@ class GrantedEngine:
                 level=level,
                 granter_turnaround_s=self.cfg.turnaround_s,
                 open_window=open_window,
-                ident_s=self._peer_identifier_s if slave_ident else 0.0,
-                data=bool(data),
+                data=bool(data) and not measuring,
                 granted=n,
             ),
             frames,
@@ -1991,7 +2060,7 @@ class GrantedEngine:
                 self._take_ack(ctl, recommendation=False)
             return
         self._heard(frame)
-        self._measure(frame)
+        self._measure_lateness(frame)
         if ctl.snr_db is not None:
             self.peer_snr_db = ctl.snr_db
         if ctl.kind is GrantKind.DISC:
@@ -2001,6 +2070,7 @@ class GrantedEngine:
         if ctl.kind is not GrantKind.HEADER:
             return
         self._open_rx(frame, ctl.count, ctl.data_floor)
+        self._note_opening(ctl)
         self._take_ack(ctl)
         self._ans_sticky = ctl.fam or self._floor_only()
         self._grant = ctl
@@ -2014,12 +2084,12 @@ class GrantedEngine:
             if decoded:
                 payload, _ = frame.decode(None)
                 if payload is not None:
-                    self._accept(_RxRecord(frame, 0), payload)
+                    self._accept(_RxRecord(frame, 0), payload, late=True)
             return
         rec = self._take_data(frame)
         if rec.payload is not None:
             self._heard(frame)
-            self._measure(frame)
+            self._measure_lateness(frame)
             if (
                 self._m_end is None
                 and not rec.combined
@@ -2033,7 +2103,7 @@ class GrantedEngine:
                 self._schedule_slave()
         self._decide_if_final()
 
-    def _measure(self, frame: SoftFrame) -> None:
+    def _measure_lateness(self, frame: SoftFrame) -> None:
         """How late this station's receiver reported a frame of the other's, and how late its
         keying is, against what the slot allows: the level its answers ask for. Up at once,
         down one level after :attr:`GrantConfig.need_ease_after` frames on time."""
@@ -2199,8 +2269,7 @@ class GrantedEngine:
             level=self._asked_level(),
             fam=self._wants_floor(),
             flag=self._disc_requested,
-            # no identifier is ever due inside a session (ADR-0075): the bit asks for none
-            ident=False,
+            measure=self._measure_out is not None,
             snr_db=self._heard_db,
             rung=self._recommend(),
             n=min(7, self._queued_frames()),
@@ -2220,7 +2289,10 @@ class GrantedEngine:
 
     def _queued_frames(self) -> int:
         cap = data_capacity(self.timing.capacity(self._burst_mode()))
-        return len(self._unacked()) + math.ceil(len(self._tx_queue) / max(1, cap))
+        queued = len(self._unacked()) + math.ceil(len(self._tx_queue) / max(1, cap))
+        if self._measure_ask is not None:
+            queued += self._measure_ask[1]
+        return queued
 
     def _send_acceptance(self, answer: _Answer) -> None:
         if self.session != answer.session or self.role is not Role.SLAVE:
@@ -2324,9 +2396,13 @@ class GrantedEngine:
         """This station's data for a transmission, laid out as ``LinkEngine`` lays out a burst:
         the unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones,
         one family a transmission, as many as ``room_s`` and :data:`MAX_DATA`
-        allow. Each frame states how many follow it, three meaning three or more."""
-        if room_s <= 0:
+        allow. Each frame states how many follow it, three meaning three or more. A measurement
+        asked for goes alone once nothing of this station's data is unacknowledged, and nothing
+        goes while one waits for its report."""
+        if room_s <= 0 or self._measure_out is not None:
             return []
+        if self._measure_ask is not None and not self._unacked():
+            return self._measurement(room_s)
         mode = self._burst_mode()
         recommendation = min(self._recommended, self._cap())
         # what an unheard answer would have said is not resent blind: it waits for an answer —
@@ -2337,13 +2413,7 @@ class GrantedEngine:
             unacked = [s for s in unacked if not self._records[s].unknown]
         for s in unacked:
             rec = self._records[s]
-            # a frame pinned for a measurement has made it with its first copy: from then on it
-            # goes as data goes, at the rung asked for, never again at the rung that failed — the
-            # Test's ladder had sent such frames again at RV 0, 2 and 3 before re-encoding them,
-            # 13 of the 21 silent slots of ND1J's Tests of 2026-10-15 (ADR-0074)
-            if rec.pinned:
-                due = 1
-            elif self._hopeless(rec.mode):
+            if self._hopeless(rec.mode):
                 due = self.cfg.reencode_early_after
             else:
                 due = self.cfg.max_combines
@@ -2353,7 +2423,6 @@ class GrantedEngine:
                     rec.mode = target
                     rec.reencoded += rec.tx_count
                     rec.tx_count = 0
-                    rec.pinned = False
                     self.stats.frames_reencoded += 1
         family = self.timing.is_floor(mode)
         if unacked:
@@ -2366,7 +2435,8 @@ class GrantedEngine:
         if room <= 0:
             return []
         seqs = seqs[:room]
-        new_frames = family == self.timing.is_floor(mode)
+        # a measurement asked for waits only for what is in flight: nothing new goes before it
+        new_frames = family == self.timing.is_floor(mode) and self._measure_ask is None
         cap = data_capacity(self.timing.capacity(mode))
         while (
             new_frames
@@ -2381,15 +2451,10 @@ class GrantedEngine:
                 take -= 1  # the one length the container cannot carry
             body = bytes(self._tx_queue[:take])
             del self._tx_queue[:take]
-            rec = _TxRecord(self._tx_next, body, mode, pinned=self._pinned is not None)
+            rec = _TxRecord(self._tx_next, body, mode)
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
             seqs.append(rec.seq)
-        if self._pinned is not None:
-            fresh = [s for s in seqs if not self._records[s].sent]
-            if fresh:
-                self._ladder_pending = (mode, fresh)
-                self._ladder_unheard = False
         frames = []
         for i, s in enumerate(seqs):
             rec = self._records[s]
@@ -2407,18 +2472,58 @@ class GrantedEngine:
         self.stats.frames_sent += len(frames)
         return frames
 
+    def _measurement(self, room_s: float) -> list[TxFrame]:
+        """The measurement asked for, as many of its frames as the transmission holds: filler
+        at its rung, each stating how many follow, indexed in place of a sequence number."""
+        assert self._measure_ask is not None
+        mode, asked = self._measure_ask
+        mode = min(mode, self._cap())
+        frame_s = self._frame_s(self.timing.is_floor(mode))
+        count = min(asked, MAX_DATA, self.burst_capacity(frame_s))
+        if math.isfinite(room_s):
+            count = min(count, int(room_s / frame_s + 1e-9))
+        if count <= 0:
+            return []
+        self._measure_ask = None
+        self._measure_out = (mode, count)
+        self._measure_unheard = False
+        capacity = self.timing.capacity(mode)
+        body = data_capacity(capacity)
+        frames = [
+            TxFrame(
+                Container.DATA,
+                encode_data(
+                    DataHeader(DataKind.MEASURE, i, self.session),
+                    measure_body(self.session, i, body),
+                    capacity,
+                ),
+                mode=mode,
+                rv=0,
+                follows=min(MAX_FOLLOWS, count - 1 - i),
+            )
+            for i in range(count)
+        ]
+        self.stats.frames_sent += count
+        return frames
+
     def _take_ack(self, ctl: GrantFrame, *, recommendation: bool = True) -> None:
-        """The other station's acknowledgement of this one's data, and its recommendation."""
-        if self._ladder_pending is not None and recommendation:
-            pinned_mode, fresh = self._ladder_pending
-            self._ladder_pending = None
-            decoded = sum(1 for s in fresh if ctl.received(s))
-            # after a silent slot the answer is the poll's: its frames counted, its SNR not the
-            # rung's — WC4Y's rung 8 went into the field log "at -4 dB", the poll's tone-floor
-            # reading, where its frames had arrived at 0 dB (13-wc4y-beta111.md §10)
-            snr = None if self._ladder_unheard else ctl.snr_db
-            self._ladder_unheard = False
-            self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, snr))
+        """The other station's acknowledgement of this one's data, and its recommendation — or
+        its report of this station's measurement (a header decoded late reports nothing: the
+        next one says it again)."""
+        if self._measure_out is not None and recommendation:
+            if ctl.reports:
+                mode, sent = self._measure_out
+                self._measure_out = None
+                decoded = sum(1 for i in range(sent) if ctl.measured(i))
+                # after a silent slot the report is the poll's answer: its frames counted, its
+                # SNR not the rung's — WC4Y's rung 8 went into the field log "at -4 dB", the
+                # poll's tone-floor reading, where its frames had arrived at 0 dB
+                # (13-wc4y-beta111.md §10)
+                snr = None if self._measure_unheard else ctl.snr_db
+                self._measure_unheard = False
+                self.ladder.append(LadderRung(mode, sent, decoded, snr))
+            else:
+                self._measure_unheard = True
         progress = False
         for rec in self._records.values():
             rec.unknown = False  # the answer says what arrived
@@ -2463,6 +2568,9 @@ class GrantedEngine:
             if not self._accept(rec, payload):
                 self._rx.remove(rec)
             return rec
+        if self._rx_measure:
+            self.stats.frames_failed += 1  # a measurement frame: never sent again
+            return rec
         guess = self._infer_seq(rec.slot)
         rec.seq = guess
         if guess is None or not in_window(guess, self._rx_base):
@@ -2493,6 +2601,34 @@ class GrantedEngine:
         self._rx = []
         self._rx_t0 = None
         self._grid = None
+        self._rx_measure = False
+
+    def _note_opening(self, ctl: GrantFrame) -> None:
+        """What the other station's opening control frame says of its own frames: measurement
+        frames follow, or its last were and their report is owed; or data follows, and the
+        report of its last measurement is over."""
+        if ctl.measure:
+            self._measurement_heard(new=ctl.count > 0)
+        elif ctl.count:
+            self._measured = None
+
+    def _measurement_heard(self, *, new: bool) -> None:
+        """The other station is measuring: ``new``, the transmission being received is its
+        measurement; otherwise its last one was. Nothing of its data is in flight while it
+        measures, so whatever this station holds to combine is of measurement frames — kept, the
+        next data frame under the sequence number inferred for one would combine with another
+        codeword — and goes."""
+        if self._rx_measure:
+            return
+        if new:
+            self._rx_measure = True
+            self._measured = REPORT
+        elif self._measured is None:
+            self._measured = REPORT
+        self._harq.clear()
+        for rec in self._rx:
+            if rec.payload is None:
+                rec.seq = None
 
     def _open_rx(self, opener: SoftFrame, count: int, floor: bool) -> None:
         """A control frame read opens the other station's transmission and states it: ``count``
@@ -2551,14 +2687,29 @@ class GrantedEngine:
                 return expected[idx]
         return None
 
-    def _accept(self, rec: _RxRecord, payload: bytes) -> bool:
-        """Take a decoded data frame of this session; ``False`` for anything else."""
+    def _accept(self, rec: _RxRecord, payload: bytes, *, late: bool = False) -> bool:
+        """Take a decoded data frame of this session; ``False`` for anything else. ``late``: of
+        a transmission already over — its data is kept, a measurement frame is of a report
+        already made."""
         try:
             header, body = decode_data(payload)
         except ValueError:
             return False
-        if header.kind is not DataKind.DATA or header.session != self.session:
+        if header.session != self.session:
             return False
+        if header.kind is DataKind.MEASURE:
+            if late:
+                return False
+            self._measurement_heard(new=True)
+            assert self._measured is not None
+            if header.seq < WINDOW - 1:
+                self._measured |= 2 << header.seq
+            rec.payload = payload
+            return True
+        if header.kind is not DataKind.DATA:
+            return False
+        if not late:
+            self._measured = None
         rec.payload = payload
         rec.seq = header.seq
         self.stats.frames_received += 1
@@ -2616,12 +2767,14 @@ class GrantedEngine:
                 missing.append(s)
         return bitmap, missing, seq_after(self._rx_base, limit)
 
-    def _ack_fields(self) -> dict[str, int]:
+    def _ack_fields(self) -> _AckFields:
         """What a control frame says this station has received — remembered, for the slot
         inference of the copies sent after it."""
         bitmap, missing, next_new = self._receive_window()
         snap = _AckSnapshot(self._rx_base, missing, next_new)
         self._ack_history = [snap, *self._ack_history][:2]
+        if self._measured is not None:
+            bitmap = self._measured  # nothing of the other's data is beyond base
         return {"base": self._rx_base, "bitmap": bitmap}
 
     # ── the end ───────────────────────────────────────────────────────

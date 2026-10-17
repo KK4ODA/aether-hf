@@ -614,7 +614,7 @@ def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, in
         (rung, 1, int(bool(f.get("decoded"))), float(f["snr_3k_db"]))
         for f in frames
         if isinstance(f, dict)
-        and f.get("kind") == "data"
+        and f.get("kind") in ("data", "measure")  # a measurement frame is a rung's frame too
         and isinstance(f.get("snr_3k_db"), (int, float))
         and (rung := sidecar_rung(document, int(f["mode"]))) is not None
     ]

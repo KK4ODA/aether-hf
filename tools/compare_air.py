@@ -133,7 +133,7 @@ def report(sidecar: Path, channel: str | None, baselines: Path, simulate: bool) 
     if document.get("format") not in FORMATS:
         sys.exit(f"{sidecar}: not a session sidecar")
     frames = document.get("frames", [])
-    data = [f for f in frames if f["kind"] == "data"]
+    data = [f for f in frames if f["kind"] in ("data", "measure")]  # measure: ADR-0077
     session = document.get("session", {})
     counters = document.get("counters") or {}
     seconds = float(document["audio"]["seconds"])

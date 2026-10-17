@@ -6,7 +6,9 @@
 (`aether-link/src/granted.rs`) and the replay vectors (the `ladder` session). The Test itself is
 the daemon's (`aetherd/src/station/fieldtest.rs`); the panel's step list follows it. No wire
 change: a station on this build and one on v0.2.0-beta.106 to beta.109 work together, and Test
-with each other.
+with each other. **The pinned frame's re-encode after its first copy is superseded by
+ADR-0077** (link protocol 9): the ladder measures with frames of their own, which are never sent
+again; the order (transfers, then the ladder) stands.
 
 ## 1. Context
 
