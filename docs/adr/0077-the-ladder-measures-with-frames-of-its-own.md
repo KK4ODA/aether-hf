@@ -122,4 +122,32 @@ planted in the port were caught: a report bit shifted one place, the buffers not
 
 ## 6. The harness
 
-The 14 Test scenarios against beta.112's daemon: running; the numbers follow.
+The 14 scenarios that run a Test, two draws each (the scenario's seed and +1000), this build
+against beta.112's daemon (`session_matrix.py --seeds 2`, the same seeds both arms):
+
+| scenario | passed, before / after | Test air, s, before → after | message, bit/s | file, bit/s |
+|---|---|---|---|---|
+| 20m-dx-moderate-2300 | 2 / 2 | 319 → 300 (−6 %) | 438 → 448 | 594 → 599 |
+| 40m-drift-and-clocks-2300 | 2 / 2 | 262 → 237 (−9 %) | 557 → 557 | 564 → 564 |
+| 40m-good-2300-rtty-crashes | 2 / 2 | 281 → 244 (−13 %) | 301 → 383 | 345 → 466 |
+| 40m-moderate-2300-vara-qrm | 2 / 2 | 343 → 280 (−18 %) | 511 → 384 | 455 → 521 |
+| 40m-rtty-contest-2300 | 2 / 2 | 391 → 355 (−9 %) | 414 → 362 | 108 → 121 |
+| 80m-asymmetric-500 | 2 / 2 | 419 → 259 (−38 %) | 62 → 66 | 72 → 93 |
+| 80m-floor-top-start-500 | 2 / 2 | 380 → 306 (−19 %) | 68 → 68 | 83 → 83 |
+| 80m-flutter-500 | 2 / 2 | 496 → 382 (−23 %) | 68 → 69 | 78 → 75 |
+| 80m-local-rfi-ladder-500 | 2 / 2 | 372 → 328 (−12 %) | 78 → 78 | 73 → 73 |
+| 80m-lopsided-acks-500 | 2 / 2 | 398 → 324 (−19 %) | 67 → 74 | 77 → 83 |
+| 80m-nvis-evening-500 | 2 / 2 | 398 → 340 (−14 %) | 30 → 29 | 31 → 31 |
+| 80m-slow-machine-500 | 2 / 2 | 387 → 339 (−12 %) | 102 → 97 | 96 → 65 |
+| 80m-thunderstorm-agc-2300 | 2 / 2 | 283 → 240 (−15 %) | 417 → 417 | 463 → 463 |
+| 80m-weak-both-ways-ladder-500 | 2 / 2 | 432 → 348 (−19 %) | 56 → 47 | 48 → 55 |
+| **all** | **28 / 28** | **10 318 → 8 563 s (−17.0 %)** | | |
+
+No radiated overlap in either arm, and every scenario's Test is shorter. The ladders measured
+about as much in about the same time — 166 rungs in 1 997 s before, 172 in 2 016 s after, from
+each rung's start to its report — so the 1 755 s saved, about a minute a Test, is the leftovers:
+the old ladder waited for each rung's failed frames to be delivered before the next. The message
+and file rates are the draws' own: where both arms read the same the draw ran identically up to
+the ladder, and where they differ (the RTTY and VARA QRM scenarios, the slow machine's file) the
+two runs parted during the transfers, before the ladder, as two runs of one build can (the
+daemons' threads; ADR-0044).
