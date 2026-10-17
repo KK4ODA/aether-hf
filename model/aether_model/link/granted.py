@@ -267,6 +267,13 @@ class GrantConfig:
     """How far an idle link's open window grows, by doubling, while it stays idle."""
     elide: bool = True
     """Leave the header out of a transmission it would change nothing in (R7)."""
+    header_above_recommendation: bool = True
+    """Keep the header on a transmission whose data goes above the rung the slave recommends —
+    the Test's ladder pins its rungs there — when the header is ordinary (ADR-0076). Left out,
+    such a transmission granted nothing when none of its frames decoded: the two silent slots
+    of WC4Y's Test of 2026-10-17, each a wait and a floor poll, where a 0.43 s header would have
+    been read (13-wc4y-beta111.md §6). A floor header costs 3.2 s and broke even on ND1J's weak
+    paths (12-two-paths-80m.md §12.1), so it is kept only where it is cheap."""
     turnaround_s: float = 0.0
     """This station's radio: how long after it stops sending it hears again (VOX hold and
     receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s."""
@@ -534,7 +541,12 @@ class GrantedEngine:
         self._leave_since: float | None = None
         """When a disconnect was asked: by this station's operator, or — for the master — when
         it first read the slave's request (ADR-0072)."""
+        self._leave_drain_s = self.cfg.disc_drain_s
+        """How long this session's disconnect waits for what is queued (:meth:`disconnect`)."""
         self._ladder_pending: tuple[int, list[int]] | None = None
+        self._ladder_unheard = False
+        """The pinned transmission's slot went silent: the answer that reports its frames
+        follows a poll, and the SNR it carries is the poll's, not the rung's (ADR-0076)."""
         self.rate = self._rate_controller()
         self._asked: int | None = None
         # receiving, either role
@@ -677,14 +689,18 @@ class GrantedEngine:
         else:
             self._arm_at("probe", self._hold_until)
 
-    def disconnect(self) -> None:
+    def disconnect(self, drain_s: float | None = None) -> None:
         """Orderly close. The master finishes what it has queued, and what the slave has, for
-        no longer than :attr:`GrantConfig.disc_drain_s` from now (ADR-0072) or its patience with
+        no longer than :attr:`GrantConfig.disc_drain_s` from now (ADR-0072) — or ``drain_s``,
+        0 to leave at its next opportunity with what it has not delivered left undelivered (the
+        Test, whose last queued bytes are its ladder's filler: ADR-0076) — or its patience with
         nothing moving (ADR-0039), then sends DISC; the slave asks to leave in its next answer
         and the master closes the session."""
         if self.state is State.IDLE:
             return
         self._disc_requested = True
+        if drain_s is not None:
+            self._leave_drain_s = max(0.0, drain_s)
         if self._leave_since is None:
             self._leave_since = self.now
         if self.role is Role.SLAVE and self._window is not None:
@@ -703,7 +719,7 @@ class GrantedEngine:
         it, an answer later."""
         if self._leave_since is None or self.state is not State.CONNECTED:
             return None
-        return self._leave_since + self.cfg.disc_drain_s
+        return self._leave_since + self._leave_drain_s
 
     def abort(self) -> None:
         """Drop the session now. A master says DISC from idle, on the floor, at its next
@@ -746,6 +762,13 @@ class GrantedEngine:
 
     def _ident_for(self, call: str) -> float:
         return self.cfg.identifiers.get(call.upper(), self.cfg.identifier_s)
+
+    @property
+    def peer_identifier_s(self) -> float:
+        """The other station's closing identifier's length, as its call or acceptance declared
+        it: the session's, and kept once it ends, while the identifiers are still to go
+        (ADR-0075). A recording runs on past the session's end until it has (ADR-0076)."""
+        return self._peer_identifier_s
 
     @property
     def identifier_owed(self) -> bool:
@@ -1718,7 +1741,7 @@ class GrantedEngine:
             self._patience_until = self.now + self._disc_patience()
         if self._leave_since is None:
             self._leave_since = self.now
-        if self.now >= self._leave_since + self.cfg.disc_drain_s:
+        if self.now >= self._leave_since + self._leave_drain_s:
             self._say_left(f"{self.now - self._leave_since:.0f} s after the disconnect was asked")
             return True
         if self.now >= self._patience_until:
@@ -1764,6 +1787,8 @@ class GrantedEngine:
         self.stats.silent_slots += 1
         self._silent += 1
         self._answered_run = 0
+        if self._ladder_pending is not None:
+            self._ladder_unheard = True
         if slot.data and self.cfg.hold_unknown:
             for s in self._unacked():
                 self._records[s].unknown = True
@@ -1836,6 +1861,13 @@ class GrantedEngine:
             and 0 < len(data) <= MAX_FOLLOWS + 1
             and any(f.rv in READABLE_ALONE_RVS for f in data)
         )
+        # data above the rung the slave asks for is a bet that it decodes — the Test's ladder
+        # pins its rungs there — and when none of it does, a transmission without its header
+        # granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
+        # (ADR-0076)
+        if self.cfg.header_above_recommendation and not hdr_floor:
+            recommendation = min(self._recommended, self._cap())
+            elide = elide and not any(f.mode > recommendation for f in data)
         level = 0 if elide else self.level
         # a slave of an earlier build asks for its ten-minute identifier's time, and is given
         # it: this build sends none inside a session (ADR-0075), and asks for none
@@ -2357,6 +2389,7 @@ class GrantedEngine:
             fresh = [s for s in seqs if not self._records[s].sent]
             if fresh:
                 self._ladder_pending = (mode, fresh)
+                self._ladder_unheard = False
         frames = []
         for i, s in enumerate(seqs):
             rec = self._records[s]
@@ -2380,7 +2413,12 @@ class GrantedEngine:
             pinned_mode, fresh = self._ladder_pending
             self._ladder_pending = None
             decoded = sum(1 for s in fresh if ctl.received(s))
-            self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, ctl.snr_db))
+            # after a silent slot the answer is the poll's: its frames counted, its SNR not the
+            # rung's — WC4Y's rung 8 went into the field log "at -4 dB", the poll's tone-floor
+            # reading, where its frames had arrived at 0 dB (13-wc4y-beta111.md §10)
+            snr = None if self._ladder_unheard else ctl.snr_db
+            self._ladder_unheard = False
+            self.ladder.append(LadderRung(pinned_mode, len(fresh), decoded, snr))
         progress = False
         for rec in self._records.values():
             rec.unknown = False  # the answer says what arrived

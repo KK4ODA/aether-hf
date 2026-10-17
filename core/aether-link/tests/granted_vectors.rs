@@ -129,6 +129,9 @@ fn config(doc: &Value) -> GrantConfig {
         first_grant: int(&doc["first_grant"]),
         window_doublings: int(&doc["window_doublings"]),
         elide: doc["elide"].as_bool().expect("elide"),
+        header_above_recommendation: doc["header_above_recommendation"]
+            .as_bool()
+            .expect("header_above_recommendation"),
         turnaround_s: num(&doc["turnaround_s"]),
         identifier_s: num(&doc["identifier_s"]),
         identifiers: doc["identifiers"]
@@ -466,7 +469,7 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
                     entry["as"].as_str(),
                 )
                 .expect("probe"),
-            "disconnect" => engine.disconnect(),
+            "disconnect" => engine.disconnect_within(opt(&entry["drain_s"])),
             "abort" => engine.abort(),
             "send" => engine.send(&replay.blob(&entry["data"])),
             "set_callsigns" => {
