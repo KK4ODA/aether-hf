@@ -134,6 +134,11 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    still no overlap; the keying and render times ADR-0071 learns; every silent slot, 21 of 22
    at headerless ladder rungs; and the author's questions on the speed ladder, a rung between
    rungs 3 and 5, the lopsided signal and the Morse identifier.
+13. [13-wc4y-beta111.md](13-wc4y-beta111.md): Step 4, WC4Y's Test of 2026-10-17 on beta.111,
+   read the same way: still no overlap; KK4ODA-1's sound card losing audio inside two received
+   frames; the Test's ladder leftovers taking a fifth of it; both Morse identifiers at exactly
+   20 wpm; and the Status tab checked reading by reading, which found the busy detector learning
+   the other station's signal as its noise floor.
 
 ## Reproduction
 
