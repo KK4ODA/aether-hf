@@ -765,6 +765,7 @@ def measure_unread() -> list[Recorder]:
     rng = random.Random(55)
     state = {"phase": 0, "data": 0}
     masters: set[int] = set()
+    alive: list[TxFrame] = []  # so no other frame is given one of their ids
 
     def offset(frame: TxFrame) -> float:
         if id(frame) not in masters:
@@ -788,6 +789,7 @@ def measure_unread() -> list[Recorder]:
 
     def launched(who: int, at: float, tx: Any) -> None:
         if who == 0:
+            alive.extend(tx.frames)
             masters.update(id(f) for f in tx.frames)
         launch(who, at, tx)
 
