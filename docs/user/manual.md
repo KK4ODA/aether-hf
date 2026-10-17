@@ -312,17 +312,15 @@ press **Test session**. It runs:
 2. a call;
 3. a message, sized to how well the probe says you are heard;
 4. a file, sized to about two minutes at the message's rate (at least 256 bytes);
-5. a **ladder**: a short burst pinned at each rung the link uses, starting one rung under the
+5. a **ladder**: a short measurement at each rung the link uses, starting one rung under the
    fastest the message and file were acknowledged at, until three rungs in a row fail;
 6. a disconnect.
 
 The message and file go first, so the speeds the Test reports are the speeds you would get.
 The ladder then tries rungs the link would not choose by itself. It skips the rungs the link
-never uses: 4 and 8 at 500 Hz, 6 and 13 at 2300 Hz. Each ladder frame is tried once at its rung; a frame that fails goes
-again at the speed the other station asks for. A rung the other station did not answer at all
-is logged with no SNR (*at ? dB*). As soon as the last rung is answered the Test disconnects,
-without delivering the ladder's leftover test bytes. The other station may say the last frames
-were not received; for a Test that is expected.
+never uses: 4 and 8 at 500 Hz, 6 and 13 at 2300 Hz. Each rung sends a few frames of test filler
+once. The other station says which arrived, and nothing is sent again. A rung whose answer was
+lost is logged with no SNR (*at ? dB*). After the last rung the Test disconnects.
 
 It takes about five minutes and stops itself at ten. The other station only has to be listening.
 Both stations must run the same bandwidth and protocol version. The result is recorded as two

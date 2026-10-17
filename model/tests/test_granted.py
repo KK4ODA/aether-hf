@@ -17,6 +17,7 @@ from __future__ import annotations
 import heapq
 import math
 import random
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
@@ -28,6 +29,7 @@ from aether_model.link.frames import (
     CONNECT_BODY_8_BYTES,
     CONNECT_BODY_BYTES,
     PROTOCOL_VERSION,
+    REPORT,
     TURNS_VERSION,
     ConnectBody,
     DataKind,
@@ -143,9 +145,9 @@ def test_the_control_frame_carries_every_field() -> None:
         level=3,
         fam=True,
         flag=True,
-        ident=True,
+        measure=True,
         base=200,
-        bitmap=0xA5C3,
+        bitmap=0xA5C2,
         snr_db=-12.4,
         rung=19,
         n=7,
@@ -159,6 +161,25 @@ def test_the_control_frame_carries_every_field() -> None:
     assert GrantFrame.decode(replace(frame, snr_db=None).encode()).snr_db is None
     for kind in GrantKind:
         assert GrantFrame.decode(GrantFrame(kind, 1).encode()).kind is kind
+    # one bit, two meanings by kind (protocol 9): a header's or an answer's measurement, a
+    # DISC's or a DISC_ACK's closing identifier
+    for kind in GrantKind:
+        closing = kind in (GrantKind.DISC, GrantKind.DISC_ACK)
+        read = GrantFrame.decode(GrantFrame(kind, 1, ident=True, measure=True).encode())
+        assert (read.ident, read.measure) == (closing, not closing)
+
+
+def test_a_report_acknowledges_nothing_at_or_above_its_base() -> None:
+    # a plain acknowledgement's bit 0 is always clear: base is the first frame not received
+    plain = GrantFrame(GrantKind.ANSWER, 1, base=10, bitmap=0b0110)
+    assert not plain.reports
+    assert [plain.received(s) for s in (9, 10, 11, 12, 13)] == [True, False, True, True, False]
+    # with REPORT set the bitmap says which of the last measurement's frames arrived
+    report = replace(plain, bitmap=REPORT | 0b10100)  # frames 1 and 3
+    assert report.reports
+    assert [report.measured(i) for i in range(4)] == [False, True, False, True]
+    assert [report.received(s) for s in (9, 10, 11, 12, 13)] == [True, False, False, False, False]
+    assert not plain.measured(0)
 
 
 def test_the_connect_body_of_protocol_8_declares_the_radio() -> None:
@@ -882,7 +903,7 @@ def test_a_probe_across_bandwidths_is_answered_and_says_so() -> None:
     assert any("runs 2300 Hz, this station 500 Hz" in e for e in sim.events(0))
 
 
-def test_protocols_7_and_8_ignore_each_other_and_say_so() -> None:
+def test_protocol_7_and_the_granted_protocol_ignore_each_other_and_say_so() -> None:
     timing = _timing(WIDE)
     caps = bandwidth_capabilities(WIDE.params)
     new = GrantedEngine("W4ODA", timing, GrantConfig(capabilities=caps), seed=1)
@@ -890,7 +911,7 @@ def test_protocols_7_and_8_ignore_each_other_and_say_so() -> None:
     sim = TwoStationSim(new, old, snr_db=10.0, seed=3)  # type: ignore[arg-type]
     new.connect("KK4XYZ")
     sim.run(until=30.0)
-    assert "ignored:W4ODA calls with link protocol 8" in sim.events(1)
+    assert f"ignored:W4ODA calls with link protocol {PROTOCOL_VERSION}" in sim.events(1)
     new.abort()
     old.connect("W4ODA")
     sim.run(until=sim.t + 30.0)
@@ -907,21 +928,30 @@ def test_a_call_in_another_bandwidth_is_ignored_and_said() -> None:
     assert any(e.startswith("ignored:W4ODA calls in another bandwidth") for e in sim.events(1))
 
 
-def test_the_ladder_reports_each_pinned_transmission() -> None:
+def test_the_ladder_reports_each_measurement() -> None:
+    """A measurement is filler at its rung, reported and never delivered: the session's data
+    and its counts are untouched by it (ADR-0077)."""
     a, b = _pair(WIDE)
     sim = TwoStationSim(a, b, snr_db=14.0, seed=5)
     a.connect("KK4XYZ")
     sim.run(until=20.0)
     rungs = []
     for mode in (8, 10, 12):
-        a.pin_mode(mode, body_bytes=20)
-        a.send(b"L" * 80)
+        a.measure(mode, 4)
+        assert a.measuring
         sim.run(until=sim.t + 40.0)
+        assert not a.measuring
         rungs += a.take_ladder()
-    a.pin_mode(None)
-    assert [r.mode for r in rungs][:3] == [8, 10, 12]
-    assert all(r.frames > 0 and r.decoded == r.frames for r in rungs[:2])
-    assert a.top_acked_mode is not None and a.top_acked_mode >= 10
+    assert [r.mode for r in rungs] == [8, 10, 12]
+    assert all(r.frames == 4 and r.decoded == r.frames for r in rungs[:2])
+    assert all(r.snr_db is not None for r in rungs)
+    assert sim.delivered(1) == b"" and b.stats.bytes_delivered == 0
+    assert a.top_acked_mode is None and a.stats.bytes_acked == 0
+    assert a.all_acknowledged() and a.tx_undelivered_bytes == 0
+    with pytest.raises(ValueError):
+        a.measure(99, 4)
+    with pytest.raises(ValueError):
+        a.measure(8, 0)
 
 
 def test_a_floor_only_ceiling_puts_every_frame_on_the_floor() -> None:
@@ -1322,40 +1352,148 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
     assert sim.overlaps() == []
 
 
-def test_a_ladder_frame_is_measured_once_and_then_goes_at_the_rung_asked_for() -> None:
-    """The Test's ladder pins a rung to measure it. ND1J's Tests of 2026-10-15 sent the frames
-    that failed again at that rung, at RV 0, 2 and 3, before re-encoding them: 13 of their 21
-    silent slots, and in the two morning Tests about 130 s of each ladder. A pinned frame's first
-    copy is the measurement; after it, the frame goes at the rung the slave asks for (ADR-0074)."""
-    a, b = _pair(NARROW)
-    sim = TwoStationSim(a, b, snr_db=-5.0, seed=22)
-    sent: list[TxFrame] = []
+def _spy_data(sim: TwoStationSim, who: int) -> list[list[TxFrame]]:
+    """Every transmission of station ``who``'s that carries data frames, as launched."""
+    sent: list[list[TxFrame]] = []
     orig = sim._launch
 
-    def spy(who: int, at: float, tx: object) -> None:
-        if who == 0 and isinstance(tx, SlotTransmit):
-            sent.extend(f for f in tx.frames if f.container is Container.DATA)
-        orig(who, at, tx)  # type: ignore[arg-type]
+    def spy(station: int, at: float, tx: object) -> None:
+        if station == who and isinstance(tx, SlotTransmit):
+            data = [f for f in tx.frames if f.container is Container.DATA]
+            if data:
+                sent.append(data)
+        orig(station, at, tx)  # type: ignore[arg-type]
 
     sim._launch = spy  # type: ignore[method-assign]
+    return sent
+
+
+def _data_kind(frame: TxFrame) -> DataKind:
+    return decode_data(frame.payload)[0].kind
+
+
+def test_a_measurement_frame_goes_once_and_its_losses_cost_nothing() -> None:
+    """The Test's ladder had pinned the session's own data at each rung, so a frame that failed
+    there was data still to deliver: on WC4Y's Test of 2026-10-17 the leftovers took 93 s of 435
+    (13-wc4y-beta111.md §10). A measurement frame takes no sequence number: sent once, alone in
+    its transmission, reported, never sent again — and the data queued behind it waits for the
+    report, then goes as if there had been none (ADR-0077)."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=-5.0, seed=22)
+    sent = _spy_data(sim, 0)
     a.connect("KK4XYZ")
     sim.run(until=60.0)
-    pinned = 9
-    a.pin_mode(pinned, body_bytes=10)
-    a.send(_message(random.Random(22), 40))
-    sim.run(until=sim.t + 120.0)
-    rungs = a.take_ladder()
-    a.pin_mode(None)
+    measured = 9
+    a.measure(measured, 4)
+    message = _message(random.Random(22), 40)
+    a.send(message)
     sim.run(until=sim.t + 300.0)
-    assert [r.mode for r in rungs] == [pinned] and rungs[0].decoded < rungs[0].frames
-    at_pinned: dict[int, int] = {}
-    for frame in sent:
-        if frame.mode == pinned:
-            seq = decode_data(frame.payload)[0].seq
-            at_pinned[seq] = at_pinned.get(seq, 0) + 1
-    assert at_pinned and max(at_pinned.values()) == 1, at_pinned
-    assert a.stats.frames_reencoded >= rungs[0].frames - rungs[0].decoded
-    assert len(sim.delivered(1)) == 40, "the ladder's frames still all arrive"
+    rungs = a.take_ladder()
+    assert [r.mode for r in rungs] == [measured] and rungs[0].decoded < rungs[0].frames
+    with_measurement = [tx for tx in sent if any(_data_kind(f) is DataKind.MEASURE for f in tx)]
+    assert len(with_measurement) == 1, "a measurement is sent once"
+    assert all(_data_kind(f) is DataKind.MEASURE and f.rv == 0 for f in with_measurement[0])
+    assert [decode_data(f.payload)[0].seq for f in with_measurement[0]] == list(range(4))
+    first = sent.index(with_measurement[0])
+    assert all(_data_kind(f) is DataKind.DATA for tx in sent[first + 1 :] for f in tx)
+    assert sim.delivered(1) == message, "the data behind it, and nothing of it"
+    assert sim.overlaps() == []
+
+
+def test_a_measurement_leaves_nothing_to_combine() -> None:
+    """A measurement frame that does not decode is never sent again, and the data that follows
+    takes the sequence numbers a receiver would infer for it: a buffer kept for one would be
+    combined with another codeword. The receiver keeps none (ADR-0077)."""
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(a, b, snr_db=4.0, seed=23)
+    a.connect("KK4XYZ")
+    sim.run(until=30.0)
+    failed = b.stats.frames_failed
+    a.measure(WIDE.n_rungs - 1, 4)
+    sim.run(until=sim.t + 60.0)
+    rungs = a.take_ladder()
+    assert rungs and rungs[0].decoded == 0
+    assert b.stats.frames_failed >= failed + rungs[0].frames
+    assert b._harq == {}
+
+
+def test_an_unread_measurement_leaves_nothing_to_combine() -> None:
+    """Its header lost and its frames failed, a measurement looks like data to the slave, which
+    keeps the frames to combine under the sequence numbers the master's next data takes. The
+    master's poll says it still waits for the report, and the slave drops them before any data
+    comes (ADR-0077)."""
+    a, b = _pair(WIDE)
+    masters: set[int] = set()
+    lost = [False]
+
+    def offset(frame: TxFrame) -> float:
+        if id(frame) not in masters:
+            return 0.0
+        if frame.container is Container.CONTROL:
+            ctl = GrantFrame.decode(frame.payload)
+            if not lost[0] and ctl.kind is GrantKind.HEADER and ctl.measure and ctl.count:
+                lost[0] = True
+                return -60.0
+            return 0.0
+        return -8.0 if _data_kind(frame) is DataKind.MEASURE else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=55, frame_snr_offset=offset)
+    launch = sim._launch
+
+    def launched(who: int, at: float, tx: object) -> None:
+        if who == 0:
+            masters.update(id(f) for f in tx.frames)  # type: ignore[attr-defined]
+        launch(who, at, tx)  # type: ignore[arg-type]
+
+    sim._launch = launched  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    a.send(_message(random.Random(55), 600))
+    sim.run(until=60.0)
+    b.send(_message(random.Random(56), 6000))  # the slave keeps answering
+    sim.run(until=75.0)
+    a.measure(a.current_mode, 4)
+    kept = False
+    t = sim.t
+    while a.measuring and t < 200.0:
+        t += 0.1
+        sim.run(until=t)
+        kept = kept or bool(b._harq)
+    assert lost[0] and kept, "the unread frames were kept to combine"
+    assert not a.measuring and a.take_ladder()
+    assert b._harq == {}, "and dropped before the master's data comes"
+
+
+def test_data_waits_for_the_measurements_report() -> None:
+    """The report rides in the bitmap the other station's acknowledgements would carry for
+    this station's data, so nothing of it goes until the report is read (ADR-0077)."""
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=24)
+    a.connect("KK4XYZ")
+    sim.run(until=20.0)
+    a.measure(10, 3)
+    a.send(b"d" * 300)
+    sent = _spy_data(sim, 0)
+    t = sim.t
+    while a.measuring and t < 120.0:
+        t += 0.5
+        sim.run(until=t)
+        assert all(_data_kind(f) is DataKind.MEASURE for tx in sent for f in tx)
+    assert not a.measuring and a.take_ladder()
+    sim.run(until=sim.t + 60.0)
+    assert sim.delivered(1) == b"d" * 300
+
+
+def test_the_slave_measures_too() -> None:
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(a, b, snr_db=14.0, seed=25)
+    a.connect("KK4XYZ")
+    sim.run(until=20.0)
+    b.measure(10, 3)
+    b.send(b"s" * 200)
+    sim.run(until=sim.t + 90.0)
+    rungs = b.take_ladder()
+    assert [(r.mode, r.frames, r.decoded) for r in rungs] == [(10, 3, 3)]
+    assert sim.delivered(0) == b"s" * 200
     assert sim.overlaps() == []
 
 
@@ -1547,13 +1685,20 @@ def test_an_answer_is_decided_early_and_radiates_at_its_slot(air: str) -> None:
 
 
 def _ladder_rung(
-    pinned: int, *, snr_db: float, seed: int, **cfg: object
+    rung: int,
+    *,
+    snr_db: float,
+    seed: int,
+    pinned: bool = False,
+    lose: Callable[[TxFrame], float] | None = None,
+    **cfg: object,
 ) -> tuple[GrantedEngine, list[list[TxFrame]], int, list[object]]:
-    """A session on the 2 300 Hz air, then one rung of the Test's ladder pinned at ``pinned``:
-    the master, its transmissions while the rung was pinned, the silent slots they drew, and
-    what the ladder reported."""
+    """A session on the 2 300 Hz air, then one rung of the Test's ladder at ``rung`` — measured,
+    or with ``pinned`` the session's own data pinned there, as the ladder did before ADR-0077:
+    the master, its transmissions since, the silent slots they drew, and what the ladder
+    reported. ``lose``: decibels off a frame, as the simulator's ``frame_snr_offset``."""
     a, b = _pair(WIDE, **cfg)
-    sim = TwoStationSim(a, b, snr_db=snr_db, seed=seed)
+    sim = TwoStationSim(a, b, snr_db=snr_db, seed=seed, frame_snr_offset=lose)
     sent: list[list[TxFrame]] = []
     orig = sim._launch
     recording = [False]
@@ -1570,12 +1715,19 @@ def _ladder_rung(
     assert sim.delivered(1) == b"m" * 600
     silent = a.stats.silent_slots
     recording[0] = True
-    a.pin_mode(pinned, body_bytes=10)
-    a.send(b"L" * 40)
+    if pinned:
+        a.pin_mode(rung, body_bytes=10)
+        a.send(b"L" * 40)
+    else:
+        a.measure(rung, 4)
     sim.run(until=sim.t + 60.0)
     rungs: list[object] = list(a.take_ladder())
     a.pin_mode(None)
     return a, sent, a.stats.silent_slots - silent, rungs
+
+
+def _at(sent: list[list[TxFrame]], rung: int) -> list[list[TxFrame]]:
+    return [tx for tx in sent if any(f.mode == rung for f in tx if f.container is Container.DATA)]
 
 
 def test_a_pinned_transmission_above_the_recommendation_keeps_a_cheap_header() -> None:
@@ -1583,32 +1735,58 @@ def test_a_pinned_transmission_above_the_recommendation_keeps_a_cheap_header() -
     header; none of their frames decoded, so each transmission granted nothing — a wait and a
     floor poll — where an ordinary header, 0.43 s, would have been read (ADR-0076)."""
     pinned = WIDE.n_rungs - 1
-    _, sent, silent, rungs = _ladder_rung(pinned, snr_db=6.0, seed=31)
-    with_pinned = [
-        tx for tx in sent if any(f.mode == pinned for f in tx if f.container is Container.DATA)
-    ]
+    _, sent, silent, _ = _ladder_rung(pinned, snr_db=6.0, seed=31, pinned=True)
+    with_pinned = _at(sent, pinned)
     assert with_pinned, "the pinned rung went out"
     assert with_pinned[0][0].container is Container.CONTROL and not with_pinned[0][0].floor
     assert silent == 0
-    assert rungs and rungs[0].decoded < rungs[0].frames  # type: ignore[attr-defined]
-    assert rungs[0].snr_db is not None  # type: ignore[attr-defined]
-
-
-def test_a_ladder_rung_whose_slot_went_silent_reports_no_snr() -> None:
-    """Without the header the pinned transmission's slot goes silent, and the answer that
-    reports its frames is the poll's: its SNR is the poll's reading, not the rung's — WC4Y's
-    rung 8 went into the field log "at -4 dB" where its frames had arrived at 0 dB
-    (13-wc4y-beta111.md §10). The rung is reported with no SNR (ADR-0076)."""
-    pinned = WIDE.n_rungs - 1
-    _, sent, silent, rungs = _ladder_rung(
-        pinned, snr_db=6.0, seed=31, header_above_recommendation=False
+    _, sent, silent, _ = _ladder_rung(
+        pinned, snr_db=6.0, seed=31, pinned=True, header_above_recommendation=False
     )
-    with_pinned = [
-        tx for tx in sent if any(f.mode == pinned for f in tx if f.container is Container.DATA)
-    ]
-    assert with_pinned and with_pinned[0][0].container is Container.DATA, "elided as before"
+    assert _at(sent, pinned)[0][0].container is Container.DATA, "elided without the rule"
     assert silent >= 1
-    assert rungs and rungs[0].decoded < rungs[0].frames  # type: ignore[attr-defined]
+
+
+def test_a_measurement_keeps_its_header_whatever_the_rule() -> None:
+    """Its header says the frames are measurement frames, so it always goes: what came of the
+    frames is reported in the measurement's own slot, with the rung's SNR."""
+    top = WIDE.n_rungs - 1
+    for rule in (True, False):
+        _, sent, silent, rungs = _ladder_rung(
+            top, snr_db=6.0, seed=31, header_above_recommendation=rule
+        )
+        measured = _at(sent, top)
+        assert len(measured) == 1 and measured[0][0].container is Container.CONTROL
+        assert GrantFrame.decode(measured[0][0].payload).measure
+        assert silent == 0
+        assert rungs and rungs[0].decoded < rungs[0].frames  # type: ignore[attr-defined]
+        assert rungs[0].snr_db is not None  # type: ignore[attr-defined]
+
+
+def test_a_ladder_rung_whose_answer_was_lost_reports_no_snr() -> None:
+    """The measurement's answer lost, the master polls — saying it still waits for the report —
+    and the answer to the poll reports the frames: its SNR is the poll's reading, not the
+    rung's — WC4Y's rung 8 went into the field log "at -4 dB" where its frames had arrived at
+    0 dB (13-wc4y-beta111.md §10). The rung is reported with no SNR (ADR-0076)."""
+    lost = [False, False]  # a measurement frame launched; its answer lost
+
+    def lose(frame: TxFrame) -> float:
+        if frame.container is Container.DATA and _data_kind(frame) is DataKind.MEASURE:
+            lost[0] = True
+        elif (
+            frame.container is Container.CONTROL
+            and lost[0]
+            and not lost[1]
+            and GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER
+        ):
+            lost[1] = True
+            return -60.0
+        return 0.0
+
+    _, sent, silent, rungs = _ladder_rung(10, snr_db=12.0, seed=32, lose=lose)
+    assert lost == [True, True] and silent >= 1
+    assert len(_at(sent, 10)) == 1, "the poll carries no data"
+    assert rungs and rungs[0].decoded == rungs[0].frames == 4  # type: ignore[attr-defined]
     assert rungs[0].snr_db is None  # type: ignore[attr-defined]
 
 

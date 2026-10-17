@@ -26,6 +26,7 @@ from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
     DATA_HEADER,
     PROTOCOL_VERSION,
+    REPORT,
     ConnectBody,
     ControlFlags,
     ControlFrame,
@@ -164,7 +165,8 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
 
 def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
     """Protocol 8's control frame (ADR-0069): every field at its edges, the session's high bit
-    dropped, the SNR's ties to even and its six-bit clamp."""
+    dropped, the SNR's ties to even and its six-bit clamp; protocol 9's measurement bit, which
+    is the identifier's in a DISC and a DISC_ACK, and a report (ADR-0077)."""
     out = []
     cases = [
         GrantFrame(GrantKind.HEADER, 42),
@@ -176,9 +178,9 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
             level=3,
             fam=True,
             flag=True,
-            ident=True,
+            measure=True,
             base=250,
-            bitmap=0xFFFF,
+            bitmap=0xFFFE,
             snr_db=31.6,
             rung=19,
             n=7,
@@ -188,6 +190,10 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
         GrantFrame(GrantKind.DISC, 64, fam=True, level=2, snr_db=-40.0),
         GrantFrame(GrantKind.DISC_ACK, 255, ident=True, snr_db=-31.4, base=17),
         GrantFrame(GrantKind.HEADER, 9, count=9, n=12, snr_db=13.5, rung=40),
+        GrantFrame(GrantKind.HEADER, 3, ident=True, measure=False, base=7, bitmap=0b0110),
+        GrantFrame(GrantKind.DISC, 5, measure=True),
+        GrantFrame(GrantKind.ANSWER, 11, measure=True, base=250, bitmap=REPORT | 0b10110),
+        GrantFrame(GrantKind.HEADER, 12, base=4, bitmap=0xFFFF),
     ]
     for frame in cases:
         encoded = frame.encode()
@@ -202,6 +208,7 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                 "fam": frame.fam,
                 "flag": frame.flag,
                 "ident": frame.ident,
+                "measure": frame.measure,
                 "base": frame.base,
                 "bitmap": frame.bitmap,
                 "snr_db": frame.snr_db,
@@ -217,13 +224,17 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                     "fam": decoded.fam,
                     "flag": decoded.flag,
                     "ident": decoded.ident,
+                    "measure": decoded.measure,
                     "base": decoded.base,
                     "bitmap": decoded.bitmap,
                     "snr_db": decoded.snr_db,
                     "rung": decoded.rung,
                     "n": decoded.n,
                 },
-                "received": [decoded.received(q) for q in range(0, 256, 13)],
+                "received": [decoded.received(q) for q in range(0, 256, 13)]
+                + [decoded.received((decoded.base + d) % 256) for d in range(17)],
+                "reports": decoded.reports,
+                "measured": [decoded.measured(i) for i in range(-1, 17)],
             }
         )
     return out

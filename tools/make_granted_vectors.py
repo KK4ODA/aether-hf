@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.engine import Deliver, Event, Transmit
 from aether_model.link.fading import FadingPipe
-from aether_model.link.frames import GrantFrame, GrantKind
+from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_data
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
@@ -185,6 +185,7 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "probing": e.probing,
         "peer_snr_db": bits(e.peer_snr_db),
         "identifier_owed": e.identifier_owed,
+        "measuring": e.measuring,
         "stats": dict(vars(e.stats)),
     }
 
@@ -307,6 +308,7 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
     },
     "set_answer_gap": lambda seconds: {"seconds": bits(seconds)},
     "pin_mode": lambda mode, body_bytes=None: {"mode": mode, "body": body_bytes},
+    "measure": lambda mode, frames: {"mode": mode, "frames": frames},
     "take_ladder": lambda: {},
     "set_ceiling": lambda rung: {"rung": rung},
     "set_max_burst_s": lambda seconds: {"seconds": bits(seconds)},
@@ -370,6 +372,7 @@ def _exchange(
     to_b: bytes,
     to_a: bytes,
     until: float = 900.0,
+    during: Callable[[float], None] | None = None,
 ) -> None:
     a.connect(b.my_call)
     a.send(to_b)
@@ -379,6 +382,8 @@ def _exchange(
     while t < until:
         t += 5.0
         sim.run(until=t)
+        if during is not None:
+            during(t)
         if not done and sim.delivered(1) == to_b and sim.delivered(0) == to_a:
             done = True
             a.disconnect()
@@ -671,20 +676,27 @@ def identifiers() -> list[Recorder]:
 
 
 def ladder() -> list[Recorder]:
-    """The Test's ladder: the master's new data pinned rung by rung; a floor-only ceiling."""
+    """The Test's ladder: the master measures rung by rung (ADR-0077), the last measurement with
+    data queued behind it, which waits for the report; the slave measures once; then a
+    floor-only ceiling."""
     a, b, ra, rb = _pair(WIDE)
     rng = random.Random(9)
     sim = TwoStationSim(a, b, snr_db=14.0, seed=9)
     a.connect("KK4XYZ")
     sim.run(until=15.0)
     t = 15.0
-    for rung in (4, 8, 12, 16):
-        a.pin_mode(rung, 40)
-        a.send(_message(rng, 120))
+    for rung in (4, 8, 12, 16, 19):
+        a.measure(rung, 4)
+        if rung == 19:
+            a.send(_message(rng, 200))
         t += 25.0
         sim.run(until=t)
         a.take_ladder()
-    a.pin_mode(None)
+    b.measure(10, 3)
+    b.send(_message(rng, 120))
+    t += 40.0
+    sim.run(until=t)
+    b.take_ladder()
     a.set_ceiling(1)
     b.send(_message(rng, 300))
     a.send(_message(rng, 300))
@@ -696,28 +708,102 @@ def ladder() -> list[Recorder]:
     return [ra, rb]
 
 
+def _lose_around_measurement(kind: GrantKind) -> Callable[[TxFrame], float]:
+    """A frame offset that loses one control frame around a measurement: its own header, or the
+    first answer after its frames."""
+    state = {"armed": False, "lost": False}
+
+    def offset(frame: TxFrame) -> float:
+        if state["lost"]:
+            return 0.0
+        if frame.container is Container.DATA:
+            state["armed"] |= decode_data(frame.payload)[0].kind is DataKind.MEASURE
+            return 0.0
+        ctl = GrantFrame.decode(frame.payload)
+        header = kind is GrantKind.HEADER and ctl.kind is kind and ctl.measure and ctl.count > 0
+        answer = kind is GrantKind.ANSWER and ctl.kind is kind and state["armed"]
+        if header or answer:
+            state["lost"] = True
+            return -60.0
+        return 0.0
+
+    return offset
+
+
 def ladder_unheard() -> list[Recorder]:
-    """A ladder rung pinned above what the path carries, with the header left out as before
-    ADR-0076 and then — a second pair — kept, as an ordinary header is now: the first rung's
-    slot goes silent and is reported with no SNR; the second is answered. Each Test then closes
-    with its leftover filler undelivered (``disconnect(drain_s=0)``)."""
+    """A ladder rung measured above what the path carries, its answer lost — and then, a second
+    pair, its header lost too: the master polls, saying it still waits for the report, and the
+    slave, which kept to combine what it could not decode, drops it and reports. The rung is
+    reported with no SNR (ADR-0076), the data queued behind it goes after the report, and each
+    Test closes with nothing left to drain (``disconnect(drain_s=0)``)."""
     recorders: list[Recorder] = []
-    for keep, seeds in ((False, (51, 52)), (True, (53, 54))):
-        a, b, ra, rb = _pair(WIDE, seeds=seeds, header_above_recommendation=keep)
+    for lose, seeds in ((GrantKind.ANSWER, (51, 52)), (GrantKind.HEADER, (53, 54))):
+        a, b, ra, rb = _pair(WIDE, seeds=seeds)
         rng = random.Random(seeds[0])
-        sim = TwoStationSim(a, b, snr_db=6.0, seed=seeds[0])
+        offset = _lose_around_measurement(lose)
+        sim = TwoStationSim(a, b, snr_db=6.0, seed=seeds[0], frame_snr_offset=offset)
         a.connect("KK4XYZ")
         a.send(_message(rng, 600))
         sim.run(until=90.0)
-        a.pin_mode(WIDE.n_rungs - 1, 10)
+        a.measure(WIDE.n_rungs - 1, 4)
         a.send(_message(rng, 40))
         sim.run(until=150.0)
         a.take_ladder()
-        a.pin_mode(None)
         a.disconnect(drain_s=0.0)
         sim.run(until=260.0)
         recorders += [ra, rb]
     return recorders
+
+
+def measure_unread() -> list[Recorder]:
+    """A measurement at the rung the data goes at, its header lost and its frames failed, while
+    the slave's own data keeps it answering: it cannot tell the frames from data and keeps them
+    to combine, under the sequence numbers the master's next data takes. The master's poll says
+    it still waits for the report, the slave drops what it kept, and the data's first copies,
+    failed too, combine with nothing of the measurement's (ADR-0077)."""
+    a, b, ra, rb = _pair(WIDE, seeds=(55, 56))
+    rng = random.Random(55)
+    state = {"phase": 0, "data": 0}
+    masters: set[int] = set()
+
+    def offset(frame: TxFrame) -> float:
+        if id(frame) not in masters:
+            return 0.0
+        if frame.container is Container.CONTROL:
+            ctl = GrantFrame.decode(frame.payload)
+            if state["phase"] == 0 and ctl.kind is GrantKind.HEADER and ctl.measure and ctl.count:
+                state["phase"] = 1
+                return -60.0
+            return 0.0
+        kind = decode_data(frame.payload)[0].kind
+        if kind is DataKind.MEASURE:
+            return -8.0
+        if state["phase"] == 1 and kind is DataKind.DATA and state["data"] < 4:
+            state["data"] += 1
+            return -8.0
+        return 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=55, frame_snr_offset=offset)
+    launch = sim._launch
+
+    def launched(who: int, at: float, tx: Any) -> None:
+        if who == 0:
+            masters.update(id(f) for f in tx.frames)
+        launch(who, at, tx)
+
+    sim._launch = launched  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 600))
+    sim.run(until=60.0)
+    b.send(_message(rng, 6000))
+    sim.run(until=75.0)
+    a.measure(a.current_mode, 4)
+    a.send(_message(rng, 400))
+    sim.run(until=200.0)
+    a.take_ladder()
+    a.disconnect()
+    sim.run(until=400.0)
+    return [ra, rb]
 
 
 def late_station() -> list[Recorder]:
@@ -738,7 +824,14 @@ def late_station() -> list[Recorder]:
         return rng.choice([0.0, 0.2, 0.6]) if who == 1 else 0.05
 
     sim = TwoStationSim(a, b, snr_db=9.0, seed=10, decode_latency=latency, key_lead=lead)
-    _exchange(sim, a, b, _message(rng, 2000), _message(rng, 1500))
+
+    def measure(t: float) -> None:
+        # the slave measures again and again: a measurement the gate drops is asked for again
+        b.take_ladder()
+        if t <= 60.0 and not b.measuring and b.state.value == "connected":
+            b.measure(8, 3)
+
+    _exchange(sim, a, b, _message(rng, 2000), _message(rng, 1500), during=measure)
     return [ra, rb]
 
 
@@ -928,6 +1021,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "identifiers": identifiers,
     "ladder": ladder,
     "ladder-unheard": ladder_unheard,
+    "measure-unread": measure_unread,
     "late-station": late_station,
     "simultaneous": simultaneous,
     "called-again": called_again,

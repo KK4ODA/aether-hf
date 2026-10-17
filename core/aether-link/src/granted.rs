@@ -50,9 +50,9 @@ use crate::{
     engine::{Action, LadderRung, ProbeResult, State},
     frames::{
         CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, GrantFrame,
-        GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, WINDOW, bandwidth_code,
-        bandwidth_hz_of, data_capacity, decode_data, encode_data, in_window, level_of,
-        pack_callsign, seq_after, seq_distance, with_level,
+        GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, REPORT, WINDOW,
+        bandwidth_code, bandwidth_hz_of, data_capacity, data_kind, decode_data, encode_data,
+        in_window, level_of, pack_callsign, seq_after, seq_distance, with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
@@ -148,6 +148,26 @@ impl Draws {
     }
 }
 
+/// A measurement frame's filler: `SplitMix64` from the session and the frame's index, so a frame
+/// of every rung carries bytes that look like data — a body of zeros is not what data sends, and
+/// on the four-tone kinds it is a lopsided spectrum (12-two-paths-80m.md §9).
+fn measure_body(session: u8, index: u8, length: usize) -> Vec<u8> {
+    let mut draws =
+        Draws::new(0x4D45_4153_5552_4500 | (u64::from(session) << 8) | u64::from(index));
+    let mut out = Vec::with_capacity(length + 8);
+    while out.len() < length {
+        out.extend_from_slice(&draws.next_u64().to_be_bytes());
+    }
+    out.truncate(length);
+    out
+}
+
+fn carries_measurement(frames: &[TxFrame]) -> bool {
+    frames
+        .iter()
+        .any(|f| f.container == Container::Data && data_kind(&f.payload) == Some(DataKind::Measure))
+}
+
 /// Which side of a session this station is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -230,7 +250,8 @@ pub struct GrantConfig {
     /// Leave the header out of a transmission it would change nothing in (R7).
     pub elide: bool,
     /// Keep the header on a transmission whose data goes above the rung the slave recommends —
-    /// the Test's ladder pins its rungs there — when the header is ordinary (ADR-0076). Left
+    /// copies still at the rung they first went at, data pinned ([`GrantedEngine::pin_mode`]) —
+    /// when the header is ordinary (ADR-0076). Left
     /// out, such a transmission granted nothing when none of its frames decoded: a wait and a
     /// floor poll, where a 0.43 s header would have been read. A floor header costs 3.2 s and
     /// broke even on weak paths, so it is kept only where it is cheap.
@@ -384,6 +405,16 @@ pub struct GrantStats {
 
 // ── internal records ──────────────────────────────────────────────────
 
+/// What a decoded data frame of this session was ([`GrantedEngine::accept`]).
+enum Accepted {
+    /// Data, under its sequence number.
+    Data(u8),
+    /// A measurement frame: counted in the report, never delivered.
+    Measurement,
+    /// Anything else, or a measurement frame of a report already made.
+    Not,
+}
+
 #[derive(Debug, Clone)]
 struct TxRecord {
     seq: u8,
@@ -394,10 +425,6 @@ struct TxRecord {
     reencoded: usize,
     /// Sent in a transmission whose answer went unheard: whether it arrived is not known.
     unknown: bool,
-    /// Sent first at a rung pinned to measure it (the Test's ladder). Its first copy is the
-    /// measurement; after it, the frame goes on as data does, at the rung the other station asks
-    /// for (ADR-0074).
-    pinned: bool,
 }
 
 impl TxRecord {
@@ -523,9 +550,9 @@ struct Slot {
     level: usize,
     granter_turnaround_s: f64,
     open_window: bool,
-    /// The slave's identifier time granted: its answer starts that much into the slot.
-    ident_s: f64,
-    /// The granting transmission carried data: a silent slot steps its rung down.
+    /// The granting transmission carried data: a silent slot steps its rung down. Measurement
+    /// frames are none: a measurement always carries its header, and the slot's silence says the
+    /// header or the answer was lost, not that the rung measured was too fast (ADR-0077).
     data: bool,
     granted: usize,
     tx_end: f64,
@@ -551,7 +578,6 @@ impl Slot {
             level: 0,
             granter_turnaround_s: 0.0,
             open_window: false,
-            ident_s: 0.0,
             data: false,
             granted: 0,
             tx_end: 0.0,
@@ -713,9 +739,10 @@ pub struct GrantedEngine {
     slot: Option<Slot>,
     next_slot_id: u64,
     /// This station's transmissions handed over and not yet done, in order, each with the slot
-    /// it granted — `on_tx_done` reports where that slot's granting transmission ended — and the
-    /// closing identifier it carries behind a `DISC_ACK`, owed again if it is dropped.
-    in_flight: VecDeque<(Option<u64>, f64)>,
+    /// it granted — `on_tx_done` reports where that slot's granting transmission ended —, the
+    /// closing identifier it carries behind a `DISC_ACK`, owed again if it is dropped, and
+    /// whether it carries a measurement, asked again if it is dropped.
+    in_flight: VecDeque<(Option<u64>, f64, bool)>,
     /// Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
     /// while idle keys before this: the last slot it granted may still be in use.
     hold_until: f64,
@@ -741,7 +768,8 @@ pub struct GrantedEngine {
     probe_unsent: bool,
     last_probe: Option<ProbeResult>,
     ended_peer_snr_db: Option<f64>,
-    /// What each pinned transmission's acknowledgement reported (the Test's ladder).
+    /// What the other station reported of each measurement ([`Self::measure`]): the Test's
+    /// ladder.
     ladder: Vec<LadderRung>,
     pinned: Option<usize>,
     pin_body: Option<usize>,
@@ -775,10 +803,16 @@ pub struct GrantedEngine {
     /// How long this session's disconnect waits for what is queued
     /// ([`disconnect_within`](Self::disconnect_within)).
     leave_drain_s: f64,
-    ladder_pending: Option<(usize, Vec<u8>)>,
-    /// The pinned transmission's slot went silent: the answer that reports its frames follows a
-    /// poll, and the SNR it carries is the poll's, not the rung's (ADR-0076).
-    ladder_unheard: bool,
+    /// A measurement asked for ([`Self::measure`]) and not yet sent: its rung and frames.
+    measure_ask: Option<(usize, usize)>,
+    /// A measurement sent and not yet reported: its rung and the frames it went with. Until the
+    /// report, this station sends no data, and every control frame of its says so (the
+    /// `measure` bit): the other station keeps the report for it, and whatever that station
+    /// holds to combine is of measurement frames, which it drops (ADR-0077).
+    measure_out: Option<(usize, usize)>,
+    /// The measurement's answer was not read: the report follows a poll, and the SNR it carries
+    /// is the poll's, not the rung's (ADR-0076).
+    measure_unheard: bool,
     rate: RateController,
     asked: Option<usize>,
     rx_base: u8,
@@ -792,6 +826,13 @@ pub struct GrantedEngine {
     /// first one's start, how many, their family.
     grid: Option<(f64, usize, bool)>,
     ack_history: Vec<AckSnapshot>,
+    /// The report of the other station's last measurement, as a bitmap ([`REPORT`]): what this
+    /// station's acknowledgements carry from the measurement until the other station's data
+    /// comes again.
+    measured: Option<u16>,
+    /// The transmission being received is a measurement: its frames are filler, and one that
+    /// does not decode is never sent again — nothing to combine it with.
+    rx_measure: bool,
     // the master
     level_asked: usize,
     silence_level: usize,
@@ -802,7 +843,6 @@ pub struct GrantedEngine {
     /// Frames the slave said it has queued; `None` before its first answer.
     slave_want: Option<usize>,
     slave_leaves: bool,
-    slave_id_due: bool,
     slave_floor_only: bool,
     hdr_floor: bool,
     /// Every family the slave may answer in when it has not read the header (R6).
@@ -930,8 +970,9 @@ impl GrantedEngine {
             patience_until: None,
             leave_since: None,
             leave_drain_s: drain,
-            ladder_pending: None,
-            ladder_unheard: false,
+            measure_ask: None,
+            measure_out: None,
+            measure_unheard: false,
             rate,
             asked: None,
             rx_base: 0,
@@ -942,6 +983,8 @@ impl GrantedEngine {
             rx_t0: None,
             grid: None,
             ack_history: Vec::new(),
+            measured: None,
+            rx_measure: false,
             level_asked: 0,
             silence_level: 0,
             silent: 0,
@@ -949,7 +992,6 @@ impl GrantedEngine {
             answered_run: 0,
             slave_want: None,
             slave_leaves: false,
-            slave_id_due: false,
             slave_floor_only: false,
             hdr_floor: true,
             possible: Families::of(true),
@@ -992,8 +1034,9 @@ impl GrantedEngine {
         self.patience_until = None;
         self.leave_since = None;
         self.leave_drain_s = self.config.disc_drain_s;
-        self.ladder_pending = None;
-        self.ladder_unheard = false;
+        self.measure_ask = None;
+        self.measure_out = None;
+        self.measure_unheard = false;
         self.rate = rate_controller_for(&self.timing, self.config.rate);
         self.asked = None;
         self.rx_base = 0;
@@ -1004,6 +1047,8 @@ impl GrantedEngine {
         self.rx_t0 = None;
         self.grid = None;
         self.ack_history.clear();
+        self.measured = None;
+        self.rx_measure = false;
         self.slot = None;
         self.level_asked = 0;
         self.silence_level = 0;
@@ -1012,7 +1057,6 @@ impl GrantedEngine {
         self.answered_run = 0;
         self.slave_want = None;
         self.slave_leaves = false;
-        self.slave_id_due = false;
         self.slave_floor_only = false;
         self.hdr_floor = true;
         self.possible = Families::of(true);
@@ -1103,7 +1147,7 @@ impl GrantedEngine {
         self.top_acked_mode
     }
 
-    /// The pinned transmissions' rungs reported so far, not yet taken.
+    /// The measurements' rungs reported so far, not yet taken.
     #[must_use]
     pub fn ladder(&self) -> &[LadderRung] {
         &self.ladder
@@ -1208,7 +1252,7 @@ impl GrantedEngine {
         self.stats = GrantStats::default();
     }
 
-    /// The pinned transmissions' rungs reported so far, taken.
+    /// The measurements' rungs reported so far, taken.
     pub fn take_ladder(&mut self) -> Vec<LadderRung> {
         std::mem::take(&mut self.ladder)
     }
@@ -1418,8 +1462,9 @@ impl GrantedEngine {
         self.config.answer_gap_s = seconds.max(0.0);
     }
 
-    /// This station's own new data goes at `mode` until unpinned — the Test's ladder, at either
-    /// end of a session.
+    /// This station's own new data goes at `mode` until unpinned, in bodies of at most
+    /// `body_bytes` — the benches' and the tests'. The Test's ladder measures a rung with
+    /// [`Self::measure`] instead.
     ///
     /// # Errors
     /// For a mode outside the table, or a body of no bytes.
@@ -1439,6 +1484,35 @@ impl GrantedEngine {
         self.pinned = mode;
         self.pin_body = if mode.is_some() { body_bytes } else { None };
         Ok(())
+    }
+
+    /// Measure `mode` on the path to the other station (ADR-0077): `frames` frames of filler at
+    /// it, in a transmission of their own as soon as all of this station's data is acknowledged
+    /// — as many as the transmission holds — never delivered and never sent again. What the
+    /// other station reports of them goes to [`Self::take_ladder`]; this station's data waits
+    /// for the report. Asked again before it is sent, the later asking stands.
+    ///
+    /// # Errors
+    /// For a mode outside the table, or no frames.
+    pub fn measure(&mut self, mode: usize, frames: usize) -> Result<(), &'static str> {
+        if mode >= self.timing.data_capacity.len() {
+            return Err("mode is not in the table");
+        }
+        if frames == 0 {
+            return Err("a measurement takes at least one frame");
+        }
+        self.measure_ask = Some((mode, frames));
+        if self.role == Role::Slave && self.window.is_some() {
+            self.cause = "measure";
+            self.try_window();
+        }
+        Ok(())
+    }
+
+    /// A measurement is asked for and not yet reported.
+    #[must_use]
+    pub const fn measuring(&self) -> bool {
+        self.measure_ask.is_some() || self.measure_out.is_some()
     }
 
     /// Kept for the daemon's interface. Every answer states the slave's queue and the next
@@ -1600,7 +1674,7 @@ impl GrantedEngine {
     /// is measured from it, as the other station measures it from the frames it hears end.
     pub fn on_tx_done(&mut self, now: f64, frames_end: Option<f64>) {
         self.now = self.now.max(now);
-        let Some((granted, _)) = self.in_flight.pop_front() else {
+        let Some((granted, _, _)) = self.in_flight.pop_front() else {
             return;
         };
         let current = self.slot.as_ref().map(|s| (s.id, s.final_));
@@ -1623,10 +1697,11 @@ impl GrantedEngine {
     /// slot of a header nobody had read.
     pub fn on_tx_cut_unread(&mut self, now: f64) {
         self.now = self.now.max(now);
-        let Some((granted, ident)) = self.in_flight.pop_front() else {
+        let Some((granted, ident, measured)) = self.in_flight.pop_front() else {
             return;
         };
         self.owe_again(ident);
+        self.ask_again(measured);
         let current = self.slot.as_ref().map(|s| (s.id, s.final_));
         if let (Some(id), Some((slot_id, false))) = (granted, current)
             && id == slot_id
@@ -1645,10 +1720,19 @@ impl GrantedEngine {
     /// and nothing of it was sent.
     pub fn on_tx_dropped(&mut self, now: f64) {
         self.now = self.now.max(now);
-        if let Some((_, ident)) = self.in_flight.pop_front() {
+        if let Some((_, ident, measured)) = self.in_flight.pop_front() {
             self.owe_again(ident);
+            self.ask_again(measured);
         }
         self.stats.dropped += 1;
+    }
+
+    /// A measurement that never reached the air is asked for again, not reported.
+    const fn ask_again(&mut self, measured: bool) {
+        if measured && self.measure_out.is_some() && self.measure_ask.is_none() {
+            self.measure_ask = self.measure_out.take();
+            self.measure_unheard = false;
+        }
     }
 
     /// The daemon is holding this station's last transmission. A slot is absolute and a late
@@ -2004,8 +2088,6 @@ impl GrantedEngine {
 
     // ── keying ────────────────────────────────────────────────────────
 
-    /// Hand a transmission over; returns where its frames end on the air, as far as this engine
-    /// knows.
     /// Hand a transmission over; returns where it ends on the air, as far as this engine knows.
     /// An identifier goes after the frames (ADR-0075).
     fn transmit(&mut self, frames: Vec<TxFrame>, keying: Keying, granting: Option<u64>) -> f64 {
@@ -2017,6 +2099,7 @@ impl GrantedEngine {
         } else {
             keying.identifier_s
         };
+        let measured = carries_measurement(&frames);
         self.actions.push(Action::Transmit {
             frames,
             duration_s: dur,
@@ -2026,7 +2109,7 @@ impl GrantedEngine {
             identifier_s: keying.identifier_s,
             listen_first: keying.listen_first,
         });
-        self.in_flight.push_back((granting, carried));
+        self.in_flight.push_back((granting, carried, measured));
         self.stats.transmissions += 1;
         let mut on_air = self.now + self.own_latency();
         if let Some(earliest) = keying.not_before {
@@ -2336,7 +2419,7 @@ impl GrantedEngine {
         }
         if self.role == Role::Slave && self.m_end.is_none() && self.grant.is_none() {
             self.heard(frame);
-            self.measure(frame);
+            self.measure_lateness(frame);
             self.schedule_acceptance(req, frame, start);
         }
         false
@@ -2359,7 +2442,7 @@ impl GrantedEngine {
         self.state = State::Connected;
         self.role = Role::Slave;
         self.heard(frame);
-        self.measure(frame);
+        self.measure_lateness(frame);
         // the request is the first measurement of how the caller is heard; a lower bound if it
         // came on the tone floor (ADR-0016)
         self.rate.seed(frame.snr_db, frame.floor);
@@ -2600,7 +2683,7 @@ impl GrantedEngine {
         if let Some(slot) = self.slot.as_ref()
             && !slot.open_window
         {
-            let late = frame.t_start - slot.ident_s - slot.start - self.config.slack_s;
+            let late = frame.t_start - slot.start - self.config.slack_s;
             if late > self.peer_late_s {
                 self.peer_late_s = late;
             } else {
@@ -2619,9 +2702,9 @@ impl GrantedEngine {
         if ctl.count == 0 {
             self.slave_floor_only = ctl.data_floor;
         }
-        self.slave_id_due = ctl.ident;
         self.open_rx(frame, usize::from(ctl.count), ctl.data_floor);
-        if ctl.count > 0 {
+        self.note_opening(ctl);
+        if ctl.count > 0 || ctl.measure {
             self.ack_owed = true;
         }
         let last_floor = if ctl.count > 0 {
@@ -2640,7 +2723,7 @@ impl GrantedEngine {
                 // make that safe), its timing is not
                 let (payload, _) = soft.decode(None);
                 if let Some(payload) = payload {
-                    self.accept(&payload);
+                    self.accept(&payload, true);
                 }
             }
             return;
@@ -2787,8 +2870,8 @@ impl GrantedEngine {
         self.stats.silent_slots += 1;
         self.silent += 1;
         self.answered_run = 0;
-        if self.ladder_pending.is_some() {
-            self.ladder_unheard = true;
+        if self.measure_out.is_some() {
+            self.measure_unheard = true;
         }
         if slot.data && self.config.hold_unknown {
             for s in self.unacked() {
@@ -2814,7 +2897,7 @@ impl GrantedEngine {
     }
 
     fn has_work(&self) -> bool {
-        !self.tx_queue.is_empty() || !self.unacked().is_empty()
+        !self.tx_queue.is_empty() || !self.unacked().is_empty() || self.measuring()
     }
 
     /// (data frames granted, open window, window index): the master's policy (§5.2).
@@ -2829,7 +2912,7 @@ impl GrantedEngine {
             None => (self.config.first_grant.min(fit), false, 0),
             Some(want) if want > 0 => (want.min(fit), false, 0),
             Some(_) => {
-                let idle = !self.has_work() && !self.disc_requested && !self.slave_id_due;
+                let idle = !self.has_work() && !self.disc_requested;
                 if idle && self.now - self.heard_at < self.config.keepalive_s {
                     (0, true, self.config.window_doublings.min(self.idle_windows))
                 } else {
@@ -2841,7 +2924,7 @@ impl GrantedEngine {
 
     /// Whether this transmission may go without its header (R7): data only, nothing granted
     /// beyond an answer, the gap at level 0, nothing to acknowledge or recommend anew, the last
-    /// slot heard, no identifier time asked for, and the answer's family one the slave surely
+    /// slot heard, no measurement under way, and the answer's family one the slave surely
     /// holds.
     fn elide(&self, n: usize, open_window: bool, wanted: bool) -> bool {
         self.config.elide
@@ -2852,7 +2935,6 @@ impl GrantedEngine {
             && self.level() == 0
             && self.possible == Families::of(wanted)
             && !self.ack_owed
-            && !self.slave_id_due
             && self.has_work()
     }
 
@@ -2870,6 +2952,10 @@ impl GrantedEngine {
         } else {
             self.data_frames(room - self.ctl_s(hdr_floor))
         };
+        // a measurement's frames, and every transmission until its report, say so in the
+        // header, which therefore always goes (ADR-0077)
+        let measuring = self.measure_out.is_some();
+        elide = elide && !measuring;
         // the header is left out only of a transmission that carries no fewer data frames for
         // it: capped at the four whose counts can anchor it, the 15-byte rung of the 500 Hz air
         // sent 136 transmissions where protocol 7 sent 82 (the link bench, AWGN -3 dB). And only
@@ -2879,18 +2965,15 @@ impl GrantedEngine {
             && !data.is_empty()
             && data.len() <= usize::from(MAX_FOLLOWS) + 1
             && data.iter().any(|f| READABLE_ALONE_RVS.contains(&f.rv));
-        // data above the rung the slave asks for is a bet that it decodes — the Test's ladder
-        // pins its rungs there — and when none of it does, a transmission without its header
-        // granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
-        // (ADR-0076)
+        // data above the rung the slave asks for is a bet that it decodes — copies still at the
+        // rung they first went at, data pinned — and when none of it does, a transmission
+        // without its header granted nothing: a wait and a floor poll. An ordinary header is
+        // cheap, so it goes (ADR-0076)
         if self.config.header_above_recommendation && !hdr_floor {
             let recommendation = self.recommended.min(self.cap());
             elide = elide && !data.iter().any(|f| f.mode > recommendation);
         }
         let level = if elide { 0 } else { self.level() };
-        // a slave of an earlier build asks for its ten-minute identifier's time, and is given it:
-        // this build sends none inside a session (ADR-0075), and asks for none
-        let slave_ident = self.slave_id_due && !elide;
         if !elide {
             self.possible.insert(wanted);
         }
@@ -2901,14 +2984,10 @@ impl GrantedEngine {
         let grant_s = if open_window {
             self.window_s(hdr_floor, index)
         } else {
-            let mut grant = ans_s + n as f64 * self.frame_s(slave_floor);
             if n > 0 {
                 answer_floors.insert(slave_floor);
             }
-            if slave_ident {
-                grant += self.peer_identifier_s;
-            }
-            grant
+            ans_s + n as f64 * self.frame_s(slave_floor)
         };
         let data_floor = data.first().is_some_and(|f| self.timing.is_floor(f.mode));
         let carried = !data.is_empty();
@@ -2925,7 +3004,8 @@ impl GrantedEngine {
                 level: u8::try_from(level).unwrap_or(3),
                 fam: wanted,
                 flag: open_window,
-                ident: slave_ident,
+                ident: false,
+                measure: measuring,
                 base,
                 bitmap,
                 snr_db: self.heard_db,
@@ -2934,7 +3014,6 @@ impl GrantedEngine {
             };
             frames.insert(0, Self::control(&ctl, hdr_floor));
             self.ack_owed = false;
-            self.slave_id_due = false;
         }
         let mut slot = Slot::new(
             SlotKind::Header,
@@ -2945,12 +3024,7 @@ impl GrantedEngine {
         slot.level = level;
         slot.granter_turnaround_s = self.config.turnaround_s;
         slot.open_window = open_window;
-        slot.ident_s = if slave_ident {
-            self.peer_identifier_s
-        } else {
-            0.0
-        };
-        slot.data = carried;
+        slot.data = carried && !measuring;
         slot.granted = n;
         self.key_granting(slot, frames);
     }
@@ -3035,7 +3109,7 @@ impl GrantedEngine {
             return;
         }
         self.heard(frame);
-        self.measure(frame);
+        self.measure_lateness(frame);
         if ctl.snr_db.is_some() {
             self.peer_snr_db = ctl.snr_db;
         }
@@ -3048,6 +3122,7 @@ impl GrantedEngine {
             return;
         }
         self.open_rx(frame, usize::from(ctl.count), ctl.data_floor);
+        self.note_opening(ctl);
         self.take_ack(ctl, true);
         self.ans_sticky = ctl.fam || self.floor_only();
         self.grant = Some(*ctl);
@@ -3066,7 +3141,7 @@ impl GrantedEngine {
             if decoded {
                 let (payload, _) = soft.decode(None);
                 if let Some(payload) = payload {
-                    self.accept(&payload);
+                    self.accept(&payload, true);
                 }
             }
             return;
@@ -3075,7 +3150,7 @@ impl GrantedEngine {
         if index.is_some_and(|i| self.rx[i].payload.is_some()) {
             let rescued = index.is_some_and(|i| self.rx[i].combined);
             self.heard(frame);
-            self.measure(frame);
+            self.measure_lateness(frame);
             if self.m_end.is_none()
                 && !rescued
                 && let Some(follows) = frame.follows
@@ -3094,7 +3169,7 @@ impl GrantedEngine {
     /// How late this station's receiver reported a frame of the other's, and how late its
     /// keying is, against what the slot allows: the level its answers ask for. Up at once, down
     /// one level after `need_ease_after` frames on time.
-    fn measure(&mut self, frame: &Heard) {
+    fn measure_lateness(&mut self, frame: &Heard) {
         let mut late = self.now - frame.t_end - self.budget(frame.floor);
         late += 0.0f64.max(self.own_latency() - self.config.key_s);
         let need = self.level_for(late);
@@ -3306,6 +3381,7 @@ impl GrantedEngine {
             fam,
             flag: self.disc_requested,
             ident: false,
+            measure: self.measure_out.is_some(),
             base,
             bitmap,
             snr_db: self.heard_db,
@@ -3333,7 +3409,8 @@ impl GrantedEngine {
 
     fn queued_frames(&self) -> usize {
         let cap = data_capacity(self.timing.capacity(self.burst_mode()));
-        self.unacked().len() + self.tx_queue.len().div_ceil(cap.max(1))
+        let queued = self.unacked().len() + self.tx_queue.len().div_ceil(cap.max(1));
+        queued + self.measure_ask.map_or(0, |(_, frames)| frames)
     }
 
     fn send_acceptance(&mut self, answer: &Answer) {
@@ -3489,11 +3566,16 @@ impl GrantedEngine {
     /// This station's data for a transmission, laid out as `LinkEngine` lays out a burst: the
     /// unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones, one
     /// family a transmission, as many as `room_s` and [`MAX_DATA`] allow. Each frame states how
-    /// many follow it, three meaning three or more.
+    /// many follow it, three meaning three or more. A measurement asked for goes alone once
+    /// nothing of this station's data is unacknowledged, and nothing goes while one waits for
+    /// its report.
     #[allow(clippy::too_many_lines)]
     fn data_frames(&mut self, room_s: f64) -> Vec<TxFrame> {
-        if room_s <= 0.0 {
+        if room_s <= 0.0 || self.measure_out.is_some() {
             return Vec::new();
+        }
+        if self.measure_ask.is_some() && self.unacked().is_empty() {
+            return self.measurement(room_s);
         }
         let mode = self.burst_mode();
         let recommendation = self.recommended.min(self.cap());
@@ -3506,20 +3588,14 @@ impl GrantedEngine {
             .filter(|s| self.silent >= 2 || self.records.get(s).is_some_and(|r| !r.unknown))
             .collect();
         for &s in &unacked {
-            let Some((tx_count, rec_mode, body_len, pinned)) = self
+            let Some((tx_count, rec_mode, body_len)) = self
                 .records
                 .get(&s)
-                .map(|r| (r.tx_count, r.mode, r.body.len(), r.pinned))
+                .map(|r| (r.tx_count, r.mode, r.body.len()))
             else {
                 continue;
             };
-            // a frame pinned for a measurement has made it with its first copy: from then on it
-            // goes as data goes, at the rung asked for, never again at the rung that failed — the
-            // Test's ladder had sent such frames again at RV 0, 2 and 3 before re-encoding them,
-            // 13 of the 21 silent slots of ND1J's Tests of 2026-10-15 (ADR-0074)
-            let due = if pinned {
-                1
-            } else if self.hopeless(rec_mode) {
+            let due = if self.hopeless(rec_mode) {
                 self.config.reencode_early_after
             } else {
                 self.config.max_combines
@@ -3530,7 +3606,6 @@ impl GrantedEngine {
                     rec.mode = target;
                     rec.reencoded += rec.tx_count;
                     rec.tx_count = 0;
-                    rec.pinned = false;
                     self.stats.frames_reencoded += 1;
                 }
             }
@@ -3557,7 +3632,8 @@ impl GrantedEngine {
             return Vec::new();
         }
         seqs.truncate(room);
-        let new_frames = family == self.timing.is_floor(mode);
+        // a measurement asked for waits only for what is in flight: nothing new goes before it
+        let new_frames = family == self.timing.is_floor(mode) && self.measure_ask.is_none();
         let cap = data_capacity(self.timing.capacity(mode));
         while new_frames
             && seqs.len() < room
@@ -3583,22 +3659,10 @@ impl GrantedEngine {
                     acked: false,
                     reencoded: 0,
                     unknown: false,
-                    pinned: self.pinned.is_some(),
                 },
             );
             self.tx_next = seq_after(self.tx_next, 1);
             seqs.push(seq);
-        }
-        if self.pinned.is_some() {
-            let fresh: Vec<u8> = seqs
-                .iter()
-                .copied()
-                .filter(|s| self.records.get(s).is_some_and(|r| !r.sent()))
-                .collect();
-            if !fresh.is_empty() {
-                self.ladder_pending = Some((mode, fresh));
-                self.ladder_unheard = false;
-            }
         }
         let mut frames = Vec::with_capacity(seqs.len());
         let count = seqs.len();
@@ -3635,24 +3699,79 @@ impl GrantedEngine {
         frames
     }
 
-    /// The other station's acknowledgement of this one's data, and its recommendation.
-    fn take_ack(&mut self, ctl: &GrantFrame, recommendation: bool) {
-        if recommendation && let Some((pinned_mode, fresh)) = self.ladder_pending.take() {
-            let decoded = fresh.iter().filter(|&&s| ctl.received(s)).count();
-            // after a silent slot the answer is the poll's: its frames counted, its SNR not
-            // the rung's (ADR-0076)
-            let snr_db = if self.ladder_unheard {
-                None
-            } else {
-                ctl.snr_db
+    /// The measurement asked for, as many of its frames as the transmission holds: filler at its
+    /// rung, each stating how many follow, indexed in place of a sequence number.
+    fn measurement(&mut self, room_s: f64) -> Vec<TxFrame> {
+        let Some((mode, asked)) = self.measure_ask else {
+            return Vec::new();
+        };
+        let mode = mode.min(self.cap());
+        let frame_s = self.frame_s(self.timing.is_floor(mode));
+        let mut count = asked.min(MAX_DATA).min(self.burst_capacity(frame_s));
+        if room_s.is_finite() {
+            count = count.min(whole(room_s / frame_s));
+        }
+        if count == 0 {
+            return Vec::new();
+        }
+        self.measure_ask = None;
+        self.measure_out = Some((mode, count));
+        self.measure_unheard = false;
+        let capacity = self.timing.capacity(mode);
+        let body = data_capacity(capacity);
+        let mut frames = Vec::with_capacity(count);
+        for i in 0..count {
+            let index = u8::try_from(i).unwrap_or(u8::MAX);
+            let header = DataHeader {
+                kind: DataKind::Measure,
+                seq: index,
+                session: self.session,
             };
-            self.ladder_unheard = false;
-            self.ladder.push(LadderRung {
-                mode: pinned_mode,
-                frames: fresh.len(),
-                decoded,
-                snr_db,
+            let Ok(payload) =
+                encode_data(&header, &measure_body(self.session, index, body), capacity)
+            else {
+                continue;
+            };
+            let follows =
+                u8::try_from((count - 1 - i).min(usize::from(MAX_FOLLOWS))).unwrap_or(MAX_FOLLOWS);
+            frames.push(TxFrame {
+                container: Container::Data,
+                payload,
+                mode,
+                rv: 0,
+                floor: false,
+                follows,
             });
+        }
+        self.stats.frames_sent += count;
+        frames
+    }
+
+    /// The other station's acknowledgement of this one's data, and its recommendation — or its
+    /// report of this station's measurement (a header decoded late reports nothing: the next one
+    /// says it again).
+    fn take_ack(&mut self, ctl: &GrantFrame, recommendation: bool) {
+        if recommendation && let Some((mode, sent)) = self.measure_out {
+            if ctl.reports() {
+                self.measure_out = None;
+                let decoded = (0..sent).filter(|&i| ctl.measured(i)).count();
+                // after a silent slot the report is the poll's answer: its frames counted, its
+                // SNR not the rung's (ADR-0076)
+                let snr_db = if self.measure_unheard {
+                    None
+                } else {
+                    ctl.snr_db
+                };
+                self.measure_unheard = false;
+                self.ladder.push(LadderRung {
+                    mode,
+                    frames: sent,
+                    decoded,
+                    snr_db,
+                });
+            } else {
+                self.measure_unheard = true;
+            }
         }
         let mut progress = false;
         for rec in self.records.values_mut() {
@@ -3712,6 +3831,10 @@ impl GrantedEngine {
         if let Some(payload) = payload {
             return self.keep(index, payload);
         }
+        if self.rx_measure {
+            self.stats.frames_failed += 1; // a measurement frame: never sent again
+            return Some(index);
+        }
         let guess = self.infer_seq(slot);
         self.rx[index].seq = guess;
         let Some(guess) = guess.filter(|&g| in_window(g, self.rx_base, WINDOW)) else {
@@ -3741,23 +3864,61 @@ impl GrantedEngine {
         Some(index)
     }
 
-    /// The decoded payload of the record at `index`: kept if it is this session's data, the
-    /// record dropped otherwise.
+    /// The decoded payload of the record at `index`: kept if it is this session's data or a
+    /// measurement frame of it, the record dropped otherwise.
     fn keep(&mut self, index: usize, payload: Vec<u8>) -> Option<usize> {
-        if let Some(seq) = self.accept(&payload) {
-            self.rx[index].payload = Some(payload);
-            self.rx[index].seq = Some(seq);
-            Some(index)
-        } else {
-            self.rx.remove(index);
-            None
-        }
+        let seq = match self.accept(&payload, false) {
+            Accepted::Data(seq) => Some(seq),
+            Accepted::Measurement => None,
+            Accepted::Not => {
+                self.rx.remove(index);
+                return None;
+            }
+        };
+        self.rx[index].payload = Some(payload);
+        self.rx[index].seq = seq;
+        Some(index)
     }
 
     fn restart_rx(&mut self) {
         self.rx.clear();
         self.rx_t0 = None;
         self.grid = None;
+        self.rx_measure = false;
+    }
+
+    /// What the other station's opening control frame says of its own frames: measurement
+    /// frames follow, or its last were and their report is owed; or data follows, and the report
+    /// of its last measurement is over.
+    fn note_opening(&mut self, ctl: &GrantFrame) {
+        if ctl.measure {
+            self.measurement_heard(ctl.count > 0);
+        } else if ctl.count > 0 {
+            self.measured = None;
+        }
+    }
+
+    /// The other station is measuring: `new`, the transmission being received is its
+    /// measurement; otherwise its last one was. Nothing of its data is in flight while it
+    /// measures, so whatever this station holds to combine is of measurement frames — kept, the
+    /// next data frame under the sequence number inferred for one would combine with another
+    /// codeword — and goes.
+    fn measurement_heard(&mut self, new: bool) {
+        if self.rx_measure {
+            return;
+        }
+        if new {
+            self.rx_measure = true;
+            self.measured = Some(REPORT);
+        } else if self.measured.is_none() {
+            self.measured = Some(REPORT);
+        }
+        self.harq.clear();
+        for record in &mut self.rx {
+            if record.payload.is_none() {
+                record.seq = None;
+            }
+        }
     }
 
     /// A control frame read opens the other station's transmission and states it: `count` data
@@ -3856,14 +4017,32 @@ impl GrantedEngine {
         None
     }
 
-    /// Take a decoded data frame of this session; its sequence number, or `None` for anything
-    /// else.
-    fn accept(&mut self, payload: &[u8]) -> Option<u8> {
+    /// Take a decoded data frame of this session. `late`: of a transmission already over — its
+    /// data is kept, a measurement frame is of a report already made.
+    fn accept(&mut self, payload: &[u8], late: bool) -> Accepted {
         let Ok((header, body)) = decode_data(payload) else {
-            return None;
+            return Accepted::Not;
         };
-        if header.kind != DataKind::Data || header.session != self.session {
-            return None;
+        if header.session != self.session {
+            return Accepted::Not;
+        }
+        if header.kind == DataKind::Measure {
+            if late {
+                return Accepted::Not;
+            }
+            self.measurement_heard(true);
+            if usize::from(header.seq) < WINDOW - 1
+                && let Some(report) = self.measured.as_mut()
+            {
+                *report |= 2 << header.seq;
+            }
+            return Accepted::Measurement;
+        }
+        if header.kind != DataKind::Data {
+            return Accepted::Not;
+        }
+        if !late {
+            self.measured = None;
         }
         self.stats.frames_received += 1;
         if in_window(header.seq, self.rx_base, WINDOW) {
@@ -3889,7 +4068,7 @@ impl GrantedEngine {
                 self.max_seen = None;
             }
         }
-        Some(header.seq)
+        Accepted::Data(header.seq)
     }
 
     /// What a transmission's data said of the path, to the rate controller (ADR-0020's rules).
@@ -3967,7 +4146,8 @@ impl GrantedEngine {
         let snap = AckSnapshot { missing, next_new };
         self.ack_history.insert(0, snap);
         self.ack_history.truncate(2);
-        (self.rx_base, bitmap)
+        // a report: nothing of the other's data is beyond base
+        (self.rx_base, self.measured.unwrap_or(bitmap))
     }
 
     // ── the end ───────────────────────────────────────────────────────

@@ -148,7 +148,7 @@ def summarise(document: dict[str, object], recording: str) -> Session:
     assert isinstance(counters, dict)
 
     snrs = [s for f in frames if isinstance(f, dict) and (s := _number(f.get("snr_3k_db")))]
-    data = [f for f in frames if isinstance(f, dict) and f.get("kind") == "data"]
+    data = [f for f in frames if isinstance(f, dict) and f.get("kind") in ("data", "measure")]
     seconds = _number(audio.get("seconds")) or 0.0
     delivered = _number(counters.get("bytes_delivered")) or 0.0
     goodput = 8.0 * delivered / seconds if seconds > 0 and delivered > 0 else None

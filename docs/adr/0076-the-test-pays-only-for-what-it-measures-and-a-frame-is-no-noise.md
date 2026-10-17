@@ -5,7 +5,9 @@
 (`aether_model/link/granted.py`), then the port (`aether-link/src/granted.rs`) and the replay
 vectors (the new `ladder-unheard` session); the rest is the daemon's (`aetherd`), the panel's and
 the manual's. **No wire change**: a station on this build and one on v0.2.0-beta.106 to
-beta.111 work together, and Test with each other.
+beta.111 work together, and Test with each other. §5's first item — ladder frames that are not
+data — is built as ADR-0077 (link protocol 9), which removes the leftovers this ADR only stopped
+draining.
 
 ## 1. Context
 

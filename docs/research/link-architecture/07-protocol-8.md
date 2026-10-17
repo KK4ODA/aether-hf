@@ -111,14 +111,17 @@ assumes), but it would waste the tail every exchange.
 | 2 | level | the gap level of this slot | the level this slave needs | the level of the DISC_ACK slot |
 | 1 | fam | the family the answer must use | the family the slave needs headers in | — |
 | 1 | flag | the slot is an open window | the slave asks to leave | — |
-| 1 | id | the slot includes the slave's identifier time | the slave's identifier is due | — |
-| 8 + 16 | base, bitmap | selective acknowledgement | selective acknowledgement | — |
+| 1 | id / measure | protocol 9: measurement frames follow, or the master's last were (R14) | the same, of the slave's | the DISC_ACK's slot includes the slave's closing identifier (ADR-0075) |
+| 8 + 16 | base, bitmap | selective acknowledgement, or a report of a measurement (bit 0 set, R14) | the same | — |
 | 6 | snr | how this station hears the other: −31 … +31 dB, `0x20` unknown | same | same (ADR-0021) |
 | 5 | rung | rung recommended for the other's data | same | — |
 | 3 | n | frames granted, or the window index | frames queued, capped at 7 | — |
 
 Total 56 bits. The **SNR goes from 8 bits to 6**: a 3 kHz reading above +31 dB adds nothing a
-rate controller can use, and below −31 dB nothing decodes. That frees the identifier bit.
+rate controller can use, and below −31 dB nothing decodes. That frees the identifier bit. In
+protocol 8 a header's set it when the slot included the slave's identifier, and an answer's when
+that was due; ADR-0075 left a session with no identifier inside it, and protocol 9 gives the bit
+in a header and an answer to measurements (R14, ADR-0077).
 **The session field is 7 bits.** Data frames keep their 8-bit session byte, so a foreign
 control frame is taken for this session's at most one time in 128. Even then it grants a slot
 the foreign master's own timing reserves, not this one's.
@@ -135,6 +138,12 @@ too only the last three state the end exactly; a receiver that reads only the fi
 anchor and does not answer. A count is believed only from a copy that decoded alone (R2), and
 RV 1 and 2 copies never do: without the RV 0 condition a transmission of them granted nothing
 by construction.
+
+**Measurement frames** (protocol 9, R14, ADR-0077): DATA kind 7, `seq` the frame's index among
+its transmission's measurement frames, the session byte, and the rung's full size of filler
+(SplitMix64 from the session and the index, the engines' `Draws`, so a frame looks like data and
+not a block of zeros). They take no sequence number; the other station's report says which
+arrived.
 
 ### 4.3 The connect body (CONNECT_REQ, CONNECT_ACK): 19 bytes
 
@@ -311,10 +320,10 @@ an older one).
   * the trusted-failure rules (ADR-0020);
   * the hopeless re-encode (ADR-0038);
   * the RV sequence (ADR-0043).
-* **The Test ladder:**
-  * `pin_mode(rung, body_bytes)` pins this station's own data, at either end;
-  * `take_ladder` reports rungs as today;
-  * `top_acked_mode` is kept.
+* **The Test ladder** (protocol 9): `measure(rung, frames)` measures a rung with measurement
+  frames (R14), at either end; `take_ladder` returns the reports as rungs; `measuring` says one
+  is asked for or unreported; `top_acked_mode` is kept. `pin_mode(rung, body_bytes)` still pins
+  this station's own data, for the benches and the tests.
 
 ## 8. The engine's interface
 
@@ -324,7 +333,7 @@ mirrors it in Step 2, and the daemon switches to it there. The daemon's present 
 
 | Kept, same meaning | Changed | Dropped (no counterpart) |
 |---|---|---|
-| `connect_as`, `connect_tries`, `connect_due`, `move_call` (ADR-0058), `probe`, `probing`, `last_probe`, `send`, `disconnect`, `disconnect_requested`, `abort`, `tick`, `next_deadline`, `on_frame`, `drain`, `state`, `session`, `connected`, `callsigns`/`set_callsigns`, `peer_capabilities`, `peer_snr_db`, `ended_peer_snr_db`, `rate_readings`, `current_mode`, `robust_mode`, `timing`, `config`, `set_air`, `set_max_mode`, `set_ceiling`/`ceiling`, `set_max_burst_s`, `burst_capacity`, `pin_mode`, `take_ladder`, `top_acked_mode`, `tx_pending_bytes`, `tx_undelivered_bytes`, `all_acknowledged`, `reset_stats`, `stats`, `on_tx_delayed` | `on_tx_done(frames_end)` (§3.4); `role()` returns `Master`/`Slave`/`None`; `Transmit` gains `not_after` (the gate's bound, §3.1), `identifier_s` and `listen_first`; `request_break` (§5.2); `set_identifiers` and `identifier_owed` (new, §5.4); `on_preamble` changes nothing in a session (calls and probes keep it as carrier information for their own next try) | `set_chat` (open windows), `acknowledgement_at` (the follow-on heed, ADR-0040), the turn's state, `transmitting` as a turn notion |
+| `connect_as`, `connect_tries`, `connect_due`, `move_call` (ADR-0058), `probe`, `probing`, `last_probe`, `send`, `disconnect`, `disconnect_requested`, `abort`, `tick`, `next_deadline`, `on_frame`, `drain`, `state`, `session`, `connected`, `callsigns`/`set_callsigns`, `peer_capabilities`, `peer_snr_db`, `ended_peer_snr_db`, `rate_readings`, `current_mode`, `robust_mode`, `timing`, `config`, `set_air`, `set_max_mode`, `set_ceiling`/`ceiling`, `set_max_burst_s`, `burst_capacity`, `pin_mode`, `measure` and `measuring` (protocol 9), `take_ladder`, `top_acked_mode`, `tx_pending_bytes`, `tx_undelivered_bytes`, `all_acknowledged`, `reset_stats`, `stats`, `on_tx_delayed` | `on_tx_done(frames_end)` (§3.4); `role()` returns `Master`/`Slave`/`None`; `Transmit` gains `not_after` (the gate's bound, §3.1), `identifier_s` and `listen_first`; `request_break` (§5.2); `set_identifiers` and `identifier_owed` (new, §5.4); `on_preamble` changes nothing in a session (calls and probes keep it as carrier information for their own next try) | `set_chat` (open windows), `acknowledgement_at` (the follow-on heed, ADR-0040), the turn's state, `transmitting` as a turn notion |
 
 **Events kept:**
 
