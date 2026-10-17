@@ -137,4 +137,30 @@ holds. The harness A/B against beta.111 on the Test scenarios is in §6.
 
 ## 6. The harness
 
-(Filled in by the A/B run of this change: see below.)
+The 14 scenarios that run a Test, two draws each (the scenario's seed and +1000), this build
+against beta.111's daemon (`session_matrix.py --seeds 2`, the same seeds both arms):
+
+| scenario | passed, before / after | Test air, s, before → after | message, bit/s | file, bit/s |
+|---|---|---|---|---|
+| 20m-dx-moderate-2300 | 2 / 2 | 372 → 337 (−9 %) | 627 → 438 | 654 → 564 |
+| 40m-drift-and-clocks-2300 | 2 / 2 | 333 → 262 (−21 %) | 569 → 557 | 554 → 564 |
+| 40m-good-2300-rtty-crashes | 2 / 2 | 378 → 296 (−22 %) | 367 → 409 | 323 → 437 |
+| 40m-moderate-2300-vara-qrm | 2 / 2 | 362 → 343 (−5 %) | 511 → 511 | 454 → 455 |
+| 40m-rtty-contest-2300 | 2 / 2 | 351 → 392 (+12 %) | 298 → 405 | 223 → 127 |
+| 80m-asymmetric-500 | 2 / 2 | 358 → 296 (−17 %) | 57 → 61 | 88 → 92 |
+| 80m-floor-top-start-500 | 2 / 2 | 415 → 359 (−14 %) | 68 → 68 | 83 → 83 |
+| 80m-flutter-500 | 2 / 2 | 518 → 478 (−8 %) | 69 → 69 | 66 → 53 |
+| 80m-local-rfi-ladder-500 | 2 / 2 | 434 → 382 (−12 %) | 78 → 78 | 73 → 73 |
+| 80m-lopsided-acks-500 | 2 / 2 | 532 → 433 (−19 %) | 67 → 67 | 73 → 84 |
+| 80m-nvis-evening-500 | 2 / 2 | 482 → 405 (−16 %) | 34 → 30 | 33 → 32 |
+| 80m-slow-machine-500 | 2 / 2 | 438 → 480 (+10 %) | 94 → 93 | 91 → 65 |
+| 80m-thunderstorm-agc-2300 | 2 / 2 | 316 → 283 (−10 %) | 385 → 417 | 406 → 463 |
+| 80m-weak-both-ways-ladder-500 | 2 / 2 | 523 → 520 (−1 %) | 54 → 54 | 44 → 40 |
+| **all** | **28 / 28** | **11 622 → 10 530 s (−9.4 %)** | | |
+
+No radiated overlap in either arm. Where the message and file read the same in both arms the
+draw ran identically up to the ladder; the saving is the ladder's and the close's. The two
+slower scenarios are a single draw each: the RTTY contest's first draw is identical in both arms
+(395 s) and its second traded a faster message (325 → 538 bit/s) for a slower file; the slow
+machine's both draws lie inside the nightly baseline's air-time range (415–538 s). Three more
+draws of each on both arms follow.
