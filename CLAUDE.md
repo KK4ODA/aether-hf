@@ -1767,7 +1767,10 @@ bytes begin; `PROTOCOL_VERSION` and the shell's `LINK_PROTOCOL` are 9. The daemo
 calls `measure` and starts the next rung at a report (`body_bytes` and `ladder_over` gone), frame
 reports have kind `measure`, `data_kind()` in `frames.rs`. Vectors: `measure-unread` (an unread
 measurement's buffers dropped before the data combines), and the `ladder`, `ladder-unheard` and
-`late-station` sessions measure.
+`late-station` sessions measure. Harness A/B against beta.112, the 14 Test scenarios × 2 draws:
+28/28 both arms, no radiated overlap, Test air 10 318 → 8 563 s (−17 %), every scenario shorter;
+the rungs themselves took the same time (166 in 1 997 s, 172 in 2 016 s), the saving is the
+leftovers.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
