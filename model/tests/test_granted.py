@@ -1424,6 +1424,7 @@ def test_an_unread_measurement_leaves_nothing_to_combine() -> None:
     comes (ADR-0077)."""
     a, b = _pair(WIDE)
     masters: set[int] = set()
+    alive: list[TxFrame] = []  # so no other frame is given one of their ids
     lost = [False]
 
     def offset(frame: TxFrame) -> float:
@@ -1442,6 +1443,7 @@ def test_an_unread_measurement_leaves_nothing_to_combine() -> None:
 
     def launched(who: int, at: float, tx: object) -> None:
         if who == 0:
+            alive.extend(tx.frames)  # type: ignore[attr-defined]
             masters.update(id(f) for f in tx.frames)  # type: ignore[attr-defined]
         launch(who, at, tx)  # type: ignore[arg-type]
 
