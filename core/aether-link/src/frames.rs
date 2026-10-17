@@ -790,7 +790,7 @@ pub const REPORT: u16 = 0x0001;
 /// the transmission ends. `level`: in a header, the gap level of the slot it grants; in an
 /// answer, the level its sender needs. `fam`: in a header, the family the answer goes in; in an
 /// answer, the family its sender needs headers in. `flag`: the header's slot is an open window;
-/// the answer asks to leave. `ident` (a DISC, a DISC_ACK): the slot includes the slave's closing
+/// the answer asks to leave. `ident` (a DISC, a `DISC_ACK`): the slot includes the slave's closing
 /// Morse identifier (ADR-0075). `measure` (a header, an answer; the same bit, protocol 9): the
 /// data frames after this one are measurement frames ([`DataKind::Measure`]), and with none
 /// after it, the sender's last were and it has not read their report — it sends no data until
@@ -816,7 +816,7 @@ pub struct GrantFrame {
     pub fam: bool,
     /// A header: the slot is an open window; an answer: its sender asks to leave.
     pub flag: bool,
-    /// A DISC or a DISC_ACK: the slot includes the slave's closing identifier.
+    /// A DISC or a `DISC_ACK`: the slot includes the slave's closing identifier.
     pub ident: bool,
     /// A header or an answer: measurement frames follow, or the sender's last were.
     pub measure: bool,
