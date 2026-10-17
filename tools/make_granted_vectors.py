@@ -120,6 +120,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "first_grant": c.first_grant,
         "window_doublings": c.window_doublings,
         "elide": c.elide,
+        "header_above_recommendation": c.header_above_recommendation,
         "turnaround_s": bits(c.turnaround_s),
         "identifier_s": bits(c.identifier_s),
         "identifiers": {call: bits(s) for call, s in sorted(c.identifiers.items())},
@@ -296,7 +297,7 @@ def frame_doc(frame: Any, calls: list[dict[str, Any]]) -> dict[str, Any]:
 INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
     "connect": lambda remote, as_call=None: {"remote": remote, "as": as_call},
     "probe": lambda remote, as_call=None: {"remote": remote, "as": as_call},
-    "disconnect": lambda: {},
+    "disconnect": lambda drain_s=None: {"drain_s": bits(drain_s)},
     "abort": lambda: {},
     "send": lambda data: {"data": BLOBS(data)},
     "set_callsigns": lambda calls: {"calls": list(calls)},
@@ -695,6 +696,30 @@ def ladder() -> list[Recorder]:
     return [ra, rb]
 
 
+def ladder_unheard() -> list[Recorder]:
+    """A ladder rung pinned above what the path carries, with the header left out as before
+    ADR-0076 and then — a second pair — kept, as an ordinary header is now: the first rung's
+    slot goes silent and is reported with no SNR; the second is answered. Each Test then closes
+    with its leftover filler undelivered (``disconnect(drain_s=0)``)."""
+    recorders: list[Recorder] = []
+    for keep, seeds in ((False, (51, 52)), (True, (53, 54))):
+        a, b, ra, rb = _pair(WIDE, seeds=seeds, header_above_recommendation=keep)
+        rng = random.Random(seeds[0])
+        sim = TwoStationSim(a, b, snr_db=6.0, seed=seeds[0])
+        a.connect("KK4XYZ")
+        a.send(_message(rng, 600))
+        sim.run(until=90.0)
+        a.pin_mode(WIDE.n_rungs - 1, 10)
+        a.send(_message(rng, 40))
+        sim.run(until=150.0)
+        a.take_ladder()
+        a.pin_mode(None)
+        a.disconnect(drain_s=0.0)
+        sim.run(until=260.0)
+        recorders += [ra, rb]
+    return recorders
+
+
 def late_station() -> list[Recorder]:
     """A slave whose receiver reports every frame a second late and whose keying is often past
     the slack: levels asked for, slots forfeited, transmissions dropped by the gate — its first
@@ -902,6 +927,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "probes": probes,
     "identifiers": identifiers,
     "ladder": ladder,
+    "ladder-unheard": ladder_unheard,
     "late-station": late_station,
     "simultaneous": simultaneous,
     "called-again": called_again,

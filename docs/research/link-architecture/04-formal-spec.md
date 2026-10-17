@@ -139,7 +139,12 @@ every family commanded since).
 * at most four data frames follow, so the exact counts locate the end;
 * at least one of them is an RV 0 copy, the only version that decodes alone on every rung, so
   the slave can read a count it believes (R2). A transmission of RV 1–3 copies alone grants
-  nothing without its header, whatever the SNR (ADR-0073).
+  nothing without its header, whatever the SNR (ADR-0073);
+* none of them goes above the rung the slave recommends, unless the header would go on the
+  floor. Data above the recommendation — the Test's ladder pins its rungs there — is a bet that
+  it decodes, and a transmission whose frames all fail grants nothing without its header: a
+  wait and a floor poll, where an ordinary header (0.434 s) would have been read (ADR-0076). A
+  floor header (3.2 s) broke even on weak paths, so it may still be left out.
 
 **R8 — Gap levels.** The slave measures how late its decodes arrive and asks for a level in
 every ANS. The master grants `max(asked, silence level)`. Two silent slots in a row raise the
@@ -370,7 +375,7 @@ minutes in the soak of 2026-10-15.
 
 | Property | Bound |
 |---|---|
-| Control overhead | at most one control frame per master transmission (0.434 s ordinary, 3.2 s floor). It is left out when nothing changes, at most four frames follow and one of them is an RV 0 copy (R7). One ANS per slot. |
+| Control overhead | at most one control frame per master transmission (0.434 s ordinary, 3.2 s floor). It is left out when nothing changes, at most four frames follow, one of them is an RV 0 copy, and none goes above the recommendation unless the header would be the floor's (R7). One ANS per slot. |
 | Dead air per change of direction | `gap(f) = D_f + tx_latency + guard + turnaround` (field profile: 0.75 s ordinary, 1.10 s floor), plus `LEVEL[L]` for a slow station |
 | Recovery from a lost answer | one slot: the answer length plus `slack`, then the next header |
 | Burst amortisation | up to six data frames per master transmission (26 s key limit) |

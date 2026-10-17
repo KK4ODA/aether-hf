@@ -229,6 +229,12 @@ pub struct GrantConfig {
     pub window_doublings: usize,
     /// Leave the header out of a transmission it would change nothing in (R7).
     pub elide: bool,
+    /// Keep the header on a transmission whose data goes above the rung the slave recommends —
+    /// the Test's ladder pins its rungs there — when the header is ordinary (ADR-0076). Left
+    /// out, such a transmission granted nothing when none of its frames decoded: a wait and a
+    /// floor poll, where a 0.43 s header would have been read. A floor header costs 3.2 s and
+    /// broke even on weak paths, so it is kept only where it is cheap.
+    pub header_above_recommendation: bool,
     /// This station's radio: how long after it stops sending it hears again (VOX hold and
     /// receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s.
     pub turnaround_s: f64,
@@ -315,6 +321,7 @@ impl Default for GrantConfig {
             first_grant: 2,
             window_doublings: 1,
             elide: true,
+            header_above_recommendation: true,
             turnaround_s: 0.0,
             identifier_s: 0.0,
             identifiers: BTreeMap::new(),
@@ -765,7 +772,13 @@ pub struct GrantedEngine {
     /// When a disconnect was asked: by this station's operator, or — for the master — when it
     /// first read the slave's request (ADR-0072).
     leave_since: Option<f64>,
+    /// How long this session's disconnect waits for what is queued
+    /// ([`disconnect_within`](Self::disconnect_within)).
+    leave_drain_s: f64,
     ladder_pending: Option<(usize, Vec<u8>)>,
+    /// The pinned transmission's slot went silent: the answer that reports its frames follows a
+    /// poll, and the SNR it carries is the poll's, not the rung's (ADR-0076).
+    ladder_unheard: bool,
     rate: RateController,
     asked: Option<usize>,
     rx_base: u8,
@@ -864,6 +877,7 @@ impl GrantedEngine {
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
         let rate = rate_controller_for(&timing, config.rate);
+        let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
             my_call: call,
@@ -915,7 +929,9 @@ impl GrantedEngine {
             disc_tries: 0,
             patience_until: None,
             leave_since: None,
+            leave_drain_s: drain,
             ladder_pending: None,
+            ladder_unheard: false,
             rate,
             asked: None,
             rx_base: 0,
@@ -975,7 +991,9 @@ impl GrantedEngine {
         self.disc_tries = 0;
         self.patience_until = None;
         self.leave_since = None;
+        self.leave_drain_s = self.config.disc_drain_s;
         self.ladder_pending = None;
+        self.ladder_unheard = false;
         self.rate = rate_controller_for(&self.timing, self.config.rate);
         self.asked = None;
         self.rx_base = 0;
@@ -1134,8 +1152,7 @@ impl GrantedEngine {
         if self.state != State::Connected {
             return None;
         }
-        self.leave_since
-            .map(|since| since + self.config.disc_drain_s)
+        self.leave_since.map(|since| since + self.leave_drain_s)
     }
 
     /// Payload bytes queued or sent and not yet acknowledged.
@@ -1341,10 +1358,21 @@ impl GrantedEngine {
     /// (ADR-0039), then sends DISC; the slave asks to leave in its next answer and the master
     /// closes the session.
     pub fn disconnect(&mut self) {
+        self.disconnect_within(None);
+    }
+
+    /// [`disconnect`](Self::disconnect), waiting no longer than `drain_s` for what is queued
+    /// (`None`: `disc_drain_s`): 0 leaves at the master's next opportunity with what it has not
+    /// delivered left undelivered — the Test, whose last queued bytes are its ladder's filler
+    /// (ADR-0076).
+    pub fn disconnect_within(&mut self, drain_s: Option<f64>) {
         if self.state == State::Idle {
             return;
         }
         self.disc_requested = true;
+        if let Some(drain) = drain_s {
+            self.leave_drain_s = drain.max(0.0);
+        }
         if self.leave_since.is_none() {
             self.leave_since = Some(self.now);
         }
@@ -1497,6 +1525,14 @@ impl GrantedEngine {
             .get(&call.to_ascii_uppercase())
             .copied()
             .unwrap_or(self.config.identifier_s)
+    }
+
+    /// The other station's closing identifier's length, as its call or acceptance declared it:
+    /// the session's, and kept once it ends, while the identifiers are still to go (ADR-0075). A
+    /// recording runs on past the session's end until it has (ADR-0076).
+    #[must_use]
+    pub const fn peer_identifier_s(&self) -> f64 {
+        self.peer_identifier_s
     }
 
     /// Whether a session's closing identifier is owed and not yet handed over: the daemon tells
@@ -2677,7 +2713,7 @@ impl GrantedEngine {
             self.patience_until = Some(self.now + self.disc_patience());
         }
         let since = *self.leave_since.get_or_insert(self.now);
-        if self.now >= since + self.config.disc_drain_s {
+        if self.now >= since + self.leave_drain_s {
             let why = format!("{:.0} s after the disconnect was asked", self.now - since);
             self.say_left(&why);
             return true;
@@ -2751,6 +2787,9 @@ impl GrantedEngine {
         self.stats.silent_slots += 1;
         self.silent += 1;
         self.answered_run = 0;
+        if self.ladder_pending.is_some() {
+            self.ladder_unheard = true;
+        }
         if slot.data && self.config.hold_unknown {
             for s in self.unacked() {
                 if let Some(rec) = self.records.get_mut(&s) {
@@ -2840,6 +2879,14 @@ impl GrantedEngine {
             && !data.is_empty()
             && data.len() <= usize::from(MAX_FOLLOWS) + 1
             && data.iter().any(|f| READABLE_ALONE_RVS.contains(&f.rv));
+        // data above the rung the slave asks for is a bet that it decodes — the Test's ladder
+        // pins its rungs there — and when none of it does, a transmission without its header
+        // granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
+        // (ADR-0076)
+        if self.config.header_above_recommendation && !hdr_floor {
+            let recommendation = self.recommended.min(self.cap());
+            elide = elide && !data.iter().any(|f| f.mode > recommendation);
+        }
         let level = if elide { 0 } else { self.level() };
         // a slave of an earlier build asks for its ten-minute identifier's time, and is given it:
         // this build sends none inside a session (ADR-0075), and asks for none
@@ -3550,6 +3597,7 @@ impl GrantedEngine {
                 .collect();
             if !fresh.is_empty() {
                 self.ladder_pending = Some((mode, fresh));
+                self.ladder_unheard = false;
             }
         }
         let mut frames = Vec::with_capacity(seqs.len());
@@ -3591,11 +3639,19 @@ impl GrantedEngine {
     fn take_ack(&mut self, ctl: &GrantFrame, recommendation: bool) {
         if recommendation && let Some((pinned_mode, fresh)) = self.ladder_pending.take() {
             let decoded = fresh.iter().filter(|&&s| ctl.received(s)).count();
+            // after a silent slot the answer is the poll's: its frames counted, its SNR not
+            // the rung's (ADR-0076)
+            let snr_db = if self.ladder_unheard {
+                None
+            } else {
+                ctl.snr_db
+            };
+            self.ladder_unheard = false;
             self.ladder.push(LadderRung {
                 mode: pinned_mode,
                 frames: fresh.len(),
                 decoded,
-                snr_db: ctl.snr_db,
+                snr_db,
             });
         }
         let mut progress = false;

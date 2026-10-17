@@ -734,10 +734,10 @@ def test_a_count_rescued_with_its_block_places_no_end(
     # the rung whose threshold is the nearest over the path by 1.5 dB or more
     pin = min((th, mode) for mode, th in table.items() if th >= snr + 1.5)[1]
 
-    def overlapping_runs() -> int:
+    def overlapping_runs(header_above: bool = True) -> int:
         runs = 0
         for seed in range(4):
-            a, b = _pair(AIRS[air])
+            a, b = _pair(AIRS[air], header_above_recommendation=header_above)
             sender, receiver = (a, 1) if side == "slave" else (b, 0)
             hits = random.Random(900 + seed)
 
@@ -781,7 +781,11 @@ def test_a_count_rescued_with_its_block_places_no_end(
         # copies could carry was of RV 2 and 3 copies, and keeps its header now (16 seeds, no
         # overlap with the rescued count believed). Without both rules the count misleads
         monkeypatch.setattr(granted_module, "READABLE_ALONE_RVS", frozenset({0, 1, 2, 3}))
-    assert overlapping_runs() > 0, "no rescued count misled anyone: the test does not tell"
+    # and ADR-0076 guards it where the header is ordinary: data pinned above the recommendation
+    # keeps its header, whose count the slave reads first. The hazard is the headerless case
+    assert overlapping_runs(header_above=False) > 0, (
+        "no rescued count misled anyone: the test does not tell"
+    )
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
@@ -1539,4 +1543,94 @@ def test_an_answer_is_decided_early_and_radiates_at_its_slot(air: str) -> None:
         ahead.append(x.not_before - KEY_S - t)
     # decided a decode's spare budget ahead of the last moment: time the daemon renders in
     assert sorted(ahead)[len(ahead) // 2] > 0.1
+    assert sim.overlaps() == []
+
+
+def _ladder_rung(
+    pinned: int, *, snr_db: float, seed: int, **cfg: object
+) -> tuple[GrantedEngine, list[list[TxFrame]], int, list[object]]:
+    """A session on the 2 300 Hz air, then one rung of the Test's ladder pinned at ``pinned``:
+    the master, its transmissions while the rung was pinned, the silent slots they drew, and
+    what the ladder reported."""
+    a, b = _pair(WIDE, **cfg)
+    sim = TwoStationSim(a, b, snr_db=snr_db, seed=seed)
+    sent: list[list[TxFrame]] = []
+    orig = sim._launch
+    recording = [False]
+
+    def spy(who: int, at: float, tx: object) -> None:
+        if who == 0 and recording[0]:
+            sent.append(list(tx.frames))  # type: ignore[attr-defined]
+        orig(who, at, tx)  # type: ignore[arg-type]
+
+    sim._launch = spy  # type: ignore[method-assign]
+    a.connect("KK4XYZ")
+    a.send(b"m" * 600)
+    sim.run(until=90.0)
+    assert sim.delivered(1) == b"m" * 600
+    silent = a.stats.silent_slots
+    recording[0] = True
+    a.pin_mode(pinned, body_bytes=10)
+    a.send(b"L" * 40)
+    sim.run(until=sim.t + 60.0)
+    rungs: list[object] = list(a.take_ladder())
+    a.pin_mode(None)
+    return a, sent, a.stats.silent_slots - silent, rungs
+
+
+def test_a_pinned_transmission_above_the_recommendation_keeps_a_cheap_header() -> None:
+    """WC4Y's Test of 2026-10-17 pinned rungs 8 and 9 above the rung asked for, without their
+    header; none of their frames decoded, so each transmission granted nothing — a wait and a
+    floor poll — where an ordinary header, 0.43 s, would have been read (ADR-0076)."""
+    pinned = WIDE.n_rungs - 1
+    _, sent, silent, rungs = _ladder_rung(pinned, snr_db=6.0, seed=31)
+    with_pinned = [
+        tx for tx in sent if any(f.mode == pinned for f in tx if f.container is Container.DATA)
+    ]
+    assert with_pinned, "the pinned rung went out"
+    assert with_pinned[0][0].container is Container.CONTROL and not with_pinned[0][0].floor
+    assert silent == 0
+    assert rungs and rungs[0].decoded < rungs[0].frames  # type: ignore[attr-defined]
+    assert rungs[0].snr_db is not None  # type: ignore[attr-defined]
+
+
+def test_a_ladder_rung_whose_slot_went_silent_reports_no_snr() -> None:
+    """Without the header the pinned transmission's slot goes silent, and the answer that
+    reports its frames is the poll's: its SNR is the poll's reading, not the rung's — WC4Y's
+    rung 8 went into the field log "at -4 dB" where its frames had arrived at 0 dB
+    (13-wc4y-beta111.md §10). The rung is reported with no SNR (ADR-0076)."""
+    pinned = WIDE.n_rungs - 1
+    _, sent, silent, rungs = _ladder_rung(
+        pinned, snr_db=6.0, seed=31, header_above_recommendation=False
+    )
+    with_pinned = [
+        tx for tx in sent if any(f.mode == pinned for f in tx if f.container is Container.DATA)
+    ]
+    assert with_pinned and with_pinned[0][0].container is Container.DATA, "elided as before"
+    assert silent >= 1
+    assert rungs and rungs[0].decoded < rungs[0].frames  # type: ignore[attr-defined]
+    assert rungs[0].snr_db is None  # type: ignore[attr-defined]
+
+
+def test_a_disconnect_that_drains_nothing_leaves_at_the_next_opportunity() -> None:
+    """The Test's last queued bytes are its ladder's filler, which nobody reads: it closes with
+    no drain, and the master says what it left (ADR-0076)."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=-2.0, seed=33)
+    message = _message(random.Random(33), 2000)
+    a.connect("KK4XYZ")
+    a.send(message)
+    sim.run(until=40.0)
+    assert a.state is State.CONNECTED and 0 < len(sim.delivered(1)) < len(message)
+    asked = sim.t
+    a.disconnect(drain_s=0.0)
+    assert a.leave_by == pytest.approx(asked)
+    sim.run(until=asked + 40.0)
+    assert a.state is State.IDLE and b.state is State.IDLE
+    assert len(sim.delivered(1)) < len(message)
+    left = [e for e in sim.events(0) if e.startswith("disconnect:")]
+    assert left and "bytes not delivered" in left[0], left
+    # at the next opportunity: the slot of what was on the air when it was asked, no longer
+    waited = float(left[0].split("closing ")[1].split(" s after")[0])
+    assert waited < 15.0, left
     assert sim.overlaps() == []
