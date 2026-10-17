@@ -1713,6 +1713,25 @@ emulator waits for the host port, and the air clock survives a torn read of `cha
 with both identifiers; none needed a non-US callsign to keep its timing. Regulatory (reported, nothing changed): nothing in Aether identifies a
 session between its call and its end; `fcc-regulatory-controls.md` *What identifies a long
 session* says so.
+**Step 4's third report (2026-10-17, `13-wc4y-beta111.md`):** WC4Y's Test to KK4ODA-1 of
+2026-10-17 02:05Z, 80 m at 500 Hz, beta.111 at both ends, both sides with audio. Complete
+(message 72, file 74 bit/s at rung 3: report 12's 3 → 5 gap), no overlap (0.622 s), answers
+81–111 ms after their slots; ADR-0072's drain, ADR-0073's header and ADR-0074's order all ran as
+written. Both Morse identifiers went at exactly 20 wpm (timed from key and release: a recording
+stops at the session's end, before them), in ADR-0075's order, 0.7 s apart; "KK4ODA-1" is 105
+dits, 2.3 s of it the SSID. Found: KK4ODA-1's capture skipped audio inside two of WC4Y's rung-3
+frames at −1 to −4 dB (reported 66 of 134 ms lost; one frame not detected, one failed) — the
+mini PC's skips (279 since 2026-10-16 10:38Z, evening-heavy) — located by the symbol timing along
+the four-tone data (a scratch method, §5); delivering the ladder's 10-byte leftovers at rung 3
+(one family per burst, so each batch alone) took about 93 s of 435; at 500 Hz one OFDM frame in
+five was lost to acquisition on this path, as `phy_fer_500.csv`'s Moderate rows say; the busy
+detector's floor learned the other station's signal at both ends (tone frames are steady, under
+the 6 dB margin, and evidence until decoded; the quiet after a frame falls in the frame hold), so
+the panel's floor, threshold and "Signal above noise" read signal over signal in a session; the
+Mode tile shows the station's own sending rung, not the sender's as the manual says; the ladder
+records a silent rung's SNR from the next poll; the ladder still pins 500 Hz rung 4; the `keying`
+late line fires for calls and probes held for a busy channel. Eleven changes ranked in its §14,
+none made: the author's go first.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
