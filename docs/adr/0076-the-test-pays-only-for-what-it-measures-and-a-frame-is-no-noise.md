@@ -163,4 +163,6 @@ draw ran identically up to the ladder; the saving is the ladder's and the close'
 slower scenarios are a single draw each: the RTTY contest's first draw is identical in both arms
 (395 s) and its second traded a faster message (325 → 538 bit/s) for a slower file; the slow
 machine's both draws lie inside the nightly baseline's air-time range (415–538 s). Three more
-draws of each on both arms follow.
+draws of each on both arms (variants 2–4) settle it: over five draws the RTTY contest's mean Test
+air is 464 → 459 s (median 479 → 436) and the slow machine's 458 → 449 s (median 440 → 473),
+every run passing, none overlapping — inside the spread one build shows from draw to draw.
