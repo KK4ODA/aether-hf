@@ -138,7 +138,9 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
 * **The Morse ID at the end** (ADR-0075, as VARA does). Each station's Morse ID is the last
   thing it sends for a session. A US callsign always sends it; `CWID OFF` from the program is
   answered `OK` and changes nothing. Any other callsign sends it only if Setup step 4's *Morse
-  ID* is ticked, and `CWID ON` does not turn it on: the setting is Aether's.
+  ID* is ticked, and `CWID ON` does not turn it on: the setting is Aether's. It sends the
+  callsign without its SSID: a program's `MYCALL KK4ODA-1` or `KK4ODA-1-T` is identified as
+  `KK4ODA`.
   * The program hears `DISCONNECTED` only once its station's ID has gone out. So VarAC going
     back to its calling frequency, a scanning Trimode changing channel, or Winlink Express placing
     its next call does not go over it. With the program keying the radio, it is still attached and

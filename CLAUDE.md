@@ -1725,8 +1725,28 @@ the 6 dB margin, and evidence until decoded; the quiet after a frame falls in th
 the panel's floor, threshold and "Signal above noise" read signal over signal in a session; the
 Mode tile shows the station's own sending rung, not the sender's as the manual says; the ladder
 records a silent rung's SNR from the next poll; the ladder still pins 500 Hz rung 4; the `keying`
-late line fires for calls and probes held for a busy channel. Eleven changes ranked in its §14,
-none made: the author's go first.
+late line fires for calls and probes held for a busy channel. Eleven changes ranked in its §14.
+**ADR-0076 (the author: "yes to all"; no wire change, beta.111 interoperates):** the ladder
+climbs only `usable_modes` (`fieldtest::ladder_rungs`: skips 4 and 8 at 500 Hz, 6 and 13 at
+2 300 Hz; `skipped_rungs` starts a rung under the top acknowledged *on that ladder*; "the
+transfers reached rung N"); a ladder rung whose slot went silent records no SNR
+(`_ladder_unheard`/`ladder_unheard`, model first); R7 keeps an ordinary header on data above the
+recommendation (`GrantConfig.header_above_recommendation`; `04-formal-spec.md` R7; the
+rescued-count test turns it off with ADR-0073's guard to show the hazard); the Test closes with
+`disconnect(drain_s=0)` / `disconnect_within(Some(0.0))` (`close_test_session`); the busy
+detector takes every announced or reported frame's span out of the floor
+(`BusyDetector::explain`, from `heed_preambles` and `absorb`) and a frame's hold no longer keeps
+the quiet after it out (`signal_until`); a frame a reported capture skip falls inside is not
+trusted and its record says `capture_skip` (`Station::note_capture_skip`, called by `main.rs`);
+the `keying` late line skips `slotless` transmissions (calls, probes, listen-first identifiers);
+a recording runs on past the session until the closing identifiers have gone (`RecordingTail`,
+`peer_identifier_s` in both engines; slave: the master's declared identifier + 2 s; at most
+30 s — tests that read a sidecar wait for `recording` to close: `wait_for_recordings_closed` in
+`two_daemons.rs`); the identifier sends `cwid::sent_as` (no SSID, `-T`/`-R`; `/` parts kept;
+`identifier.check` gains `sent_as`); the panel's Mode tile and well rung show the rung the data
+moves at (`applyRung`), the well keeps the callsign in `#strip-who`, the speed chart leaves a
+gap outside a session. Vectors: the `ladder-unheard` session. Change 10 (ladder frames that are
+not data) waits for the next protocol bump.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

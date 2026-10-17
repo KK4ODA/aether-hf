@@ -361,6 +361,7 @@ fn absorb(
             } else {
                 None
             },
+            capture_skip: false,
         });
     }
     receiver.take_preambles();

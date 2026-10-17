@@ -52,9 +52,10 @@ Turn it on once and forget it:
 auto = true
 ```
 
-Every session then records itself from connect to disconnect — a 48 kHz WAV of what the
-radio delivered and a JSON sidecar of what the modem made of it — under `recordings/` beside
-the configuration. Or press **Record** on the Session tab for a listening session with no
+Every session then records itself from connect to disconnect, and on until the closing Morse
+identifiers have gone (this station's, and the other station's when it identifies after this
+one; at most 30 s past the end) — a 48 kHz WAV of what the radio delivered and a JSON sidecar
+of what the modem made of it — under `recordings/` beside the configuration. Or press **Record** on the Session tab for a listening session with no
 peer. Either way, **write the notes**: the band, the frequency, the other station, the
 distance, the time of day, what the S-meter said. `record.notes` on the API, the notes field
 beside the Record button, or `record.start {"notes": ...}`. The modem can measure SNR; it
@@ -124,10 +125,9 @@ The one-button version of §3, for volunteers. Put the other station's callsign 
 a fixed sequence: a probe (both directions' SNR), a call, a message (512 B to 2 kB, sized
 to how well the probe says you are heard, and sent in the session's first burst when the probe
 was answered), a file sized to about two minutes at the message's rate (at least 256 B), then the
-**mode ladder** — a short burst at every mode from a rung under the fastest the message and file
-were acknowledged at (the log says *ladder from rung N: the transfers ran at rung M*), each
-one's acknowledgement kept as a rung, until three rungs in a row fail — and an orderly
-disconnect. About five minutes of transmitting, ten at most: the message and the file are sized
+**mode ladder** — a short burst at every mode the link uses, from a rung under the fastest the
+message and file were acknowledged at (the log names both), each one's acknowledgement kept as
+a rung, until three rungs in a row fail — and an orderly disconnect. About five minutes of transmitting, ten at most: the message and the file are sized
 to what the path can do, the run keeps to a time budget, and **Stop test** — the same button
 while it runs — ends it at once, keeping what was learned.
 
@@ -135,8 +135,14 @@ while it runs — ends it at once, keeping what was learned.
 way an operator's transfer would go, before anything is pinned, so the rates the Test reports
 are the link's own. The ladder pins rungs the link would not choose: each ladder frame is sent
 once at its rung — that copy is the measurement — and a frame that failed goes on at the rung
-the other station asks for, as any data would. After the last rung's answer the Test
-disconnects without waiting for the ladder's leftovers. Through 0.2.0-beta.109 the ladder ran
+the other station asks for, as any data would. The ladder skips the rungs the link never asks
+for — 4 and 8 at 500 Hz, 6 and 13 at 2300 Hz, each beaten by another on both speed and SNR
+(ADR-0073) — since measuring them tells nothing the link can use (ADR-0076). A rung whose burst the other station did not answer at all is kept with no SNR (*at ? dB*):
+the next answer's reading is of the poll that followed, not of the rung's frames (report 13
+§6). As soon as the last rung is answered the Test disconnects without delivering the ladder's
+leftover test bytes; the other station may say the last frames were not received, which for a
+Test is expected. Through 0.2.0-beta.111 those leftovers were delivered first, one 5.4 s tone
+frame for each 10 bytes on a weak 500 Hz path (WC4Y's Test of 2026-10-17, report 13 §10). Through 0.2.0-beta.109 the ladder ran
 between the message and the file, sent its failed frames again at the rung that had failed,
 and on a weak path left the file behind its leftovers (ND1J's Tests of 2026-10-15, report 12
 §21): file rates from those builds read low on weak paths. The file leaves the ladder its time

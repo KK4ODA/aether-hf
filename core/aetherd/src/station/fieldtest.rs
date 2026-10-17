@@ -20,10 +20,14 @@
 //! leftovers ran into the file and stepped it down to the tone floor, and about 130 s of each
 //! weak Test went to delivering its filler. A ladder frame is now measured once — its first
 //! copy, in the rung's answer — and goes on at the rung the other station asks for, as data
-//! does (the engine, `pinned`); the run moves to the disconnect at the last rung's answer, not
-//! waiting for filler nobody reads (the disconnect's drain bounds it, ADR-0072). The file leaves
-//! the ladder its time ([`LADDER_RESERVE_S`]): with the file last, three Tests with ND1J on a
-//! slow path (2026-09-25) spent the budget on the transfers and never reached a rung.
+//! does (the engine, `pinned`); the run moves to the disconnect at the last rung's answer, and
+//! the disconnect delivers none of the filler still queued (ADR-0076: on WC4Y's Test of
+//! 2026-10-17 it had waited 26 s for 40 bytes nobody reads). The ladder climbs only the rungs
+//! the link uses: one another rung beats on both data rate and threshold is never recommended
+//! (ADR-0073), and measuring it measured nothing the link would do (the 500 Hz rungs 4 and 8 on
+//! that Test). The file leaves the ladder its time ([`LADDER_RESERVE_S`]): with the file last,
+//! three Tests with ND1J on a slow path (2026-09-25) spent the budget on the transfers and never
+//! reached a rung.
 //!
 //! The ladder's bodies are small on purpose: a frame pinned at a rung the path cannot carry is
 //! re-encoded at the rung asked for, and a body every rung can hold is what makes that
@@ -232,15 +236,44 @@ impl Rung {
 }
 
 /// How many of the ladder's `modes` it skips when the message ran at `rung`: those under the
-/// rung below it. The ladder starts a rung under the message's so its first rung is one the
-/// path has just carried: started at the message's own rung, a burst of RTTY in the harness
-/// failed it and the two above, and the ladder stopped having passed nothing.
+/// rung below it on the ladder. The ladder starts a rung under the message's so its first rung
+/// is one the path has just carried: started at the message's own rung, a burst of RTTY in the
+/// harness failed it and the two above, and the ladder stopped having passed nothing.
 pub fn skipped_rungs(modes: &[usize], rung: usize) -> usize {
+    let under = modes
+        .iter()
+        .copied()
+        .filter(|&m| m < rung)
+        .max()
+        .unwrap_or(rung);
     modes
         .iter()
-        .take_while(|&&m| m + 1 < rung)
+        .take_while(|&&m| m < under)
         .count()
         .min(modes.len().saturating_sub(1))
+}
+
+/// The rungs the link uses, which the ladder climbs: those no other rung beats on both the
+/// data it carries a second and its threshold — the rate controller's own front
+/// (`usable_modes_by_rate`, ADR-0073). WC4Y's Test of 2026-10-17 pinned the 500 Hz rungs 4 and
+/// 8, which the link never recommends; rung 8's slot went silent and its four frames were
+/// re-encoded and delivered as filler, about 35 s of the Test (13-wc4y-beta111.md §10).
+pub fn ladder_rungs(timing: &aether_link::PhyTiming) -> Vec<usize> {
+    let rungs = timing.data_capacity.len();
+    if timing.mode_threshold_db.is_empty() {
+        // the wide air's table, which a timing leaves empty (`PhyTiming::mode_threshold_db`)
+        let wide = aether_link::rate::usable_modes();
+        return (0..rungs).filter(|m| wide.contains(m)).collect();
+    }
+    if timing.mode_threshold_db.len() != rungs {
+        return (0..rungs).collect();
+    }
+    let frame_s: Vec<f64> = (0..rungs).map(|m| timing.data_frame_s_for(m)).collect();
+    aether_link::rate::usable_modes_by_rate(
+        &timing.mode_threshold_db,
+        &timing.data_capacity,
+        &frame_s,
+    )
 }
 
 /// Rungs in a row that may fail before the ladder stops.
@@ -515,14 +548,17 @@ impl<P: Ptt> Station<P> {
         {
             return Err(format!("{call} is not one of this station's callsigns"));
         }
-        // the ladder climbs only as far as the rules allow here (ADR-0018)
+        // the ladder climbs only as far as the rules allow here (ADR-0018), and only the rungs
+        // the link uses (ADR-0076)
         let ceiling = self.engine.ceiling().map_or(usize::MAX, |c| c + 1);
         let timing = self.engine.timing();
+        let usable = ladder_rungs(timing);
         let modes: Vec<usize> = (0..timing
             .data_capacity
             .len()
             .min(self.config.link.max_mode + 1)
             .min(ceiling))
+            .filter(|m| usable.contains(m))
             .collect();
         // a body every mode can carry, and one short of the length the container cannot
         let body_bytes = modes
@@ -949,7 +985,7 @@ impl<P: Ptt> Station<P> {
             }
             Step::Disconnect => {
                 if !run.entered {
-                    self.disconnect();
+                    self.close_test_session();
                     run.entered = true;
                 } else if self.engine.state() == State::Idle {
                     let outcome = run.failure.clone().unwrap_or_else(|| "complete".to_owned());
@@ -1005,10 +1041,27 @@ impl<P: Ptt> Station<P> {
         run.ladder_next = skip;
         if run.plan.ladder && skip > 0 {
             let from = run.modes[skip];
-            let why = format!("ladder from rung {from}: the transfers ran at rung {rung}");
+            let why = format!("ladder from rung {from}: the transfers reached rung {rung}");
             self.note("test", &why);
             run.adjustments.push(why);
         }
+    }
+
+    /// The Test's own disconnect: at once, with what is still queued left undelivered. After
+    /// the ladder that is its filler — frames that failed at a pinned rung, re-encoded at the
+    /// rung asked for, ten-odd bytes in a tone frame each — which nobody reads; WC4Y's Test of
+    /// 2026-10-17 waited 26 s of its 435 to deliver 40 such bytes (ADR-0076). The other station
+    /// may say the last frames did not arrive, which for a Test is so.
+    fn close_test_session(&mut self) {
+        let queued = self.engine.tx_pending_bytes();
+        self.engine.disconnect_within(Some(0.0));
+        if queued > 0 {
+            self.note(
+                "test",
+                &format!("closing without the {queued} test bytes still queued: nobody reads them"),
+            );
+        }
+        self.pump();
     }
 
     /// Put the run's report into the recording's sidecar, as it stands.
@@ -1037,7 +1090,8 @@ impl<P: Ptt> Station<P> {
         run.ended_s = Some(self.now());
         self.sync_test_report(run);
         if run.recorded {
-            self.stop_recording();
+            // the Test calls, so its station is the master: its identifier is the last of all
+            self.stop_recording_after_identifiers(false);
         }
         self.note("test", outcome);
     }
@@ -1211,8 +1265,9 @@ mod tests {
             "{steps:?}"
         );
         // the ladder's first rung is the one the transfers ran at — on this clean wire well up
-        // the ladder — and the rungs under it count as done on the panel
-        assert_eq!(during_ladder["ladder"]["total"], 20, "{during_ladder}");
+        // the ladder — and the rungs under it count as done on the panel; it climbs only the
+        // rungs the link uses, the 2 300 Hz air's twenty less rungs 6 and 13 (ADR-0076)
+        assert_eq!(during_ladder["ladder"]["total"], 18, "{during_ladder}");
         let first = during_ladder["ladder"]["testing"]
             .as_u64()
             .expect("a rung under test");
@@ -1220,7 +1275,11 @@ mod tests {
             first > 0,
             "the message ran above the floor: {during_ladder}"
         );
-        assert_eq!(during_ladder["ladder"]["done"], first, "{during_ladder}");
+        let under = ladder_rungs(air.a.engine.timing())
+            .iter()
+            .filter(|&&m| (m as u64) < first)
+            .count();
+        assert_eq!(during_ladder["ladder"]["done"], under, "{during_ladder}");
         assert!(during_ladder["ladder"]["testing_name"].is_string());
         assert_eq!(during_ladder["ladder"]["failures_allowed"], 3);
         assert!(
@@ -1302,6 +1361,8 @@ mod tests {
             "{results}"
         );
         assert!(!air.a.connected() && !air.b.connected());
+        // its recording runs on until the closing identifiers have gone (ADR-0076)
+        air.run(60.0, |a, _| a.recording.is_none());
         // the sidecar carries the same report
         let sidecar = std::fs::read_dir(&dir)
             .expect("recordings")
@@ -1385,6 +1446,8 @@ mod tests {
         let run = air.a.test.as_mut().expect("a run");
         run.plan.budget_s = now - run.started_s - 70.0;
         air.run(120.0, |a, _| !a.test_running());
+        // its recording runs on until the closing identifiers have gone (ADR-0076)
+        air.run(60.0, |a, _| a.recording.is_none());
         let results = air.a.test_status()["results"].clone();
         assert_eq!(results["outcome"], "complete", "{results}");
         let carried = results["file"]["bytes"].as_u64().expect("the file's bytes");

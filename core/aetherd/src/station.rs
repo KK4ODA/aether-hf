@@ -345,6 +345,9 @@ struct KeyWindow {
     header_samples: Option<(usize, usize)>,
     /// Where on the air its header begins and ends, set when it is keyed.
     header_on_air: Option<(f64, f64)>,
+    /// It starts an exchange — a call, a probe — or listens first: it has no slot to be late
+    /// for, and may wait for a clear channel (13-wc4y-beta111.md §7).
+    slotless: bool,
 }
 
 impl KeyWindow {
@@ -387,6 +390,40 @@ const KEY_TIME_MARGIN_S: f64 = 1.0;
 
 /// The moment of silence between the Morse identifier and the frames it goes with.
 const CW_ID_GAP_S: f64 = 0.1;
+
+/// How long a reported capture skip is remembered: longer than any frame takes to arrive and be
+/// decoded (ADR-0076).
+const CAPTURE_SKIP_MEMORY_S: f64 = 30.0;
+
+/// How long after the audio it lost a capture skip may be noted: a slow pass of the run loop,
+/// which is when they come — up to half a second on the mini PC of 13-wc4y-beta111.md §5.
+const CAPTURE_SKIP_NOTED_WITHIN_S: f64 = 0.5;
+
+/// The longest a recording runs on past its session's end for the closing identifiers
+/// (ADR-0076).
+const RECORDING_TAIL_MAX_S: f64 = 30.0;
+
+/// How long a recording runs on once nothing more of the session is to come: the last of
+/// the other station's signal and this station's release in it.
+const RECORDING_TAIL_AFTER_S: f64 = 1.5;
+
+/// Past the other station's declared identifier, what a slave's recording waits for the
+/// master's to have ended: the master keys a turnaround after the slave's identifier, with its
+/// keying latency and the radios' paths (13-wc4y-beta111.md §12: 0.7 s apart).
+const RECORDING_TAIL_PEER_ID_S: f64 = 2.0;
+
+/// A recording running on past its session's end (ADR-0076).
+#[derive(Debug, Clone, Copy)]
+struct RecordingTail {
+    /// When the session ended, on the station's clock.
+    since: f64,
+    /// The station was the session's slave: the master's identifier follows its own.
+    slave: bool,
+    /// The other station's closing identifier, as its call or acceptance declared it.
+    peer_identifier_s: f64,
+    /// When nothing more of the session was left for this station to send.
+    done_at: Option<f64>,
+}
 
 /// The longest a burst of frames may be on the air, so that the whole transmission — the
 /// keying's lead, the frames and the tail — ends inside the key watchdog's limit (ADR-0017).
@@ -684,6 +721,9 @@ pub struct FrameReport {
     /// How many more frames of its burst an ordinary data frame said follow it (ADR-0041);
     /// none for control and tone frames, which cannot say.
     pub follows: Option<u8>,
+    /// The sound card's capture reported skipping audio inside the frame: what became of it
+    /// says nothing of the path (ADR-0076).
+    pub capture_skip: bool,
 }
 
 /// A session's account, kept from the moment it comes up to the moment it ends.
@@ -1027,6 +1067,13 @@ pub struct Station<P: Ptt> {
     /// arrives after the key is released, and read as channel it would hold the next burst
     /// back for its own echo.
     deaf_until: f64,
+    /// When the sound card's capture reported skipping audio (`audio::CaptureSkips`), on the
+    /// station's clock, for the last [`CAPTURE_SKIP_MEMORY_S`]: a frame one falls inside is not
+    /// trusted (ADR-0076).
+    capture_skips_at: VecDeque<f64>,
+    /// The session's recording, running on past its end until the closing identifiers have
+    /// gone (ADR-0076).
+    recording_tail: Option<RecordingTail>,
     /// When the key last came up, for the receive trace after it (`trace_after_release`).
     released_at: f64,
     /// When that trace last wrote a line.
@@ -1252,6 +1299,8 @@ impl<P: Ptt> Station<P> {
             held_since: None,
             held_from: None,
             deaf_until: f64::NEG_INFINITY,
+            capture_skips_at: VecDeque::new(),
+            recording_tail: None,
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
             device_latency_s: None,
@@ -2114,10 +2163,11 @@ impl<P: Ptt> Station<P> {
             return;
         }
         let reason = required.map_or("", crate::cwid::Required::reason);
+        let sent = crate::cwid::sent_as(&call);
         self.note(
             "identifier",
             &format!(
-                "the Morse ID goes out as {call} at the end of every session though its setting \
+                "the Morse ID goes out as {sent} at the end of every session though its setting \
                  is off. {reason}"
             ),
         );
@@ -2149,6 +2199,7 @@ impl<P: Ptt> Station<P> {
             "setting": self.config.cw_id.is_some(),
             "forced": required.is_some(),
             "reason": required.map(crate::cwid::Required::reason),
+            "sent_as": crate::cwid::sent_as(&call),
             "callsign": call,
             "wpm": cw.map_or(self.config.cw_id_wpm, |cw| cw.wpm),
             "sent_wpm": cw.map(|cw| self.sent_wpm(cw)),
@@ -2538,6 +2589,10 @@ impl<P: Ptt> Station<P> {
         let Some(dir) = self.config.record_dir.clone() else {
             return Err("no recording directory is configured ([record] dir)".into());
         };
+        // the last session's, still waiting for its identifiers: it ends here
+        if self.recording_tail.take().is_some() {
+            self.stop_recording();
+        }
         if self.recording.is_some() {
             return Err("a recording is already running".into());
         }
@@ -2613,6 +2668,61 @@ impl<P: Ptt> Station<P> {
                 self.note("error", &format!("could not finish the recording: {error}"));
                 None
             }
+        }
+    }
+
+    /// End the session's recording once its closing identifiers have gone (ADR-0076): this
+    /// station's, and — when it was the slave — the master's, which follows it. Until then the
+    /// recording runs on, at most [`RECORDING_TAIL_MAX_S`]. Ended at the session's end, no
+    /// recording held either identifier, and ADR-0075's order could not be read from the air
+    /// (13-wc4y-beta111.md §12).
+    pub(crate) fn stop_recording_after_identifiers(&mut self, slave: bool) {
+        if self.recording.is_none() {
+            return;
+        }
+        self.recording_tail = Some(RecordingTail {
+            since: self.now(),
+            slave,
+            peer_identifier_s: self.engine.peer_identifier_s(),
+            done_at: None,
+        });
+        // judged from the next pass on: the session's end is drained from the engine before
+        // the DISC_ACK it sends with it is queued
+    }
+
+    /// Close a recording running on past its session once nothing more of the session is to
+    /// come on the air: this station's own transmissions over, its identifier gone or none
+    /// owed, and the other station's identifier given its time.
+    fn advance_recording_tail(&mut self, now: f64) {
+        let Some(mut tail) = self.recording_tail else {
+            return;
+        };
+        if self.recording.is_none() {
+            self.recording_tail = None;
+            return;
+        }
+        let own_done = !self.transmitting
+            && !self.closing_identifier_pending()
+            && !self
+                .pending
+                .iter()
+                .any(|next| matches!(next, Outgoing::Link(_)));
+        if own_done && tail.done_at.is_none() {
+            tail.done_at = Some(now);
+        }
+        // the master identifies after the slave's identifier, a turnaround and its keying later
+        let hold = if tail.slave && tail.peer_identifier_s > 0.0 {
+            tail.peer_identifier_s + RECORDING_TAIL_PEER_ID_S
+        } else {
+            RECORDING_TAIL_AFTER_S
+        };
+        let due = tail.done_at.is_some_and(|at| now >= at + hold)
+            || now >= tail.since + RECORDING_TAIL_MAX_S;
+        if due {
+            self.recording_tail = None;
+            self.stop_recording();
+        } else {
+            self.recording_tail = Some(tail);
         }
     }
 
@@ -2774,6 +2884,7 @@ impl<P: Ptt> Station<P> {
         }
         self.pump();
         self.advance_identifier(now);
+        self.advance_recording_tail(now);
         self.advance_test();
         self.advance_beacons(now);
         self.advance_call_bandwidth(now);
@@ -2962,6 +3073,12 @@ impl<P: Ptt> Station<P> {
         let Some(window) = self.keying else {
             return;
         };
+        // a call or a probe has no slot: the engine places what it grants from where it goes,
+        // and one held for a busy channel is held on purpose — WC4Y's call was reported "1820 ms
+        // after its slot opened" for the busy hangover after a probe's answer
+        if window.slotless {
+            return;
+        }
         let Some(opened) = window.not_before else {
             return;
         };
@@ -3150,6 +3267,32 @@ impl<P: Ptt> Station<P> {
         self.latency.render.push(seconds);
         self.rendered_s = Some(seconds);
         self.tell_engine_latency();
+    }
+
+    /// The sound card's capture reported skipping `lost_s` of audio, just now: recorded, and
+    /// remembered so that a frame it fell inside is not trusted (ADR-0076). The capture stream's
+    /// timestamps see about half of such losses (12-two-paths-80m.md §15.2; 13-wc4y-beta111.md
+    /// §5), so the station's clock is not moved by them.
+    pub fn note_capture_skip(&mut self, lost_s: f64) {
+        let now = self.now();
+        self.record_event("capture_skip", &format!("lost {lost_s:.3}"));
+        self.capture_skips_at.push_back(now);
+        while self
+            .capture_skips_at
+            .front()
+            .is_some_and(|&at| at < now - CAPTURE_SKIP_MEMORY_S)
+        {
+            self.capture_skips_at.pop_front();
+        }
+    }
+
+    /// Whether a capture skip was reported inside `start..end` on the station's clock. A skip
+    /// is noted after the audio it was in has been taken in, by up to a slow pass of the run
+    /// loop — which is when they come — so the window reaches that far past the frame.
+    fn capture_skipped_within(&self, start: f64, end: f64) -> bool {
+        self.capture_skips_at
+            .iter()
+            .any(|&at| at >= start && at <= end + CAPTURE_SKIP_NOTED_WITHIN_S)
     }
 
     /// Put a line in the session recording, when one is running: what the run loop learns of
@@ -3361,6 +3504,8 @@ impl<P: Ptt> Station<P> {
             let detected = decoded.frame.detect_confidence(&air);
             let span_start = (origin + decoded.frame.start()) as f64 / fs;
             let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
+            // its blocks are a frame's, not the noise's (ADR-0076)
+            self.busy.explain(span_start, span_end);
             let record = crate::record::FrameRecord {
                 t_s: now,
                 start_s: Some(span_start),
@@ -3388,6 +3533,7 @@ impl<P: Ptt> Station<P> {
                 } else {
                     None
                 },
+                capture_skip: self.capture_skipped_within(span_start, span_end),
             };
             self.keep_frame(record, now);
             // A beacon belongs to no session, so it is handled before anything the engine
@@ -3409,7 +3555,11 @@ impl<P: Ptt> Station<P> {
             // only place the other station transmits, so a fragment is on no grid)
             self.fragment_of_own_tx(&decoded, origin, &air);
             let decoded_ok = decoded.ok();
-            let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected);
+            // a frame the sound card's capture lost audio inside of says nothing of the path:
+            // two of WC4Y's rung-3 frames at -1 to -4 dB, where that rung decodes 9 dB lower,
+            // were lost that way, and the failure stepped the recommendation down (ADR-0076)
+            let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected)
+                && !self.capture_skipped_within(start, start + frame_s);
             // A frame that decoded is real whatever its acquisition looked like, and a weak
             // one at the floor may have acquired below the gate below — it counts here. One
             // that did not decode is a soft frame the engine may still combine, and it says
@@ -3574,7 +3724,12 @@ impl<P: Ptt> Station<P> {
             control: None,
             bandwidth_hz: None,
             follows: frame.follows(),
+            capture_skip: false,
         };
+        let span_start = (self.rx_origin + frame.start()) as f64 / self.config.params.fs_baseband;
+        let span_end =
+            span_start + frame.samples(&self.air()) as f64 / self.config.params.fs_baseband;
+        report.capture_skip = self.capture_skipped_within(span_start, span_end);
         // a frame that belongs to the session is the other station's; one with another
         // session id is somebody else's business and stays unattributed
         let ours = |session: u8| {
@@ -3878,12 +4033,14 @@ impl<P: Ptt> Station<P> {
                     // sooner than the engine reckoned, never early (`latency.rs`).
                     let not_before =
                         not_before.or_else(|| Some(self.now() + self.engine_latency_s()));
+                    let slotless = listen_first || starts_an_exchange(&frames);
                     self.pending.push_back(Outgoing::Link(LinkTx {
                         frames,
                         origin,
                         window: KeyWindow {
                             not_before,
                             not_after,
+                            slotless,
                             ..KeyWindow::default()
                         },
                         identifier_s,
@@ -3909,6 +4066,7 @@ impl<P: Ptt> Station<P> {
                     // stream's history, and carrying it into the next session would make the
                     // first bytes undecodable.
                     let session_recorded = self.session_notes.as_ref().is_some_and(|n| n.recorded);
+                    let was_slave = self.session_notes.as_ref().is_some_and(|n| !n.caller);
                     if name == "connected" {
                         self.session_began(&detail);
                         connected = true;
@@ -3940,7 +4098,7 @@ impl<P: Ptt> Station<P> {
                                 }
                             }
                         } else if name == "disconnected" {
-                            self.stop_recording();
+                            self.stop_recording_after_identifiers(was_slave);
                         }
                     }
                 }
@@ -4408,7 +4566,8 @@ impl<P: Ptt> Station<P> {
         });
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.identified(now);
-        self.identifier.outcome = Some(format!("the closing identifier went out as {call}"));
+        let sent = crate::cwid::sent_as(&call);
+        self.identifier.outcome = Some(format!("the closing identifier went out as {sent}"));
         self.tx_tag = Some(self.tag(now, tx.origin, &[], true));
     }
 
@@ -4473,6 +4632,9 @@ impl<P: Ptt> Station<P> {
         for pending in preambles {
             let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
             let start_s = (origin + pending.start) as f64 / fs;
+            // a frame arriving: none of it is the noise floor, heeded or not (ADR-0076)
+            self.busy
+                .explain(start_s, (origin + pending.end) as f64 / fs);
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
             if let Some(recording) = &mut self.recording {
@@ -4705,7 +4867,7 @@ impl<P: Ptt> Station<P> {
             self.report_decision(&decision, now);
             return None;
         }
-        let audio = cw.audio(call, audio_rate);
+        let audio = cw.audio(&crate::cwid::sent_as(call), audio_rate);
         (!audio.is_empty()).then_some(audio)
     }
 
@@ -4722,7 +4884,7 @@ impl<P: Ptt> Station<P> {
             wpm: self.sent_wpm(cw),
             ..cw
         };
-        cw.audio(call, rate).len() as f64 / rate + CW_ID_GAP_S
+        cw.audio(&crate::cwid::sent_as(call), rate).len() as f64 / rate + CW_ID_GAP_S
     }
 
     /// Tell the engine how long the identifier is for each of the station's callsigns, after
@@ -4758,7 +4920,8 @@ impl<P: Ptt> Station<P> {
         self.playback.extend(std::iter::repeat_n(0.0f32, gap));
         self.playback.extend(audio.into_iter().take(room - gap));
         self.identified(now);
-        self.identifier.outcome = Some(format!("the closing identifier went out as {call}"));
+        let sent = crate::cwid::sent_as(&call);
+        self.identifier.outcome = Some(format!("the closing identifier went out as {sent}"));
         true
     }
 
@@ -6905,6 +7068,8 @@ mod tests {
             air.run(60.0, |a, b| {
                 a.state() == State::Idle && b.state() == State::Idle
             });
+            // a recording runs on until the closing identifiers have gone (ADR-0076)
+            air.run(60.0, |_, b| b.recording().is_none());
             assert!(air.b.recording().is_none());
             let finished = air.b.take_finished_sessions();
             assert_eq!(finished.len(), 1);
@@ -6938,8 +7103,13 @@ mod tests {
         air.a.disconnect();
         air.run(60.0, |a, b| !a.connected() && !b.connected());
         assert!(
+            air.b.recording().is_some(),
+            "the recording runs on past the session for the closing identifiers (ADR-0076)"
+        );
+        air.run(60.0, |_, b| b.recording().is_none());
+        assert!(
             air.b.recording().is_none(),
-            "the recording did not stop with the session"
+            "the recording did not stop after the session's identifiers"
         );
 
         let sidecar_path = std::fs::read_dir(&dir)
@@ -8470,6 +8640,143 @@ mod tests {
             "then the identifier"
         );
         assert_eq!(window.trailing_samples, gap + id.len());
+    }
+
+    #[test]
+    fn the_identifier_sends_the_callsign_without_its_ssid() {
+        // ADR-0076: the assigned call sign is what §97.119 asks for; "KK4ODA-1" took 6.3 s at
+        // 20 wpm, 2.3 s of it the SSID (13-wc4y-beta111.md §12). What a call declares is the
+        // length of what goes out
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA-1".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let with_ssid = station.identifier_length_for("W4ODA-1");
+        assert!(with_ssid > 0.0, "a US callsign identifies");
+        assert!((with_ssid - station.identifier_length_for("W4ODA")).abs() < 1e-9);
+        assert_eq!(station.identifier_check("W4ODA-1")["sent_as"], "W4ODA");
+        assert_eq!(station.identifier_check("W4ODA-1")["callsign"], "W4ODA-1");
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("identifier:the Morse ID goes out as W4ODA at")),
+            "the log names what is sent"
+        );
+    }
+
+    #[test]
+    fn a_frame_a_capture_skip_fell_inside_is_not_trusted() {
+        // ADR-0076: two of WC4Y's rung-3 frames were lost to the mini PC's capture skipping
+        // audio inside them; a skip is noted after the audio it was in, by up to a slow pass
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate;
+        station.capture(&vec![0.0f32; rate * 3]).expect("capture");
+        let now = station.now();
+        assert!(!station.capture_skipped_within(now - 2.0, now));
+        station.note_capture_skip(0.048);
+        assert!(station.capture_skipped_within(now - 2.0, now), "inside");
+        assert!(
+            station.capture_skipped_within(now - 2.0, now - 0.3),
+            "noted a slow pass after the frame's end"
+        );
+        assert!(
+            !station.capture_skipped_within(now - 2.0, now - 0.8),
+            "before it"
+        );
+        assert!(
+            !station.capture_skipped_within(now + 0.1, now + 2.0),
+            "after it"
+        );
+    }
+
+    #[test]
+    fn a_call_or_a_probe_is_never_reported_late_for_a_slot() {
+        // a call held for a busy channel was reported "1820 ms after its slot opened": a call
+        // has no slot (13-wc4y-beta111.md §7)
+        let mut station = idle_station();
+        for (slotless, reported) in [(true, 0), (false, 1)] {
+            station.late_keyings = 0;
+            station.keying = Some(KeyWindow {
+                not_before: Some(1.0),
+                slotless,
+                ..KeyWindow::default()
+            });
+            station.note_slow_keying(3.0, 3.0, 0.02);
+            assert_eq!(station.late_keyings, reported, "slotless {slotless}");
+        }
+        station.keying = None;
+    }
+
+    #[test]
+    fn a_recording_runs_on_until_both_closing_identifiers_have_gone() {
+        // ADR-0076: a recording that stopped at the session's end held neither station's
+        // closing identifier (13-wc4y-beta111.md §12). The slave's runs on past its own
+        // identifier until the master's has gone; the master's stops after its own
+        let dir = std::env::temp_dir().join(format!("aether-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            record_dir: Some(dir.clone()),
+            record_auto: true,
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.recording.is_some() && air.b.recording.is_some());
+        air.a.send(&[0x42; 300]);
+        air.a.disconnect();
+        air.run(150.0, |_, b| b.state() == State::Idle);
+        assert_eq!(air.b.state(), State::Idle);
+        assert!(air.b.recording.is_some(), "the slave's recording runs on");
+        let mut master_identified = None;
+        let mut slave_stopped = None;
+        air.run(60.0, |a, b| {
+            if master_identified.is_none() && a.stats.cw_ids == 1 && a.quiescent() {
+                master_identified = Some(a.now());
+            }
+            if slave_stopped.is_none() && b.recording.is_none() {
+                slave_stopped = Some(b.now());
+            }
+            a.recording.is_none() && b.recording.is_none()
+        });
+        let (Some(identified), Some(stopped)) = (master_identified, slave_stopped) else {
+            panic!(
+                "identified {master_identified:?}, the slave's recording stopped {slave_stopped:?}"
+            );
+        };
+        assert!(
+            stopped >= identified,
+            "the slave's recording stopped at {stopped:.1} s, before the master's identifier \
+             ended at {identified:.1} s"
+        );
+        assert!(
+            air.a.recording.is_none(),
+            "the master's recording stopped too"
+        );
+        let sidecars: Vec<_> = std::fs::read_dir(&dir)
+            .expect("the recordings")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .collect();
+        assert_eq!(sidecars.len(), 2);
+        for sidecar in sidecars {
+            let doc: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&sidecar).expect("sidecar"))
+                    .expect("json");
+            let events = doc["events"].as_array().expect("events");
+            assert!(
+                events.iter().any(|e| e["event"] == "identified"),
+                "{}: its own identifier is in it",
+                sidecar.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -475,15 +475,23 @@ const STATE_TEXT = {
   disconnecting: ["Closing", "Finishing what is queued, then closing."],
 };
 
-function setState(key, name, detail) {
+function setState(key, name, detail, remote = "") {
+  const named = remote ? `${name} with ${remote}` : name;
   $("state-strip").dataset.state = key;
-  $("state-name").textContent = name;
+  $("state-name").textContent = named;
   $("state-detail").textContent = detail;
-  // the header's display well carries the same state on every tab
+  // the header's display well carries the same state on every tab, the other station first in
+  // a span of its own: the state's words give way in a narrow window, the callsign never does
+  // ("Connected with …" at 994 px, report 13 §13.3)
+  const who = $("strip-who");
+  who.dataset.state = key;
+  who.textContent = remote;
+  who.hidden = !remote;
+  who.title = remote ? `The other station: ${named}` : "The other station in the call or session";
   const strip = $("strip-state");
   strip.dataset.state = key;
   strip.textContent = name;
-  strip.title = detail ? `${name}. ${detail}` : name;
+  strip.title = detail ? `${named}. ${detail}` : named;
 }
 
 // The status the panel last saw: whether a restart is something it can do for the operator.
@@ -500,8 +508,8 @@ async function refreshStatus() {
   const [name, detail] = STATE_TEXT[status.state] ?? ["Unknown", ""];
   // the engine keeps the last session's callsign after it ends: name it only while there is a
   // call or a session to name
-  const who = status.remote && status.state !== "idle" ? ` with ${status.remote}` : "";
-  setState(status.state, name + who, detail);
+  const who = status.remote && status.state !== "idle" ? status.remote : "";
+  setState(status.state, name, detail, who);
   syncBanner(status);
 
   $("callsign").textContent = status.callsign || "—";
@@ -703,21 +711,73 @@ function showCwidCap() {
     : "";
 }
 
+// The rung the SNR chart draws the threshold of: the one the data is moving at when data moves
+// (the receiving rung first: the chart's readings are of the frames heard here), else the rung
+// this station would send at.
 let currentMode = null;
+
+function rungName(rung) {
+  const entry = modeTable[rung];
+  return entry ? `${entry.name}${entry.floor ? " (floor)" : ""}` : `rung ${rung}`;
+}
+
+function rungRate(rung) {
+  const entry = modeTable[rung];
+  return entry ? `${Math.round(entry.net_bit_rate)} bit/s` : "";
+}
+
+// The Mode tile and the well's rung: the rung the data is moving at — the other station's while
+// this one receives, this station's while it sends, both when both. `metrics.mode` is the rung
+// the other station recommends for this one's data, which moves nothing while this station only
+// answers: KK4ODA-1's tile read tone-36 under data arriving at tone4x100-75 (report 13 §13.3).
+// With no data moving, or from a daemon before 0.2.0-beta.109 that does not say, it is that rung.
+function applyRung(metrics) {
+  const mode = metrics.mode;
+  const told = metrics.sending_rung !== undefined;
+  const sending = told ? metrics.sending_rung : null;
+  const receiving = told ? metrics.receiving_rung : null;
+  const value = $("v-mode");
+  const sub = $("v-mode-name");
+  const strip = $("strip-rung");
+  if (sending != null && receiving != null) {
+    currentMode = receiving;
+    value.textContent = `${sending} / ${receiving}`;
+    sub.textContent = `sending ${rungName(sending)} · receiving ${rungName(receiving)}`;
+    value.title = `Data both ways: this station sends at rung ${sending} (${rungName(sending)}, ${rungRate(sending)}), the other station at rung ${receiving} (${rungName(receiving)}, ${rungRate(receiving)})`;
+    strip.textContent = `Rung ${sending} ↑  ${receiving} ↓`;
+    strip.title = `Sending at rung ${sending}, receiving at rung ${receiving}`;
+  } else if (receiving != null) {
+    currentMode = receiving;
+    value.textContent = String(receiving);
+    sub.textContent = `receiving · ${rungName(receiving)} · ${rungRate(receiving)}`;
+    value.title = `The other station's data is arriving at rung ${receiving}: ${rungName(receiving)}, ${rungRate(receiving)} on the air`;
+    strip.textContent = `Rung ${receiving} ↓  ${rungRate(receiving)}`;
+    strip.title = `Receiving at rung ${receiving}, ${rungRate(receiving)} on the air`;
+  } else if (sending != null) {
+    currentMode = sending;
+    value.textContent = String(sending);
+    sub.textContent = `sending · ${rungName(sending)} · ${rungRate(sending)}`;
+    value.title = `This station's data is going at rung ${sending}: ${rungName(sending)}, ${rungRate(sending)} on the air`;
+    strip.textContent = `Rung ${sending} ↑  ${rungRate(sending)}`;
+    strip.title = `Sending at rung ${sending}, ${rungRate(sending)} on the air`;
+  } else if (mode !== undefined) {
+    currentMode = mode;
+    value.textContent = String(mode);
+    const rate = rungRate(mode);
+    sub.textContent = modeTable[mode] ? `${rungName(mode)} · ${rate} · to send at` : "";
+    value.title = `No data moving: rung ${mode} is the rung this station would send at, as the other station last recommended`;
+    strip.textContent = modeTable[mode] ? `Rung ${mode}  ${rate}` : `Rung ${mode}`;
+    strip.title = `No data moving: rung ${mode} is the rung this station would send at`;
+  } else {
+    return;
+  }
+  sub.title = value.title;
+  strip.hidden = false;
+}
 
 function applyMetrics(metrics) {
   const mode = metrics.mode;
-  if (mode !== undefined) {
-    currentMode = mode;
-    $("v-mode").textContent = String(mode);
-    const entry = modeTable[mode];
-    $("v-mode-name").textContent = entry
-      ? `${entry.name}${entry.floor ? " (floor)" : ""} · ${Math.round(entry.net_bit_rate)} bit/s`
-      : "";
-    const rung = $("strip-rung");
-    rung.textContent = entry ? `Rung ${mode}  ${Math.round(entry.net_bit_rate)} bit/s` : `Rung ${mode}`;
-    rung.hidden = false;
-  }
+  applyRung(metrics);
   if (metrics.queued_bytes !== undefined) {
     $("v-queued").textContent = String(metrics.queued_bytes);
   }
@@ -752,11 +812,12 @@ function applyMetrics(metrics) {
     // A daemon that does not say (before 0.2.0-beta.109) is drawn as before, its own rung
     const rateOf = (rung) => (rung == null ? null : (modeTable[rung]?.net_bit_rate ?? null));
     const told = metrics.sending_rung !== undefined;
-    const sending = metrics.link ? rateOf(told ? metrics.sending_rung : currentMode) : null;
+    const sending = metrics.link ? rateOf(told ? metrics.sending_rung : mode) : null;
     const receiving = metrics.link && told ? rateOf(metrics.receiving_rung) : null;
+    // no session is a gap in the curve, not a line on the chart's 10 bit/s floor
     throughputHistory.push({
       at,
-      bps: metrics.link ? metrics.throughput_bps : 0,
+      bps: metrics.link ? metrics.throughput_bps : null,
       sending,
       receiving,
     });
@@ -1274,26 +1335,40 @@ function drawSpeedChart() {
   rateLine("sending", c.tx);
   rateLine("receiving", c.rx);
 
-  // the goodput itself, the reading that matters: a filled area under a thick accent line
-  if (throughputHistory.length === 0) return;
-  const first = throughputHistory[0];
-  const last = throughputHistory[throughputHistory.length - 1];
-  ctx.beginPath();
-  ctx.moveTo(x(first.at), f.bottom);
-  for (const point of throughputHistory) ctx.lineTo(x(point.at), y(point.bps));
-  ctx.lineTo(x(last.at), f.bottom);
-  ctx.closePath();
-  ctx.fillStyle = withAlpha(c.accent, 0.18);
-  ctx.fill();
-  ctx.strokeStyle = c.accent;
-  ctx.lineWidth = 2.5;
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  throughputHistory.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(x(point.at), y(point.bps));
-    else ctx.lineTo(x(point.at), y(point.bps));
-  });
-  ctx.stroke();
+  // the goodput itself, the reading that matters: a filled area under a thick accent line, one
+  // piece for each stretch of session — outside one there is nothing to measure, and a line on
+  // the floor read as 10 bit/s
+  const runs = [];
+  let run = [];
+  for (const point of throughputHistory) {
+    if (point.bps == null) {
+      if (run.length) runs.push(run);
+      run = [];
+    } else {
+      run.push(point);
+    }
+  }
+  if (run.length) runs.push(run);
+  for (const points of runs) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    ctx.beginPath();
+    ctx.moveTo(x(first.at), f.bottom);
+    for (const point of points) ctx.lineTo(x(point.at), y(point.bps));
+    ctx.lineTo(x(last.at), f.bottom);
+    ctx.closePath();
+    ctx.fillStyle = withAlpha(c.accent, 0.18);
+    ctx.fill();
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      if (index === 0) ctx.moveTo(x(point.at), y(point.bps));
+      else ctx.lineTo(x(point.at), y(point.bps));
+    });
+    ctx.stroke();
+  }
 }
 
 // ── SNR by frame, last ten minutes ──────────────────────────────────

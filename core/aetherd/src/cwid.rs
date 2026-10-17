@@ -128,6 +128,23 @@ pub fn required_for(callsign: &str) -> Option<Required> {
     is_united_states(&location_of(callsign)).then_some(Required::UnitedStates)
 }
 
+/// What the Morse identifier sends for a callsign: the assigned call sign, with any
+/// designator written with a `/` (`W4/G4ABC`, `KK4ODA/P`), and without the SSID or VARA's
+/// `-T`/`-R` (ADR-0076). §97.119(a) asks for the station's assigned call sign, and an SSID is
+/// no part of it: `KK4ODA-1` took 6.3 s at 20 wpm, 2.3 s of it the hyphen and the 1, a
+/// character rarely heard on the air (13-wc4y-beta111.md §12); `KK4ODA` takes 4.0 s.
+#[must_use]
+pub fn sent_as(callsign: &str) -> String {
+    callsign
+        .trim()
+        .to_ascii_uppercase()
+        .split('/')
+        .map(|part| part.split('-').next().unwrap_or_default())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// The part of a callsign that says where its station operates (see [`required_for`]).
 fn location_of(callsign: &str) -> String {
     let call = callsign.trim().to_ascii_uppercase();
@@ -334,6 +351,21 @@ mod tests {
         ] {
             assert!(required_for(other).is_none(), "{other}");
         }
+    }
+
+    #[test]
+    fn the_identifier_sends_the_call_sign_without_its_ssid() {
+        assert_eq!(sent_as("KK4ODA-1"), "KK4ODA");
+        assert_eq!(sent_as(" kk4oda-1-t "), "KK4ODA");
+        assert_eq!(sent_as("WC4Y"), "WC4Y");
+        assert_eq!(sent_as("W4/G4ABC-2"), "W4/G4ABC");
+        assert_eq!(sent_as("KK4ODA-1/P"), "KK4ODA/P");
+        assert_eq!(sent_as("G4ABC/W4"), "G4ABC/W4");
+        assert_eq!(sent_as("-1"), "");
+        let cw = CwId::default();
+        // 105 dits with the SSID, 67 without: 6.3 s against 4.02 s at 20 wpm
+        assert!((cw.duration_s("KK4ODA-1") - 6.3).abs() < 1e-9);
+        assert!((cw.duration_s(&sent_as("KK4ODA-1")) - 4.02).abs() < 1e-9);
     }
 
     #[test]

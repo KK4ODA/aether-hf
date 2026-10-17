@@ -301,12 +301,25 @@ header.bar {
   text-overflow: ellipsis;
 }
 
-.strip-state[data-state="connected"] {
+/* the other station in the call or session, ahead of the state: a callsign in the mono face,
+   never shortened — the state's words give way first in a narrow window */
+.strip-who {
+  font: 600 var(--fs-md) / 1 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--text);
+  padding-right: 10px;
+  flex: none;
+}
+
+.strip-state[data-state="connected"],
+.strip-who[data-state="connected"] {
   color: var(--status-link);
 }
 
 .strip-state[data-state="connecting"],
-.strip-state[data-state="disconnecting"] {
+.strip-state[data-state="disconnecting"],
+.strip-who[data-state="connecting"],
+.strip-who[data-state="disconnecting"] {
   color: var(--status-warning);
 }
 
@@ -3603,7 +3616,8 @@ body.compact .strip {
   height: 34px;
 }
 
-body.compact .strip-state {
+body.compact .strip-state,
+body.compact .strip-who {
   font-size: var(--fs-lg);
 }
 

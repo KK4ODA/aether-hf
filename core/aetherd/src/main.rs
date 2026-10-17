@@ -862,13 +862,14 @@ fn note_audio_losses(
         reported.starved = starved;
         daemon.starved_audio = starved as u64;
     }
-    // what the capture stream's own timestamps say it skipped: a report only, until a station
-    // has shown that they see the losses at all (ADR-0071 §3). Every one goes to the recording,
-    // where it is placed; the log says them at most every `LOOP_STALL_LOG_INTERVAL`
+    // what the capture stream's own timestamps say it skipped: they see about half of what is
+    // lost (ADR-0071 §3), so the clock is not moved by them, but a frame one falls inside is not
+    // trusted (ADR-0076). Every one goes to the recording, where it is placed; the log says them
+    // at most every `LOOP_STALL_LOG_INTERVAL`
     let skips = audio.capture_skips();
     if skips.lost > reported.skips.lost {
         let lost = skips.lost_s - reported.skips.lost_s;
-        station.record_event("capture_skip", &format!("lost {lost:.3}"));
+        station.note_capture_skip(lost);
     }
     if skips.repeated > reported.skips.repeated {
         let repeated = skips.repeated_s - reported.skips.repeated_s;

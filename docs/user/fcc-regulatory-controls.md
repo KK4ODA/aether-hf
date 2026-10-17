@@ -192,6 +192,11 @@ locally controlled station's: somebody is at the radio when they are pressed.
   * a reciprocal prefix in front decides (`W4/G4ABC` is US, `VE3/KK4ODA` is not), as does a
     location after the callsign (`G4ABC/W4` is US, `KK4ODA/VE3` is not). §97.119(g) puts the
     indicator in front, and after the callsign for a Canadian licence; both are read.
+* **What it sends.** The callsign without its SSID: `KK4ODA-1` goes out as `KK4ODA`, and a
+  `-T` or `-R` is dropped too. §97.119(a) asks for the station's assigned call sign, and an SSID
+  is not part of it. Sent, `-1` was a hyphen and a digit, 2.3 s of a 6.3 s identifier. A `/`
+  part is kept: a reciprocal or location indicator (`W4/G4ABC`, `G4ABC/W4`) is part of how the
+  station identifies (§97.119(g)), and `/P` or `/M` is the operator's choice.
 * **How it is sent.** It is judged as a CW emission at the dial it goes out on, a 1 500 Hz tone.
   It goes at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent by an automatic
   device. A faster setting is held to 20, and Setup step 4 and the log say so.
