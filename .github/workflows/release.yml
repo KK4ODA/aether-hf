@@ -32,6 +32,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Tauri CLI that builds the installers, exactly. It carries the bundler and with it the
+  # installer's own script, so a new one can change how an installer behaves: `^2` took CLI
+  # 2.12.0 (bundler 2.10) on 2026-09-26 unannounced, and with it a running-app check that
+  # stops an update at the first refusal (windows/hooks.nsh says what we do about it). Bump
+  # it on purpose, and try an update across the bump on Windows before the release.
+  TAURI_CLI: "2.12.3"
 
 jobs:
   plan:
@@ -224,7 +230,7 @@ jobs:
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; the installer will not be signed for the updater"
           fi
-          npx --yes @tauri-apps/cli@^2 build --bundles ${{ matrix.bundles }} --config "$config"
+          npx --yes "@tauri-apps/cli@${TAURI_CLI}" build --bundles ${{ matrix.bundles }} --config "$config"
 
       # Space-free names: GitHub rewrites spaces in asset names to dots, and a URL that has
       # to be guessed is not a URL the updater manifest can point at.

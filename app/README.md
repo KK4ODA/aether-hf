@@ -81,8 +81,11 @@ Setup says otherwise.
 
 ```bash
 python tools/stage_daemon.py            # builds aetherd and copies it to src-tauri/binaries/
-cd app/src-tauri && npx @tauri-apps/cli@^2 build
+cd app/src-tauri && npx @tauri-apps/cli@2.12.3 build
 ```
+
+The CLI version is the one `release.yml` pins (`TAURI_CLI`): it carries the installer's own
+script, so it changes only on purpose, with an update tried across the change.
 
 The bundler packages the daemon as a *sidecar* (installed beside the shell's binary, which
 is where the shell looks first) and the `ui/` directory as a resource (the shell asks Tauri
