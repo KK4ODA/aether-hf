@@ -35,7 +35,7 @@ when the pinned CLI is bumped, also try an update across the bump on a Windows m
 
 ```bash
 sudo dpkg --add-architecture i386 && sudo apt-get update
-sudo apt-get install wine32:i386 wine64 nsis gcc-mingw-w64-i686 xvfb
+sudo apt-get install wine wine32:i386 wine64 nsis gcc-mingw-w64-i686 xvfb
 python3 tools/installer_hooks/run.py              # the hook scenarios, about a minute
 python3 tools/installer_hooks/run.py --installer  # and the real installer, about three
 ```
