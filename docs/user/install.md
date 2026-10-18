@@ -149,6 +149,18 @@ before your next contact, and ask the stations you work with to do the same. A c
 an answer to, a station on another protocol is not taken as a contact: the panel says which
 of the two needs to update.
 
+**If Aether HF is still running.** On Windows the installer and the uninstaller wait for
+it first. After an update started from the application, they wait up to 20 seconds for it
+to finish closing. If it is still open, they close it, and ask first when you run them
+yourself. It ends a session and releases the radio before it closes. The modem itself is
+never stopped by force: it is asked to stop. If something else still holds a file, such as
+an antivirus or a copy started as administrator, the old file is renamed to
+`aether-hf.exe.old` (or `aetherd.exe.old`) and the new one is installed beside it. Aether HF
+deletes the old one the next time it starts. The installer's details name the program that
+held the file. Versions up to beta 113 stopped instead with *Failed to kill Aether HF*. To
+install over one of those by hand, choose *Do not uninstall* on the installer's first page,
+or update from the application.
+
 Every version the application installs is kept on the machine (`%LOCALAPPDATA%\aether-hf\rollback\`
 on Windows, `~/.local/state/aether-hf/rollback/` on Linux and macOS), so if an update does not work
 for you, *Help > Restore the previous version…* goes back without a network. That works on

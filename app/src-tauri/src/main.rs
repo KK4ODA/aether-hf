@@ -24,6 +24,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod aside;
 mod close;
 mod logs;
 mod signal;
@@ -110,6 +111,7 @@ fn bring_up_the_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: String)
 
 fn main() {
     let context = tauri::generate_context!();
+    aside::clear_beside_program();
     // Where the bundler put the panel: beside the binary on Windows, under /usr/lib on a
     // Debian package, inside the mounted image for an AppImage. Tauri's own resolver knows
     // every layout it produces, which is the reason to ask it rather than guess.
@@ -224,8 +226,21 @@ fn main() {
                 _ => {}
             }
         })
-        .run(context)
-        .expect("the desktop shell could not start");
+        .build(context)
+        .expect("the desktop shell could not start")
+        .run(|app, event| stop_on_exit(app, &event));
+}
+
+/// Stop the modem when the program ends without its window closing.
+///
+/// Windows ending the program arrives as an exit with no window closed: tao raises it on
+/// `WM_ENDSESSION`, which the Restart Manager sends for an installer (`windows/hooks.nsh`)
+/// and Windows at a shutdown or a sign-out. The modem stops first, as on any close; after the
+/// window's own close it has stopped already and this does nothing.
+fn stop_on_exit(app: &tauri::AppHandle, event: &tauri::RunEvent) {
+    if matches!(event, tauri::RunEvent::Exit) {
+        stop_daemon(&app.state::<Daemon>());
+    }
 }
 
 /// What the panel asks of the shell. It is served by the daemon and has no commands, so it

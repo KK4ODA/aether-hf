@@ -1776,6 +1776,29 @@ measurement's buffers dropped before the data combines), and the `ladder`, `ladd
 28/28 both arms, no radiated overlap, Test air 10 318 → 8 563 s (−17 %), every scenario shorter;
 the rungs themselves took the same time (166 in 1 997 s, 172 in 2 016 s), the saving is the
 leftovers.
+**The installer's hooks (2026-10-18, after beta.113; a tester's *Failed to kill Aether HF* on
+two Windows 11 PCs, by the updater and by hand).** Tauri CLI 2.12.0 (bundler 2.10, 2026-09-26),
+taken unannounced through `@tauri-apps/cli@^2`, made the installer's running-app check one
+Restart Manager `RmShutdown` that aborts at the first refusal: an update's installer races the
+exiting shell (tauri#16277), and a file anything else holds (an antivirus, a copy run as
+administrator, a process stuck exiting) cannot be closed that way at all.
+`app/src-tauri/windows/hooks.nsh` has PREINSTALL/PREUNINSTALL hooks that run before it, for the
+shell and the modem: wait (20 s unattended, 2 s with someone there), close the shell through
+the Restart Manager (asking first when someone is there), ask the modem to stop with `curl.exe`
+`POST /v1/shutdown` (never by force: a killed daemon can leave a CAT-keyed radio on the air),
+rename what is still held to `<name>.old` (`.old2`…`.old9`), and name the holders in the details
+pane; POSTUNINSTALL deletes what was set aside. The shell stops the modem on `RunEvent::Exit`
+(`stop_on_exit`: tao raises it on `WM_ENDSESSION`, which the Restart Manager and a Windows
+shutdown send; before, a shell closed that way left the daemon running) and deletes `*.exe.old*`
+beside itself at start (`aside.rs`). `release.yml` pins `TAURI_CLI` (2.12.3): bump it on
+purpose, and try an update across the bump on Windows. `tools/installer_hooks/` tests the hooks
+under Wine with a fake `rstrtmgr.dll` (NSIS loads plugins' DLLs from System32 only, so it goes
+in the prefix's `syswow64`) and, with `--installer`, the real installer the pinned CLI builds from
+placeholder binaries (`tauri bundle --target x86_64-pc-windows-msvc --no-binary-patching` works
+on Linux with `nsis` installed); `installer-hooks.yml` runs it when the hooks, the tool or
+`release.yml` change. Under Wine the old installer reproduces the abort in 0.3 s. An update
+never runs the old uninstaller; a manual upgrade that chooses *Uninstall before installing*
+runs the old build's, with the old build's hooks.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

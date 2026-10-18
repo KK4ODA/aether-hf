@@ -1,0 +1,54 @@
+name: Installer hooks
+
+# The Windows installer's hooks (app/src-tauri/windows/hooks.nsh) under Wine, and the real
+# installer the pinned Tauri CLI builds: tools/installer_hooks/README.md. Run when the hooks,
+# the test or the release workflow (the CLI pin) change.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - app/src-tauri/windows/**
+      - app/src-tauri/tauri.conf.json
+      - tools/installer_hooks/**
+      - .github/workflows/release.yml
+      - .github/workflows/installer-hooks.yml
+  pull_request:
+    paths:
+      - app/src-tauri/windows/**
+      - app/src-tauri/tauri.conf.json
+      - tools/installer_hooks/**
+      - .github/workflows/release.yml
+      - .github/workflows/installer-hooks.yml
+  workflow_dispatch:
+
+concurrency:
+  group: installer-hooks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wine:
+    name: installer hooks · wine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Wine, NSIS, mingw and Xvfb
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            wine32:i386 wine64 nsis gcc-mingw-w64-i686 xvfb
+
+      - name: Run the hooks and the real installer
+        run: python3 tools/installer_hooks/run.py --installer --work "$RUNNER_TEMP/installer-hooks"
+
+      - name: Keep the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-hooks
+          path: |
+            ${{ runner.temp }}/installer-hooks/prefix/drive_c/t/*.log
+            ${{ runner.temp }}/installer-hooks/prefix/drive_c/t/result.txt
+          if-no-files-found: ignore
