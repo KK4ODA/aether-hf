@@ -360,12 +360,14 @@ the channel is busy. The rules judge each one first.
 **Copy** copies the text without the times; **Clear** empties the box and takes nothing back
 from the session.
 
-### Recording
+### Record the radio's audio
 
-**Record** records the radio's audio at 48 kHz, with a `.json` file beside it saying what the
-modem made of every frame, until you press it again. Add notes (band, the other station,
-distance) in the field beside it. **Open folder** opens the recordings folder. A recording is what
-a bug report about the air should carry.
+**Start recording** saves what the radio hears to a file, at 48 kHz, until you press **Stop and
+save**. It works at any time, just listening or during a session, and needs no other station. A
+`.json` file beside the audio says what the modem made of it: every frame, and every change of the
+busy indicator. Type notes first, in the field beside the button: band, frequency, radio settings,
+the other station. **Open folder** opens the recordings folder. A recording is what a bug report
+about the air should carry: Log tab → **Send files…** sends it.
 
 ## 6. Status
 

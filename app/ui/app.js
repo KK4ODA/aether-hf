@@ -6123,11 +6123,14 @@ async function copyReceived() {
 function applyRecording(recording) {
   recordingPath = recording?.path ?? null;
   const button = $("btn-record");
-  button.textContent = recordingPath ? "Stop recording" : "Record";
+  button.textContent = recordingPath ? "Stop and save" : "Start recording";
+  button.title = recordingPath
+    ? "Stop recording and save the file"
+    : "Start saving the radio's audio to a file; press again to stop and save";
   button.classList.toggle("danger", Boolean(recordingPath));
   if (recordingPath) {
     const name = recordingPath.split(/[\\/]/).pop();
-    $("record-note").textContent = `● ${name} — ${Math.round(recording.seconds)} s`;
+    $("record-note").textContent = `● Recording ${name} — ${Math.round(recording.seconds)} s`;
   } else if ($("record-note").textContent.startsWith("●")) {
     $("record-note").textContent = "";
   }

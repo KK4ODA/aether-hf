@@ -55,10 +55,11 @@ auto = true
 Every session then records itself from connect to disconnect, and on until the closing Morse
 identifiers have gone (this station's, and the other station's when it identifies after this
 one; at most 30 s past the end) — a 48 kHz WAV of what the radio delivered and a JSON sidecar
-of what the modem made of it — under `recordings/` beside the configuration. Or press **Record** on the Session tab for a listening session with no
-peer. Either way, **write the notes**: the band, the frequency, the other station, the
+of what the modem made of it — under `recordings/` beside the configuration. Or press **Start
+recording** on the Session tab (the *Record the radio's audio* box) for a listening session with
+no peer. Either way, **write the notes**: the band, the frequency, the other station, the
 distance, the time of day, what the S-meter said. `record.notes` on the API, the notes field
-beside the Record button, or `record.start {"notes": ...}`. The modem can measure SNR; it
+beside **Start recording**, or `record.start {"notes": ...}`. The modem can measure SNR; it
 cannot know it was 40 m at dusk over 900 km.
 
 A minute of audio is 5.8 MB. Sessions of a few minutes are the useful size.
