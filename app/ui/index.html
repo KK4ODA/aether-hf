@@ -468,21 +468,25 @@
         <!-- 5. what is kept of it: the recording, the last session, the test's report -->
         <section class="card console-card rec-card" id="session-recording" aria-labelledby="recording-title">
           <div class="card-head">
-            <h3 class="card-title" id="recording-title" title="Recording the radio's audio and what the modem makes of it, and where recordings go">Recording</h3>
+            <h3 class="card-title" id="recording-title" title="Save what the radio hears to a file, at any time: just listening or during a session">Record the radio's audio</h3>
             <span class="sub" id="record-note" title="The recording's state and file" role="status" aria-live="polite"></span>
             <details class="help-pop push-right" id="recording-help" title="What a recording is">
               <summary title="What a recording is" aria-label="What a recording is">?</summary>
               <p>
-                A recording is what the radio delivered, at 48 kHz, and a JSON file beside it saying
-                what the modem made of it — every frame, its SNR, whether it decoded. It is what a bug
-                report about the air should carry. A test session leaves two files whose names end in
+                A recording is what the radio hears, at 48 kHz, saved as a <code>.wav</code> file,
+                with a <code>.json</code> file beside it saying what the modem made of it: every
+                frame, its SNR and whether it decoded, and every change of the busy indicator. It
+                works at any time, just listening or during a session, and needs no other station.
+                It is what a bug report about the air should carry: <strong>Send files…</strong> on
+                the Log tab sends it. A test session leaves two files whose names end in
                 <code>_test</code>: the <code>.json</code> report and the <code>.wav</code> audio.
               </p>
             </details>
           </div>
+          <p class="note" id="record-lede" title="What this box does">Saves what the radio hears to a file, whenever you like: just listening, or during a session. No other station is needed.</p>
           <div class="tool-row">
-            <button id="btn-record" title="Record the radio's audio and what the modem makes of it, until pressed again">Record</button>
-            <input id="record-notes" title="Notes kept with the recording: band, frequency, the other station, distance" type="text" placeholder="Notes for the recording: band, frequency, the other station, distance" aria-label="Notes for the recording" />
+            <button id="btn-record" title="Start saving the radio's audio to a file; press again to stop and save">Start recording</button>
+            <input id="record-notes" title="Notes saved with the recording: what you are recording, such as the band, frequency, radio settings or the other station" type="text" placeholder="Notes: band, frequency, radio settings, the other station" aria-label="Notes for the recording" />
           </div>
           <dl class="rec-facts" title="Where recordings go">
             <div class="rec-fact">
