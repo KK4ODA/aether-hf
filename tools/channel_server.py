@@ -80,6 +80,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.channel import HfChannel, SampleRateOffset, noise_power_for_snr
 from aether_model.qrm import (
     AtmosphericCrashes,
+    Carrier,
     Ft8Station,
     OfdmArqStation,
     PactorStation,
@@ -209,6 +210,8 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
         common = {
             "seed": seed * 1000 + i + STATION_SEED.get(at, 0),
             "profile": q.get("profile"),
+            # fixed [start, end] windows in seconds of air, or the kind's own rhythm
+            "windows": [tuple(w) for w in q["windows"]] if "windows" in q else None,
         }
         power = float(q.get("power_db", 0.0))
         kind = q["kind"]
@@ -226,6 +229,8 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
             )
         elif kind == "rtty":
             out.append(RttyStation(BASEBAND_RATE, offset, power, **common))
+        elif kind == "carrier":
+            out.append(Carrier(BASEBAND_RATE, offset, power, **common))
         elif kind == "ft8":
             # a band of FT8 stations: `count` of them spread over `spread_hz` around the
             # centre, each at its own level within `power_db` ± 6 dB and its own duty
@@ -241,10 +246,11 @@ def extras_for(scenario: dict, at: str, snr_db: float | None, seed: int) -> list
                         duty=float(rng.uniform(0.4, 0.9)),
                         seed=int(common["seed"]) * 100 + k,  # type: ignore[call-overload]
                         profile=common["profile"],  # type: ignore[arg-type]
+                        windows=common["windows"],  # type: ignore[arg-type]
                     )
                 )
         else:
-            raise SystemExit(f"unknown qrm kind {kind!r}: ofdm-arq, pactor, rtty or ft8")
+            raise SystemExit(f"unknown qrm kind {kind!r}: ofdm-arq, pactor, rtty, ft8 or carrier")
     crashes = scenario.get("crashes")
     if crashes and crashes.get("at", "both") in (at, "both") and snr_db is not None:
         out.append(
@@ -310,7 +316,8 @@ class Agc:
         self.gain_db = 0.0
         self.held = 0.0  # seconds of hang left
 
-    def process(self, audio: np.ndarray) -> np.ndarray:
+    def gains_db(self, audio: np.ndarray) -> np.ndarray:
+        """The gain, in dB, for each 1 ms step of ``audio`` (a whole number of steps)."""
         steps = audio.reshape(-1, self.STEP)
         peaks = np.max(np.abs(steps), axis=1)
         gains = np.empty(len(peaks))
@@ -323,7 +330,11 @@ class Agc:
             else:
                 self.gain_db = min(0.0, limit, self.gain_db + self.decay)
             gains[i] = self.gain_db
-        out = steps * (10.0 ** (gains / 20.0))[:, None]
+        return gains
+
+    def process(self, audio: np.ndarray) -> np.ndarray:
+        gains = self.gains_db(audio)
+        out = audio.reshape(-1, self.STEP) * (10.0 ** (gains / 20.0))[:, None]
         return out.reshape(-1).astype(np.float32)
 
 

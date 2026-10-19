@@ -54,7 +54,10 @@ snr_db = 4.0
 
 [[qrm]]                     # another station, heard at "a", "b" or "both"
 kind = "ofdm-arq"           # ofdm-arq (VARA-class), pactor, rtty, ft8 (`count` stations
-                            # spread over `spread_hz`, each ± 6 dB, on their 15 s slots)
+                            # spread over `spread_hz`, each ± 6 dB, on their 15 s slots),
+                            # carrier (a steady tone: a broadcast carrier, a key held down)
+windows = [[60, 80]]        # on exactly through these [start, end] seconds of air, steady,
+                            # instead of the kind's own rhythm
 at = "both"
 audio_hz = 2600             # its centre, in the receiver's audio
 power_db = -6.0             # against this session's signal
@@ -90,7 +93,10 @@ moment), `abort` (`abort a`: waits for the caller alone; `abort b`: the called s
 session, and the caller closes it). For what goes wrong mid-session: `send N` (queued, not waited for; `send b N` at the called station),
 `message? N` (a message that may fail — reported, not judged), `outage S` (from now neither
 station hears the other for S seconds: a station switched off, a band gone), `wait_idle S`
-(both back to idle by themselves within S seconds of air). `stall WHO S` (that station's
+(both back to idle by themselves within S seconds of air). `at T` waits until second T of
+air (to line a script up with a signal's `windows`); `clear WHO S` passes when that station's
+channel reads clear, and stays clear for 2 s, within S seconds of air, and `busy WHO S` when it
+reads busy (the time each took is in `transfers`). `stall WHO S` (that station's
 computer stops for S seconds of air). With `continue_on_failure = true` in `[script]` a failed
 step does not end the script. `setup = [...]` runs once before `steps`, and `repeat = N` runs
 `steps` N times; each daemon's memory, open files and threads are sampled after every round
