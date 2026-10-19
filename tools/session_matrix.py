@@ -744,6 +744,33 @@ def step(run: Run, text: str) -> bool:
         # one station's loop stops for S s of air (``stall b 4``): a slow or busy computer
         run.command(f"stall {arg}")
         return True
+    if word == "at":
+        # until this second of air: a script lined up with a signal's fixed ``windows``
+        until = float(arg)
+        run.wait(f"air at {arg} s", lambda: run.air_s() >= until, max(until - run.air_s(), 0) + 5)
+        return True
+    if word in ("clear", "busy"):
+        # ``clear a 4``: a's busy detector reads clear, and stays clear 2 s of air, within 4 s of
+        # air (ADR-0078: the floor after an AGC let go); ``busy a 2``: it reads busy within 2 s
+        who, _, within = arg.partition(" ")
+        st = run.stations[who]
+        began = run.air_s()
+        want = word == "busy"
+        since: list[float] = []
+
+        def settled() -> bool:
+            now = run.air_s()
+            if bool(st.status().get("channel_busy")) != want:
+                since.clear()
+                return False
+            if not since:
+                since.append(now)
+            return want or now - since[0] >= 2.0
+
+        ok = run.wait(f"{word} {who}", settled, float(within) + (0.0 if want else 2.0))
+        took = (since[0] if since else run.air_s()) - began
+        run.transfers.append(f"{word} {who} {took:.1f} s" if ok else f"{word} {who} not seen")
+        return ok
     if word == "wait_clear":
         # until the outage is over: a call made in it is heard by nobody
         until = run.outage_until

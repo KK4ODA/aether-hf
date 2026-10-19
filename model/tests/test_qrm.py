@@ -8,6 +8,7 @@ import pytest
 from aether_model.channel import noise_power_for_snr
 from aether_model.qrm import (
     AtmosphericCrashes,
+    Carrier,
     Ft8Station,
     OfdmArqStation,
     PactorStation,
@@ -24,10 +25,12 @@ def sources() -> list[object]:
         RttyStation(FS, 900.0, 3.0, seed=3),
         AtmosphericCrashes(FS, noise_power_for_snr(0.0, 1.0, FS), rate_per_s=2.0, seed=4),
         Ft8Station(FS, -1100.0, 0.0, seed=9),
+        Carrier(FS, -800.0, 10.0, windows=[(0.7, 2.1), (3.0, 4.4)]),
+        RttyStation(FS, 900.0, 3.0, seed=3, windows=[(0.2, 3.3)]),
     ]
 
 
-@pytest.mark.parametrize("index", range(5))
+@pytest.mark.parametrize("index", range(7))
 def test_a_source_is_the_same_however_the_stream_is_cut(index: int) -> None:
     whole = sources()[index].next(40_000)  # type: ignore[attr-defined]
     cut = sources()[index]
@@ -100,3 +103,34 @@ def test_an_ft8_station_keeps_to_its_slots() -> None:
     starts = np.flatnonzero(on[1:] & ~on[:-1]) + 1
     assert [round(s / FS, 2) for s in starts] == [0.5, 15.5, 30.5, 45.5, 60.5][: len(starts)]
     assert abs(on[: int(15 * FS)].sum() / FS - 12.64) < 0.05
+
+
+def test_a_source_keyed_on_windows_is_on_exactly_through_them() -> None:
+    # ADR-0078's corpus says when a signal comes and goes: on inside each window, silent
+    # between and after, whatever the source's own rhythm would have been. Judged on 10 ms of
+    # power, since a PACTOR signal's two tones beat through zero within a symbol
+    windows = [(1.0, 2.5), (4.0, 4.5)]
+    block = int(0.01 * FS)
+    for source in (
+        Carrier(FS, -800.0, 0.0, windows=windows),
+        RttyStation(FS, 900.0, 0.0, seed=1, windows=windows),
+        PactorStation(FS, -600.0, 0.0, seed=2, windows=windows),
+    ):
+        x = source.next(int(6 * FS))
+        power = np.mean(np.abs(x.reshape(-1, block)) ** 2, axis=1)
+        t = (np.arange(len(power)) + 0.5) * block / FS
+        inside = np.zeros(len(power), dtype=bool)
+        outside = np.ones(len(power), dtype=bool)
+        for start, end in windows:
+            inside |= (t >= start + 0.02) & (t < end - 0.02)
+            outside &= (t < start - 0.02) | (t >= end + 0.02)
+        name = type(source).__name__
+        assert (power[inside] > 0.25).all(), name
+        assert (power[outside] == 0.0).all(), name
+
+
+def test_a_carrier_is_one_steady_tone_at_its_offset_and_power() -> None:
+    x = Carrier(FS, -800.0, 6.0).next(int(2 * FS))[100:]  # past its 5 ms rise
+    assert np.allclose(np.abs(x), 10 ** (6.0 / 20.0))
+    lo, hi = _occupied(x)
+    assert -805.0 < lo <= hi < -795.0

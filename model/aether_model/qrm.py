@@ -28,6 +28,8 @@ any program's internals:
 * :class:`Ft8Station` — an FT8-class weak-signal station: 8-FSK at 6.25 Bd, 6.25 Hz apart
   (50 Hz occupied), 79 symbols (12.64 s) starting half a second into a 15 s slot, sent in
   some slots and not others — on 20 and 15 m a dozen of them sit beside the data segment;
+* :class:`Carrier` — a steady carrier: a broadcast station's, a CW station holding its key
+  down, a tune-up — the strongest steady thing a receiver's AGC meets (ADR-0078);
 * :class:`AtmosphericCrashes` — the impulsive noise of distant thunderstorms: crashes arriving
   at random (Poisson), each a cluster of impulses under a decaying envelope tens of
   milliseconds long, its peak a log-normal number of decibels above the noise floor — a
@@ -35,12 +37,15 @@ any program's internals:
   probability distribution it is meant to resemble, not to reproduce.
 
 Each source may fade on its own path (``profile``), as a station heard over the ionosphere
-does; the crashes do not.
+does; the crashes do not. Any source may instead be keyed on fixed ``windows`` (seconds from the
+stream's start), on and steady inside each and silent between, so an experiment can say exactly
+when a signal comes and goes (the busy detector's AGC corpus, ADR-0078).
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -107,8 +112,28 @@ class _Schedule:
 # ── the sources ───────────────────────────────────────────────────────
 
 
+def _windows_pattern(windows: Sequence[tuple[float, float]]) -> object:
+    """A schedule's pattern keyed on fixed windows: silent up to each, on through it, and
+    silent for good after the last."""
+    segments: list[tuple[float, float]] = []
+    at = 0.0
+    for start, end in sorted(windows):
+        if start > at:
+            segments.append((start - at, 0.0))
+        if end > max(start, at):
+            segments.append((end - max(start, at), 1.0))
+            at = end
+    left = iter(segments)
+
+    def pattern(_rng: np.random.Generator) -> list[tuple[float, float]]:
+        return [next(left, (3600.0, 0.0))]
+
+    return pattern
+
+
 class _Source:
-    """A keyed waveform at an offset, optionally through its own fading path."""
+    """A keyed waveform at an offset, optionally through its own fading path, keyed by its own
+    rhythm or, given ``windows``, on exactly those."""
 
     def __init__(
         self,
@@ -117,6 +142,8 @@ class _Source:
         power_db: float,
         seed: int,
         profile: str | None,
+        *,
+        windows: Sequence[tuple[float, float]] | None = None,
     ) -> None:
         self.fs = float(fs)
         self.offset_hz = float(offset_hz)
@@ -124,7 +151,8 @@ class _Source:
         ss = np.random.SeedSequence(seed)
         sched, wave, fade = ss.spawn(3)
         self._rng_wave = np.random.default_rng(wave)
-        self._schedule = _Schedule(self.fs, np.random.default_rng(sched), self._pattern)
+        pattern = self._pattern if windows is None else _windows_pattern(windows)
+        self._schedule = _Schedule(self.fs, np.random.default_rng(sched), pattern)
         self._fading = (
             WattersonChannel(profile, self.fs, seed=int(fade.generate_state(1)[0]))
             if profile is not None
@@ -174,13 +202,14 @@ class OfdmArqStation(_Source):
         spacing_hz: float = 50.0,
         seed: int = 0,
         profile: str | None = None,
+        windows: Sequence[tuple[float, float]] | None = None,
     ) -> None:
         self.partner = 10.0 ** (partner_db / 20.0)
         self.freqs = (np.arange(carriers) - (carriers - 1) / 2.0) * spacing_hz
         self.useful = round(fs / spacing_hz)
         self.cp = self.useful // 4
         self._symbol: ComplexArray = np.zeros(0, dtype=np.complex128)
-        super().__init__(fs, offset_hz, power_db, seed, profile)
+        super().__init__(fs, offset_hz, power_db, seed, profile, windows=windows)
 
     def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
         out = [
@@ -229,13 +258,14 @@ class PactorStation(_Source):
         partner_db: float = -6.0,
         seed: int = 0,
         profile: str | None = None,
+        windows: Sequence[tuple[float, float]] | None = None,
     ) -> None:
         self.partner = 10.0 ** (partner_db / 20.0)
         self.sps = round(fs / self.BAUD)
         self._phase = np.zeros(2)
         self._pending: ComplexArray = np.zeros(0, dtype=np.complex128)
         self._t = 0
-        super().__init__(fs, offset_hz, power_db, seed, profile)
+        super().__init__(fs, offset_hz, power_db, seed, profile, windows=windows)
 
     def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
         gap = (self.CYCLE_S - self.PACKET_S - self.CONTROL_S) / 2.0
@@ -284,12 +314,13 @@ class RttyStation(_Source):
         *,
         seed: int = 0,
         profile: str | None = None,
+        windows: Sequence[tuple[float, float]] | None = None,
     ) -> None:
         self.bit = fs / self.BAUD
         self._phase = 0.0
         self._pending: FloatArray = np.zeros(0)
         self._carry = 0.0
-        super().__init__(fs, offset_hz, power_db, seed, profile)
+        super().__init__(fs, offset_hz, power_db, seed, profile, windows=windows)
 
     def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
         return [(rng.uniform(20.0, 60.0), 1.0), (rng.uniform(5.0, 30.0), 0.0)]
@@ -337,13 +368,14 @@ class Ft8Station(_Source):
         duty: float = 0.5,
         seed: int = 0,
         profile: str | None = None,
+        windows: Sequence[tuple[float, float]] | None = None,
     ) -> None:
         self.duty = duty
         self.symbol = fs / self.BAUD
         self._phase = 0.0
         self._pending: FloatArray = np.zeros(0)
         self._carry = 0.0
-        super().__init__(fs, offset_hz, power_db, seed, profile)
+        super().__init__(fs, offset_hz, power_db, seed, profile, windows=windows)
 
     def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
         on = self.SYMBOLS / self.BAUD
@@ -363,6 +395,30 @@ class Ft8Station(_Source):
         phase = self._phase + 2 * np.pi * np.cumsum(freq) / self.fs
         self._phase = float(phase[-1] % (2 * np.pi)) if n else self._phase
         return np.exp(1j * phase)
+
+
+class Carrier(_Source):
+    """A steady, unmodulated carrier: a broadcast station's, a CW station's key held down, a
+    tune-up. Constant envelope and one frequency, so a receiver's AGC holds its gain down for as
+    long as it lasts and nothing in it varies; on and off by its ``windows``, or always on."""
+
+    def __init__(
+        self,
+        fs: float,
+        offset_hz: float,
+        power_db: float,
+        *,
+        seed: int = 0,
+        profile: str | None = None,
+        windows: Sequence[tuple[float, float]] | None = None,
+    ) -> None:
+        super().__init__(fs, offset_hz, power_db, seed, profile, windows=windows)
+
+    def _pattern(self, rng: np.random.Generator) -> list[tuple[float, float]]:
+        return [(3600.0, 1.0)]
+
+    def _waveform(self, n: int) -> ComplexArray:
+        return np.ones(n, dtype=np.complex128)
 
 
 class AtmosphericCrashes:
