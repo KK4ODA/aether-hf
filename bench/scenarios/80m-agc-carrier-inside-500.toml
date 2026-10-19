@@ -1,0 +1,36 @@
+name = "80m-agc-carrier-inside-500"
+description = """The same carrier as 80m-agc-carrier-outside-500, but at 1500 Hz, in the middle of
+Aether's channel (ADR-0078): the channel is occupied while it lasts and must read busy, whatever
+the AGC does to the noise; when it goes, the channel reads clear and the call goes out."""
+tags = ["80m", "agc"]
+bandwidth = 500
+seconds = 400
+seed = 33
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.a.radio]
+agc = "auto"
+[stations.b]
+callsign = "WC4Y"
+
+[path]
+profile = "nvis"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "carrier"
+at = "a"
+audio_hz = 1500
+power_db = 30.0
+windows = [[30, 60]]
+
+[script]
+steps = ["at 35", "busy a 2", "at 61", "clear a 4", "connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true

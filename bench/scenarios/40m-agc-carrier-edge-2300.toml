@@ -1,0 +1,36 @@
+name = "40m-agc-carrier-edge-2300"
+description = """At 2300 Hz Aether's channel fills most of the radio's passband (ADR-0078): a
+strong carrier at 2850 Hz, just past the channel's edge, holds an AGC on AUTO down 31 dB for 30 s.
+When it goes the channel must read clear, and the call go out."""
+tags = ["40m", "agc"]
+bandwidth = 2300
+seconds = 400
+seed = 34
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.a.radio]
+agc = "auto"
+[stations.b]
+callsign = "W4TGA"
+
+[path]
+profile = "good"
+snr_db = 12.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "carrier"
+at = "a"
+audio_hz = 2850
+power_db = 28.0
+windows = [[30, 60]]
+
+[script]
+steps = ["at 61", "clear a 4", "connect", "message 2000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
