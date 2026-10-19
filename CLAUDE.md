@@ -1800,6 +1800,39 @@ on Linux with `nsis` installed); `installer-hooks.yml` runs it when the hooks, t
 never runs the old uninstaller; a manual upgrade that chooses *Uninstall before installing*
 runs the old build's, with the old build's hooks.
 
+**The busy detector under an AGC (2026-10-19, ADR-0078; after beta.114).** The author's panel showed
+an idle 3.590 MHz channel busy by level for ~70 s, the floor slid to −47 dBFS: an AGC held the gain
+down for a strong signal, the floor learned the turned-down noise (quiet, steady, low: evidence),
+and when the gain came back no block was evidence until the 60 s hold ran out — 57 such spans in 108
+h of KK4ODA-1's logs, 36 of them 69–73 s. `docs/research/busy-detection/` is the investigation:
+`00-recording-plan.md` (what the author is asked to record — owed), `01-survey.md`,
+`02-measurements.md`, `03-candidates.md` (criteria registered before the runs, seven runs, a
+held-out draw). Now the station hands the detector the radio's whole 48 kHz audio
+(`BusyDetector::hear_passband`, skipped while deaf; `skip` clears the reference's averages), and
+`PassbandReference` reads the radio's gain from it: each 40 Hz bin of 300–2700 Hz (Blackman–Harris;
+the channel ± 280 Hz left out at 500 Hz, every bin read at 2300 Hz — `includes_channel`) against its
+own level on quiet (the bin's 25th percentile over a two-second warm-up, then a 25 % quantile
+tracker that learns only from uncut readings at evidence blocks), the 25th percentile of the
+differences over bins within 10 dB of the channel's, the median of three readings. The floor is the
+median of `power / gain` over evidence, drawn at the gain of the moment (`draw`: never above 0 dB; a
+2 dB dead band, a one-second ease; at 2300 Hz up only once within 3 dB of 0, so a wide signal in the
+channel under a cut stays visible; the hold's expiry rebases). `GainHandling::Plain` is the floor
+before, kept for `aetherd --busy-trace WAV [--expect] [--bandwidth] --busy-variant plain` (the
+detector over a recording, block by block, as CSV); `tools/floor_trace.py` lists every AGC event in
+a recording (depth, ramp, cause, busy after); `tools/busy_corpus.py` (183 labelled clips, `--seed N`
+for another draw) and `tools/busy_eval.py` (`--judge`: §2.2's criteria clip by clip) are the bench.
+The Diagnostics busy line and the busy log line say *radio gain −N dB* when ≤ −6 (`radio_gain_db`).
+Corpus: after a strong signal outside a 500 Hz channel the channel reads clear within ~1 s (40–70 s
+before); at 2300 Hz within the AGC's ramp (≤ 5.9 s with a slow AGC); what still fails the criteria
+is traced in `03-candidates.md` §3. Harness (10 scenarios × 3 draws against beta.114):
+`80m-agc-carrier-outside-500` (`quick`) and `-slow-` (a carrier at 700 Hz for 30 s, then `clear a
+4/6` and a call) fail 6/6 on beta.114 and pass 6/6; 30/30 against 24/30, no radiated overlap,
+nothing slower. The channel server has `kind = "carrier"` and `windows = [[start, end]]` for any
+QRM; the harness has the steps `at T`, `clear WHO S` and `busy WHO S`. No wire change, no config
+key. Open: the author's recordings (does a real radio's passband outside the channel follow its
+gain; fit the AGC presets; where the drivers sat), a radio filter narrower than ~1 kHz at 500 Hz (no
+bins to read: the floor behaves as before), the S-meter as a witness.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
