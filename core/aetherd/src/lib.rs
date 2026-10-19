@@ -11,6 +11,7 @@
 
 pub mod audio;
 pub mod busy;
+pub mod busy_trace;
 pub mod channel_link;
 pub mod compress;
 pub mod config;

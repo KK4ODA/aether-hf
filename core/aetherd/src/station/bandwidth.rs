@@ -705,6 +705,7 @@ impl<P: Ptt> Station<P> {
         self.busy = crate::busy::BusyDetector::new(crate::busy::BusyConfig {
             fs: params.fs_baseband,
             passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
             threshold_db: self.busy.config().threshold_db,
             ..self.config.busy
         });

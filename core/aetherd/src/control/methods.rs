@@ -2037,6 +2037,11 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         // the passband's highest spectral bin over its median, dB: flat noise reads about
         // 6, a narrowband signal 15 and up, and the AGC cannot change it
         "shape_db": level(busy.shape_db),
+        // how far the radio's AGC holds its gain down, dB, when it does (ADR-0078): the floor
+        // follows it, and the operator should know why the noise dropped
+        "radio_gain_db": busy
+            .gain_db()
+            .filter(|&g| busy.settled() && g <= -crate::station::RADIO_GAIN_SHOWN_DB),
         "transmitting": station.transmitting(),
         "receiving": station.receiving(),
         "audio": level_json(&station.audio_level()),

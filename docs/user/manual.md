@@ -405,8 +405,9 @@ not touched.
 - **Signal analysis**: the constellation, spectrum and waterfall. **Undock** opens them in a
   window of their own, to keep in view from any tab. A tone frame has no constellation.
 - **Receiver**: the rate controller's smoothed SNR and margin, how the other station hears you,
-  mode confidence (below 1.3 is a guess), every number behind the busy detector's decision, and
-  what host program, KISS programs and audio are attached.
+  mode confidence (below 1.3 is a guess), every number behind the busy detector's decision (with
+  *radio gain*, how far the radio's AGC holds its gain down when it does), and what host program,
+  KISS programs and audio are attached.
 - **Frames**: every frame the receiver found, decoded or not, newest first: kind, callsigns,
   mode, redundancy version, SNR, offset, confidence, whether it decoded, and what a control frame
   said.
@@ -509,7 +510,7 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 | **Rung / Mode** | Header, Link | The step the data is moving at, with its name and rate on the air: the other station's while you receive, yours while you send, both (*sending / receiving*) when data goes both ways. With no data moving, the rung your station would send at. The low rungs are the tone floor. |
 | **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. Data going one way stays below the rate of the rung it went at: acknowledgements, turnarounds and retransmissions take their share. With data going both ways, the total can stand above either line. |
 | **Tuning** | Channel | The carrier offset the receiver removed from the last frame. Positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check. |
-| **Signal above noise** | Channel | The busy detector's reading: the level of its latest 25 ms of audio over its learned noise floor. Frames the modem finds, decoded or not, never count as noise. |
+| **Signal above noise** | Channel | The busy detector's reading: the level of its latest 25 ms of audio over its learned noise floor. Frames the modem finds, decoded or not, never count as noise. The floor follows the radio's gain: when its AGC turns everything down for a strong signal, the floor goes down with it and back up with it. |
 | **Receive level** | Channel, Setup step 3 | The sound card's input over the last 3 seconds. Aim for *Good*. It reads a longer window than *Signal above noise*, so the two can differ by a few decibels. |
 | **Queued** | Channel | Bytes still waiting to be sent. |
 | **Mode confidence** | Diagnostics | How clearly the last frame's mode was read. Below 1.3 is a guess. |
@@ -562,7 +563,18 @@ helps the first contact.
 **The Busy lamp stays on with nothing on the air.** Look at the Diagnostics tab's busy detector
 line, which says which test marked the channel busy. A steady carrier or a spur in your own
 receiver can do it. Try with the antenna disconnected: if it is still busy, the signal is in your
-station. Use the radio's AGC on FAST or AUTO, or off; SLOW confuses the noise floor.
+station.
+
+**The Busy lamp stayed on for about a minute after a strong signal went.** Up to 0.2.0-beta.114
+the floor learned the noise the radio's AGC had turned down, and the true noise read busy until
+the floor caught up (ADR-0078). Now the floor follows the radio's gain. While the AGC holds it
+down, the Diagnostics tab's busy line says *radio gain −20 dB* (or however far). At 500 Hz the
+floor comes back up as the gain does. At 2300 Hz the channel fills the radio's passband, so the
+floor waits until the gain is nearly back: a second with AUTO, a few with SLOW. Any AGC setting
+works. In USB mode an FTDX10's AUTO picks SLOW; DATA-U (AUTO picks MID) suits data better. Two
+setups leave the gain unreadable, and the floor then behaves as it did before: a radio filter
+narrower than about 1 kHz around a 500 Hz channel, and a band of strong signals filling the
+radio's passband beside the channel, such as a busy FT8 segment.
 
 **Sessions connect but run slowly.** Look at the SNR both ways (SNR and *They hear you at*). A
 lopsided path, where the other station hears you much worse than you hear it, slows every
