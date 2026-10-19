@@ -1,0 +1,38 @@
+name = "80m-agc-slow-carrier-outside-500"
+description = """The author's failure (ADR-0078): an FTDX10 on AGC SLOW (15 dB/s back) at 500 Hz, and a strong
+carrier at 700 Hz in the audio — inside the radio's passband, outside Aether's channel — for 30 s,
+40 dB over the noise. The AGC holds the gain down 31 dB for as long as it lasts. When it goes,
+the caller's channel must read clear at once, not for the minute the floor took to come back
+up, and the call must go out."""
+tags = ["80m", "agc"]
+bandwidth = 500
+seconds = 400
+seed = 32
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.a.radio]
+agc = "slow"
+[stations.b]
+callsign = "WC4Y"
+
+[path]
+profile = "nvis"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[[qrm]]
+kind = "carrier"
+at = "a"
+audio_hz = 700
+power_db = 30.0
+windows = [[30, 60]]
+
+[script]
+steps = ["at 61", "clear a 6", "connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
