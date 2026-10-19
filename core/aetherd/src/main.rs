@@ -138,6 +138,7 @@ enum Exit {
     Restart,
 }
 
+#[derive(Default)]
 struct Args {
     config: Option<PathBuf>,
     call: Option<String>,
@@ -150,18 +151,16 @@ struct Args {
     block_ms: Option<f64>,
     /// A channel server to take the audio from, in lockstep (ADR-0042): the scenario harness.
     channel: Option<String>,
+    /// A recording to run through the busy detector, block by block.
+    busy_trace: Option<PathBuf>,
+    /// The bandwidth a busy trace runs at, when the sidecar does not say.
+    bandwidth: Option<u32>,
+    /// How a busy trace's floor answers the radio's gain.
+    busy_variant: Option<String>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
-    let mut args = Args {
-        config: None,
-        call: None,
-        dry_run: false,
-        replay: None,
-        expect: None,
-        block_ms: None,
-        channel: None,
-    };
+    let mut args = Args::default();
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -195,23 +194,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                 return Ok(None);
             }
             "--list-ports" => {
-                let ports = list_serial_ports();
-                if ports.is_empty() {
-                    println!("no serial ports");
-                }
-                for port in ports {
-                    println!("{:<12} {}", port.name, port.description);
-                }
-                let interfaces = aetherd::ptt::list_gpio_interfaces();
-                if !interfaces.is_empty() {
-                    println!();
-                    println!(
-                        "CM108-class interfaces, keyed through a GPIO pin ([ptt] kind = \"cm108\"):"
-                    );
-                    for interface in interfaces {
-                        println!("{}\n    device = {:?}", interface.name, interface.path);
-                    }
-                }
+                print_ports();
                 return Ok(None);
             }
             "--dry-run" => args.dry_run = true,
@@ -234,6 +217,22 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--channel" => {
                 args.channel = Some(argv.next().ok_or("--channel needs HOST:PORT")?);
             }
+            "--busy-trace" => {
+                args.busy_trace = Some(PathBuf::from(
+                    argv.next().ok_or("--busy-trace needs a WAV file")?,
+                ));
+            }
+            "--busy-variant" => {
+                args.busy_variant = Some(argv.next().ok_or("--busy-variant needs a name")?);
+            }
+            "--bandwidth" => {
+                let value = argv.next().ok_or("--bandwidth needs 500 or 2300")?;
+                args.bandwidth = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--bandwidth: {value:?} is not 500 or 2300"))?,
+                );
+            }
             "--block-ms" => {
                 let value = argv
                     .next()
@@ -252,6 +251,25 @@ fn parse_args() -> Result<Option<Args>, String> {
     Ok(Some(args))
 }
 
+/// `--list-ports`: the serial ports and the CM108-class interfaces this machine offers.
+fn print_ports() {
+    let ports = list_serial_ports();
+    if ports.is_empty() {
+        println!("no serial ports");
+    }
+    for port in ports {
+        println!("{:<12} {}", port.name, port.description);
+    }
+    let interfaces = aetherd::ptt::list_gpio_interfaces();
+    if !interfaces.is_empty() {
+        println!();
+        println!("CM108-class interfaces, keyed through a GPIO pin ([ptt] kind = \"cm108\"):");
+        for interface in interfaces {
+            println!("{}\n    device = {:?}", interface.name, interface.path);
+        }
+    }
+}
+
 const USAGE: &str = "\
 aetherd — the Aether HF station daemon
 
@@ -266,6 +284,12 @@ aetherd — the Aether HF station daemon
                       and fail if fewer frames decode than did on the day
       --block-ms N    feed the replay in blocks of N ms (default 20, the daemon's own);
                       the receiver's cost per block is printed either way
+      --busy-trace WAV  run a recording through the busy detector and print every 25 ms
+                      block as CSV: its power, why it was or was not taken as noise, the
+                      floor, the busy state, the radio's gain, and the audio's power in and
+                      out of the channel (with --expect, muted where the station transmitted)
+      --bandwidth N   the bandwidth a busy trace runs at when no sidecar says (500 or 2300)
+      --busy-variant plain  trace with the floor in dBFS, as before ADR-0078
       --channel HOST:PORT  take the audio from a scenario harness's channel server, in
                       lockstep, keying nothing (tools/session_matrix.py)
       --list-devices  print the audio devices this machine offers
@@ -275,10 +299,26 @@ aetherd — the Aether HF station daemon
   -h, --help          print this
 ";
 
+/// `--busy-trace`: the busy detector over a recording, block by block, as CSV on stdout.
+fn busy_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
+    let expectation = args
+        .expect
+        .as_deref()
+        .map(aetherd::replay::Expectation::from_sidecar)
+        .transpose()?;
+    let config = aetherd::busy_trace::variant(args.busy_variant.as_deref().unwrap_or(""))?;
+    let rows = aetherd::busy_trace::trace(wav, expectation.as_ref(), args.bandwidth, config)?;
+    print!("{}", aetherd::busy_trace::to_csv(&rows));
+    Ok(())
+}
+
 fn run() -> Result<Exit, String> {
     let Some(args) = parse_args()? else {
         return Ok(Exit::Done);
     };
+    if let Some(wav) = &args.busy_trace {
+        return busy_trace(wav, &args).map(|()| Exit::Done);
+    }
     if let Some(wav) = &args.replay {
         let block_s = args
             .block_ms

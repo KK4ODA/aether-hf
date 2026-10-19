@@ -33,15 +33,22 @@ drive** → *Set drive* for the transmit level against the rig's ALC (the guide 
 card), on both stations. An overdriven card is the most common reason a mode "does not
 work".
 
-**The rig's AGC.** FAST or AUTO, or OFF with the RF gain set so the band noise sits well
-above the sound card's own floor. The busy detector learns the noise floor from the
-quiet, steady moments of the last ten seconds; a receiver's AGC cuts its gain the
-instant something strong appears anywhere in its passband and lets it back over the
-next half second, and the detector is built to see through that ramp (an FTDX10 on
-AUTO recovers at 40–55 dB/s). A SLOW setting recovers gently enough to look like a
-genuine drop in the noise, and the floor on the Status tab will follow the AGC down
-for a few seconds after every strong adjacent signal. `tools/floor_trace.py` replays a
-recording through the detector and lists every such dip, with its depth and length.
+**The rig's AGC.** Any setting, or OFF with the RF gain set so the band noise sits well
+above the sound card's own floor. A receiver's AGC cuts its gain the instant something
+strong appears anywhere in its passband, holds it down while the signal lasts, and lets
+it back when it goes. The busy detector learns the noise floor against the noise across
+the radio's whole audio passband, which the AGC turns down and up together, so the floor
+follows the gain both ways (ADR-0078; before it, the floor learned the turned-down noise
+and the channel read busy for about a minute after every strong signal). The Diagnostics
+tab's busy line shows *radio gain* while the AGC holds it down. At 2300 Hz the channel
+fills the passband, so the floor waits until the gain is within 3 dB of normal: a slow AGC
+reads busy for a few seconds after a deep cut. The gain cannot be read, and the floor
+behaves as before, with a radio filter narrower than about 1 kHz around a 500 Hz channel or
+a band of strong signals filling the rest of the passband (a busy FT8 segment). In USB mode
+an FTDX10's AUTO is SLOW (3 s); DATA-U (MID, 0.5 s) is better. `tools/floor_trace.py`
+replays a recording through the detector and lists every AGC event in it: how deep and how
+long, how fast the noise came back, whether its cause was in the channel, and how long the
+channel read busy after it.
 
 ## 2. Recording
 

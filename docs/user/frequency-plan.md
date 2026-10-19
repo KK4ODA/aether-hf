@@ -116,7 +116,9 @@ These are on by default and should stay that way.
   noise floor the detector learns — the median of the last ten seconds' quiet, steady blocks,
   held while a signal stays, since an HF noise floor moves by tens of dB between bands and
   hours — and is busy when it stands `busy_threshold_db` (6 dB) above it for half of the last
-  400 ms. Its *shape* catches what a receiver's AGC hides from the level: a narrowband peak
+  400 ms. The floor is learned against the noise across the radio's whole audio passband, so
+  when the radio's AGC turns everything down for a strong signal, the floor goes down with it
+  and comes back with it (ADR-0078). Its *shape* catches what a receiver's AGC hides from the level: a narrowband peak
   well above the rest of the passband (FT8, CW, PSK, RTTY, a voice) marks it busy, as long as
   the peak stands near the learned floor — a station's own faint spur does not. A station will
   not *start* a session, a probe or a beacon on an occupied channel. One already in session

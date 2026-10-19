@@ -793,6 +793,11 @@ pub struct Delivery {
 /// otherwise misses.
 pub const PREROLL_S: f64 = 30.0;
 
+/// How far under its level on quiet the radio's gain must stand before the busy log line and
+/// the metrics say so, in dB: the reading wanders a decibel or two on noise alone, and a cut that
+/// matters to the floor is the threshold's size (ADR-0078).
+pub const RADIO_GAIN_SHOWN_DB: f64 = 6.0;
+
 /// The most deliveries kept for `status` — a panel that was closed or reloaded while one
 /// resolved looks its messages up there — and held between two calls of `take_deliveries`.
 const RECENT_DELIVERIES: usize = 32;
@@ -1271,6 +1276,7 @@ impl<P: Ptt> Station<P> {
         let busy = BusyDetector::new(BusyConfig {
             fs: params.fs_baseband,
             passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
             ..config.busy
         });
         let mut station = Self {
@@ -2849,6 +2855,10 @@ impl<P: Ptt> Station<P> {
             if now < self.deaf_until {
                 self.busy.skip(&baseband);
             } else {
+                // the whole passband first: the radio's gain, which the channel's own blocks
+                // are judged at (ADR-0078)
+                self.busy
+                    .hear_passband(audio, self.config.params.audio_rate as f64, now);
                 self.busy.push(&baseband, now);
             }
             self.absorb(&baseband, now);
@@ -4788,9 +4798,16 @@ impl<P: Ptt> Station<P> {
         } else {
             "hangover ran out with the energy under the threshold".to_owned()
         };
+        // and the radio's gain, when its AGC holds it down: the floor follows it (ADR-0078),
+        // and a reader of the log should know the noise moved for that reason
+        let gain = self
+            .busy
+            .gain_db()
+            .filter(|&g| g <= -RADIO_GAIN_SHOWN_DB)
+            .map_or_else(String::new, |g| format!(" | radio gain {g:.0} dB"));
         let detail = format!(
             "{level:.1} dBFS | floor {floor:.1} | delta {:+.1} dB | margin {margin:.1} | \
-             threshold {:.1} dBFS | {} | {why}",
+             threshold {:.1} dBFS | {} | {why}{gain}",
             level - floor,
             floor + margin,
             if busy { "OFF -> ON" } else { "ON -> OFF" },
@@ -5834,6 +5851,76 @@ mod tests {
             "and the burst's peak is recorded beside it: {peak}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_channel_reads_clear_when_the_radios_agc_lets_go() {
+        // ADR-0078 through the station's own capture path: the radio's audio is band noise at
+        // about −29 dBFS in a 500 Hz channel and, from 20 s to 40 s, a carrier at 700 Hz —
+        // outside the channel — 30 dB over the noise in 3 kHz, which an AGC on AUTO holds 21 dB
+        // down (beta.17's model: a step down, 100 ms of hold, 50 dB/s back). The station must
+        // read the channel clear once the gain is back, not for the 71 s the floor took when it
+        // had learned the noise the AGC held down.
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "KK4ODA".to_owned(),
+                params: aether_phy::waveform::NARROW_500,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let rate = station.config.params.audio_rate as f64;
+        // uniform white noise: 0.61 peak is 0.18 RMS, −29 dBFS in the channel's 480 Hz
+        let amplitude = 0.61;
+        let noise_3k = amplitude / 12f64.sqrt() * (3000.0 / (rate / 2.0)).sqrt();
+        let carrier = noise_3k * 10f64.powf(30.0 / 20.0) * std::f64::consts::SQRT_2;
+        let threshold = noise_3k * 10f64.powf(12.0 / 20.0);
+        let (mut gain_db, mut held) = (0.0f64, 0.0f64);
+        let mut state = 11u32;
+        let block = (rate / 50.0) as usize;
+        let mut n = 0usize;
+        let mut busy_after = Vec::new();
+        while (n as f64) < 80.0 * rate {
+            let audio: Vec<f32> = (0..block)
+                .map(|_| {
+                    let t = n as f64 / rate;
+                    n += 1;
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let noise = (f64::from(state >> 8) / f64::from(1u32 << 24) - 0.5) * amplitude;
+                    let on = (20.0..40.0).contains(&t);
+                    let tone = if on {
+                        carrier * (2.0 * std::f64::consts::PI * 700.0 * t).sin()
+                    } else {
+                        0.0
+                    };
+                    let limit = if on {
+                        20.0 * (threshold / carrier).log10()
+                    } else {
+                        0.0
+                    };
+                    if limit < gain_db {
+                        (gain_db, held) = (limit, 0.1);
+                    } else if held > 0.0 {
+                        held -= 1.0 / rate;
+                    } else {
+                        gain_db = (gain_db + 50.0 / rate).min(0.0).min(limit);
+                    }
+                    ((noise + tone) * 10f64.powf(gain_db / 20.0)) as f32
+                })
+                .collect();
+            station.capture(&audio).expect("capture");
+            let now = n as f64 / rate;
+            if now > 43.0 && station.channel_busy() {
+                busy_after.push(now);
+            }
+        }
+        assert!(
+            busy_after.is_empty(),
+            "the channel read busy {:.1} s after the carrier had gone, the last at {:.1} s",
+            busy_after.len() as f64 * 0.02,
+            busy_after.last().copied().unwrap_or(0.0)
+        );
     }
 
     #[test]

@@ -884,6 +884,9 @@ function applyMetrics(metrics) {
     // the passband's shape: flat noise reads about 6 dB, a narrowband signal 15 and up,
     // and it is the one reading the receiver's AGC cannot compress
     const shape = typeof metrics.shape_db === "number" ? `shape ${metrics.shape_db.toFixed(1)} dB` : "";
+    // the radio's AGC holding its gain down: the floor follows it (ADR-0078), and this says why
+    // the noise dropped
+    const gain = typeof metrics.radio_gain_db === "number" ? `radio gain ${metrics.radio_gain_db.toFixed(0)} dB` : "";
     const why =
       metrics.busy_reason === "frame"
         ? "last lit by a decoded frame"
@@ -892,7 +895,7 @@ function applyMetrics(metrics) {
           : metrics.busy_reason === "level"
             ? "last lit by the level"
             : "";
-    $("d-busy-why").textContent = [peak, shape, why].filter(Boolean).join(" · ");
+    $("d-busy-why").textContent = [peak, shape, gain, why].filter(Boolean).join(" · ");
   }
   // the lamp says which path lit it: the level threshold, or a frame acquired
   const why =

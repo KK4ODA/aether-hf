@@ -57,7 +57,23 @@
 //! held: a channel that has been busy for five seconds without a quiet moment is still
 //! measured against the noise that was there before it. A receiver whose AGC recovers
 //! slower than about 15 dB/s (a SLOW setting) ramps gently enough to pass the gate, and
-//! its dips will show; the field notes say which settings to use.
+//! its dips would show, but the floor follows the radio's gain through them (below).
+//!
+//! # The radio's gain
+//!
+//! The steady gate keeps a gain *transient* out of the floor; it cannot keep out a gain *held*
+//! down. While a strong signal anywhere in the passband lasts — a carrier beside the channel,
+//! a station outside the DSP filter that the AGC still feels — the noise under the cut is
+//! quiet, steady and low, every test of evidence passes, and a floor in dBFS learns it. When
+//! the AGC lets go, the true noise stands over that floor by the cut, no block is evidence any
+//! more, and the channel read busy until the hold ran out: 71 s, 57 times in 108 hours of one
+//! station's logs (ADR-0078). So the floor is learned against the radio's gain and drawn at the
+//! gain of the moment. The gain is read from the radio's whole audio passband
+//! ([`PassbandReference`]): the AGC scales every frequency together, so each spectral bin falls
+//! by the cut against its own level on quiet, while a signal only lifts the few bins it holds.
+//! A cut lowers the floor at once and the gain coming back raises it at once; the evidence gate
+//! cannot stagnate, because the noise under the cut and after it are the same number in the
+//! floor's units.
 //!
 //! # The shape of the passband
 //!
@@ -144,6 +160,23 @@ pub struct BusyConfig {
     /// The width of the passband the shape is judged over, in hertz: the waveform's
     /// occupied bandwidth.
     pub passband_hz: f64,
+    /// Where the channel sits in the radio's audio, in hertz: the waveform's centre. The
+    /// passband reference leaves the channel out where the passband has room beside it.
+    pub centre_hz: f64,
+    /// Whether the floor follows the radio's gain.
+    pub gain: GainHandling,
+}
+
+/// Whether the floor follows the radio's gain (ADR-0078).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GainHandling {
+    /// The floor in dBFS, as before ADR-0078: a gain an AGC holds down is learned as the noise,
+    /// and the true noise reads busy when it lets go. Kept to replay a recording both ways.
+    Plain,
+    /// The floor learned against the radio's gain as the passband shows it, and drawn at the
+    /// gain of the moment.
+    #[default]
+    Normalised,
 }
 
 impl Default for BusyConfig {
@@ -162,6 +195,8 @@ impl Default for BusyConfig {
             frame_hold_s: 2.0,
             shape_db: 12.0,
             passband_hz: 500.0,
+            centre_hz: 1500.0,
+            gain: GainHandling::Normalised,
         }
     }
 }
@@ -196,6 +231,41 @@ pub enum BusyReason {
     },
 }
 
+/// What the detector made of one block: its power and every test that decided whether it was
+/// evidence of the noise. A trace of these (`aetherd --busy-trace`) is how a floor that went
+/// wrong on the air is taken apart afterwards.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "a record of independent tests, one flag each"
+)]
+pub struct BlockNote {
+    /// Where the block ended, on the caller's clock.
+    pub end_s: f64,
+    /// The block's power, dBFS.
+    pub power_db: f64,
+    /// Within 3 dB of its neighbours over the last 200 ms.
+    pub steady: bool,
+    /// At least the threshold over the floor learned before it.
+    pub over: bool,
+    /// Inside a shape window that read peaked.
+    pub peaked: bool,
+    /// Inside the hangover of a signal the level or shape path found.
+    pub signal: bool,
+    /// Inside a frame the receiver found ([`BusyDetector::explain`]).
+    pub in_frame: bool,
+    /// Taken as evidence of the noise floor.
+    pub evidence: bool,
+    /// The window held no evidence after it, so the floor was held (or, past the hold,
+    /// taken from every block).
+    pub held: bool,
+    /// The radio's gain as the passband showed it at the block, dB; NaN when there is no
+    /// reading (no audio handed over, the warm-up, or too few bins carrying the band's noise).
+    pub gain_db: f64,
+    /// The gain the floor was drawn at, dB: 0 when the floor is not normalised.
+    pub drawn_db: f64,
+}
+
 /// Channel occupancy from the received baseband.
 #[derive(Clone)]
 pub struct BusyDetector {
@@ -208,10 +278,14 @@ pub struct BusyDetector {
     /// made forty times a second on a 50 ms quantity and a display samples it twice a second,
     /// so the excursions that trip the threshold are the ones a display never shows.
     excess_peak_db: f64,
-    /// Raw power per block, whether it is evidence of the noise floor — steady, not silence,
-    /// captured while no signal was measured on the channel and inside no frame the receiver
-    /// found — and when the block ended, newest last, capped at `window_blocks`.
-    history: std::collections::VecDeque<(f64, bool, f64)>,
+    /// The blocks of the floor window, newest last, capped at `window_blocks`.
+    history: std::collections::VecDeque<Block>,
+    /// The radio's gain as the noise across its audio passband shows it, when the caller
+    /// hands over the audio ([`Self::hear_passband`]).
+    reference: Option<PassbandReference>,
+    /// The gain the floor is drawn at, dB, never above 0: the reading, or where the reading
+    /// includes the channel, the reading held down until it comes back near 0 ([`Self::draw`]).
+    drawn_db: f64,
     /// Until when the level or the shape path last found a signal on the channel, with its
     /// hangover: a frame's hold makes the channel busy without measuring anything, and does
     /// not keep the quiet after the frame from the floor (ADR-0076).
@@ -240,9 +314,46 @@ pub struct BusyDetector {
     /// Latest floor estimate, in dB relative to full scale: the median of the last
     /// minute's blocks that were not under a signal — the noise's typical level.
     pub floor_db: f64,
+    /// The floor in its own units, linear: power, over the radio's gain when the floor is
+    /// normalised; 0 before anything is learned.
+    floor_q: f64,
     /// Blocks discarded because this station was transmitting.
     pub blocks_skipped: usize,
+    /// The latest block, as the detector judged it.
+    pub last_block: Option<BlockNote>,
 }
+
+/// One block of the floor window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Block {
+    /// Raw power, linear.
+    power: f64,
+    /// The gain the floor was drawn at for this block, linear; 1 when not normalised.
+    gain: f64,
+    /// Evidence of the noise floor: steady, not silence, captured while no signal was
+    /// measured on the channel and inside no frame the receiver found.
+    evidence: bool,
+    /// Steady, not peaked, not in a frame, not silence: what a returned noise looks like.
+    plain: bool,
+    /// Inside a shape window that read peaked.
+    peaked: bool,
+    /// When the block ended.
+    end: f64,
+}
+
+/// A gain this far under 0 dB is a cut: the bins' levels on quiet do not learn from it.
+const CUT_DB: f64 = 3.0;
+/// Where the gain reading includes the channel, how near 0 dB it must come before the floor
+/// follows it back up, dB ([`BusyDetector::draw`]).
+const GAIN_RETURN_DB: f64 = 3.0;
+/// A move of the gain reading larger than this is followed at once, dB; a smaller one is eased
+/// toward by [`GAIN_EASE`] a block. The reading wanders about a decibel either way on steady
+/// noise, and a floor drawn at every wander judged a signal at the threshold against a moving
+/// line (C-rtty-+0-slow: busy 0.25 s later than the plain floor's).
+const GAIN_STEP_DB: f64 = 2.0;
+/// The share of the way to the reading the drawn gain moves each block within
+/// [`GAIN_STEP_DB`]: a second's time constant.
+const GAIN_EASE: f64 = 0.025;
 
 /// Power floor for the logarithm, so silence gives a very negative number rather than
 /// negative infinity.
@@ -308,6 +419,8 @@ impl BusyDetector {
             block_samples,
             window_blocks,
             history: std::collections::VecDeque::with_capacity(window_blocks),
+            reference: None,
+            drawn_db: 0.0,
             partial: Vec::with_capacity(block_samples),
             reason: None,
             excess_peak_db: f64::NEG_INFINITY,
@@ -322,7 +435,9 @@ impl BusyDetector {
             explained_until: f64::NEG_INFINITY,
             level_db: f64::NEG_INFINITY,
             floor_db: f64::NEG_INFINITY,
+            floor_q: 0.0,
             blocks_skipped: 0,
+            last_block: None,
         }
     }
 
@@ -368,6 +483,18 @@ impl BusyDetector {
     /// Start a new peak interval; the publisher calls it after each reading goes out.
     pub fn reset_excess_peak(&mut self) {
         self.excess_peak_db = f64::NEG_INFINITY;
+    }
+
+    /// How far the radio's gain stands under its level on quiet, in dB, as the passband
+    /// reference shows it: about 0 when nothing holds it down, −20 when an AGC has cut it by
+    /// 20 dB. `None` before the detector has a reference and a level on quiet to measure it
+    /// against, or when its floor is not normalised.
+    #[must_use]
+    pub fn gain_db(&self) -> Option<f64> {
+        if !self.normalising() {
+            return None;
+        }
+        Some(self.reference.as_ref()?.latest()?.min(0.0))
     }
 
     /// Whether enough audio has gone by for the floor estimate to mean anything.
@@ -426,11 +553,12 @@ impl BusyDetector {
         self.explained_until = self.explained_until.max(until);
         let mut changed = false;
         for entry in self.history.iter_mut().rev() {
-            if entry.2 <= from {
+            if entry.end <= from {
                 break;
             }
-            changed |= entry.1;
-            entry.1 = false;
+            changed |= entry.evidence;
+            entry.evidence = false;
+            entry.plain = false;
         }
         if changed {
             self.refloor();
@@ -439,14 +567,72 @@ impl BusyDetector {
 
     /// The floor from the evidence the window holds now; held as it is when there is none.
     fn refloor(&mut self) {
-        if let Some(floor) = median(
+        if let Some(q) = self.evidence_floor() {
+            self.floor_q = q;
+            let gain = self.history.back().map_or(1.0, |b| b.gain);
+            self.floor_db = 10.0 * (q * gain).max(FLOOR).log10();
+        }
+    }
+
+    /// The median of the window's evidence, in the floor's own units: linear power, over the
+    /// radio's gain when the floor is normalised.
+    fn evidence_floor(&self) -> Option<f64> {
+        median(
             self.history
                 .iter()
-                .filter(|&&(_, evidence, _)| evidence)
-                .map(|&(power, _, _)| power),
-        ) {
-            self.floor_db = 10.0 * floor.max(FLOOR).log10();
+                .filter(|b| b.evidence)
+                .map(|b| b.power / b.gain),
+        )
+    }
+
+    /// Whether the floor is learned against the passband reference (C2).
+    fn normalising(&self) -> bool {
+        self.config.gain == GainHandling::Normalised && self.reference.is_some()
+    }
+
+    /// The gain the floor is drawn at for a block whose gain reads `measured` (dB, `None` with no
+    /// reading): the reading, never above 0 dB — a signal only adds power, so a reading over
+    /// the bins' levels on quiet is a signal, not more gain — and held where it was while there
+    /// is no reading. A move of more than [`GAIN_STEP_DB`] is taken at once, a smaller one
+    /// eased toward, so the floor does not wander with the reading. Where the reading includes the channel (a 2300 Hz channel fills the
+    /// passband), a wide signal in the channel lifts it exactly as the gain coming back would,
+    /// so the floor follows it down at once but back up only once it is within
+    /// [`GAIN_RETURN_DB`] of 0: a signal in the channel under a cut stays over the floor, at the
+    /// price of a slow AGC's ramp back read as busy until it is nearly done.
+    fn draw(&self, measured: Option<f64>) -> f64 {
+        let Some(g) = measured.map(|g| g.min(0.0)) else {
+            return self.drawn_db;
+        };
+        let holds = self
+            .reference
+            .as_ref()
+            .is_some_and(PassbandReference::includes_channel);
+        let target = if holds && g > self.drawn_db && g < -GAIN_RETURN_DB {
+            self.drawn_db
+        } else {
+            g
+        };
+        if (target - self.drawn_db).abs() > GAIN_STEP_DB {
+            target
+        } else {
+            (target - self.drawn_db).mul_add(GAIN_EASE, self.drawn_db)
         }
+    }
+
+    /// Hand over the radio's audio as captured, before its baseband goes to [`Self::push`]:
+    /// the noise across the radio's whole audio passband follows its gain, whatever a
+    /// narrowband signal on top does.
+    pub fn hear_passband(&mut self, audio: &[f32], audio_rate: f64, now: f64) {
+        let block_s = self.config.block_s;
+        let (centre, half) = (self.config.centre_hz, self.config.passband_hz / 2.0);
+        let occupied = (centre - half, centre + half);
+        let heard = (
+            centre - half - CHANNEL_GUARD_HZ,
+            centre + half + CHANNEL_GUARD_HZ,
+        );
+        self.reference
+            .get_or_insert_with(|| PassbandReference::new(audio_rate, block_s, occupied, heard))
+            .push(audio, now);
     }
 
     /// Discard audio captured while this station was transmitting.
@@ -464,6 +650,9 @@ impl BusyDetector {
         self.over.clear();
         self.shape_buffer.clear();
         self.peaked = [false, false];
+        if let Some(reference) = self.reference.as_mut() {
+            reference.skip();
+        }
         self.blocks_skipped += samples.len() / self.block_samples.max(1);
     }
 
@@ -483,22 +672,17 @@ impl BusyDetector {
                 .map(|&(re, im)| re.mul_add(re, im * im))
                 .sum::<f64>()
                 / self.block_samples as f64;
+            let measured = self.reference.as_ref().and_then(|r| r.at(block_end));
+            if self.normalising() {
+                self.drawn_db = self.draw(measured);
+            }
+            let gain = 10f64.powf(self.drawn_db / 10.0);
+            // the floor learned before this block, at this block's gain
+            if self.normalising() && self.floor_q > 0.0 {
+                self.floor_db = 10.0 * (self.floor_q * gain).max(FLOOR).log10();
+            }
 
-            // steady: the last few blocks, this one included, stayed within a few dB — a
-            // receiver's AGC stepping down and ramping back never is
-            let steady = self.history.len() + 1 >= STEADY_BLOCKS && {
-                let recent = self
-                    .history
-                    .iter()
-                    .rev()
-                    .take(STEADY_BLOCKS - 1)
-                    .map(|&(block, _, _)| block)
-                    .chain(std::iter::once(power));
-                let (low, high) = recent.fold((f64::INFINITY, 0.0_f64), |(lo, hi), p| {
-                    (lo.min(p), hi.max(p))
-                });
-                high <= low.max(FLOOR) * 10f64.powf(STEADY_RANGE_DB / 10.0)
-            };
+            let steady = self.steady_with(power);
             // the shape path: a narrowband signal an AGC held down out of the level reading
             self.shape_buffer.extend_from_slice(block);
             let peaked_now = self.note_shape(now);
@@ -530,45 +714,113 @@ impl BusyDetector {
             // channel busy. A decoded frame's hold is not a signal measured: the quiet after the
             // frame is the noise, and in a session it is the only quiet there is (ADR-0076)
             let in_frame = block_start < self.explained_until;
-            let evidence =
-                steady && power > SILENCE && !was_signal && !over && !peaked_now && !in_frame;
-            self.history.push_back((power, evidence, block_end));
+            let plain = steady && power > SILENCE && !peaked_now && !in_frame;
+            let evidence = plain && !was_signal && !over;
+            if let Some(reference) = self.reference.as_mut() {
+                reference.learn(block_end, evidence);
+            }
+            self.history.push_back(Block {
+                power,
+                gain,
+                evidence,
+                plain,
+                peaked: peaked_now,
+                end: block_end,
+            });
             if self.history.len() > self.window_blocks {
                 self.history.pop_front();
             }
 
-            let floor = median(
-                self.history
-                    .iter()
-                    .filter(|&&(_, evidence, _)| evidence)
-                    .map(|&(power, _, _)| power),
-            );
-            if let Some(floor) = floor {
-                self.floor_db = 10.0 * floor.max(FLOOR).log10();
-                self.held_since = None;
-            } else {
-                // No signal-free block in the window: the floor learned before is held —
-                // through an FT8 period, an SSB over — until the hold runs out. Then, or
-                // when nothing has been learned yet at all, the median of every block,
-                // silence excepted: a signal that never stops is the environment, and a
-                // floor that will not learn it is a floor that can never recover.
-                let since = *self.held_since.get_or_insert(now);
-                let unlearned = self.floor_db == f64::NEG_INFINITY;
-                if unlearned || now - since >= self.config.floor_hold_s {
-                    let all = median(
-                        self.history
-                            .iter()
-                            .map(|&(power, _, _)| power)
-                            .filter(|&p| p > SILENCE),
-                    );
-                    if let Some(all) = all {
-                        self.floor_db = 10.0 * all.max(FLOOR).log10();
-                    }
-                }
-            }
+            let held = !self.settle_floor(now);
+            self.last_block = Some(BlockNote {
+                end_s: block_end,
+                power_db: self.level_db,
+                steady,
+                over,
+                peaked: peaked_now,
+                signal: was_signal,
+                in_frame,
+                evidence,
+                held,
+                gain_db: measured.unwrap_or(f64::NAN),
+                drawn_db: self.drawn_db,
+            });
         }
         self.partial.drain(..consumed);
         self.busy(now)
+    }
+
+    /// Steady: the last few blocks and one of `power` stayed within a few dB — a receiver's AGC
+    /// stepping down and ramping back never is.
+    fn steady_with(&self, power: f64) -> bool {
+        self.history.len() + 1 >= STEADY_BLOCKS && {
+            let recent = self
+                .history
+                .iter()
+                .rev()
+                .take(STEADY_BLOCKS - 1)
+                .map(|b| b.power)
+                .chain(std::iter::once(power));
+            let (low, high) = recent.fold((f64::INFINITY, 0.0_f64), |(lo, hi), p| {
+                (lo.min(p), hi.max(p))
+            });
+            high <= low.max(FLOOR) * 10f64.powf(STEADY_RANGE_DB / 10.0)
+        }
+    }
+
+    /// The floor from the window as it stands at `now`; whether the window held evidence for it.
+    fn settle_floor(&mut self, now: f64) -> bool {
+        let learned = if let Some(floor) = self.evidence_floor() {
+            self.floor_q = floor;
+            self.held_since = None;
+            true
+        } else {
+            // No signal-free block in the window: the floor learned before is held — through an
+            // FT8 period, an SSB over — until the hold runs out. Then, or when nothing has been
+            // learned yet at all, the median of every block, silence excepted: a signal that
+            // never stops is the environment, and a floor that will not learn it is a floor that
+            // can never recover.
+            let since = *self.held_since.get_or_insert(now);
+            if self.floor_q <= 0.0 || now - since >= self.config.floor_hold_s {
+                let all = median(
+                    self.history
+                        .iter()
+                        .filter(|b| b.power > SILENCE)
+                        .map(|b| b.power / b.gain),
+                );
+                if let Some(all) = all {
+                    self.floor_q = all;
+                }
+                // what is there now is the environment, the gain included
+                self.rebase();
+            }
+            false
+        };
+        if self.floor_q > 0.0 {
+            let gain = 10f64.powf(self.drawn_db / 10.0);
+            self.floor_db = 10.0 * (self.floor_q * gain).max(FLOOR).log10();
+        }
+        learned
+    }
+
+    /// Take the gain the floor is drawn at now as the normal one, the floor's units moving
+    /// with it, so the floor in dBFS is unchanged: the hold has run out and what is there is the
+    /// environment, the radio's gain included. Without it a reading stuck under 0 dB — the
+    /// baselines learned before an attenuator went in, say — would, where the reading includes
+    /// the channel, keep the floor from following the gain back up after every cut.
+    fn rebase(&mut self) {
+        if !self.normalising() || self.drawn_db >= 0.0 {
+            return;
+        }
+        let g = 10f64.powf(self.drawn_db / 10.0);
+        for b in &mut self.history {
+            b.gain /= g;
+        }
+        self.floor_q *= g;
+        if let Some(reference) = self.reference.as_mut() {
+            reference.rebase(self.drawn_db);
+        }
+        self.drawn_db = 0.0;
     }
 }
 
@@ -674,6 +926,330 @@ impl BusyDetector {
     }
 }
 
+/// The radio's gain, from the noise across its audio passband.
+///
+/// A receiver's AGC scales everything in its passband by one factor. Each spectral bin of the
+/// passband is measured against its own level on quiet, and the gain is a low quantile of
+/// those differences across the bins: a cut moves every bin down together, while a signal on
+/// top only ever *raises* the bins it holds — up to three in four of them may hold one and the
+/// reading stays on the noise. Each bin is judged against itself, so a radio's filter skirt,
+/// a sound card's tilt or a quiet edge of the band costs nothing.
+///
+/// A bin's level on quiet is learned only while the gain reads uncut and the channel's own
+/// block was evidence of the noise ([`Self::learn`]): a cut is never learned as the normal
+/// level, and neither is a wide signal over the channel. Where the passband has room beside
+/// the channel the channel's bins are left out of the reading; a 2300 Hz channel fills the
+/// passband, and there the reading includes it ([`Self::includes_channel`]).
+#[derive(Clone)]
+pub struct PassbandReference {
+    rate: f64,
+    block: usize,
+    pending: Vec<f32>,
+    fft: std::sync::Arc<dyn rustfft::Fft<f64>>,
+    window: Vec<f64>,
+    /// Every bin of [`REFERENCE_BAND_HZ`].
+    bins: Vec<usize>,
+    /// Which of `bins` the gain is read from: those beside the channel, or all of them.
+    gain_bins: Vec<bool>,
+    /// Which of `bins` lie in the channel's occupied band: the noise the floor is of.
+    channel_bins: Vec<bool>,
+    includes_channel: bool,
+    /// Each bin's power in the last [`GAIN_SMOOTH`] blocks, linear, newest last.
+    recent: std::collections::VecDeque<Vec<f64>>,
+    /// Each bin's level on quiet, dB: a quantile tracker of the bin's own level.
+    baseline: Vec<f64>,
+    /// The bins' levels through the warm-up, until the baselines are set from them.
+    warm: Vec<Vec<f64>>,
+    /// The last few raw gain readings, for the median that smooths them.
+    raw: std::collections::VecDeque<f64>,
+    /// Readings, newest last: two seconds of them.
+    readings: std::collections::VecDeque<GainReading>,
+}
+
+/// One reading of the passband: the gain and the bins' levels it came from.
+#[derive(Clone)]
+struct GainReading {
+    /// The end of the audio it covers.
+    end: f64,
+    /// The gain against the bins' levels on quiet, dB; `None` while warming up or when too few
+    /// bins carry the band's noise.
+    gain_db: Option<f64>,
+    /// Each bin's level, dB.
+    levels: Vec<f64>,
+    /// Whether the baselines have learned from it.
+    learned: bool,
+}
+
+/// The audio band the reference is taken over, Hz: inside any SSB filter of 2.4 kHz.
+const REFERENCE_BAND_HZ: (f64, f64) = (300.0, 2700.0);
+/// How far either side of the channel's occupied band the channel's band filter still lets
+/// energy through, Hz: a subcarrier and the filter's transition band. The reference leaves
+/// it out, so a signal in the channel cannot lift the reference the floor is drawn at.
+const CHANNEL_GUARD_HZ: f64 = 280.0;
+/// The fewest bins outside the channel the gain is read from; with fewer (a 2300 Hz channel
+/// fills a 2.4 kHz passband) it is read from every bin.
+const MIN_REFERENCE_BINS: usize = 20;
+/// The quantile both of each bin's level that its baseline tracks and of the bins' differences
+/// that the gain reads. The same on both sides, so noise alone reads 0 dB with no correction;
+/// signals may lift three bins in four, and a baseline is left on the noise by a signal there
+/// three-quarters of the time.
+const GAIN_QUANTILE: f64 = 0.25;
+/// How many blocks a bin's level is averaged over: 100 ms, which puts a bin's level within
+/// about 2 dB on noise and the quantile across thirty bins within about half a decibel.
+const GAIN_SMOOTH: usize = 4;
+/// How many raw gain readings the reading is the median of: 75 ms. One reading wanders ±2 dB
+/// on noise alone, and the floor's dead band ([`BusyDetector::draw`]) takes the rest; more
+/// readings put the reading further behind the radio, and a fast AGC's dip after a static crash
+/// was read after the noise was back (D-crashes-fast: 1.9 s of false busy with five).
+const GAIN_READINGS: usize = 3;
+/// A baseline's step down per reading it learns from, dB (0.8 dB/s); its step up is a third of
+/// that, which is what puts it at [`GAIN_QUANTILE`].
+const BASELINE_STEP_DB: f64 = 0.02;
+/// The first readings are a warm-up: no gain is read, and at its end each bin's level on quiet is
+/// set from them ([`PassbandReference::warm_up`]): two seconds.
+const WARM_READINGS: usize = 80;
+/// A bin carries the band's noise, and so follows the gain, when its level on quiet is within
+/// this of the channel's, dB, either way. A bin outside a narrow radio filter holds only the
+/// sound card's own noise, which no AGC moves; a bin far above the channel's has learned a
+/// signal that was there more often than not, and would read its absence as a cut.
+const INFORM_DB: f64 = 10.0;
+/// The fewest bins carrying the band's noise a gain is read from.
+const MIN_INFORMED_BINS: usize = 10;
+
+impl PassbandReference {
+    /// A reference for audio at `rate`, read every `block_s`, for a channel whose occupied band
+    /// is `occupied` (Hz) and which the band filter hears out to `heard` (Hz).
+    #[must_use]
+    pub fn new(rate: f64, block_s: f64, occupied: (f64, f64), heard: (f64, f64)) -> Self {
+        let block = ((rate * block_s) as usize).max(16);
+        let bin_hz = rate / block as f64;
+        // four-term Blackman-Harris: sidelobes 92 dB down. A carrier 40 dB over the noise in
+        // 3 kHz stands 59 dB over a 40 Hz bin's, and through a Hann window its skirt lifted
+        // every bin within 400 Hz of it — half of one side of the reference
+        let window = (0..block)
+            .map(|i| {
+                let x = 2.0 * std::f64::consts::PI * i as f64 / block as f64;
+                0.01168f64.mul_add(
+                    -(3.0 * x).cos(),
+                    0.14128f64.mul_add((2.0 * x).cos(), 0.48829f64.mul_add(-x.cos(), 0.35875)),
+                )
+            })
+            .collect();
+        let bins: Vec<usize> = ((REFERENCE_BAND_HZ.0 / bin_hz).ceil() as usize
+            ..=((REFERENCE_BAND_HZ.1 / bin_hz).floor() as usize).min(block / 2))
+            .collect();
+        let hz = |k: usize| k as f64 * bin_hz;
+        let beside: Vec<bool> = bins
+            .iter()
+            .map(|&k| hz(k) < heard.0 || hz(k) > heard.1)
+            .collect();
+        let includes_channel = beside.iter().filter(|&&b| b).count() < MIN_REFERENCE_BINS;
+        let gain_bins = if includes_channel {
+            vec![true; bins.len()]
+        } else {
+            beside
+        };
+        let channel_bins = bins
+            .iter()
+            .map(|&k| hz(k) >= occupied.0 && hz(k) <= occupied.1)
+            .collect();
+        Self {
+            rate,
+            block,
+            pending: Vec::with_capacity(block),
+            fft: rustfft::FftPlanner::new().plan_fft_forward(block),
+            window,
+            bins,
+            gain_bins,
+            channel_bins,
+            includes_channel,
+            recent: std::collections::VecDeque::with_capacity(GAIN_SMOOTH),
+            baseline: Vec::new(),
+            warm: Vec::with_capacity(WARM_READINGS),
+            raw: std::collections::VecDeque::with_capacity(GAIN_READINGS),
+            readings: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Whether the gain is read from the channel's own bins too: a 2300 Hz channel fills the
+    /// passband, so a wide signal in it lifts the reading as the gain coming back would.
+    #[must_use]
+    pub fn includes_channel(&self) -> bool {
+        self.includes_channel
+    }
+
+    /// Feed captured audio ending at `now`.
+    pub fn push(&mut self, audio: &[f32], now: f64) {
+        self.pending.extend_from_slice(audio);
+        let mut taken = 0;
+        let mut spectrum = vec![rustfft::num_complex::Complex64::default(); self.block];
+        while self.pending.len() - taken >= self.block {
+            for ((slot, &x), &w) in spectrum
+                .iter_mut()
+                .zip(&self.pending[taken..taken + self.block])
+                .zip(&self.window)
+            {
+                *slot = rustfft::num_complex::Complex64::new(f64::from(x) * w, 0.0);
+            }
+            taken += self.block;
+            let end = now - (self.pending.len() - taken) as f64 / self.rate;
+            self.fft.process(&mut spectrum);
+            if self.recent.len() == GAIN_SMOOTH {
+                self.recent.pop_front();
+            }
+            self.recent
+                .push_back(self.bins.iter().map(|&k| spectrum[k].norm_sqr()).collect());
+            if self.recent.len() < GAIN_SMOOTH {
+                continue;
+            }
+            let levels: Vec<f64> = (0..self.bins.len())
+                .map(|i| {
+                    let mean = self.recent.iter().map(|p| p[i]).sum::<f64>() / GAIN_SMOOTH as f64;
+                    10.0 * mean.max(FLOOR).log10()
+                })
+                .collect();
+            let gain_db = if self.baseline.is_empty() {
+                self.warm_up(&levels);
+                None
+            } else if let Some(g) = self.gain_of(&levels) {
+                if self.raw.len() == GAIN_READINGS {
+                    self.raw.pop_front();
+                }
+                self.raw.push_back(g);
+                median(self.raw.iter().copied())
+            } else {
+                self.raw.clear();
+                None
+            };
+            self.readings.push_back(GainReading {
+                end,
+                gain_db,
+                levels,
+                learned: false,
+            });
+        }
+        self.pending.drain(..taken);
+        if let Some(newest) = self.readings.back().map(|r| r.end) {
+            while self.readings.front().is_some_and(|r| r.end < newest - 2.0) {
+                self.readings.pop_front();
+            }
+        }
+    }
+
+    /// The gain these levels show against the baselines, dB: the quantile of the differences
+    /// over the bins that carry the band's noise.
+    fn gain_of(&self, levels: &[f64]) -> Option<f64> {
+        let channel = quantile(
+            self.baseline
+                .iter()
+                .zip(&self.channel_bins)
+                .filter(|&(_, &c)| c)
+                .map(|(&b, _)| b),
+            0.5,
+        )?;
+        let mut differences: Vec<f64> = levels
+            .iter()
+            .zip(&self.baseline)
+            .zip(&self.gain_bins)
+            .filter(|&((_, &b), &used)| used && (b - channel).abs() <= INFORM_DB)
+            .map(|((&x, &b), _)| x - b)
+            .collect();
+        if differences.len() < MIN_INFORMED_BINS {
+            return None;
+        }
+        differences.sort_by(f64::total_cmp);
+        Some(differences[(differences.len() as f64 * GAIN_QUANTILE) as usize])
+    }
+
+    /// Gather the warm-up's levels, and once there are [`WARM_READINGS`] of them set each bin's
+    /// level on quiet to the [`GAIN_QUANTILE`] of its own: a static crash or a burst in the first
+    /// seconds lifts a few of them and moves no quantile. Started from the first reading alone,
+    /// a crash there left every bin 9 dB high, every reading after it said the gain was cut by 9,
+    /// and the bins, which learn only from uncut readings, never came down (the held-out draw's
+    /// `D-crashes-off`: busy 47 % of the time with no AGC at all).
+    fn warm_up(&mut self, levels: &[f64]) {
+        self.warm.push(levels.to_vec());
+        if self.warm.len() < WARM_READINGS {
+            return;
+        }
+        self.baseline = (0..self.bins.len())
+            .map(|i| quantile(self.warm.iter().map(|l| l[i]), GAIN_QUANTILE).unwrap_or(0.0))
+            .collect();
+        self.warm = Vec::new();
+    }
+
+    /// Move each baseline a step toward the level it saw: down by [`BASELINE_STEP_DB`] when
+    /// under it, up by a third of that when over it — the steps that settle a tracker on the
+    /// [`GAIN_QUANTILE`] of what it sees.
+    fn step_baselines(&mut self, levels: &[f64]) {
+        let down = BASELINE_STEP_DB;
+        let up = down * GAIN_QUANTILE / (1.0 - GAIN_QUANTILE);
+        for (b, &x) in self.baseline.iter_mut().zip(levels) {
+            *b += if x < *b { -down } else { up };
+        }
+    }
+
+    /// The block of the channel ending at `t` was `quiet` — evidence of the noise floor: when
+    /// the gain read then is uncut, the bins' levels then are the noise's, and each baseline
+    /// takes a step toward its own.
+    pub fn learn(&mut self, t: f64, quiet: bool) {
+        let Some(index) = self.index_at(t) else {
+            return;
+        };
+        let reading = &mut self.readings[index];
+        let uncut = reading.gain_db.is_some_and(|g| g >= -CUT_DB);
+        if reading.learned || !quiet || !uncut {
+            return;
+        }
+        reading.learned = true;
+        let levels = reading.levels.clone();
+        self.step_baselines(&levels);
+    }
+
+    /// Take the gain of the moment as the normal one: every baseline moves by `gain_db`, so the
+    /// gain reads 0 dB now. What the floor does when it accepts the environment.
+    pub fn rebase(&mut self, gain_db: f64) {
+        for b in &mut self.baseline {
+            *b += gain_db;
+        }
+        for r in &mut self.readings {
+            r.gain_db = r.gain_db.map(|g| g - gain_db);
+        }
+        for g in &mut self.raw {
+            *g -= gain_db;
+        }
+    }
+
+    /// This station transmitted: the audio gathered before it is not averaged with what comes
+    /// after. The baselines and the readings stay.
+    pub fn skip(&mut self) {
+        self.pending.clear();
+        self.recent.clear();
+        self.raw.clear();
+    }
+
+    /// The newest gain reading, dB.
+    #[must_use]
+    pub fn latest(&self) -> Option<f64> {
+        self.readings.back().and_then(|r| r.gain_db)
+    }
+
+    /// The gain reading for audio ending at `t`, dB: the latest that ended by then, give or
+    /// take half a block; the earliest kept when none did.
+    #[must_use]
+    pub fn at(&self, t: f64) -> Option<f64> {
+        self.index_at(t).and_then(|i| self.readings[i].gain_db)
+    }
+
+    fn index_at(&self, t: f64) -> Option<usize> {
+        let slack = 0.5 * self.block as f64 / self.rate;
+        self.readings
+            .iter()
+            .rposition(|r| r.end <= t + slack)
+            .or_else(|| (!self.readings.is_empty()).then_some(0))
+    }
+}
+
 impl std::fmt::Debug for BusyDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BusyDetector")
@@ -695,6 +1271,16 @@ fn median(powers: impl Iterator<Item = f64>) -> Option<f64> {
     }
     sorted.sort_by(f64::total_cmp);
     Some(sorted[sorted.len() / 2])
+}
+
+/// The `q` quantile of some values, or `None` of none.
+fn quantile(values: impl Iterator<Item = f64>, q: f64) -> Option<f64> {
+    let mut sorted: Vec<f64> = values.collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(f64::total_cmp);
+    Some(sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)])
 }
 
 #[cfg(test)]
@@ -1767,6 +2353,299 @@ mod tests {
         assert!(
             with.abs() < 1.0,
             "the floor learned the frames: {with:.1} dB over the noise"
+        );
+    }
+
+    /// The radio's audio as an AGC delivers it, fed to a detector the way `Station::capture`
+    /// does: 20 ms at a time, the whole passband to [`BusyDetector::hear_passband`] and the
+    /// channel's baseband, from the same front end, to [`BusyDetector::push`].
+    ///
+    /// The audio is white noise (the band: −29 dBFS in a 500 Hz channel, where the author's
+    /// station reads −27) and, from `on` to `off`, a carrier at `carrier_hz` 30 dB over the noise
+    /// in 3 kHz. The AGC is the harness's model of an FTDX10 on AUTO in DATA (beta.17's
+    /// measurement): it holds the gain to keep the carrier's peaks at 12 dB over the noise —
+    /// 21 dB down here, as the author's −27 went to −47 — holds 100 ms after the carrier goes,
+    /// and comes back at 50 dB/s.
+    /// Returns, every 20 ms: the time, whether the channel read busy, and the floor.
+    fn agc_held_by_a_carrier(
+        detector: &mut BusyDetector,
+        seconds: f64,
+        carrier_hz: f64,
+        on: f64,
+        off: f64,
+    ) -> Vec<(f64, bool, f64)> {
+        let params = aether_phy::waveform::NARROW_500;
+        let rate = params.audio_rate as f64;
+        let mut front = aether_phy::AudioToBaseband::new(params);
+        let sigma = 0.18;
+        // white noise at 48 kHz holds a sixteenth of its power in 3 kHz
+        let noise_3k = sigma * (3000.0 / (rate / 2.0)).sqrt();
+        let amplitude = noise_3k * 10f64.powf(30.0 / 20.0) * std::f64::consts::SQRT_2;
+        let threshold = noise_3k * 10f64.powf(12.0 / 20.0);
+        let (mut gain_db, mut held) = (0.0f64, 0.0f64);
+        let chunk = (0.02 * rate) as usize;
+        let mut out = Vec::new();
+        let mut n = 0usize;
+        let mut seed = 1u64;
+        while (n as f64) / rate < seconds {
+            let samples = noise(chunk, sigma, seed);
+            // odd seeds: the generator's state is the seed with its low bit set
+            seed += 2;
+            let mut audio = Vec::with_capacity(chunk);
+            for (re, _) in samples {
+                let t = n as f64 / rate;
+                let carrier = if (on..off).contains(&t) {
+                    amplitude * (2.0 * std::f64::consts::PI * carrier_hz * t).sin()
+                } else {
+                    0.0
+                };
+                // the AGC's limit: what keeps the carrier's peak at the threshold
+                let limit = if (on..off).contains(&t) {
+                    20.0 * (threshold / amplitude).log10()
+                } else {
+                    0.0
+                };
+                if limit < gain_db {
+                    (gain_db, held) = (limit, 0.1);
+                } else if held > 0.0 {
+                    held -= 1.0 / rate;
+                } else {
+                    gain_db = (gain_db + 50.0 / rate).min(0.0).min(limit);
+                }
+                audio.push(((re + carrier) * 10f64.powf(gain_db / 20.0)) as f32);
+                n += 1;
+            }
+            let now = n as f64 / rate;
+            let baseband = front.process(&audio);
+            detector.hear_passband(&audio, rate, now);
+            let busy = detector.push(&baseband, now);
+            out.push((now, busy, detector.floor_db));
+        }
+        out
+    }
+
+    #[test]
+    fn a_gain_held_down_by_a_signal_outside_the_channel_reads_clear_when_it_lets_go() {
+        // The author's FTDX10 on AGC AUTO, 2026-10-17: a strong signal held the gain down, the
+        // floor fell from −27 to −47 dBFS on the depressed noise, and when the AGC let go the
+        // true noise read busy by level for 71 s — the floor window and its hold (ADR-0078).
+        // The carrier here is at 700 Hz, outside the 500 Hz channel, for 20 s.
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let trace = agc_held_by_a_carrier(&mut detector, 90.0, 700.0, 20.0, 40.0);
+        let before = trace
+            .iter()
+            .rev()
+            .find(|r| r.0 < 19.0)
+            .expect("the minute before")
+            .2;
+        assert!(
+            !trace.iter().any(|r| r.0 > 5.0 && r.0 < 40.0 && r.1),
+            "busy with nothing in the channel, before the carrier or under it"
+        );
+        let still_busy: Vec<_> = trace.iter().filter(|r| r.0 >= 43.0 && r.1).collect();
+        assert!(
+            still_busy.is_empty(),
+            "the channel read busy {:.1} s after the carrier had gone (last at {:.1} s): the \
+             floor had learned the noise the AGC held down",
+            still_busy.len() as f64 * 0.02,
+            still_busy.last().map_or(0.0, |r| r.0)
+        );
+        let after = trace.iter().find(|r| r.0 >= 43.0).expect("after").2;
+        assert!(
+            (after - before).abs() < 3.0,
+            "the floor is back at the noise: {before:.1} before, {after:.1} after"
+        );
+    }
+
+    /// White noise at 48 kHz through `params`' front end and an AGC (beta.17's: a step down, a
+    /// 100 ms hold, 50 dB/s back), 20 ms a call: `scene(t)` gives what is added to the noise at
+    /// `t` (relative to the noise's RMS) and the gain the AGC would cut to, dB (0 for none).
+    /// Returns (time, busy) after every call.
+    fn agc_scene(
+        params: aether_phy::waveform::WaveformParams,
+        seconds: f64,
+        mut scene: impl FnMut(f64, f64) -> (f64, f64),
+    ) -> Vec<(f64, bool)> {
+        let rate = params.audio_rate as f64;
+        let mut detector = BusyDetector::new(BusyConfig {
+            fs: params.fs_baseband,
+            passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
+            ..BusyConfig::default()
+        });
+        let mut front = aether_phy::AudioToBaseband::new(params);
+        let sigma = 0.18;
+        let (mut gain_db, mut held) = (0.0f64, 0.0f64);
+        let chunk = (0.02 * rate) as usize;
+        let mut out = Vec::new();
+        let mut n = 0usize;
+        let mut seed = 1u64;
+        while (n as f64) / rate < seconds {
+            let noise = noise(chunk, sigma, seed);
+            // odd seeds: the generator's state is the seed with its low bit set
+            seed += 2;
+            let mut audio = Vec::with_capacity(chunk);
+            for (re, im) in noise {
+                let t = n as f64 / rate;
+                let (added, limit) = scene(t, im / sigma);
+                if limit < gain_db {
+                    (gain_db, held) = (limit, 0.1);
+                } else if held > 0.0 {
+                    held -= 1.0 / rate;
+                } else {
+                    gain_db = (gain_db + 50.0 / rate).min(0.0).min(limit);
+                }
+                audio.push(((re + added * sigma) * 10f64.powf(gain_db / 20.0)) as f32);
+                n += 1;
+            }
+            let now = n as f64 / rate;
+            let baseband = front.process(&audio);
+            detector.hear_passband(&audio, rate, now);
+            out.push((now, detector.push(&baseband, now)));
+        }
+        out
+    }
+
+    /// The share of the trace's blocks in `from..until` that read busy.
+    fn busy_in(trace: &[(f64, bool)], from: f64, until: f64) -> f64 {
+        let blocks: Vec<bool> = trace
+            .iter()
+            .filter(|r| r.0 >= from && r.0 < until)
+            .map(|r| r.1)
+            .collect();
+        blocks.iter().filter(|&&b| b).count() as f64 / blocks.len().max(1) as f64
+    }
+
+    #[test]
+    fn a_wide_signal_in_a_2300_hz_channel_under_a_cut_still_reads_busy() {
+        // A 2300 Hz channel fills the radio's passband, so the gain is read from the channel's own
+        // bins: a wide signal in it lifts the reading exactly as the gain coming back would. A
+        // signal the audio never carries (outside the DSP filter) holds the AGC 25 dB down from
+        // 20 s to 60 s; a wide signal 9 dB over the noise fills the channel from 35 s to 45 s. It
+        // must read busy, and the channel clear again within 3 s of its end and of the gain's
+        // return (ADR-0078 §2.3).
+        let trace = agc_scene(aether_phy::waveform::WIDE_2300, 75.0, |t, other| {
+            let wide = if (35.0..45.0).contains(&t) {
+                other * 10f64.powf(9.0 / 20.0)
+            } else {
+                0.0
+            };
+            let limit = if (20.0..60.0).contains(&t) {
+                -25.0
+            } else {
+                0.0
+            };
+            (wide, limit)
+        });
+        let caught = busy_in(&trace, 35.5, 45.0);
+        assert!(
+            caught > 0.9,
+            "the wide signal under the cut read busy {caught:.2} of its length"
+        );
+        for (from, until, what) in [
+            (5.0, 35.0, "before the signal"),
+            (48.0, 60.0, "under the cut after it"),
+            (63.0, 75.0, "after the gain came back"),
+        ] {
+            let busy = busy_in(&trace, from, until);
+            assert!(busy == 0.0, "busy {busy:.2} of the time {what}");
+        }
+    }
+
+    #[test]
+    fn a_crash_in_the_first_moment_leaves_no_false_cut() {
+        // A static crash 30 dB over the noise in the first tenth of a second, then quiet noise
+        // with no AGC. Each bin's level on quiet is set from the whole warm-up, so the crash
+        // moves none of them; set from the first reading, it left them 9 dB high, the gain read
+        // −9 dB with nothing cut, and the channel read busy for a minute (ADR-0078 §3.3).
+        let trace = agc_scene(aether_phy::waveform::NARROW_500, 40.0, |t, other| {
+            let crash = if (0.03..0.09).contains(&t) {
+                other * 10f64.powf(30.0 / 20.0)
+            } else {
+                0.0
+            };
+            (crash, 0.0)
+        });
+        let busy = busy_in(&trace, 3.0, 40.0);
+        assert!(
+            busy == 0.0,
+            "busy {busy:.2} of the time after a crash at the start"
+        );
+    }
+
+    /// The gain reading after four seconds of noise to learn from, then one second of the same
+    /// noise through a gain of `gain_db` with a tone of `tone_db` over the noise at `tone_hz`.
+    fn reading_after(gain_db: f64, tone_hz: f64, tone_db: f64, occupied: (f64, f64)) -> f64 {
+        let rate = 48_000.0;
+        let heard = (occupied.0 - CHANNEL_GUARD_HZ, occupied.1 + CHANNEL_GUARD_HZ);
+        let mut reference = PassbandReference::new(rate, 0.025, occupied, heard);
+        let sigma = 0.05;
+        let amplitude = sigma * 10f64.powf(tone_db / 20.0) * std::f64::consts::SQRT_2;
+        let mut n = 0usize;
+        let mut readings = Vec::new();
+        for chunk in 0..250u64 {
+            let learning = chunk < 200;
+            let gain = if learning {
+                1.0
+            } else {
+                10f64.powf(gain_db / 20.0)
+            };
+            // odd seeds: the generator's state is the seed with its low bit set
+            let audio: Vec<f32> = noise(960, sigma, 2 * chunk + 61)
+                .into_iter()
+                .map(|(re, _)| {
+                    let t = n as f64 / rate;
+                    n += 1;
+                    let tone = if tone_hz > 0.0 && !learning {
+                        amplitude * (2.0 * std::f64::consts::PI * tone_hz * t).sin()
+                    } else {
+                        0.0
+                    };
+                    ((re + tone) * gain) as f32
+                })
+                .collect();
+            let now = n as f64 / rate;
+            reference.push(&audio, now);
+            reference.learn(now, learning);
+            if chunk >= 225 {
+                readings.push(reference.latest().expect("a reading"));
+            }
+        }
+        median(readings.into_iter()).expect("readings")
+    }
+
+    #[test]
+    fn the_gain_reading_follows_the_gain_and_not_a_signal_on_top_of_it() {
+        // a gain cut moves it by the cut, at once; a strong narrowband signal outside the
+        // channel, or a signal inside it when there is room to leave the channel out, does not
+        // move it at all (ADR-0078)
+        let narrow = (1250.0, 1750.0);
+        let quiet = reading_after(0.0, 0.0, 0.0, narrow);
+        assert!(quiet.abs() < 1.0, "noise alone read {quiet:.1} dB");
+        let cut = reading_after(-20.0, 0.0, 0.0, narrow);
+        assert!((cut + 20.0).abs() < 1.0, "a 20 dB cut read as {cut:.1} dB");
+        for (hz, place) in [(700.0, "at 700 Hz"), (1500.0, "in the channel")] {
+            let carrier = reading_after(0.0, hz, 30.0, narrow);
+            assert!(
+                (carrier - quiet).abs() < 1.0,
+                "a carrier {place} moved it {:.1} dB",
+                carrier - quiet
+            );
+            let both = reading_after(-20.0, hz, 30.0, narrow);
+            assert!(
+                (both + 20.0).abs() < 1.0,
+                "a 20 dB cut with a carrier {place} read as {both:.1} dB"
+            );
+        }
+        // a 2300 Hz channel fills the passband: the reading includes it, and still reads a cut
+        let heard = |(low, high): (f64, f64)| (low - CHANNEL_GUARD_HZ, high + CHANNEL_GUARD_HZ);
+        let wide = (360.0, 2640.0);
+        assert!(PassbandReference::new(48_000.0, 0.025, wide, heard(wide)).includes_channel());
+        assert!(!PassbandReference::new(48_000.0, 0.025, narrow, heard(narrow)).includes_channel());
+        let cut = reading_after(-20.0, 0.0, 0.0, wide);
+        assert!(
+            (cut + 20.0).abs() < 1.0,
+            "a 20 dB cut at 2300 Hz read as {cut:.1} dB"
         );
     }
 
