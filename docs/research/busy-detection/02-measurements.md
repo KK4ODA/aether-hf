@@ -1,9 +1,9 @@
 # Measurements
 
 What was measured before designing, from what was in hand: the author's daemon logs from four
-uploads, the session recordings in them, the code, a synthetic corpus, and the harness. The
-author's purpose-made recordings (`00-recording-plan.md`) are the next section's source; until
-they arrive, the AGC model below is the one beta.17 measured, and §6 says what they must settle.
+uploads, the session recordings in them, the code, a synthetic corpus, and the harness. The AGC
+model below is the one beta.17 measured, and §6 says what the author's purpose-made recordings
+(`00-recording-plan.md`) must settle. The first batch of them arrived on 2026-10-20 (§9).
 
 ## 1. The logs: how often, how long, when
 
@@ -152,6 +152,8 @@ When the author's batches arrive (`00-recording-plan.md`):
    the reference's premise — and how far the radio's own audio noise sits under the band noise
    (the floor a deep cut runs into).
 
+The first batch (§9) answers all five for 40 m in daylight with AUTO, FAST and SLOW.
+
 ## 7. The harness
 
 The A/B of `03-candidates.md` §2.3: ten scenarios, three draws each (`--seeds 3`), one arm on
@@ -210,3 +212,116 @@ they are the author's radio:
 
 None of the 17 holds an idle AGC event of the kind the investigation is about; the author's
 recordings (§6) are still what settles that.
+
+## 9. The author's first recordings (2026-10-18)
+
+Seven listening recordings, 19:03–19:28Z, uploaded 2026-10-20: 17.6 minutes with beta.114, the
+FTDX10 on 40 m with a 3 kHz filter, Aether at 500 Hz. The notes give the AGC setting and the
+frequency of each. Two are on 7.082 MHz with AUTO, one on 7.074 MHz (the FT8 segment) with AUTO,
+one with FAST and one with SLOW on and around 7.074 while the author tuned a strong signal in and
+out of the passband by hand, and three on 7.082 with SLOW and FAST. Not in this batch: part A (80 m
+at night, the band of the original panel), MID and OFF, part C with its times, and the radio's
+settings (the mode, the AGC delays, the USB audio level).
+
+They were replayed one at a time with `tools/floor_trace.py`, and **joined end to end**, as one
+running daemon would have heard them: the 30–60 s gaps between them closed up, so each joint is a
+change the detector meets unannounced, as a running station does. The floor before ADR-0078
+(`plain`), the floor as ADR-0078 was first built, and the fixed floor (below) each ran over them;
+every stretch where two of them disagree was checked against a spectrogram of the audio.
+
+**What the AGC did.** In the joined run the gain read 6 dB or more down 55 times. Twelve are the
+kind the investigation is about: cuts of 13–23 dB for 10–13 s, each from a strong signal in the
+audio — an FT8 station's 15 s period at 570–770 Hz or 2 700–2 900 Hz, a carrier the author tuned
+in, a signal at 1 870 Hz, 120 Hz past the channel's edge. The rest are 0.5–4.7 s and 6–11 dB,
+where a signal in or beside the channel pumps a FAST AGC. Every cut had its signal in the audio;
+none had a cause the audio does not carry (the corpus's group H).
+
+**The release, by AGC setting.** The gain starts back as the strong signal ends — within the
+reading's own 0.1 s on FAST and AUTO, 0.2–0.4 s later on SLOW — and comes back at:
+
+| Setting | Release | Events | The corpus's preset (`busy_corpus.py`) |
+|---|---|---|---|
+| FAST | 40–150 dB/s | 5 | 120 dB/s after 50 ms |
+| AUTO | 49–74 dB/s | 4 | MID: 50 dB/s after 100 ms (beta.17's measurement of AUTO in DATA) |
+| SLOW | 25–27 dB/s | 3 | 15 dB/s after 200 ms |
+
+The presets were provisional, to be fitted to these. They bracket them, with SLOW slower than the
+radio's — the harder case for the 2 300 Hz floor, which waits for the gain — so they are kept, and
+the corpus stays comparable across its runs. AUTO measured as MID suggests the radio was in DATA-U,
+not USB (the field guide's AUTO-is-SLOW-in-USB); the author's notes do not say.
+
+**The premise: the passband outside the channel follows the gain.** On the long cuts, the channel's
+noise (the per-bin median over 1 250–1 750 Hz, 0.1 s bins) against the gain reading over the middle
+half of the cut:
+
+| Cut | Gain reading | The channel's noise fell by |
+|---|---|---|
+| 19:06:59 file, 1.5 s (AUTO) | −21.3 dB | 23.4 dB |
+| 19:09:33 file, 44.7 s (FAST) | −18.1 | 18.2 |
+| 19:09:33 file, 87.2 s (FAST) | −22.6 | 22.2 |
+| 19:11:59 file, 61.5 s (SLOW) | −22.8 | 21.2 |
+| 19:11:59 file, 91.2 s (SLOW) | −15.8 | 14.0 |
+| 19:11:59 file, 121.1 s (SLOW) | −14.6 | 13.2 |
+| 19:24:31 file, 1.7 s (FAST) | −12.9 | 13.2 |
+
+Within 2 dB, on a real radio. Where FT8 filled the channel before the cut, or a strong signal sat
+just past its edge, the channel's noise fell up to 5 dB less than the reading — the energy left in
+the channel was not noise. The radio's own audio noise, above the 3 kHz filter (3.3–3.6 kHz), sits
+49–54 dB under the band noise: the deepest cut, 23 dB, comes nowhere near it.
+
+**False busy, before and after.** The joined run, recording by recording:
+
+| Recording | s | Busy %: before ADR-0078 / as first built / fixed | Floor median, dBFS |
+|---|---|---|---|
+| 19:03:53 AUTO, 7.082 | 152 | 51 / 51 / 51 | −56 / −56 / −56 |
+| 19:06:59 AUTO, 7.074 | 119 | 75 / 75 / 65 | −53 / −53 / −39 |
+| 19:09:33 FAST, 7.074 | 137 | 99 / 99 / 28 | −51 / −51 / −29 |
+| 19:11:59 SLOW, tuning | 174 | 64 / 64 / 8 | −46 / −46 / −30 |
+| 19:20:04 SLOW, 7.082 | 117 | 26 / 26 / 0 | −30 / −30 / −30 |
+| 19:23:22 FAST, 7.082 | 71 | 13 / 12 / 18 | −30 / −30 / −30 |
+| 19:24:31 FAST, 7.082 | 284 | 44 / 47 / 47 | −29 / −29 / −30 |
+
+Busy by level for 20 s or more: six spans of 33–71 s before ADR-0078 and as first built, one with
+the fix — the first recording's opening, below. Where the fixed floor reads busy and the old one
+did not (19:23:22, 19:24:31: 6 and 3 points), the spectrogram shows a signal: an MFSK signal from
+1 750 Hz up whose lowest tones sit on the channel's edge, inside what Aether's own 500 Hz signal
+occupies (709 Hz), and a multi-tone digital signal in the channel; the old floor, not yet down with
+the cut those signals' own strength made, read part of them clear. Where the fixed floor reads busy
+on 7.074 it is FT8 or a strong signal in or against the channel; the old floor read the whole of the
+quiet between them busy, its floor 20 dB under the noise.
+
+**The slow AGC, event by event** (the 19:11:59 recording replayed alone; every floor learns the
+same from its start): after its three 13 s cuts the channel read busy for 16.9 s, 21.1 s and 40 s (to
+the end of the file) before ADR-0078; 0.5 s, 0 and 0 after it.
+
+**A defect in the reference, found by joining the recordings.** At 19:03:45, eight seconds before
+the first recording started, the receive level rose 26 dB across the whole passband and the
+radio's filter widened from 2.8 to 3.1 kHz with it: a setting changed at the radio. The log shows
+the channel at −55 to −65 dBFS for the half hour before. Both floors read the louder noise busy for
+68 s, until the hold ran out — by design, as for any rise of the band's noise (the corpus's group
+G). The floor then took the new level as the environment. The reference did not: `rebase` moved the
+levels on quiet only by a gain under 0 dB, and the reading stayed 23 dB over them. From then on a
+21 dB cut read as about 0 dB, so the floor learned the cut-down noise, and the channel read busy
+for the rest of every FT8 period and for a minute after each of the slow AGC's cuts — the failure
+ADR-0078 is about, for the rest of the session. Replayed one at a time the recordings did not show
+it: each started its reference afresh. Raising the RF gain, an attenuator off or a preamp on, a
+noisier band, a higher USB level and a start under a cut all leave the same. Fixed (ADR-0078 §5):
+when the hold runs out, the reference moves by the reading over 0 dB as well as under it.
+
+**Starting under a cut.** Replayed alone, the two 7.074 recordings begin inside a strong FT8
+station's period, so each reference learns that level as quiet, and the strong stations come back
+every other period, keep giving the floor evidence and so never let the hold run out: all three
+floors read busy 75 % and 98 % of those files, against 65 % and 28 % joined. A running station
+meets that only when its reference starts. Before the fix, that included every bandwidth move, which
+rebuilt the detector — and a 2 300 Hz station moves to answer a narrow call while the caller's signal
+may hold its AGC down; a move now keeps the radio's levels on quiet. A start of the daemon under a
+cut on such a band stays as it was before ADR-0078.
+
+**The logs.** All five uploads (138 hours, 2026-10-08…20) hold 97 spans busy by level for 20 s or
+more that ended with the floor 6 dB or more over where it began; one
+began within 90 s of a dial change made through Aether and one within 90 s of a start. Six are the
+afternoon of these recordings.
+
+What these recordings settle of §6: items 1–5 for 40 m in daylight with AUTO, FAST and SLOW. Still
+owed: part A, the original case (80 m at night, 15 minutes, AUTO), MID and OFF, part C with its times,
+and the radio's mode, AGC delays and USB level.

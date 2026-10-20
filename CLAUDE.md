@@ -1800,7 +1800,7 @@ an idle 3.590 MHz channel busy by level for ~70 s, the floor slid to −47 dBFS:
 down for a strong signal, the floor learned the turned-down noise (quiet, steady, low: evidence),
 and when the gain came back no block was evidence until the 60 s hold ran out — 57 such spans in 108
 h of KK4ODA-1's logs, 36 of them 69–73 s. `docs/research/busy-detection/` is the investigation:
-`00-recording-plan.md` (what the author is asked to record — owed), `01-survey.md`,
+`00-recording-plan.md` (what the author is asked to record), `01-survey.md`,
 `02-measurements.md`, `03-candidates.md` (criteria registered before the runs, seven runs, a
 held-out draw). Now the station hands the detector the radio's whole 48 kHz audio
 (`BusyDetector::hear_passband`, skipped while deaf; `skip` clears the reference's averages), and
@@ -1811,7 +1811,8 @@ tracker that learns only from uncut readings at evidence blocks), the 25th perce
 differences over bins within 10 dB of the channel's, the median of three readings. The floor is the
 median of `power / gain` over evidence, drawn at the gain of the moment (`draw`: never above 0 dB; a
 2 dB dead band, a one-second ease; at 2300 Hz up only once within 3 dB of 0, so a wide signal in the
-channel under a cut stays visible; the hold's expiry rebases). `GainHandling::Plain` is the floor
+channel under a cut stays visible; the hold's expiry, and only it, rebases — the reference by the
+reading, over 0 dB as well as under it). `GainHandling::Plain` is the floor
 before, kept for `aetherd --busy-trace WAV [--expect] [--bandwidth] --busy-variant plain` (the
 detector over a recording, block by block, as CSV); `tools/floor_trace.py` lists every AGC event in
 a recording (depth, ramp, cause, busy after); `tools/busy_corpus.py` (183 labelled clips, `--seed N`
@@ -1824,9 +1825,20 @@ is traced in `03-candidates.md` §3. Harness (10 scenarios × 3 draws against be
 4/6` and a call) fail 6/6 on beta.114 and pass 6/6; 30/30 against 24/30, no radiated overlap,
 nothing slower. The channel server has `kind = "carrier"` and `windows = [[start, end]]` for any
 QRM; the harness has the steps `at T`, `clear WHO S` and `busy WHO S`. No wire change, no config
-key. Open: the author's recordings (does a real radio's passband outside the channel follow its
-gain; fit the AGC presets; where the drivers sat), a radio filter narrower than ~1 kHz at 500 Hz (no
-bins to read: the floor behaves as before), the S-meter as a witness.
+key. **The author's first recordings** (2026-10-18, 40 m, AUTO/FAST/SLOW; `02-measurements.md` §9,
+ADR-0078 §5) confirmed the premise on the FTDX10 (the channel's noise falls by the reading within
+2 dB; the radio's audio noise 49–54 dB under the band's) and the presets' bracket (release FAST
+40–150, AUTO 49–74, SLOW 25–27 dB/s), and found a defect: joined end to end, a 26 dB rise of the whole
+passband made at the radio left the reference 23 dB over its levels on quiet (the rebase went only
+down), every later cut read as none, and the old failure came back for the session. Now the hold's
+rebase moves the reference both ways, and a bandwidth move keeps the radio's levels on quiet
+(`keep_levels_from`, `for_channel` in `move_to`); joined, busy 64 → 8 % on the slow-AGC recording,
+20 s+ spans six → one (the rise itself, 68 s, by design). Join a batch's recordings end to end
+(as one daemon hears them) as well as replaying each alone: each alone starts its reference afresh.
+Open: 80 m at night (the original case), MID and OFF, a radio filter narrower than ~1 kHz at 500 Hz
+(no bins to read: the floor behaves as before), a daemon started under a cut that returns within
+every minute (FT8 with a strong station every other period: as before ADR-0078), the S-meter as a
+witness.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -269,6 +269,29 @@ never reads clear within 6–8 s of the carrier going, so no call is made) and p
 build — **H1 met**; every scenario passes at least as often (30/30 against 24/30), no radiated
 overlap in either arm, and nothing slower by the nightly's trend rules — **H2 met**.
 
+### 3.5 On the air (§2.4)
+
+The author's first recordings (2026-10-18: 40 m, AUTO, FAST and SLOW; `02-measurements.md` §9),
+replayed with `tools/floor_trace.py`. **Each recording alone, the build of run 7 meets §2.4**: on the
+slow-AGC recording the channel read clear 0.5 s, 0 and 0 s after its three 13 s cuts (`plain`:
+16.9 s, 21.1 s, and 40 s to the end of the file), and it adds no false busy of 5 s or more anywhere —
+every stretch it reads busy and `plain` did not holds a signal in the channel or on its edge.
+
+**The seven joined end to end, as a running daemon would have heard them, it fails.** A 26 dB rise
+of the whole passband at the radio, before the first recording, left the reference reading 23 dB over
+its levels on quiet once the hold had taken the new level as the environment, and every cut after it
+read as no cut: six false busy spans of 33–71 s, as `plain`'s six. Fixed in the reference's rebase
+(ADR-0078 §5); with the fix, one span — the 68 s both floors take to accept the rise itself, as any
+rise of the band's noise (group G).
+
+The fix judged again on the three draws of the corpus: the first and the third identical, clip by
+clip, to run 7; on the second, one clip more fails criterion 4, `G-noise-step+10` (floor error median
+1.050 dB against `plain`'s 0.545, 0.5 allowed: 0.005 over). It is the third draw's `G-noise-step+10`
+again (§3.3): the floors after the hold has run out differ by 0.1 dB (−18.3 against −18.2 dBFS), and
+with half the clip's blocks 10 dB off for the minute both floors take on the rise, the median of the
+error sits on the edge between the two groups. Its false busy, its episodes and its share are
+`plain`'s.
+
 ## 4. Decision
 
 `normalised` as built for run 7 (ADR-0078). It meets the criterion the investigation is about — the
