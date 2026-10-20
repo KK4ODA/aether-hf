@@ -1704,7 +1704,14 @@ stop's wind-down is 22 s, the shell's kill 30 s, systemd's 30 s. Harness: `ident
 scenarios `40m-closing-identifiers-2300` (two US callsigns) and `-ve3-` (one non-US, ID off): five
 endings each, and `80m-varac-chat-and-ping-500` (a `host a varac` emulator and `host-ping`).
 Three draws of all 50 scenarios: 150/150, no radiated overlap; the closing costs a median 8.4 s
-(3.6 % of air, ×1.042 against beta.110); the nightly baseline is these runs. Mixed pairs against
+(3.6 % of air, ×1.042 against beta.110); the nightly baseline is these runs. **Those identifier
+checks never ran** from a607247 until 2026-10-20: `config::EXAMPLE` still said `schema_version =
+12`, the harness's `schema_of` reads it, and `identifier_faults` and `Host._check_identified`
+skip a station under 13 — the 150/150, the mixed pairs and every nightly were unjudged on them.
+The example says 13 now and `the_example_file_says_the_schema_this_version_writes` holds it to
+`SCHEMA_VERSION` (**a schema bump updates the example**). Rerun with the checks on: the three
+identifier scenarios 9/9 over three draws, the quick set 4/4, all 54 scenarios 54/54; 157
+identifiers judged, no fault. Mixed pairs against
 beta.108: 14/14 both ways; with both IDs on, a beta.108 slave that aborts keys its identifier
 over the master, as two beta.108 stations do. Residual: on a path neither station hears, a
 timed-out slave's identifier can fall on the master's last retries. Harness fixes: the host

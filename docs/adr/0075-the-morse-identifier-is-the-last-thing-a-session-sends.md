@@ -174,6 +174,24 @@ and VarAC's chat and ping (`80m-varac-chat-and-ping-500`, new). The five endings
 | the called station aborts | KK4ODA DISC 163.5–167.1 · W4ODA DISC 167.4–168.3 · KK4ODA DISC_ACK + Morse 168.6–173.5 · W4ODA Morse 174.3–178.0 |
 | the path dies (outage 196–436) | KK4ODA times out, Morse 383.3–387.7 · W4ODA "no response", Morse 452.6–456.3 |
 
+**Those checks did not run (found 2026-10-20).** This ADR raised `SCHEMA_VERSION` to 13 and left
+the example file (`config::EXAMPLE`, what `aetherd --example-config` prints) at
+`schema_version = 12`. The harness learns what a build reads from that line (`schema_of` in
+`tools/session_matrix.py`), so it took this build for schema 12. The identifier invariants above
+(`identifier_faults`) and the host emulator's check that `DISCONNECTED` comes after the
+identifier (`Host._check_identified`) returned early for every station, on every run from
+a607247 until the fix: the 150 of 150 here, the mixed pairs of §5 and every nightly since. The
+endings in the table were read off the account of the air, which was right. Operators lost
+nothing: a file written from the example is migrated forward at load. The example says 13 now,
+and a test holds it to `SCHEMA_VERSION`
+(`the_example_file_says_the_schema_this_version_writes`). Rerun with the checks on (beta.115's
+tree): `40m-closing-identifiers-2300`, `40m-closing-identifiers-ve3-2300` and
+`80m-varac-chat-and-ping-500` over three draws, 9 of 9; the quick set, 4 of 4; all 54 scenarios
+once, 54 of 54. That is 157 identifiers judged and no fault. Every session of an identifying
+station ended with its identifier, VE3XYZ sent none, and no radiated overlap. A doctored copy of
+the closing scenario's account is caught at schema 13 (a Header after its session's identifier,
+a session without one) and passed at 12.
+
 **What it costs.** From the end of the last DISC_ACK's frame, where a session ended before, to
 the end of the last identifier: a median 8.4 s a closing exchange (4.0–15.1 s over 213 closings),
 3.6 % of the scenarios' air time — by class, VOX 12.4 % (many short sessions), identifier 5.4 %,
