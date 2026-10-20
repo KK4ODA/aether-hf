@@ -257,7 +257,7 @@ reading's own 0.1 s on FAST and AUTO, 0.2–0.4 s later on SLOW — and comes ba
 The presets were provisional, to be fitted to these. They bracket them, with SLOW slower than the
 radio's — the harder case for the 2 300 Hz floor, which waits for the gain — so they are kept, and
 the corpus stays comparable across its runs. AUTO measured as MID suggests the radio was in DATA-U,
-not USB (the field guide's AUTO-is-SLOW-in-USB); the author's notes do not say.
+not USB (the field guide's AUTO-is-SLOW-in-USB); the author confirms DATA-U (2026-10-20).
 
 **The premise: the passband outside the channel follows the gain.** On the long cuts, the channel's
 noise (the per-bin median over 1 250–1 750 Hz, 0.1 s bins) against the gain reading over the middle
@@ -305,7 +305,9 @@ the end of the file) before ADR-0078; 0.5 s, 0 and 0 after it.
 
 **A defect in the reference, found by joining the recordings.** At 19:03:45, eight seconds before
 the first recording started, the receive level rose 26 dB across the whole passband and the
-radio's filter widened from 2.8 to 3.1 kHz with it: a setting changed at the radio. The log shows
+radio's filter widened from 2.8 to 3.1 kHz with it: a setting changed at the radio. The author does
+not remember which; a recording made with the recording tools keeps the radio's RF gain,
+attenuator, preamp, filter width, mode and AGC every 5 s, so the next one names itself. The log shows
 the channel at −55 to −65 dBFS for the half hour before. Both floors read the louder noise busy for
 68 s, until the hold ran out — by design, as for any rise of the band's noise (the corpus's group
 G). The floor then took the new level as the environment. The reference did not: `rebase` moved the
