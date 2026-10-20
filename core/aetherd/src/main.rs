@@ -1059,6 +1059,24 @@ fn waited_on(radio_ms: f64, recording_ms: f64, card_ms: f64, total_ms: f64) -> S
 /// of the burst is still to come. A whole burst goes over at once so nothing the loop does
 /// afterwards can put a hole in it; a keying failure is logged and the burst abandoned
 /// rather than taking the daemon down and stranding the key.
+/// Tell the station where the sound card's clock stands and what it reports of its latency —
+/// and of a transmission it dropped unplayed because its first radiating sample would have
+/// left past its slot ([`AudioIo::guard_onset`]): the key comes down at once.
+fn read_card(
+    station: &mut Station<Box<dyn Ptt>>,
+    audio: &mut dyn AudioIo,
+    daemon: &mut DaemonState,
+    last_ptt_fault: &mut Option<std::time::Instant>,
+) {
+    station.device_played(audio.played());
+    station.device_latency(audio.output_latency_s());
+    if let Some(late) = audio.take_onset_drop() {
+        if let Err(error) = station.card_dropped_late(late) {
+            note_ptt_failure(daemon, station, &error, last_ptt_fault);
+        }
+    }
+}
+
 fn fill_card(
     station: &mut Station<Box<dyn Ptt>>,
     audio: &mut dyn AudioIo,
@@ -1100,6 +1118,11 @@ fn fill_card(
     // was rendered and the radio keyed in between while the card played silence and counted
     // it (ADR-0010 §7).
     station.device_drains_at(audio.drains_at());
+    // and a transmission just keyed is held to its slot where its first radiating sample
+    // leaves the card, which is the last the station can see of it (report 12, change 6)
+    if let Some(guard) = station.take_onset_guard() {
+        audio.guard_onset(guard);
+    }
     // Silence played for want of samples the station still holds is a hole in the burst.
     // Once it has handed over the last of them, a card that runs dry has reached the burst's
     // end, and the silence until the next pass brings the key up is no hole.
@@ -1208,8 +1231,7 @@ fn serve(
 
         // the card's clock goes in ahead of the block, so a block that outlasts this
         // station's own transmission is muted only up to where the transmission ended
-        station.device_played(audio.played());
-        station.device_latency(audio.output_latency_s());
+        read_card(station, audio, daemon, &mut last_ptt_fault);
         let captured = aetherd::waits::timed(aetherd::waits::Wait::Card, || audio.capture());
         // audio the card's queue lost ahead of this block: the station's clock moves past it,
         // or every slot after a stall would be answered that much late
@@ -1240,8 +1262,7 @@ fn serve(
         // disk, the scheduler — can put a hole in it; the station releases the key against
         // the card's own clock, when the last sample has really left — where `fill_card`,
         // having queued it, says the card drains.
-        station.device_played(audio.played());
-        station.device_latency(audio.output_latency_s());
+        read_card(station, audio, daemon, &mut last_ptt_fault);
         fill_card(station, audio, backlog, block, daemon, &mut last_ptt_fault);
         let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
         note_pass(
