@@ -1718,7 +1718,10 @@ mod tests {
         assert_eq!(read("preamp", b"PA00;").as_deref(), Some("IPO"));
         assert_eq!(read("agc", b"?;"), None);
         assert_eq!(read("agc", b"GT09;"), None, "no such setting");
-        assert!(CatProtocol::Kenwood.settings_queries().is_empty());
+        assert_eq!(
+            CatProtocol::Kenwood.settings_queries(),
+            Vec::<(&str, Vec<u8>)>::new()
+        );
         assert_eq!(CatProtocol::Kenwood.parse_setting("agc", b"GT05;"), None);
     }
 
