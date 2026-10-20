@@ -43,21 +43,25 @@ caused it sat.
 
 1. **Receiver.** RF gain fully up (except AGC OFF, below). ATT off. IPO as you normally run it.
    NB, DNR, notch and contour off.
-2. **Nothing transmits.** No session, no beacon repeating, no Test. A transmission makes the modem
+2. **Settle first.** A recording starts with the last 30 s the modem heard. Make every change at the
+   radio (band, mode, filter, AGC, RF gain, attenuator, preamp) at least 30 s before you press the
+   button, then leave it alone until you stop. If you have to change something during a recording,
+   write down the time.
+3. **Nothing transmits.** No session, no beacon repeating, no Test. A transmission makes the modem
    deaf for a moment and moves the radio's AGC. If a station calls you during a recording, write
    down the time; the recording is still useful.
-3. **Notes.** On the Session tab, scroll to the recording box at the bottom. In the field beside
+4. **Notes.** On the Session tab, scroll to the recording box at the bottom. In the field beside
    the button, type the recording's letter, the frequency, the mode and filter, and the AGC
    setting. For example: *A 3.590 DATA-U 3000 AGC AUTO*.
-4. **Start.**
+5. **Start.**
    - Up to beta.114: the box is called *Recording*. Press **Record** to start and
      **Stop recording** to stop.
    - From the next beta: the box is called *Record the radio's audio*. Press **Start recording**
      to start and **Stop and save** to stop.
    - The line beside the box title says what was saved.
-5. **One recording per setting.** Stop and start a new recording each time you change the AGC
+6. **One recording per setting.** Stop and start a new recording each time you change the AGC
    setting, and type the new setting in the notes first.
-6. **Watch.** Keep the Status tab open. When the busy indicator stays on after a signal has gone,
+7. **Watch.** Keep the Status tab open. When the busy indicator stays on after a signal has gone,
    take a screenshot of the *Channel and activity* chart and write down the clock time.
 
 ## A. The real case (the most important)
