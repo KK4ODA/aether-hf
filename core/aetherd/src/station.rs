@@ -1033,6 +1033,10 @@ pub struct Station<P: Ptt> {
     /// How long the transmission now leaving the queue was held for a busy channel or the
     /// answer gap (`held_for_busy`).
     last_hold_s: f64,
+    /// Every second a transmission has waited for a clear channel since the station started:
+    /// what a Test's probe and call steps leave out of their deadlines, which count from the
+    /// transmission (10-step-3.md §3.7).
+    held_total_s: f64,
     /// The same for the last transmission that finished, which is the one worth reporting:
     /// a peak is only meaningful over a whole burst.
     tx_peak_last: Option<f32>,
@@ -1276,6 +1280,7 @@ impl<P: Ptt> Station<P> {
             tx_tag: None,
             tx_tags: Vec::new(),
             last_hold_s: 0.0,
+            held_total_s: 0.0,
             tx_peak_last: None,
             held_since: None,
             held_from: None,
@@ -4126,6 +4131,7 @@ impl<P: Ptt> Station<P> {
             // that has not left yet and the two go out back to back when the channel clears
             if let Some(since) = self.held_since {
                 self.engine.on_tx_delayed(now - since);
+                self.held_total_s += now - since;
             }
             self.held_since = Some(now);
             self.held_from.get_or_insert(now);
