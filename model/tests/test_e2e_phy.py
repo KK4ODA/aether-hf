@@ -6,11 +6,13 @@ import numpy as np
 import pytest
 
 from aether_model.channel import ChannelConfig, HfChannel, InterfererConfig, make_channel
+from aether_model.frame.codec import FrameCodec
 from aether_model.frame.modes import MODES
 from aether_model.phy.passband import AudioToBaseband
 from aether_model.phy.pipeline import Modem
 from aether_model.phy.preamble import FrameType
-from aether_model.waveform import WIDE_2300
+from aether_model.phy.rx import FrameReceiver, ReceivedFrame
+from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 
 P = WIDE_2300
 FS = P.fs_baseband
@@ -318,3 +320,86 @@ def test_a_narrowband_interferer_costs_only_the_carriers_it_sits_on(seed: int) -
     # and the SNR the rate controller is told leaves the interfered pilots out: the path's
     # 18 dB less what the fading costs, not the interferer's average over every carrier
     assert reported[True] > 14.0 > reported[False] + 5.0, reported
+
+
+def _received_both_ways(
+    params: WaveformParams,
+    profile: str,
+    snr_db: float,
+    mode_index: int,
+    frames: int,
+    seed: int,
+    **kw: float,
+) -> list[tuple[ReceivedFrame, ReceivedFrame, bytes, FrameCodec]]:
+    """``frames`` DATA frames through ``profile``, each received with the time filter that
+    follows a moving channel (ADR-0082) and without it, at the same sync."""
+    modem = Modem(params)
+    mode = modem.air.modes[mode_index]
+    codec = modem.codec(mode, modem.air.long)
+    steady = FrameReceiver(params)
+    steady.track_motion = False
+    follows = FrameReceiver(params)
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(frames):
+        payload = bytes(rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8))
+        y = make_channel(
+            profile,
+            snr_db=snr_db,
+            fs=FS,
+            seed=int(rng.integers(0, 2**31)),
+            signal_power=1.0,
+            **kw,
+        ).process(_buffer(modem.data_burst(payload, mode)))
+        y = modem.detector.condition(y)
+        (sync,) = modem.detector.detect(y, max_frames=1)
+        out.append((steady.receive(y, sync), follows.receive(y, sync), payload, codec))
+    return out
+
+
+@pytest.mark.parametrize(
+    ("bandwidth", "mode_index", "snr_db", "at_least"),
+    [(500, 7, 12.0, 7), (2300, 7, 26.0, 5)],
+)
+def test_a_channel_that_moves_within_the_frame_is_followed(
+    bandwidth: int, mode_index: int, snr_db: float, at_least: int
+) -> None:
+    """ADR-0082: on ITU flutter (10 Hz) the comb pilots, averaged over three symbols a third
+    each, average a channel that has turned over in three: the estimate's own error was the
+    frame's noise, the SNR read about −3.4 dB whatever the path's, and frames a per-symbol
+    estimate carries did not decode — 16-QAM ½ at +12 dB on the 500 Hz air, 8PSK ⅔ at +26 dB on
+    the 2 300 Hz one. Followed with the weight the motion asks for, they decode, and the
+    reading rises with the path."""
+    params = NARROW_500 if bandwidth == 500 else WIDE_2300
+    frames = _received_both_ways(params, "flutter", snr_db, mode_index, 8, seed=bandwidth + 1)
+    weights = [f.motion_weight for _, f, _, _ in frames]
+    assert sum(w is not None for w in weights) >= 7, weights
+    decoded = {False: 0, True: 0}
+    readings: dict[bool, list[float]] = {False: [], True: []}
+    for steady, follows, payload, codec in frames:
+        for followed, frame in ((False, steady), (True, follows)):
+            out, _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
+            decoded[followed] += out == payload
+            readings[followed].append(frame.snr_3k_db)
+    assert decoded[True] >= at_least > decoded[False] + 2, decoded
+    assert np.median(readings[True]) > np.median(readings[False]) + 3.0, readings
+
+
+@pytest.mark.parametrize("bandwidth", [500, 2300])
+@pytest.mark.parametrize(
+    ("profile", "impulses"), [("awgn", False), ("poor", False), ("awgn", True)]
+)
+def test_a_steady_channel_is_estimated_as_it_always_was(
+    bandwidth: int, profile: str, impulses: bool
+) -> None:
+    """ADR-0082 changes nothing where the channel holds still over a frame: on AWGN, ITU Poor
+    (1 Hz) and under impulses — which a mean of the pilots' second difference in time would
+    have taken for motion, and its median over symbols does not — the frame is received bit
+    for bit as it was."""
+    params = NARROW_500 if bandwidth == 500 else WIDE_2300
+    kw = {"impulsive_probability": 0.002, "impulsive_db_above_noise": 25.0} if impulses else {}
+    for steady, follows, _, _ in _received_both_ways(params, profile, 10.0, 3, 6, seed=17, **kw):
+        assert follows.motion_weight is None
+        assert np.array_equal(follows.symbols, steady.symbols)
+        assert np.array_equal(follows.noise_var, steady.noise_var)
+        assert follows.snr_3k_db == steady.snr_3k_db

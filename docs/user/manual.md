@@ -519,7 +519,7 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 
 | Reading | Where | What it is |
 |---|---|---|
-| **SNR** | Header, Link | What this receiver measured on the last frame it found, in a 3 kHz bandwidth. Negative numbers are normal on HF; the tone floor works below −14 dB. On a tone frame it is a lower bound and reads no higher than about 17 dB. |
+| **SNR** | Header, Link | What this receiver measured on the last frame it found, in a 3 kHz bandwidth. Negative numbers are normal on HF; the tone floor works below −14 dB. On a tone frame it is a lower bound and reads no higher than about 17 dB. On a fast flutter (a polar or auroral path, a signal that warbles) it is what the frame could carry, which stays a few decibels under the path however strong it is: the channel changes within each frame. |
 | **They hear you at** | Diagnostics, SNR chart | What the other station measured on your last burst, sent back in its acknowledgement or control frames. Compare it with your SNR: a big difference is a lopsided path. |
 | **Rung / Mode** | Header, Link | The step the data is moving at, with its name and rate on the air: the other station's while you receive, yours while you send, both (*sending / receiving*) when data goes both ways. With no data moving, the rung your station would send at. The low rungs are the tone floor. |
 | **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. Data going one way stays below the rate of the rung it went at: acknowledgements, turnarounds and retransmissions take their share. With data going both ways, the total can stand above either line. |
