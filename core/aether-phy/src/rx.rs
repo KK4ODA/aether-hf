@@ -12,7 +12,8 @@
 //!    the runner-up so a caller can retry if the CRC fails;
 //! 4. estimates the channel on every symbol — full estimates on the pilot symbols once their
 //!    chips are known, comb estimates smoothed over neighbouring symbols and interpolated
-//!    across carriers elsewhere;
+//!    across carriers elsewhere, the neighbours weighed less when the channel moves within
+//!    the frame (ADR-0082);
 //! 5. equalises the data carriers and returns the symbols with a **per-symbol** noise
 //!    variance.
 //!
@@ -139,6 +140,116 @@ pub struct ReceivedFrame {
     /// How many more frames of its burst the frame says follow it, read from the phase of
     /// its mode chips (ADR-0041); 0 for a control frame.
     pub follows: u8,
+    /// The weight each neighbouring symbol's pilots had in the channel estimate when the
+    /// channel moved within the frame (ADR-0082) — under a third, and the less the faster it
+    /// moved; `None` for a channel steady over the frame, estimated as always.
+    pub motion_weight: Option<f64>,
+}
+
+/// How much the channel must move for the receiver to follow it (ADR-0082): the comb pilots'
+/// second difference in time, less what their noise puts there, at least this share of their
+/// power. A Gaussian Doppler spectrum reaches it at about 4.5 Hz (2σ) on 31 ms symbols; ITU
+/// Poor (1 Hz) puts 0.0005 there and a steady channel nothing, and a short control frame's
+/// pilots carry about 0.02 of their own on any channel at high SNR.
+pub const MOTION_SHARE: f64 = 0.1;
+
+/// And the weight it asks for at most this — the motion at least four times the noise in the
+/// pilots' second difference (ADR-0082). The noise is read from 20 (a 500 Hz control frame) to
+/// 220 samples; at a few decibels on a steady channel the share alone fired on a third of the
+/// frames, where the noise had read low, and each such frame's SNR read high by as much.
+pub const MOTION_WEIGHT_MAX: f64 = 0.2;
+
+/// `(weight, noise)` when the channel moves within the frame, `None` when it is steady
+/// (ADR-0082).
+///
+/// Two second differences tell the channel's motion from the noise. Across frequency, on the
+/// full pilot symbols — every carrier known, one instant — they hold the noise (with whatever
+/// interferes between carriers and the transmitter's peak reduction) and, for the delay
+/// spreads the prefix covers, little of the channel: `noise` is their mean power over six. In
+/// time, on the comb pilots, they hold six times the noise plus the channel's own change; the
+/// median over symbols, so an impulse in a few symbols is not taken for motion. The three-tap
+/// time filter `[w, 1 − 2w, w]` leaves the least error at `w = 2·noise / D2` — a third on a
+/// steady channel, which is the filter as it always was, and the less the more it moves; the
+/// channel is followed when it moves by [`MOTION_SHARE`] of its power and `w` is at most
+/// [`MOTION_WEIGHT_MAX`].
+fn motion(
+    comb: &[Vec<Complex>],
+    raw: &[Vec<Complex>],
+    known: &[Vec<Complex>],
+    full: &[bool],
+    pre: usize,
+) -> Option<(f64, f64)> {
+    let n_sym = comb.len();
+    if n_sym < pre + 3 || !full.iter().any(|&f| f) {
+        return None;
+    }
+    let second =
+        |a: Complex, b: Complex, z: Complex| c::norm_sq(c::add(c::sub(a, c::scale(b, 2.0)), z));
+    let per_symbol: Vec<f64> = (pre..n_sym - 2)
+        .map(|s| {
+            let row: f64 = (0..comb[s].len())
+                .map(|k| second(comb[s][k], comb[s + 1][k], comb[s + 2][k]))
+                .sum();
+            row / comb[s].len() as f64
+        })
+        .collect();
+    let moved = median(&per_symbol);
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for (symbol, _) in full.iter().enumerate().filter(|&(_, &f)| f) {
+        let direct: Vec<Complex> = raw[symbol]
+            .iter()
+            .zip(&known[symbol])
+            .map(|(&r, &k)| c::div(r, k))
+            .collect();
+        for k in 0..direct.len().saturating_sub(2) {
+            sum += second(direct[k], direct[k + 1], direct[k + 2]);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    let noise = sum / count as f64 / 6.0;
+    let cells = comb[pre..].iter().map(Vec::len).sum::<usize>();
+    let power = comb[pre..]
+        .iter()
+        .flatten()
+        .map(|&v| c::norm_sq(v))
+        .sum::<f64>()
+        / cells as f64;
+    if moved - 6.0 * noise < MOTION_SHARE * power {
+        return None;
+    }
+    let weight = 2.0 * noise / moved;
+    (weight <= MOTION_WEIGHT_MAX).then_some((weight, noise))
+}
+
+/// The comb pilots smoothed in time by `[w, 1 − 2w, w]`, and `[1 − w, w]` at the frame's two
+/// ends (ADR-0082).
+fn follow(comb: &[Vec<Complex>], pre: usize, weight: f64) -> Vec<Vec<Complex>> {
+    let n_sym = comb.len();
+    let mut out = comb.to_vec();
+    let edge = |a: &[Complex], b: &[Complex]| -> Vec<Complex> {
+        a.iter()
+            .zip(b)
+            .map(|(&x, &y)| c::add(c::scale(x, 1.0 - weight), c::scale(y, weight)))
+            .collect()
+    };
+    out[pre] = edge(&comb[pre], &comb[pre + 1]);
+    out[n_sym - 1] = edge(&comb[n_sym - 1], &comb[n_sym - 2]);
+    for s in pre + 1..n_sym - 1 {
+        for k in 0..comb[s].len() {
+            out[s][k] = c::add(
+                c::add(
+                    c::scale(comb[s - 1][k], weight),
+                    c::scale(comb[s][k], 1.0 - 2.0 * weight),
+                ),
+                c::scale(comb[s + 1][k], weight),
+            );
+        }
+    }
+    out
 }
 
 /// A pilot carrier whose residual is over this many times the median pilot's carries an
@@ -179,6 +290,13 @@ pub struct FrameReceiver {
     /// A carrier's slicing error must be this many times the median carrier's before its noise
     /// is raised: under it, the scatter of a clean carrier's estimate over 12–32 symbols.
     pub carrier_noise_threshold: f64,
+    /// Follow a channel that moves within the frame (ADR-0082). The comb pilots are averaged
+    /// over three symbols, a third each, which on a steady channel takes two thirds of their
+    /// noise away and on ITU flutter (10 Hz) averages a channel that has turned over in three
+    /// symbols: the estimate's own error was the frame's noise. Where the pilots' change from
+    /// symbol to symbol stands clear of their noise, the neighbours' weight is the one that
+    /// leaves the least error.
+    pub track_motion: bool,
 }
 
 impl Default for FrameReceiver {
@@ -200,6 +318,7 @@ impl FrameReceiver {
             noise_floor_fraction: 0.25,
             per_carrier_noise: true,
             carrier_noise_threshold: 2.0,
+            track_motion: true,
         }
     }
 
@@ -468,6 +587,11 @@ impl FrameReceiver {
                 known[symbol][carrier] = pilot_reference[slot];
             }
         }
+        let moving = if self.track_motion {
+            motion(&comb, &raw, &known, &is_pilot_symbol, pre)
+        } else {
+            None
+        };
 
         let mut channel = vec![vec![(0.0, 0.0); n_carriers]; n_sym];
         for symbol in pre..n_sym {
@@ -516,12 +640,31 @@ impl FrameReceiver {
             total / count as f64 * bias
         };
         let floor = sigma2 * self.noise_floor_fraction;
-        let sigma2_symbol: Vec<f64> = per_symbol
+        let mut sigma2_symbol: Vec<f64> = per_symbol
             .iter()
             .map(|&value| {
                 (self.noise_shrinkage * sigma2 + (1.0 - self.noise_shrinkage) * value).max(floor)
             })
             .collect();
+        for value in &mut per_pilot {
+            *value = *value / data_symbols.len().max(1) as f64 * bias;
+        }
+        let mut reported = self.reported_noise(&per_pilot, sigma2);
+        if let Some((weight, noise)) = moving {
+            // re-estimate between the full pilot symbols with the weight the motion asks for;
+            // the residuals above, from the steady estimate, keep their shape — which symbols an
+            // impulse hit, which carriers an interferer sits on — scaled to what the frame's
+            // noise is, read across frequency, plus the error this estimate leaves
+            let followed = follow(&comb, pre, weight);
+            for &symbol in &data_symbols {
+                channel[symbol] = interpolate(&followed[symbol]);
+            }
+            let scale = (noise * (5.0 / 3.0 - 2.0 * weight) / sigma2.max(1e-12)).min(1.0);
+            for value in &mut sigma2_symbol {
+                *value *= scale;
+            }
+            reported *= scale;
+        }
 
         let signal_power: f64 = data_symbols
             .iter()
@@ -529,10 +672,7 @@ impl FrameReceiver {
             .map(|(s, carrier)| c::norm_sq(channel[s][carrier]))
             .sum::<f64>()
             / (data_symbols.len() * n_carriers) as f64;
-        for value in &mut per_pilot {
-            *value = *value / data_symbols.len().max(1) as f64 * bias;
-        }
-        let snr_carrier = signal_power / self.reported_noise(&per_pilot, sigma2).max(1e-12);
+        let snr_carrier = signal_power / reported.max(1e-12);
         let bandwidth_ratio = self.params.occupied_bandwidth_hz() / 3000.0;
 
         // 6. equalise the data carriers, time-major
@@ -567,6 +707,7 @@ impl FrameReceiver {
             chip_runner_up: runner_up,
             mode_confidence: confidence,
             follows,
+            motion_weight: moving.map(|(weight, _)| weight),
         })
     }
 }

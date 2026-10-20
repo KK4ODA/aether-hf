@@ -510,7 +510,12 @@ A conforming receiver is not required to use any particular algorithm, but must 
 * **Residual carrier offset** estimation from the comb pilots; 64-QAM needs the frame's
   residual well below 0.1 Hz.
 * **Channel estimation** from the comb pilots, interpolated across frequency and smoothed
-  across symbols.
+  across symbols — by less where the channel moves within the frame. The reference receiver
+  averages three symbols a third each, and where the pilots' second difference in time stands
+  clear of the noise their second difference across frequency shows on the full pilot
+  symbols, it weighs the neighbours by `w = 2·noise / D2` instead, under a fifth (ADR-0082): on
+  ITU flutter (10 Hz) the three-symbol average had averaged a channel that turns over in
+  three symbols, and its own error was the frame's noise.
 * **Per-symbol noise variance**, so a symbol damaged by impulsive noise is discounted rather
   than trusted. This matters more on HF than the interpolation does: the FFT spreads a single
   hot sample across every carrier of its symbol.

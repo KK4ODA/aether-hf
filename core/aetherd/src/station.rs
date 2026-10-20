@@ -10932,6 +10932,7 @@ mod tests {
                 chip_runner_up: 1,
                 mode_confidence: 1.0,
                 follows: 0,
+                motion_weight: None,
             }),
         };
         assert!(!station.receiving(), "dark to begin with");

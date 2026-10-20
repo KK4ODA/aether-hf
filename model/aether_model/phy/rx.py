@@ -85,6 +85,22 @@ class ReceivedFrame:
     follows: int = 0
     """How many more frames of its burst the frame says follow it, read from the phase of its
     mode chips (ADR-0041); 0 for CONTROL frames."""
+    motion_weight: float | None = None
+    """The weight each neighbouring symbol's pilots had in the channel estimate when the
+    channel moved within the frame (ADR-0082) — under a third, and the less the faster it
+    moved; ``None`` for a channel steady over the frame, estimated as always."""
+
+
+def _follow(comb: ComplexArray, pre: int, weight: float) -> ComplexArray:
+    """The comb pilots smoothed in time by ``[w, 1 − 2w, w]``, and ``[1 − w, w]`` at the frame's
+    two ends (ADR-0082)."""
+    out = comb.copy()
+    out[pre] = (1.0 - weight) * comb[pre] + weight * comb[pre + 1]
+    out[-1] = (1.0 - weight) * comb[-1] + weight * comb[-2]
+    out[pre + 1 : -1] = (
+        weight * comb[pre:-2] + (1.0 - 2.0 * weight) * comb[pre + 1 : -1] + weight * comb[pre + 2 :]
+    )
+    return out
 
 
 def layout_for(header_type: FrameType, params: WaveformParams = WIDE_2300) -> FrameLayout:
@@ -139,6 +155,27 @@ class FrameReceiver:
     carrier_noise_threshold: float = 2.0
     """A carrier's slicing error must be this many times the median carrier's before its noise
     is raised: under it, the scatter of a clean carrier's estimate over 12–32 symbols."""
+    track_motion: bool = True
+    """Follow a channel that moves within the frame (ADR-0082). The comb pilots are averaged
+    over three symbols, a third each, which on a steady channel takes two thirds of their noise
+    away and on ITU flutter (10 Hz) averages a channel that has turned over in three symbols:
+    the estimate's own error was the frame's noise, the SNR read about −3.4 dB whatever the
+    path's, and 16-QAM ½ decoded 4 frames of 20 at +8 dB of the 18 that following the channel
+    decodes. Where the pilots' change from symbol to symbol stands clear of their noise, the
+    neighbours' weight is the one that leaves the least error (:meth:`_motion`)."""
+    MOTION_SHARE = 0.1
+    """How much the channel must move for the receiver to follow it: the comb pilots' second
+    difference in time, less what their noise puts there, at least this share of their power.
+    A Gaussian Doppler spectrum reaches it at about 4.5 Hz (2σ) on 31 ms symbols; ITU Poor
+    (1 Hz) puts 0.0005 there and a steady channel nothing, and a short control frame's
+    pilots carry about 0.02 of their own on any channel at high SNR."""
+    MOTION_WEIGHT_MAX = 0.2
+    """And the weight it asks for at most this — the motion at least four times the noise in
+    the pilots' second difference. The noise is read from 20 (a 500 Hz control frame) to 220
+    samples; at a few decibels on a steady channel the share alone fired on a third of the
+    frames, where the noise had read low, and each such frame's SNR read high by as much. With
+    the cap it fires on 1–15 % of steady frames, mostly short control frames, and on 80–95 % of
+    500 Hz data frames on flutter from +4 dB."""
 
     def __init__(self, params: WaveformParams = WIDE_2300) -> None:
         self.p = params
@@ -177,6 +214,43 @@ class FrameReceiver:
         return float(np.mean(clean)) if len(clean) else sigma2
 
     OUTLIER_PILOT = 4.0
+
+    def _motion(
+        self,
+        comb: ComplexArray,
+        raw: ComplexArray,
+        known: ComplexArray,
+        full: NDArray[np.bool_],
+        pre: int,
+    ) -> tuple[float, float] | None:
+        """``(weight, noise)`` when the channel moves within the frame, ``None`` when it is
+        steady (ADR-0082).
+
+        Two second differences tell the channel's motion from the noise. Across frequency, on
+        the full pilot symbols — every carrier known, one instant — they hold the noise
+        (with whatever interferes between carriers and the transmitter's peak reduction) and,
+        for the delay spreads the prefix covers, little of the channel: ``noise`` is their
+        mean power over six. In time, on the comb pilots, they hold six times the noise plus
+        the channel's own change, ``D2``; the median over symbols, so an impulse in a few
+        symbols is not taken for motion. The three-tap time filter ``[w, 1 − 2w, w]`` leaves
+        the least error at ``w = 2·noise / D2`` — a third on a steady channel, which is the
+        filter as it always was, and the less the more the channel moves; the channel is
+        followed when it moves by :attr:`MOTION_SHARE` of its power and ``w`` is at most
+        :attr:`MOTION_WEIGHT_MAX`.
+        """
+        n_sym = len(comb)
+        if n_sym - pre < 3 or not full.any():
+            return None
+        d2 = comb[pre : n_sym - 2] - 2.0 * comb[pre + 1 : n_sym - 1] + comb[pre + 2 :]
+        moved = float(np.median(np.mean(np.abs(d2) ** 2, axis=1)))
+        direct = raw[full] / known[full]
+        f2 = direct[:, :-2] - 2.0 * direct[:, 1:-1] + direct[:, 2:]
+        noise = float(np.mean(np.abs(f2) ** 2)) / 6.0
+        power = float(np.mean(np.abs(comb[pre:]) ** 2))
+        if moved - 6.0 * noise < self.MOTION_SHARE * power:
+            return None
+        weight = 2.0 * noise / moved
+        return (weight, noise) if weight <= self.MOTION_WEIGHT_MAX else None
 
     def frame_span(self, sync: FrameSync) -> tuple[int, int]:
         layout = layout_for(sync.header.frame_type, self.p)
@@ -281,6 +355,11 @@ class FrameReceiver:
             full[s_i] = True
         for s_i in data_syms:
             known[s_i, pc] = ref
+        motion = (
+            self._motion(comb, raw, known, full, pre)
+            if self.track_motion and self.channel_estimator == "linear"
+            else None
+        )
         h = np.zeros((n_sym, self.cmap.n_carriers), dtype=np.complex128)
         for s_i in range(pre, n_sym):
             if full[s_i]:
@@ -309,8 +388,21 @@ class FrameReceiver:
             self.noise_shrinkage * sigma2 + (1.0 - self.noise_shrinkage) * per_symbol,
             sigma2 * self.noise_floor_fraction,
         )
+        reported = self._reported_noise(resid, bias, sigma2)
+        if motion is not None:
+            # re-estimate between the full pilot symbols with the weight the motion asks for;
+            # the residuals above, from the steady estimate, keep their shape — which symbols
+            # an impulse hit, which carriers an interferer sits on — scaled to what the
+            # frame's noise is, read across frequency, plus the error this estimate leaves
+            weight, noise = motion
+            sm = _follow(comb, pre, weight)
+            for s_i in data_syms:
+                h[s_i] = interp(sm[s_i])
+            scale = min(1.0, noise * (5.0 / 3.0 - 2.0 * weight) / max(sigma2, 1e-12))
+            sigma2_sym = sigma2_sym * scale
+            reported *= scale
         sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
-        snr_carrier = sig_power / max(self._reported_noise(resid, bias, sigma2), 1e-12)
+        snr_carrier = sig_power / max(reported, 1e-12)
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
         # 5. equalize data carriers of payload symbols, time-major
         eq = raw[data_syms][:, self.data_c] / h[data_syms][:, self.data_c]
@@ -331,4 +423,5 @@ class FrameReceiver:
             chip_runner_up=runner_up,
             mode_confidence=confidence,
             follows=follows,
+            motion_weight=None if motion is None else motion[0],
         )

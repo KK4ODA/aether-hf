@@ -23,6 +23,7 @@ use aether_phy::{
     ofdm::OfdmDemodulator,
     passband::{AudioToBaseband, BasebandToAudio, band_limit_taps, resample_taps},
     preamble::{FrameHeader, FrameType},
+    rx::{FrameReceiver, FrameSync},
     tone,
     tx::FrameTransmitter,
     waveform::{Modulation, WIDE_2300},
@@ -753,6 +754,205 @@ fn whole_frames_match_the_model() {
                 .expect("in range");
             expect_complex(&got, want, &format!("{label}: symbol {symbol}"));
         }
+    }
+}
+
+/// `SplitMix64` draws mapped to `[−1, 1)`, real then imaginary: the vector generator's noise.
+fn pseudo_noise(n: usize, seed: u64) -> Vec<(f64, f64)> {
+    let mut state = seed;
+    let mut draw = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z >> 11) as f64 * 2f64.powi(-53) * 2.0 - 1.0
+    };
+    (0..n).map(|_| (draw(), draw())).collect()
+}
+
+/// `input` turned by `hz` from its first sample, at the baseband rate.
+fn turned(input: &[(f64, f64)], hz: f64, phase: f64) -> impl Iterator<Item = (f64, f64)> + '_ {
+    input.iter().enumerate().map(move |(index, &(re, im))| {
+        let angle = 2.0 * std::f64::consts::PI * hz * index as f64 / 8000.0 + phase;
+        let (cos, sin) = (angle.cos(), angle.sin());
+        (re * cos - im * sin, re * sin + im * cos)
+    })
+}
+
+/// `Σ amplitude · x[k − delay] · exp(j(2π·f·k/8000 + phase))` over `[amplitude, f, phase,
+/// delay]` rays, as the generator builds it.
+fn ofdm_rays(input: &[(f64, f64)], rays: &Value) -> Vec<(f64, f64)> {
+    let mut output = vec![(0.0, 0.0); input.len()];
+    for ray in rays.as_array().expect("rays") {
+        let ray = ray.as_array().expect("ray");
+        let amplitude = ray[0].as_f64().expect("amplitude");
+        let hz = ray[1].as_f64().expect("frequency");
+        let phase = ray[2].as_f64().expect("phase");
+        let delay = ray[3].as_f64().expect("delay") as usize;
+        let mut delayed = vec![(0.0, 0.0); delay];
+        delayed.extend_from_slice(&input[..input.len() - delay]);
+        for (out, (re, im)) in output.iter_mut().zip(turned(&delayed, hz, phase)) {
+            out.0 += amplitude * re;
+            out.1 += amplitude * im;
+        }
+    }
+    output
+}
+
+/// One `ofdm_receive` case's received samples and the sync it is received at, with its codec,
+/// payload and a label.
+struct OfdmInput {
+    samples: Vec<(f64, f64)>,
+    sync: FrameSync,
+    params: aether_phy::waveform::WaveformParams,
+    codec: FrameCodec,
+    payload: Vec<u8>,
+    label: String,
+}
+
+fn ofdm_receive_input(case: &Value) -> OfdmInput {
+    let params = match int(case, "bandwidth_hz") {
+        2300 => WIDE_2300,
+        500 => aether_phy::waveform::NARROW_500,
+        other => panic!("no waveform for {other} Hz"),
+    };
+    let air = aether_phy::modes::air_interface(params);
+    let control = case["mode"].as_i64().expect("mode") < 0;
+    let (mode, layout) = if control {
+        (air.control_mode(), air.short)
+    } else {
+        (air.modes[int(case, "mode")], air.long)
+    };
+    let rv = int(case, "rv") as u8;
+    let header = if control {
+        FrameHeader::control()
+    } else {
+        FrameHeader::new(FrameType::Data, mode.index, rv)
+            .and_then(|header| header.with_follows(int(case, "follows") as u8))
+            .expect("header")
+    };
+    let label = format!("{} Hz {} rv{rv}", params.bandwidth.hz(), mode.name());
+    let codec = FrameCodec::new(mode, layout).expect("codec");
+    let payload = from_hex(case["payload"].as_str().expect("payload"));
+    let frame = FrameTransmitter::new(params)
+        .baseband(
+            &header,
+            &layout,
+            &codec.encode(&payload, rv).expect("encode"),
+        )
+        .expect("baseband");
+    let lead = int(case, "lead");
+    let mut clean = vec![(0.0, 0.0); int(case, "n_samples")];
+    clean[lead..lead + frame.len()].copy_from_slice(&frame);
+    let cfo = float(case, "cfo_hz");
+    let level = float(case, "noise");
+    let draws = pseudo_noise(clean.len(), case["noise_seed"].as_u64().expect("seed"));
+    let samples = turned(&ofdm_rays(&clean, &case["rays"]), cfo, 0.0)
+        .zip(draws)
+        .map(|((re, im), (nre, nim))| (re + level * nre, im + level * nim))
+        .collect();
+    let sync = FrameSync {
+        start: lead,
+        cfo_hz: cfo - 0.8,
+        frame_type: if control {
+            FrameType::Control
+        } else {
+            FrameType::Data
+        },
+        timing_peak: 1.0,
+        type_confidence: 1.0,
+    };
+    OfdmInput {
+        samples,
+        sync,
+        params,
+        codec,
+        payload,
+        label,
+    }
+}
+
+#[test]
+fn ofdm_frames_are_received_as_the_model_receives_them() {
+    // ADR-0082: a frame on a steady channel and one whose two paths beat at 9–12 Hz, on both
+    // airs — the receiver decides the same about the channel's motion, follows it with the
+    // same weight, and reports the same offset, SNR, symbols and noise variances
+    let doc = vectors();
+    let tol = float(&doc, "ofdm_receive_tolerance");
+    let cases = doc["ofdm_receive"].as_array().expect("ofdm receive");
+    assert!(
+        cases.iter().any(|c| c["motion_weight"].is_null())
+            && cases.iter().any(|c| !c["motion_weight"].is_null()),
+        "the vectors must cover a steady channel and a moving one"
+    );
+    let close = |got: f64, want: f64| (got - want).abs() <= tol * (1.0 + want.abs());
+    for case in cases {
+        let OfdmInput {
+            samples,
+            sync,
+            params,
+            codec,
+            payload,
+            label,
+        } = ofdm_receive_input(case);
+        let frame = FrameReceiver::new(params)
+            .receive(&samples, &sync, None)
+            .expect("receive");
+        assert_eq!(frame.mode, int(case, "received_mode"), "{label}: mode");
+        assert_eq!(
+            usize::from(frame.rv),
+            int(case, "received_rv"),
+            "{label}: rv"
+        );
+        assert_eq!(
+            usize::from(frame.follows),
+            int(case, "received_follows"),
+            "{label}: follows"
+        );
+        match case["motion_weight"].as_f64() {
+            None => assert!(frame.motion_weight.is_none(), "{label}: taken as moving"),
+            Some(want) => {
+                let got = frame.motion_weight.expect("taken as steady");
+                assert!(close(got, want), "{label}: weight {got} vs {want}");
+            }
+        }
+        for (key, got) in [
+            ("received_cfo_hz", frame.cfo_hz),
+            ("snr_carrier_db", frame.snr_carrier_db),
+            ("snr_3k_db", frame.snr_3k_db),
+        ] {
+            let want = float(case, key);
+            assert!(close(got, want), "{label}: {key} {got} vs {want}");
+        }
+        let want = case["symbols"].as_array().expect("symbols");
+        assert_eq!(frame.symbols.len(), want.len(), "{label}: symbol count");
+        for (index, (got, want)) in frame.symbols.iter().zip(want).enumerate() {
+            let pair = want.as_array().expect("pair");
+            let (re, im) = (pair[0].as_f64().expect("re"), pair[1].as_f64().expect("im"));
+            assert!(
+                close(got.0, re) && close(got.1, im),
+                "{label}: symbol {index} {got:?} vs ({re}, {im})"
+            );
+        }
+        let want = case["noise_var"].as_array().expect("noise_var");
+        for (index, (&got, want)) in frame.noise_var.iter().zip(want).enumerate() {
+            let want = want.as_f64().expect("variance");
+            assert!(close(got, want), "{label}: noise {index} {got} vs {want}");
+        }
+        let (decoded, _) = codec
+            .decode(
+                &frame.symbols,
+                NoiseVar::PerSymbol(&frame.noise_var),
+                frame.rv,
+                None,
+            )
+            .expect("decode");
+        assert_eq!(
+            decoded.as_deref() == Some(payload.as_slice()),
+            case["decoded"].as_bool().expect("decoded"),
+            "{label}: decoded"
+        );
     }
 }
 

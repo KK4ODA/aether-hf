@@ -49,8 +49,10 @@ from aether_model.phy import tone
 from aether_model.phy.constellation import constellation
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import FrameHeader, FrameType
+from aether_model.phy.rx import FrameReceiver
+from aether_model.phy.sync import FrameSync
 from aether_model.phy.tx import FrameTransmitter
-from aether_model.waveform import WIDE_2300, Modulation
+from aether_model.waveform import NARROW_500, WIDE_2300, Modulation
 
 MODULATIONS = [
     Modulation.BPSK,
@@ -589,6 +591,109 @@ def tone_after_silence_cases() -> list[dict[str, object]]:
     return out
 
 
+MASK64 = (1 << 64) - 1
+
+
+def pseudo_noise(n: int, seed: int) -> NDArray[np.complex128]:
+    """Noise, closed form so both languages build it identically: SplitMix64 draws mapped to
+    ``[−1, 1)``, real then imaginary — uniform in a square, which a receiver's estimators
+    take as they take Gaussian noise."""
+    state = seed & MASK64
+    draws = np.empty(2 * n)
+    for i in range(2 * n):
+        state = (state + 0x9E3779B97F4A7C15) & MASK64
+        z = state
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & MASK64
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & MASK64
+        z ^= z >> 31
+        draws[i] = (z >> 11) * 2.0**-53 * 2.0 - 1.0
+    return draws[0::2] + 1j * draws[1::2]
+
+
+def ofdm_rays(x: NDArray[np.complex128], rays: list[list[float]]) -> NDArray[np.complex128]:
+    """``Σ amplitude · x[k − delay] · exp(j(2π·f·k/8000 + phase))`` over ``[amplitude, f,
+    phase, delay]`` rays: a channel that is steady, two paths, or two paths whose Doppler
+    shifts beat — closed form, so both languages build it identically."""
+    k = np.arange(len(x))
+    y = np.zeros(len(x), dtype=np.complex128)
+    for amp, f, phase, delay in rays:
+        d = int(delay)
+        shifted = np.concatenate((np.zeros(d, dtype=np.complex128), x[: len(x) - d]))
+        y += amp * shifted * np.exp(1j * (2 * np.pi * f * k / 8000.0 + phase))
+    return y
+
+
+OFDM_RECEIVE_CASES = (
+    # (waveform, mode index or None for the control frame, rv, follows, rays, noise)
+    (NARROW_500, 3, 0, 0, [[1.0, 0.0, 0.0, 0]], 0.04),
+    (NARROW_500, 7, 0, 1, [[1.0, 0.0, 0.0, 0], [0.9, 9.0, 0.3, 0]], 0.02),
+    (NARROW_500, None, 0, 0, [[1.0, 3.0, 0.0, 0], [0.8, -9.0, 1.1, 4]], 0.02),
+    (WIDE_2300, 4, 1, 0, [[1.0, 0.0, 0.0, 0], [0.7, 0.2, 0.5, 8]], 0.03),
+    (WIDE_2300, 9, 0, 2, [[1.0, -4.0, 0.0, 0], [1.0, 6.0, 0.7, 4]], 0.01),
+    (WIDE_2300, None, 0, 0, [[1.0, 0.0, 0.0, 0]], 0.03),
+)
+"""OFDM frames received at a known start (ADR-0082): a steady channel, where the comb pilots
+are averaged a third each as they always were, and two paths whose Doppler shifts beat at 9–12
+Hz — a channel that moves within the frame, followed with a lighter weight — on both airs."""
+
+
+def ofdm_receive_cases() -> list[dict[str, object]]:
+    """An OFDM frame (peak-reduced, as the modem sends it) through :func:`ofdm_rays`, turned by
+    ``cfo_hz``, with :func:`pseudo_noise` added, received at its start with a preamble estimate
+    0.8 Hz off: the residual offset, the mode, RV and count, the motion weight, the SNR and
+    every equalised symbol and noise variance to a tolerance, and whether it decodes."""
+    out = []
+    rng = np.random.default_rng(4242)
+    for i, (params, mode_index, rv, follows, rays, noise) in enumerate(OFDM_RECEIVE_CASES):
+        air = NARROW if params is NARROW_500 else WIDE
+        control = mode_index is None
+        mode = air.control_mode if control else air.modes[mode_index]
+        layout = air.short if control else air.long
+        codec = FrameCodec(mode, layout)
+        payload = rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8).tobytes()
+        header = (
+            FrameHeader(FrameType.CONTROL)
+            if control
+            else FrameHeader(FrameType.DATA, mode_index, rv, follows)
+        )
+        x = FrameTransmitter(params).baseband(header, layout, codec.encode(payload, rv))
+        lead, cfo = 700 + 53 * i, 11.5 - 6.25 * i
+        n = lead + len(x) + 900
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y = ofdm_rays(y, rays) * np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += noise * pseudo_noise(n, 1000 + i)
+        sync = FrameSync(lead, cfo - 0.8, header, 0.0, 1.0, 1.0)
+        frame = FrameReceiver(params).receive(y, sync)
+        decoded, _ = codec.decode(frame.symbols, frame.noise_var, rv=frame.rv)
+        out.append(
+            {
+                "bandwidth_hz": params.bandwidth.hz,
+                "mode": -1 if control else mode_index,
+                "rv": rv,
+                "follows": follows,
+                "payload": payload.hex(),
+                "rays": rays,
+                "noise": noise,
+                "noise_seed": 1000 + i,
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "received_cfo_hz": frame.cfo_hz,
+                "received_mode": frame.mode,
+                "received_rv": frame.rv,
+                "received_follows": frame.follows,
+                "motion_weight": frame.motion_weight,
+                "snr_carrier_db": frame.snr_carrier_db,
+                "snr_3k_db": frame.snr_3k_db,
+                "symbols": complex_list(frame.symbols),
+                "noise_var": [float(v) for v in frame.noise_var],
+                "decoded": decoded == payload,
+            }
+        )
+    return out
+
+
 def passband_input(n: int) -> NDArray[np.complex128]:
     """A deterministic multi-tone test signal, defined so both languages build it identically.
 
@@ -720,6 +825,8 @@ def main() -> int:
         "tone_counted_frames": tone_counted_frame_cases(),
         "tone_counted_receive": tone_counted_receive_cases(),
         "tone_after_silence": tone_after_silence_cases(),
+        "ofdm_receive": ofdm_receive_cases(),
+        "ofdm_receive_tolerance": 1e-9,
         "tone_sample_tolerance": 1e-9,
         "tone_llr_tolerance": 1e-6,
     }
