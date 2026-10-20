@@ -1759,7 +1759,10 @@ impl ToneDetector {
     /// `clean_block_hits` and uncontradicted (ADR-0049): no shift of a frame lines up two of
     /// its blocks, and a ghost is contradicted in every block, while a frame that slipped a
     /// symbol on its way (WC4Y's acceptances of 2026-10-05) is contradicted in its end block
-    /// by its own next tones.
+    /// by its own next tones. A frame all three blocks hold to `faded_block_hits` counts only
+    /// the contradictions at `contradiction_share` of its own level or more (ADR-0083): on ITU
+    /// flutter a sync tone fades out inside its symbol and leaves the fade's leakage strongest,
+    /// at a tenth of the level, while a ghost's contradictions are a real frame's tones.
     #[must_use]
     pub fn confirmed(&self, samples: &[Complex], sync: &ToneSync) -> bool {
         let Some(e) = tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()) else {
@@ -1771,13 +1774,28 @@ impl ToneDetector {
         if hits.iter().sum::<usize>() < TONE.min_hits || hits[1] < TONE.min_block_hits {
             return false;
         }
-        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle);
+        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle, 0.0);
         if against.iter().sum::<usize>() <= TONE.max_contradictions {
             return true;
         }
         // a frame spoiled in one block still stands on the other two when both are whole
         // and uncontradicted
-        two_clean(&blocks, &against)
+        if two_clean(&blocks, &against) {
+            return true;
+        }
+        // a frame held by all three blocks, its sync tones faded out here and there by a fast
+        // fade: only a contradiction as strong as half its own level counts (ADR-0083)
+        if hits[0] < TONE.faded_block_hits {
+            return false;
+        }
+        let strong = block_contradictions_in(
+            &e,
+            sync.kind,
+            sync.rv,
+            sync.middle,
+            TONE.contradiction_share,
+        );
+        strong.iter().sum::<usize>() <= TONE.max_contradictions
     }
 
     /// Whether the two best of a refined frame's sync blocks each have `clean_block_hits` of
@@ -1789,7 +1807,7 @@ impl ToneDetector {
             return false;
         };
         let blocks = block_hits_in(&e, sync.kind, sync.rv, sync.middle);
-        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle);
+        let against = block_contradictions_in(&e, sync.kind, sync.rv, sync.middle, 0.0);
         two_clean(&blocks, &against)
     }
 
@@ -1805,7 +1823,7 @@ impl ToneDetector {
         tone_energies(samples, sync.start, sync.cfo_hz, sync.kind.symbols()).map_or(
             3 * SYNC_SYMBOLS,
             |e| {
-                block_contradictions_in(&e, sync.kind, sync.rv, sync.middle)
+                block_contradictions_in(&e, sync.kind, sync.rv, sync.middle, 0.0)
                     .iter()
                     .sum()
             },
@@ -1928,8 +1946,15 @@ fn argmax_usize(values: &[usize]) -> usize {
     best
 }
 
-/// [`ToneDetector::contradictions`] from a frame's slot energies `e`, per sync block.
-fn block_contradictions_in(e: &[f64], kind: &ToneKind, rv: u8, middle: u8) -> [usize; 3] {
+/// [`ToneDetector::contradictions`] from a frame's slot energies `e`, per sync block; with
+/// `share`, only those at least that share of the frame's own level (ADR-0083).
+fn block_contradictions_in(
+    e: &[f64],
+    kind: &ToneKind,
+    rv: u8,
+    middle: u8,
+    share: f64,
+) -> [usize; 3] {
     let tones = TONE.tones;
     let layout = kind.layout_with(usize::from(rv), usize::from(middle));
     let rows: Vec<(usize, &[f64])> = layout
@@ -1941,11 +1966,28 @@ fn block_contradictions_in(e: &[f64], kind: &ToneKind, rv: u8, middle: u8) -> [u
         .map(|k| median(&mut rows.iter().map(|(_, row)| row[k]).collect::<Vec<_>>()))
         .collect();
     let noise = sync_noise(e, &layout, kind);
+    // the frame's own level: its tone's energy where it is the strongest (ADR-0083)
+    let mut own_peaks: Vec<f64> = rows
+        .iter()
+        .filter_map(|&(own, row)| {
+            let top = argmax(row);
+            (top == own && row[top] > 0.0).then_some(row[top])
+        })
+        .collect();
+    let level = if own_peaks.is_empty() {
+        0.0
+    } else {
+        median(&mut own_peaks)
+    };
     // the sync rows come in layout order, a block's eight after the one before's
     let mut out = [0; 3];
     for (i, &(own, row)) in rows.iter().enumerate() {
         let top = argmax(row);
-        if top != own && row[top] >= TONE.contradiction * noise && row[top] >= 4.0 * steady[top] {
+        if top != own
+            && row[top] >= TONE.contradiction * noise
+            && row[top] >= 4.0 * steady[top]
+            && row[top] >= share * level
+        {
             out[i / SYNC_SYMBOLS] += 1;
         }
     }
@@ -2598,7 +2640,7 @@ mod tests {
             e[s * tones + t] = 100.0;
         }
         assert_eq!(
-            block_contradictions_in(&e, kind, 0, 0)
+            block_contradictions_in(&e, kind, 0, 0, 0.0)
                 .iter()
                 .sum::<usize>(),
             0
@@ -2608,7 +2650,7 @@ mod tests {
             e[s * tones + (t + 5) % tones] = 200.0;
         }
         assert_eq!(
-            block_contradictions_in(&e, kind, 0, 0)
+            block_contradictions_in(&e, kind, 0, 0, 0.0)
                 .iter()
                 .sum::<usize>(),
             3
@@ -2619,7 +2661,7 @@ mod tests {
         e[s * tones + t] = 0.5;
         e[s * tones + (t + 5) % tones] = 5.0;
         assert_eq!(
-            block_contradictions_in(&e, kind, 0, 0)
+            block_contradictions_in(&e, kind, 0, 0, 0.0)
                 .iter()
                 .sum::<usize>(),
             2
@@ -2636,11 +2678,45 @@ mod tests {
             steady[s * tones + carrier] = 150.0;
         }
         assert_eq!(
-            block_contradictions_in(&steady, kind, 0, 0)
+            block_contradictions_in(&steady, kind, 0, 0, 0.0)
                 .iter()
                 .sum::<usize>(),
             0
         );
+    }
+
+    #[test]
+    fn with_a_share_only_a_contradiction_near_the_frames_own_level_counts() {
+        // ADR-0083: a fast fade leaves a faded sync symbol's leakage strongest, a tenth of the
+        // frame's level; a ghost's contradictions are a real frame's tones, at its level
+        let kind = &data_kinds()[0];
+        let tones = TONE.tones;
+        let layout = kind.layout(0);
+        let mut e = vec![1.0f64; kind.symbols() * tones];
+        let sync: Vec<(usize, usize)> = layout
+            .iter()
+            .enumerate()
+            .filter_map(|(s, role)| role.map(|t| (s, t)))
+            .collect();
+        for &(s, t) in &sync {
+            e[s * tones + t] = 100.0;
+        }
+        // four faded symbols, their leakage at 20 (over 12 times the noise): contradictions
+        // as before, none at half the level
+        for &(s, t) in &sync[..4] {
+            e[s * tones + t] = 2.0;
+            e[s * tones + (t + 1) % tones] = 20.0;
+        }
+        let total = |e: &[f64], share: f64| -> usize {
+            block_contradictions_in(e, kind, 0, 0, share).iter().sum()
+        };
+        assert_eq!(total(&e, 0.0), 4);
+        assert_eq!(total(&e, TONE.contradiction_share), 0);
+        // one at the frame's level still counts
+        let (s, t) = sync[10];
+        e[s * tones + (t + 3) % tones] = 120.0;
+        assert_eq!(total(&e, 0.0), 5);
+        assert_eq!(total(&e, TONE.contradiction_share), 1);
     }
 
     #[test]
