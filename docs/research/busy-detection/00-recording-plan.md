@@ -17,8 +17,13 @@ caused it sat.
   heard.
 - **The `.json` beside it**: your notes, the dial frequency when it started (read over CAT), every
   change of the busy indicator with the level, floor and reason, and every frame the modem found.
-- **Not in it**: dial changes after the start. Aether reads the dial only now and then and does not
-  write it into the recording. Time your VFO moves by hand (part C says how).
+- **From the next beta, also**: with CAT, rigctld or FLRig keying, the radio's S-meter four times a
+  second, every change of the dial (read once a second), and on a Yaesu the AGC as it runs (what
+  AUTO picked too), the mode, the filter width, the RF gain, the attenuator and the preamp whenever
+  they change; and every press of **Mark**. The radio is asked only while nothing else is going on,
+  never during a session or a transmission.
+- **Up to beta.114, not in it**: dial changes after the start. Time your VFO moves by hand (part C
+  says how).
 - **Where it goes**: `%APPDATA%\aether-hf\recordings\`. **Open folder** in the recording box opens it.
 
 ## Once, before the first recording
@@ -26,9 +31,10 @@ caused it sat.
 1. **AGC times.** In the FTDX10's menu, find the AGC settings. Write down the FAST, MID and SLOW
    delay times.
 2. **AGC AUTO.** Write down what AUTO picks in the mode you run Aether in. The radio's manual has a
-   table; the display may show it too.
+   table; the display may show it too. (From the next beta a Yaesu records it by itself; write it
+   down anyway the first time.)
 3. **Mode and filter.** Write down the mode (USB or DATA-U) and the filter width (for example
-   3000 Hz).
+   3000 Hz). (The same: recorded by itself from the next beta.)
 4. **USB audio.** Write down the radio's USB audio output level setting. Don't change it between
    recordings.
 5. **Aether.** Open *Help / About* and write down the version. Any beta from 113 on records the
@@ -95,7 +101,10 @@ This one has a signal come and go on a schedule, so I can line the audio up with
 3. Put the "outside" frequency in VFO-B and the "inside" frequency in VFO-A. Then the A/B swap
    button moves the signal in and out in one press. (Moving the dial or using IF SHIFT also works;
    write down which you used.)
-4. Start a phone stopwatch at the moment you press the record button.
+4. From the next beta, press **Mark** (beside the record button) at every swap below, and skip the
+   stopwatch. With beta.114, start a phone stopwatch at the moment you press the record button.
+   (A swap with the A/B button changes what VFO-A holds, so from the next beta the dial changes
+   are in the recording too.)
 
 **Run 1: the signal outside Aether's channel.**
 
@@ -103,12 +112,12 @@ This one has a signal come and go on a schedule, so I can line the audio up with
 2. Swap so the signal sits at 700 Hz (or 2300 Hz) in the audio, outside Aether's channel. Hold
    20 s.
 3. Swap back out. Wait 40 s.
-4. Do steps 2–3 five times. Write down the stopwatch time of every swap.
+4. Do steps 2–3 five times. Press **Mark** at every swap, or write down its stopwatch time.
 
 **Run 2: the signal inside Aether's channel.**
 
 1. Set VFO-A so the signal lands at 1500 Hz in the audio.
-2. Do five more cycles: 20 s in, 40 s out. Write down the times.
+2. Do five more cycles: 20 s in, 40 s out. Mark every swap, or write down the times.
 
 **Do all of C twice:** once with AGC AUTO, once with FAST. A new recording for each, with the
 notes saying which (for example *C1 WWV 5.000 AUTO*).
@@ -144,7 +153,13 @@ PC's clock or the panel in the frame, so the video lines up with the recording.
 4. Tell you in a few lines what each recording showed, what is missing, and what to record again
    or differently, before you record the next batch.
 
-## Tools that would make the data better (each needs a beta and your go)
+## Tools that make the data better (built after the first batch, in the next beta)
+
+The author's go came on 2026-10-20; all three are built and tested, and reach the radio with the
+next beta. The S-meter and the dial are read over rigctld and FLRig too, and on a Yaesu the
+recording also keeps the AGC, mode, filter width, RF gain, attenuator and preamp. They are asked
+only between sessions, not merely while not transmitting: a reading on the keying port must never
+stand in front of a slot's key.
 
 | Tool | What it gives | Cost |
 |---|---|---|
@@ -152,8 +167,8 @@ PC's clock or the panel in the frame, so the video lines up with the recording.
 | **A Mark button** | Beside the record button. Each press writes the time into the running recording. Replaces the stopwatch in part C. | A couple of hours. One button with a tooltip, one line in the manual. |
 | **Dial changes in the recording** | While recording, the dial is read once a second and every change is written into the `.json`, so VFO-A moves in part C mark themselves. | A couple of hours, shares the S-meter's CAT reads. Needs CAT, `rigctld` or FLRig keying, as your station has. |
 
-A and B need none of these. You can record them today. C is better with the Mark button or the
-dial log, but works with a stopwatch.
+A and B need none of these. C is better with the Mark button and the dial log, but works with a
+stopwatch.
 
 **Later, other radios:** recording A from ND1J (FTDX101MP), WC4Y, KE4QCM (FT-100) and an IC-7300
 user would show whether other rigs do the same. I'd ask them through *Ask a station to send me its

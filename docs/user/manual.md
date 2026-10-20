@@ -369,6 +369,18 @@ busy indicator. Type notes first, in the field beside the button: band, frequenc
 the other station. **Open folder** opens the recordings folder. A recording is what a bug report
 about the air should carry: Log tab → **Send files…** sends it.
 
+**Mark** writes the moment you press it into the recording's `.json` file, numbered 1, 2, 3 and
+so on. Press it each time you change something on purpose, such as swapping VFOs, instead of
+timing it with a stopwatch. The line beside the box title counts the marks.
+
+With the radio keyed over CAT, rigctld or FLRig, a recording also keeps what the radio says about
+itself: its S-meter, four times a second, and its dial whenever it changes. On a Yaesu over CAT it
+also keeps the AGC (including what AUTO picked), the mode, the filter width, the RF gain, the
+attenuator and the preamp whenever they change. The radio is asked only while nothing else is
+going on: never during a session, a call, a probe, a Test or a transmission. The line beside the
+box title says how many S-meter readings the recording holds. A serial line, a CM108 codec or a
+host program keying the radio gives none of these.
+
 ## 6. Status
 
 - **Link**: the mode, SNR, throughput and session (who, and for how long).

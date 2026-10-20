@@ -5140,6 +5140,7 @@ function wire() {
     });
   }
   $("btn-record").addEventListener("click", toggleRecording);
+  $("btn-mark").addEventListener("click", markRecording);
   $("btn-open-recordings").addEventListener("click", openRecordingsFolder);
   $("btn-copy-recordings").addEventListener("click", () => copyRecordingsPath(false));
   $("btn-copy-received").addEventListener("click", copyReceived);
@@ -5806,6 +5807,8 @@ function wireShare() {
 }
 
 let recordingPath = null;
+// the last Mark pressed in the running recording, said beside it until the recording ends
+let lastMark = null;
 
 // The modem runs even when its keying interface or sound card would not open, so that
 // Setup — the screen naming the very port or card at fault — can be reached. It says so
@@ -6124,18 +6127,46 @@ async function copyReceived() {
 }
 
 function applyRecording(recording) {
+  const was = recordingPath;
   recordingPath = recording?.path ?? null;
+  if (recordingPath !== was) lastMark = null;
   const button = $("btn-record");
   button.textContent = recordingPath ? "Stop and save" : "Start recording";
   button.title = recordingPath
     ? "Stop recording and save the file"
     : "Start saving the radio's audio to a file; press again to stop and save";
   button.classList.toggle("danger", Boolean(recordingPath));
+  $("btn-mark").disabled = !recordingPath;
   if (recordingPath) {
     const name = recordingPath.split(/[\\/]/).pop();
-    $("record-note").textContent = `● Recording ${name} — ${Math.round(recording.seconds)} s`;
+    const parts = [`● Recording ${name} — ${Math.round(recording.seconds)} s`];
+    // what the radio itself said, read between sessions over CAT, rigctld or FLRig
+    if (recording.reads_meter && recording.meter_readings > 0) {
+      parts.push(`S-meter read ${recording.meter_readings} times`);
+    }
+    if (recording.marks > 0) {
+      parts.push(lastMark ?? `${recording.marks} ${recording.marks === 1 ? "mark" : "marks"}`);
+    }
+    $("record-note").textContent = parts.join(" · ");
   } else if ($("record-note").textContent.startsWith("●")) {
     $("record-note").textContent = "";
+  }
+}
+
+// a recording's time as minutes and seconds, as a stopwatch shows it
+function recordingClock(seconds) {
+  const whole = Math.max(0, Math.round(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+async function markRecording() {
+  try {
+    const marked = await call("record.mark");
+    lastMark = `mark ${marked.mark} at ${recordingClock(marked.t_s)}`;
+    log(`recording: ${lastMark}`);
+    refreshStatus();
+  } catch (error) {
+    $("record-note").textContent = error.message;
   }
 }
 

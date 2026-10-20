@@ -69,7 +69,11 @@ recording** on the Session tab (the *Record the radio's audio* box) for a listen
 no peer. Either way, **write the notes**: the band, the frequency, the other station, the
 distance, the time of day, what the S-meter said. `record.notes` on the API, the notes field
 beside **Start recording**, or `record.start {"notes": ...}`. The modem can measure SNR; it
-cannot know it was 40 m at dusk over 900 km.
+cannot know it was 40 m at dusk over 900 km. With CAT, rigctld or FLRig keying, a recording made
+while listening keeps the radio's S-meter, its dial and (on a Yaesu) its AGC, mode, filter, RF
+gain, attenuator and preamp by itself; a session's recording does not, since the radio is never
+asked during one. **Mark** (or `record.mark`) writes a numbered moment into the recording: press
+it at each change you make on purpose.
 
 A minute of audio is 5.8 MB. Sessions of a few minutes are the useful size.
 

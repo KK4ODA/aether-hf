@@ -95,6 +95,118 @@ pub trait Ptt: Send {
                 .into(),
         ))
     }
+
+    /// The radio's S-meter, when this backend has a way to ask: Yaesu's and Kenwood's `SM0;`,
+    /// Icom's CI-V `15 02`, rigctld's `STRENGTH`, `FLRig`'s `rig.get_smeter`.
+    ///
+    /// The meter follows the radio's AGC itself, which the audio can only suggest (the busy
+    /// detector's investigation, `docs/research/busy-detection/`).
+    fn s_meter(&mut self) -> Option<SMeter> {
+        None
+    }
+
+    /// Whether [`Self::s_meter`] has a way to ask.
+    fn reads_meter(&self) -> bool {
+        false
+    }
+
+    /// The radio's settings that decide what its audio holds — its AGC, mode, filter width, RF
+    /// gain, attenuator and preamp — by name, when this backend can ask: a Yaesu over CAT.
+    fn settings(&mut self) -> Vec<(&'static str, String)> {
+        Vec::new()
+    }
+
+    /// Ask for what `asked` names in the background; the answers come from
+    /// [`Self::take_readings`]. A backend on the run loop's own thread has no background and
+    /// ignores it: only one on a thread of its own ([`ThreadedPtt`]) reads the radio this way.
+    fn request_readings(&mut self, _asked: Asked) {}
+
+    /// The background readings that have come back since the last call, oldest first.
+    fn take_readings(&mut self) -> Vec<Readings> {
+        Vec::new()
+    }
+}
+
+/// One reading of the radio's S-meter, on the scale of whatever gave it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SMeter {
+    /// The reading.
+    pub value: f64,
+    /// What the number is on: every radio and program has its own, and none is decibels of
+    /// signal without a calibration.
+    pub scale: &'static str,
+}
+
+/// What a background reading of the radio asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Asked {
+    /// The S-meter.
+    pub meter: bool,
+    /// The dial.
+    pub dial: bool,
+    /// The settings.
+    pub settings: bool,
+}
+
+impl Asked {
+    /// Whether it asks for anything.
+    #[must_use]
+    pub fn any(self) -> bool {
+        self.meter || self.dial || self.settings
+    }
+}
+
+/// What a background reading found, and when it was read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Readings {
+    /// When the radio was asked.
+    pub at: std::time::Instant,
+    /// What was asked: a reading asked for and not had is a `None` here.
+    pub asked: Asked,
+    /// The S-meter.
+    pub meter: Option<SMeter>,
+    /// The dial, hertz.
+    pub dial_hz: Option<u64>,
+    /// The settings, by name.
+    pub settings: Vec<(&'static str, String)>,
+}
+
+impl Readings {
+    /// Read what `asked` names from `radio`, the settings stopping at the first question
+    /// unanswered: a radio that did not answer one will not answer the next, and each costs
+    /// the port a second while the key may be waiting behind it.
+    fn take(radio: &mut impl Ptt, asked: Asked) -> Self {
+        let at = std::time::Instant::now();
+        let meter = if asked.meter { radio.s_meter() } else { None };
+        let dial_hz = if asked.dial {
+            radio.frequency_hz()
+        } else {
+            None
+        };
+        let settings = if asked.settings {
+            radio.settings()
+        } else {
+            Vec::new()
+        };
+        Self {
+            at,
+            asked,
+            meter,
+            dial_hz,
+            settings,
+        }
+    }
+
+    /// Nothing read, because the radio was keyed: no question was put, so none goes unanswered.
+    fn none() -> Self {
+        Self {
+            at: std::time::Instant::now(),
+            asked: Asked::default(),
+            meter: None,
+            dial_hz: None,
+            settings: Vec::new(),
+        }
+    }
 }
 
 impl<P: Ptt + ?Sized> Ptt for Box<P> {
@@ -122,6 +234,26 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
         (**self).set_frequency_hz(hz)
     }
 
+    fn s_meter(&mut self) -> Option<SMeter> {
+        (**self).s_meter()
+    }
+
+    fn reads_meter(&self) -> bool {
+        (**self).reads_meter()
+    }
+
+    fn settings(&mut self) -> Vec<(&'static str, String)> {
+        (**self).settings()
+    }
+
+    fn request_readings(&mut self, asked: Asked) {
+        (**self).request_readings(asked);
+    }
+
+    fn take_readings(&mut self) -> Vec<Readings> {
+        (**self).take_readings()
+    }
+
     fn describe(&self) -> String {
         (**self).describe()
     }
@@ -133,6 +265,9 @@ const KEY_BOUND: std::time::Duration = std::time::Duration::from_millis(1200);
 const READ_BOUND: std::time::Duration = std::time::Duration::from_millis(300);
 /// How long the run loop waits for the radio to be tuned and read back.
 const TUNE_BOUND: std::time::Duration = std::time::Duration::from_millis(2500);
+/// How often the keying thread, with nothing of the run loop's to do, looks for a background
+/// reading to take: the reading waits at most this long, a key not at all.
+const READINGS_LOOK: std::time::Duration = std::time::Duration::from_millis(20);
 
 enum Request {
     Key,
@@ -157,9 +292,15 @@ enum Reply {
 /// no frame is heard. Here it costs a key that is refused (the burst goes later) or a dial
 /// reading a few seconds old. A release is always queued, whatever is stuck before it: the key
 /// comes up as soon as the port answers again.
+///
+/// Background readings — the S-meter, the dial and the settings a recording keeps — go on a
+/// queue of their own that the thread serves only when the run loop has asked for nothing:
+/// a key never waits behind a reading still queued, only behind one already on the wire (one
+/// CAT round trip). None is taken while the radio is keyed. The run loop never waits for one.
 pub struct ThreadedPtt {
     describe: String,
     can_tune: bool,
+    reads_meter: bool,
     requests: std::sync::mpsc::Sender<Request>,
     replies: std::sync::mpsc::Receiver<Reply>,
     /// Requests sent whose replies have not been taken.
@@ -168,6 +309,11 @@ pub struct ThreadedPtt {
     dial: Option<u64>,
     /// What the port is doing wrong, while it is.
     stuck: Option<String>,
+    /// Background readings asked for, and their answers.
+    questions: std::sync::mpsc::Sender<Asked>,
+    answers: std::sync::mpsc::Receiver<Readings>,
+    /// Whether a background reading is out: one at a time, so they never pile up.
+    asking: bool,
 }
 
 impl std::fmt::Debug for ThreadedPtt {
@@ -183,17 +329,57 @@ impl ThreadedPtt {
     /// Move `inner` to a thread of its own.
     #[must_use]
     pub fn spawn<P: Ptt + 'static>(mut inner: P) -> Self {
+        use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+
         let describe = inner.describe();
         let can_tune = inner.can_tune();
+        let reads_meter = inner.reads_meter();
         let (requests, work) = std::sync::mpsc::channel::<Request>();
         let (answer, replies) = std::sync::mpsc::channel::<Reply>();
+        let (questions, asked) = std::sync::mpsc::channel::<Asked>();
+        let (answered, answers) = std::sync::mpsc::channel::<Readings>();
         let spawned = std::thread::Builder::new()
             .name("keying".into())
             .spawn(move || {
-                for request in work {
+                let mut keyed = false;
+                loop {
+                    // the run loop's requests first; a background reading only when there is
+                    // none, and none while keyed — the meter reads the transmitter then, and a
+                    // release must not wait behind a question
+                    let request = match work.try_recv() {
+                        Ok(request) => request,
+                        Err(TryRecvError::Disconnected) => break,
+                        Err(TryRecvError::Empty) => {
+                            if let Ok(question) = asked.try_recv() {
+                                let readings = if keyed {
+                                    Readings::none()
+                                } else {
+                                    Readings::take(&mut inner, question)
+                                };
+                                if answered.send(readings).is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
+                            match work.recv_timeout(READINGS_LOOK) {
+                                Ok(request) => request,
+                                Err(RecvTimeoutError::Timeout) => continue,
+                                Err(RecvTimeoutError::Disconnected) => break,
+                            }
+                        }
+                    };
                     let reply = match request {
-                        Request::Key => Reply::Done(inner.key()),
-                        Request::Unkey => Reply::Done(inner.unkey()),
+                        Request::Key => {
+                            let done = inner.key();
+                            keyed = keyed || done.is_ok();
+                            Reply::Done(done)
+                        }
+                        Request::Unkey => {
+                            let done = inner.unkey();
+                            // a release that failed may have left the radio keyed
+                            keyed = done.is_err();
+                            Reply::Done(done)
+                        }
                         Request::Read => Reply::Read(inner.frequency_hz()),
                         Request::Tune(hz) => Reply::Done(inner.set_frequency_hz(hz)),
                     };
@@ -208,11 +394,15 @@ impl ThreadedPtt {
         Self {
             describe,
             can_tune,
+            reads_meter,
             requests,
             replies,
             pending: 0,
             dial: None,
             stuck,
+            questions,
+            answers,
+            asking: false,
         }
     }
 
@@ -331,6 +521,27 @@ impl Ptt for ThreadedPtt {
             self.exchange(Request::Tune(hz), TUNE_BOUND, false)
         });
         Self::done(reply, "tuning command", self.stuck.as_ref())
+    }
+
+    fn reads_meter(&self) -> bool {
+        self.reads_meter
+    }
+
+    fn request_readings(&mut self, asked: Asked) {
+        if !self.asking && asked.any() && self.questions.send(asked).is_ok() {
+            self.asking = true;
+        }
+    }
+
+    fn take_readings(&mut self) -> Vec<Readings> {
+        let came: Vec<Readings> = self.answers.try_iter().collect();
+        if !came.is_empty() {
+            self.asking = false;
+        }
+        if let Some(hz) = came.iter().rev().find_map(|r| r.dial_hz) {
+            self.dial = Some(hz);
+        }
+        came
     }
 }
 
@@ -564,6 +775,19 @@ impl Ptt for RigctldPtt {
         // `F` is set_freq; the daemon answers `RPRT 0` when the rig took it
         self.command(&format!("F {hz}\n"))
     }
+
+    fn s_meter(&mut self) -> Option<SMeter> {
+        // `l STRENGTH` is get_level: Hamlib's calibrated signal strength, in dB over S9
+        let value: f64 = self.query("l STRENGTH\n")?.trim().parse().ok()?;
+        value.is_finite().then_some(SMeter {
+            value,
+            scale: "Hamlib STRENGTH, dB over S9",
+        })
+    }
+
+    fn reads_meter(&self) -> bool {
+        true
+    }
 }
 
 /// Keying and tuning through `FLRig`'s XML-RPC server, conventionally at `127.0.0.1:12345`.
@@ -729,6 +953,25 @@ impl Ptt for FlrigPtt {
     fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
         self.call("rig.set_vfo", Some(&format!("<double>{hz}</double>")))
             .map(|_| ())
+    }
+
+    fn s_meter(&mut self) -> Option<SMeter> {
+        // the radio's meter on FLRig's own 0–100 scale, S9 at 50 and S9 + 60 dB at 100 (its
+        // `rig.get_DBM` and `rig.get_Sunits` are drawn from the same number)
+        let value: f64 = self
+            .call("rig.get_smeter", None)
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+        value.is_finite().then_some(SMeter {
+            value,
+            scale: "FLRig 0-100, S9 at 50",
+        })
+    }
+
+    fn reads_meter(&self) -> bool {
+        true
     }
 }
 
@@ -1235,6 +1478,8 @@ mod tests {
                 seen.lock().expect("lock").push(line.clone());
                 let answer = match line.as_str() {
                     "f" => format!("{dial}\n"),
+                    // Hamlib's calibrated strength: S9 less 12 dB
+                    "l STRENGTH" => "-12\n".to_owned(),
                     other => {
                         if let Some(hz) = other.strip_prefix("F ") {
                             dial = hz.trim().parse().expect("hertz");
@@ -1409,6 +1654,212 @@ mod tests {
         let mut none = NullPtt::default();
         assert!(!none.can_tune());
         assert!(none.set_frequency_hz(7_101_000).is_err());
+    }
+
+    #[test]
+    fn the_s_meter_is_asked_and_read_in_each_dialect() {
+        // the FTDX10 CAT manual: `SM0;` answers `SM0` and 000–255; Kenwood's `SM0;` four
+        // digits; Icom's 15 02 two BCD bytes, most significant first, 0120 being S9
+        let yaesu = CatProtocol::Yaesu;
+        assert_eq!(yaesu.s_meter_query(), b"SM0;");
+        assert_eq!(yaesu.parse_s_meter(b"SM0123;"), Some(123.0));
+        assert!(yaesu.reply_complete(b"SM0;", b"SM0123;"));
+        assert_eq!(yaesu.parse_s_meter(b"?;"), None);
+        assert_eq!(CatProtocol::Kenwood.parse_s_meter(b"SM00015;"), Some(15.0));
+        let icom = CatProtocol::Icom { address: 0x94 };
+        assert_eq!(
+            icom.s_meter_query(),
+            [0xFE, 0xFE, 0x94, 0xE0, 0x15, 0x02, 0xFD]
+        );
+        // the radio's echo of the command first, then its answer
+        let reply = [
+            0xFE, 0xFE, 0x94, 0xE0, 0x15, 0x02, 0xFD, 0xFE, 0xFE, 0xE0, 0x94, 0x15, 0x02, 0x01,
+            0x20, 0xFD,
+        ];
+        assert!(icom.reply_complete(&icom.s_meter_query(), &reply));
+        assert_eq!(icom.parse_s_meter(&reply), Some(120.0));
+        assert_eq!(
+            icom.parse_s_meter(&[0xFE, 0xFE, 0xE0, 0x94, 0x15, 0x02, 0x0A, 0x20, 0xFD]),
+            None,
+            "not BCD"
+        );
+    }
+
+    #[test]
+    fn a_yaesu_says_its_agc_mode_filter_and_gains() {
+        // the FTDX10 CAT manual's GT, MD, SH, RG, RA and PA: GT's answer is the AGC as it
+        // runs, AUTO's choice included
+        let yaesu = CatProtocol::Yaesu;
+        let asked: Vec<(&str, String)> = yaesu
+            .settings_queries()
+            .into_iter()
+            .map(|(name, query)| (name, String::from_utf8(query).expect("ASCII")))
+            .collect();
+        let want = [
+            ("agc", "GT0;"),
+            ("mode", "MD0;"),
+            ("width", "SH0;"),
+            ("rf_gain", "RG0;"),
+            ("attenuator", "RA0;"),
+            ("preamp", "PA0;"),
+        ];
+        assert_eq!(asked.len(), want.len());
+        for ((name, query), (want_name, want_query)) in asked.iter().zip(want) {
+            assert_eq!((*name, query.as_str()), (want_name, want_query));
+        }
+        let read = |name: &str, reply: &[u8]| yaesu.parse_setting(name, reply);
+        assert_eq!(read("agc", b"GT05;").as_deref(), Some("AUTO-MID"));
+        assert_eq!(read("agc", b"GT03;").as_deref(), Some("SLOW"));
+        assert_eq!(read("mode", b"MD0C;").as_deref(), Some("DATA-U"));
+        assert_eq!(read("mode", b"MD02;").as_deref(), Some("USB"));
+        assert_eq!(read("width", b"SH0018;").as_deref(), Some("18"));
+        assert_eq!(read("rf_gain", b"RG0255;").as_deref(), Some("255"));
+        assert_eq!(read("attenuator", b"RA02;").as_deref(), Some("12 dB"));
+        assert_eq!(read("preamp", b"PA00;").as_deref(), Some("IPO"));
+        assert_eq!(read("agc", b"?;"), None);
+        assert_eq!(read("agc", b"GT09;"), None, "no such setting");
+        assert!(CatProtocol::Kenwood.settings_queries().is_empty());
+        assert_eq!(CatProtocol::Kenwood.parse_setting("agc", b"GT05;"), None);
+    }
+
+    /// A radio whose S-meter takes `meter` to answer, counting the times it is read.
+    struct Metered {
+        meter: std::time::Duration,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Ptt for Metered {
+        fn key(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn unkey(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            "a radio with a meter".into()
+        }
+        fn frequency_hz(&mut self) -> Option<u64> {
+            Some(7_082_000)
+        }
+        fn can_tune(&self) -> bool {
+            true
+        }
+        fn s_meter(&mut self) -> Option<SMeter> {
+            std::thread::sleep(self.meter);
+            let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(SMeter {
+                value: n as f64,
+                scale: "test",
+            })
+        }
+        fn reads_meter(&self) -> bool {
+            true
+        }
+        fn settings(&mut self) -> Vec<(&'static str, String)> {
+            vec![("agc", "AUTO-MID".to_owned())]
+        }
+    }
+
+    /// The readings the keying thread has returned, waited for up to a second.
+    fn readings_within_a_second(ptt: &mut ThreadedPtt) -> Vec<Readings> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            let came = ptt.take_readings();
+            if !came.is_empty() || std::time::Instant::now() > until {
+                return came;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_radio_is_read_in_the_background_and_never_while_keyed() {
+        // the S-meter, the dial and the settings a recording keeps: asked without waiting, one
+        // question out at a time, and none put to a radio that is keyed
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut ptt = ThreadedPtt::spawn(Metered {
+            meter: std::time::Duration::from_millis(30),
+            reads: reads.clone(),
+        });
+        assert!(ptt.reads_meter());
+        let all = Asked {
+            meter: true,
+            dial: true,
+            settings: true,
+        };
+        let began = std::time::Instant::now();
+        ptt.request_readings(all);
+        ptt.request_readings(all);
+        assert!(
+            began.elapsed() < std::time::Duration::from_millis(10),
+            "the run loop waited {:?} to ask",
+            began.elapsed()
+        );
+        let came = readings_within_a_second(&mut ptt);
+        assert_eq!(came.len(), 1, "one question out at a time");
+        let reading = &came[0];
+        assert_eq!(reading.asked, all);
+        assert_eq!(reading.meter.map(|m| m.scale), Some("test"));
+        assert_eq!(reading.dial_hz, Some(7_082_000));
+        assert_eq!(reading.settings, vec![("agc", "AUTO-MID".to_owned())]);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            ptt.take_readings().is_empty(),
+            "the second ask was not sent"
+        );
+
+        ptt.key().expect("keyed");
+        ptt.request_readings(all);
+        let came = readings_within_a_second(&mut ptt);
+        assert_eq!(came.len(), 1);
+        assert_eq!(
+            came[0].asked,
+            Asked::default(),
+            "nothing asked of a keyed radio"
+        );
+        assert!(came[0].meter.is_none());
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        ptt.unkey().expect("released");
+        ptt.request_readings(Asked {
+            meter: true,
+            ..Asked::default()
+        });
+        // a key asked for while a reading is on the wire waits for that one reading at most
+        let began = std::time::Instant::now();
+        ptt.key().expect("keyed behind one reading");
+        assert!(
+            began.elapsed() < std::time::Duration::from_millis(500),
+            "the key waited {:?}",
+            began.elapsed()
+        );
+        ptt.unkey().expect("released");
+        assert!(ptt.fault().is_none(), "a reading is no stuck port");
+    }
+
+    #[test]
+    fn rigctld_and_flrig_say_the_s_meter_on_their_own_scales() {
+        let (address, received) = fake_rigctld();
+        let mut rig = RigctldPtt::new(&address, std::time::Duration::from_secs(2));
+        assert!(rig.reads_meter());
+        let meter = rig.s_meter().expect("a reading");
+        assert!((meter.value + 12.0).abs() < 1e-9, "{meter:?}");
+        assert_eq!(meter.scale, "Hamlib STRENGTH, dB over S9");
+        assert_eq!(
+            *received.lock().expect("lock"),
+            vec!["l STRENGTH".to_owned()]
+        );
+        let (address, _) = fake_flrig(|method| {
+            (method == "rig.get_smeter").then(|| flrig_value("<string>37</string>"))
+        });
+        let mut rig = FlrigPtt::new(&address, std::time::Duration::from_secs(2));
+        assert!(rig.reads_meter());
+        let meter = rig.s_meter().expect("a reading");
+        assert!((meter.value - 37.0).abs() < 1e-9, "{meter:?}");
+        assert_eq!(meter.scale, "FLRig 0-100, S9 at 50");
+        let mut none = NullPtt::default();
+        assert!(!none.reads_meter());
+        assert!(none.s_meter().is_none());
     }
 
     #[test]
@@ -1644,7 +2095,151 @@ impl CatProtocol {
             _ => true,
         }
     }
+
+    /// The bytes that ask for the S-meter: `SM0;` (the main receiver) on a Yaesu and a
+    /// Kenwood, CI-V `15 02` on an Icom.
+    #[must_use]
+    pub fn s_meter_query(self) -> Vec<u8> {
+        match self {
+            Self::Yaesu | Self::Kenwood => b"SM0;".to_vec(),
+            Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x15, 0x02, 0xFD],
+        }
+    }
+
+    /// The S-meter reading in the radio's answer, if the answer is one: `SM0` and three digits
+    /// on a Yaesu (`SM0123;`, 000–255), four on a Kenwood; on an Icom, four BCD digits in two
+    /// bytes, most significant first, 0000–0255.
+    #[must_use]
+    pub fn parse_s_meter(self, reply: &[u8]) -> Option<f64> {
+        match self {
+            Self::Yaesu | Self::Kenwood => {
+                let text = std::str::from_utf8(reply).ok()?;
+                let start = text.find("SM0")? + 3;
+                let digits: String = text[start..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                (!digits.is_empty())
+                    .then(|| digits.parse::<u32>().ok().map(f64::from))
+                    .flatten()
+            }
+            Self::Icom { address } => {
+                let header = [0xFE, 0xFE, CIV_CONTROLLER, address, 0x15, 0x02];
+                let start = reply.windows(header.len()).position(|w| w == header)?;
+                let data = &reply[start + header.len()..];
+                let end = data.iter().position(|&b| b == 0xFD)?;
+                let [high, low] = data[..end] else {
+                    return None;
+                };
+                let mut value = 0u32;
+                for byte in [high, low] {
+                    let (tens, units) = (byte >> 4, byte & 0x0F);
+                    if tens > 9 || units > 9 {
+                        return None;
+                    }
+                    value = value * 100 + u32::from(tens) * 10 + u32::from(units);
+                }
+                Some(f64::from(value))
+            }
+        }
+    }
+
+    /// The scale an S-meter reading is on.
+    #[must_use]
+    pub fn s_meter_scale(self) -> &'static str {
+        match self {
+            Self::Yaesu => "Yaesu SM0, 0-255",
+            Self::Kenwood => "Kenwood SM0, the radio's own steps",
+            Self::Icom { .. } => "Icom CI-V 15 02, 0-255 (S9 at 120 on most)",
+        }
+    }
+
+    /// The settings this dialect can be asked for, by name, with the bytes that ask: on a
+    /// Yaesu the AGC as it is running (`GT0;` — what AUTO picked, too), the mode (`MD0;`), the
+    /// filter width (`SH0;`), the RF gain (`RG0;`), the attenuator (`RA0;`) and the preamp
+    /// (`PA0;`), the FTDX10's published commands. None on the others: their answers differ from
+    /// model to model.
+    #[must_use]
+    pub fn settings_queries(self) -> Vec<(&'static str, Vec<u8>)> {
+        match self {
+            Self::Yaesu => YAESU_SETTINGS
+                .iter()
+                .map(|&(name, command)| (name, format!("{command};").into_bytes()))
+                .collect(),
+            Self::Kenwood | Self::Icom { .. } => Vec::new(),
+        }
+    }
+
+    /// A setting's value in the radio's answer, by the name [`Self::settings_queries`] gave
+    /// it: the AGC, mode, attenuator and preamp by their names in the CAT manual, the RF gain
+    /// as 0–255 and the width as the manual's table index (its hertz depend on the mode).
+    #[must_use]
+    pub fn parse_setting(self, name: &str, reply: &[u8]) -> Option<String> {
+        if self != Self::Yaesu {
+            return None;
+        }
+        let command = YAESU_SETTINGS.iter().find(|(n, _)| *n == name)?.1;
+        let text = std::str::from_utf8(reply).ok()?;
+        let start = text.find(command)? + command.len();
+        let value: String = text[start..].chars().take_while(|&c| c != ';').collect();
+        let pick = |names: &[&str]| -> Option<String> {
+            let index = usize::from_str_radix(&value, 16).ok()?;
+            names.get(index).map(|&n| n.to_owned())
+        };
+        match name {
+            // the answer's P3: what the AGC is running at, AUTO's choice included
+            "agc" => pick(&[
+                "OFF",
+                "FAST",
+                "MID",
+                "SLOW",
+                "AUTO-FAST",
+                "AUTO-MID",
+                "AUTO-SLOW",
+            ]),
+            "mode" => pick(&[
+                "",
+                "LSB",
+                "USB",
+                "CW-U",
+                "FM",
+                "AM",
+                "RTTY-L",
+                "CW-L",
+                "DATA-L",
+                "RTTY-U",
+                "DATA-FM",
+                "FM-N",
+                "DATA-U",
+                "AM-N",
+                "PSK",
+                "DATA-FM-N",
+            ])
+            .filter(|m| !m.is_empty()),
+            "attenuator" => pick(&["OFF", "6 dB", "12 dB", "18 dB"]),
+            "preamp" => pick(&["IPO", "AMP 1", "AMP 2"]),
+            // `RG0nnn;`, 000–255
+            "rf_gain" => value.parse::<u16>().ok().map(|v| v.to_string()),
+            // `SH00nn;`: a fixed 0, then the index into the manual's width table
+            "width" => value
+                .get(1..)
+                .and_then(|index| index.parse::<u8>().ok())
+                .map(|index| index.to_string()),
+            _ => None,
+        }
+    }
 }
+
+/// The Yaesu settings a recording keeps, and the command that reads each (answer: the same
+/// letters and digit, then the value).
+const YAESU_SETTINGS: [(&str, &str); 6] = [
+    ("agc", "GT0"),
+    ("mode", "MD0"),
+    ("width", "SH0"),
+    ("rf_gain", "RG0"),
+    ("attenuator", "RA0"),
+    ("preamp", "PA0"),
+];
 
 /// The longest a radio's answer is waited for, however much else it is saying meanwhile.
 const REPLY_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -1825,6 +2420,34 @@ impl Ptt for CatPtt {
                 self.path
             ))),
         }
+    }
+
+    fn s_meter(&mut self) -> Option<SMeter> {
+        let query = self.protocol.s_meter_query();
+        let reply = self.ask(&query)?;
+        let value = self.protocol.parse_s_meter(&reply)?;
+        Some(SMeter {
+            value,
+            scale: self.protocol.s_meter_scale(),
+        })
+    }
+
+    fn reads_meter(&self) -> bool {
+        true
+    }
+
+    fn settings(&mut self) -> Vec<(&'static str, String)> {
+        let mut found = Vec::new();
+        for (name, query) in self.protocol.settings_queries() {
+            // a radio that did not answer one will not answer the next
+            let Some(reply) = self.ask(&query) else {
+                break;
+            };
+            if let Some(value) = self.protocol.parse_setting(name, &reply) {
+                found.push((name, value));
+            }
+        }
+        found
     }
 }
 
