@@ -183,6 +183,15 @@ this build all six pass. **H1 met.** Every scenario passes at least as often (30
 there are no radiated overlaps in either arm, and `tools/scenario_trend.py` with beta.114's runs as
 the baseline finds nothing slower or failing. **H2 met.**
 
+**Again with ADR-0078 §5** (the reference rebased both ways, a bandwidth move keeping it;
+2026-10-20), the same ten scenarios and seeds: 30/30 against beta.114's 24/30, no radiated overlap,
+both outside-the-channel scenarios 3/3 (beta.114 0/3), and `tools/scenario_trend.py` against
+beta.114's runs finds nothing slower or failing. Air-time medians against the build of §7 above:
+`80m-agc-carrier-outside-500` 381 against 355 s and `80m-disconnect-slow-drain-500` 347 against
+336 s, `80m-agc-carrier-inside-500` 328 against 279 s, `80m-thunderstorm-agc-2300` 227 against
+239 s — inside each scenario's own spread over three seeds (the ranges overlap), as harness runs
+of one build differ.
+
 ## 8. The session recordings through both floors
 
 The 17 session recordings in KK4ODA-1's uploads (2026-10-10…17, 80 m and 40 m, 500 Hz) replayed
