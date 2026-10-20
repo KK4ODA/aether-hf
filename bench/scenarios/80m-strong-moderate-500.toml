@@ -1,0 +1,35 @@
+name = "80m-strong-moderate-500"
+description = """80 m at 500 Hz on a strong Moderate path, as ND1J ↔ KK4ODA-1 measured it on the night
+of 2026-10-14 (report 12 §17.1): KK4ODA-1 read ND1J at +7 to +15 dB, ND1J read KK4ODA-1 at about
++5. A Test session — the OFDM rungs, where on Moderate each rung needs 8–16 dB more than on AWGN
+and one margin over the AWGN table has to price them all."""
+tags = ["80m", "stress"]
+bandwidth = 500
+seconds = 1200
+seed = 141
+
+[stations.a]
+callsign = "ND1J"
+[stations.a.radio]
+rx_recovery_ms = 20
+[stations.b]
+callsign = "KK4ODA"
+[stations.b.radio]
+rx_recovery_ms = 50
+
+[path]
+profile = "moderate"
+cfo_hz = 3.0
+[path.a_to_b]
+snr_db = 11.0
+[path.b_to_a]
+snr_db = 5.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5
