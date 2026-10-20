@@ -45,7 +45,9 @@ fills the passband, so the floor waits until the gain is within 3 dB of normal: 
 reads busy for a few seconds after a deep cut. The gain cannot be read, and the floor
 behaves as before, with a radio filter narrower than about 1 kHz around a 500 Hz channel or
 a band of strong signals filling the rest of the passband (a busy FT8 segment). In USB mode
-an FTDX10's AUTO is SLOW (3 s); DATA-U (MID, 0.5 s) is better. `tools/floor_trace.py`
+an FTDX10's AUTO is SLOW (3 s); DATA-U (MID, 0.5 s) is better. A change that makes all the noise
+louder at once — the RF gain up, the attenuator off, a preamp on, a noisier band — reads busy for about a
+minute while the floor learns the new level; make it before you start listening. `tools/floor_trace.py`
 replays a recording through the detector and lists every AGC event in it: how deep and how
 long, how fast the noise came back, whether its cause was in the channel, and how long the
 channel read busy after it.

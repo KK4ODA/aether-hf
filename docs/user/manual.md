@@ -576,6 +576,12 @@ setups leave the gain unreadable, and the floor then behaves as it did before: a
 narrower than about 1 kHz around a 500 Hz channel, and a band of strong signals filling the
 radio's passband beside the channel, such as a busy FT8 segment.
 
+**The Busy lamp stayed on for about a minute after you changed something at the radio.** Turning
+the RF gain up, switching the attenuator off or a preamp on, raising the radio's USB audio level or moving
+to a noisier band makes all the noise louder at once. Aether reads the louder noise as a signal until
+its floor learns the new level, about a minute. Wait it out, or make such changes before you start
+listening. The other way round (the noise gets quieter) costs nothing.
+
 **Sessions connect but run slowly.** Look at the SNR both ways (SNR and *They hear you at*). A
 lopsided path, where the other station hears you much worse than you hear it, slows every
 exchange. More power, a better antenna or another band helps more than any setting. If the
