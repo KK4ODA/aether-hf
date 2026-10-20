@@ -176,6 +176,14 @@ pub struct RateConfig {
     /// larger of two noisy numbers. Beyond it the seed was the floor's ceiling, not the
     /// path's (ADR-0016).
     pub reseed_margin_db: f64,
+    /// A burst that lost fewer than this share of its frames, and decoded some, failed in part
+    /// (ADR-0084): the margin widens by the share lost — the jump to the margin the failure
+    /// implies too — the rung stays unless the SNR no longer carries it, and the climb waits.
+    /// On a fading path a lone lost frame is the operating point HARQ pays for, not a cliff. A
+    /// burst lost in the main is a failure as before, and so is any on the first OFDM rung of
+    /// an air that does not cap its margin there, where the floor below carries an exchange
+    /// better than the rung does once it loses frames.
+    pub partial_share: f64,
 }
 
 impl Default for RateConfig {
@@ -195,6 +203,7 @@ impl Default for RateConfig {
             max_up_step: 2,
             first_mode_back: 2,
             reseed_margin_db: 3.0,
+            partial_share: 0.5,
         }
     }
 }
@@ -469,8 +478,22 @@ impl RateController {
                     .map_or(value, |prev| 0.7 * prev + 0.3 * value),
             );
         }
-        if failed > 0 {
-            self.widen(snr_db, mode);
+        let total = (ok + failed) as f64;
+        if failed > 0
+            && ok > 0
+            && (failed as f64) < self.config.partial_share * total
+            && !self.at_edge()
+        {
+            self.widen(snr_db, mode, failed as f64 / total);
+            self.ever_failed = true;
+            self.clean_run = 0;
+            self.clean_since_decay = 0;
+            self.decay_step_db = 0.0;
+            if !self.fits(self.index, 0.0) {
+                self.step_down();
+            }
+        } else if failed > 0 {
+            self.widen(snr_db, mode, 1.0);
             self.ever_failed = true;
             self.clean_run = 0;
             self.clean_since_decay = 0;
@@ -499,13 +522,22 @@ impl RateController {
         }
     }
 
-    /// A failed burst is a measurement, not just a nudge.
-    fn widen(&mut self, snr_db: Option<f64>, mode: Option<usize>) {
-        let mut target = self.margin_db + self.config.up_step_db;
+    /// Whether the recommendation is the first OFDM rung of an air whose floor below it holds
+    /// no margin cap: where a failure, in part or not, goes back to the floor (ADR-0084).
+    fn at_edge(&self) -> bool {
+        self.floor_margin_db.is_none()
+            && self.floor_modes > 0
+            && self.index == self.first_ordinary()
+    }
+
+    /// A failed burst is a measurement, not just a nudge; one that failed in part moves the
+    /// margin by the `share` of it that failed (ADR-0084).
+    fn widen(&mut self, snr_db: Option<f64>, mode: Option<usize>, share: f64) {
+        let mut target = self.margin_db + self.config.up_step_db * share;
         if let (Some(snr), Some(mode)) = (snr_db, mode) {
             if let Some(&threshold) = self.thresholds.get(mode) {
                 let implied = snr - threshold + self.config.up_step_db;
-                target = target.max(implied.min(self.margin_db + self.config.max_jump_db));
+                target = target.max(implied.min(self.margin_db + self.config.max_jump_db * share));
             }
         }
         self.margin_db = target.clamp(self.config.min_margin_db, self.config.max_margin_db);
@@ -717,6 +749,61 @@ mod tests {
         rc.observe(Some(12.0), 0, 4, Some(6));
         assert!(rc.margin_db() - start > rc.config.up_step_db);
         assert!(rc.margin_db() - start <= rc.config.max_jump_db);
+    }
+
+    #[test]
+    fn a_burst_that_failed_in_part_moves_the_margin_by_its_share() {
+        // ADR-0084: one frame of six lost widens the margin by a sixth of what the whole burst
+        // lost would and keeps the rung; half or more lost is a failure as before
+        let settle = |rc: &mut RateController| {
+            for _ in 0..20 {
+                rc.observe(Some(12.0), 6, 0, None);
+            }
+            rc.recommend()
+        };
+        let mut part = RateController::default();
+        let mut half = RateController::default();
+        let mut whole = RateController::default();
+        let mode = settle(&mut part);
+        assert_eq!(settle(&mut half), mode);
+        assert_eq!(settle(&mut whole), mode);
+        let start = part.margin_db();
+        part.observe(Some(12.0), 5, 1, Some(mode));
+        half.observe(Some(12.0), 3, 3, Some(mode));
+        whole.observe(Some(12.0), 0, 6, Some(mode));
+        let lost = whole.margin_db() - start;
+        assert_eq!(part.recommend(), mode);
+        assert!(part.margin_db() > start && part.margin_db() - start <= lost / 6.0 + 1e-9);
+        assert!(half.recommend() < mode && whole.recommend() < mode);
+    }
+
+    #[test]
+    fn a_partial_failure_on_the_first_500_hz_ofdm_rung_goes_back_to_the_floor() {
+        // ADR-0084: under it is the floor, the better exchange once the rung loses frames
+        let narrow = || {
+            RateController::for_table_timed(
+                RateConfig::default(),
+                &NARROW_AWGN_THRESHOLD_DB,
+                &NARROW_PAYLOAD_BYTES,
+                &NARROW_FRAME_S,
+            )
+            .with_floor(aether_phy::modes::NARROW.floor_modes(), None)
+        };
+        let mut rc = narrow();
+        for _ in 0..20 {
+            rc.observe(Some(-2.0), 6, 0, None);
+        }
+        assert_eq!(rc.recommend(), 5);
+        rc.observe(Some(-2.0), 5, 1, Some(5));
+        assert!(rc.recommend() < 5);
+        let mut rc = narrow();
+        for _ in 0..20 {
+            rc.observe(Some(1.0), 6, 0, None);
+        }
+        let above = rc.recommend();
+        assert!(above > 5);
+        rc.observe(Some(1.0), 5, 1, Some(above));
+        assert_eq!(rc.recommend(), above);
     }
 
     #[test]

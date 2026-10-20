@@ -229,6 +229,17 @@ class RateController:
     first_mode_back: int = 2
     """Steps kept in hand by :meth:`first_mode`: how far below the fastest mode one
     measurement supports a session's first burst goes out."""
+    partial_share: float = 0.5
+    """A burst that lost fewer than this share of its frames, and decoded some, failed in part
+    (ADR-0084): the margin widens by the share lost — the jump to the margin the failure
+    implies too — the rung stays unless the SNR no longer carries it, and the climb waits. On a
+    fading path a lone lost frame is the operating point HARQ pays for, not a cliff: widening
+    in full on one frame of six took a 1 kB session on ITU Poor at −6 dB from rung 3 to rung 1
+    for its next burst. A burst lost in the main is a failure as before, and so is any on the
+    first OFDM rung of an air that does not cap its margin there (:attr:`floor_margin_db`):
+    the 500 Hz floor below it carries an exchange better than the rung does once it loses
+    frames (a fifth of rung 5's at 0 dB on Moderate and Poor), and holding the rung cost 3 %
+    there."""
     reseed_margin_db: float = 3.0
     """How far above a lower-bound seed (:meth:`seed`) the first ordinary measurement must read
     to replace it. The tone floor's estimate is exact to about +10 dB on AWGN; a few decibels
@@ -294,7 +305,15 @@ class RateController:
                 snr_db if self._smoothed is None else 0.7 * self._smoothed + 0.3 * snr_db
             )
             self.snr_db = self._smoothed
-        if failed:
+        if failed and ok and failed < self.partial_share * (ok + failed) and not self._at_edge():
+            self._widen(snr_db, mode, failed / (ok + failed))
+            self._ever_failed = True
+            self._clean_run = 0
+            self._clean_since_decay = 0
+            self._decay_step_db = 0.0
+            if not self._fits(self._index):
+                self._step_down()
+        elif failed:
             self._widen(snr_db, mode)
             self._ever_failed = True
             self._clean_run = 0
@@ -330,7 +349,17 @@ class RateController:
         self._smoothed = snr_db if self._smoothed is None else 0.7 * self._smoothed + 0.3 * snr_db
         self.snr_db = self._smoothed
 
-    def _widen(self, snr_db: float | None, mode: int | None) -> None:
+    def _at_edge(self) -> bool:
+        """Whether the recommendation is the first OFDM rung of an air whose floor below it
+        holds no margin cap: where a failure, in part or not, goes back to the floor
+        (:attr:`partial_share`)."""
+        return (
+            self.floor_margin_db is None
+            and self.floor_modes > 0
+            and self._index == self._first_ordinary()
+        )
+
+    def _widen(self, snr_db: float | None, mode: int | None, share: float = 1.0) -> None:
         """A failed burst is a measurement, not just a nudge: mode ``m`` failing at SNR ``s``
         says this channel needs more than ``s − threshold[m]`` dB of margin. Jump most of the
         way there instead of creeping up in fixed steps — on a fading channel, where every
@@ -340,11 +369,12 @@ class RateController:
         Every failure is a measurement, an isolated one included: reading the first as an
         accident (a collision, a missed preamble) and jumping only on a repeat was tried on
         the link bench and cost 11 % on the Moderate channel at 16 dB, where the climb it
-        allowed ran into the fades — see ADR-0007."""
-        target = self.margin_db + self.up_step_db
+        allowed ran into the fades — see ADR-0007. A burst that failed in part moves the margin
+        by the ``share`` of it that failed (:attr:`partial_share`)."""
+        target = self.margin_db + self.up_step_db * share
         if snr_db is not None and mode is not None and mode in self.thresholds:
             implied = snr_db - self.thresholds[mode] + self.up_step_db
-            target = max(target, min(implied, self.margin_db + self.max_jump_db))
+            target = max(target, min(implied, self.margin_db + self.max_jump_db * share))
         self.margin_db = min(self.max_margin_db, max(self.min_margin_db, target))
 
     def recommend(self) -> int:
