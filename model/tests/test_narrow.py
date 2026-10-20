@@ -116,18 +116,18 @@ def test_narrow_mode_table() -> None:
     # body), and the tone floor's slowest kind
     assert NARROW.control_mode.payload_bytes(NARROW_LONG) >= CONNECT_BODY_BYTES + 5
     assert NARROW.ladder[0].payload_bytes >= CONNECT_BODY_BYTES + 5
-    # the ladder: the tone floor's two kinds (ADR-0013) and its two four-tone middle kinds
-    # (ADR-0015), then OFDM modes 2–12 on the LONG layout — modes 0 and 1, the OFDM floor
-    # the tone floor replaced, are on no rung
-    assert NARROW.n_rungs == 15 and NARROW.floor_modes == 4
-    assert [r.tone for r in NARROW.ladder[:4]] == list(NARROW.tone_data)
+    # the ladder: the tone floor's two kinds (ADR-0013) and its three four-tone middle kinds
+    # (ADR-0015, ADR-0081), then OFDM modes 3–12 on the LONG layout — modes 0 and 1, the OFDM
+    # floor the tone floor replaced, and mode 2, which tone4x100-93 replaced, are on no rung
+    assert NARROW.n_rungs == 15 and NARROW.floor_modes == 5
+    assert [r.tone for r in NARROW.ladder[:5]] == list(NARROW.tone_data)
     assert NARROW.tone_data == (*M.TONE_DATA, *M.TONE_NARROW)
-    assert [r.mode.index for r in NARROW.ladder[4:] if r.mode] == list(range(2, 13))
+    assert [r.mode.index for r in NARROW.ladder[5:] if r.mode] == list(range(3, 13))
     # the ordinary modes each carry more than the one before; the floor's kinds carry 24 to
-    # 75 bytes in a frame five times as long; the fastest reaches a kilobit
+    # 93 bytes in a frame five times as long; the fastest reaches a kilobit
     payloads = [r.payload_bytes for r in NARROW.ladder]
-    assert payloads[4:] == sorted(payloads[4:])
-    assert payloads[:6] == [24, 36, 51, 75, 15, 25] and payloads[-1] == 137
+    assert payloads[5:] == sorted(payloads[5:])
+    assert payloads[:6] == [24, 36, 51, 75, 93, 25] and payloads[-1] == 137
     assert NARROW.ladder[0].duration_s == pytest.approx(5.36)
     assert {r.index: pytest.approx(r.duration_s, abs=1e-3) for r in NARROW.ladder} == (
         NARROW_FRAME_S
@@ -136,15 +136,18 @@ def test_narrow_mode_table() -> None:
     # the rate controller's copies agree with the ladder
     assert {r.index: r.payload_bytes for r in NARROW.ladder} == NARROW_PAYLOAD_BYTES
     assert set(NARROW_AWGN_THRESHOLD_DB) == {r.index for r in NARROW.ladder}
-    # rung 4 (QPSK 1/3) carries less data after its header than tone4x100-75 does, from 7 dB
-    # further up: it is offered no more (ADR-0073)
-    assert usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)[:6] == [
+    # every rung up to rung 8 is offered: 8PSK 2/3 carries no more than 16QAM 1/2 (rung 9)
+    # from more SNR (ADR-0073 counts the data after the header)
+    assert usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)[:9] == [
         0,
         1,
         2,
         3,
+        4,
         5,
         6,
+        7,
+        9,
     ]
 
 
@@ -238,7 +241,7 @@ def test_narrow_session_over_the_real_phy() -> None:
     timing = phy_timing(P)
     assert timing.mode_threshold_db == NARROW_AWGN_THRESHOLD_DB
     assert timing.capacity(5) == 25 and timing.capacity(0) == 24
-    assert timing.floor_modes == 4 and timing.floor_data_frame_s == pytest.approx(5.36, abs=1e-3)
+    assert timing.floor_modes == 5 and timing.floor_data_frame_s == pytest.approx(5.36, abs=1e-3)
     cfg = GrantConfig(capabilities=bandwidth_capabilities(P))
     assert bandwidth_code(cfg.capabilities) == 1
     a = GrantedEngine("W4ODA", timing, cfg, seed=1)

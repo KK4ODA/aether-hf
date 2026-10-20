@@ -407,8 +407,9 @@ pub const GRANTED_VERSION: u8 = 8;
 /// [`GRANTED_VERSION`], since granted slots. 9 since the measurement frames (ADR-0077): a
 /// [`DataKind::Measure`] frame, the control frame's `measure` bit in the place of version 8's
 /// identifier request inside a session, and an acknowledgement that reports a measurement
-/// ([`REPORT`]), none of which a station of version 8 reads.
-pub const PROTOCOL_VERSION: u8 = 9;
+/// ([`REPORT`]), none of which a station of version 8 reads. 10 since tone4x100-93
+/// (ADR-0081): rung 4 of the 500 Hz ladder is a tone kind where it was QPSK ⅓.
+pub const PROTOCOL_VERSION: u8 = 10;
 
 /// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
 /// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called

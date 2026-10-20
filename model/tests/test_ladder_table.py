@@ -36,16 +36,17 @@ def test_the_table_is_the_models_ladder_and_the_rate_table() -> None:
 def test_the_front_counts_the_data_a_frame_carries() -> None:
     rungs = ladder_table.ladder(NARROW)
     front = ladder_table.front(rungs, "awgn")
-    # 500 Hz rung 4 (OFDM QPSK 1/3: 15 bytes in 1.054 s against tone4x100-75's 75 in 5.36 s)
-    # carries 91 bit/s after the 3-byte header to rung 3's 107, from 7 dB further up: off the
-    # front, and the rate controller's own rule, which counts the same data, agrees (ADR-0073)
+    # 500 Hz rung 8 (8PSK 2/3) carries as much as rung 9 (16QAM 1/2), 53 bytes, from more SNR:
+    # off the front, and the rate controller's own rule, which counts the same data — after
+    # the 3-byte header (ADR-0073) — agrees
     usable = usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S)
-    assert 4 not in usable and front == sorted(usable, key=NARROW_AWGN_THRESHOLD_DB.__getitem__)
-    assert 4 not in front and {3, 5} <= set(front)
+    assert 8 not in usable and front == sorted(usable, key=NARROW_AWGN_THRESHOLD_DB.__getitem__)
+    # tone4x100-93 (ADR-0081) is on it, between rung 3 and the first OFDM rung
+    assert 8 not in front and {3, 4, 5} <= set(front)
     gaps = {(g.low, g.high): g for g in ladder_table.gaps(rungs, "awgn")}
-    gap = gaps[(3, 5)]
-    assert round(gap.db, 1) == round(NARROW_AWGN_THRESHOLD_DB[5] - NARROW_AWGN_THRESHOLD_DB[3], 1)
-    assert gap.ratio > 1.5
+    gap = gaps[(4, 5)]
+    assert round(gap.db, 1) == round(NARROW_AWGN_THRESHOLD_DB[5] - NARROW_AWGN_THRESHOLD_DB[4], 1)
+    assert gap.ratio > 1.15
     # the front is ordered by threshold and every neighbour pair is a gap
     assert (
         len(ladder_table.gaps(rungs, "moderate")) == len(ladder_table.front(rungs, "moderate")) - 1

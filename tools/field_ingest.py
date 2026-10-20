@@ -28,17 +28,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FORMAT = "aether-hf-session/4"
+FORMAT = "aether-hf-session/5"
 """The sidecar format this tool writes rows from: its mode numbers are rungs of the air's
-ladder (ADR-0015). Older sidecars are read onto it by :func:`sidecar_rung`:
-``aether-hf-session/3`` (the fast kinds, ADR-0014) numbered the 500 Hz ladder before its
+ladder (ADR-0081). Older sidecars are read onto it by :func:`sidecar_rung`:
+``aether-hf-session/4`` named QPSK ⅓ by the 500 Hz rung 4, which tone4x100-93 took and which
+is on no rung now; ``aether-hf-session/3`` (the fast kinds, ADR-0014) numbered the 500 Hz
+ladder before its
 middle kinds, ``aether-hf-session/2`` (the tone floor, ADR-0013) both ladders before their
 middle rungs, and ``aether-hf-session/1`` — every sidecar before the tone floor — the OFDM
 modes."""
 LEGACY_FORMAT = "aether-hf-session/1"
 FLOOR_FORMAT = "aether-hf-session/2"
 FAST_FORMAT = "aether-hf-session/3"
-FORMATS = (LEGACY_FORMAT, FLOOR_FORMAT, FAST_FORMAT, FORMAT)
+MIDDLE_FORMAT = "aether-hf-session/4"
+FORMATS = (LEGACY_FORMAT, FLOOR_FORMAT, FAST_FORMAT, MIDDLE_FORMAT, FORMAT)
 
 
 def sidecar_rung(document: dict[str, object], mode: int) -> int | None:
@@ -47,16 +50,20 @@ def sidecar_rung(document: dict[str, object], mode: int) -> int | None:
     is on no rung (``None``), and on the 2 300 Hz air every mode sat two rungs up on the
     ``/2`` ladder, above the tone floor's two. From there each air's rungs from 2 up moved
     once more: four on the 2 300 Hz air in ``/3``, above the fast kinds (ADR-0014), two on
-    the 500 Hz air in ``/4``, above its middle kinds (ADR-0015)."""
+    the 500 Hz air in ``/4``, above its middle kinds (ADR-0015). Up to ``/4`` the 500 Hz rung 4
+    was QPSK ⅓, which tone4x100-93 replaced in ``/5`` (ADR-0081): on no rung now."""
     fmt = document.get("format")
-    if fmt not in (LEGACY_FORMAT, FLOOR_FORMAT, FAST_FORMAT):
+    if fmt not in (LEGACY_FORMAT, FLOOR_FORMAT, FAST_FORMAT, MIDDLE_FORMAT):
         return mode
     session = document.get("session") or {}
     bandwidth = session.get("bandwidth_hz") if isinstance(session, dict) else None
     if bandwidth == 500:
         if fmt == LEGACY_FORMAT and mode < 2:
             return None
-        return mode + 2 if mode >= 2 else mode
+        rung = mode if fmt == MIDDLE_FORMAT else mode + 2 if mode >= 2 else mode
+        return None if rung == 4 else rung
+    if fmt == MIDDLE_FORMAT:
+        return mode
     if fmt == FAST_FORMAT:
         return mode
     if fmt == LEGACY_FORMAT:

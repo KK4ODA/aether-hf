@@ -462,10 +462,10 @@
     "tone-24",
     "tone-36",
     "tone4x100-51",
-    "tone4x100-75"
+    "tone4x100-75",
+    "tone4x100-93"
    ],
    "ofdm_ladder": [
-    2,
     3,
     4,
     5,
@@ -881,6 +881,46 @@
     15,
     2,
     14
+   ],
+   [
+    5,
+    12,
+    7,
+    15,
+    4,
+    6,
+    0,
+    1
+   ],
+   [
+    9,
+    12,
+    14,
+    2,
+    1,
+    5,
+    15,
+    0
+   ],
+   [
+    0,
+    2,
+    7,
+    4,
+    15,
+    8,
+    12,
+    1
+   ],
+   [
+    5,
+    3,
+    13,
+    14,
+    0,
+    15,
+    2,
+    7
    ]
   ],
   "control": {
@@ -1014,6 +1054,21 @@
      30,
      31,
      32
+    ],
+    "control": false,
+    "data_symbol_samples": 80,
+    "data_ramp_samples": 32,
+    "data_tones": 4
+   },
+   {
+    "name": "tone4x100-93",
+    "payload_bytes": 93,
+    "data_symbols": 440,
+    "patterns": [
+     33,
+     34,
+     35,
+     36
     ],
     "control": false,
     "data_symbol_samples": 80,

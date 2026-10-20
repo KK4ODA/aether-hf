@@ -205,7 +205,7 @@ station one slot, defined by what it states; a station keys only in a slot grant
 decoded in time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes
 are not version 7's, and neither is any of its timing."""
 
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 10
 """The link protocol a station speaks, in the connect body's version byte; what a release
 states (``link_protocol``); a station ignores a call of another, and says so. The same number
 names different frames in different versions, so a session between two versions cannot run.
@@ -220,7 +220,8 @@ the end of a burst (ADR-0047), the last of the turn engine, retired in ADR-0069'
 :data:`GRANTED_VERSION`, since granted slots. 9 since the measurement frames (ADR-0077): a
 MEASURE frame, the control frame's ``measure`` bit in the place of version 8's identifier
 request inside a session, and an acknowledgement that reports a measurement (:data:`REPORT`),
-none of which a station of version 8 reads."""
+none of which a station of version 8 reads. 10 since tone4x100-93 (ADR-0081): rung 4 of the
+500 Hz ladder is a tone kind where it was QPSK ⅓."""
 
 CAP_LEVEL_SHIFT = 3
 CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT

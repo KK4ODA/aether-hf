@@ -93,7 +93,7 @@ NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
     1: -17.3,
     2: -14.3,
     3: -13.0,
-    4: -6.0,
+    4: -11.1,
     5: -5.2,
     6: -3.6,
     7: -2.1,
@@ -107,15 +107,15 @@ NARROW_AWGN_THRESHOLD_DB: dict[int, float] = {
 }
 """The 500 Hz waveform's table (P7-0), 3 kHz-referenced like the wide one, so the two read
 as an operator would compare them: the same transmitter power into the same noise. Every
-entry is measured: the tone floor's four (rungs 0–3: its own two, ADR-0013, the same frames
-and thresholds as on the wide ladder, and the four-tone middle kinds, ADR-0015) by
-``tools/bench_tone.py`` (``bench/baselines/tone_floor.csv``); the OFDM modes (rungs 4–14,
-OFDM modes 2–12) by ``tools/bench_phy.py --bandwidth 500`` (``bench/baselines/
+entry is measured: the tone floor's five (rungs 0–4: its own two, ADR-0013, the same frames
+and thresholds as on the wide ladder, and the four-tone middle kinds, ADR-0015 and ADR-0081)
+by ``tools/bench_tone.py`` (``bench/baselines/tone_floor.csv``); the OFDM modes (rungs 5–14,
+OFDM modes 3–12) by ``tools/bench_phy.py --bandwidth 500`` (``bench/baselines/
 phy_fer_500.csv``; written by ``tools/update_rate_table.py --bandwidth 500 --apply``). Its
 control mode, QPSK ½ (rung 5), sits at −5.2 dB against the wide table's BPSK ⅕ at −5.1
-because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it is QPSK ⅓
-on the ordinary frame (rung 4), and below that the tone floor, which reaches −19 dB where the
-OFDM floor it replaced (ADR-0009) reached −12."""
+because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; below it is the
+tone floor, which reaches −19 dB where the OFDM floor it replaced (ADR-0009) reached −12. QPSK
+⅓ on the ordinary frame was rung 4 until tone4x100-93 took its place (ADR-0081)."""
 
 TONE_CONTROL_THRESHOLD_DB = -19.5
 """The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
@@ -140,7 +140,7 @@ NARROW_PAYLOAD_BYTES: dict[int, float] = {
     1: 36,
     2: 51,
     3: 75,
-    4: 15,
+    4: 93,
     5: 25,
     6: 34,
     7: 39,
@@ -156,7 +156,7 @@ NARROW_PAYLOAD_BYTES: dict[int, float] = {
 five times as long as the ordinary ones, which is why :func:`usable_modes` needs
 :data:`NARROW_FRAME_S` to compare them."""
 
-NARROW_FRAME_S: dict[int, float] = {m: (5.36 if m < 4 else 1.054) for m in range(15)}
+NARROW_FRAME_S: dict[int, float] = {m: (5.36 if m < 5 else 1.054) for m in range(15)}
 """Air time of each narrow rung's DATA frame: 134 slots of 40 ms on the tone floor, its
 middle kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy of
 the frames; tested against them)."""
@@ -363,7 +363,7 @@ class RateController:
         On the floor the steps in hand are the decibels they keep, not the rungs: the first
         burst goes at the fastest rung the measurement clears by as much as the steps below
         the fit would have kept at the fit's own edge. The floor's top rung fits a measurement
-        up to seven decibels above it, because the rung above is the first OFDM one, and
+        up to six or seven decibels above it, because the rung above is the first OFDM one, and
         counted in rungs the steps took a session the call had measured with ten decibels to
         spare down to half the rate — WC4Y's Test of 2026-10-11, its message at tone-36 on a
         path that carried tone4x100-75 in every burst after (ADR-0066). Among the OFDM rungs,

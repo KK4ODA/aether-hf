@@ -21,6 +21,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -309,6 +310,8 @@ TONE_CASES = (
     # the 500 Hz air's middle kinds (ADR-0015), after the rest for the same reason
     (TONE_NARROW[0], 2),
     (TONE_NARROW[1], 0),
+    # tone4x100-93 (ADR-0081), last again
+    (TONE_NARROW[2], 3),
 )
 
 
@@ -484,6 +487,71 @@ def tone_receive_cases() -> list[dict[str, object]]:
     return out
 
 
+TONE_FADED_CASES = (
+    (TONE_NARROW[2], {"kind": "rays", "rays": [[1.0, 0.0, 0.0], [0.9, 8.0, 0.0]]}),
+    (
+        TONE_NARROW[2],
+        {"kind": "rays", "rays": [[1.0, 0.0, 0.0], [1.0, 8.0, 0.0], [1.0, 19.3, 1.0]]},
+    ),
+    (TONE_NARROW[1], {"kind": "gate", "floor": 0.1, "f_hz": 3.7, "above": 0.4}),
+)
+"""Four-tone frames under an envelope that moves within a sync block (ADR-0080 §2.4): two and
+three rays beating at 8 and 19.3 Hz, and an on-off gate at 3.7 Hz — Nakagami orders 3, 2 and 1
+of the metric for a channel that fades faster than the levels read from the data follow."""
+
+
+def tone_envelope(spec: dict[str, Any], n: int) -> NDArray[np.complex128]:
+    """A deterministic fading envelope, closed form so both languages build it identically:
+    a sum of rays ``amplitude · exp(j(2π·f·k/8000 + phase))``, or a gate of ``floor`` plus one
+    where ``cos(2π·f·k/8000)`` is above ``above``."""
+    k = np.arange(n)
+    if spec["kind"] == "rays":
+        env = np.zeros(n, dtype=np.complex128)
+        for amp, f, phase in spec["rays"]:
+            env += amp * np.exp(1j * (2 * np.pi * f * k / 8000.0 + phase))
+        return env
+    on = np.cos(2 * np.pi * float(spec["f_hz"]) * k / 8000.0) > float(spec["above"])
+    return np.asarray(float(spec["floor"]) + on, dtype=np.complex128)
+
+
+def tone_faded_cases() -> list[dict[str, object]]:
+    """A four-tone frame under :func:`tone_envelope`, turned and with :func:`tone_interference`
+    added, demodulated at its known start and offset: the wobble the sync blocks read
+    (:func:`~aether_model.phy.tone.fade_wobble`) and the soft bits to a tolerance, whether it
+    decodes exact."""
+    out = []
+    rng = np.random.default_rng(2024)
+    for i, (kind, spec) in enumerate(TONE_FADED_CASES):
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        lead, cfo = 1700 + 97 * i, 12.5 - 9.75 * i
+        x = tone.burst(kind, payload, 0)
+        n = lead + len(x) + 2000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y *= tone_envelope(spec, n) * np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += tone_interference(n)
+        layout = kind.layout(0, 0)
+        energies = tone.tone_energies(y, lead, cfo, kind.symbols, kind.num)
+        wobble = tone.fade_wobble(energies / tone.sync_noise(energies, layout, kind), layout)
+        assert wobble * (tone.FADE_ORDER_MAX + 0.5) > tone.FADE_SCALE, (kind.name, wobble)
+        frame = tone.demodulate(y, kind, 0, lead, cfo)
+        decoded, _ = frame.decode()
+        out.append(
+            {
+                "kind": kind.name,
+                "payload": payload.hex(),
+                "envelope": spec,
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "wobble": wobble,
+                "decoded": decoded == payload,
+                "llr": [float(v) for v in frame.llr],
+            }
+        )
+    return out
+
+
 def tone_after_silence_cases() -> list[dict[str, object]]:
     """A tone-36 frame straight after exact silence — a receiver's own transmission, muted —
     with :func:`tone_interference` after it: the hypothesis a block-spacing early (first
@@ -648,6 +716,7 @@ def main() -> int:
         "blanker": blanker_case(),
         "tone_frames": tone_frame_cases(),
         "tone_receive": tone_receive_cases(),
+        "tone_faded": tone_faded_cases(),
         "tone_counted_frames": tone_counted_frame_cases(),
         "tone_counted_receive": tone_counted_receive_cases(),
         "tone_after_silence": tone_after_silence_cases(),

@@ -71,7 +71,7 @@ def test_on_awgn_a_frame_decodes_at_the_channel_snr() -> None:
 def test_frames_are_shaped_by_the_layout_they_go_out_on() -> None:
     narrow = shapes_for(NARROW)
     floor_data = narrow(TxFrame(Container.DATA, b"", mode=0))
-    ordinary = narrow(TxFrame(Container.DATA, b"", mode=4))
+    ordinary = narrow(TxFrame(Container.DATA, b"", mode=NARROW.floor_modes))
     floor_control = narrow(TxFrame(Container.CONTROL, b"", floor=True))
     assert floor_data.duration_s > 3 * ordinary.duration_s
     assert floor_control.duration_s > narrow(TxFrame(Container.CONTROL, b"")).duration_s

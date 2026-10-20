@@ -318,7 +318,7 @@ press **Test session**. It runs:
 
 The message and file go first, so the speeds the Test reports are the speeds you would get.
 The ladder then tries rungs the link would not choose by itself. It skips the rungs the link
-never uses: 4 and 8 at 500 Hz, 6 and 13 at 2300 Hz. Each rung sends a few frames of test filler
+never uses: 8 at 500 Hz, 6 and 13 at 2300 Hz. Each rung sends a few frames of test filler
 once. The other station says which arrived, and nothing is sent again. A rung whose answer was
 lost is logged with no SNR (*at ? dB*). After the last rung the Test disconnects.
 
@@ -533,10 +533,11 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 The rungs, their rates and the SNR each needs are in Setup's **Mode table**, and in full in the
 [air-interface specification](../spec/air-interface.md#4-modes--the-ladder). Roughly: at
 **2300 Hz**, rungs 0–5 are tone kinds from 36 to 228 bit/s, and rungs 6–19 OFDM from about 200
-bit/s to 5.5 kbit/s. At **500 Hz**, rungs 0–3 are tone kinds from 36 to 112 bit/s, and rungs
-4–14 OFDM up to about 1 kbit/s. Some rungs are never asked for, because another carries as
-much or more from less SNR: 4 and 8 at 500 Hz (rung 4, after each frame's header, carries less
-than rung 3 from 7 dB more), 6 and 13 at 2300 Hz. The Test's ladder skips them too.
+bit/s to 5.5 kbit/s. At **500 Hz**, rungs 0–4 are tone kinds from 36 to 139 bit/s, and rungs
+5–14 OFDM up to about 1 kbit/s. Some rungs are never asked for, because another carries as
+much or more from less SNR: 8 at 500 Hz, 6 and 13 at 2300 Hz. The Test's ladder skips them too.
+Rung 4 at 500 Hz was an OFDM rung before 0.2.0-beta.117; the link protocol changed with it, so
+both stations need a version with the new protocol (see **Update required** above).
 
 ## 14. Troubleshooting
 

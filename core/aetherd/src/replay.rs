@@ -77,7 +77,10 @@ impl Expectation {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let document: Value =
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        if document["format"] != crate::record::FORMAT {
+        if !crate::record::READS
+            .iter()
+            .any(|&format| document["format"] == format)
+        {
             return Err(format!(
                 "{} is not a session sidecar ({} expected)",
                 path.display(),

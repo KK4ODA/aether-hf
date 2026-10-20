@@ -124,10 +124,12 @@ def test_the_first_mode_keeps_a_step_in_hand() -> None:
 
 def test_on_the_floor_the_steps_in_hand_are_decibels() -> None:
     """WC4Y's Test of 2026-10-11 (80 m, 500 Hz; ADR-0066): the call was heard at about −2 dB,
-    which the floor's top rung (tone4x100-75, −13 dB) clears by ten decibels and the first
-    OFDM rung does not fit; two rungs in hand sent the message at tone-36, half the rate, on a
-    path that carried tone4x100-75 in every burst after. On the floor the steps keep the
-    decibels they would at the fit's own edge; among the OFDM rungs they stay rungs."""
+    which the floor's top rung (then tone4x100-75, −13 dB) cleared by ten decibels and the
+    first OFDM rung did not fit; two rungs in hand sent the message at tone-36, half the rate,
+    on a path that carried tone4x100-75 in every burst after. On the floor the steps keep the
+    decibels they would at the fit's own edge; among the OFDM rungs they stay rungs. The
+    floor's top is tone4x100-93 since ADR-0081, and the same call still starts on it."""
+    from aether_model.frame.modes import NARROW
     from aether_model.link.rate import (
         NARROW_AWGN_THRESHOLD_DB,
         NARROW_FRAME_S,
@@ -138,19 +140,20 @@ def test_on_the_floor_the_steps_in_hand_are_decibels() -> None:
     narrow = RateController(
         thresholds=thresholds,
         modes=usable_modes(thresholds, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
-        floor_modes=4,
+        floor_modes=NARROW.floor_modes,
     )
+    top = NARROW.floor_modes - 1
 
     def required(rung: int) -> float:
         return thresholds[rung] + narrow.margin_db + narrow.up_hysteresis_db
 
-    assert required(3) <= -2.0 < required(4)  # the floor's top fits, the first OFDM rung not
-    assert narrow.first_mode(-2.0) == 3
-    keep = required(3) - required(1)  # what two rungs in hand keep at the top's edge
-    assert narrow.first_mode(required(3) + keep) == 3
-    assert narrow.first_mode(required(2) + keep) == 2
-    assert narrow.first_mode(required(2) + keep - 0.01) == 1
-    assert narrow.first_mode(required(3)) == 1  # at the fit's edge: two rungs, as before
+    assert required(top) <= -2.0 < required(top + 1)  # the floor's top fits, the OFDM rung not
+    assert narrow.first_mode(-2.0) == top
+    keep = required(top) - required(top - 2)  # what two rungs in hand keep at the top's edge
+    assert narrow.first_mode(required(top) + keep) == top
+    assert narrow.first_mode(required(top - 1) + keep) == top - 1
+    assert narrow.first_mode(required(top - 1) + keep - 0.01) == top - 2
+    assert narrow.first_mode(required(top)) == top - 2  # at the fit's edge: two rungs, as before
     assert narrow.first_mode(-20.0) == 0
     # the OFDM rungs: the steps are rungs (ADR-0008)
     ordinary = narrow._first_ordinary()

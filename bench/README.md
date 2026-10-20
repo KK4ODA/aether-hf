@@ -417,6 +417,30 @@ is as fast or faster (1.3–1.7 times on the fading classes from −8 to 0 dB), 
 fewer sessions; the cap helps AWGN at −2 dB only and costs the fading classes, so the 500 Hz
 air has none. The calibration added the two kinds' rows and left every other row as it was.
 
+## Each tone's level, and the 500 Hz rung 4 (`tone_floor.csv`, `fading_pipe.csv`, `link_narrow_rung4.csv`, ADR-0080 / ADR-0081)
+
+The four-tone receiver reads each tone's level from the data (ADR-0080), and `tone4x100-93`,
+the four-tone frame at 93 bytes, takes the 500 Hz rung 4 from QPSK ⅓ (ADR-0081). The middle
+kinds' rows of `tone_floor.csv` were run again on the same frames and seeds; 10 % FER through
+the detector:
+
+| | AWGN | ITU Good | ITU Moderate | ITU Poor |
+|---|---|---|---|---|
+| tone4x100-51, 76 bit/s | −14.3 dB | −7.8 | −10.2 | −10.8 |
+| tone4x100-75, 112 bit/s | −13.0 | −3.6 | −6.2 | −7.2 |
+| tone4x100-93, 139 bit/s | −11.1 | −0.7 | −2.2 | −3.8 |
+
+(Before the receiver: rung 3 −3.2, −4.9 and −5.7 on the fading classes, rung 2 −7.5, −10.0 and
+−10.3; AWGN unchanged.) `fading_pipe.csv` was refitted: the three kinds' rows move, QPSK ⅓'s go
+(it is on no rung), and the 500 Hz OFDM rungs the sweep never measured on Moderate and Poor
+(modes 6 and 8–12) move 0.3–0.45 dB up, because the mean penalty they are filled from no longer
+counts QPSK ⅓'s. `link_narrow_rung4.csv` is the link bench on the fading pipe at 500 Hz, 30
+sessions of 1 kB a point, in four arms — beta.116 from a worktree, beta.116 with the receiver,
+the same with `--rung 4=93@-11.1~3`, and the rung — and 120 a point from −6 to −2 dB on Moderate
+and Poor for three of them. Nothing is slower than beta.116; sessions from 0 to +2 dB on the
+fading classes run 8–20 % faster; against the receiver alone Poor at −6 dB is 2 % slower
+(ADR-0081 §3).
+
 ## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
 
 `calls.csv` is `tools/bench_calls.py`: per air, class and SNR, 30 calls and 30 probes on the

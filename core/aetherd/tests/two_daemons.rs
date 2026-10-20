@@ -527,13 +527,14 @@ fn two_daemons_complete_a_session_at_500_hz() {
     let caps = a.call("capabilities", &json!({}))["result"].clone();
     assert_eq!(caps["bandwidth_hz"], 500, "{caps}");
     assert_eq!(caps["modes"].as_array().map(Vec::len), Some(15));
-    // the tone floor (ADR-0013) and its four-tone middle kinds (ADR-0015) lead the ladder;
-    // the control mode, QPSK 1/2, is rung 5
+    // the tone floor (ADR-0013) and its four-tone middle kinds (ADR-0015, ADR-0081) lead the
+    // ladder; the control mode, QPSK 1/2, is rung 5
     assert_eq!(caps["modes"][0]["name"], "tone-24");
     assert_eq!(caps["modes"][0]["floor"], true);
     assert_eq!(caps["modes"][2]["name"], "tone4x100-51");
     assert_eq!(caps["modes"][3]["floor"], true);
-    assert_eq!(caps["modes"][4]["name"], "QPSK-1/3");
+    assert_eq!(caps["modes"][4]["name"], "tone4x100-93");
+    assert_eq!(caps["modes"][4]["floor"], true);
     assert_eq!(caps["modes"][5]["name"], "QPSK-1/2");
     assert_eq!(caps["modes"][5]["floor"], false);
 

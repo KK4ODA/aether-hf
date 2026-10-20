@@ -91,7 +91,7 @@
   -17.3,
   -14.3,
   -13.0,
-  -6.0,
+  -11.1,
   -5.2,
   -3.6,
   -2.1,
@@ -108,7 +108,7 @@
   36,
   51,
   75,
-  15,
+  93,
   25,
   34,
   39,
@@ -125,7 +125,7 @@
   5.36,
   5.36,
   5.36,
-  1.054,
+  5.36,
   1.054,
   1.054,
   1.054,
@@ -150,6 +150,7 @@
   1,
   2,
   3,
+  4,
   5,
   6,
   7,
@@ -1213,7 +1214,7 @@
    "src": "KK4ODA",
    "dst": "W1AW",
    "caps": 18,
-   "version": 9,
+   "version": 10,
    "snr_db": null,
    "turnaround_s": 0.25,
    "identifier_s": 4.3,
@@ -1221,13 +1222,13 @@
    "decoded_turnaround_s": 0.3,
    "decoded_identifier_s": 4.5,
    "level": 2,
-   "encoded": "2cb7cf101000005dc0570000000012097f0309"
+   "encoded": "2cb7cf101000005dc05700000000120a7f0309"
   },
   {
    "src": "W4ODA",
    "dst": "KK4XYZ",
    "caps": 25,
-   "version": 9,
+   "version": 10,
    "snr_db": -3.0,
    "turnaround_s": 0.2,
    "identifier_s": 0.0,
@@ -1235,13 +1236,13 @@
    "decoded_turnaround_s": 0.2,
    "decoded_identifier_s": 0.0,
    "level": 3,
-   "encoded": "5df3c4040000002cb7d865a000001909fd0200"
+   "encoded": "5df3c4040000002cb7d865a00000190afd0200"
   },
   {
    "src": "A1",
    "dst": "9Z9ZZZ9ZZ",
    "caps": 0,
-   "version": 9,
+   "version": 10,
    "snr_db": 12.5,
    "turnaround_s": 2.0,
    "identifier_s": 200.0,
@@ -1249,13 +1250,13 @@
    "decoded_turnaround_s": 1.5,
    "decoded_identifier_s": 127.5,
    "level": 0,
-   "encoded": "05c0000000000091a91a69a91a6800090c0fff"
+   "encoded": "05c0000000000091a91a69a91a68000a0c0fff"
   },
   {
    "src": "M0ABC",
    "dst": "VK2DEF/P",
    "caps": 2,
-   "version": 9,
+   "version": 10,
    "snr_db": 0.0,
    "turnaround_s": 0.0,
    "identifier_s": 0.5,
@@ -1263,7 +1264,7 @@
    "decoded_turnaround_s": 0.0,
    "decoded_identifier_s": 0.5,
    "level": 0,
-   "encoded": "35b0420c00000058b744146990000209000001"
+   "encoded": "35b0420c00000058b74414699000020a000001"
   }
  ],
  "probe_bodies": [

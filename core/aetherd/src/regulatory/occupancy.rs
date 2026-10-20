@@ -249,7 +249,9 @@ mod tests {
         };
         assert!(width(narrow.rungs[0].edges, Reading::Power) < 500.0);
         assert!(width(narrow.rungs[0].edges, Reading::Spectral) > 500.0);
-        assert!(width(narrow.rungs[4].edges, Reading::Power) > 500.0);
+        assert!(width(narrow.rungs[5].edges, Reading::Power) > 500.0);
+        // the four-tone kinds, rungs 2-4 (ADR-0015, ADR-0081), as the floor's
+        assert!(width(narrow.rungs[4].edges, Reading::Power) < 500.0);
         let wide = air(2300).expect("measured");
         assert!(width(wide.control_ordinary, Reading::Wider) < 2800.0);
         assert!(air(9600).is_err());
