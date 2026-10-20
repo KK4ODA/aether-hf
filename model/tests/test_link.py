@@ -380,6 +380,59 @@ def test_a_learned_margin_is_given_back_faster_the_longer_bursts_stay_clean() ->
     assert max(taken) <= rc.max_down_step_db
 
 
+def test_a_burst_that_failed_in_part_moves_the_margin_by_its_share() -> None:
+    """ADR-0084: on a fading path a lone lost frame is the operating point HARQ pays for, not a
+    cliff. One frame of six lost widens the margin by a sixth of what the whole burst lost
+    would, the rung stays and the climb waits; half or more lost is a failure as before."""
+    rcs = {lost: RateController() for lost in (1, 3, 6)}
+    modes = {lost: _settle(rc, 12.0) for lost, rc in rcs.items()}
+    mode = modes[1]
+    assert set(modes.values()) == {mode}
+    start = rcs[1].margin_db
+    for lost, rc in rcs.items():
+        rc.observe(12.0, ok=6 - lost, failed=lost, mode=mode)
+    whole = rcs[6].margin_db - start
+    assert rcs[1].recommend() == mode
+    assert 0 < rcs[1].margin_db - start <= whole / 6 + 1e-9
+    assert rcs[3].recommend() < mode and rcs[6].recommend() < mode
+    # a clean burst after it: no climb past the rung on the burst that failed in part
+    rcs[1].observe(14.0, ok=6, failed=0, mode=mode)
+    assert rcs[1].recommend() >= mode
+
+
+def test_a_burst_that_failed_in_part_on_the_first_500_hz_ofdm_rung_goes_back_to_the_floor() -> None:
+    """ADR-0084: under the 500 Hz air's first OFDM rung is the tone floor, which carries an
+    exchange better than the rung does once the rung loses frames; holding the rung there on
+    a partial failure cost 3 % at 0 dB on Moderate and Poor, so it steps down as before."""
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.rate import (
+        NARROW_AWGN_THRESHOLD_DB,
+        NARROW_FRAME_S,
+        NARROW_PAYLOAD_BYTES,
+    )
+
+    thresholds = dict(NARROW_AWGN_THRESHOLD_DB)
+
+    def narrow() -> RateController:
+        return RateController(
+            thresholds=thresholds,
+            modes=usable_modes(thresholds, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
+            floor_modes=NARROW.floor_modes,
+        )
+
+    rc = narrow()
+    edge = _settle(rc, -2.0)
+    assert edge == NARROW.floor_modes  # the first OFDM rung
+    rc.observe(-2.0, ok=5, failed=1, mode=edge)
+    assert rc.recommend() < edge
+    # one rung up, a partial failure holds the rung as anywhere else
+    rc = narrow()
+    above = _settle(rc, 1.0)
+    assert above > edge
+    rc.observe(1.0, ok=5, failed=1, mode=above)
+    assert rc.recommend() == above
+
+
 def test_margin_decays_freely_before_anything_is_learned() -> None:
     """Stickiness protects a *learned* penalty; on a link that has never failed there is
     nothing to protect, so a clean channel must still reach its mode quickly."""
