@@ -1693,7 +1693,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 12
+schema_version = 13
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1900,6 +1900,20 @@ mod tests {
         let config = Config::parse(EXAMPLE).expect("the example does not parse");
         assert_eq!(config.callsign, "N0CALL");
         assert!(matches!(config.ptt, PttConfig::Rigctld { .. }));
+    }
+
+    #[test]
+    fn the_example_file_says_the_schema_this_version_writes() {
+        // A file written from the example is brought forward at load, so a stale number breaks
+        // no station — but the scenario harness reads the number from `--example-config` to
+        // know what a build is (`schema_of` in tools/session_matrix.py), and a build that says
+        // one schema less is held to none of the checks that schema brought. ADR-0075 bumped
+        // the constant to 13 and left the example at 12, and its identifier checks never ran.
+        let line = EXAMPLE
+            .lines()
+            .find(|line| line.starts_with("schema_version"))
+            .expect("the example says its schema");
+        assert_eq!(line, format!("schema_version = {SCHEMA_VERSION}"));
     }
 
     #[test]
