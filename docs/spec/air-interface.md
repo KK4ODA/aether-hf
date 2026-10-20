@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 7,
+Status: **draft**, tracking the reference model on `master` (link protocol version 9,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -184,6 +184,12 @@ sharing more than two symbols under any offset within a block and any shift of u
 tones. The uneven split of the data makes the three distances between a frame's blocks
 differ, so no shift of a frame lines up more than one of its blocks with another's.
 
+The start and end blocks name the frame's kind and redundancy version. The middle block says
+how many frames of its transmission follow it (link protocol 8, ADR-0068 §2.1): its pattern is
+the kind's for redundancy version (RV + count) mod 4, the count 0–3, 3 meaning three or more.
+A receiver reads a count only when the middle block's hits under one count reach five and beat
+every other count's by three; a faded block states none, rather than a guess.
+
 The 2 300 Hz ladder also has four **fast kinds** (ADR-0014) between the floor's own two and
 the OFDM modes. A fast kind is the same frame — the same sync blocks at the same places, the
 same 134 slots and 5.36 s, the same code rates — with two or four data symbols in each data
@@ -350,25 +356,17 @@ first transmission whose payload, and therefore sequence number, it never decode
 CONTROL frames always use the control mode and RV 0; their pilot symbols carry the plain
 pilot sequence.
 
-**The burst countdown** (link protocol version 5, ADR-0041; counted in pairs since version 6,
-ADR-0046). A DATA frame's chips are multiplied by `j^f`, where `f` is half the number of frames
-of its burst that follow it, rounded up: 0 for the last frame, 1 for one or two following, 2 for
-three or four, 3 for five or six. It never says fewer frames than follow — a receiver takes
-`2f` as the most still to come, and the burst's end as the tightest such bound any frame it
-believed gives — so one that hears only a burst's first frames does not answer over the rest,
-which version 5's "three or more" let it do; the sender's wait for the acknowledgement covers
-the one frame more it may say. A receiver picks the (mode, RV) sequence by the
-*magnitude* of its correlation, which the turn does not change, and reads `f` as the nearest
-quarter turn of that correlation's phase against the comb pilots' channel estimate; the pilot
-symbols are then known with the turned chips. A frame with `f = 0` is the frame of version 4.
-The countdown is outside the codeword, like the RV, so retransmissions still soft-combine
-whatever their position in a later burst. Tone-floor frames carry no countdown. A receiver
-believes a frame's count when the frame decoded or its acquisition was confident, and a decoded
-frame's count wins: the burst ends by the tightest bound a decoded frame gives, and by a failed
-frame's only when nothing of the burst decoded — the count rides in chips a failed frame may
-have read wrong (ADR-0047). A frame that did
-not decode and began before the receiver's own last transmission belongs to the burst that
-transmission answered, and starts no new one.
+**The count** (link protocol version 8, ADR-0068 §2.1; the chips' turn since version 5,
+ADR-0041). A DATA frame's chips are multiplied by `j^f`, where `f` is how many frames of its
+transmission follow it, exactly: 0 for the last, 3 for three or more. A receiver picks the
+(mode, RV) sequence by the *magnitude* of its correlation, which the turn does not change, and
+reads `f` as the nearest quarter turn of that correlation's phase against the comb pilots'
+channel estimate; the pilot symbols are then known with the turned chips. The count is outside
+the codeword, like the RV, so retransmissions still soft-combine whatever their place in a
+later transmission. A tone-floor frame carries its count in its middle sync block (§2.4). A
+receiver believes a count only from a copy that decoded alone: the chips of a copy too weak to
+decode alone can read a quarter turn off, and one HARQ rescued at −1.5 dB on the scenario
+harness carried three to follow read as none (§7.2, rule 2).
 
 ---
 
@@ -525,15 +523,15 @@ carried, and a sender leaves that byte for the next frame.
 **Nothing in this header may differ between transmissions of the same codeword.** A
 retransmission is the same codeword under another redundancy version, and the receiver
 soft-combines them; a header that changed would make the combination meaningless. That is why
-no burst length or position appears here — the receiver derives a frame's position in its
-burst from its air time, and the end of a burst from the silence that follows and from the
-countdown an OFDM frame carries in its chips (§3.2, §9).
+no transmission length or position appears here — the receiver derives a frame's place in
+its transmission from its air time, and the transmission's end from the count every frame
+carries outside its codeword (§3.2, §2.4) or the header before it (§7.2).
 
 Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in a control
-frame), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5) and `DATAGRAM` (6). A receiver ignores a
-kind it does not know, which is what lets a kind be added. `BEACON`, `PROBE`, `PROBE_ACK` and
-`DATAGRAM` are sent outside sessions, and a station in a session never takes one of them for
-session data, whatever its session id says.
+frame), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5), `DATAGRAM` (6) and `MEASURE` (7, link
+protocol 9: §7.2, rule 14). The kind's three bits are all in use. `BEACON`, `PROBE`,
+`PROBE_ACK` and `DATAGRAM` are sent outside sessions, and a station in a session never takes one
+of them for session data, whatever its session id says.
 
 A `CONNECT_REQ` and a `CONNECT_ACK` carry this body with sequence number 0 and the session
 id the caller chose (at random, 1–255), at the slowest rung of their family that carries it:
@@ -545,29 +543,33 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 7 |
-| 16 | measured SNR, as the CONTROL frame's byte (signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
+| 15 | link protocol version: 9 |
+| 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
+| 17 | the sender's **turnaround**: bits 0–3, how long its radio takes to hear again after it stops sending (VOX hold, receiver recovery), in 0.1 s steps rounded up, 0–1.5 s; bits 4–7 reserved, zero |
+| 18 | the sender's **identifier**: its closing Morse identifier's length in 0.5 s steps rounded up, 0 for none |
+
+Nineteen bytes, with a DATA header and an explicit length, fill the 24 bytes of tone-24, the
+floor's slowest rung. A body shorter than nineteen bytes is of version 7 or earlier.
 
 A station ignores a request or an acceptance whose version is not its own, and says so.
 Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the control frame's
 recommended mode to five bits (ADR-0014), 4 added the 500 Hz middle kinds (ADR-0015), 5 the
-burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), and 7 the turn offered at the end
-of a burst (ADR-0047). The
-same number names different frames in different versions, so a session between two versions
-cannot run.
+burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), 7 the turn offered at the end of
+a burst (ADR-0047), 8 granted slots (ADR-0069: the control frame below, the connect body's two
+more bytes, and every rule of §7.2), and 9 the measurement frames (ADR-0077). The same number
+names different frames in different versions, so a session between two versions cannot run.
 
 The SNR byte is the **faster start**: a session used to begin at the most robust mode
-and climb from there, a burst per step, proving what the connect frames had already
+and climb from there, a transmission per step, proving what the connect frames had already
 measured. The called station starts its rate controller from the request's SNR and
-sends that SNR back; the caller starts its first burst two usable rungs below the fastest
+sends that SNR back; the caller starts its first data two usable rungs below the fastest
 rung that SNR supports with the controller's margin and hysteresis — never falling from an
 OFDM rung onto the tone floor for that caution; on the floor the two rungs are counted in
 decibels, so a SNR the floor's top rung clears by as much as the two rungs below it would have
 kept starts there (ADR-0066) — and starts its own controller from the SNR
-the acceptance arrived at, which is what it will recommend once it receives. A station handed
-the turn later starts its first burst the same way, from the SNR it has measured the other
-station at. A body that stops at the version byte reads as "not measured"; only a version-1
-station sends one, and its call is ignored.
+the acceptance arrived at, which is what it will recommend once it receives. A body that stops
+at the version byte reads as "not measured"; only a version-1 station sends one, and its call is
+ignored.
 
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
 id of zero and this body:
@@ -595,16 +597,18 @@ body:
 |---|---|
 | 0–6 | source callsign, packed |
 | 7–13 | destination callsign, packed |
-| 14 | measured SNR, as the CONTROL frame's byte: signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured (a `PROBE` always says 0x7F) |
-| 15 | capability byte (§7.3): the bandwidth the frame was sent in |
+| 14 | measured SNR, as the connect body's byte: signed dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured (a `PROBE` always says 0x7F) |
+| 15 | capability byte (§7.3): the bandwidth the frame was sent in, and in a probe the gap level of the answer's slot |
 
-A station that is addressed by a probe, is idle, and finds the probe's stated bandwidth to
-be its own answers with one `PROBE_ACK`, in the family the probe arrived in — the same body
-with the callsigns swapped and the SNR it measured on the probe in the SNR byte. The prober
+A station that is addressed by a probe and is idle answers with one `PROBE_ACK`, on the floor —
+the same body with the callsigns swapped and the SNR it measured on the probe in the SNR byte —
+in the slot the probe grants (§7.2, rule 11), or not at all. A probe is answered across
+bandwidths (ADR-0035): its frames are the floor's, the same on both airs, and the answer's
+capability byte tells the prober what the other station runs. The prober
 then has the two numbers that describe a path, one from each end, and reports them (a reading
-from a floor frame is a lower bound on a strong path, §2.4); a probe that draws no answer
-within a floor frame's turnaround — moved past any frame the prober hears arriving, which may
-be the answer — is reported as unanswered, and there are no retries — the
+from a floor frame is a lower bound on a strong path, §2.4); a probe that draws no answer by
+the end of its answer's slot — moved past any frame the prober hears arriving, which may be the
+answer — is reported as unanswered, and there are no retries — the
 operator asks again, so a probe can never fill a channel by itself. A station in a
 session ignores probes (the session's frames matter more), and a station never answers a
 probe addressed to somebody else. Answering is a *response* in the sense of
@@ -640,29 +644,39 @@ joins the pieces it decodes, hands the frame and its type to its own KISS client
 piece has arrived, keeps at most eight incomplete datagrams, and drops one that has waited
 two minutes for a piece that is not coming.
 
-CONTROL container:
+CONTROL container, seven bytes (link protocol 8, ADR-0069):
 
-| Offset | Field |
-|---|---|
-| 0 | kind (4 bits) \| flags (4 bits) |
-| 1 | session id |
-| 2 | base sequence number — the next one the receiver needs |
-| 3–4 | bitmap: bit *i* set ⇔ `base + i` received |
-| 5 | measured SNR, signed dB, 3 kHz reference; 0x7F = unknown — in an acknowledgement, the mean over the burst's frames that decoded or that the receiver acquired with confidence, unknown when there was none (ADR-0020); in any other control frame, the SNR of the last frame of the session its sender decoded from the other station (ADR-0021) |
-| 6 | recommended mode (5 bits) \| counter (3 bits) |
+| Byte | Bits | Field |
+|---|---|---|
+| 0 | 7–6 | kind: `HEADER` (0, the master's), `ANSWER` (1, the slave's), `DISC` (2), `DISC_ACK` (3) |
+| 0 | 5–3 | count: data frames after this one in its transmission, exactly, 0–6 |
+| 0 | 2 | those data frames are tone-floor frames |
+| 0 | 1–0 | level: in a header, the gap level of the slot it grants; in an answer, the level its sender needs; in a `DISC`, the level of the `DISC_ACK`'s slot |
+| 1 | 7–1 | the session number's low seven bits (data frames carry all eight) |
+| 1 | 0 | fam: in a header, the family the answer goes in (1 = the tone floor); in an answer, the family its sender needs headers in |
+| 2 | 7 | flag: in a header, the slot is an open window; in an answer, its sender asks to leave |
+| 2 | 6 | in a header or an answer, `measure` (version 9): the data frames after it are measurement frames, or with none after it, its sender's last were and it has not read the report; in a `DISC` or a `DISC_ACK`, the `DISC_ACK`'s slot includes the slave's closing identifier |
+| 2 | 5–0 | SNR: how the sender hears the other station, signed whole decibels −31 … +31 (3 kHz reference, ties to even), 0x20 = not measured |
+| 3 | | base: the next sequence number the sender needs of the other's data |
+| 4–5 | | bitmap: bit *i* set ⇔ `base + i` received — or, with bit 0 set, a **report** of the other station's last measurement: bit *i* + 1 set ⇔ its measurement frame *i* arrived, and nothing at or above `base` is acknowledged |
+| 6 | 7–3 | rung recommended for the other station's data |
+| 6 | 2–0 | n: in a header, the data frames granted, or the open window's size index; in an answer, the frames its sender has queued, at most 7 |
 
-Kinds: `ACK` (0), `POLL` (1), `TURN` (2), `DISC` (3), `DISC_ACK` (4). Flags, in an ACK:
-`WANT_TX` (0x1), `BREAK` (0x2) and `TAKEN` (0x8); in a `TURN` or a caller's first `POLL`, `OFFER` (0x4). The base, bitmap, recommended mode and counter are an
-ACK's; the other kinds send them as zero. The recommended mode is a rung of the air's ladder;
-the counter numbers a station's acknowledgements modulo 8, for logs. Protocol version 2 split
-the byte four and four; the fast kinds (ADR-0014) took the 2 300 Hz ladder to twenty rungs.
+Bit 0 of a plain acknowledgement's bitmap is always clear, since `base` is the first sequence
+number not received, so a report is never read as an acknowledgement.
+
+A **measurement frame** (`MEASURE`, version 9) has the frame's index among its transmission's
+measurement frames, 0–5, in the sequence number's byte and the session number in the session
+byte, and is filled to the rung's full size with SplitMix64 drawn from the session and the
+index: bytes that look like data, not a block of zeros. It takes no sequence number and is
+never delivered or sent again.
 
 A callsign is one to nine characters of `A–Z 0–9 - /`, coded 1–26 for A–Z, 27–36 for 0–9, 37
 for `-` and 38 for `/`, padded with 0 to nine; the nine six-bit codes, first character most
 significant, fill 54 bits, and two zero bits make seven bytes.
 
-The SNR byte is the measurement rounded to the nearest integer decibel and clamped to
-−40 … +40, with **ties rounded to even** (12.5 dB encodes as 12, 13.5 as 14). The tie rule
+The SNR byte of the connect and probe bodies is the measurement rounded to the nearest
+integer decibel and clamped to −40 … +40, with **ties rounded to even** (12.5 dB encodes as 12, 13.5 as 14). The tie rule
 is stated because it is the kind of detail two implementations silently disagree on —
 Python rounds halves to even and Rust rounds them away from zero — and a wire format that
 two correct implementations encode differently is not a wire format.
@@ -674,85 +688,116 @@ would make an all-zero frame, and a receiver **discards any decoded block that i
 zeros** — the all-zero word is a codeword of every linear code and its CRC is zero, so a
 decoder fed a false detection converges to it. Every other frame carries a non-zero kind.
 
+**Granted slots** (link protocol 8, ADR-0069). The station whose call was accepted is the
+**master** for the whole session; the called station is the **slave**. The master is the only
+station that keys on its own initiative. Each master transmission is a `HEADER` and up to six
+data frames, and it grants the slave one **slot**: an answer, an answer and *n* data frames, or,
+when neither station has anything to send, an open window. The slave keys only in a slot granted
+by a frame it decoded in time to start the slot on time. There is no turn, nothing to hand over
+and no request to send: data flows both ways in every exchange, sized by the grants. Only
+decoded content changes a station's state; a detection, an announcement or a silence moves no
+deadline. The rules, numbered as in the formal specification
+(`../research/link-architecture/04-formal-spec.md`, where they are proved):
 
-One station is the information sending station (ISS), the other the information receiving
-station (IRS). The ISS sends a burst of data frames; the IRS answers each burst with one ACK
-carrying the selective-repeat bitmap, the SNR it measured, and the mode it recommends. The
-ISS retransmits what the bitmap reports missing — same codeword, next redundancy version in
-the order 0, 0, 2, 3, then round again (ADR-0043: the second copy is RV 0 so that it decodes on
-its own when the first was never detected; the receiver reads the RV from the chips and combines
-any order) — and fills the remainder of the burst with new frames at the
-recommended mode. A frame sent four times unacknowledged at a rung the recommendation has
-since left is re-encoded at the slowest rung, from the recommendation up, that carries its
-body: a new codeword under the same sequence number, which the receiver does not combine with
-the old one.
+1. **One initiator.** Only the master starts a transmission on its own. The slave transmits only
+   in a slot (rule 2), with its acceptance (rule 11), with its `DISC_ACK` (rule 10) and, after
+   the session, its closing identifier (rule 13).
+2. **The slot.** After a master transmission whose last frame ends on the air at `E` and is of
+   family `f`, at gap level `L`:
 
-An ACK sets `WANT_TX` when its sender has data of its own — queued, or sent and not yet
-acknowledged — and `BREAK`, with `WANT_TX`, when it demands the sending role now. `TURN` hands
-the sending role over: at once for `BREAK`, and for `WANT_TX` once the sender has nothing left
-to send or has sent a few bursts of its own in the turn (three in the reference engine). The
-station handed the turn answers with its first burst, or a `POLL` if it has nothing to send.
-`POLL` asks for an ACK: a sender with nothing to send polls to keep an idle link alive (every
-10 s in the reference engine), and a caller with nothing to send polls to confirm the
-handshake. A sending station that decodes a data frame of the session from the other station
-takes the receiving role: the other took the turn. `DISC`/`DISC_ACK` close the link. Connection is
-a two-way handshake in DATA-container frames carrying both callsigns, with randomised
-backoff so two stations calling each other simultaneously desynchronise instead of colliding
-on every retry. The first request goes out on the tone floor and the tries alternate between
-the floor and the ordinary family's robust mode (ADR-0016); the acceptance goes back in the
-family the request arrived in, and a caller does not send a try over a frame it hears
-arriving. A called station that hears the request again once it has accepted — its
-acceptance was lost — answers with the acceptance again and nothing else: the caller's first
-burst follows the acceptance at once. An ISS waits for an acknowledgement in the longer of two families: its burst's, and
-the one the IRS last heard it in — the IRS answers in the latter when it decoded none of the
-burst. An IRS that hears a `POLL` announced and cannot decode it answers all the same, once its
-quiet after the frame has run out, and the poll's sender waits for an answer that late
-(ADR-0028). A station waiting for the answer to its `DISC` takes no data frame as a burst and does
-not repeat the `DISC` over a frame it hears arriving (ADR-0022). A receiving station that wants
-to close sends its `DISC` between bursts; the sender of a `TURN` waits for the peer's first burst
-as long as the longest data frame there is, and past any frame it hears arriving; and a sending
-station that hears the other poll — both believe they hold the turn — yields if it was called,
-answering the poll with `WANT_TX` set, while the caller keeps the turn (ADR-0023). A station that
-holds the turn and hears the `TURN` again answers it as it answered the first — its burst again,
-or a `POLL`: the other station heard nothing of it taking the turn. The sender of a `TURN` repeats
-it when no answer comes, and takes the turn back after three tries in the reference engine —
-unless the last frame it heard from the other station since the first was one it could not read,
-which may be the answer; then it offers again, up to eight. A receiving station does not
-acknowledge an acknowledgement it reads: the other station is receiving too (ADR-0029). An
-acknowledgement that answers a `TURN` answered its preamble alone — a station that reads a
-`TURN` answers with a burst or a `POLL` — and so does a floor acknowledgement that answers an
-ordinary `POLL`, since a station answers in the family it last read the other in. The `TURN`
-goes again a turnaround after that answer, on the floor; the `POLL` does too, unless the answer
-prompts a `TURN` or a burst, and then that `TURN` goes on the floor. The station's `POLL`s and
-`TURN`s stay on the floor until a `POLL` is answered in its own family or the turn changes hands
-(ADR-0034).
+   ```
+   start   = E + max(D_f + KEY, T_master) + GUARD + LEVEL[L]
+   end_max = start + SLACK + grant
+   grant   = answer + n × the slave's data frame,   or an open window
+   ```
 
-**The turn on offer** (version 7, ADR-0047). A sending station whose ordinary burst empties its
-queue, with nothing else unacknowledged and no disconnect asked, ends the burst with a `TURN`
-carrying `OFFER`, counted among the frames the burst's countdown says follow. A receiving
-station with data of its own, and none of the other station's missing, answers with an `ACK`
-carrying `TAKEN` and `WANT_TX` and its own first burst after it in the same transmission; it is
-now the sending station. One without data answers with the `ACK` alone, and the sender keeps
-the turn. A sender that reads `TAKEN` takes the receiving role and acknowledges the burst that
-followed. One that misses that `ACK` and hears a data frame of the session — decoded, or one it
-did not decode but acquired with confidence, in the ordinary family, while its offer is
-unanswered — takes the receiving role all the same: only data can follow an offer that way. The
-sender's wait for the acknowledgement covers two of its frames more than its burst, for a
-receiver that lost the offer and took the last data frame's count at its word. An offer
-replaces the request for the turn and the `TURN` that answered it: one keying of each
-transmitter a change of direction instead of two.
-
-A caller with nothing to send confirms a new session with a `POLL` — decided a moment after
-the acceptance, so data given to it as the session comes up goes in a first burst instead
-(ADR-0066); that poll carries `OFFER`
-(ADR-0053), and the called station answers it as it answers an offering `TURN` — with `TAKEN`
-and its first burst when it has data (a gateway's greeting), with the `ACK` alone otherwise. A
-station that knows no offer on a poll answers it as a plain poll, so the flag needs no new
-version.
-
-When two
-stations call each other at once, the one whose callsign sorts higher keeps calling and ignores
-the other's request, and the other answers it.
+   `D_f`, `KEY`, `GUARD`, `SLACK` and `LEVEL` are the constants of §9; `T_master` is the
+   turnaround the master declared in its connect body. A station places `E` from the header's
+   count, or from any data frame's count (§3.2), whichever ends latest — believing a count only
+   from a copy that decoded alone. The master reads the slave's frames the same way.
+3. **The forfeit.** The slave keys for `start` and radiates no later than `start + SLACK`, or not
+   at all: whatever held its answer — a late decode, a busy computer, a radio slow to key — it
+   drops it rather than send it late.
+4. **The master's next key.** After a decoded slave frame of the slot stated its end `S`, the
+   master keys no sooner than `S + max(D_f, T_slave − KEY) + GUARD`; when it decoded nothing of
+   the slot, no sooner than `end_max` plus the slowest answer family's decode budget and
+   `GUARD`. Nothing else moves this deadline.
+5. **Attribution by air time.** A slave frame belongs to the slot when it began after the
+   master's last transmission ended. An older frame's content is kept (sequence numbers make
+   that safe); its timing is ignored.
+6. **What the slave may assume.** The slave takes the level, the grant and the answer's family
+   only from the header of the transmission it answers. Without that header it answers alone,
+   at level 0, in the family it last used, anchored on the data frames' exact counts, and with
+   no anchor it does not transmit. The master's slot reserves for the slowest family the slave
+   may hold.
+7. **Header elision.** The master may leave its header out only when the transmission grants
+   nothing beyond an answer, at level 0, after a slot it heard, with the answer's family the only
+   one the slave may hold; when at most four data frames follow, one of them a copy at RV 0 (the
+   only version that decodes alone on every rung, ADR-0073); when none of them goes above the
+   rung the slave recommends, unless the header would be a floor frame (ADR-0076); and when no
+   measurement is under way.
+8. **Gap levels.** The slave asks in every answer for the level its own lateness needs, and for
+   one that starts its slots no sooner than its answer gap (configured, or learned of the master)
+   after the master's frames;
+   it eases a level after six slots answered on time. The master grants the larger of what was
+   asked and its silence level, which two silent slots in a row raise one step and four slots
+   answered on time lower one. A call's or a probe's level is in its capability bits 3–4 and
+   rises every second try.
+9. **Rate.** Each station recommends the other's rung in every control frame, and the other
+   follows it, capped by its own regulatory ceiling (below), its `max_mode` and a pinned rung. A
+   data slot heard silent steps the master's own rung down two usable rungs; two silent slots
+   step the slave's too and put headers and answers on the floor. Control frames go on the floor
+   unless the other station's last three reports cleared the ordinary control frame's threshold
+   by 3 dB, and while any of the last four answer slots went silent. A copy goes at the next RV
+   in the order 0, 0, 2, 3, then round again (ADR-0043: the second copy is RV 0 so that it
+   decodes on its own when the first was never detected; the receiver reads the RV from the
+   chips and combines any order). A frame sent four times unacknowledged at a rung the
+   recommendation has since left, or after two copies one the other station measured further
+   under its rung than four copies can make up (ADR-0038), is re-encoded at the slowest rung from the recommendation up that
+   carries its body: a new codeword under the same sequence number, which the receiver does not
+   combine with the old one. A rung is offered only when no other carries as much data, after the
+   DATA header, per second of air from a threshold no higher (ADR-0073).
+10. **Ending.** The master leaves with a `DISC`, which grants the slave a slot for its
+    `DISC_ACK`; it repeats it at most three times, then ends ("closed (no DISC_ACK)"). It sends
+    its `DISC` once its queue is acknowledged; once the longer of two whole exchanges and 20 s
+    has passed with nothing new acknowledged; or a minute after the operator asked — whichever
+    comes first — and says what it left. The slave asks to leave with `flag` in an answer; the master then sends its `DISC` once
+    what the slave had is delivered, without waiting for its own. A station that left a session
+    without the other's word that it was over (an abort, "closed (no DISC_ACK)", "no response",
+    a link timeout) remembers it for a link timeout and answers a header of it with a `DISC`, or
+    a `DISC` of it with a `DISC_ACK`, in the frame's slot (ADR-0052); an aborting master says its
+    `DISC` on the floor, granting the `DISC_ACK`'s slot, up to three times. A station's link
+    timer is four exchanges of the size in use, 45 s at least; the master also ends once more than
+    eight slots in a row have gone silent ("no response").
+11. **Connection.** The `CONNECT_REQ` grants the acceptance's slot, at the level in its
+    capability bits 3–4, and the called station accepts in that slot or not at all. The first try
+    goes out on the tone floor and the tries alternate between the floor and the ordinary
+    family's robust mode (ADR-0016); the level rises every second try, so that a slow called
+    station is reached; and the next try waits until the acceptance's slot is over, plus a
+    random part of a floor frame that grows with the tries, so that two stations calling each
+    other fall apart. An ordinary call heard less than 12 dB above the ordinary control frame's
+    threshold is accepted on the floor (ADR-0056). The caller is the master once it reads the
+    acceptance: its first header goes in the family the acceptance's SNR asks for, its first
+    data at the rung that SNR supports with two usable rungs in hand (§7.1), and its first grant
+    is two frames, so that a gateway can greet. A call from the session's own peer under a new
+    session number ends the session and is answered as from idle (ADR-0056). When two stations
+    call each other at once, the one whose callsign sorts higher keeps calling and ignores the
+    other's request, and the other answers it.
+12. **Open windows.** When neither station has anything to send, the header grants an open
+    window, 4 s after an ordinary header and 10 s after a floor one, doubled once while the link
+    stays idle. The slave may start inside it when it has something to send and can finish
+    inside it. An idle master that has heard nothing from the slave for 10 s grants an answer
+    instead: a link that is only ever silent cannot tell idle from dead.
+13. **The closing identifier** (below).
+14. **Measurement** (link protocol 9, ADR-0077). A station measures a rung — the Test's ladder
+    — with measurement frames (§7.1), as many as one transmission holds, in a transmission of
+    their own, once none of its data is unacknowledged; no new data goes while one is asked for.
+    Its control frames set `measure` until it reads the report, carry no data, and are never
+    left out. The other station, learning of the measurement from `measure` or a measurement
+    frame it decodes, drops every soft buffer it holds and keeps none for a measurement frame
+    that did not decode, and reports in every acknowledgement it sends until data comes again.
+    A measurement's slot heard silent steps no rung down, and one the keying gate dropped or a
+    cut left unread is asked again.
 
 A station whose rules admit only tone-floor rungs where it is (the regulatory ceiling,
 ADR-0018) sends every frame on the floor: every try of a call, its answers to calls and
@@ -764,10 +809,9 @@ Data frames carry no callsign. A station that identifies in Morse (the reference
 1 500 Hz tone, at most 20 wpm under US rules; on for a US callsign whatever its setting) does
 it once a session, at the end, and its identifier is the last thing it sends for the session
 (ADR-0075). Nothing inside a session carries one, and neither do calls, acceptances, probes,
-probe answers, beacons or datagrams. Under link protocol 8 (granted slots,
-`../research/link-architecture/07-protocol-8.md` §5.4) the connect request and its acceptance
-each state the sender's identifier length, and every `DISC` grants the other station its
-`DISC_ACK` plus that length:
+probe answers, beacons or datagrams. The connect request and its acceptance each state the
+sender's identifier length, and every `DISC` grants the other station its `DISC_ACK` plus that
+length:
 
 * the station that answers a `DISC` sends its identifier right behind its `DISC_ACK`, inside that
   slot, and starts nothing of its own until the other's identifier can be over;
@@ -792,14 +836,17 @@ earlier one.
 |---|---|
 | 0 | Stream compression: deflate, RFC 1951 |
 | 1–2 | Bandwidth of the waveform this frame was sent in: 0 = 2 300 Hz, 1 = 500 Hz, 2 = 2 750 Hz (reserved), 3 = reserved |
-| 3–7 | Reserved, must be zero |
+| 3–4 | In a request (a call, a probe): the gap level of the slot its answer goes in (§7.2, rule 8). An answer carries 0 |
+| 5–7 | Reserved, must be zero |
 
-The bandwidth bits are not negotiated: they state the air the sender runs. An OFDM frame's
+The bandwidth and level bits are not negotiated: the first state the air the sender runs, the
+second the slot it grants. An OFDM frame's
 air is a physical fact the receiver knows from having decoded it, but a tone-floor frame is the
 same on either air, and a call, an answer or a probe on the floor says which air its sender
-runs only here. A station ignores a request, an acceptance or a probe whose stated bandwidth
-is not its own, and says so; a station that listens in more than one bandwidth answers in the
-one it was called in. Both stations of a session use one bandwidth for its whole life.
+runs only here. A station ignores a request or an acceptance whose stated bandwidth is not its
+own, and says so; a station that listens in more than one bandwidth answers in the one it was
+called in. A probe is answered across bandwidths (§7.1). Both stations of a session use one
+bandwidth for its whole life.
 
 **Compression is applied to the payload byte stream, above the ARQ, not to individual
 frames.** A frame carries 24 bytes on the slowest rung (tone-24), and a compressor with no
@@ -814,15 +861,14 @@ therefore never has to wait for more data to decode what it already has.
 
 ### 7.4 Ordering rule
 
-The ISS composes every burst as **unacknowledged frames in ascending sequence order, then new
-frames**, all of one family. This is required, not advisory: it is what allows the IRS to
-infer the sequence number of a frame whose payload did not decode, and therefore to
-soft-combine it with the retransmission that follows. A burst's frames must be one length for
-the IRS to place them by air time, so when the oldest unacknowledged frame is of the other
-family than the rung new frames would go at, the burst carries that family's retransmissions
-alone and new frames wait for the next burst. A burst carries at most sixteen frames (the
-selective-repeat window), and no more than fit in the transmitter's key time, one at least
-(ADR-0017).
+A station composes every transmission's data as **unacknowledged frames in ascending sequence
+order, then new frames**, all of one family. This is required, not advisory: it is what allows
+the receiver to infer the sequence number of a frame whose payload did not decode, and therefore
+to soft-combine it with the copy that follows. A transmission's frames must be one length for
+the receiver to place them by air time, so when the oldest unacknowledged frame is of the other
+family than the rung new frames would go at, the transmission carries that family's
+retransmissions alone and new frames wait for the next. A transmission carries at most six data
+frames, and no more than fit in the transmitter's key time, one at least (ADR-0017).
 
 ---
 
@@ -848,27 +894,23 @@ selective-repeat window), and no more than fit in the transmitter's key time, on
 
 ## 9. Timing
 
-A receiver establishes the end of a burst from silence, and — on the OFDM rungs — from the
-countdown each frame carries (§3.2): after a frame that says `f` more follow, the receiver
-waits `f` frame times before the silence below can end the burst, so a following frame lost
-in a fade is not answered over (ADR-0041). When the frame that ends latest said, believably
-(it decoded, or its acquisition was trusted), that none follow it, the burst is over at its end
-and the acknowledgement waits only the turnaround (ADR-0045). An ordinary frame that did not
-decode and whose acquisition was not trusted belongs to a burst only after an ordinary frame
-of it: alone, or after tone frames, it starts no burst and does not move a burst's end — its
-countdown is noise, and so, as often as not, is the frame (ADR-0065). Otherwise the silence
-rule has two cases:
+A session's timing is the slot of §7.2, and its constants are protocol constants, the same at
+both ends:
 
-* if the physical layer can report a *detected preamble* before the frame is decoded, the
-  receiver need only wait that long plus a small guard;
-* otherwise it must wait a full data-frame time, because a contiguous next frame would not
-  otherwise have announced itself.
+| Constant | Value | What it covers |
+|---|---|---|
+| decode budget, ordinary and floor | 0.30 s, 0.30 s | a frame's end on the air to its decode reaching the link layer: the reference receiver reports within 0.157 s on the scenario harness and 0.161 s on the air |
+| `KEY` | 0.35 s | a station's decision to its radiation: keying lead, sound card |
+| `GUARD` | 0.05 s | propagation (under 20 ms one way on HF), clock error, rounding |
+| `SLACK` | 0.35 s | how late a slot may start on the air and still be used |
+| gap levels | 0, 0.5, 1.0, 2.0 s | extra gap a slow station asks for, or a master grants after silence |
+| open window | 4 s ordinary, 10 s floor | doubled once while the link stays idle |
 
-The second costs about 13 % of throughput on the OFDM ladder (`bench/README.md`, P2-2a), so
-reporting preambles early is worth implementing. A tone frame's preamble is its first sync
-block: the reference receiver announces it 0.54 s after the frame starts, against 0.12 s for
-an OFDM preamble. Turnaround guard, detection latency and acknowledgement air time are
-implementation parameters; the reference values are in `model/aether_model/link/harness.py`.
+A station whose computer decodes or keys later than these allow does not change them; it asks
+for a gap level. A receiver may announce a frame as arriving before it is decoded: an OFDM
+preamble two symbols after it starts, a tone frame's first sync block 0.54 s after. Inside a
+session an announcement changes nothing (rule 5); a caller or a prober waits past a frame
+announced, which may be the answer.
 
 ---
 

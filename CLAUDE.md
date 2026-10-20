@@ -1845,6 +1845,26 @@ Open: 80 m at night (the original case), MID and OFF, a radio filter narrower th
 every minute (FT8 with a strong station every other period: as before ADR-0078), the S-meter as a
 witness.
 
+**ADR-0069 Step 5, protocol 7 retired (2026-10-20).** Protocol 8 shipped in beta.106 and held
+through beta.114, so the turn engine went in both suites: `LinkEngine` (`engine.py`,
+`engine.rs`), its control frame (`ControlFrame`/`ControlKind`/`ControlFlags`), `TURNS_VERSION`,
+the countdown's pairs (`countdown_of`/`most_following`), the Rust `TwoStationSim` (`sim.rs`) and
+the tests that drove it (`protocol.rs`, `stated.rs`, `test_stated.py`, most of `test_link.py`,
+which keeps the frame and rate-controller tests), `request_break` (a no-op), and the daemon's
+`FOLLOW_ON_*`, `fragment_of_own_tx`, its muted spans and `frames_under_own_tx`. What the granted
+engine shared with it (`State`, `Action`/`Transmit`/`Deliver`/`Event`, `LadderRung`,
+`ProbeResult`, the RV and left-session constants) lives in `granted.py`/`granted.rs`; the crate
+re-exports them as before. The model's `TwoStationSim` and `harness.py` drive `GrantedEngine`
+alone; `bench_link`, `bench_calls` and `compare_air` run it (no `--engine`), and `bench_chat`
+keeps its workload with `GrantConfig` policies. A `ConnectBody` is protocol 9's unless it says
+otherwise; a call of another version is still read, refused and said so (the crafted-call test).
+Moving the left-session list found the model spelling it `closed (no disc ack)` against its own
+end reason `closed (no DISC_ACK)` (the port had it right; fixed, with a test). The granted
+vectors regenerate byte for byte. **`research/link_arch` is frozen at `886f102`**, the last tree
+with `LinkEngine`, excluded from lint like the audit probes (`git worktree add ../aether-research
+886f102`). `docs/spec/air-interface.md` §3.2, §7 and §9 now describe protocol 9 (granted slots,
+the exact counts, the control frame, measurement frames); they had described protocol 7.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
@@ -1866,15 +1886,17 @@ equality; floating-point ones to a tolerance carried in the vector file.
 run `python tools/make_spec.py` after any waveform, mode or constant change, or
 `model/tests/test_spec.py` fails.
 
-Note for Phase 3: `LinkEngine.on_preamble` needs the real streaming receiver to report a
-detected preamble before the frame is decoded; `PhyTiming.preamble_detect_s` is what turns
-that signal on, and leaving it `None` is the safe fallback (costs ~13 % throughput).
+`GrantedEngine.on_preamble` is told of a frame announced before it is decoded
+(`PhyTiming.preamble_detect_s`); inside a session it changes nothing (ADR-0069 §2.5), and a caller
+or a prober waits past the frame, which may be the answer.
 
 Link layer (`aether_model/link/`): `frames.py` (DATA/CONTROL/connect formats, callsign
-packing), `engine.py` (`LinkEngine`, event-driven: `connect/send/disconnect/tick/on_frame`
-→ `Action`s), `rate.py` (rate recommendation), `sim.py` (`TwoStationSim` discrete-event
-driver), `harness.py` (real-PHY bridge). The DATA header is static across a frame's
-retransmissions so the receiver can soft-combine identical codewords; the RV rides in the
-chips, not the header.
+packing), `granted.py` (`GrantedEngine`, granted slots, event-driven:
+`connect/send/disconnect/tick/on_frame` → `Action`s, and the types it hands its driver),
+`rate.py` (rate recommendation), `sim.py` (`TwoStationSim` discrete-event driver), `harness.py`
+(real-PHY bridge, `phy_timing`), `fading.py` (the link bench's fading pipe), `datagram.py`. The
+DATA header is static across a frame's retransmissions so the receiver can soft-combine
+identical codewords; the RV and the count of frames to follow ride outside the codeword (the
+chips, or a tone frame's middle sync block), not in the header.
 Benchmarks: `tools/bench_phy.py` (≈ 40 min full grid) and `tools/bench_ldpc.py`; golden
 vectors: `tools/make_vectors.py` (regenerate only with an ADR).

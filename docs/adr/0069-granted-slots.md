@@ -11,6 +11,11 @@ judged on the harness and the air before any build reaches a tester.
 one overlap was a count read short off a frame HARQ rescued, and its rule is in; the one PACTOR
 run short of protocol 7 the author ruled the accepted cost. By the author's decision the first
 build of it, `v0.2.0-beta.106`, goes to the beta channel for Step 4, the air with the testers.
+**Step 5 of the review's plan, the retirement, done 2026-10-20** (`06-recommendation.md` §4),
+protocol 8 having shipped in beta.106 and held through beta.114: protocol 7's engine is deleted in
+both suites with its control frame, its simulator and its tests, the daemon's paths that served
+it are gone, the review's research code is frozen at `886f102`, and the air-interface
+specification's link layer (§7) describes protocol 9.
 
 ## 1. Context
 
