@@ -7,7 +7,7 @@ these crates are the implementation, and the two are required to agree bit-for-b
 |---|---|
 | `aether-fec` | TS 38.212 CRCs, LDPC (BG1/BG2) encode and layered decode, rate matching with incremental redundancy |
 | `aether-phy` | the waveforms of both airs (2 300 and 500 Hz): constellations, the ladders of rungs, the frame codec, OFDM, the preamble, peak reduction (ADR-0004), the tone frames — the tone floor, fast tones and the 500 Hz middle kinds (ADR-0013–0015) — the transmitter, acquisition, the receiver, the 48 kHz audio front end, the impulse blanker and the streaming receiver |
-| `aether-link` | frame formats, rate control, the ARQ engine (sessions, HARQ, probes, datagrams, the regulatory ceiling) and a two-station simulator over a lossy pipe (the fading pipe of the link bench is the model's) |
+| `aether-link` | frame formats, rate control and the link engine of granted slots (sessions, HARQ, probes, datagrams, the regulatory ceiling; ADR-0069). The two-station simulator over a lossy pipe and the link bench are the model's |
 | `aetherd` | the daemon: audio (cpal) and keying (serial, CAT, CM108, `rigctld`, FLRig, the host program), the key watchdog, the busy detector, the regulatory gate (`data/regulatory/`, `data/occupancy.json`), the control API and the panel's files, the VARA-compatible host interface, the KISS port, profiles, recordings and replay, the simulated channel and the scenario harness's (`--channel HOST:PORT`), and file sharing (`share.prepare`, and `share.upload` over HTTPS with ureq and rustls) |
 
 All four are done and in every release; `docs/ROADMAP.md` says what is next.
@@ -25,9 +25,10 @@ unoptimised build runs it about twenty times slower without covering anything ex
 
 Every ported layer has a `tests/model_vectors.rs` fed by vectors the model generates
 (`python tools/make_fec_vectors.py`, `make_phy_vectors.py` and `make_link_vectors.py`,
-committed under each crate's `tests/data/`), and `aether-link/tests/protocol.rs` runs the
-engine's protocol scenarios against the model's. CI regenerates the vectors and fails on any
-difference, so the model cannot change without the core being re-checked against it.
+committed under each crate's `tests/data/`), and `aether-link/tests/granted_vectors.rs` replays
+the link engine input by input against the model's (`make_granted_vectors.py`: every action and,
+after every input, the engine's state). CI regenerates the vectors and fails on any difference,
+so the model cannot change without the core being re-checked against it.
 
 **If a vector test fails, the core is wrong.** Regenerate the vectors only when the model
 changed on purpose — and then say so in the commit.

@@ -30,7 +30,7 @@
 //!
 //! A move rebuilds what depends on the waveform — the receiver, the modems, the band filters,
 //! the busy detector, the occupancy the rules judge by, the link engine's air (its timing,
-//! ladder and handshake bandwidth, [`LinkEngine::set_air`](aether_link::LinkEngine::set_air))
+//! ladder and handshake bandwidth, [`GrantedEngine::set_air`](aether_link::GrantedEngine::set_air))
 //! — and keeps the rest: the callsigns, the counters, the identifier's clock, the stations
 //! heard, the KISS datagrams not yet framed. It is made only when nothing is under way that
 //! runs on the air it would leave: no session, call or probe, no Test, nothing queued or on
