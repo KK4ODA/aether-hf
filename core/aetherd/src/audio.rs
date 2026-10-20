@@ -31,6 +31,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -94,6 +95,18 @@ pub trait AudioIo {
     /// was opened ([`CaptureSkips`]). None from a backend that keeps no timestamps.
     fn capture_skips(&self) -> CaptureSkips {
         CaptureSkips::default()
+    }
+    /// Hold the transmission just handed over to its slot (report 12, change 6): if the sample
+    /// that leaves when the clock reads `guard.at` would leave the device after `guard.by`, drop
+    /// it and everything queued behind it unplayed, and say so ([`Self::take_onset_drop`]).
+    /// The keying gate judged the start before the key; this judges it where the first sample
+    /// that radiates leaves, so a card that stalls after the key cannot put it on the air past
+    /// its limit. A backend whose clock is not the wall's has nothing to hold it to.
+    fn guard_onset(&mut self, _guard: OnsetGuard) {}
+    /// How many seconds past its limit the guarded sample would have left, when the device
+    /// dropped a transmission for it since the last call ([`Self::guard_onset`]).
+    fn take_onset_drop(&mut self) -> Option<f64> {
+        None
     }
     /// An account of the transmission whose samples are queued next (one line of JSON,
     /// `Station::take_tags`): a harness's channel server puts it on the air beside them, so a
@@ -205,6 +218,17 @@ fn seconds_between(earlier: cpal::StreamInstant, later: cpal::StreamInstant) -> 
     )
 }
 
+/// Where a transmission's first radiating sample sits on the playback clock, and the latest
+/// moment it may leave the device: the keying gate's limit (`not_after`) as the wall clock
+/// reads it ([`AudioIo::guard_onset`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OnsetGuard {
+    /// The playback clock's reading when the sample leaves the callback.
+    pub at: u64,
+    /// The latest it may leave the device.
+    pub by: Instant,
+}
+
 /// A bounded queue shared with a sound-card callback.
 #[derive(Debug, Default)]
 struct Shared {
@@ -220,15 +244,30 @@ struct Shared {
     latency_s: Option<f64>,
     /// What the capture stream's timestamps said it skipped (the capture queue only).
     skips: CaptureSkips,
+    /// The transmission queued now, held to its slot (the playback queue only).
+    onset: Option<OnsetGuard>,
+    /// How late the guarded sample would have left, when the callback dropped its
+    /// transmission for it, until the modem asks.
+    onset_late_s: Option<f64>,
 }
 
 type Queue = Arc<Mutex<Shared>>;
 
 /// Fill one playback callback's buffer from the queue: the same sample on every channel,
-/// silence when the queue is empty, and the accounting the modem reads back.
+/// silence when the queue is empty, and the accounting the modem reads back. `first_leaves`
+/// is when the buffer's first frame leaves the device, as the callback's timestamps say, and
+/// `rate` the device's frames a second: what a guarded transmission is held to.
 ///
 /// Kept apart from the callback so it can be tested without a sound card.
-fn fill_playback(shared: &mut Shared, data: &mut [f32], channels: usize) {
+fn fill_playback(
+    shared: &mut Shared,
+    data: &mut [f32],
+    channels: usize,
+    first_leaves: Instant,
+    rate: f64,
+) {
+    let frames = data.len().div_ceil(channels.max(1));
+    hold_to_onset(shared, frames, first_leaves, rate);
     for frame in data.chunks_mut(channels.max(1)) {
         let sample = shared.samples.pop_front().unwrap_or_else(|| {
             if shared.playing {
@@ -238,6 +277,29 @@ fn fill_playback(shared: &mut Shared, data: &mut [f32], channels: usize) {
         });
         frame.fill(sample);
         shared.played += 1;
+    }
+}
+
+/// The keying gate's last word (report 12, change 6): when the guarded sample is in this
+/// buffer and would leave the device after its limit, the transmission goes unplayed. The
+/// samples ahead of it in the buffer are the keying's lead, silence, so nothing of it has
+/// radiated; the queue is emptied and the modem told.
+fn hold_to_onset(shared: &mut Shared, frames: usize, first_leaves: Instant, rate: f64) {
+    let Some(guard) = shared.onset else {
+        return;
+    };
+    if guard.at >= shared.played + frames as u64 {
+        return; // in a later buffer
+    }
+    shared.onset = None;
+    if guard.at < shared.played || rate.is_nan() || rate <= 0.0 {
+        return; // it left before the guard arrived: nothing left to judge
+    }
+    let offset = Duration::from_secs_f64((guard.at - shared.played) as f64 / rate);
+    let leaves = first_leaves + offset;
+    if leaves > guard.by {
+        shared.samples.clear();
+        shared.onset_late_s = Some(leaves.duration_since(guard.by).as_secs_f64());
     }
 }
 
@@ -468,6 +530,7 @@ impl SoundCard {
             .map_err(|e| AudioError::Stream(format!("input: {e}")))?;
 
         let play_queue = Arc::clone(&to_play);
+        let out_rate = f64::from(out_config.sample_rate.0);
         let output = output_device
             .build_output_stream(
                 &out_config,
@@ -480,12 +543,14 @@ impl SoundCard {
                     };
                     // when this callback's first sample will leave the device (ADR-0038)
                     let stamp = info.timestamp();
-                    if let Some(delay) = stamp.playback.duration_since(&stamp.callback) {
+                    let delay = stamp.playback.duration_since(&stamp.callback);
+                    if let Some(delay) = delay {
                         let seconds = delay.as_secs_f64();
                         shared.latency_s =
                             Some(shared.latency_s.map_or(seconds, |s| s.max(seconds)));
                     }
-                    fill_playback(&mut shared, data, out_channels);
+                    let first_leaves = Instant::now() + delay.unwrap_or_default();
+                    fill_playback(&mut shared, data, out_channels, first_leaves, out_rate);
                 },
                 |error| eprintln!("aetherd: playback stream: {error}"),
                 None,
@@ -579,7 +644,22 @@ impl AudioIo for SoundCard {
     fn clear(&mut self) {
         if let Ok(mut shared) = self.to_play.lock() {
             shared.samples.clear();
+            // what it held to its slot is gone with it
+            shared.onset = None;
         }
+    }
+
+    fn guard_onset(&mut self, guard: OnsetGuard) {
+        if let Ok(mut shared) = self.to_play.lock() {
+            shared.onset = Some(guard);
+        }
+    }
+
+    fn take_onset_drop(&mut self) -> Option<f64> {
+        self.to_play
+            .lock()
+            .ok()
+            .and_then(|mut shared| shared.onset_late_s.take())
     }
 }
 
@@ -821,7 +901,7 @@ mod tests {
         let mut shared = Shared::default();
         shared.samples.extend([0.1, 0.2, 0.3, 0.4]);
         let mut data = [9.0f32; 12];
-        fill_playback(&mut shared, &mut data, 2);
+        fill_playback(&mut shared, &mut data, 2, Instant::now(), 48_000.0);
         assert_eq!(
             &data[..4],
             &[0.1, 0.1, 0.2, 0.2],
@@ -840,9 +920,87 @@ mod tests {
 
         shared.playing = true;
         let mut data = [9.0f32; 6];
-        fill_playback(&mut shared, &mut data, 2);
+        fill_playback(&mut shared, &mut data, 2, Instant::now(), 48_000.0);
         assert_eq!(shared.played, 9);
         assert_eq!(shared.starved, 3, "every silent frame in a burst is a hole");
+    }
+
+    #[test]
+    fn a_transmission_whose_first_radiating_sample_would_leave_past_its_limit_goes_unplayed() {
+        // report 12, change 6: the keying gate judged the start before the key, and a card
+        // that stalls after it is held to the limit where the first radiating sample leaves
+        let rate = 48_000.0;
+        let lead = 4800; // 100 ms of the keying's silence, then the frames
+        let at = 1_000 + lead as u64;
+        let queue = || {
+            let mut shared = Shared {
+                played: 1_000,
+                ..Shared::default()
+            };
+            shared.samples.extend(std::iter::repeat_n(0.0, lead));
+            shared.samples.extend(std::iter::repeat_n(0.5, 9_600));
+            shared
+        };
+        // 10 ms buffers, each leaving the device 10 ms after the last; the guarded sample is
+        // the first of the eleventh, 100 ms after the key, against a limit of 150 ms
+        let t0 = Instant::now();
+        let limit = t0 + Duration::from_millis(150);
+        let buffer = |i: u64| t0 + Duration::from_millis(10 * i);
+        let mut data = vec![9.0f32; 480];
+        let mut shared = queue();
+        shared.onset = Some(OnsetGuard { at, by: limit });
+        for i in 0..10 {
+            fill_playback(&mut shared, &mut data, 1, buffer(i), rate);
+        }
+        assert_eq!(
+            shared.onset,
+            Some(OnsetGuard { at, by: limit }),
+            "not reached yet"
+        );
+        fill_playback(&mut shared, &mut data, 1, buffer(10), rate);
+        assert_eq!(shared.onset, None, "judged once, where it leaves");
+        assert_eq!(shared.onset_late_s, None, "on time");
+        assert!(
+            data.iter().all(|&x| (x - 0.5).abs() < 1e-6),
+            "the frames play"
+        );
+        // the card stalled 80 ms after the key: the buffer that holds it leaves that much late
+        let mut shared = queue();
+        shared.onset = Some(OnsetGuard { at, by: limit });
+        for i in 0..10 {
+            fill_playback(&mut shared, &mut data, 1, buffer(i), rate);
+        }
+        fill_playback(&mut shared, &mut data, 1, buffer(18), rate);
+        assert!(data.iter().all(|&x| x == 0.0), "nothing of it radiated");
+        assert!(
+            shared.samples.is_empty(),
+            "the transmission is dropped whole"
+        );
+        let past = shared.onset_late_s.expect("the modem is told");
+        assert!((past - 0.030).abs() < 1e-3, "{past}");
+        // a guarded sample inside a buffer is judged where it is in it
+        let mut shared = queue();
+        shared.played -= 240;
+        shared.onset = Some(OnsetGuard { at, by: limit });
+        for i in 0..10 {
+            fill_playback(&mut shared, &mut data, 1, buffer(i), rate);
+        }
+        // the buffer leaves at 148 ms, inside the limit, and the sample 5 ms into it, past it
+        fill_playback(
+            &mut shared,
+            &mut data,
+            1,
+            buffer(10) + Duration::from_millis(48),
+            rate,
+        );
+        let past = shared.onset_late_s.expect("judged where the sample is");
+        assert!((past - 0.003).abs() < 1e-4, "{past}");
+        // a guard that arrives once the sample has left judges nothing
+        let mut shared = queue();
+        shared.played = at + 1;
+        shared.onset = Some(OnsetGuard { at, by: t0 });
+        fill_playback(&mut shared, &mut data, 1, buffer(18), rate);
+        assert_eq!((shared.onset, shared.onset_late_s), (None, None));
     }
 
     #[test]

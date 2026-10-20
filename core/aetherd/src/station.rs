@@ -58,6 +58,7 @@ use aether_phy::{
 };
 
 use crate::{
+    audio::OnsetGuard,
     busy::{BusyConfig, BusyDetector},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
@@ -457,8 +458,8 @@ const LATENCY_NOTE_STEP_S: f64 = 0.01;
 /// limit (`not_after`). ND1J's first morning Test of 2026-10-15: one answer of KK4ODA-1's
 /// rendered in 122 ms where 60 was typical, reached the air 281 ms into a 350 ms slack, and
 /// the log said only that the radio was keyed (12-two-paths-80m.md §4). The gate judges the
-/// start before the key; what stalls after it is unjudged, and S2 holds there by margin —
-/// how often the margin runs thin is what decides whether the gate must judge later.
+/// start before the key, and a sound card holds it to the limit where its first radiating
+/// sample leaves ([`OnsetGuard`]): what stalls after the key is judged there.
 const SLOW_KEYING_LATE_S: f64 = 0.05;
 const SLOW_KEYING_MARGIN_S: f64 = 0.1;
 
@@ -928,6 +929,31 @@ struct PlaybackClock {
     cut_short: bool,
     /// Whether the run loop should drop what the sound card still holds.
     flush_device: bool,
+    /// The transmission just keyed, until the run loop has said where the card drains after
+    /// its first samples ([`Onset`]).
+    onset: Option<Onset>,
+    /// Where its first radiating sample sits on the card's clock and the latest it may leave,
+    /// for the run loop to hold the card to ([`Station::take_onset_guard`]).
+    guard: Option<OnsetGuard>,
+}
+
+/// A transmission of the engine's with a limit (`not_after`), between the key and the run
+/// loop's report of where the card drains: the latest wall-clock moment its first radiating
+/// sample may leave the card, and what of it has been handed over (report 12, change 6).
+///
+/// The keying gate judges the start before the key and again with the key's wait measured.
+/// What comes after — the card taking the samples, a USB codec that stalls in both directions
+/// as the mini PC's did (12-two-paths-80m.md §4.4) — only the card can see, where the samples
+/// leave: so the station tells it the limit, on the wall clock, and the card drops the
+/// transmission unplayed rather than let it radiate late ([`crate::audio::AudioIo::guard_onset`]).
+#[derive(Debug, Clone, Copy)]
+struct Onset {
+    /// The latest moment its first radiating sample may leave the card.
+    by: std::time::Instant,
+    /// Samples of it handed to the card so far.
+    handed: u64,
+    /// The keying's lead: silence ahead of its first radiating sample.
+    lead: u64,
 }
 
 impl PlaybackClock {
@@ -1432,6 +1458,69 @@ impl<P: Ptt> Station<P> {
     /// clock must report this too, or the key stays down until the watchdog trips.
     pub fn device_drains_at(&mut self, at: u64) {
         self.clock.drains_at.get_or_insert(at);
+        // the first report after the key: this transmission's first sample leaves where the
+        // card drains less what of it was handed over, and the first that radiates a lead on
+        if let Some(onset) = self.clock.onset.take() {
+            self.clock.guard = Some(OnsetGuard {
+                at: at.saturating_sub(onset.handed) + onset.lead,
+                by: onset.by,
+            });
+        }
+    }
+
+    /// Where the transmission just keyed starts radiating on the sound card's clock, and the
+    /// latest it may: for the run loop to hold the card to it
+    /// ([`crate::audio::AudioIo::guard_onset`]). Once per transmission of the engine's with a
+    /// limit, after the report of where the card drains that follows its key.
+    pub fn take_onset_guard(&mut self) -> Option<OnsetGuard> {
+        self.clock.guard.take()
+    }
+
+    /// The sound card dropped the transmission now running unplayed: its first radiating
+    /// sample would have left `late_s` seconds past its limit ([`OnsetGuard`]). Nothing of it
+    /// radiated, so it is a drop like the gate's ([`Self::drop_late`]), with the key up: released
+    /// now, not when the card's clock reaches the end of a transmission it no longer holds.
+    ///
+    /// # Errors
+    /// If the radio refuses to release.
+    pub fn card_dropped_late(&mut self, late_s: f64) -> Result<(), PttError> {
+        if !self.transmitting {
+            return Ok(()); // ended already: cut, or the watchdog
+        }
+        let now = self.now();
+        if let Some(window) = self.keying.take() {
+            if window.identifier {
+                // nothing of it went out: the engine owes it again
+                self.stats.cw_ids = self.stats.cw_ids.saturating_sub(1);
+                self.identifier.outcome = None;
+            }
+            self.engine.on_tx_dropped(now);
+        }
+        self.playback.clear();
+        self.clock.cut_short = false;
+        self.clock.onset = None;
+        self.clock.guard = None;
+        self.tx_capture = None;
+        self.transmitting = false;
+        self.playing_test = false;
+        self.tx_peak_running = 0.0;
+        self.stats.dropped_late += 1;
+        self.forced_release(now, "dropped late");
+        let result = self.ptt.unkey(now);
+        self.note(
+            "dropped",
+            &format!(
+                "an answer the sound card held {:.0} ms past its slot after the key: not sent, \
+                 the key released",
+                late_s * 1000.0
+            ),
+        );
+        if let Some(recording) = &mut self.recording {
+            let state = format!("{:?}", self.engine.state());
+            recording.event(now, "dropped", &format!("late {late_s:.3} card"), &state);
+        }
+        self.pump();
+        result
     }
 
     /// Whether the transmission now running still has samples to hand the sound card. While
@@ -2933,7 +3022,8 @@ impl<P: Ptt> Station<P> {
             // transmission's start judged on the wait it took (`latency.rs`)
             let asked = std::time::Instant::now();
             self.ptt.key(now)?;
-            let waited = asked.elapsed().as_secs_f64();
+            let keyed = std::time::Instant::now();
+            let waited = keyed.duration_since(asked).as_secs_f64();
             self.latency.key.push(waited);
             self.key_waited_s = waited;
             self.tell_engine_latency();
@@ -2949,6 +3039,17 @@ impl<P: Ptt> Station<P> {
                 }
             }
             self.note_slow_keying(now, radiates_at, waited);
+            // and where its first radiating sample leaves, the card holds it to the same
+            // limit: the air's clock stands at `starts_at` as the key returns
+            self.clock.guard = None;
+            self.clock.onset = self
+                .keying
+                .and_then(|window| window.not_after)
+                .map(|latest| Onset {
+                    by: keyed + std::time::Duration::from_secs_f64((latest - starts_at).max(0.0)),
+                    handed: 0,
+                    lead: (self.config.key_lead_s * self.config.params.audio_rate as f64) as u64,
+                });
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
@@ -2988,6 +3089,9 @@ impl<P: Ptt> Station<P> {
             // these leave after everything already queued: where the card drains is not
             // known again until the run loop, having queued them, says
             self.clock.drains_at = None;
+            if let Some(onset) = &mut self.clock.onset {
+                onset.handed += count as u64;
+            }
         }
         if let Some(capture) = &mut self.tx_capture {
             capture.push(&out[..count]);
@@ -6280,6 +6384,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_answer_the_card_drops_after_the_key_costs_its_slot_and_nothing_else() {
+        // report 12, change 6: the called station's card stalls under a keyed answer, and holds
+        // it past its slot — dropped unplayed, as the gate drops one before the key. The caller
+        // hears a silent slot, and the session carries on
+        // pseudo-random, so the deflate above the link cannot fold it into one transmission
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let message: Vec<u8> = (0..8_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 32) as u8
+            })
+            .collect();
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        air.a.send(&message);
+        // an answer to the message's first data, with the rest still to come
+        air.run(60.0, |_, b| {
+            b.received_len() > 0 && b.transmitting() && b.clock.guard.is_some()
+        });
+        assert!(
+            air.b.received_len() < message.len(),
+            "the message is still crossing"
+        );
+        let guard = air
+            .b
+            .take_onset_guard()
+            .expect("an answer held to its slot");
+        assert!(
+            guard.at > air.played[1] - air.block as u64,
+            "not yet left the card"
+        );
+        let silent = air.a.engine().stats.silent_slots;
+        air.b.card_dropped_late(0.06).expect("release");
+        assert!(!air.b.transmitting(), "the key came down");
+        air.run(240.0, |a, b| {
+            b.received_len() >= message.len() && a.engine().stats.bytes_acked >= message.len()
+        });
+        assert_eq!(air.b.received_len(), message.len(), "the message crossed");
+        assert_eq!(air.b.stats.dropped_late, 1);
+        assert!(
+            air.a.engine().stats.silent_slots > silent,
+            "the caller heard the slot silent"
+        );
     }
 
     #[test]
@@ -11352,6 +11506,79 @@ mod tests {
             1,
             "keyed when the wait said it would be late"
         );
+    }
+
+    #[test]
+    fn the_card_holds_a_keyed_answer_to_its_slot_where_it_starts_radiating() {
+        // report 12, change 6: the gate judged the start before the key and with the key's wait
+        // measured; what stalls after it — the mini PC's USB audio, in both directions — only
+        // the card sees. The station hands it the limit where the first radiating sample
+        // leaves, on the wall clock, once it knows where that sample sits on the card's clock
+        use std::time::{Duration, Instant};
+        let mut station = slow_station(0.0);
+        let lead = (station.config.key_lead_s * station.config.params.audio_rate as f64) as u64;
+        let room = 0.2;
+        let latest = station.now() + station.capture_lag_s() + station.radiation_latency_s() + room;
+        let opened = station.now() - 0.1;
+        queue_link(&mut station, Some(opened), Some(latest));
+        station.device_played(1_000);
+        let before = Instant::now();
+        let mut out = vec![0.0f32; 480];
+        let handed = station.playback(&mut out).expect("playback");
+        let after = Instant::now();
+        assert!(handed > 0 && station.transmitting());
+        assert_eq!(
+            station.take_onset_guard(),
+            None,
+            "where it leaves is not known yet"
+        );
+        // the card had 300 samples queued ahead of the transmission when the run loop asked
+        station.device_drains_at(1_300 + handed as u64);
+        let guard = station.take_onset_guard().expect("a guard for the card");
+        assert_eq!(
+            guard.at,
+            1_300 + lead,
+            "its first radiating sample, a lead on"
+        );
+        let expected = Duration::from_secs_f64(station.radiation_latency_s() + room);
+        assert!(
+            guard.by + Duration::from_millis(10) >= before + expected
+                && guard.by <= after + expected,
+            "the limit {:?} after the key",
+            guard.by.saturating_duration_since(before)
+        );
+        station.device_drains_at(1_400 + handed as u64);
+        assert_eq!(station.take_onset_guard(), None, "once a transmission");
+
+        // the card dropped it unplayed: the key comes down now, not at the end of a transmission
+        // the card no longer holds, and it is a drop like the gate's
+        station.card_dropped_late(0.04).expect("release");
+        assert!(!station.transmitting());
+        assert_eq!(station.stats.dropped_late, 1);
+        assert_eq!(
+            (station.ptt.inner().keys, station.ptt.inner().releases),
+            (1, 1)
+        );
+        assert!(
+            station
+                .events
+                .iter()
+                .any(|e| e.starts_with("dropped:") && e.contains("40 ms past its slot")),
+            "{:?}",
+            station.events
+        );
+        // a report that arrives once the transmission has ended changes nothing
+        station.card_dropped_late(0.04).expect("nothing to release");
+        assert_eq!(station.stats.dropped_late, 1);
+        assert_eq!(station.ptt.inner().releases, 1);
+
+        // a transmission with no limit — a call — has nothing to be held to
+        queue_link(&mut station, None, None);
+        station.device_played(20_000);
+        let handed = station.playback(&mut out).expect("playback");
+        assert!(handed > 0 && station.transmitting());
+        station.device_drains_at(20_000 + handed as u64);
+        assert_eq!(station.take_onset_guard(), None);
     }
 
     #[test]

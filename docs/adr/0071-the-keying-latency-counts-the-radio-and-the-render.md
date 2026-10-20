@@ -95,3 +95,40 @@ two-sided session reads it.
   learned, a call is keyed 80 ms after the engine decided it. The test fails without decision 3
   (keyed at once).
 * `a_jump_in_the_capture_timestamps_is_audio_lost_and_jitter_is_not` (`audio.rs`).
+
+## 6. Amendment (2026-10-20): the card holds the start too
+
+Report 12 (§12, change 6) found S2 holding after the key by margin only: decision 4 judges the
+start with the key's wait measured, and nothing judges what comes after it. On ND1J's first
+morning one answer of KK4ODA-1's reached the air 69 ms inside its slack after a 207 ms handover;
+the mini PC's USB audio had stalled in both directions (§4.4). Only the sound card sees that,
+where the samples leave it.
+
+1. **At the key**, a transmission with a `not_after` gets a limit on the wall clock: the moment
+   the key returned plus `not_after` less where the air's clock then stood (`Onset`).
+2. **At the run loop's report of where the card drains** after the key, the station knows where
+   the transmission's first radiating sample sits on the card's clock: that report less what of
+   it was handed over, plus the keying's lead. It hands the card both (`OnsetGuard`,
+   `Station::take_onset_guard`, `AudioIo::guard_onset`).
+3. **The playback callback** that holds the sample places it by its own timestamps (the
+   callback's time, plus the device's reported delay, plus the sample's place in the buffer). If
+   that is past the limit, it empties the queue: the samples ahead of it are the lead's silence,
+   so nothing has radiated. The run loop reads the drop (`AudioIo::take_onset_drop`) at each
+   reading of the card's clock, and the station releases the key and drops the transmission as
+   decision 4 does (`Station::card_dropped_late`: `dropped_late`, `on_tx_dropped`, a `dropped`
+   log line naming the sound card, a `dropped` recording event with `card`).
+4. **A backend whose clock is not the wall's** (the lockstep channel, `[sim]`, the tests) holds
+   nothing to it. Their clocks cannot stall under a keyed transmission the way a USB codec does,
+   and on a loaded machine the wall clock runs ahead of them.
+
+What stays unjudged: a stall after the first radiating sample has left the callback. That
+stretches a frame (S1, S5) rather than starting it late, and the report's one case was of that
+kind as well (35 ms inside the answer). And the device's own buffering past its reported delay,
+which no program sees.
+
+Tests: `a_transmission_whose_first_radiating_sample_would_leave_past_its_limit_goes_unplayed`
+(`audio.rs`: on time, 30 ms late after an 80 ms stall, judged where the sample is in its buffer,
+a guard that arrives too late), `the_card_holds_a_keyed_answer_to_its_slot_where_it_starts_radiating`
+(the guard's place and limit, once a transmission, none without a limit, the drop and a stale
+report) and `an_answer_the_card_drops_after_the_key_costs_its_slot_and_nothing_else` (two stations:
+the caller hears a silent slot and the message still crosses).
