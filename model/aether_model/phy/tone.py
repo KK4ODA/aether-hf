@@ -523,6 +523,22 @@ class ToneDetector:
     symbols — and not a tone that is as strong across the frame's sync symbols (a carrier or
     a spur on it, steady, is interference the frame may still decode through; see
     :meth:`contradictions`)."""
+    CONTRADICTION_SHARE = 0.5
+    """For a frame all three of whose sync blocks hold it (:attr:`FADED_BLOCK_HITS`), the
+    share of its own sync level — the median energy of its own tone over the sync symbols
+    where it is the strongest — a contradiction must also reach to count (ADR-0083). On ITU
+    flutter (10 Hz) a sync tone fades out inside its 40 ms now and then, and what is left
+    strongest is the glide and the neighbouring symbols' tones spread by the fading: at +9 dB
+    a tenth of the frame's level and more than twelve times the noise, three to five such
+    symbols in one frame in eight, and the detector refused frames that decode. A ghost's
+    contradictions are a real frame's tones at its level: 0.3–1.2 of the ghost's own, seven
+    to nine of them at half or more."""
+    FADED_BLOCK_HITS = 5
+    """Hits each of the three sync blocks must have for :attr:`CONTRADICTION_SHARE` to apply.
+    The frames flutter cost had five to eight in every block. A hypothesis read a block early
+    (ADR-0014) has none in the silence before the frame, and a fast kind's data under its end
+    block contradicts it at a fifth of its level — weak, as a fade's leakage is, and refused
+    because its first block is empty."""
     MAX_CONTRADICTIONS = 2
     """Contradictions a confirmed frame may have. Found with the 500 Hz air's middle kinds
     (ADR-0015): a strong frame of one air's kinds, read by the other air's detector — which
@@ -708,7 +724,10 @@ class ToneDetector:
         block and chance in the others, which the second condition refuses. And no more than
         :attr:`MAX_CONTRADICTIONS` of its sync symbols may hold another tone, strong
         (:meth:`contradictions`): a pattern read at a part-symbol offset inside a strong frame
-        it does not name matches half its symbols and is contradicted in the rest."""
+        it does not name matches half its symbols and is contradicted in the rest — unless its
+        two best blocks are whole and uncontradicted (ADR-0049), or all three blocks hold it
+        and only its weak contradictions, under :attr:`CONTRADICTION_SHARE` of its own level,
+        are over the limit: a fast fade's, not another frame's (ADR-0083)."""
         kind = sync.kind
         e = tone_energies(x, sync.start, sync.cfo_hz, kind.symbols, kind.num)
         blocks = _block_hits(e, kind, sync.rv, sync.middle)
@@ -720,7 +739,16 @@ class ToneDetector:
             return True
         # a frame spoiled in one block — a slip or a burst of interference over it — still
         # stands on the other two when both are whole and uncontradicted (ADR-0049)
-        return self._two_clean(blocks, against)
+        if self._two_clean(blocks, against):
+            return True
+        # a frame held by all three blocks, its sync tones faded out here and there by a fast
+        # fade: only a contradiction as strong as half its own level counts (ADR-0083)
+        if hits[0] < self.FADED_BLOCK_HITS:
+            return False
+        strong = self._block_contradictions(
+            e, kind, sync.rv, sync.middle, share=self.CONTRADICTION_SHARE
+        )
+        return sum(strong) <= self.MAX_CONTRADICTIONS
 
     def two_clean_blocks(self, x: ComplexArray, sync: ToneSync) -> bool:
         """Whether the two best of a refined frame's sync blocks each have
@@ -748,9 +776,10 @@ class ToneDetector:
         return sum(self._block_contradictions(e, kind, rv, middle))
 
     def _block_contradictions(
-        self, e: FloatArray, kind: ToneKind, rv: int, middle: int = 0
+        self, e: FloatArray, kind: ToneKind, rv: int, middle: int = 0, share: float = 0.0
     ) -> list[int]:
-        """:meth:`contradictions`, per sync block (start, middle, end)."""
+        """:meth:`contradictions`, per sync block (start, middle, end); with ``share``, only
+        those at least that share of the frame's own level (:attr:`CONTRADICTION_SHARE`)."""
         layout = kind.layout(rv, middle)
         idx = np.flatnonzero(layout >= 0)
         rows = e[idx]
@@ -758,7 +787,14 @@ class ToneDetector:
         peak = rows[np.arange(len(idx)), top]
         steady = np.median(rows, axis=0)[top]
         noise = sync_noise(e, layout, kind)
-        against = (top != layout[idx]) & (peak >= self.CONTRADICTION * noise) & (peak >= 4 * steady)
+        hits = (top == layout[idx]) & (peak > 0)
+        level = float(np.median(peak[hits])) if hits.any() else 0.0
+        against = (
+            (top != layout[idx])
+            & (peak >= self.CONTRADICTION * noise)
+            & (peak >= 4 * steady)
+            & (peak >= share * level)
+        )
         per_block = against.reshape(len(kind.block_offsets), SYNC_SYMBOLS)
         return [int(n) for n in per_block.sum(axis=1)]
 

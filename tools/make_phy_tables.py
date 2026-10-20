@@ -147,6 +147,8 @@ def tone_block() -> dict[str, object]:
             "min_block_hits": det.MIN_BLOCK_HITS,
             "min_first_hits": det.MIN_FIRST_HITS,
             "contradiction": det.CONTRADICTION,
+            "contradiction_share": det.CONTRADICTION_SHARE,
+            "faded_block_hits": det.FADED_BLOCK_HITS,
             "max_contradictions": det.MAX_CONTRADICTIONS,
             "clean_block_hits": det.CLEAN_BLOCK_HITS,
             "count_hits": det.COUNT_HITS,

@@ -211,7 +211,7 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
          hop_div: {},\n    bin_div: {},\n    \
          clip: {:?},\n    max_cfo_hz: {:?},\n    threshold: {:?},\n    min_hits: {},\n    \
          min_block_hits: {},\n    min_first_hits: {},\n    contradiction: {:?},\n    \
-         max_contradictions: {},\n    clean_block_hits: {},\n    count_hits: {},\n    \
+         contradiction_share: {:?},\n    faded_block_hits: {},\n    max_contradictions: {},\n    clean_block_hits: {},\n    count_hits: {},\n    \
          count_margin: {},\n    announce_threshold: {:?},\n    \
          lookahead: {},\n    \
          announce_lookahead: {},\n}};",
@@ -231,6 +231,8 @@ fn tone(out: &mut String, doc: &serde_json::Value) {
         du("min_block_hits"),
         du("min_first_hits"),
         df("contradiction"),
+        df("contradiction_share"),
+        du("faded_block_hits"),
         du("max_contradictions"),
         du("clean_block_hits"),
         du("count_hits"),
@@ -328,6 +330,8 @@ fn main() {
              pub min_block_hits: usize,\n    \
              pub min_first_hits: usize,\n    \
              pub contradiction: f64,\n    \
+             pub contradiction_share: f64,\n    \
+             pub faded_block_hits: usize,\n    \
              pub max_contradictions: usize,\n    \
              pub clean_block_hits: usize,\n    \
              pub count_hits: usize,\n    \

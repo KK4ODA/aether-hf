@@ -1086,6 +1086,8 @@
    "min_block_hits": 4,
    "min_first_hits": 5,
    "contradiction": 12.0,
+   "contradiction_share": 0.5,
+   "faded_block_hits": 5,
    "max_contradictions": 2,
    "clean_block_hits": 7,
    "count_hits": 5,

@@ -869,6 +869,42 @@ def test_a_four_tone_frame_on_flutter_reads_as_well_as_the_sync_blocks_level() -
     assert ok[4] >= ok[0] - 1 and ok[4] >= 10, ok
 
 
+@pytest.mark.slow
+def test_a_four_tone_frame_on_flutter_is_found_through_its_faded_sync_tones() -> None:
+    """ADR-0083: on ITU flutter (10 Hz) a sync tone fades out inside its 40 ms now and then,
+    and the glide and the neighbouring symbols' tones, spread by the fading, are left strongest
+    — at +9 dB more than twelve times the noise, three to five such symbols in a frame: the
+    detector took them for contradictions and refused frames that decode. Where all three
+    blocks hold the frame, only a contradiction at half its own level or more counts."""
+    kind = M.TONE_NARROW[1]
+    det = T.ToneDetector(NARROW_DETECTOR_KINDS)
+    rng = np.random.default_rng(505)
+    found = {5: 0, 99: 0}
+    try:
+        for _ in range(16):
+            payload = _payload(rng, kind)
+            lead = int(rng.integers(1000, 4000))
+            cfo = float(rng.uniform(-100, 100))
+            x = np.concatenate((np.zeros(lead, complex), T.burst(kind, payload, 0), np.zeros(2000)))
+            y = make_channel(
+                "flutter",
+                snr_db=9.0,
+                fs=kind.num.fs,
+                seed=int(rng.integers(0, 2**31)),
+                signal_power=1.0,
+                cfo_hz=cfo,
+            ).process(x)
+            for faded in found:
+                T.ToneDetector.FADED_BLOCK_HITS = faded
+                hit = [s for s in det.detect(y, max_frames=2) if s.kind == kind]
+                if hit and abs(hit[0].start - lead) <= det.hop:
+                    out = T.demodulate(y, kind, 0, hit[0].start, hit[0].cfo_hz).decode()[0]
+                    found[faded] += out == payload
+    finally:
+        T.ToneDetector.FADED_BLOCK_HITS = 5
+    assert found[5] == 16 and found[99] <= 13, found
+
+
 def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:
     """A frame half under the receiver's own transmission — the station keyed over it —
     read its noise as zero from the silent symbols and its SNR as 290 dB, which a rate

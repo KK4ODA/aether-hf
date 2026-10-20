@@ -225,7 +225,12 @@ a sync symbol whose strongest tone is another one, at least 12 times the noise p
 at least four times that tone's median over the frame's sync symbols (a steady carrier or
 spur is not a contradiction). A pattern read at a part-symbol offset inside a strong frame
 it does not name — another air's middle kind, or a frame read a block early — matches half its
-symbols there and is contradicted in the rest.
+symbols there and is contradicted in the rest. A frame whose two best blocks are whole and
+uncontradicted stands whatever its third holds (ADR-0049). And a frame every block of which
+holds it (5 of 8) counts only the contradictions that reach half its own sync level, the median
+energy of its own tone where that tone is strongest (ADR-0083): on fast fading a sync tone fades
+out inside its symbol and leaves the glide and its neighbours' spread tones strongest, at a
+tenth of the level, while a ghost's contradictions are a real frame's tones at its level.
 
 <!-- BEGIN:tone -->
 | Parameter | Value | Notes |
@@ -242,7 +247,7 @@ symbols there and is contradicted in the rest.
 | Level | +5.5 dB | over an OFDM frame's average power at the same transmit level |
 | Sync blocks | 3 x 8 symbols | start, middle, end; 45 % of the data slots before the middle one; the same for every kind |
 | Detector | hop 80 samples, bin 6.25 Hz | offset search +/-150 Hz |
-| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence; at most 2 contradicted (another tone strongest, 12x the noise, not steady), unless the two best blocks each have 7 of 8 and none contradicted |
+| Acquisition threshold | 3.0 | mean sync-tone ratio, each clipped at 10; 12 of 24 sync tones strongest, 4 of them in a second block; a silent symbol is no evidence; at most 2 contradicted (another tone strongest, 12x the noise, not steady), unless the two best blocks each have 7 of 8 and none contradicted, or every block has 5 of 8 and at most 2 contradictions reach 0.5 of the frame's own sync level |
 | Arrival threshold | 4.8 | first block's mean ratio; 5 of 8 strongest |
 
 | Kind | Payload B | Data + sync = slots | Duration | Sync blocks at | Rate | Net bps | Patterns (by RV) | AWGN dB |
