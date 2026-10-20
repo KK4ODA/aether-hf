@@ -25,8 +25,8 @@ from aether_model.frame.modes import (
     WIDE,
     air_interface,
 )
-from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.frames import CONNECT_BODY_BYTES, CONTROL_BYTES, bandwidth_code
+from aether_model.link.granted import GrantConfig, GrantedEngine, State
 from aether_model.link.harness import bandwidth_capabilities, phy_timing, two_modem_sim
 from aether_model.link.rate import (
     NARROW_AWGN_THRESHOLD_DB,
@@ -239,10 +239,10 @@ def test_narrow_session_over_the_real_phy() -> None:
     assert timing.mode_threshold_db == NARROW_AWGN_THRESHOLD_DB
     assert timing.capacity(5) == 25 and timing.capacity(0) == 24
     assert timing.floor_modes == 4 and timing.floor_data_frame_s == pytest.approx(5.36, abs=1e-3)
-    cfg = LinkConfig(capabilities=bandwidth_capabilities(P))
+    cfg = GrantConfig(capabilities=bandwidth_capabilities(P))
     assert bandwidth_code(cfg.capabilities) == 1
-    a = LinkEngine("W4ODA", timing, cfg, seed=1)
-    b = LinkEngine("KK4XYZ", timing, cfg, seed=2)
+    a = GrantedEngine("W4ODA", timing, cfg, seed=1)
+    b = GrantedEngine("KK4XYZ", timing, cfg, seed=2)
     assert a.rate.modes == usable_modes(
         NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S
     )

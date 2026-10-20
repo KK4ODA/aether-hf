@@ -38,9 +38,14 @@ two rungs can be put on the grid, the fading pipe or a recorded session (12-two-
 §Q2). A floor-family LIKE can take the first ordinary rung's place (the floor is the ladder's
 leading rungs). The ``ideal_bps`` column still reads the real ladder.
 
+The engine is :class:`~aether_model.link.granted.GrantedEngine`, granted slots (ADR-0069).
+Baselines written before ADR-0069's Step 5 retired protocol 7's turn engine are that engine's
+unless their ``engine`` column says ``granted``.
+
 Output columns: backend, channel, snr_db (or ramp description), bytes, seconds, goodput_bps,
-ideal_bps, efficiency, mode_min/mode_max/mode_final, mode_changes, bursts, frames_sent,
-frames_resent, harq_rescues, ack_timeouts, ok.
+ideal_bps, efficiency, mode_min/mode_max/mode_final (the rungs the caller's headers sent its
+data at), mode_changes, bursts (the caller's transmissions), frames_sent, frames_resent,
+harq_rescues, ack_timeouts (the caller's silent slots), ok.
 """
 
 from __future__ import annotations
@@ -66,7 +71,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aether_model.frame.modes import NARROW, TONE_CONTROL, WIDE, AirInterface
-from aether_model.link.engine import LinkConfig, LinkEngine
 from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
 from aether_model.link.frames import data_capacity
 from aether_model.link.granted import GrantConfig, GrantedEngine
@@ -387,7 +391,6 @@ def run_point(
     continuous: bool = False,
     link: dict[str, float | int] | None = None,
     floor_cap: float | None = None,
-    engine: str = "p7",
     rung: Hypothetical | None = None,
 ) -> dict[str, object]:
     timing = phy_timing(air.params)
@@ -401,21 +404,14 @@ def run_point(
             # a class's table shifts the rung as it shifts the frame it borrows
             shift = thresholds.get(rung.like, awgn_table[rung.like]) - table_for(air)[0][rung.like]
             thresholds = {**thresholds, rung.index: rung.awgn_db + shift}
-    a: LinkEngine | GrantedEngine
-    b: LinkEngine | GrantedEngine
-    if engine == "granted":
-        # protocol 8 (ADR-0069): its gaps are its protocol's constants, and the pipe charges no
-        # keying, so this measures the header and the slot's cost, not keying's. The session
-        # sends and disconnects at once, so the disconnect's wait is the transfer: the minute an
-        # operator's disconnect waits (ADR-0072) is lifted unless `--link` sets it
-        knobs = {"disc_drain_s": math.inf, **(link or {})}
-        gcfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **knobs)  # type: ignore[arg-type]
-        a = GrantedEngine("W4ODA", timing, gcfg, seed=seed)
-        b = GrantedEngine("KK4XYZ", timing, gcfg, seed=seed + 1)
-    else:
-        cfg = LinkConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **(link or {}))  # type: ignore[arg-type]
-        a = LinkEngine("W4ODA", timing, cfg, seed=seed)
-        b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
+    # granted slots (ADR-0069): the gaps are the protocol's constants, and the pipe charges no
+    # keying, so this measures the header and the slot's cost, not keying's. The session sends
+    # and disconnects at once, so the disconnect's wait is the transfer: the minute an operator's
+    # disconnect waits (ADR-0072) is lifted unless `--link` sets it
+    knobs = {"disc_drain_s": math.inf, **(link or {})}
+    cfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **knobs)  # type: ignore[arg-type]
+    a = GrantedEngine("W4ODA", timing, cfg, seed=seed)
+    b = GrantedEngine("KK4XYZ", timing, cfg, seed=seed + 1)
     if ramp is not None:
         span, period = ramp
         top, half = snr_db + span / 2, period / 2
@@ -464,23 +460,13 @@ def run_point(
         )
 
     modes: list[int] = []
-    if isinstance(a, GrantedEngine):
-        sender = a
-        header = sender._send_header
+    header = a._send_header
 
-        def wrapped_header() -> None:
-            modes.append(min(sender._recommended, sender.cfg.max_mode))
-            header()
+    def wrapped_header() -> None:
+        modes.append(min(a._recommended, a.cfg.max_mode))
+        header()
 
-        sender._send_header = wrapped_header  # type: ignore[method-assign]
-    else:
-        original = a._send_burst
-
-        def wrapped(prefix: tuple[TxFrame, ...] = ()) -> None:
-            modes.append(min(a._recommended, a.cfg.max_mode))
-            original(prefix)
-
-        a._send_burst = wrapped  # type: ignore[method-assign]
+    a._send_header = wrapped_header  # type: ignore[method-assign]
 
     wall = time.perf_counter()
     a.connect("KK4XYZ")
@@ -521,14 +507,11 @@ def run_point(
         "mode_max": max(modes) if modes else "",
         "mode_final": modes[-1] if modes else "",
         "mode_changes": changes,
-        "engine": engine,
-        "bursts": a.stats.transmissions if isinstance(a, GrantedEngine) else a.stats.bursts,
+        "bursts": a.stats.transmissions,
         "frames_sent": a.stats.frames_sent,
         "frames_resent": a.stats.frames_resent,
         "harq_rescues": b.stats.harq_rescues,
-        "ack_timeouts": (
-            a.stats.silent_slots if isinstance(a, GrantedEngine) else a.stats.ack_timeouts
-        ),
+        "ack_timeouts": a.stats.silent_slots,
         "ok": int(ok),
         "wall_s": round(time.perf_counter() - wall, 1),
     }
@@ -620,12 +603,9 @@ def sidecar_observations(document: dict[str, object]) -> list[tuple[int, int, in
     ]
 
 
-def replay_sidecar(
-    path: Path, seed: int, engine: str = "p7", rung: Hypothetical | None = None
-) -> dict[str, object]:
-    """One run of the engines against a recorded session: protocol 7's ``LinkEngine`` or
-    protocol 8's ``GrantedEngine`` (``engine``, as ``--engine`` names them), on the real ladder
-    or with a hypothetical rung (``rung``) fitted with the same penalty."""
+def replay_sidecar(path: Path, seed: int, rung: Hypothetical | None = None) -> dict[str, object]:
+    """One run of the engines against a recorded session, on the real ladder or with a
+    hypothetical rung (``rung``) fitted with the same penalty."""
     from field_ingest import FORMATS
 
     document = json.loads(path.read_text(encoding="utf-8"))
@@ -677,11 +657,9 @@ def replay_sidecar(
         None,
         schedule,
         controls,
-        engine=engine,
         rung=rung,
     )
     row["replay_of"] = path.stem
-    row["engine"] = engine
     row["penalty_db"] = penalty
     row["observations"] = len(observations)
     row["measured_bps"] = "" if measured is None else round(measured, 1)
@@ -726,7 +704,7 @@ def main() -> int:
     ap.add_argument(
         "--link",
         default="",
-        help="link-engine overrides, key=value pairs separated by commas (LinkConfig "
+        help="link-engine overrides, key=value pairs separated by commas (GrantConfig "
         "fields), to compare one engine against another",
     )
     ap.add_argument(
@@ -762,13 +740,6 @@ def main() -> int:
         "directions, instead of a fresh channel per frame",
     )
     ap.add_argument(
-        "--engine",
-        choices=("p7", "granted"),
-        default="p7",
-        help="the link engine: protocol 7's LinkEngine, or protocol 8's GrantedEngine "
-        "(ADR-0069); the pipe charges neither any keying",
-    )
-    ap.add_argument(
         "--rung",
         type=parse_rung,
         default=None,
@@ -779,7 +750,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.replay:
-        return replay_main(args.replay, args.trials, args.out, args.engine, args.rung)
+        return replay_main(args.replay, args.trials, args.out, args.rung)
 
     air = NARROW if args.bandwidth == 500 else WIDE
     fer_csv = args.fer_csv or (
@@ -822,7 +793,6 @@ def main() -> int:
                     continuous=args.continuous,
                     link=link,
                     floor_cap=FLOOR_READING_CAP_DB.get(channel) if args.floor_cap else None,
-                    engine=args.engine,
                     rung=args.rung,
                 )
                 rows.append(row)
@@ -849,18 +819,17 @@ def replay_main(
     sidecars: list[Path],
     trials: int,
     out: str,
-    engine: str = "p7",
     rung: Hypothetical | None = None,
 ) -> int:
     rows: list[dict[str, object]] = []
     for sidecar in sidecars:
         for trial in range(trials):
-            row = replay_sidecar(sidecar, 100 + 7 * trial, engine, rung)
+            row = replay_sidecar(sidecar, 100 + 7 * trial, rung)
             rows.append(row)
             measured = row["measured_bps"]
             against = f"measured {measured} bps" if measured != "" else "no measured goodput"
             print(
-                f"{row['replay_of']}: {engine} replayed {row['goodput_bps']} bps ({against}), "
+                f"{row['replay_of']}: replayed {row['goodput_bps']} bps ({against}), "
                 f"penalty {row['penalty_db']:+.2f} dB over AWGN from {row['observations']} "
                 f"observations, modes {row['mode_min']}-{row['mode_max']}, ok={row['ok']}",
                 flush=True,

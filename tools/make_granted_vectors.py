@@ -34,10 +34,9 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.engine import Deliver, Event, Transmit
 from aether_model.link.fading import FadingPipe
 from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_data
-from aether_model.link.granted import GrantConfig, GrantedEngine
+from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, Transmit
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.sim import TwoStationSim

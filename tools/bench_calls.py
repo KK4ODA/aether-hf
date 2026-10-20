@@ -2,14 +2,16 @@
 
 A session's throughput (`bench_link.py`) says little about the start of a contact: a call that
 takes three tries to connect and a probe that is never answered both vanish into a session's
-total. This runs the two engines of `LinkEngine` through the link bench's fading pipe
+total. This runs two link engines (`GrantedEngine`, ADR-0069) through the link bench's fading
+pipe
 (`bench_link.py --fading`, `bench/baselines/fading_pipe.csv`) and records, per air, channel
 class and SNR, one call — connected or not within 400 s, when, after how many tries — and one
 probe — answered or not within 120 s — per trial (ADR-0016).
 
 `--tree` runs another checkout's model and link bench against this calibration: that is how the
 "before" rows of `bench/baselines/calls.csv` come from a worktree of an earlier release, which
-has no copy of this tool.
+has no copy of this tool. The rows there are protocol 7's turn engine, retired in ADR-0069's
+Step 5; a tree run now needs the granted engine (2026-10-13 on).
 
     python tools/bench_calls.py --variant "calls on the floor" --out calls.csv
     python tools/bench_calls.py --tree C:/Dev/aether-before --variant beta.54 --out before.csv
@@ -37,7 +39,7 @@ def point(job: tuple[str, int, str, float, int]) -> list[dict[str, object]]:
     sys.path.insert(0, str(Path(tree) / "tools"))
     import bench_link as bench
     from aether_model.frame.modes import NARROW, WIDE
-    from aether_model.link.engine import LinkConfig, LinkEngine
+    from aether_model.link.granted import GrantConfig, GrantedEngine
     from aether_model.link.harness import phy_timing
     from aether_model.link.sim import TwoStationSim, control_thresholds_for
 
@@ -47,9 +49,9 @@ def point(job: tuple[str, int, str, float, int]) -> list[dict[str, object]]:
     for trial in range(trials):
         seed = 1000 * trial + 17
         for what in ("call", "probe"):
-            cfg = LinkConfig(max_mode=air.n_rungs - 1)
-            a = LinkEngine("W4ODA", timing, cfg, seed=seed)
-            b = LinkEngine("KK4XYZ", timing, cfg, seed=seed + 1)
+            cfg = GrantConfig(max_mode=air.n_rungs - 1)
+            a = GrantedEngine("W4ODA", timing, cfg, seed=seed)
+            b = GrantedEngine("KK4XYZ", timing, cfg, seed=seed + 1)
             sim = TwoStationSim(
                 a,
                 b,

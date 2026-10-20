@@ -39,16 +39,12 @@ def test_a_bench_point_runs_on_every_ofdm_mode_the_gate_and_the_curves_use(param
 
 @pytest.mark.parametrize("bandwidth", [2300, 500])
 def test_the_chat_bench_runs_a_conversation_on_each_air(bandwidth: int) -> None:
-    """``tools/bench_chat.py`` (ADR-0027) against the model as it stands: one conversation on a
-    clean path under today's turn-taking, in a chat, and with the handover it measured and did
-    not adopt — every line arrives, and a reply arrives sooner in a chat than when it has to
-    wait to be polled."""
-    import statistics
-
+    """``tools/bench_chat.py`` against the model as it stands: one conversation on a clean path,
+    under the engine as it ships and with a shorter idle keepalive — every line arrives, and the
+    slave's lines go in slots its master's headers granted."""
     import bench_chat
 
-    rows = {}
-    for policy in ("base", "request", "handover+request"):
+    for policy in ("base", "keepalive5"):
         point = bench_chat.Point(
             policy,
             tuple(sorted(bench_chat.POLICIES[policy].items())),
@@ -60,8 +56,6 @@ def test_the_chat_bench_runs_a_conversation_on_each_air(bandwidth: int) -> None:
             floor_cap=True,
             max_burst_s=bench_chat.MAX_BURST_S,
         )
-        rows[policy] = bench_chat.run_session(point, 0)
-        assert rows[policy]["connected"] == 1 and rows[policy]["lost"] == 0, rows[policy]
-    base, chat = (rows[p]["replies"] for p in ("base", "request"))
-    assert statistics.median(chat) < statistics.median(base)  # type: ignore[arg-type]
-    assert rows["request"]["requests"], "the chat asked for the turn"
+        row = bench_chat.run_session(point, 0)
+        assert row["connected"] == 1 and row["lost"] == 0, row
+        assert row["headers"] and row["answers"], row

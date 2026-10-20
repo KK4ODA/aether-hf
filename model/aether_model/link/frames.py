@@ -20,23 +20,9 @@ burst from the silence after it. Kinds carried in the DATA container: DATA (user
 MEASURE (a rung measured, never delivered: protocol 9), CONNECT_REQ and CONNECT_ACK (callsigns
 do not fit a control frame), and — outside sessions — BEACON, PROBE, PROBE_ACK and DATAGRAM.
 
-CONTROL container, 7 bytes::
-
-    0: kind (4 bits) | flags (4 bits)
-    1: session id
-    2: base seq      ACK: next sequence number the receiver needs
-    3–4: bitmap      ACK: bit i set ⇔ seq base + i has been received (16-frame window)
-    5: SNR           signed dB, 3 kHz reference (−40 … +40), 0x7f = unknown: in an ACK the
-                     burst's (ADR-0020), in any other kind the last frame decoded from the
-                     other station (ADR-0021)
-    6: recommended mode (5 bits) | burst family (1 bit) | follows (2 bits): how many frames
-       of a burst follow this control frame in the same transmission, in slots of that
-       burst's data frame, and the burst's family (1 = the tone floor) — an acknowledgement
-       that takes the turn, its own burst after it (ADR-0047, ADR-0068); 0 otherwise. Until
-       protocol 8 the three bits were a counter of acknowledgements, a label for logs.
-
-Kinds: ACK, POLL (ISS keep-alive, answered by an ACK), TURN (ISS hands the sending role
-to the peer), DISC / DISC_ACK. Everything is big-endian; nothing here depends on the PHY.
+CONTROL container, 7 bytes: :class:`GrantFrame` (ADR-0069), whose docstring has the layout.
+Kinds: HEADER (the master's, which grants the slave its slot), ANSWER (the slave's, in it),
+DISC / DISC_ACK. Everything is big-endian; nothing here depends on the PHY.
 
 Callsigns are packed 6 bits per character (``A–Z 0–9 - /``), 9 characters in 7 bytes.
 """
@@ -97,28 +83,6 @@ class DataFlags(IntFlag):
     NONE = 0
     PARTIAL = 0x01
     """An explicit data length follows the header (the frame is not full)."""
-
-
-class ControlKind(Enum):
-    ACK = 0
-    POLL = 1
-    TURN = 2
-    DISC = 3
-    DISC_ACK = 4
-
-
-class ControlFlags(IntFlag):
-    NONE = 0
-    WANT_TX = 0x1
-    """(ACK) the receiving station has data to send."""
-    BREAK = 0x2
-    """(ACK) the receiving station demands the sending role now."""
-    OFFER = 0x4
-    """(TURN) sent at the end of a burst that emptied the sender's queue: the turn is the
-    receiving station's for the taking, with its acknowledgement (ADR-0047)."""
-    TAKEN = 0x8
-    """(ACK) the turn offered is taken: this station's own data follows the acknowledgement in
-    the same transmission (ADR-0047)."""
 
 
 # ── callsigns ─────────────────────────────────────────────────────────
@@ -229,42 +193,9 @@ def with_bandwidth(caps: int, bandwidth_hz: int) -> int:
 
 
 MAX_FOLLOWS = 3
-"""The largest countdown a DATA frame carries (ADR-0041): the PHY turns the frame's mode chips
-a quarter turn a step, so four values."""
-
-
-def countdown_of(following: int) -> int:
-    """The countdown a DATA frame carries for the frames of its burst that follow it: half of
-    them, rounded up (ADR-0046) — 0 for the last frame, 1 for one or two following, 2 for three
-    or four, 3 for five or six. It never says fewer than follow, so a receiver that hears only
-    the burst's first frames does not answer over the rest, as "three or more" let it; it says
-    at most one more, and only the last frame's loss makes that matter. Exact for bursts up to
-    seven frames; :attr:`LinkConfig.burst_frames` is six."""
-    return min(MAX_FOLLOWS, (following + 1) // 2)
-
-
-def most_following(countdown: int) -> int:
-    """The most frames a countdown says may follow (:func:`countdown_of`)."""
-    return 2 * countdown
-
-
-TURNS_VERSION = 7
-"""Link protocol 7, the turn engine's (:class:`~aether_model.link.engine.LinkEngine`), in the
-connect body's version byte — kept until granted slots replace that engine (ADR-0069 Step 5).
-2 since the tone floor (ADR-0013): a mode number is a rung of the air's ladder — on the
-2 300 Hz air two above the OFDM mode of version 1 — so a session between the two would run on
-numbers that mean different frames at either end; a station ignores a call or an acceptance
-of another version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the
-2 300 Hz air, between the floor's two and the OFDM modes, and a control frame whose recommended
-mode has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two more
-rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz ladder is
-as it was, but one number says what both ladders are). 5 since the burst countdown
-(ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its
-burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
-noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
-would answer a frame early. 7 since the turn offered at the end of a burst (ADR-0047): a TURN's
-OFFER flag and an acknowledgement's TAKEN, which a station of version 6 would take for a TURN to
-answer and an acknowledgement alone."""
+"""The largest count of frames to follow a DATA frame carries (ADR-0041, ADR-0068 §2.1): the PHY
+turns an ordinary frame's mode chips a quarter turn a step, and a tone frame's middle sync block
+names one of four, so four values — 3 for three or more."""
 
 
 GRANTED_VERSION = 8
@@ -276,10 +207,20 @@ are not version 7's, and neither is any of its timing."""
 
 PROTOCOL_VERSION = 9
 """The link protocol a station speaks, in the connect body's version byte; what a release
-states (``link_protocol``); a station ignores a call of another, and says so. 9 since the
-measurement frames (ADR-0077): a MEASURE frame, the control frame's ``measure`` bit in the place
-of version 8's identifier request inside a session, and an acknowledgement that reports a
-measurement (:data:`REPORT`), none of which a station of version 8 reads."""
+states (``link_protocol``); a station ignores a call of another, and says so. The same number
+names different frames in different versions, so a session between two versions cannot run.
+
+2 since the tone floor (ADR-0013): a mode number is a rung of the air's ladder — on the
+2 300 Hz air two above the OFDM mode of version 1. 3 since the fast kinds (ADR-0014): four more
+rungs on the 2 300 Hz air, and a control frame whose recommended mode has five bits. 4 since the
+narrow middle kinds (ADR-0015): two more rungs on the 500 Hz air. 5 since the burst countdown
+(ADR-0041): an ordinary DATA frame's mode chips are turned by the number of frames of its burst
+that follow it. 6 since the countdown counts in pairs (ADR-0046). 7 since the turn offered at
+the end of a burst (ADR-0047), the last of the turn engine, retired in ADR-0069's Step 5. 8,
+:data:`GRANTED_VERSION`, since granted slots. 9 since the measurement frames (ADR-0077): a
+MEASURE frame, the control frame's ``measure`` bit in the place of version 8's identifier
+request inside a session, and an acknowledgement that reports a measurement (:data:`REPORT`),
+none of which a station of version 8 reads."""
 
 CAP_LEVEL_SHIFT = 3
 CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT
@@ -308,7 +249,7 @@ class ConnectBody:
     """Capability bits: compression (bit 0) and the bandwidth this frame was sent in
     (bits 1–2, :func:`bandwidth_code`); in a request of protocol 8, the gap level of the
     acceptance's slot (bits 3–4, :func:`level_of`)."""
-    version: int = TURNS_VERSION
+    version: int = PROTOCOL_VERSION
     snr_db: float | None = None
     """In an acceptance: the SNR (3 kHz) the request arrived at, whole decibels, in the
     CONTROL frame's byte — what the caller starts its first burst from (P9-2). Absent
@@ -407,73 +348,6 @@ PROBE_BODY_BYTES = 2 * CALL_BYTES + 2
 # ── CONTROL container ─────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class ControlFrame:
-    kind: ControlKind
-    session: int
-    flags: ControlFlags = ControlFlags.NONE
-    base: int = 0
-    bitmap: int = 0
-    snr_db: float | None = None
-    recommended_mode: int = 0
-    """A rung of the air's ladder: five bits, room for 32 — the 2 300 Hz ladder has 20 since
-    the fast kinds (ADR-0014), past the four bits of protocol version 2."""
-    follows: int = 0
-    """How many frames of a burst follow this control frame in the same transmission, in
-    slots of that burst's data frame (0–3, ADR-0068): an acknowledgement that took the turn
-    states its own burst after it (ADR-0047), so a receiver that reads it and nothing of the
-    burst still knows when the burst ends."""
-    burst_floor: bool = False
-    """The family of the burst :attr:`follows` counts — the length of its slots."""
-
-    def encode(self) -> bytes:
-        snr = SNR_UNKNOWN if self.snr_db is None else max(-40, min(40, round(self.snr_db)))
-        return bytes(
-            [
-                (self.kind.value << 4) | int(self.flags),
-                self.session,
-                self.base,
-                (self.bitmap >> 8) & 0xFF,
-                self.bitmap & 0xFF,
-                snr & 0xFF,
-                ((self.recommended_mode & 0x1F) << 3)
-                | (int(self.burst_floor) << 2)
-                | (self.follows & 0x03),
-            ]
-        )
-
-    @classmethod
-    def decode(cls, payload: bytes) -> ControlFrame:
-        if len(payload) < CONTROL_BYTES:
-            raise ValueError("short CONTROL payload")
-        raw_snr = payload[5]
-        if raw_snr == SNR_UNKNOWN:
-            snr: float | None = None
-        else:
-            snr = float(raw_snr - 256 if raw_snr >= 128 else raw_snr)
-        return cls(
-            kind=ControlKind(payload[0] >> 4),
-            session=payload[1],
-            flags=ControlFlags(payload[0] & 0x0F),
-            base=payload[2],
-            bitmap=(payload[3] << 8) | payload[4],
-            snr_db=snr,
-            recommended_mode=payload[6] >> 3,
-            burst_floor=bool(payload[6] & 0x04),
-            follows=payload[6] & 0x03,
-        )
-
-    def received(self, seq: int) -> bool:
-        """ACK semantics: has ``seq`` been received (below base, or set in the bitmap)?"""
-        d = (seq - self.base) % SEQ_MOD
-        if d >= WINDOW:
-            return d >= SEQ_MOD // 2  # far behind base → already acknowledged
-        return bool((self.bitmap >> d) & 1)
-
-
-# ── protocol 8: the CONTROL container ──────────────────────────────────
-
-
 class GrantKind(Enum):
     HEADER = 0
     """The master's: what this transmission carries, what it acknowledges, and the slot it
@@ -503,7 +377,7 @@ class GrantFrame:
         0: kind (2) | count (3) | data family (1) | level (2)
         1: session (7) | fam (1)
         2: flag (1) | id / measure (1) | SNR (6)
-        3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
+        3: base       4–5: bitmap         (selective acknowledgement)
         6: rung (5) | n (3)
 
     ``count``: data frames after this one in its transmission, exactly (0–6), and their family
@@ -585,11 +459,11 @@ class GrantFrame:
         )
 
     def received(self, seq: int) -> bool:
-        """Acknowledgement semantics, as :meth:`ControlFrame.received`; a report acknowledges
-        only what is below ``base``."""
+        """Acknowledgement semantics: has ``seq`` been received — below ``base``, or set in the
+        bitmap? A report (:attr:`reports`) acknowledges only what is below ``base``."""
         d = (seq - self.base) % SEQ_MOD
         if d >= WINDOW:
-            return d >= SEQ_MOD // 2
+            return d >= SEQ_MOD // 2  # far behind base: already acknowledged
         return not self.reports and bool((self.bitmap >> d) & 1)
 
     @property

@@ -63,7 +63,9 @@ filterwarnings = ["error::DeprecationWarning:aether_model.*"]
 line-length = 100
 target-version = "py312"
 src = ["model", "tools"]
-extend-exclude = ["core", "app", "tools/audit_probe_*.py"]  # probes are frozen audit evidence
+# the audit probes and the link review's research code are frozen evidence: each runs at the tree
+# it was written against (docs/research/link-architecture/README.md, "Reproduction")
+extend-exclude = ["core", "app", "tools/audit_probe_*.py", "research"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "NPY", "RUF", "SIM", "PL"]
@@ -80,7 +82,6 @@ ignore = [
 "model/aether_model/host/*.py" = ["PL", "B"]
 "model/tests/*.py" = ["PL"]
 "tools/*.py" = ["PL", "E501"]
-"research/**/*.py" = ["PL"]  # research prototypes (docs/research/link-architecture/)
 
 [tool.ruff.format]
 quote-style = "double"

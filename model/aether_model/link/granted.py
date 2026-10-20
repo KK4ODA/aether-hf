@@ -1,12 +1,14 @@
 """Granted slots: the link engine of protocols 8 and 9 (ADR-0069; 9 adds measurement frames,
 ADR-0077).
 
-One :class:`GrantedEngine` per station, beside :class:`~aether_model.link.engine.LinkEngine`
-(protocol 7). Like it, it is a pure state machine — :meth:`~GrantedEngine.on_frame`,
-:meth:`~GrantedEngine.on_tx_done` and :meth:`~GrantedEngine.tick` in, actions out — and it
-keeps its data path: selective repeat over a 16-frame window, HARQ with slot inference,
-re-encoding, the rate controller and the connect handshake's measurements. What it changes is
-*when* a station may key, and nothing else.
+One :class:`GrantedEngine` per station. It is a pure state machine —
+:meth:`~GrantedEngine.on_frame`, :meth:`~GrantedEngine.on_tx_done` and
+:meth:`~GrantedEngine.tick` in, actions out — with no threads, no clock of its own and no PHY, so
+the same engine runs under the lossy-pipe simulator, the PHY-level harness and the daemon. It
+replaced protocol 7's turn engine (``LinkEngine``, retired in ADR-0069's Step 5) and kept its data
+path: selective repeat over a 16-frame window, HARQ with slot inference, re-encoding, the rate
+controller and the connect handshake's measurements. What it changed is *when* a station may key,
+and nothing else.
 
 The protocol in one paragraph
 -----------------------------
@@ -56,19 +58,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TypedDict
 
-from aether_model.link.engine import (
-    LEFT_UNHEARD,
-    OUTSIDE_SESSIONS,
-    RV_SEQUENCE,
-    SELF_DECODABLE_RVS,
-    Action,
-    Deliver,
-    Event,
-    LadderRung,
-    ProbeResult,
-    State,
-    Transmit,
-)
 from aether_model.link.frames import (
     CAP_LEVEL_MASK,
     CONNECT_BODY_8_BYTES,
@@ -97,6 +86,93 @@ from aether_model.link.frames import (
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
+
+# ── what the engine hands its driver ──────────────────────────────────
+
+
+class State(Enum):
+    IDLE = "idle"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    DISCONNECTING = "disconnecting"
+
+
+@dataclass
+class Transmit:
+    frames: list[TxFrame]
+    duration_s: float
+
+
+@dataclass
+class Deliver:
+    data: bytes
+
+
+@dataclass
+class Event:
+    name: str
+    detail: str = ""
+
+
+Action = Transmit | Deliver | Event
+
+
+@dataclass(frozen=True)
+class LadderRung:
+    """One rung of the Test session's mode ladder (P6-7): the measurement frames sent at it and
+    the other station's report of them (ADR-0077) — the frame error rate it saw at the SNR it
+    measured."""
+
+    mode: int
+    frames: int
+    """Measurement frames sent at the rung; a measurement is never sent again."""
+    decoded: int
+    """Of those, the ones the other station's report says arrived."""
+    snr_db: float | None
+    """The SNR the other station measured, from its report; ``None`` when the measurement's
+    slot went silent and the report came with a later answer (ADR-0076)."""
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
+    on our probe, and the SNR we measured on their answer."""
+
+    remote: str
+    heard_there_db: float | None
+    heard_here_db: float
+    bandwidth_hz: int | None = None
+    """The bandwidth the answering station runs, from its answer's capability byte — a
+    probe is answered across bandwidths (ADR-0035), and this is how the prober learns that
+    a call would not be; ``None`` for a reserved code."""
+
+
+OUTSIDE_SESSIONS = frozenset(
+    {DataKind.BEACON, DataKind.PROBE, DataKind.PROBE_ACK, DataKind.DATAGRAM}
+)
+"""DATA kinds sent outside any session: never taken into a session's stream."""
+
+SELF_DECODABLE_RVS = frozenset({0, 3})
+"""The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
+them, RV 3 wraps round to them): a frame at RV 1 or 2 is mostly parity and, at the rates this
+modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path, 2026-09-25,
+against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
+
+RV_SEQUENCE = (0, 0, 2, 3)
+"""The redundancy version of a frame's first, second, third and fourth transmission under one
+codeword, then round again (ADR-0043). On HF a retransmission is as often of a frame the
+receiver never detected — a fade, a collision, a burst's faded end — as of one it detected and
+could not decode, so the second copy must decode on its own: RV 0 again, which also combines
+with a failed first copy as well as any other (27 of 29 against RV 1's 24, 2300 Hz Poor). RV 2
+then adds the parity neither RV 0 carries, and RV 3 the systematic bits with the code's
+outermost parity. The order was 0, 1, 2, 3, under which a frame whose first copy was missed
+could not decode until its fourth: RV 1 and RV 2 decode alone at no SNR, and RV 3 not at all on
+the 36 bit/s tone rung (85 s of tone frames at +5 dB on a 500 Hz path, the scenario harness)."""
+
+LEFT_UNHEARD = frozenset({"aborted", "closed (no disc ack)", "no response", "link timeout"})
+"""How a session ends without the other station's word that it is over: frames of it heard
+afterwards are answered with a DISC (ADR-0052). Each is the reason a session's end is given,
+letter for letter, and the session history's ``end`` (``docs/spec/control-api.md``)."""
 
 # ── the protocol's constants ──────────────────────────────────────────
 
@@ -279,7 +355,13 @@ class GrantConfig:
     initial_mode: int = 0
     max_mode: int = 19
     ceiling: int | None = None
-    """The fastest rung the rules allow (ADR-0018); see ``LinkConfig.ceiling``."""
+    """The fastest rung the rules allow this station to send at, where it is now — the
+    regulatory policy's answer (ADR-0018), which link adaptation never overrides: an
+    automatically controlled station answering outside the §97.221(b) segments may not climb
+    past the rungs that occupy 500 Hz or less, however good the path. Unlike :attr:`max_mode`,
+    which is the operator's taste, it reaches every frame the station sends: when it admits only
+    tone-floor rungs, control frames, connect requests and answers, and probe answers go on the
+    floor too. Unset, only :attr:`max_mode` applies."""
     silence_step: int = 2
     """Rungs a master steps its own data down by for every data slot heard silent (P9-7)."""
     max_combines: int = 4
@@ -474,9 +556,6 @@ class _Answer:
 class GrantedEngine:
     """The link engine of granted slots (ADR-0069), protocol 9 (ADR-0077)."""
 
-    counts_on_floor = True
-    """Tone frames carry their count too (ADR-0068 §2.1, kept): a simulated PHY delivers it."""
-
     def __init__(
         self,
         my_call: str,
@@ -652,7 +731,14 @@ class GrantedEngine:
     # ── public commands ───────────────────────────────────────────────
 
     def set_callsigns(self, calls: Sequence[str]) -> None:
-        """As :meth:`LinkEngine.set_callsigns`: refused while a session is up."""
+        """Change the callsigns this station answers to; the first is the one it calls as.
+
+        The operator's callsign belongs to the host program in practice — VARA's published
+        interface has no callsign of its own, ``MYCALL`` is the only place one is ever set, and
+        clients send several when a station also answers to a club or tactical call — so the
+        engine takes a list at run time rather than one name at construction. Refused while a
+        session is up: the callsign is in the session's addressing, and changing it would orphan
+        the other station."""
         if self.state is not State.IDLE:
             raise RuntimeError("a session is running")
         cleaned = [c.strip().upper() for c in calls if c.strip()]
@@ -819,7 +905,7 @@ class GrantedEngine:
         return self._id_owed > 0.0
 
     def pin_mode(self, mode: int | None, body_bytes: int | None = None) -> None:
-        """As :meth:`LinkEngine.pin_mode`: this station's own new data goes at ``mode`` until
+        """This station's own new data goes at ``mode`` until
         unpinned, in bodies of at most ``body_bytes`` — the benches' and the tests'. The Test's
         ladder measures a rung with :meth:`measure` instead."""
         if mode is not None and mode not in (self.timing.data_capacity or {}):
@@ -852,11 +938,6 @@ class GrantedEngine:
     def take_ladder(self) -> list[LadderRung]:
         rungs, self.ladder = self.ladder, []
         return rungs
-
-    def request_break(self) -> None:
-        """Kept for the daemon's interface. Every answer states the slave's queue and the next
-        header grants it, so the slave's data never waits for the master's to run out: there is
-        no turn to break into."""
 
     @property
     def tx_pending_bytes(self) -> int:
@@ -928,14 +1009,28 @@ class GrantedEngine:
         self.cfg.max_mode = rung
 
     def set_air(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
-        """As :meth:`LinkEngine.set_air` (ADR-0026): another air from the next session on."""
+        """Run on another air interface from the next session on (ADR-0026).
+
+        The engine knows one air at a time — its frame lengths, its ladder, the thresholds its
+        rate controller steps by — and the daemon moves it between sessions: to the bandwidth a
+        host program's ``BW500``/``BW2300`` asked for, as VARA does, or to the narrower one a
+        call to this station came in. ``capabilities`` is what the connect handshake offers from
+        then on, its bandwidth bits (:func:`~aether_model.link.frames.with_bandwidth`) included,
+        and ``max_mode`` the fastest rung on the new ladder. The callsigns, the counters, the
+        session numbering and the last probe stay: the station is the same one.
+
+        Refused while anything is under way — a session, a call, a probe: each runs to its end
+        on the air it started on, and the other station is on that one."""
         if self.state is not State.IDLE or self._probing is not None:
             raise RuntimeError("a session, a call or a probe is running")
         self._move(timing, capabilities, max_mode)
 
     def move_call(self, timing: PhyTiming, capabilities: int, max_mode: int | None = None) -> None:
-        """As :meth:`LinkEngine.move_call` (ADR-0058): an unanswered call's next tries go out on
-        another air, its tries and timers standing."""
+        """Carry a call that has not been answered on to another air interface (ADR-0058): its
+        next tries go out there, stating its bandwidth, and its try count and timers stand. A
+        2 300 Hz caller nobody has answered moves to 500 Hz, where a 500 Hz station that ignores
+        a wider call hears it, and a 2 300 Hz one answers it by moving too. Refused but while
+        calling."""
         if self.state is not State.CONNECTING:
             raise RuntimeError("no call is going out")
         self._move(timing, capabilities, max_mode)
@@ -2393,7 +2488,7 @@ class GrantedEngine:
         return sorted(seqs, key=lambda s: seq_distance(s, self._tx_base))
 
     def _data_frames(self, room_s: float) -> list[TxFrame]:
-        """This station's data for a transmission, laid out as ``LinkEngine`` lays out a burst:
+        """This station's data for a transmission, laid out as protocol 7 laid out a burst:
         the unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones,
         one family a transmission, as many as ``room_s`` and :data:`MAX_DATA`
         allow. Each frame states how many follow it, three meaning three or more. A measurement
@@ -2552,8 +2647,7 @@ class GrantedEngine:
 
     def _take_data(self, frame: SoftFrame) -> _RxRecord:
         """A data frame of the transmission being received: decoded alone, or combined with an
-        earlier copy of its block, its sequence number inferred from its slot (as
-        ``LinkEngine``)."""
+        earlier copy of its block, its sequence number inferred from its slot."""
         payload, buffer = frame.decode(None)
         rec = _RxRecord(frame, 0)
         if payload is None and not self._on_grid(frame):
@@ -2733,7 +2827,7 @@ class GrantedEngine:
 
     def _observe(self, records: list[_RxRecord]) -> float | None:
         """What a transmission's data said of the path, to the rate controller (ADR-0020's
-        rules, as ``LinkEngine._observe_burst``). Returns the SNR measured on it."""
+        rules). Returns the SNR measured on it."""
         ok = sum(1 for r in records if r.payload is not None)
         failed = sum(
             1

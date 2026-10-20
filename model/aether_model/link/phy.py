@@ -81,10 +81,9 @@ class PhyTiming:
     by that much. Found by two real daemons over a socket, not by the simulator."""
     preamble_detect_s: float | None = None
     """Delay from a frame's *first* sample to the PHY reporting its preamble via
-    :meth:`~aether_model.link.engine.LinkEngine.on_preamble`. When a PHY provides that
-    signal the receiver learns a burst is continuing this quickly; when it is ``None`` the
-    receiver has to wait a whole data frame of silence instead to be sure a burst has
-    ended, which costs roughly a quarter of the air time (see ``bench/README.md``)."""
+    :meth:`~aether_model.link.granted.GrantedEngine.on_preamble`. A caller or a prober waits
+    past a frame announced this way, which may be the answer; inside a session an announcement
+    changes nothing (ADR-0069 §2.5). ``None``: the PHY announces nothing."""
     data_capacity: dict[int, int] | None = None
     """PHY payload bytes per DATA-container mode index (mode → bytes)."""
     mode_threshold_db: dict[int, float] | None = None

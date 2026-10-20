@@ -16,8 +16,8 @@ use std::{fs, path::PathBuf};
 use aether_link::{
     datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
-        ConnectBody, ControlFrame, ControlKind, DataHeader, DataKind, GrantFrame, GrantKind,
-        ProbeBody, decode_data, encode_data, level_of, pack_callsign, unpack_callsign,
+        ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, ProbeBody, decode_data,
+        encode_data, level_of, pack_callsign, unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
@@ -60,17 +60,6 @@ fn data_kind(name: &str) -> DataKind {
         "DATAGRAM" => DataKind::Datagram,
         "MEASURE" => DataKind::Measure,
         other => panic!("unknown data kind {other}"),
-    }
-}
-
-fn control_kind(name: &str) -> ControlKind {
-    match name {
-        "ACK" => ControlKind::Ack,
-        "POLL" => ControlKind::Poll,
-        "TURN" => ControlKind::Turn,
-        "DISC" => ControlKind::Disc,
-        "DISC_ACK" => ControlKind::DiscAck,
-        other => panic!("unknown control kind {other}"),
     }
 }
 
@@ -429,54 +418,6 @@ fn probe_bodies_match_the_model() {
                 assert!((got - want).abs() < 1e-12, "{label}: SNR {got} vs {want}");
             }
             (got, want) => panic!("{label}: SNR presence differs, {got:?} vs {want:?}"),
-        }
-    }
-}
-
-#[test]
-fn control_frames_match_the_model() {
-    for case in vectors()["control_frames"]
-        .as_array()
-        .expect("control frames")
-    {
-        let kind = control_kind(case["kind"].as_str().expect("kind"));
-        let frame = ControlFrame {
-            kind,
-            session: int(case, "session") as u8,
-            flags: int(case, "flags") as u8,
-            base: int(case, "base") as u8,
-            bitmap: int(case, "bitmap") as u16,
-            snr_db: case["snr_db"].as_f64(),
-            recommended_mode: int(case, "recommended_mode") as u8,
-            follows: int(case, "follows") as u8,
-            burst_floor: case["burst_floor"].as_bool().expect("burst_floor"),
-        };
-        let expected = from_hex(case["encoded"].as_str().expect("encoded"));
-        assert_eq!(
-            frame.encode().to_vec(),
-            expected,
-            "{kind:?}: bytes differ from the model"
-        );
-
-        let decoded = ControlFrame::decode(&expected).expect("decode");
-        // the SNR is quantised to a signed byte, so compare against what the model read back
-        match (decoded.snr_db, case["decoded_snr_db"].as_f64()) {
-            (None, None) => {}
-            (Some(got), Some(want)) => {
-                assert!((got - want).abs() < 1e-12, "{kind:?}: SNR {got} vs {want}");
-            }
-            (got, want) => panic!("{kind:?}: SNR presence differs, {got:?} vs {want:?}"),
-        }
-
-        let expected_received: Vec<bool> = case["received"]
-            .as_array()
-            .expect("received")
-            .iter()
-            .map(|v| v.as_bool().expect("flag"))
-            .collect();
-        for (index, want) in expected_received.iter().enumerate() {
-            let seq = (index * 17) as u8;
-            assert_eq!(decoded.received(seq), *want, "{kind:?}: received({seq})");
         }
     }
 }
