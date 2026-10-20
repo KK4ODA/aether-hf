@@ -86,3 +86,6 @@ context → decision → alternatives considered → consequences.
 | [0079](0079-the-receiver-follows-a-session-station-off-frequency.md) | The receiver follows a session's station off frequency | accepted |
 | [0080](0080-the-four-tone-receiver-reads-each-tones-level-from-the-data.md) | The four-tone receiver reads each tone's level from the data | accepted |
 | [0081](0081-tone4x100-93-the-500-hz-rung-between-the-tones-and-ofdm.md) | tone4x100-93, the 500 Hz rung between the four-tone kinds and OFDM: link protocol 10 | accepted |
+| [0082](0082-the-ofdm-receiver-follows-a-channel-that-moves-within-the-frame.md) | The OFDM receiver follows a channel that moves within the frame | accepted |
+| [0083](0083-a-tone-frame-is-not-refused-for-its-faded-sync-tones.md) | A tone frame is not refused for its faded sync tones | accepted |
+| [0084](0084-a-burst-that-failed-in-part-moves-the-margin-by-its-share.md) | A burst that failed in part moves the margin by its share; thresholds per channel class measured and rejected | accepted |

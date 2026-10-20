@@ -1952,6 +1952,41 @@ entry (an air-like namespace with `tone_control`/`tone_data`); `bench_tone` keep
 memory until it ends, so a long run belongs in the background with a two-hour timeout, or in a
 driver that appends each point as it finishes.
 
+**Fast fading and partial failures (2026-10-20, P9-14; ADR-0082, ADR-0083, ADR-0084; no wire
+change).** The three items ADR-0081 left open. *ADR-0082*: the OFDM receiver's three-symbol pilot
+average (a third each) had averaged a flutter channel that turns over in three symbols, and its
+own error was the frame's noise. Now `FrameReceiver._motion` reads the noise from the full pilot
+symbols' second difference across frequency (over six) and the motion from the comb pilots' second
+difference in time (`D2`, the median over symbols, so impulses are not motion), and where
+`D2 − 6·noise` ≥ `MOTION_SHARE` (0.1) of the pilots' power and `w = 2·noise/D2` ≤
+`MOTION_WEIGHT_MAX` (0.2) it re-estimates with `[w, 1 − 2w, w]` (`_follow`), scales the noise
+figures to `noise·(5/3 − 2w)` (never above the steady estimate's) and reports the SNR against
+that; `ReceivedFrame.motion_weight`. A steady frame is received bit for bit as before (the chips
+are read from the steady estimate first). 500 Hz flutter +10 dB: 16-QAM ½ 6 → 18 of 20, reading
+−3.2 → +2.0 dB; 2 300 Hz follows from ~+10 dB. The OFDM receiver had no model vectors below the
+payload: `phy_vectors.json`'s `ofdm_receive` (SplitMix64 noise, `ofdm_rays` with delay and
+Doppler beating, both branches, both airs) holds `rx.rs` to the model's weight, offset, SNR,
+symbols and noise. The peak reduction (ADR-0004) puts a −15…−20 dB floor in the full pilot symbols
+on 2 300 Hz: it is in both second differences and cancels in the motion. *ADR-0083*: a tone frame
+all three of whose sync blocks hold it (`FADED_BLOCK_HITS` 5 of 8) counts only contradictions at
+`CONTRADICTION_SHARE` (0.5) of its own sync level or more (`confirmed`; `_block_contradictions(…,
+share)`, `block_contradictions_in(…, share)`; both constants through `preamble_tables.json`):
+flutter's faded sync tones leave leakage at a tenth of the level, a ghost's contradictions are a
+real frame's tones at its level, and ADR-0014's early reading (contradicted at a fifth by a fast
+kind's data) has an empty first block. Four-tone frames on flutter +3 … +9 dB 52–58 → 60 of 60; no
+new false frame in 1 152 strong transmissions. *ADR-0084*: thresholds per channel class, measured
+first with the class known (the fading pipe's 10 % FER points), lost 5–47 % on the link bench —
+HARQ's operating point is not a 10 % FER point. The cost was the controller's reaction to one lost
+frame of six (the margin 3 → 6 dB, rung 3 → 1). `RateController.partial_share` (0.5): a burst
+that decoded some and lost fewer than half widens the margin by the share lost (the jump's cap
+too), keeps its rung unless the SNR no longer carries it, and resets the clean run; not on the
+first OFDM rung of an air with no floor margin cap (500 Hz, `_at_edge`), where the floor is the
+better exchange. Link bench (`bench/baselines/link_partial_failures.csv`, `partial_share=0.0` is
+beta.117): AWGN identical; 500 Hz up to +15 % (1 kB) / +30 % (8 kB), 2 300 Hz +11 % / +59 %; the
+longer the session the more, because the margin used to ratchet up on every partial failure.
+Tried and not built: a per-rung offset (no effect), an exchange-priced ladder (−12 % AWGN 0 dB).
+Open: Poor −6 dB at 1 kB (+0.6 %; a ladder capped at rung 3 would be +7 %).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

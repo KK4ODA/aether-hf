@@ -441,6 +441,29 @@ and Poor for three of them. Nothing is slower than beta.116; sessions from 0 to 
 fading classes run 8–20 % faster; against the receiver alone Poor at −6 dB is 2 % slower
 (ADR-0081 §3).
 
+## Fast fading and partial failures (`link_partial_failures.csv`, ADR-0082 … ADR-0084)
+
+Three receiver and controller changes after ADR-0081, measured with scratch benches whose numbers
+are in the ADRs: the OFDM receiver's time filter follows a channel that moves within the frame
+(ADR-0082: 500 Hz flutter +10 dB, 16-QAM ½ 6 → 18 of 20 frames, the reading −3.2 → +2.0 dB;
+steady frames bit for bit as before), and the tone detector keeps a frame whose faded sync tones
+leave weak contradictions (ADR-0083: four-tone frames on flutter at +3 … +9 dB 52–58 → 60 of
+60). `link_partial_failures.csv` is the link bench on the fading pipe for the third (ADR-0084):
+a burst that lost fewer than half its frames moves the margin by the share lost. Two arms per
+point, the same seeds: `beta.117` (`partial_share=0.0`) and `this ADR`; both airs, 1 kB and 8 kB
+sessions:
+
+| | 1 kB | 8 kB |
+|---|---|---|
+| 500 Hz, fading classes | −1 … +15 % | −1 … +30 % |
+| 2 300 Hz, fading classes | −1 … +11 % | −5 … +59 % |
+| AWGN, both airs | identical | identical |
+
+Every session of both arms completed. The one loss past a percent, 2 300 Hz Moderate 0 dB on
+8 kB sessions (−5 %, z −1.7), read −2.4 % (z −0.8) in a second run. Thresholds per channel
+class, the class known (its 10 % FER points from `fading_pipe.csv`), lost 5–47 % on the same
+bench (ADR-0084 §1).
+
 ## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
 
 `calls.csv` is `tools/bench_calls.py`: per air, class and SNR, 30 calls and 30 probes on the
