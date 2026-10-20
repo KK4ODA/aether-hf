@@ -1,0 +1,33 @@
+name = "40m-drifting-rig-500"
+description = """40 m at 500 Hz on a weak path, with an old rig at one end that keeps drifting as it
+warms: 100 Hz off at the start and 0.4 Hz/s, past the tone floor's ±150 Hz search two minutes in.
+The path is weak enough that the session runs on the floor; the other station's receiver has to
+follow the rig to keep hearing it (ADR-0079)."""
+tags = ["40m", "stress"]
+bandwidth = 500
+seconds = 1500
+seed = 79
+
+[stations.a]
+callsign = "KK4ODA"
+[stations.b]
+callsign = "KE4QCM"
+
+[path]
+profile = "good"
+snr_db = -4.0
+cfo_hz = -100.0
+cfo_drift_hz_per_s = -0.4
+[path.b_to_a]
+cfo_hz = 100.0
+cfo_drift_hz_per_s = 0.4
+
+[script]
+steps = ["probe", "connect", "message 1000", "reply 500", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 5

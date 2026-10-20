@@ -741,6 +741,28 @@ fn the_audio_front_end_matches_the_model() {
             index * stride
         );
     }
+
+    // the receive mixer moved to a peer's offset partway through (ADR-0079)
+    let mut moved = AudioToBaseband::new(WIDE_2300);
+    let half = int(case, "moved_after_audio");
+    let mut back = moved.process(&audio[..half]);
+    moved.set_offset_hz(case["moved_offset_hz"].as_f64().expect("moved_offset_hz"));
+    back.extend(moved.process(&audio[half..]));
+    let want_moved = case["baseband_moved"].as_array().expect("baseband_moved");
+    assert_eq!(
+        back.len().div_ceil(stride),
+        want_moved.len(),
+        "moved length"
+    );
+    for (index, want) in want_moved.iter().enumerate() {
+        let (wr, wi) = (want[0].as_f64().expect("re"), want[1].as_f64().expect("im"));
+        let (gr, gi) = back[index * stride];
+        assert!(
+            (gr - wr).abs() < 1e-6 && (gi - wi).abs() < 1e-6,
+            "moved sample {}: ({gr}, {gi}) vs ({wr}, {wi})",
+            index * stride
+        );
+    }
 }
 
 /// The same deterministic blanker input the generator builds: silence, then a burst with a

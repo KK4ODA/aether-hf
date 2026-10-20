@@ -1889,6 +1889,29 @@ with `LinkEngine`, excluded from lint like the audit probes (`git worktree add .
 886f102`). `docs/spec/air-interface.md` §3.2, §7 and §9 now describe protocol 9 (granted slots,
 the exact counts, the control frame, measurement frames); they had described protocol 7.
 
+**Three timing debts (2026-10-20, after Step 5).** *The Test's deadlines*: the probe's and the
+call's own timeouts count from the transmission, not from the step's start: a station that
+waits for a clear channel holds them meanwhile (`Station::held_total_s`, `TestRun::held_at_step`,
+`step_elapsed_s`), and the Test's ten minutes still bound a channel that never clears ("aborted:
+out of time, the channel busy N s"). *The keying gate after the key* (ADR-0071 §6, report 12
+change 6): at the key a transmission with a `not_after` gets a limit on the wall clock; at the
+run loop's next report of where the card drains the station hands the card where its first
+radiating sample sits on the card's clock (`OnsetGuard`, `take_onset_guard`,
+`AudioIo::guard_onset`), and the playback callback that holds it places it by its own timestamps
+and, past the limit, empties the queue unplayed; the run loop reads the drop
+(`AudioIo::take_onset_drop`, `read_card`) and the station releases the key and drops it as the
+gate does (`card_dropped_late`). Only the sound card holds anything to it: the lockstep channel
+and `[sim]` keep no wall-clock time. *Following a station off frequency* (ADR-0079, ADR-0064's
+open step; model first): the receive mixer has an offset (`AudioToBaseband.offset_hz` /
+`set_offset_hz`, bit-exact at 0, the `baseband_moved` vector); `station/centre.rs` moves it onto
+the session's station, by what its last decoded frame measured, only at this station's own key
+(deaf), by 10 Hz or more, only in `Connected`/`Disconnecting` (a call goes from the dial), and
+back on the dial once idle and nothing is arriving; frame offsets are reported true (measured +
+the mixer's where the frame began); `receiver` log lines; `rx_offset` recording events, which the
+replay follows (`CentreMove`). The test harness's `Air::with_rig_offset` shifts one rig's audio
+through the wide chain. Scenario `40m-drifting-rig-500` (weak, on the floor, 100 Hz off drifting
+0.4 Hz/s) is ADR-0079's measurement.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

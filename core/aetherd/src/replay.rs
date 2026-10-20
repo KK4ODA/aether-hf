@@ -40,6 +40,16 @@ pub struct AirChange {
     pub bandwidth_hz: u32,
 }
 
+/// A move of the receive mixer during a recording (ADR-0079): from `at_s` on the station was
+/// centred `hz` off the dial, on the station it was in session with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CentreMove {
+    /// When, in seconds of the recording.
+    pub at_s: f64,
+    /// The offset from then on, in hertz.
+    pub hz: f64,
+}
+
 /// What a sidecar says a replay should reproduce.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Expectation {
@@ -53,6 +63,9 @@ pub struct Expectation {
     /// Where it moved to the other bandwidth, in order: a host program's `BW` command or a
     /// call in the narrower one (ADR-0026). Empty for most recordings.
     pub airs: Vec<AirChange>,
+    /// Where its receiver moved onto, or off, a station off frequency, in order (ADR-0079).
+    /// Empty for most recordings.
+    pub centres: Vec<CentreMove>,
 }
 
 impl Expectation {
@@ -75,9 +88,20 @@ impl Expectation {
             .map_err(|e| format!("{}: frames: {e}", path.display()))?;
         let mut muted = Vec::new();
         let mut airs = Vec::new();
+        let mut centres = Vec::new();
         let mut keyed_at: Option<f64> = None;
         for event in document["events"].as_array().into_iter().flatten() {
             let t = event["t_s"].as_f64().unwrap_or(0.0);
+            if event["event"] == "rx_offset" {
+                if let Some(hz) = event["detail"]
+                    .as_str()
+                    .and_then(|detail| detail.parse::<f64>().ok())
+                    .filter(|hz| hz.is_finite())
+                {
+                    centres.push(CentreMove { at_s: t, hz });
+                }
+                continue;
+            }
             if event["event"] == "air" {
                 if let Some(hz) = event["detail"]
                     .as_str()
@@ -117,6 +141,7 @@ impl Expectation {
             muted,
             bandwidth_hz,
             airs,
+            centres,
         })
     }
 }
@@ -152,6 +177,7 @@ pub fn replay_expecting(
         params,
         &expectation.muted,
         &airs,
+        &expectation.centres,
         block_s,
     ))
 }
@@ -231,16 +257,19 @@ pub fn run_timed(
     muted: &[Muted],
     block_s: f64,
 ) -> (Vec<FrameRecord>, BlockTiming) {
-    run_moving(samples, params, muted, &[], block_s)
+    run_moving(samples, params, muted, &[], &[], block_s)
 }
 
 /// The receiver as the station ran it: a new front end and receiver wherever `airs` says the
-/// station moved to another waveform (ADR-0026), counting from there as the live one did.
+/// station moved to another waveform (ADR-0026), counting from there as the live one did, and
+/// the receive mixer moved wherever `centres` says (ADR-0079) — at the first block from then,
+/// as the live one moved between two of its blocks.
 fn run_moving(
     samples: &[f32],
     params: WaveformParams,
     muted: &[Muted],
     airs: &[(f64, WaveformParams)],
+    centres: &[CentreMove],
     block_s: f64,
 ) -> (Vec<FrameRecord>, BlockTiming) {
     let mut timing = BlockTiming {
@@ -259,6 +288,10 @@ fn run_moving(
     let mut origin = 0usize;
     let mut baseband_seen = 0usize;
     let mut next_air = 0usize;
+    let mut next_centre = 0usize;
+    // the moves made, each from where it took effect: a frame's offset is read from the one in
+    // force where it began
+    let mut centred: Vec<(f64, f64)> = Vec::new();
     let block = ((block_s * params.audio_rate as f64) as usize).max(1);
     let fs = params.fs_baseband;
     let rate = params.audio_rate as f64;
@@ -273,6 +306,15 @@ fn run_moving(
             air = aether_phy::modes::air_interface(moved);
             origin = baseband_seen;
             next_air += 1;
+            // a new front end starts on the dial, as the live one did
+            if centred.last().is_some_and(|&(_, hz)| hz != 0.0) {
+                centred.push((t, 0.0));
+            }
+        }
+        while let Some(change) = centres.get(next_centre).filter(|c| c.at_s <= t) {
+            front.set_offset_hz(change.hz);
+            centred.push((t, change.hz));
+            next_centre += 1;
         }
         let baseband = front.process(chunk);
         seen += chunk.len();
@@ -281,9 +323,25 @@ fn run_moving(
         let deaf = muted.iter().any(|m| t >= m.from_s && t < m.until_s);
         if deaf {
             let silence = vec![(0.0, 0.0); baseband.len()];
-            absorb(&silence, &mut receiver, &air, origin, fs, &mut found);
+            absorb(
+                &silence,
+                &mut receiver,
+                &air,
+                origin,
+                fs,
+                &centred,
+                &mut found,
+            );
         } else {
-            absorb(&baseband, &mut receiver, &air, origin, fs, &mut found);
+            absorb(
+                &baseband,
+                &mut receiver,
+                &air,
+                origin,
+                fs,
+                &centred,
+                &mut found,
+            );
         }
         baseband_seen += baseband.len();
         let ms = began.elapsed().as_secs_f64() * 1000.0;
@@ -302,19 +360,29 @@ fn run_moving(
     // let the last frame out: the receiver holds samples back for its filters
     let tail = vec![0.0f32; block * 8];
     let baseband = front.process(&tail);
-    absorb(&baseband, &mut receiver, &air, origin, fs, &mut found);
+    absorb(
+        &baseband,
+        &mut receiver,
+        &air,
+        origin,
+        fs,
+        &centred,
+        &mut found,
+    );
     timing.total_ms = started.elapsed().as_secs_f64() * 1000.0;
     (found, timing)
 }
 
 /// Feed the receiver a block and keep what it found, in the sidecar's terms: `origin` is where
-/// this receiver's count starts in the recording's.
+/// this receiver's count starts in the recording's, and `centred` where its mixer moved, each
+/// from when, so a frame's offset is the true one as the station reported it.
 fn absorb(
     baseband: &[Complex],
     receiver: &mut StreamingReceiver,
     air: &aether_phy::modes::AirInterface,
     origin: usize,
     fs: f64,
+    centred: &[(f64, f64)],
     found: &mut Vec<FrameRecord>,
 ) {
     for decoded in receiver.feed(baseband) {
@@ -330,6 +398,11 @@ fn absorb(
         };
         let detected = decoded.frame.detect_confidence(air);
         let start = (origin + decoded.frame.start()) as f64 / fs;
+        let centre = centred
+            .iter()
+            .rev()
+            .find(|(from, _)| *from <= start)
+            .map_or(0.0, |&(_, hz)| hz);
         found.push(FrameRecord {
             t_s: start,
             start_s: Some(start),
@@ -347,7 +420,7 @@ fn absorb(
                 decoded.ok(),
                 decoded.frame.mode_confidence(),
                 detected,
-                decoded.frame.cfo_hz(),
+                decoded.frame.cfo_hz() + centre,
             ),
             confidence: decoded.frame.mode_confidence(),
             detect_confidence: detected,
@@ -446,7 +519,9 @@ mod tests {
                     {"t_s": 1.5, "event": "ptt", "detail": "keyed", "state": "Connected"},
                     {"t_s": 2.5, "event": "ptt", "detail": "released", "state": "Connected"},
                     {"t_s": 3.5, "event": "air", "detail": "500", "state": "Idle"},
-                    {"t_s": 4.0, "event": "ptt", "detail": "keyed", "state": "Connected"}
+                    {"t_s": 4.0, "event": "ptt", "detail": "keyed", "state": "Connected"},
+                    {"t_s": 4.0, "event": "rx_offset", "detail": "182.500", "state": "Connected"},
+                    {"t_s": 9.0, "event": "rx_offset", "detail": "0.000", "state": "Idle"}
                 ]
             })
             .to_string(),
@@ -476,7 +551,61 @@ mod tests {
                 bandwidth_hz: 500
             }]
         );
+        // and where its receiver moved onto a station off frequency, and back (ADR-0079)
+        assert_eq!(
+            expectation.centres,
+            vec![
+                CentreMove {
+                    at_s: 4.0,
+                    hz: 182.5
+                },
+                CentreMove { at_s: 9.0, hz: 0.0 }
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_whose_receiver_followed_a_station_off_frequency_replays_as_it_ran() {
+        // ADR-0079: a 500 Hz station 230 Hz off is past the tone floor's ±150 Hz search, and the
+        // station that followed it heard its frames; the replay moves its receiver where the
+        // sidecar says, finds them, and reports their offset true
+        let narrow = aether_phy::waveform::NARROW_500;
+        let mut modem = aether_phy::Modem::new(narrow, false);
+        let bytes = modem.air().ladder()[0].payload_bytes();
+        let payload: Vec<u8> = (0..bytes).map(|i| (i * 11 % 256) as u8).collect();
+        let frame = modem.rung_burst(&payload, 0, 0).expect("a floor frame");
+        // the other rig's offset, put on before the wide transmit chain so its band filter
+        // keeps all of it: the two waveforms share the centre and the rates
+        let off = 230.0;
+        let fs = narrow.fs_baseband;
+        let shifted: Vec<Complex> = frame
+            .iter()
+            .enumerate()
+            .map(|(i, &(re, im))| {
+                let phase = 2.0 * std::f64::consts::PI * off * i as f64 / fs;
+                let (sin, cos) = phase.sin_cos();
+                (re * cos - im * sin, re * sin + im * cos)
+            })
+            .collect();
+        let mut to_audio = aether_phy::BasebandToAudio::new(WIDE_2300);
+        let mut audio = vec![0.0f32; narrow.audio_rate];
+        audio.extend(to_audio.process(&shifted));
+        audio.extend(to_audio.flush());
+        audio.extend(vec![0.0f32; narrow.audio_rate]);
+        let audio: Vec<f32> = audio.iter().map(|x| x * 0.25).collect();
+
+        let (plain, _) = run_moving(&audio, narrow, &[], &[], &[], BLOCK_S);
+        assert!(!plain.iter().any(|f| f.decoded), "{plain:?}");
+        let followed = [CentreMove {
+            at_s: 0.5,
+            hz: 215.0,
+        }];
+        let (found, _) = run_moving(&audio, narrow, &[], &[], &followed, BLOCK_S);
+        let decoded: Vec<&FrameRecord> = found.iter().filter(|f| f.decoded).collect();
+        assert_eq!(decoded.len(), 1, "{found:?}");
+        let cfo = decoded[0].cfo_hz.expect("a decoded frame's offset");
+        assert!((cfo - off).abs() < 3.0, "reported {cfo:.1} Hz");
     }
 
     #[test]
@@ -503,13 +632,13 @@ mod tests {
         let wide = clip(WIDE_2300);
         let moved_at = wide.len() as f64 / WIDE_2300.audio_rate as f64;
         let audio: Vec<f32> = wide.iter().chain(clip(narrow).iter()).copied().collect();
-        let (found, _) = run_moving(&audio, WIDE_2300, &[], &[(moved_at, narrow)], BLOCK_S);
+        let (found, _) = run_moving(&audio, WIDE_2300, &[], &[(moved_at, narrow)], &[], BLOCK_S);
         let decoded: Vec<&FrameRecord> = found.iter().filter(|f| f.decoded).collect();
         assert_eq!(decoded.len(), 2, "{found:?}");
         assert!(decoded[0].t_s < moved_at, "{found:?}");
         assert!(decoded[1].t_s > moved_at + 0.5, "{found:?}");
         // without the move the wide receiver never decodes the narrow frame
-        let (unmoved, _) = run_moving(&audio, WIDE_2300, &[], &[], BLOCK_S);
+        let (unmoved, _) = run_moving(&audio, WIDE_2300, &[], &[], &[], BLOCK_S);
         assert_eq!(
             unmoved.iter().filter(|f| f.decoded).count(),
             1,

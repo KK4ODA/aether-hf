@@ -45,4 +45,4 @@ The tone detector searches **±150 Hz** of carrier offset (`MAX_CFO_HZ`).
   ±150 Hz. The vectors are unchanged.
 - A station more than 150 Hz off is still lost to the floor. Following the session peer's
   measured offset (centring the search on it) is the complete answer for a rig that keeps
-  drifting; it waits for a field report that needs it.
+  drifting; it waits for a field report that needs it. Built 2026-10-20 as ADR-0079.

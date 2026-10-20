@@ -138,6 +138,8 @@ pub struct AudioToBaseband {
     band: Fir<Complex>,
     phase: usize,
     n0: usize,
+    /// Where the receiver centres, from `centre_hz` ([`Self::set_offset_hz`]).
+    offset_hz: f64,
 }
 
 impl AudioToBaseband {
@@ -155,7 +157,23 @@ impl AudioToBaseband {
             params,
             phase: 0,
             n0: 0,
+            offset_hz: 0.0,
         }
+    }
+
+    /// Centre the receiver `hz` off `centre_hz`, from the next sample: on a session peer whose
+    /// rig is off frequency, so that the band filter and the detectors' searches follow it
+    /// (ADR-0079). A frame received with it set reads its offset from here — the true one is
+    /// this plus what the frame measures. The mixer's phase jumps where it moves, so it moves
+    /// only while no frame is arriving.
+    pub const fn set_offset_hz(&mut self, hz: f64) {
+        self.offset_hz = hz;
+    }
+
+    /// Where the receiver centres, from `centre_hz`.
+    #[must_use]
+    pub const fn offset_hz(&self) -> f64 {
+        self.offset_hz
     }
 
     /// Group delay from audio in to baseband out, in audio samples.
@@ -180,12 +198,13 @@ impl AudioToBaseband {
         }
         self.phase = index - filtered.len();
 
+        let centre = self.params.centre_hz + self.offset_hz;
         let mixed: Vec<Complex> = low
             .iter()
             .enumerate()
             .map(|(i, &x)| {
                 let t = (self.n0 + i) as f64 / self.params.fs_baseband;
-                let phase = -2.0 * std::f64::consts::PI * self.params.centre_hz * t;
+                let phase = -2.0 * std::f64::consts::PI * centre * t;
                 (x * phase.cos(), x * phase.sin())
             })
             .collect();
