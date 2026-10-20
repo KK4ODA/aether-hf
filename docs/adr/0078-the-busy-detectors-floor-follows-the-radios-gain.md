@@ -223,8 +223,9 @@ or more once (the 68 s of the rise itself) against six times (33–71 s). Where 
 busy and the old did not, a signal sits in the channel or on its edge. The corpus: the first and third
 draws judged identically to run 7, clip by clip; on the second, one clip more fails criterion 4 by
 0.005 dB (`G-noise-step+10`, a median sitting on the edge of a clip half of whose blocks both floors
-read 10 dB off; its floors differ by 0.1 dB once the hold has run out). The harness: `02-measurements.md`
-§7.
+read 10 dB off; its floors differ by 0.1 dB once the hold has run out). The harness, the ten
+scenarios of §3 on the same seeds: 30/30 (beta.114 24/30), no radiated overlap, nothing slower or
+failing by the nightly's trend rules (`02-measurements.md` §7).
 
 **Its price.** When the hold runs out on a wide signal that has lasted over a minute, the reference
 now takes it in with the floor; when the signal goes, the reading falls by its level and the floor is
