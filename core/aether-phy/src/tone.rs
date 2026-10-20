@@ -871,20 +871,235 @@ pub fn fast_metrics(
     let speed = kind.speed();
     let data_layout = vec![None; data.len() / tones];
     let data_noise = noise_level_of(data, &data_layout, tones);
-    let mut out = Vec::with_capacity(data.len());
-    let mut row = 0usize;
+    let energy: Vec<f64> = data.iter().map(|v| v / data_noise).collect();
+    let mut snr = Vec::with_capacity(data.len());
     for (slot, role) in layout.iter().enumerate() {
         if role.is_some() {
             continue;
         }
         for j in 0..speed {
             let at = slot as f64 + (j as f64 + 0.5) / speed as f64 - 0.5;
-            let snr = (interp(at, &centres, &levels) / speed as f64).max(0.1);
-            for k in 0..tones {
-                let energy = data[row * tones + k] / data_noise;
-                out.push(log_i0(2.0 * (energy * snr).sqrt()));
-            }
-            row += 1;
+            let level = (interp(at, &centres, &levels) / speed as f64).max(0.1);
+            snr.extend(std::iter::repeat_n(level, tones));
+        }
+    }
+    if tones > TRACKED_TONES {
+        return energy
+            .iter()
+            .zip(&snr)
+            .map(|(e, s)| log_i0(2.0 * (e * s).sqrt()))
+            .collect();
+    }
+    let held = tone_levels(&energy, &snr, tones);
+    tracked_metrics(&energy, &held, tones, fade_wobble(&e, layout))
+}
+
+/// The Nakagami order a frame's data is read at is this over its [`fade_wobble`]: a
+/// quarter-second window centred on each symbol follows a fade better than a straight line
+/// through a block of eight 40 ms symbols does (ADR-0080 §2.4).
+pub const FADE_SCALE: f64 = 2.0;
+/// Above this order the level read from the data is taken as known ([`tracked_metrics`]).
+pub const FADE_ORDER_MAX: usize = 8;
+
+/// How much the sync tones' energy moves within each block beyond a straight line through it
+/// and beyond the noise, in units of the block's level squared, averaged over the blocks (slot
+/// energies already divided by the noise): about 0 when the channel holds steady or fades
+/// smoothly over a block, about 1 when it goes through Rayleigh fades within one (ITU
+/// flutter). A block with a silent symbol or at most half the noise's level says nothing.
+#[must_use]
+pub fn fade_wobble(e: &[f64], layout: &[Option<usize>]) -> f64 {
+    let tones = TONE.tones;
+    let sync: Vec<(usize, usize)> = layout
+        .iter()
+        .enumerate()
+        .filter_map(|(s, role)| role.map(|t| (s, t)))
+        .collect();
+    let half = (SYNC_SYMBOLS - 1) as f64 / 2.0;
+    let k: Vec<f64> = (0..SYNC_SYMBOLS).map(|j| j as f64 - half).collect();
+    let kk: f64 = k.iter().map(|v| v * v).sum();
+    let mut out = Vec::new();
+    for block in sync.chunks(SYNC_SYMBOLS) {
+        if block
+            .iter()
+            .any(|&(s, _)| silent(&e[s * tones..(s + 1) * tones]))
+        {
+            continue;
+        }
+        let row: Vec<f64> = block.iter().map(|&(s, t)| e[s * tones + t]).collect();
+        let mean = row.iter().sum::<f64>() / row.len() as f64;
+        let level = mean - 1.0;
+        if level <= 0.5 {
+            continue;
+        }
+        let slope = k.iter().zip(&row).map(|(k, r)| k * (r - mean)).sum::<f64>() / kk;
+        let fit: Vec<f64> = k.iter().map(|k| mean + k * slope).collect();
+        let resid = row
+            .iter()
+            .zip(&fit)
+            .map(|(r, f)| (r - f) * (r - f))
+            .sum::<f64>()
+            / (SYNC_SYMBOLS - 2) as f64;
+        let floor = fit
+            .iter()
+            .map(|f| 1.0 + 2.0 * (f - 1.0).max(0.0))
+            .sum::<f64>()
+            / fit.len() as f64;
+        out.push((resid - floor) / (level * level));
+    }
+    if out.is_empty() {
+        0.0
+    } else {
+        out.iter().sum::<f64>() / out.len() as f64
+    }
+}
+
+/// Each tone's log-likelihood in each data symbol of a four-tone kind, from its energies over
+/// the noise and each tone's level read from the data ([`tone_levels`]), both symbols ×
+/// `tones`. Where the channel holds steady within a sync block, the known level's metric,
+/// `-s + log I0(2·sqrt(E·s))`; where it fades within one, the tone's power taken as
+/// Nakagami-distributed about its level, of order [`FADE_SCALE`] over the `wobble`
+/// ([`fade_wobble`]): `m·ln(m/(m+s)) + x + ln Σ_{k<m} C(m-1,k)·x^k/k!`, `x = E·s/(m+s)` —
+/// Rayleigh at `m = 1`. A silent symbol is no evidence for any tone.
+#[must_use]
+pub fn tracked_metrics(energy: &[f64], level: &[f64], tones: usize, wobble: f64) -> Vec<f64> {
+    let order = if wobble > 0.0 {
+        FADE_SCALE / wobble
+    } else {
+        f64::INFINITY
+    };
+    let known = order > FADE_ORDER_MAX as f64 + 0.5;
+    // half rounds up, as in the model
+    let m = if known {
+        0
+    } else {
+        ((order + 0.5).floor() as usize).clamp(1, FADE_ORDER_MAX)
+    };
+    let mut out = Vec::with_capacity(energy.len());
+    for (row, held) in energy.chunks_exact(tones).zip(level.chunks_exact(tones)) {
+        if silent(row) {
+            out.extend(std::iter::repeat_n(0.0, tones));
+            continue;
+        }
+        for (&e, &s) in row.iter().zip(held) {
+            out.push(if known {
+                -s + log_i0(2.0 * (e * s).sqrt())
+            } else {
+                nakagami(e, s, m)
+            });
+        }
+    }
+    out
+}
+
+/// The energy detector's log-likelihood of energy `e` over noise alone when the tone's power
+/// is Nakagami-distributed of whole order `m` about the level `s`.
+fn nakagami(e: f64, s: f64, m: usize) -> f64 {
+    let mf = m as f64;
+    let x = e * s / (mf + s);
+    let mut poly = 0.0;
+    for k in 0..m {
+        poly += binomial(m - 1, k) * x.powf(k as f64) / factorial(k);
+    }
+    mf * (mf / (mf + s)).ln() + x + poly.ln()
+}
+
+/// `n` choose `k`, exactly for the small numbers the metric takes.
+fn binomial(n: usize, k: usize) -> f64 {
+    (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+}
+
+/// `k!` for the small numbers the metric takes.
+fn factorial(k: usize) -> f64 {
+    (1..=k).map(|i| i as f64).product()
+}
+
+/// The most data tones whose levels the receiver reads from the data itself (ADR-0080): the
+/// 500 Hz air's four-tone kinds. A window of [`TRACK_WINDOW`] symbols sends each of four tones
+/// about six times; each of sixteen, one and a half — too few to tell a fade from noise.
+pub const TRACKED_TONES: usize = 4;
+/// Data symbols either side of each one, together, that its tones' levels are read over
+/// ([`tone_levels`]): a quarter second at 100 Bd. Moderate's fading turns over in about a
+/// second and Poor's in half that, while the sync blocks that set the level are 2.4 s apart.
+pub const TRACK_WINDOW: usize = 25;
+const TRACK_HALF: usize = TRACK_WINDOW / 2;
+/// The least SNR a tone is given: a tone in a deep fade still counts for something.
+const LEVEL_FLOOR: f64 = 0.05;
+/// The least total weight a level is divided by: a tone the window hardly ever sends.
+const WEIGHT_FLOOR: f64 = 0.025;
+
+/// Each tone's SNR at each data symbol of a four-tone kind (ADR-0080), from the data's
+/// energies over the noise and the sync blocks' level `snr`, both symbols × `tones`.
+///
+/// Each tone's level is read where it was probably sent: every tone's probability in every
+/// symbol under the sync blocks' level, each tone's energy less the noise's weighted by it and
+/// averaged over [`TRACK_WINDOW`] symbols; a silent symbol adds nothing. The figure is pulled
+/// toward the sync blocks' by how far the two disagree beyond its own noise, over the frame —
+/// on AWGN the sync blocks' level stands, in a fade the data's.
+#[must_use]
+pub fn tone_levels(energy: &[f64], snr: &[f64], tones: usize) -> Vec<f64> {
+    let rows = energy.len() / tones;
+    let mut weighted = vec![0.0; energy.len()];
+    let mut prob = vec![0.0; energy.len()];
+    for r in 0..rows {
+        let e = &energy[r * tones..(r + 1) * tones];
+        if silent(e) {
+            continue;
+        }
+        let m: Vec<f64> = (0..tones)
+            .map(|t| log_i0(2.0 * (e[t] * snr[r * tones + t]).sqrt()))
+            .collect();
+        let top = m.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let x: Vec<f64> = m.iter().map(|v| (v - top).exp()).collect();
+        let total: f64 = x.iter().sum();
+        for t in 0..tones {
+            let p = x[t] / total;
+            prob[r * tones + t] = p;
+            weighted[r * tones + t] = p * (e[t] - 1.0);
+        }
+    }
+    let weight = window_sums(&prob, tones, TRACK_HALF);
+    let found: Vec<f64> = window_sums(&weighted, tones, TRACK_HALF)
+        .iter()
+        .zip(&weight)
+        .map(|(n, w)| (n / w.max(WEIGHT_FLOOR)).max(LEVEL_FLOOR))
+        .collect();
+    let count = found.len() as f64;
+    let noise = found
+        .iter()
+        .zip(&weight)
+        .map(|(f, w)| (1.0 + 2.0 * f) / w.max(1.0))
+        .sum::<f64>()
+        / count;
+    let spread = found
+        .iter()
+        .zip(snr)
+        .map(|(f, s)| (f - s) * (f - s))
+        .sum::<f64>()
+        / count;
+    let keep = (1.0 - noise / spread.max(1e-9)).max(0.0);
+    found
+        .iter()
+        .zip(snr)
+        .map(|(f, s)| s + keep * (f - s))
+        .collect()
+}
+
+/// Each row's sum with the `half` rows either side of it, clipped at the ends — by running
+/// sums, as the model takes them.
+fn window_sums(x: &[f64], tones: usize, half: usize) -> Vec<f64> {
+    let rows = x.len() / tones;
+    let mut running = vec![0.0; (rows + 1) * tones];
+    for r in 0..rows {
+        for t in 0..tones {
+            running[(r + 1) * tones + t] = running[r * tones + t] + x[r * tones + t];
+        }
+    }
+    let mut out = Vec::with_capacity(x.len());
+    for r in 0..rows {
+        let hi = (r + half + 1).min(rows);
+        let lo = r.saturating_sub(half);
+        for t in 0..tones {
+            out.push(running[hi * tones + t] - running[lo * tones + t]);
         }
     }
     out
@@ -2199,13 +2414,14 @@ mod tests {
         }
         assert!((fast_kinds()[3].data_tone_hz(15) - 750.0).abs() < 1e-12);
         // ADR-0015: the narrow middle kinds are the floor's frame with four data symbols a
-        // slot on four tones 100 Hz apart, inside the floor's 400 Hz — 880 coded bits
+        // slot on four tones 100 Hz apart, inside the floor's 400 Hz — 880 coded bits; the
+        // third, tone4x100-93, since ADR-0081
         assert_eq!(
             narrow_kinds()
                 .iter()
                 .map(|k| (k.payload_bytes, k.speed(), k.data_tones, k.coded_bits()))
                 .collect::<Vec<_>>(),
-            vec![(51, 4, 4, 880), (75, 4, 4, 880)]
+            vec![(51, 4, 4, 880), (75, 4, 4, 880), (93, 4, 4, 880)]
         );
         for kind in narrow_kinds() {
             assert_eq!(kind.symbols(), 134);
@@ -2214,7 +2430,7 @@ mod tests {
             let span = kind.data_tone_hz(3) - kind.data_tone_hz(0);
             assert!((kind.data_tone_hz(0) + 150.0).abs() < 1e-12 && (span - 300.0).abs() < 1e-12);
         }
-        assert_eq!(all_kinds().len(), 9);
+        assert_eq!(all_kinds().len(), 10);
     }
 
     #[test]

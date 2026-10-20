@@ -242,8 +242,10 @@ seconds — on a Yaesu over CAT `agc` (as it runs: `OFF`, `FAST`, `MID`, `SLOW`,
 index; its hertz depend on the mode), `rf_gain` (0–255), `attenuator` and `preamp` (`IPO`,
 `AMP 1`, `AMP 2`), the FTDX10's published `GT`, `MD`, `SH`, `RG`, `RA` and `PA` commands; none on
 other radios. A radio that leaves eight S-meter questions in a row unanswered is not asked for it
-again in that recording, and a log line says so. The sidecar's `format` is `aether-hf-session/4`
-(the `radio` object and the `mark` events are additions a reader of an older one may ignore).
+again in that recording, and a log line says so. The sidecar's `format` is `aether-hf-session/5`
+(the `radio` object and the `mark` events are additions a reader of an older one may ignore; `/5`
+differs from `/4` only in what a 500 Hz frame's `mode` 4 names: tone4x100-93 where it was QPSK ⅓,
+ADR-0081).
 `status` carries `recording` while one runs — its `path`, `seconds` so far, `marks` pressed,
 `meter_readings` kept and `reads_meter`, whether the keying interface reads the S-meter at all. With `[record] auto = true` every session records itself
 from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remote>`.

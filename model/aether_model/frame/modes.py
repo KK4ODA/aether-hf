@@ -200,9 +200,11 @@ NARROW_MODES: tuple[Mode, ...] = (
 """The 500 Hz OFDM mode table, most robust first. Modes 0 and 1 were the OFDM floor family's
 (ADR-0009): QPSK 1/10 and ⅕ on a frame four times as long, until the tone floor (ADR-0013)
 replaced them — they stay in the table only because an OFDM frame's chip sequence is indexed
-by its position in it, and are on no rung of the ladder. Mode 2, QPSK ⅓, is the ladder's
-first OFDM rung. Mode 3 is QPSK ½: the slowest mode whose SHORT frame carries a control
-frame and whose LONG frame carries a connect request, and — with the narrow waveform's
+by its position in it, and are on no rung of the ladder. Mode 2, QPSK ⅓, was the ladder's
+first OFDM rung until tone4x100-93 took its place (ADR-0081): after its header it carried less
+than the tone kind under it from 7 dB more, and is on no rung either. Mode 3 is QPSK ½: the
+slowest mode whose SHORT frame carries a control frame and whose LONG frame carries a connect
+request, and — with the narrow waveform's
 per-carrier advantage — one that reaches about the same 3 kHz SNR as the wide table's BPSK
 ⅕; ordinary control frames go out at it, and a connect request's ordinary tries (beacons,
 probes and a request's first try go out on the tone floor, ADR-0016). Thirteen modes is what
@@ -314,6 +316,10 @@ SYNC_PATTERNS: tuple[tuple[int, ...], ...] = (
     (6, 13, 5, 14, 10, 4, 2, 15),
     (0, 3, 1, 5, 11, 12, 14, 4),
     (4, 13, 11, 0, 8, 15, 2, 14),
+    (5, 12, 7, 15, 4, 6, 0, 1),
+    (9, 12, 14, 2, 1, 5, 15, 0),
+    (0, 2, 7, 4, 15, 8, 12, 1),
+    (5, 3, 13, 14, 0, 15, 2, 7),
 )
 """The tone floor's sync blocks: eight symbols over sixteen tones, each a *Costas sequence* —
 every displacement (Δsymbol, Δtone) between two of its symbols occurs once, so a shifted
@@ -325,8 +331,8 @@ apart put nine of a frame's 24 sync symbols on a hypothesis of the other kind re
 symbols early — which, with the data's coincidences on top, passed for a frame. The first
 is the control frame's; then four for each data kind, one per redundancy version, in the
 order of :data:`TONE_DATA`, :data:`TONE_FAST` and :data:`TONE_NARROW` — each family's are
-the same search carried on (ADR-0014, ADR-0015), so the earlier ones never change. Drawn by
-:func:`search_sync_patterns` and pinned: they are part of the air interface."""
+the same search carried on (ADR-0014, ADR-0015, ADR-0081), so the earlier ones never change.
+Drawn by :func:`search_sync_patterns` and pinned: they are part of the air interface."""
 PATTERN_SHIFT = 8
 """Tone shifts over which :data:`SYNC_PATTERNS` are mutually distinct."""
 PATTERN_CROSS = 2
@@ -360,14 +366,15 @@ def cross_hits(
 
 
 def search_sync_patterns(
-    count: int, symbols: int = SYNC_SYMBOLS, tones: int = 16, draws: int = 5_000_000
+    count: int, symbols: int = SYNC_SYMBOLS, tones: int = 16, draws: int = 25_000_000
 ) -> tuple[tuple[int, ...], ...]:
     """How :data:`SYNC_PATTERNS` were drawn: random selections of ``symbols`` distinct tones
     from a seeded generator, kept if Costas (:func:`is_costas`) and within
     :data:`PATTERN_CROSS` of every earlier one (:func:`cross_hits`, over every offset).
 
-    The later patterns lie millions of draws in — the 33rd at 4.45 million — so the search
-    runs a batch at a time and never one pair at a time: ``permuted`` shuffles each row of a
+    The later patterns lie millions of draws in — the 33rd at 4.45 million, the 37th at 21.3
+    million (ADR-0081) — so the search runs a batch at a time and never one pair at a time:
+    ``permuted`` shuffles each row of a
     batch exactly as successive ``permutation`` calls would, from the same generator, and
     both tests are vectorised. A block is Costas when no two of its displacements *the same
     distance apart* are equal: one bit per tone difference, the sum of a distance's bits
@@ -557,10 +564,16 @@ blocks, its 5.36 s — with two or four data symbols a slot, at the floor's two 
 TONE_NARROW: tuple[ToneKind, ...] = (
     ToneKind("tone4x100-51", 51, 440, (25, 26, 27, 28), data_num=QUAD100),
     ToneKind("tone4x100-75", 75, 440, (29, 30, 31, 32), data_num=QUAD100),
+    ToneKind("tone4x100-93", 93, 440, (33, 34, 35, 36), data_num=QUAD100),
 )
-"""The 500 Hz air's middle rungs (ADR-0015): the floor's frame with four data symbols a slot
-on :data:`QUAD100`'s four tones — 880 coded bits, as the 50 Bd fast kinds have, at the
-floor's two code rates: 51 and 75 bytes (76 and 112 bit/s)."""
+"""The 500 Hz air's middle rungs (ADR-0015, ADR-0081): the floor's frame with four data
+symbols a slot on :data:`QUAD100`'s four tones — 880 coded bits, as the 50 Bd fast kinds
+have — at the floor's two code rates, 51 and 75 bytes (76 and 112 bit/s), and at 0.87: 93
+bytes (139 bit/s), the rung between tone4x100-75 and the first OFDM one. ADR-0015 measured
+this rate and did not build it — it fell off a cliff on the fading classes — and it is the
+receiver that reads each tone's level from the data (ADR-0080) that brings it back: through
+the detector −2.2 dB on Moderate and −3.8 on Poor, where the receiver before reached −0.9 and
++1.6 with genie timing."""
 
 
 # ── the ladder ────────────────────────────────────────────────────────
@@ -723,7 +736,7 @@ NARROW = AirInterface(
     NARROW_MODES,
     0.25,
     0.56,
-    ofdm_ladder=tuple(range(2, len(NARROW_MODES))),
+    ofdm_ladder=tuple(range(3, len(NARROW_MODES))),
     control_mode_index=NARROW_CONTROL_MODE_INDEX,
     tone_data=(*TONE_DATA, *TONE_NARROW),
 )

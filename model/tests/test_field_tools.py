@@ -129,20 +129,38 @@ def test_a_sidecar_from_before_the_ladder_is_read_onto_it(tmp_path: Path) -> Non
     were the retired OFDM floor, which is on no rung, and modes 2–12 sit two rungs up, above
     the narrow middle kinds (ADR-0015). One recorded with the tone floor and before the fast
     kinds (``/2``) numbered the wide ladder's rungs from 2 up four lower; one from before the
-    narrow middle kinds (``/2``, ``/3``) the narrow ladder's from 2 up two lower."""
+    narrow middle kinds (``/2``, ``/3``) the narrow ladder's from 2 up two lower. QPSK ⅓, the
+    narrow rung 4 from ``/4`` on, is on no rung since tone4x100-93 took its place (``/5``)."""
     legacy = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 2300}}
     assert [field_ingest.sidecar_rung(legacy, m) for m in (0, 5, 13)] == [6, 11, 19]
     narrow = {"format": "aether-hf-session/1", "session": {"bandwidth_hz": 500}}
-    assert [field_ingest.sidecar_rung(narrow, m) for m in (0, 1, 2, 12)] == [None, None, 4, 14]
+    assert [field_ingest.sidecar_rung(narrow, m) for m in (0, 1, 2, 3, 12)] == [
+        None,
+        None,
+        None,
+        5,
+        14,
+    ]
     floor = {"format": "aether-hf-session/2", "session": {"bandwidth_hz": 2300}}
     assert [field_ingest.sidecar_rung(floor, m) for m in (0, 1, 2, 15)] == [0, 1, 6, 19]
     for fmt in ("aether-hf-session/2", "aether-hf-session/3"):
         before = {"format": fmt, "session": {"bandwidth_hz": 500}}
-        assert [field_ingest.sidecar_rung(before, m) for m in (0, 1, 2, 12)] == [0, 1, 4, 14]
+        assert [field_ingest.sidecar_rung(before, m) for m in (0, 1, 2, 3, 12)] == [
+            0,
+            1,
+            None,
+            5,
+            14,
+        ]
+    # QPSK 1/3, the 500 Hz rung 4 until tone4x100-93 took it (ADR-0081), is on no rung
+    middle = {"format": "aether-hf-session/4", "session": {"bandwidth_hz": 500}}
+    assert [field_ingest.sidecar_rung(middle, m) for m in (3, 4, 5)] == [3, None, 5]
+    middle_wide = {"format": "aether-hf-session/4", "session": {"bandwidth_hz": 2300}}
+    assert [field_ingest.sidecar_rung(middle_wide, m) for m in (4, 19)] == [4, 19]
     fast = {"format": "aether-hf-session/3", "session": {"bandwidth_hz": 2300}}
     assert [field_ingest.sidecar_rung(fast, m) for m in (0, 2, 19)] == [0, 2, 19]
     for bandwidth, top in ((2300, 19), (500, 14)):
-        current = {"format": "aether-hf-session/4", "session": {"bandwidth_hz": bandwidth}}
+        current = {"format": "aether-hf-session/5", "session": {"bandwidth_hz": bandwidth}}
         assert [field_ingest.sidecar_rung(current, m) for m in (0, 2, top)] == [0, 2, top]
     document = json.loads(_sidecar(tmp_path).read_text(encoding="utf-8"))
     document["format"] = "aether-hf-session/1"
@@ -235,24 +253,24 @@ def test_a_hypothetical_rung_takes_a_rungs_place_in_the_frame_it_borrows() -> No
     from aether_model.link.harness import phy_timing
     from aether_model.link.phy import Container, TxFrame
 
-    rung = bench_link.parse_rung("4=93@-9.1~3")
-    assert rung == bench_link.Hypothetical(4, 93, -9.1, 3)
+    rung = bench_link.parse_rung("5=110@-9.1~4")
+    assert rung == bench_link.Hypothetical(5, 110, -9.1, 4)
     assert bench_link.parse_rung("6=40@-4") == bench_link.Hypothetical(6, 40, -4.0, 6)
     timing = phy_timing(NARROW.params)
-    assert timing.floor_modes == 4
+    assert timing.floor_modes == 5
     moved = bench_link.with_rung(timing, rung)
-    # the floor is the ladder's leading rungs: a floor-like rung 4 extends it
-    assert moved.floor_modes == 5 and moved.data_frame_s_for(4) == timing.data_frame_s_for(3)
-    assert moved.capacity(4) == 93 and moved.mode_threshold_db is not None
-    assert moved.mode_threshold_db[4] == -9.1 and moved.capacity(5) == timing.capacity(5)
+    # the floor is the ladder's leading rungs: a floor-like rung 5 extends it
+    assert moved.floor_modes == 6 and moved.data_frame_s_for(5) == timing.data_frame_s_for(4)
+    assert moved.capacity(5) == 110 and moved.mode_threshold_db is not None
+    assert moved.mode_threshold_db[5] == -9.1 and moved.capacity(6) == timing.capacity(6)
     # an ordinary-like rung in the floor's last place shortens it
-    shorter = bench_link.with_rung(timing, bench_link.Hypothetical(3, 20, -10.0, 5))
-    assert shorter.floor_modes == 3 and shorter.data_frame_s_for(3) == timing.data_frame_s
+    shorter = bench_link.with_rung(timing, bench_link.Hypothetical(4, 20, -10.0, 6))
+    assert shorter.floor_modes == 4 and shorter.data_frame_s_for(4) == timing.data_frame_s
     with pytest.raises(ValueError):
-        bench_link.with_rung(timing, bench_link.Hypothetical(6, 50, -9.0, 3))
-    frame = TxFrame(Container.DATA, b"", mode=4)
-    assert bench_link.like_frame(frame, rung).mode == 3
-    assert bench_link.like_frame(TxFrame(Container.DATA, b"", mode=5), rung).mode == 5
+        bench_link.with_rung(timing, bench_link.Hypothetical(7, 50, -9.0, 3))
+    frame = TxFrame(Container.DATA, b"", mode=5)
+    assert bench_link.like_frame(frame, rung).mode == 4
+    assert bench_link.like_frame(TxFrame(Container.DATA, b"", mode=6), rung).mode == 6
     # a session runs on it, on the fading pipe too
     row = bench_link.run_point(
         "sim",

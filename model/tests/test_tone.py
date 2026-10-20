@@ -141,19 +141,22 @@ def test_the_narrow_middle_kinds_are_the_floors_frame_on_four_tones() -> None:
     """ADR-0015: the floor's frame again — its sync blocks, its 5.36 s, its two code rates —
     with four data symbols a slot on four tones 100 Hz apart, the floor's own 400 Hz: 880
     coded bits a frame, twice the floor's. The 500 Hz air's ladder runs through them between
-    the floor's kinds and the OFDM modes; the 2 300 Hz air never looks for them."""
-    assert [k.payload_bytes for k in M.TONE_NARROW] == [51, 75]
+    the floor's kinds and the OFDM modes; the 2 300 Hz air never looks for them. The third,
+    tone4x100-93 (ADR-0081), is the same frame at rate 0.87."""
+    assert [k.payload_bytes for k in M.TONE_NARROW] == [51, 75, 93]
     floor = M.TONE_DATA[0]
-    for k, slow in zip(M.TONE_NARROW, M.TONE_DATA, strict=True):
+    for k in M.TONE_NARROW:
         assert k.num == M.TONE_NUMEROLOGY and not k.control and len(k.patterns) == 4
         assert (k.data.tones, k.data.spacing_hz, k.data.span_hz, k.speed) == (4, 100.0, 400.0, 4)
         assert k.data.span_hz == k.num.span_hz
         assert k.data_slots == floor.data_slots and k.symbols == floor.symbols
         assert k.block_offsets == floor.block_offsets and k.samples == floor.samples
         assert k.coded_bits == 2 * floor.coded_bits == 880
+    for k, slow in zip(M.TONE_NARROW[:2], M.TONE_DATA, strict=True):
         assert k.info_bits == 2 * slow.info_bits and k.rate == pytest.approx(slow.rate)
+    assert M.TONE_NARROW[2].rate == pytest.approx(0.87, abs=0.005)
     ladder = (*M.TONE_DATA, *M.TONE_NARROW)
-    assert [round(k.net_bps) for k in ladder] == [36, 54, 76, 112]
+    assert [round(k.net_bps) for k in ladder] == [36, 54, 76, 112, 139]
     assert M.NARROW.tone_data == ladder
     assert not set(M.TONE_NARROW) & set(M.WIDE.tone_data)
 
@@ -542,8 +545,11 @@ def test_frames_decode_through_the_detector_near_the_floor(kind: M.ToneKind, snr
 
 
 @pytest.mark.slow
-def test_a_minute_of_noise_is_never_a_frame() -> None:
-    det = T.ToneDetector()
+@pytest.mark.parametrize("narrow", [False, True], ids=["2300", "500"])
+def test_a_minute_of_noise_is_never_a_frame(narrow: bool) -> None:
+    """Each air's detector, with every pattern it looks for: the 500 Hz air's four for
+    tone4x100-93 (ADR-0081) left its noise maximum where it was, 2.82–2.92 against 3.0."""
+    det = T.ToneDetector(NARROW_DETECTOR_KINDS) if narrow else T.ToneDetector()
     for seed in range(3):
         y = make_channel("awgn", snr_db=0.0, fs=8000.0, seed=300 + seed, signal_power=1.0).process(
             np.zeros(8000 * 60, complex)
@@ -810,6 +816,57 @@ def test_an_unconfirmed_frames_end_block_is_not_announced_as_a_frame(kind: M.Ton
         for a in stream.arriving:
             announced.setdefault(a.start, a.kind)
     assert len(announced) == 1 and abs(next(iter(announced)) - lead) <= 160, announced
+
+
+def test_the_sync_blocks_tell_a_steady_channel_from_flutter() -> None:
+    """ADR-0080 §2.4: the wobble of the sync tones about a straight line through each block is
+    about 0 where the channel holds or fades smoothly over a block, and about 1 on ITU flutter
+    (10 Hz), where the levels read from the data are only a window's mean."""
+    kind = M.TONE_NARROW[2]
+    rng = np.random.default_rng(31)
+    layout = kind.layout(0, 0)
+
+    def wobble(channel: str, seed: int) -> float:
+        y = _received(
+            kind, _payload(rng, kind), snr_db=6.0, lead=700, cfo_hz=0.0, seed=seed, channel=channel
+        )
+        e = T.tone_energies(y, 700, 0.0, kind.symbols, kind.num)
+        return T.fade_wobble(e / T.sync_noise(e, layout, kind), layout)
+
+    steady = [wobble("awgn", 40 + i) for i in range(4)]
+    flutter = [wobble("flutter", 50 + i) for i in range(4)]
+    assert max(abs(w) for w in steady) < 0.1, steady
+    assert min(flutter) > 0.4, flutter
+    # a silent symbol in a block leaves the block out; a muted symbol is no evidence
+    e = np.zeros((kind.symbols, M.TONE_NUMEROLOGY.tones))
+    assert T.fade_wobble(e, layout) == 0.0
+    levels = np.full((3, 4), 2.0)
+    data = np.array([[0.0, 0.0, 0.0, 0.0], [5.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]])
+    out = T.tracked_metrics(data, levels, 1.0)
+    assert (out[0] == 0).all() and (out[2] == 0).all() and out[1, 0] > out[1, 1]
+
+
+def test_a_four_tone_frame_on_flutter_reads_as_well_as_the_sync_blocks_level() -> None:
+    """ITU flutter turns the channel over within the quarter second the levels are read over.
+    With the known level's metric there, a tone in an instant's fade under a high mean was a
+    confident error — tone4x100-93 decoded 12 frames in 60 at 0 dB where the sync blocks'
+    common level decoded 60. The Nakagami metric at the frame's measured wobble reads it as
+    the common level did."""
+    kind = M.TONE_NARROW[2]
+    rng = np.random.default_rng(32)
+    ok = {0: 0, 4: 0}
+    try:
+        for i in range(12):
+            payload = _payload(rng, kind)
+            y = _received(
+                kind, payload, snr_db=3.0, lead=900, cfo_hz=0.0, seed=60 + i, channel="flutter"
+            )
+            for tracked in ok:
+                T.TRACKED_TONES = tracked
+                ok[tracked] += T.demodulate(y, kind, 0, 900, 0.0).decode()[0] == payload
+    finally:
+        T.TRACKED_TONES = 4
+    assert ok[4] >= ok[0] - 1 and ok[4] >= 10, ok
 
 
 def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:

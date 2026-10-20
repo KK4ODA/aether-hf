@@ -523,6 +523,120 @@ fn tone_frames_are_received_as_the_model_receives_them() {
     }
 }
 
+/// The model's `tone_envelope`: a sum of rays `amplitude·exp(j(2π·f·k/8000 + phase))`, or a
+/// gate of `floor` plus one where `cos(2π·f·k/8000)` is above `above`.
+fn tone_envelope(spec: &Value, n: usize) -> Vec<(f64, f64)> {
+    let tau = 2.0 * std::f64::consts::PI;
+    match spec["kind"].as_str().expect("envelope kind") {
+        "rays" => {
+            let rays: Vec<(f64, f64, f64)> = spec["rays"]
+                .as_array()
+                .expect("rays")
+                .iter()
+                .map(|r| {
+                    let r = r.as_array().expect("ray");
+                    (
+                        r[0].as_f64().expect("amplitude"),
+                        r[1].as_f64().expect("frequency"),
+                        r[2].as_f64().expect("phase"),
+                    )
+                })
+                .collect();
+            (0..n)
+                .map(|k| {
+                    rays.iter().fold((0.0, 0.0), |(re, im), &(a, f, p)| {
+                        let phase = tau * f * k as f64 / 8000.0 + p;
+                        (re + a * phase.cos(), im + a * phase.sin())
+                    })
+                })
+                .collect()
+        }
+        "gate" => {
+            let (floor, f, above) = (
+                float(spec, "floor"),
+                float(spec, "f_hz"),
+                float(spec, "above"),
+            );
+            (0..n)
+                .map(|k| {
+                    let on = (tau * f * k as f64 / 8000.0).cos() > above;
+                    (floor + if on { 1.0 } else { 0.0 }, 0.0)
+                })
+                .collect()
+        }
+        other => panic!("no envelope {other}"),
+    }
+}
+
+#[test]
+fn four_tone_frames_that_fade_within_a_block_are_read_as_the_model_reads_them() {
+    // ADR-0080 §2.4: a frame under an envelope that moves within a sync block is read with
+    // the Nakagami metric of the order its sync blocks' wobble gives — orders 4, 3 and 1 here
+    let doc = vectors();
+    let tolerance = float(&doc, "tone_llr_tolerance");
+    let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
+    let cases = doc["tone_faded"].as_array().expect("tone faded");
+    assert!(!cases.is_empty(), "cases is empty");
+    for case in cases {
+        let kind = tone_kind(case["kind"].as_str().expect("kind"));
+        let label = kind.name;
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let codec = tone::ToneCodec::new(kind).expect("codec");
+        let x = tone::burst(&codec, &payload, 0).expect("burst");
+        let (lead, n, cfo) = (
+            int(case, "lead"),
+            int(case, "n_samples"),
+            float(case, "cfo_hz"),
+        );
+        let mut y = vec![(0.0f64, 0.0f64); n];
+        y[lead..lead + x.len()].copy_from_slice(&x);
+        let tau = 2.0 * std::f64::consts::PI;
+        let envelope = tone_envelope(&case["envelope"], n);
+        for (k, ((sample, noise), env)) in y
+            .iter_mut()
+            .zip(tone_interference(n))
+            .zip(envelope)
+            .enumerate()
+        {
+            let faded = (
+                sample.0 * env.0 - sample.1 * env.1,
+                sample.0 * env.1 + sample.1 * env.0,
+            );
+            let phase = tau * cfo * k as f64 / 8000.0;
+            let (cos, sin) = (phase.cos(), phase.sin());
+            *sample = (
+                faded.0 * cos - faded.1 * sin + noise.0,
+                faded.0 * sin + faded.1 * cos + noise.1,
+            );
+        }
+        let layout = kind.layout(0);
+        let energies = tone::tone_energies(&y, lead, cfo, kind.symbols()).expect("in range");
+        let noise = tone::sync_noise(&energies, &layout, kind);
+        let normalised: Vec<f64> = energies.iter().map(|e| e / noise).collect();
+        let wobble = tone::fade_wobble(&normalised, &layout);
+        assert!(
+            close(wobble, float(case, "wobble")),
+            "{label}: wobble {wobble}"
+        );
+        let frame = tone::demodulate(&y, kind, 0, lead, cfo).expect("in range");
+        let want = case["llr"].as_array().expect("llr");
+        assert_eq!(frame.llr.len(), want.len(), "{label}: soft bits");
+        for (index, (got, w)) in frame.llr.iter().zip(want).enumerate() {
+            let w = w.as_f64().expect("llr");
+            assert!(
+                close(*got, w),
+                "{label}: soft bit {index} is {got}, the model has {w}"
+            );
+        }
+        let (decoded, _) = codec.decode(&frame.llr, 0, None).expect("decode");
+        assert_eq!(
+            decoded.as_deref() == Some(payload.as_slice()),
+            case["decoded"].as_bool().expect("decoded"),
+            "{label}: decoded"
+        );
+    }
+}
+
 #[test]
 fn whole_frames_match_the_model() {
     // The strongest check of the physical layer: build the same frame the model builds and

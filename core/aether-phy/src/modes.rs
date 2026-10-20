@@ -274,8 +274,9 @@ pub const NARROW_CONTROL_MODE: Mode = NARROW_MODES[NARROW_CONTROL_MODE_INDEX];
 
 /// The wide ladder's OFDM rungs: every mode of the table.
 const WIDE_OFDM_LADDER: [usize; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
-/// The narrow ladder's OFDM rungs: the table from QPSK ⅓ up.
-const NARROW_OFDM_LADDER: [usize; 11] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+/// The narrow ladder's OFDM rungs: the table from QPSK ½ up. QPSK ⅓ was the first until
+/// tone4x100-93 took its place (ADR-0081).
+const NARROW_OFDM_LADDER: [usize; 10] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 /// One step of an air's ladder — what the link layer, the rate controller and the operator
 /// call "mode N": a tone-floor kind, or an OFDM mode on the layout it goes out on.
@@ -676,22 +677,24 @@ mod tests {
                 .map(Rung::payload_bytes)
                 .collect::<Vec<_>>(),
             vec![
-                24, 36, 51, 75, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137
+                24, 36, 51, 75, 93, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137
             ]
         );
         assert_eq!(NARROW.n_rungs(), 15);
         assert_eq!(NARROW.rung(2).name(), "tone4x100-51");
         assert_eq!(NARROW.rung(3).name(), "tone4x100-75");
-        assert_eq!((WIDE.floor_modes(), NARROW.floor_modes()), (6, 4));
+        assert_eq!(NARROW.rung(4).name(), "tone4x100-93");
+        assert_eq!((WIDE.floor_modes(), NARROW.floor_modes()), (6, 5));
         assert_eq!((WIDE.control_rung(), NARROW.control_rung()), (6, 5));
         assert_eq!(NARROW.rung_of(0), None);
-        assert_eq!(NARROW.rung_of(2), Some(4));
+        assert_eq!(NARROW.rung_of(2), None);
+        assert_eq!(NARROW.rung_of(3), Some(5));
         assert!(WIDE.is_floor(5) && !WIDE.is_floor(6));
-        assert!(NARROW.is_floor(3) && !NARROW.is_floor(4));
+        assert!(NARROW.is_floor(4) && !NARROW.is_floor(5));
         assert_eq!(WIDE.rung(6).ofdm_mode(), Some(MODES[0]));
         assert!(NARROW.rung(0).is_floor());
         assert_eq!(WIDE.tone_kinds().len(), 7);
-        assert_eq!(NARROW.tone_kinds().len(), 5);
+        assert_eq!(NARROW.tone_kinds().len(), 6);
         // bytes per second climb the ladder, which is what the rate controller steps along —
         // but for the first OFDM rung of the wide air, which its fastest tone kind beats and
         // which stays on the ladder as the ordinary family's robust mode

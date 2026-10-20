@@ -26,8 +26,14 @@ use serde_json::{Value, json};
 /// The sidecar's `format` field: bumped when its shape or the meaning of its numbers changes
 /// — `/3` since the fast kinds (ADR-0014) put four more rungs on the 2 300 Hz ladder, `/4`
 /// since the narrow middle kinds (ADR-0015) put two more on the 500 Hz one, so a mode number
-/// means another frame there than in an earlier sidecar.
-pub const FORMAT: &str = "aether-hf-session/4";
+/// means another frame there than in an earlier sidecar, `/5` since tone4x100-93 (ADR-0081)
+/// took the 500 Hz rung 4 from QPSK ⅓.
+pub const FORMAT: &str = "aether-hf-session/5";
+
+/// The formats the replay reads ([`crate::replay`]): this one, and `/4`, whose only difference
+/// is what a 500 Hz rung 4 names — the replay decodes the audio afresh, and a QPSK ⅓ frame, on
+/// no rung of the ladder now, replays as the station drops it.
+pub const READS: [&str; 2] = [FORMAT, "aether-hf-session/4"];
 
 /// One frame the receiver found, as the sidecar records it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

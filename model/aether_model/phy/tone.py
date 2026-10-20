@@ -234,7 +234,128 @@ def fast_metrics(
     at = np.repeat(slots, speed) + (np.tile(np.arange(speed), len(slots)) + 0.5) / speed - 0.5
     s = np.maximum(np.interp(at, centres, levels) / speed, 0.1)
     e = data / noise_level(data, np.full(len(data), -1, dtype=np.int64))
-    return _log_i0(2.0 * np.sqrt(e * s[:, None]))
+    if kind.data.tones > TRACKED_TONES:
+        return _log_i0(2.0 * np.sqrt(e * s[:, None]))
+    held = tone_levels(e, np.repeat(s[:, None], kind.data.tones, axis=1))
+    return tracked_metrics(e, held, fade_wobble(energies / noise, layout))
+
+
+TRACKED_TONES = 4
+"""The most data tones whose levels the receiver reads from the data itself (ADR-0080): the
+500 Hz air's four-tone kinds. A window of :data:`TRACK_WINDOW` symbols sends each of four
+tones about six times; each of sixteen, one and a half — too few to tell a fade from noise."""
+TRACK_WINDOW = 25
+"""Data symbols either side of each one, together, that its tones' levels are read over
+(:func:`tone_levels`): a quarter second at 100 Bd. Moderate's fading (0.5 Hz, 2σ) turns over
+in about a second and Poor's in half that, while the sync blocks that set the level today
+are 2.4 s apart; a shorter window is noisier on every channel."""
+TRACK_HALF = TRACK_WINDOW // 2
+LEVEL_FLOOR = 0.05
+"""The least SNR a tone is given: a tone in a deep fade still counts for something."""
+WEIGHT_FLOOR = 0.025
+"""The least total weight a level is divided by: a tone the window hardly ever sends."""
+
+
+def tone_levels(e: FloatArray, s: FloatArray) -> FloatArray:
+    """Each tone's SNR at each data symbol of a four-tone kind (ADR-0080), from the data's
+    energies ``e`` (over the noise) and the sync blocks' level ``s`` (the same shape).
+
+    The four tones are 100 Hz apart, so on a path with a millisecond or two of delay spread
+    they fade apart, and they fade within the 2.4 s between sync blocks; the sync blocks'
+    level, the same for every tone, then weighs a symbol by a figure that is wrong for most of
+    them. Each tone's level is read where it was probably sent: every tone's probability in
+    every symbol under the sync blocks' level, each tone's energy less the noise's weighted by
+    it and averaged over :data:`TRACK_WINDOW` symbols — a symbol a tone was not sent in adds
+    nothing. A silent symbol (the receiver muted) adds nothing either.
+
+    On a steady channel that figure is noisier than the sync blocks' — 24 known symbols —
+    so it is pulled toward theirs by how far the two disagree beyond its own noise, over the
+    frame (an empirical-Bayes shrinkage): on AWGN the sync blocks' level stands, in a fade the
+    data's."""
+    m = _log_i0(2.0 * np.sqrt(e * s))
+    p = np.exp(m - m.max(axis=1, keepdims=True))
+    p /= p.sum(axis=1, keepdims=True)
+    p[e.max(axis=1) <= 0] = 0.0
+    weight = _window_sums(p, TRACK_HALF)
+    found = _window_sums(p * (e - 1.0), TRACK_HALF) / np.maximum(weight, WEIGHT_FLOOR)
+    found = np.maximum(found, LEVEL_FLOOR)
+    noise = float(np.mean((1.0 + 2.0 * found) / np.maximum(weight, 1.0)))
+    spread = float(np.mean((found - s) ** 2))
+    keep = max(0.0, 1.0 - noise / max(spread, 1e-9))
+    return np.asarray(s + keep * (found - s), dtype=np.float64)
+
+
+FADE_SCALE = 2.0
+"""The Nakagami order a frame's data is read at is this over its :func:`fade_wobble`. A
+quarter-second window centred on each symbol follows a fade better than a straight line through
+a block of eight 40 ms symbols does, so the wobble overstates how far a level read from the data
+misses the instant: at 1, ITU Poor (whose blocks wobble about 0.3) gave back 4 frames in 60 of
+what the known-level metric decodes, at 2 one or two, and flutter (about 0.7) lost none."""
+FADE_ORDER_MAX = 8
+"""Above this order the level read from the data is taken as known (:func:`tracked_metrics`)."""
+
+
+def fade_wobble(e: FloatArray, layout: IntArray) -> float:
+    """How much the sync tones' energy moves within each block beyond a straight line through
+    it and beyond the noise, in units of the block's level squared, averaged over the blocks
+    (slot energies already divided by the noise): about 0 when the channel holds steady or
+    fades smoothly over a block (0.32 s), about 1 when it goes through Rayleigh fades within
+    one — ITU flutter's 10 Hz. A block with a silent symbol (the receiver muted) or at most half
+    the noise's level says nothing."""
+    idx = np.flatnonzero(layout >= 0)
+    held = e[idx, layout[idx]].reshape(-1, SYNC_SYMBOLS)
+    k = np.arange(SYNC_SYMBOLS, dtype=np.float64) - (SYNC_SYMBOLS - 1) / 2.0
+    out = []
+    for row, whole in zip(held, e[idx].reshape(-1, SYNC_SYMBOLS, e.shape[1]), strict=True):
+        if (whole.max(axis=1) <= 0).any():
+            continue
+        level = float(row.mean()) - 1.0
+        if level <= 0.5:
+            continue
+        fit = row.mean() + k * float(np.dot(k, row - row.mean()) / np.dot(k, k))
+        resid = float(np.sum((row - fit) ** 2)) / (SYNC_SYMBOLS - 2)
+        excess = resid - float(np.mean(1.0 + 2.0 * np.maximum(fit - 1.0, 0.0)))
+        out.append(excess / (level * level))
+    return float(np.mean(out)) if out else 0.0
+
+
+def tracked_metrics(e: FloatArray, s: FloatArray, wobble: float) -> FloatArray:
+    """Each tone's log-likelihood in each data symbol of a four-tone kind, from its energies
+    ``e`` and each tone's level ``s`` read from the data (:func:`tone_levels`).
+
+    Where the channel holds steady within a sync block the level is the instant's, and the
+    metric is the known level's, ``−s + log I0(2·sqrt(E·s))``. Where it fades within a block —
+    flutter — the level is only the window's mean, and that metric turns an instant's deep
+    fade of a tone with a high mean into a confident error: tone4x100-93 decoded 12 frames in
+    60 at 0 dB on ITU flutter where the sync blocks' common level decoded 60. There the tone's
+    power is taken as Nakagami-distributed about its level, of order ``m`` =
+    :data:`FADE_SCALE` over the frame's :func:`fade_wobble`, whose energy-detector likelihood
+    over noise alone is, for a whole ``m``,
+    ``m·ln(m/(m+s)) + x + ln Σ_{k<m} C(m−1,k)·x^k/k!`` with ``x = E·s/(m+s)`` — Rayleigh at
+    ``m = 1``, the known level as ``m`` grows. A silent symbol is no evidence for any tone."""
+    silent = e.max(axis=1) <= 0
+    order = FADE_SCALE / wobble if wobble > 0 else math.inf
+    if order > FADE_ORDER_MAX + 0.5:
+        out = -s + _log_i0(2.0 * np.sqrt(e * s))
+    else:
+        # half rounds up, as in the port (Python's round() rounds half to even)
+        m = min(FADE_ORDER_MAX, max(1, math.floor(order + 0.5)))
+        x = e * s / (m + s)
+        poly = np.zeros_like(x)
+        for k in range(m):
+            poly = poly + math.comb(m - 1, k) * x**k / math.factorial(k)
+        out = m * np.log(m / (m + s)) + x + np.log(poly)
+    out[silent] = 0.0
+    return np.asarray(out, dtype=np.float64)
+
+
+def _window_sums(x: FloatArray, half: int) -> FloatArray:
+    """Each row's sum with the ``half`` rows either side of it, clipped at the ends."""
+    c = np.concatenate((np.zeros((1, x.shape[1])), np.cumsum(x, axis=0)))
+    i = np.arange(len(x))
+    return np.asarray(
+        c[np.minimum(i + half + 1, len(x))] - c[np.maximum(i - half, 0)], dtype=np.float64
+    )
 
 
 def _log_i0(arg: FloatArray) -> FloatArray:

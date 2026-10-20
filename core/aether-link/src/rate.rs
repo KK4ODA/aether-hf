@@ -71,29 +71,29 @@ pub const FRAME_S: [f64; 20] = [
     1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
 ];
 
-/// The 500 Hz waveform's ladder (P7-0, ADR-0013, ADR-0015), 3 kHz-referenced like the wide
-/// one, so the two read as an operator would compare them: the tone floor's two rungs (the
-/// same frames and thresholds as on the wide ladder) and its two four-tone middle kinds,
+/// The 500 Hz waveform's ladder (P7-0, ADR-0013, ADR-0015, ADR-0081), 3 kHz-referenced like
+/// the wide one, so the two read as an operator would compare them: the tone floor's two rungs
+/// (the same frames and thresholds as on the wide ladder) and its three four-tone middle kinds,
 /// measured by `tools/bench_tone.py` (`bench/baselines/tone_floor.csv`), then the OFDM modes
-/// from QPSK ⅓, measured by `tools/bench_phy.py --bandwidth 500` into
+/// from QPSK ½, measured by `tools/bench_phy.py --bandwidth 500` into
 /// `bench/baselines/phy_fer_500.csv`, written by `tools/update_rate_table.py --bandwidth 500
 /// --apply` into the model, and mirrored here (the vector test pins it).
 pub const NARROW_AWGN_THRESHOLD_DB: [f64; 15] = [
-    -19.0, -17.3, -14.3, -13.0, -6.0, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
+    -19.0, -17.3, -14.3, -13.0, -11.1, -5.2, -3.6, -2.1, 0.5, -0.1, 2.0, 3.5, 6.9, 8.8, 10.4,
 ];
 
 /// Payload bytes per frame of each rung of the 500 Hz ladder: the tone floor's frames are
 /// five times as long as the ordinary ones, which is why [`usable_modes_by_rate`] needs
 /// [`NARROW_FRAME_S`] to compare them.
 pub const NARROW_PAYLOAD_BYTES: [usize; 15] = [
-    24, 36, 51, 75, 15, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137,
+    24, 36, 51, 75, 93, 25, 34, 39, 53, 53, 71, 81, 109, 123, 137,
 ];
 
 /// Air time of each narrow rung's DATA frame: 134 slots of 40 ms on the tone floor, its
 /// middle kinds included, 34 symbols of 31 ms on the ordinary layout (the link layer's copy
 /// of the frames; the vector test pins it).
 pub const NARROW_FRAME_S: [f64; 15] = [
-    5.36, 5.36, 5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
+    5.36, 5.36, 5.36, 5.36, 5.36, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054, 1.054,
     1.054,
 ];
 
@@ -777,28 +777,31 @@ mod tests {
     #[test]
     fn on_the_floor_the_steps_in_hand_are_decibels() {
         // WC4Y's Test of 2026-10-11 (80 m, 500 Hz; ADR-0066): the call heard at about -2 dB,
-        // which the floor's top rung clears by ten decibels and the first OFDM rung does not
-        // fit; two rungs in hand sent the message at tone-36, half the rate
+        // which the floor's top rung (then tone4x100-75) cleared by ten decibels and the first
+        // OFDM rung did not fit; two rungs in hand sent the message at tone-36, half the rate.
+        // The floor's top is tone4x100-93 since ADR-0081, and the same call starts on it.
         let config = RateConfig::default();
+        let floor = aether_phy::modes::NARROW.floor_modes();
         let narrow = RateController::for_table_timed(
             config,
             &NARROW_AWGN_THRESHOLD_DB,
             &NARROW_PAYLOAD_BYTES,
             &NARROW_FRAME_S,
         )
-        .with_floor(4, None);
+        .with_floor(floor, None);
         let required = |rung: usize| {
             NARROW_AWGN_THRESHOLD_DB[rung] + config.margin_db + config.up_hysteresis_db
         };
-        assert!(required(3) <= -2.0 && -2.0 < required(4));
-        assert_eq!(narrow.first_mode(-2.0), 3);
-        let keep = required(3) - required(1);
-        assert_eq!(narrow.first_mode(required(3) + keep), 3);
-        assert_eq!(narrow.first_mode(required(2) + keep), 2);
-        assert_eq!(narrow.first_mode(required(2) + keep - 0.01), 1);
+        let top = floor - 1;
+        assert!(required(top) <= -2.0 && -2.0 < required(top + 1));
+        assert_eq!(narrow.first_mode(-2.0), top);
+        let keep = required(top) - required(top - 2);
+        assert_eq!(narrow.first_mode(required(top) + keep), top);
+        assert_eq!(narrow.first_mode(required(top - 1) + keep), top - 1);
+        assert_eq!(narrow.first_mode(required(top - 1) + keep - 0.01), top - 2);
         assert_eq!(
-            narrow.first_mode(required(3)),
-            1,
+            narrow.first_mode(required(top)),
+            top - 2,
             "at the fit's edge: two rungs"
         );
         assert_eq!(narrow.first_mode(-20.0), 0);

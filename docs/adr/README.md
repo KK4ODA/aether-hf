@@ -19,7 +19,7 @@ context → decision → alternatives considered → consequences.
 | [0012](0012-holding-the-link.md) | Holding the link on a fading path — the timeout spans whole exchanges, silence steps the mode down, the ACK waits for the announced frame | accepted |
 | [0013](0013-the-tone-floor.md) | The tone floor — a steady-envelope FSK family under both ladders; the ladder; crossing the floor boundary by what the rungs are worth | accepted |
 | [0014](0014-fast-tones.md) | Fast tones — the floor's frame with its data at 50 and 100 baud, the 2 300 Hz ladder's middle rungs; link protocol 3 | accepted |
-| [0015](0015-narrow-middle-kinds.md) | The narrow middle kinds — four tones at 100 baud inside the floor's 400 Hz, the 500 Hz ladder's middle rungs; contradicted sync symbols; link protocol 4 | accepted |
+| [0015](0015-narrow-middle-kinds.md) | The narrow middle kinds — four tones at 100 baud inside the floor's 400 Hz, the 500 Hz ladder's middle rungs; contradicted sync symbols; link protocol 4 | accepted; QPSK ⅓'s rung 4 taken by 0081 |
 | [0016](0016-calls-on-the-floor.md) | Calls, probes and beacons start on the tone floor; a reading from the floor is a lower bound | accepted (amends 0006 and 0009's connect rule) |
 | [0017](0017-a-burst-fits-the-key.md) | A burst fits the key; a session ends on the air; the Test climbs before it carries | accepted; the Test's order superseded by 0074 |
 | [0018](0018-the-regulatory-gate.md) | The regulatory gate — nothing is keyed without the policy's leave; the rules as data; the occupancy measured | accepted |
@@ -84,3 +84,5 @@ context → decision → alternatives considered → consequences.
 | [0077](0077-the-ladder-measures-with-frames-of-its-own.md) | The ladder measures with frames of its own: link protocol 9 | accepted |
 | [0078](0078-the-busy-detectors-floor-follows-the-radios-gain.md) | The busy detector's floor follows the radio's gain, read from the noise across its whole passband | accepted |
 | [0079](0079-the-receiver-follows-a-session-station-off-frequency.md) | The receiver follows a session's station off frequency | accepted |
+| [0080](0080-the-four-tone-receiver-reads-each-tones-level-from-the-data.md) | The four-tone receiver reads each tone's level from the data | accepted |
+| [0081](0081-tone4x100-93-the-500-hz-rung-between-the-tones-and-ofdm.md) | tone4x100-93, the 500 Hz rung between the four-tone kinds and OFDM: link protocol 10 | accepted |

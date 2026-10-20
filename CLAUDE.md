@@ -1907,6 +1907,51 @@ replay follows (`CentreMove`). The test harness's `Air::with_rig_offset` shifts 
 through the wide chain. Scenario `40m-drifting-rig-500` (weak, on the floor, 100 Hz off drifting
 0.4 Hz/s) is ADR-0079's measurement.
 
+**The 500 Hz rung between rungs 3 and 5 (2026-10-20, P9-13; ADR-0080, ADR-0081, beta.117).** Report
+12 §18.4 asked for 130–150 data bit/s from about −1 dB on Moderate and −2 on Poor; it needed no
+new waveform. *ADR-0080* (receiver only, no wire change): a twin of the simulator's fading gave
+each tone's true gain, and with it in the metric the four-tone kinds gained 0.5–6 dB on the fading
+classes — the one sync-block level for every tone was wrong for most symbols (the tones 100 Hz
+apart fade apart; the blocks are 2.4 s apart). `tone_levels` (model, then `tone.rs`) reads each
+tone's level where it was probably sent (the posterior under the sync blocks' level, weighted
+energy over `TRACK_WINDOW` = 25 symbols, silent symbols out), pulls it toward the sync blocks'
+level by an empirical-Bayes factor (without it AWGN at −12 dB lost 6 of 33 frames), and the
+metric is each tone's own `−s + log I0(2√(E·s))`; only kinds with ≤ `TRACKED_TONES` (4) data
+tones — sixteen are sent too seldom to read. **The first build failed on ITU flutter** (10 Hz:
+tone4x100-93 12/60 at 0 dB against 60): the known level's `−s` term turns an instant's fade of a
+tone with a high window mean into a confident error. No bench had a flutter class; the harness's
+`80m-flutter-500` (10 % slower) gave it away. Now `fade_wobble` measures the sync tones' spread
+about a line through each block (≈ 0 AWGN/Good, 0.2–0.4 Moderate/Poor, 0.7–0.8 flutter) and
+`tracked_metrics` uses the Nakagami-m energy-detector likelihood of order `m = 2/wobble`
+(`FADE_SCALE`, half rounds up; known level above `FADE_ORDER_MAX` 8; m = 1 is Rayleigh), a muted
+symbol 0 for every tone; `phy_vectors.json`'s `tone_faded` cases (deterministic envelopes, orders
+4, 3, 1) hold the port to it, and `test_a_four_tone_frame_on_flutter_reads_as_well_as_the_sync_blocks_level`
+guards it. **Bench a receiver change on flutter too.** Rung 3 through the detector: −3.6 / −6.2 / −7.2 dB
+on Good / Moderate / Poor (was −3.2 / −4.9 / −5.7), AWGN unchanged. *ADR-0081* (link protocol
+10): `tone4x100-93` (93 bytes, rate 0.87, 139 bit/s; ADR-0015 had dropped it for its fading
+cliff) takes the 500 Hz rung 4 from QPSK ⅓ — −11.1 / −0.7 / −2.2 / −3.8 dB; the ladder keeps 15
+rungs, the floor is rungs 0–4, OFDM modes 3–12 are rungs 5–14 (modes 0–2 on no rung), so
+`max_mode` keeps its meaning and there is **no schema change**. Sync patterns 33–36 are the search
+carried on (the 37th at 21.3 million draws; `search_sync_patterns` defaults to 25 million);
+the 500 Hz detector's noise maximum did not move. The occupancy table was remeasured whole
+(`make_occupancy.py`: the random payloads are one stream, so a new rung moves the later rungs'
+edges by 1–3 bins, and `test_occupancy.py` holds the committed table to a fresh run); sidecars
+`aether-hf-session/5` (`record::READS` lets the replay read `/4`; `field_ingest.sidecar_rung`
+maps a `/4` 500 Hz rung 4 to no rung). The fading pipe was refitted (`calibrate_fading.py`): the
+unmeasured 500 Hz OFDM rungs moved 0.3–0.45 dB up, their fill no longer averaging QPSK ⅓'s
+penalty. Link bench (`link_narrow_rung4.csv`): nothing slower than beta.116, 8–20 % faster at 0
+and +2 dB on the fading classes, `bench_link --rung 4=93@-11.1~3` within a few bit/s of the real
+rung; Poor at −6 dB 2 % slower than the receiver alone (the climb by AWGN thresholds onto a rung
+with a larger fading penalty; a per-class threshold is not built). Found on the way: on 10 Hz
+flutter the 500 Hz OFDM receiver's SNR reading stays near −3.4 dB whatever the SNR (QPSK ½ data
+still decodes 20/20, ordinary control frames 16–17/20), which is what holds `80m-flutter-500`
+low — a reading for fast fading is the open item, not the family rule; and a 5 s OFDM frame at
+500 Hz loses 4 dB on Good to its two-symbol preamble through the detector. To bench a kind not yet
+on the air: append its patterns to `M.SYNC_PATTERNS` and give `bench_tone`'s `KINDS`/`AIRS` an
+entry (an air-like namespace with `tone_control`/`tone_data`); `bench_tone` keeps its rows in
+memory until it ends, so a long run belongs in the background with a two-hour timeout, or in a
+driver that appends each point as it finishes.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
