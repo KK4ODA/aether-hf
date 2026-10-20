@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 import statistics
 import sys
@@ -40,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aether_model.frame.modes import NARROW, WIDE
-from aether_model.link.engine import LinkEngine
+from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
 from aether_model.link.sim import TwoStationSim
 from aether_model.waveform import WIDE_2300
@@ -68,9 +69,12 @@ def predict_session(
     thresholds = None if channel == "awgn" else channel_thresholds(fer_csv).get(channel)
     payload = bytes(random.Random(7).getrandbits(8) for _ in range(link_bytes))
     rates = []
+    # the session sends and disconnects at once: the disconnect waits for the transfer, not
+    # for the minute an operator's disconnect waits (ADR-0072)
+    cfg = GrantConfig(disc_drain_s=math.inf)
     for trial in range(trials):
-        a = LinkEngine("W4ODA", timing, None, seed=100 + trial)
-        b = LinkEngine("KK4XYZ", timing, None, seed=200 + trial)
+        a = GrantedEngine("W4ODA", timing, cfg, seed=100 + trial)
+        b = GrantedEngine("KK4XYZ", timing, cfg, seed=200 + trial)
         sim = TwoStationSim(
             a,
             b,

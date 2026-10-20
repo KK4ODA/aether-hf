@@ -24,18 +24,18 @@ import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link import granted as granted_module
-from aether_model.link.engine import LinkConfig, LinkEngine, State
 from aether_model.link.frames import (
     CONNECT_BODY_8_BYTES,
     CONNECT_BODY_BYTES,
     PROTOCOL_VERSION,
     REPORT,
-    TURNS_VERSION,
     ConnectBody,
+    DataHeader,
     DataKind,
     GrantFrame,
     GrantKind,
     decode_data,
+    encode_data,
     level_of,
     with_level,
 )
@@ -44,14 +44,17 @@ from aether_model.link.granted import (
     KEY_S,
     READABLE_ALONE_RVS,
     SLACK_S,
+    Event,
     GrantConfig,
     GrantedEngine,
     Role,
     SlotTransmit,
+    State,
+    Transmit,
 )
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
-from aether_model.link.sim import TwoStationSim
+from aether_model.link.sim import SimFrame, TwoStationSim
 
 AIRS = {"2300": WIDE, "500": NARROW}
 WIDE_WINDOW = GrantConfig().open_window_s[0] * 2
@@ -200,9 +203,9 @@ def test_the_connect_body_of_protocol_8_declares_the_radio() -> None:
     assert back.identifier_s == pytest.approx(6.5)
     assert level_of(back.caps) == 2 and back.caps & 0x07 == 0x03
     # protocol 7's body is two bytes shorter and reads as protocol 7
-    old = ConnectBody("W4ODA", "KK4XYZ", version=TURNS_VERSION).encode()
+    old = ConnectBody("W4ODA", "KK4XYZ", version=7).encode()
     assert len(old) == CONNECT_BODY_BYTES
-    assert ConnectBody.decode(old).version == TURNS_VERSION
+    assert ConnectBody.decode(old).version == 7
     assert ConnectBody.decode(old).turnaround_s == 0.0
 
 
@@ -903,19 +906,24 @@ def test_a_probe_across_bandwidths_is_answered_and_says_so() -> None:
     assert any("runs 2300 Hz, this station 500 Hz" in e for e in sim.events(0))
 
 
-def test_protocol_7_and_the_granted_protocol_ignore_each_other_and_say_so() -> None:
+@pytest.mark.parametrize("version", [7, 8])
+def test_a_call_in_another_link_protocol_is_ignored_and_said_so(version: int) -> None:
+    """A call from a station of protocol 7 (the turn engine, retired in ADR-0069's Step 5) or 8
+    is read, not answered, and said to be another protocol: the daemon puts that on the
+    panel's mismatch banner, and the operator knows to update rather than to call again."""
     timing = _timing(WIDE)
     caps = bandwidth_capabilities(WIDE.params)
-    new = GrantedEngine("W4ODA", timing, GrantConfig(capabilities=caps), seed=1)
-    old = LinkEngine("KK4XYZ", timing, LinkConfig(capabilities=caps), seed=2)
-    sim = TwoStationSim(new, old, snr_db=10.0, seed=3)  # type: ignore[arg-type]
-    new.connect("KK4XYZ")
-    sim.run(until=30.0)
-    assert f"ignored:W4ODA calls with link protocol {PROTOCOL_VERSION}" in sim.events(1)
-    new.abort()
-    old.connect("W4ODA")
-    sim.run(until=sim.t + 30.0)
-    assert "ignored:KK4XYZ calls with link protocol 7" in sim.events(0)
+    b = GrantedEngine("W4ODA", timing, GrantConfig(capabilities=caps), seed=1)
+    body = ConnectBody("KK4XYZ", "W4ODA", caps=caps, version=version).encode()
+    mode = b.robust_mode(True)
+    payload = encode_data(DataHeader(DataKind.CONNECT_REQ, 0, 77), body, timing.capacity(mode))
+    length = timing.data_frame_s_for(mode)
+    call = SimFrame(Container.DATA, mode, 0, 10.0, 0.0, length, payload, _draw=0.0, floor=True)
+    b.on_frame(call, length)
+    actions = b.drain()
+    assert Event("ignored", f"KK4XYZ calls with link protocol {version}") in actions
+    assert not any(isinstance(a, Transmit) for a in actions)
+    assert b.state is State.IDLE
 
 
 def test_a_call_in_another_bandwidth_is_ignored_and_said() -> None:

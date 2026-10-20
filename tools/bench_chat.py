@@ -1,6 +1,6 @@
 """Keyboard-to-keyboard chat on the link bench: how long a typed line takes to arrive.
 
-    python tools/bench_chat.py [--policies request-without-offer,request+offer]
+    python tools/bench_chat.py [--policies base,keepalive5]
                                [--bandwidth 2300,500] [--channels awgn,good,moderate,poor]
                                [--snr -6,0,6,12] [--trials 30] [--first-trial N] [--jobs 4]
                                [--out bench/baselines/chat_handover.csv]
@@ -9,9 +9,10 @@
 matters is goodput. A keyboard-to-keyboard contact is the other shape of traffic — short
 lines both ways, with the operators reading and typing between them — and what matters is
 how long a line takes from the moment it is sent to the moment it is on the other screen.
-Little of that is air time: a line typed at the station that does not hold the turn waits for
-the sender's next poll, which an idle link sends every ``keepalive_s``, and then for a poll,
-an acknowledgement and a TURN before its own burst can go (ADR-0023's turn-taking).
+Little of that is air time. Under granted slots (ADR-0069) the caller is the master and keys
+on its own; a line typed at the master goes in its next transmission, and one typed at the
+slave waits for a header that grants it a slot: an idle link's open window, or the answer an
+idle master asks for every ``keepalive_s``.
 
 **The workload** is seeded by the trial alone, so every policy, channel and SNR runs the same
 script: A calls B, and once both are connected the two exchange 10–20 lines of 20–120 bytes.
@@ -22,8 +23,7 @@ one before has arrived, so no line waits behind another and a line's latency is 
 (it is the same for every policy); the conversation starts when both stations are up.
 
 **The cost** is keyed time: both transmitters' air time, every frame, from the first line
-typed to the last one delivered — what polling more often, or handing the turn over when
-nobody asked for it, puts on the air. A session that ends before its last line arrives (the
+typed to the last one delivered — what granting the slave more often puts on the air. A session that ends before its last line arrives (the
 link gives up) is a drop, and its undelivered lines are lost; a line not delivered within
 ``LINE_S`` ends the session the same way.
 
@@ -32,16 +32,15 @@ fading_pipe.csv``) with the tone floor's SNR reading capped at its class's ceili
 — ``--logistic`` and ``--no-floor-cap`` for the older pipe and uncapped readings — and a burst
 is held to the daemon's key-time limit (ADR-0017, ``--max-burst-s``).
 
-**Policies** are ``LinkConfig`` overrides by name (:data:`POLICIES`) — ``request``
-(``LinkConfig.chat``, ADR-0027; in every session since ADR-0044) and ``request+offer``
-(ADR-0047, the default since protocol 7); ``base`` is the engine before ADR-0044 — and
-``handover`` and ``hold``, which run what was not adopted (:class:`Candidate`); ``--policy name:key=value,…`` adds one. What was measured, and what was
-decided, is ADR-0027.
+**Policies** are ``GrantConfig`` overrides by name (:data:`POLICIES`); ``base`` is the engine
+as it ships, and ``--policy name:key=value,…`` adds one. The bench was built for protocol 7's
+turn policies (ADR-0027, ADR-0044, ADR-0047), which went with its turn engine in ADR-0069's
+Step 5; the rows under ``bench/baselines/`` written before then are that engine's.
 
 Output: one row per (policy, bandwidth, channel, SNR) to ``--out`` — sessions, lines sent,
 delivered and lost, drops, median and 90th-percentile latency (every line, replies,
-follow-ups), keyed seconds per line and the transmitters' duty cycle, turns, polls and
-requests per line; ``--sessions`` writes one row per session.
+follow-ups), keyed seconds per line and the transmitters' duty cycle, headers and answers per
+line; ``--sessions`` writes one row per session.
 """
 
 from __future__ import annotations
@@ -64,8 +63,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bench_link as bench
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.engine import LinkConfig, LinkEngine, Role, State, Transmit
-from aether_model.link.frames import ControlKind, DataKind
+from aether_model.link.frames import DataKind, GrantKind
+from aether_model.link.granted import GrantConfig, GrantedEngine, State, Transmit
 from aether_model.link.harness import phy_timing
 from aether_model.link.phy import Container, TxFrame
 from aether_model.link.sim import TwoStationSim, control_thresholds_for
@@ -75,28 +74,14 @@ HERE = Path(__file__).resolve().parents[1]
 Setting = float | int | bool | str | None
 
 POLICIES: dict[str, dict[str, Setting]] = {
-    "base": {"chat": False},  # the engine before ADR-0044: no turn request
+    "base": {},
     "keepalive5": {"keepalive_s": 5.0},
-    "handover": {"handover": "always"},
-    "handover+keepalive5": {"handover": "always", "keepalive_s": 5.0},
-    "request": {"chat": True},
-    "request-without-hold": {"chat": True, "hold": False},
-    "handover+request": {"chat": True, "handover": "always"},
-    "ordinary-handover+request": {"chat": True, "handover": "ordinary"},
-    "request+keepalive20": {"chat": True, "keepalive_s": 20.0},
-    "handover+request+keepalive20": {"chat": True, "handover": "always", "keepalive_s": 20.0},
-    "request+offer": {"chat": True, "offer_turn": True},
-    "request-without-offer": {"chat": True, "offer_turn": False},
+    "keepalive20": {"keepalive_s": 20.0},
+    "no-window-growth": {"window_doublings": 0},
 }
-"""The turn policies measured: the engine before ADR-0044 (``base``: no turn request); a shorter idle poll (``keepalive5``); the
-sender handing the turn over as soon as its line is acknowledged (``handover``, the
-:class:`Candidate` engine); the receiving station asking for the turn unasked (``request``:
-``LinkConfig.chat``, what ADR-0027 adopted), and the same without the idle sender's hold over
-a frame arriving (``hold``); and combinations — with a longer idle poll too, which asking makes
-possible: a poll no longer carries the other station's wish to send, only the news that the
-link is alive; and the turn offered at the end of a burst that empties the queue
-(``request+offer``, ADR-0047, the default since protocol 7; ``request-without-offer`` is the
-engine before it). Every key but ``handover`` and ``hold`` is a ``LinkConfig`` field."""
+"""The engine as it ships (``base``); an idle master asking for the slave's answer every 5 s
+or 20 s instead of 10 (``keepalive``); and an idle link's open window kept at its first size
+(``no-window-growth``). Every key is a ``GrantConfig`` field."""
 
 LINES = (10, 20)
 """Lines per conversation, inclusive."""
@@ -119,9 +104,9 @@ LINE_S = 900.0
 STEP_S = 0.05
 """The simulator is run in steps of this while a line is on its way. Delivery times are exact
 whatever the step (the simulator notes them), but a reply is typed after the step that
-delivered the line: at 1 s (until ADR-0047) the receiving station had acknowledged the line
-before a reply typed at once was queued, so an acknowledgement never carried a reply's WANT_TX,
-and every reply asked for the turn on its own."""
+delivered the line, so a coarse step would queue every reply late: at 1 s a station had
+answered the line before a reply typed at once was queued, and the reply waited for the next
+slot."""
 
 MAX_KEY_S = 30.0
 """The daemon's default key-time limit (``[radio] max_key_s``)."""
@@ -165,60 +150,11 @@ def conversation(trial: int, file_bytes: int = 0) -> list[Line]:
     return lines
 
 
-class Candidate(LinkEngine):
-    """The model's engine with what ADR-0027 measured and did not adopt, which lives here and
-    not in the model so the bench can still run it.
-
-    ``handover``: a sender whose bursts of this turn are all acknowledged, with nothing more to
-    send, hands the turn over at once (TURN) — to the station that has just read its line and is
-    likely to answer it — on every family (``always``), or only while its control frames are
-    ordinary ones (``ordinary``: on the tone floor a TURN and its confirmation are three frames
-    of 3.2 s). It lost sessions where the request did not.
-
-    ``hold=False``: the adopted chat without the idle sender's hold — its poll keyed on time
-    even over a frame it hears arriving, which may be the other station's request."""
-
-    def __init__(
-        self, *args: object, handover: str = "", hold: bool = True, **kwargs: object
-    ) -> None:
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-        if handover not in ("", "always", "ordinary"):
-            raise ValueError(f"handover={handover!r}: always or ordinary")
-        self.handover = handover
-        self.hold = hold
-
-    def _maybe_start_burst(self) -> None:
-        if self._hands_over():
-            self._turn_tries = 0
-            self._send_turn()
-            return
-        super()._maybe_start_burst()
-
-    def on_preamble(self, t_start: float, now: float, frame_s: float | None = None) -> None:
-        keepalive = self._deadlines.get("keepalive")
-        super().on_preamble(t_start, now, frame_s)
-        if not self.hold and keepalive is not None and "keepalive" in self._deadlines:
-            self._deadlines["keepalive"] = keepalive
-
-    def _hands_over(self) -> bool:
-        return (
-            self.handover != ""
-            and self.state is State.CONNECTED
-            and self.role is Role.ISS
-            and self._waiting_for is None
-            and not self._tx_busy()
-            and not self._disc_requested
-            and not self._has_work()
-            and self._bursts_since_turn > 0
-            and (self.handover == "always" or not self.timing.is_floor(self._burst_mode()))
-        )
-
-
 def frame_kind(frame: TxFrame) -> str:
     """What a frame is, from its first byte: a DATA container's kind or a control frame's."""
     if frame.container is Container.DATA:
         return DataKind(frame.payload[0] >> 5).name.lower()
-    return ControlKind(frame.payload[0] >> 4).name.lower()
+    return GrantKind(frame.payload[0] >> 6).name.lower()
 
 
 class ChatSim(TwoStationSim):
@@ -284,7 +220,9 @@ class Point:
     first_trial: int = 0
 
 
-def make_sim(point: Point, air: AirInterface, a: LinkEngine, b: LinkEngine, seed: int) -> ChatSim:
+def make_sim(
+    point: Point, air: AirInterface, a: GrantedEngine, b: GrantedEngine, seed: int
+) -> ChatSim:
     """Two engines on the link bench's channel for this point."""
     timing = a.timing
     cap = bench.FLOOR_READING_CAP_DB.get(point.channel) if point.floor_cap else None
@@ -324,18 +262,13 @@ def run_session(point: Point, trial: int) -> dict[str, object]:
     timing = phy_timing(air.params)
     seed = 1000 * trial + 17
 
-    def engine(call: str, engine_seed: int) -> LinkEngine:
-        settings = dict(point.overrides)
-        handover = str(settings.pop("handover", "") or "")
-        hold = bool(settings.pop("hold", True))
-        cfg = LinkConfig(
+    def engine(call: str, engine_seed: int) -> GrantedEngine:
+        cfg = GrantConfig(
             max_mode=air.n_rungs - 1,
             max_burst_s=point.max_burst_s,
-            **settings,  # type: ignore[arg-type]
+            **dict(point.overrides),  # type: ignore[arg-type]
         )
-        if handover or not hold:
-            return Candidate(call, timing, cfg, seed=engine_seed, handover=handover, hold=hold)
-        return LinkEngine(call, timing, cfg, seed=engine_seed)
+        return GrantedEngine(call, timing, cfg, seed=engine_seed)
 
     a, b = engine("W4ODA", seed), engine("KK4XYZ", seed + 1)
     sim = make_sim(point, air, a, b, seed)
@@ -419,10 +352,8 @@ def run_session(point: Point, trial: int) -> dict[str, object]:
         keyed_s=round(sum(keyed.values()), 2),
         keyed_data_s=round(keyed.get("data", 0.0), 2),
         keyed_control_s=round(sum(v for k, v in keyed.items() if k != "data"), 2),
-        polls=sim.count_between(first_typed, end, "poll"),
-        turns=sim.count_between(first_typed, end, "turn"),
-        acks=sim.count_between(first_typed, end, "ack"),
-        requests=a.stats.turn_requests + b.stats.turn_requests,
+        headers=sim.count_between(first_typed, end, "header"),
+        answers=sim.count_between(first_typed, end, "answer"),
         latency=latency,
         replies=replies,
         follow_ups=follow_ups,
@@ -482,9 +413,8 @@ def summarise(point: Point, rows: list[dict[str, object]], wall_s: float) -> dic
         "file_median_s": _quantile(files, 50),
         "keyed_per_line_s": round(keyed / typed, 2) if typed else "",
         "duty": round(keyed / window, 3) if window else "",
-        "polls_per_line": per_line("polls"),
-        "turns_per_line": per_line("turns"),
-        "requests_per_line": per_line("requests"),
+        "headers_per_line": per_line("headers"),
+        "answers_per_line": per_line("answers"),
         "wall_s": round(wall_s, 1),
     }
 
@@ -496,8 +426,8 @@ def _timed(point: Point) -> tuple[Point, list[dict[str, object]], float]:
 
 
 def parse_policy(text: str) -> tuple[str, dict[str, Setting]]:
-    """``name:key=value,…`` — a policy of one's own: ``LinkConfig`` fields (numbers, ``true``,
-    ``false``, ``none``), ``handover=always|ordinary`` and ``hold=false``."""
+    """``name:key=value,…`` — a policy of one's own: ``GrantConfig`` fields (numbers, ``true``,
+    ``false``, ``none``)."""
     name, _, spec = text.partition(":")
     settings: dict[str, Setting] = {}
     for item in spec.split(","):
@@ -509,8 +439,6 @@ def parse_policy(text: str) -> tuple[str, dict[str, Setting]]:
             settings[key] = lowered == "true"
         elif lowered == "none":
             settings[key] = None
-        elif key == "handover":
-            settings[key] = value
         else:
             settings[key] = int(value) if value.lstrip("-").isdigit() else float(value)
     return name, settings
@@ -523,7 +451,7 @@ def main() -> int:
         "--policy",
         action="append",
         default=[],
-        help="another policy, name:key=value,... (LinkConfig fields); may repeat",
+        help="another policy, name:key=value,... (GrantConfig fields); may repeat",
     )
     ap.add_argument("--bandwidth", default="2300,500")
     ap.add_argument("--channels", default="awgn,good,moderate,poor")

@@ -1,10 +1,10 @@
 """Two-engine discrete-event simulator over a lossy pipe (roadmap P2-1).
 
 This is the *fast* harness: no DSP. A single half-duplex channel connects two
-:class:`~aether_model.link.engine.LinkEngine` stations; frames are delivered frame by
+:class:`~aether_model.link.granted.GrantedEngine` stations; frames are delivered frame by
 frame with a per-mode error model and an energy-accumulation stand-in for HARQ-IR, so the
-protocol's timers, selective repeat, HARQ inference, turnaround and handshakes can be
-exercised in milliseconds over thousands of seeded trials.
+protocol's timers, slots, selective repeat, HARQ inference and handshakes can be exercised in
+milliseconds over thousands of seeded trials.
 :mod:`aether_model.link.harness` is the slow harness that swaps this pipe for the real PHY
 and channel simulator, and confirms the qualitative behaviour end to end.
 
@@ -45,9 +45,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import cast
 
-from aether_model.link.engine import Deliver, Event, LinkEngine, Transmit
 from aether_model.link.fading import FadingPipe, success_probability
-from aether_model.link.granted import HEADER_UNDECODABLE_SHARE, GrantedEngine
+from aether_model.link.granted import (
+    HEADER_UNDECODABLE_SHARE,
+    Deliver,
+    Event,
+    GrantedEngine,
+    Transmit,
+)
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -106,8 +111,9 @@ class SimFrame:
     trusted: bool = True
     """A simulated frame is a real frame, and its SNR the channel's."""
     follows: int | None = None
-    """The burst countdown as sent, on an ordinary DATA frame (ADR-0041): a simulated
-    receiver reads it right whenever it detects the frame."""
+    """How many frames of its transmission follow it, as sent on a DATA frame (ADR-0068 §2.1):
+    a simulated receiver reads it right whenever it detects the frame, unless
+    :attr:`TwoStationSim.count_misread` says otherwise."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
@@ -141,12 +147,9 @@ class _Ev:
     data: object = field(compare=False)
 
 
-Engine = LinkEngine | GrantedEngine
-
-
 @dataclass
 class _Station:
-    engine: Engine
+    engine: GrantedEngine
     delivered: bytearray = field(default_factory=bytearray)
     events: list[str] = field(default_factory=list)
     tx_end: float = 0.0
@@ -164,8 +167,8 @@ class TwoStationSim:
 
     def __init__(
         self,
-        a: Engine,
-        b: Engine,
+        a: GrantedEngine,
+        b: GrantedEngine,
         *,
         snr_db: float = 10.0,
         seed: int = 0,
@@ -179,7 +182,6 @@ class TwoStationSim:
         floor_reading_cap_db: float | None = None,
         key_limit_s: float | None = None,
         unheard: Callable[[int, Container, float], bool] | None = None,
-        countdown: bool = True,
         key_lead: Callable[[int], float] | None = None,
         decode_latency: Callable[[int, TxFrame, float], float] | None = None,
         rx_recovery_s: tuple[float, float] = (0.0, 0.0),
@@ -223,14 +225,10 @@ class TwoStationSim:
         thresholds are then the AWGN table's. Unset, every frame sees the channel SNR and
         the per-class averages of :attr:`thresholds`."""
         self.unheard = unheard
-        self.countdown = countdown
-        """False: frames arrive without the burst countdown (ADR-0041), as from a sender before
-        it — how the receiver's other ways of finding a burst's end are measured."""
-        self.floor_counts = (
-            a.counts_on_floor if isinstance(a, GrantedEngine) else a.cfg.stated_answers
-        )
-        """Tone-floor frames carry their count too (ADR-0068: in the middle sync block): with
-        stated answers, as the PHY of link protocol 8 sends them."""
+        """Frames a receiver never detects, preamble or frame: called with the receiver, the
+        frame's container and when it started. A fade that lets one kind of frame through and
+        not another — the called station's data lost while its control frames arrive — is
+        what turned KE4QCM's session of 2026-09-25 into two stations holding the turn."""
         self.key_lead = key_lead
         """Seconds from a station's engine asking for a transmission to its first radiated
         sample, drawn per transmission: the daemon's lead, the card, CAT keying. Unset, none —
@@ -246,10 +244,7 @@ class TwoStationSim:
         of a random kind and mode, trusted (ADR-0020) a :attr:`phantom_trusted` part of the
         time."""
         self.phantom_trusted = phantom_trusted
-        """Frames a receiver never detects, preamble or frame: called with the receiver, the
-        frame's container and when it started. A fade that lets one kind of frame through and
-        not another — the called station's data lost while its control frames arrive — is
-        what turned KE4QCM's session of 2026-09-25 into two stations holding the turn."""
+        """The share of false detections the receiver trusts (ADR-0020)."""
         self.count_misread = count_misread
         """The share of data frames too weak to decode alone whose count a receiver reads as
         none to follow: a weak copy's chips read a quarter turn off. On the scenario harness a
@@ -289,11 +284,7 @@ class TwoStationSim:
             _decode_snr_db=decode_snr_db,
             _threshold=threshold,
             _judge_snr_db=judge_snr_db,
-            follows=(
-                None
-                if control or (floor and not self.floor_counts) or not self.countdown
-                else frame.follows
-            ),
+            follows=None if control else frame.follows,
         )
         if (
             self.count_misread > 0.0
@@ -408,12 +399,10 @@ class TwoStationSim:
             and first[2]
             and now < first[0] + HEADER_UNDECODABLE_SHARE * (first[1] - first[0])
         )
-        if isinstance(engine, GrantedEngine) and unread:
+        if unread:
             engine.on_tx_cut_unread(now)
-        elif isinstance(engine, GrantedEngine):
-            engine.on_tx_done(now, whole_end)
         else:
-            engine.on_tx_done(now)
+            engine.on_tx_done(now, whole_end)
         self._pump(who, now)
 
     def _busy(self, who: int, t0: float, t1: float) -> bool:
@@ -562,10 +551,8 @@ class TwoStationSim:
                 elif ev.kind == "report":
                     self._report(ev.who, cast("SoftFrame", ev.data), nt)
                 elif ev.kind == "dropped":
-                    eng = self.st[ev.who].engine
-                    if isinstance(eng, GrantedEngine):
-                        eng.on_tx_dropped(nt)
-                        self._pump(ev.who, nt)
+                    self.st[ev.who].engine.on_tx_dropped(nt)
+                    self._pump(ev.who, nt)
                 elif ev.kind == "phantom":
                     self._phantom(ev.who, nt)
                     continue  # a phantom alone is no progress: an idle pair still stops

@@ -28,9 +28,6 @@ from aether_model.link.frames import (
     PROTOCOL_VERSION,
     REPORT,
     ConnectBody,
-    ControlFlags,
-    ControlFrame,
-    ControlKind,
     DataHeader,
     DataKind,
     GrantFrame,
@@ -241,8 +238,8 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
 
 
 def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
-    # the SNR byte follows the control frame's convention: whole dB, ties to even,
-    # clamped to +/-40, 0x7F for "not measured" (what a PROBE always says)
+    # the SNR byte is the connect body's: whole dB, ties to even, clamped to +/-40, 0x7F for
+    # "not measured" (what a PROBE always says)
     out = []
     for src, dst, snr, caps in (
         ("W4ODA", "KK4XYZ", None, 0),
@@ -262,60 +259,6 @@ def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
                 "caps": caps,
                 "encoded": body.encode().hex(),
                 "decoded_snr_db": decoded.snr_db,
-            }
-        )
-    return out
-
-
-def control_frame_cases() -> list[dict]:  # type: ignore[type-arg]
-    out = []
-    cases = [
-        (ControlKind.ACK, ControlFlags.NONE, 0, 0, None, 0, 0, False),
-        (ControlKind.ACK, ControlFlags.WANT_TX, 100, 0b1011, -7.0, 6, 1, True),
-        (
-            ControlKind.ACK,
-            ControlFlags.BREAK | ControlFlags.WANT_TX,
-            255,
-            0xFFFF,
-            40.0,
-            19,
-            3,
-            True,
-        ),
-        (ControlKind.ACK, ControlFlags.NONE, 3, 0b1, 2.0, 31, 2, True),
-        (ControlKind.POLL, ControlFlags.NONE, 7, 0, 12.5, 3, 1, False),
-        (ControlKind.TURN, ControlFlags.NONE, 0, 0, None, 0, 0, False),
-        (ControlKind.DISC, ControlFlags.NONE, 0, 0, -40.0, 0, 0, False),
-        (ControlKind.DISC_ACK, ControlFlags.NONE, 0, 0, -100.0, 0, 0, False),
-    ]
-    for kind, flags, base, bitmap, snr, mode, follows, burst_floor in cases:
-        frame = ControlFrame(
-            kind=kind,
-            session=42,
-            flags=flags,
-            base=base,
-            bitmap=bitmap,
-            snr_db=snr,
-            recommended_mode=mode,
-            follows=follows,
-            burst_floor=burst_floor,
-        )
-        encoded = frame.encode()
-        decoded = ControlFrame.decode(encoded)
-        out.append(
-            {
-                "kind": kind.name,
-                "session": 42,
-                "flags": int(flags),
-                "base": base,
-                "bitmap": bitmap,
-                "snr_db": snr,
-                "recommended_mode": mode,
-                "follows": follows,
-                "burst_floor": burst_floor,
-                "encoded": encoded.hex(),
-                "decoded_snr_db": decoded.snr_db,
-                "received": [decoded.received(s) for s in range(0, 256, 17)],
             }
         )
     return out
@@ -404,7 +347,6 @@ def main() -> int:
         "probe_bodies": probe_body_cases(),
         "datagrams": datagram_cases(),
         "datagram_bodies": datagram_body_cases(),
-        "control_frames": control_frame_cases(),
         "grant_frames": grant_frame_cases(),
         "rate_traces": rate_trace_cases(),
     }

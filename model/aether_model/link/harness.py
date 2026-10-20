@@ -4,7 +4,7 @@ Where :mod:`aether_model.link.sim` fakes the channel with a probability model, t
 every link frame to complex baseband with the real :class:`~aether_model.phy.pipeline.Modem`,
 pushes it through :func:`~aether_model.channel.make_channel`, and recovers it with real
 acquisition, demodulation and LDPC decoding. It is slow (seconds of audio per frame) but it
-proves the ARQ engine drives the actual waveform — including genuine HARQ-IR soft-combining
+proves the link engine drives the actual waveform — including genuine HARQ-IR soft-combining
 of LLRs across redundancy versions — not just an abstract model.
 
 It reuses :class:`TwoStationSim`'s event loop through the ``frame_factory`` hook: the factory
@@ -22,8 +22,8 @@ from numpy.typing import NDArray
 
 from aether_model.channel import WattersonChannel, make_channel
 from aether_model.frame.modes import PREAMBLE_SYMBOLS, air_interface
-from aether_model.link.engine import LinkEngine
 from aether_model.link.frames import with_bandwidth
+from aether_model.link.granted import GrantedEngine
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -62,7 +62,8 @@ class RealSoftFrame:
     trusted: bool = True
     """The harness detects in a buffer that holds the frame it sent: what it finds is real."""
     follows: int | None = None
-    """The burst countdown its chips carried (ADR-0041); ``None`` for tone and control frames."""
+    """How many frames of its transmission follow it, as its chips or its middle sync block
+    carried it (ADR-0068 §2.1); ``None`` for a control frame."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         buf = buffer if isinstance(buffer, np.ndarray) else None
@@ -71,7 +72,7 @@ class RealSoftFrame:
 
 def bandwidth_capabilities(params: WaveformParams = WIDE_2300, caps: int = 0) -> int:
     """``caps`` with the bandwidth bits of ``params`` set — what a station puts in its
-    :attr:`~aether_model.link.engine.LinkConfig.capabilities` for the waveform it runs."""
+    :attr:`~aether_model.link.granted.GrantConfig.capabilities` for the waveform it runs."""
     return with_bandwidth(caps, params.bandwidth.hz)
 
 
@@ -246,8 +247,8 @@ class PhyBridge:
 
 
 def two_modem_sim(
-    a: LinkEngine,
-    b: LinkEngine,
+    a: GrantedEngine,
+    b: GrantedEngine,
     *,
     channel: str = "awgn",
     snr_db: float = 10.0,
