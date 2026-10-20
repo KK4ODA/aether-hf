@@ -52,7 +52,7 @@ pub struct Session {
     /// Application bytes received, after decompression.
     pub bytes_received: usize,
     /// How it ended, in the link's words: `closed` (this station's disconnect,
-    /// acknowledged), `closed (no disc ack)`, `peer disconnected`, `link timeout`,
+    /// acknowledged), `closed (no DISC_ACK)`, `peer disconnected`, `link timeout`,
     /// `no response`, `aborted`.
     pub end: String,
     /// The SNR of the last frame decoded from the other station, dB (3 kHz reference).

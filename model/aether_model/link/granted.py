@@ -169,10 +169,12 @@ outermost parity. The order was 0, 1, 2, 3, under which a frame whose first copy
 could not decode until its fourth: RV 1 and RV 2 decode alone at no SNR, and RV 3 not at all on
 the 36 bit/s tone rung (85 s of tone frames at +5 dB on a 500 Hz path, the scenario harness)."""
 
-LEFT_UNHEARD = frozenset({"aborted", "closed (no disc ack)", "no response", "link timeout"})
+LEFT_UNHEARD = frozenset({"aborted", "closed (no DISC_ACK)", "no response", "link timeout"})
 """How a session ends without the other station's word that it is over: frames of it heard
 afterwards are answered with a DISC (ADR-0052). Each is the reason a session's end is given,
-letter for letter, and the session history's ``end`` (``docs/spec/control-api.md``)."""
+letter for letter, and the session history's ``end`` (``docs/spec/control-api.md``): the list
+said ``closed (no disc ack)``, which no session ended with, so a master whose DISCs all went
+unanswered was never taken to have left, where the port's was."""
 
 # ── the protocol's constants ──────────────────────────────────────────
 
