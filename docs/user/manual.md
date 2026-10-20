@@ -323,6 +323,8 @@ once. The other station says which arrived, and nothing is sent again. A rung wh
 lost is logged with no SNR (*at ? dB*). After the last rung the Test disconnects.
 
 It takes about five minutes and stops itself at ten. The other station only has to be listening.
+If you wait for a clear channel, the probe and the call wait too, and the wait does not count
+against them. It counts against the ten minutes: a channel that never clears ends the Test.
 Both stations must run the same bandwidth and protocol version. The result is recorded as two
 files ending in `_test`: a `.json` report and the `.wav` audio. See
 [Field testing](field-test.md) and the [tester's guide](tester-guide.md).

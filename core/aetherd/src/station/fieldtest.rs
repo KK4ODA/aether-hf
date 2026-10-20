@@ -365,6 +365,9 @@ pub struct TestRun {
     started_s: f64,
     started: String,
     step_started_s: f64,
+    /// The station's time held for a clear channel when this step began: a step's clock does
+    /// not run while the station waits to transmit ([`TestRun::step_elapsed_s`]).
+    held_at_step: f64,
     entered: bool,
     rung_reported: bool,
     ladder_next: usize,
@@ -406,6 +409,7 @@ impl TestRun {
             started_s: now,
             started: crate::log::rfc3339(ms),
             step_started_s: now,
+            held_at_step: 0.0,
             entered: false,
             rung_reported: false,
             ladder_next: 0,
@@ -435,11 +439,22 @@ impl TestRun {
         self.step != Step::Done
     }
 
-    fn enter(&mut self, step: Step, now: f64) {
+    fn enter(&mut self, step: Step, now: f64, held_s: f64) {
         self.step = step;
         self.step_started_s = now;
+        self.held_at_step = held_s;
         self.entered = false;
         self.rung_reported = false;
+    }
+
+    /// How long this step has run, less the time the station held a transmission for a clear
+    /// channel meanwhile (`held_s`, the station's running total): a step's deadline counts from
+    /// the transmission. The probe and the call are what such a hold can delay; in a session
+    /// nothing waits for the channel. On a contest frequency a Test's probe was held 29.7 s,
+    /// the step's 30 s ran out as the answer arrived, and it called on "no answer"
+    /// (10-step-3.md §3.7).
+    fn step_elapsed_s(&self, now: f64, held_s: f64) -> f64 {
+        now - self.step_started_s - (held_s - self.held_at_step).max(0.0)
     }
 
     /// Incompressible bytes, different for every step, the same for every run with this
@@ -501,6 +516,9 @@ fn transfer_timeout_s(bytes: usize) -> f64 {
 /// How long a rung may take: a burst, its acknowledgement, and the retransmissions of a
 /// rung the path could not carry until they are re-encoded and through.
 const RUNG_TIMEOUT_S: f64 = 300.0;
+/// How long the probe and the call may take, not counting the time the station held them for a
+/// clear channel ([`TestRun::step_elapsed_s`]): backstops behind the engine's own timers, which
+/// move with every hold too. A channel that never clears ends the run with its budget.
 const PROBE_TIMEOUT_S: f64 = 30.0;
 const CONNECT_TIMEOUT_S: f64 = 120.0;
 const DISCONNECT_TIMEOUT_S: f64 = 90.0;
@@ -555,6 +573,7 @@ impl<P: Ptt> Station<P> {
             })
             ^ (now * 1000.0) as u64;
         let mut run = TestRun::new(plan, now, modes, seed);
+        run.held_at_step = self.held_total_s;
         let name = format!(
             "{}_test",
             crate::record::session_name(&self.engine.my_call, Some(&run.plan.remote))
@@ -587,7 +606,7 @@ impl<P: Ptt> Station<P> {
         } else {
             run.failure = Some("stopped by the operator".into());
             self.abort();
-            run.enter(Step::Disconnect, self.now());
+            run.enter(Step::Disconnect, self.now(), self.held_total_s);
             run.entered = true;
         }
         self.test = Some(run);
@@ -697,7 +716,8 @@ impl<P: Ptt> Station<P> {
     #[allow(clippy::too_many_lines)]
     fn step_test(&mut self, run: &mut TestRun) {
         let now = self.now();
-        let since = now - run.step_started_s;
+        let held = self.held_total_s;
+        let since = run.step_elapsed_s(now, held);
         match run.step {
             Step::Probe => {
                 if !run.entered {
@@ -711,6 +731,14 @@ impl<P: Ptt> Station<P> {
                         }
                         Err(reason) => self.finish_test(run, &format!("aborted: {reason}")),
                     }
+                } else if run.remaining_s(now) <= 0.0 {
+                    // the step's clock stops while the channel is busy, the run's does not
+                    self.abort();
+                    let busy = held - run.held_at_step;
+                    self.finish_test(
+                        run,
+                        &format!("aborted: out of time, the channel busy {busy:.0} s"),
+                    );
                 } else if !self.engine.probing() || since > PROBE_TIMEOUT_S {
                     run.probe = self
                         .engine
@@ -740,7 +768,7 @@ impl<P: Ptt> Station<P> {
                         run.adjustments
                             .push(format!("message {} bytes: {why}", run.message_size));
                     }
-                    run.enter(Step::Connect, now);
+                    run.enter(Step::Connect, now, held);
                 }
             }
             Step::Connect => {
@@ -786,9 +814,16 @@ impl<P: Ptt> Station<P> {
                             run.message_size = size;
                         }
                     }
-                    run.enter(Step::Message, now);
+                    run.enter(Step::Message, now, held);
                 } else if self.engine.state() == State::Idle && since > 2.0 {
                     self.finish_test(run, "aborted: the call was not answered");
+                } else if run.remaining_s(now) <= 0.0 {
+                    self.abort();
+                    let busy = held - run.held_at_step;
+                    self.finish_test(
+                        run,
+                        &format!("aborted: out of time, the channel busy {busy:.0} s"),
+                    );
                 } else if since > CONNECT_TIMEOUT_S {
                     self.abort();
                     self.finish_test(run, "aborted: the call timed out");
@@ -806,7 +841,7 @@ impl<P: Ptt> Station<P> {
                     } else {
                         self.start_ladder(run);
                     }
-                    run.enter(next, now);
+                    run.enter(next, now, held);
                 } else if !run.entered {
                     run.acked_at_step = self.engine.stats.bytes_acked;
                     // the message may have gone with the call
@@ -838,7 +873,7 @@ impl<P: Ptt> Station<P> {
                         run.file = Some(transfer);
                         self.start_ladder(run);
                     }
-                    run.enter(next, now);
+                    run.enter(next, now, held);
                 } else if since > transfer_timeout_s(bytes).min(run.remaining_s(now) + 60.0) {
                     // a crawl: end it now, keeping what was learned, rather than wait for
                     // an orderly close that would first deliver the rest of the transfer
@@ -896,7 +931,7 @@ impl<P: Ptt> Station<P> {
                     if run.plan.ladder {
                         self.note("test", &format!("ladder: {} rungs, done", run.rungs.len()));
                     }
-                    run.enter(Step::Disconnect, now);
+                    run.enter(Step::Disconnect, now, held);
                 } else if !run.entered {
                     let mode = run.modes[run.ladder_next];
                     let _ = self.engine.measure(mode, run.plan.rung_frames);
@@ -938,7 +973,7 @@ impl<P: Ptt> Station<P> {
                         // a measurement leaves nothing to deliver: the next rung follows its
                         // report at once (ADR-0077)
                         run.ladder_next += 1;
-                        run.enter(Step::Ladder, now);
+                        run.enter(Step::Ladder, now, held);
                     } else if since > RUNG_TIMEOUT_S {
                         self.note("test", &format!("rung {mode}: timed out"));
                         let why = format!("aborted: rung {mode} timed out");
@@ -1462,5 +1497,51 @@ mod tests {
             }),
             Err("a session is running".to_owned())
         );
+    }
+
+    /// Step 3 §3.7: on a contest frequency a Test's probe was held 29.7 s for a clear channel,
+    /// its 30 s ran out as the answer arrived, and it called on "no answer". The step's clock
+    /// now stops while the station waits to transmit: here the other station's tune tones keep
+    /// the channel busy for some 40 s, and the probe still goes and is answered.
+    #[test]
+    fn a_probe_held_for_a_busy_channel_keeps_its_own_deadline() {
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.config.wait_for_clear = true;
+        // the busy detectors learn the noise floor first
+        air.run(4.0, |_, _| false);
+        air.b.tune(10.0).expect("idle");
+        air.run(5.0, |a, _| a.channel_busy());
+        assert!(air.a.channel_busy(), "the tone was not heard");
+        let plan = TestPlan {
+            remote: "KK4XYZ".to_owned(),
+            message_bytes: 100,
+            file_bytes: 0,
+            ladder: false,
+            ..TestPlan::default()
+        };
+        air.a.start_test(plan).expect("idle");
+        for _ in 0..3 {
+            // the next tone is asked for as the last one ends: no gap the probe could go in
+            air.run(12.0, |_, b| !b.transmitting());
+            air.b.tune(10.0).expect("idle");
+            air.run(2.0, |_, b| b.transmitting());
+        }
+        air.run(12.0, |_, b| !b.transmitting());
+        let held = air.a.held_total_s;
+        assert!(
+            held > PROBE_TIMEOUT_S,
+            "the probe was held only {held:.1} s"
+        );
+        air.run(60.0, |a, _| {
+            a.test.as_ref().is_none_or(|run| run.step != Step::Probe)
+        });
+        let run = air.a.test.as_ref().expect("the run");
+        assert!(
+            run.probe.is_some(),
+            "the probe went unanswered after {held:.1} s held: {:?} {:?}",
+            run.outcome,
+            run.step
+        );
+        assert!(run.outcome.is_none(), "{:?}", run.outcome);
     }
 }
