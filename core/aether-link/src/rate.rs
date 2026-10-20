@@ -39,9 +39,10 @@ pub const AWGN_THRESHOLD_DB: [f64; 20] = [
 pub const TONE_CONTROL_THRESHOLD_DB: f64 = -19.5;
 
 /// The 2 300 Hz control frames' 10 % FER points on AWGN, indexed by family (ordinary,
-/// floor): the control mode on the SHORT layout, and the tone floor's control frame — what
-/// the lossy pipe ([`crate::sim`]) judges a control frame by; the rate controller never
-/// reads it. Mirrors the model; the vector test pins it.
+/// floor): the control mode on the SHORT layout, and the tone floor's control frame — what the
+/// engine asks for the other station's control frames on the floor by (07-protocol-8.md §7),
+/// and the model's lossy pipe judges a control frame by; the rate controller never reads it.
+/// Mirrors the model; the vector test pins it.
 pub const CONTROL_THRESHOLD_DB: [f64; 2] = [-5.1, TONE_CONTROL_THRESHOLD_DB];
 
 /// The two 500 Hz control frames' 10 % FER points on AWGN, indexed by family: the ordinary

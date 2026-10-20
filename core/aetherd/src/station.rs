@@ -2037,11 +2037,6 @@ impl<P: Ptt> Station<P> {
         self.deaf_until = now + self.config.playback_lead_s + CAPTURE_LAG_ALLOWANCE_S;
     }
 
-    /// As the receiving station, demand the sending role.
-    pub fn request_break(&mut self) {
-        self.engine.request_break();
-    }
-
     /// Apply the settings that can change without a restart.
     ///
     /// A sound card is opened once and a control socket is bound once, so most of a

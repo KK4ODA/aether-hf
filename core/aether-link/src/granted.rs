@@ -1,11 +1,13 @@
-//! Granted slots: the link engine of protocol 8 (ADR-0069).
+//! Granted slots: the link engine of protocols 8 and 9 (ADR-0069; 9 adds measurement frames,
+//! ADR-0077).
 //!
-//! One [`GrantedEngine`] per station, beside [`LinkEngine`](crate::LinkEngine) (protocol 7).
-//! Like it, it is a pure state machine — [`on_frame`](GrantedEngine::on_frame),
-//! [`on_tx_done`](GrantedEngine::on_tx_done) and [`tick`](GrantedEngine::tick) in, [`Action`]s
-//! out — and it keeps its data path: selective repeat over a 16-frame window, HARQ with slot
-//! inference, re-encoding, the rate controller and the connect handshake's measurements. What it
-//! changes is *when* a station may key, and nothing else.
+//! One [`GrantedEngine`] per station. It is a pure state machine —
+//! [`on_frame`](GrantedEngine::on_frame), [`on_tx_done`](GrantedEngine::on_tx_done) and
+//! [`tick`](GrantedEngine::tick) in, [`Action`]s out — with no threads, no clock of its own and no
+//! physical layer. It replaced protocol 7's turn engine (`LinkEngine`, retired in ADR-0069's Step
+//! 5) and kept its data path: selective repeat over a 16-frame window, HARQ with slot inference,
+//! re-encoding, the rate controller and the connect handshake's measurements. What it changed is
+//! *when* a station may key, and nothing else.
 //!
 //! It is a port of the reference model's `aether_model.link.granted`, rule by rule and draw by
 //! draw: `tools/make_granted_vectors.py` records every input and every action of the model's
@@ -47,7 +49,6 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::{
-    engine::{Action, LadderRung, ProbeResult, State},
     frames::{
         CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, GrantFrame,
         GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, REPORT, WINDOW,
@@ -57,6 +58,97 @@ use crate::{
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
 };
+
+// ── what the engine hands its driver ──────────────────────────────────
+
+/// Where a session is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// No session.
+    Idle,
+    /// Calling, waiting for an acceptance.
+    Connecting,
+    /// In session.
+    Connected,
+    /// Closing.
+    Disconnecting,
+}
+
+/// Something the caller must do, or be told.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    /// Transmit these frames back to back; they occupy `duration_s` of air time.
+    Transmit {
+        /// The frames, in order.
+        frames: Vec<TxFrame>,
+        /// Total air time.
+        duration_s: f64,
+        /// What set it going: the engine's entry point, or the timer that fired
+        /// (`timer:proceed`, `frame`, `send`, ...). For the account of the air a harness keeps
+        /// (ADR-0069 §5), never for the protocol.
+        cause: &'static str,
+        /// The latest its radiation may start, on the air's clock, or `None` for one the
+        /// station makes on its own initiative. Past it the transmission is not sent at all,
+        /// whatever held it — the keying gate's rule (ADR-0069 §2.3) — and the engine is told
+        /// ([`GrantedEngine::on_tx_dropped`]).
+        not_after: Option<f64>,
+        /// The earliest its radiation may start, on the air's clock: the start of the slot it
+        /// is the answer in. An answer is decided as soon as what it says is final, so the
+        /// daemon renders it while the slot has yet to start and keys it to radiate here
+        /// (07-protocol-8.md §10); `None`, as soon as it can.
+        not_before: Option<f64>,
+        /// The station's closing Morse identifier, this long with the moment of silence that
+        /// parts it from the frames: after the frames — behind a `DISC_ACK`, in the time every
+        /// DISC grants it — or alone, with no frames; the last thing the station sends for the
+        /// session (ADR-0075). Counted in `duration_s`.
+        identifier_s: f64,
+        /// A transmission made outside every slot, which no protocol rule keeps clear: the
+        /// closing identifier of a station that could not be given a slot for it. The daemon
+        /// waits for a clear channel, as it does for a call (ADR-0075).
+        listen_first: bool,
+    },
+    /// Deliver these payload bytes to the application, in order.
+    Deliver(Vec<u8>),
+    /// Report something that happened.
+    Event {
+        /// What happened: `connected`, `disconnected`, `ignored`, `probe`, `probed`, …
+        name: &'static str,
+        /// Detail for a human.
+        detail: String,
+    },
+}
+
+/// What a probe of ours came back with (ADR-0006): who answered, the SNR they measured
+/// on our probe, and the SNR we measured on their answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeResult {
+    /// The station that answered.
+    pub remote: String,
+    /// The SNR it measured on our probe, when it said.
+    pub heard_there_db: Option<f64>,
+    /// The SNR we measured on its answer.
+    pub heard_here_db: f64,
+    /// The bandwidth the answering station runs, from its answer's capability byte — a
+    /// probe is answered across bandwidths (ADR-0035), and this is how the prober learns
+    /// that a call would not be; `None` for a reserved code.
+    pub bandwidth_hz: Option<usize>,
+}
+
+/// One rung of the Test session's mode ladder (P6-7): the measurement frames sent at it and the
+/// other station's report of them (ADR-0077) — the frame error rate it saw at the SNR it
+/// measured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LadderRung {
+    /// The rung.
+    pub mode: usize,
+    /// Measurement frames sent at the rung; a measurement is never sent again.
+    pub frames: usize,
+    /// Of those, the ones the other station's report says arrived.
+    pub decoded: usize,
+    /// The SNR the other station measured, from its report; `None` when the measurement's
+    /// slot went silent and the report came with a later answer (ADR-0076).
+    pub snr_db: Option<f64>,
+}
 
 // ── the protocol's constants ──────────────────────────────────────────
 
@@ -1514,11 +1606,6 @@ impl GrantedEngine {
     pub const fn measuring(&self) -> bool {
         self.measure_ask.is_some() || self.measure_out.is_some()
     }
-
-    /// Kept for the daemon's interface. Every answer states the slave's queue and the next
-    /// header grants it, so the slave's data never waits for the master's to run out: there is
-    /// no turn to break into.
-    pub const fn request_break(&mut self) {}
 
     /// The slowest mode of a family that carries a connect body: what calls, acceptances,
     /// probes and their answers go at.
@@ -3563,7 +3650,7 @@ impl GrantedEngine {
         seqs
     }
 
-    /// This station's data for a transmission, laid out as `LinkEngine` lays out a burst: the
+    /// This station's data for a transmission, laid out as protocol 7 laid out a burst: the
     /// unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones, one
     /// family a transmission, as many as `room_s` and [`MAX_DATA`] allow. Each frame states how
     /// many follow it, three meaning three or more. A measurement asked for goes alone once
@@ -3809,7 +3896,7 @@ impl GrantedEngine {
     // believe (a silent slot at worst), the master for the slot's latest end.
 
     /// A data frame of the transmission being received: decoded alone, or combined with an
-    /// earlier copy of its block, its sequence number inferred from its slot (as `LinkEngine`).
+    /// earlier copy of its block, its sequence number inferred from its slot.
     /// Returns where its record is kept, if it is.
     fn take_data<F: SoftFrame>(&mut self, soft: &F, frame: &Heard) -> Option<usize> {
         let (payload, buffer) = soft.decode(None);

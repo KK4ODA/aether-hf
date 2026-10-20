@@ -1,8 +1,9 @@
 //! Link-layer frame formats — the bytes inside a PHY DATA or CONTROL payload.
 //!
-//! Two containers exist at the physical layer: a DATA frame (LONG layout, mode signalled in
-//! the pilot chips) and a CONTROL frame (SHORT layout, control mode, seven bytes). The link
-//! layer puts its own header at the front of each.
+//! Two containers exist at the physical layer: a DATA frame (a rung of the air's ladder — a
+//! tone-floor kind, or an OFDM mode on the LONG layout with the mode signalled in the pilot
+//! chips) and a CONTROL frame (seven bytes: the tone floor's control frame, or the SHORT layout at
+//! the control mode). The link layer puts its own header at the front of each.
 //!
 //! **DATA container**, three-byte header (five with an explicit length):
 //!
@@ -19,16 +20,9 @@
 //! why there is no burst position here — the receiver takes a frame's place in its burst from
 //! its air time, and the end of a burst from the silence that follows.
 //!
-//! **CONTROL container**, seven bytes:
-//!
-//! | Offset | Field |
-//! |---|---|
-//! | 0 | kind (4 bits) \| flags (4 bits) |
-//! | 1 | session id |
-//! | 2 | base sequence number — the next one the receiver needs |
-//! | 3–4 | bitmap: bit *i* set ⇔ `base + i` received |
-//! | 5 | measured SNR, signed dB, 3 kHz reference; `0x7F` = unknown |
-//! | 6 | recommended mode (5 bits) \| burst family (1 bit) \| follows (2 bits) |
+//! **CONTROL container**, seven bytes: [`GrantFrame`] (ADR-0069), whose documentation has the
+//! layout — a header (the master's, which grants the slave its slot), an answer (the slave's, in
+//! it), a `DISC` or a `DISC_ACK`.
 //!
 //! Everything is big-endian. Callsigns pack six bits per character (`A–Z 0–9 - /`), nine
 //! characters into seven bytes.
@@ -132,58 +126,6 @@ impl DataKind {
 pub mod data_flags {
     /// An explicit data length follows the header (the frame is not full).
     pub const PARTIAL: u8 = 0x01;
-}
-
-/// What a CONTROL container carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControlKind {
-    /// Acknowledgement with a selective-repeat bitmap.
-    Ack,
-    /// Keep-alive from an idle sender, answered with an ACK.
-    Poll,
-    /// Hands the sending role to the peer.
-    Turn,
-    /// Requests that the session close.
-    Disc,
-    /// Confirms a close.
-    DiscAck,
-}
-
-impl ControlKind {
-    const fn to_bits(self) -> u8 {
-        match self {
-            Self::Ack => 0,
-            Self::Poll => 1,
-            Self::Turn => 2,
-            Self::Disc => 3,
-            Self::DiscAck => 4,
-        }
-    }
-
-    const fn from_bits(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Ack),
-            1 => Some(Self::Poll),
-            2 => Some(Self::Turn),
-            3 => Some(Self::Disc),
-            4 => Some(Self::DiscAck),
-            _ => None,
-        }
-    }
-}
-
-/// Flags on a CONTROL container.
-pub mod control_flags {
-    /// The receiving station has data to send.
-    pub const WANT_TX: u8 = 0x1;
-    /// The receiving station demands the sending role now.
-    pub const BREAK: u8 = 0x2;
-    /// (TURN) Sent at the end of a burst that emptied the sender's queue: the turn is the
-    /// receiving station's for the taking, with its acknowledgement (ADR-0047).
-    pub const OFFER: u8 = 0x4;
-    /// (ACK) The turn offered is taken: this station's own data follows the acknowledgement
-    /// in the same transmission (ADR-0047).
-    pub const TAKEN: u8 = 0x8;
 }
 
 /// Anything malformed in a received frame.
@@ -432,44 +374,10 @@ pub const fn with_bandwidth(caps: u8, bandwidth_hz: usize) -> u8 {
     (caps & !CAP_BANDWIDTH_MASK) | (code << CAP_BANDWIDTH_SHIFT)
 }
 
-/// Link protocol 7, the turn engine's ([`LinkEngine`](crate::LinkEngine)), in the connect
-/// body's version byte — kept until granted slots replace that engine (ADR-0069 Step 5). 2
-/// since the tone floor (ADR-0013): a mode number is a rung of the air's ladder — on the 2 300 Hz air two
-/// above the OFDM mode of version 1 — so a session between the two would run on numbers that
-/// mean different frames at either end; a station ignores a call or an acceptance of another
-/// version, and says so. 3 since the fast kinds (ADR-0014): four more rungs on the 2 300 Hz
-/// air, between the floor's two and the OFDM modes, and a control frame whose recommended
-/// mode has five bits and its counter three. 4 since the narrow middle kinds (ADR-0015): two
-/// more rungs on the 500 Hz air, between the floor's two and the OFDM modes (the 2 300 Hz
-/// ladder is as it was, but one number says what both ladders are). 5 since the burst countdown
-/// (ADR-0041): an ordinary data frame's mode chips are turned by the number of frames of its
-/// burst that follow it, which a receiver of version 4 cannot read — it takes a turned frame for
-/// noise. 6 since the countdown counts in pairs (ADR-0046): a 5 reading 1 where 6 says 1 or 2
-/// would answer a frame early. 7 since the turn offered at the end of a burst (ADR-0047): a
-/// TURN's `OFFER` flag and an acknowledgement's `TAKEN`, which a 6 would take for a TURN to
-/// answer and an acknowledgement alone.
-pub const TURNS_VERSION: u8 = 7;
-
-/// The largest countdown a data frame carries (ADR-0041): the physical layer turns the frame's
-/// mode chips a quarter turn a step, so four values.
+/// The largest count of frames to follow a data frame carries (ADR-0041, ADR-0068 §2.1): the
+/// physical layer turns an ordinary frame's mode chips a quarter turn a step, and a tone frame's
+/// middle sync block names one of four, so four values — 3 for three or more.
 pub const MAX_FOLLOWS: u8 = 3;
-
-/// The countdown a data frame carries for the frames of its burst that follow it: half of them,
-/// rounded up (ADR-0046) — 0 for the last frame, 1 for one or two following, 2 for three or
-/// four, 3 for five or six. It never says fewer than follow, so a receiver that hears only the
-/// burst's first frames does not answer over the rest, as "three or more" let it; it says at
-/// most one more, and only the last frame's loss makes that matter. Exact for bursts up to
-/// seven frames; the default burst is six.
-#[must_use]
-pub fn countdown_of(following: usize) -> u8 {
-    u8::try_from(following.div_ceil(2)).map_or(MAX_FOLLOWS, |n| n.min(MAX_FOLLOWS))
-}
-
-/// The most frames a countdown says may follow ([`countdown_of`]).
-#[must_use]
-pub fn most_following(countdown: u8) -> u8 {
-    2 * countdown
-}
 
 /// Bytes a connect body occupies; one of an earlier version is one byte shorter.
 pub const CONNECT_BODY_BYTES: usize = 2 * CALL_BYTES + 3;
@@ -487,7 +395,16 @@ pub const GRANTED_VERSION: u8 = 8;
 
 /// The link protocol a station speaks, in the connect body's version byte; what a release
 /// states (`link_protocol`) and the shell's `LINK_PROTOCOL` is held to; a station ignores a
-/// call of another, and says so. 9 since the measurement frames (ADR-0077): a
+/// call of another, and says so. The same number names different frames in different versions,
+/// so a session between two versions cannot run.
+///
+/// 2 since the tone floor (ADR-0013): a mode number is a rung of the air's ladder. 3 since the
+/// fast kinds (ADR-0014): four more rungs on the 2 300 Hz air, and a control frame whose
+/// recommended mode has five bits. 4 since the narrow middle kinds (ADR-0015). 5 since the burst
+/// countdown (ADR-0041): an ordinary data frame's mode chips are turned by the number of frames
+/// that follow it. 6 since the countdown counts in pairs (ADR-0046). 7 since the turn offered at
+/// the end of a burst (ADR-0047), the last of the turn engine, retired in ADR-0069's Step 5. 8,
+/// [`GRANTED_VERSION`], since granted slots. 9 since the measurement frames (ADR-0077): a
 /// [`DataKind::Measure`] frame, the control frame's `measure` bit in the place of version 8's
 /// identifier request inside a session, and an acknowledgement that reports a measurement
 /// ([`REPORT`]), none of which a station of version 8 reads.
@@ -512,7 +429,7 @@ pub const fn level_of(caps: u8) -> u8 {
     (caps & CAP_LEVEL_MASK) >> CAP_LEVEL_SHIFT
 }
 
-/// The SNR byte shared by the CONTROL frame and the probe body: signed whole decibels
+/// The SNR byte of the connect and probe bodies: signed whole decibels
 /// (3 kHz reference), clamped to ±40, [`SNR_UNKNOWN`] for "not measured".
 ///
 /// Ties round to even, matching the reference model. Rust's `round` goes half away from
@@ -642,90 +559,6 @@ impl ConnectBody {
 }
 
 // ── CONTROL container ─────────────────────────────────────────────────
-
-/// A control frame.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ControlFrame {
-    /// What it is.
-    pub kind: ControlKind,
-    /// Session id.
-    pub session: u8,
-    /// Flags (see [`control_flags`]).
-    pub flags: u8,
-    /// Next sequence number the receiver needs.
-    pub base: u8,
-    /// Bit *i* set means `base + i` has been received.
-    pub bitmap: u16,
-    /// Measured SNR in dB (3 kHz reference), or `None` if not measured.
-    pub snr_db: Option<f64>,
-    /// Mode the receiver recommends: a rung of the air's ladder, five bits — room for 32; the
-    /// 2 300 Hz ladder has 20 since the fast kinds (ADR-0014).
-    pub recommended_mode: u8,
-    /// How many frames of a burst follow this control frame in the same transmission, in
-    /// slots of that burst's data frame (0–3, ADR-0068): an acknowledgement that took the turn
-    /// states its own burst after it (ADR-0047), so a receiver that reads it and nothing of the
-    /// burst still knows when the burst ends. Until protocol 8 these bits were a counter of
-    /// acknowledgements, a label for logs.
-    pub follows: u8,
-    /// The family of the burst [`follows`](Self::follows) counts — the length of its slots.
-    pub burst_floor: bool,
-}
-
-impl ControlFrame {
-    /// Serialise into exactly [`CONTROL_BYTES`] bytes.
-    #[must_use]
-    pub fn encode(&self) -> [u8; CONTROL_BYTES] {
-        let snr = snr_byte(self.snr_db);
-        [
-            (self.kind.to_bits() << 4) | (self.flags & 0x0F),
-            self.session,
-            self.base,
-            ((self.bitmap >> 8) & 0xFF) as u8,
-            (self.bitmap & 0xFF) as u8,
-            snr,
-            ((self.recommended_mode & 0x1F) << 3)
-                | (u8::from(self.burst_floor) << 2)
-                | (self.follows & 0x03),
-        ]
-    }
-
-    /// Parse one.
-    ///
-    /// # Errors
-    /// If the payload is short or the kind is unknown.
-    pub fn decode(payload: &[u8]) -> Result<Self, FrameError> {
-        if payload.len() < CONTROL_BYTES {
-            return Err(FrameError::TooShort);
-        }
-        let kind_bits = payload[0] >> 4;
-        let kind = ControlKind::from_bits(kind_bits).ok_or(FrameError::UnknownKind(kind_bits))?;
-        let snr_db = snr_from_byte(payload[5]);
-        Ok(Self {
-            kind,
-            session: payload[1],
-            flags: payload[0] & 0x0F,
-            base: payload[2],
-            bitmap: (u16::from(payload[3]) << 8) | u16::from(payload[4]),
-            snr_db,
-            recommended_mode: payload[6] >> 3,
-            follows: payload[6] & 0x03,
-            burst_floor: payload[6] & 0x04 != 0,
-        })
-    }
-
-    /// ACK semantics: has `seq` been received — either below the base, or set in the bitmap?
-    #[must_use]
-    pub fn received(&self, seq: u8) -> bool {
-        let distance = seq_distance(seq, self.base);
-        if distance >= WINDOW {
-            // far behind the base means already acknowledged and slid past
-            return distance >= SEQ_MOD / 2;
-        }
-        (self.bitmap >> distance) & 1 == 1
-    }
-}
-
-// ── protocol 8: the CONTROL container ────────────────────────────────
 
 /// What a protocol 8 control frame is (ADR-0069).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -912,7 +745,8 @@ impl GrantFrame {
         })
     }
 
-    /// Acknowledgement semantics, as [`ControlFrame::received`]; a report acknowledges only
+    /// Acknowledgement semantics: has `seq` been received — below the base, or set in the
+    /// bitmap? A report acknowledges only
     /// what is below `base`.
     #[must_use]
     pub fn received(&self, seq: u8) -> bool {
@@ -1031,106 +865,24 @@ mod tests {
     }
 
     #[test]
-    fn control_frames_round_trip() {
-        let frame = ControlFrame {
-            kind: ControlKind::Ack,
-            session: 9,
-            flags: control_flags::WANT_TX,
-            base: 100,
-            bitmap: 0b1011,
-            snr_db: Some(-7.0),
-            recommended_mode: 6,
-            follows: 3,
-            burst_floor: true,
-        };
-        let got = ControlFrame::decode(&frame.encode()).expect("decode");
-        assert_eq!(got, frame);
-    }
-
-    #[test]
     fn snr_ties_round_to_even() {
-        // pinned because it differs between languages: see the note in `encode`
-        let frame = |snr: f64| ControlFrame {
-            kind: ControlKind::Ack,
-            session: 0,
-            flags: 0,
-            base: 0,
-            bitmap: 0,
-            snr_db: Some(snr),
-            recommended_mode: 0,
-            follows: 0,
-            burst_floor: false,
-        };
-        assert_eq!(
-            ControlFrame::decode(&frame(12.5).encode()).unwrap().snr_db,
-            Some(12.0)
-        );
-        assert_eq!(
-            ControlFrame::decode(&frame(13.5).encode()).unwrap().snr_db,
-            Some(14.0)
-        );
-        assert_eq!(
-            ControlFrame::decode(&frame(-12.5).encode()).unwrap().snr_db,
-            Some(-12.0)
-        );
+        // pinned because it differs between languages: see the note on `snr_byte`
+        let read = |snr: f64| snr_from_byte(snr_byte(Some(snr)));
+        assert_eq!(read(12.5), Some(12.0));
+        assert_eq!(read(13.5), Some(14.0));
+        assert_eq!(read(-12.5), Some(-12.0));
     }
 
     #[test]
     fn snr_is_clamped_to_the_reportable_range() {
-        let frame = |snr: f64| ControlFrame {
-            kind: ControlKind::Ack,
-            session: 0,
-            flags: 0,
-            base: 0,
-            bitmap: 0,
-            snr_db: Some(snr),
-            recommended_mode: 0,
-            follows: 0,
-            burst_floor: false,
-        };
-        assert_eq!(
-            ControlFrame::decode(&frame(99.0).encode()).unwrap().snr_db,
-            Some(40.0)
-        );
-        assert_eq!(
-            ControlFrame::decode(&frame(-99.0).encode()).unwrap().snr_db,
-            Some(-40.0)
-        );
+        assert_eq!(snr_from_byte(snr_byte(Some(99.0))), Some(40.0));
+        assert_eq!(snr_from_byte(snr_byte(Some(-99.0))), Some(-40.0));
     }
 
     #[test]
     fn an_unmeasured_snr_survives_the_round_trip() {
-        let frame = ControlFrame {
-            kind: ControlKind::Poll,
-            session: 1,
-            flags: 0,
-            base: 0,
-            bitmap: 0,
-            snr_db: None,
-            recommended_mode: 0,
-            follows: 0,
-            burst_floor: false,
-        };
-        assert_eq!(ControlFrame::decode(&frame.encode()).unwrap().snr_db, None);
-    }
-
-    #[test]
-    fn ack_received_semantics() {
-        let ack = ControlFrame {
-            kind: ControlKind::Ack,
-            session: 0,
-            flags: 0,
-            base: 10,
-            bitmap: 0b0101,
-            snr_db: None,
-            recommended_mode: 0,
-            follows: 0,
-            burst_floor: false,
-        };
-        assert!(ack.received(10) && ack.received(12));
-        assert!(!ack.received(11) && !ack.received(13));
-        // below the base: already acknowledged
-        assert!(ack.received(9) && ack.received(5));
+        assert_eq!(snr_byte(None), SNR_UNKNOWN);
+        assert_eq!(snr_from_byte(snr_byte(None)), None);
     }
 
     #[test]
@@ -1195,12 +947,8 @@ mod tests {
         assert_eq!(data_kind(&[0xE0]), Some(DataKind::Measure));
         assert_eq!(data_kind(&[]), None);
         assert!(matches!(
-            ControlFrame::decode(&[0, 1]),
+            GrantFrame::decode(&[0, 1]),
             Err(FrameError::TooShort)
-        ));
-        assert!(matches!(
-            ControlFrame::decode(&[0xF0, 0, 0, 0, 0, 0, 0]),
-            Err(FrameError::UnknownKind(15))
         ));
         // a PARTIAL frame whose declared length overruns
         assert!(matches!(
