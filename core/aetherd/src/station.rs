@@ -27,6 +27,7 @@ mod fieldtest;
 mod gaps;
 mod host;
 mod latency;
+mod radio_reads;
 mod reserve;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
@@ -1052,6 +1053,8 @@ pub struct Station<P: Ptt> {
     /// The session's recording, running on past its end until the closing identifiers have
     /// gone (ADR-0076).
     recording_tail: Option<RecordingTail>,
+    /// The radio's own readings for the recording running, and the operator's marks in it.
+    radio_reads: radio_reads::RadioReads,
     /// When the key last came up, for the receive trace after it (`trace_after_release`).
     released_at: f64,
     /// When that trace last wrote a line.
@@ -1279,6 +1282,7 @@ impl<P: Ptt> Station<P> {
             deaf_until: f64::NEG_INFINITY,
             capture_skips_at: VecDeque::new(),
             recording_tail: None,
+            radio_reads: radio_reads::RadioReads::default(),
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
             device_latency_s: None,
@@ -2615,6 +2619,8 @@ impl<P: Ptt> Station<P> {
         }
         let path = recording.path().to_path_buf();
         self.recording = Some(recording);
+        // its S-meter, dial and settings are asked for from the next pass, its marks from 1
+        self.radio_reads = radio_reads::RadioReads::default();
         self.note("recording", &format!("started {}", path.display()));
         Ok(path)
     }
@@ -2864,6 +2870,7 @@ impl<P: Ptt> Station<P> {
         self.advance_beacons(now);
         self.advance_call_bandwidth(now);
         self.advance_bandwidth(now);
+        self.read_radio(now);
         Ok(())
     }
 
@@ -10940,6 +10947,234 @@ mod tests {
         assert_eq!(station.datagram_status()["incomplete_dropped"], 1);
         let received = station.take_received_datagrams();
         assert!(received.is_empty(), "{received:?}");
+    }
+
+    /// A radio read in the background, each question answered at once as a keying thread
+    /// does between keying commands, every question kept.
+    #[derive(Debug, Default)]
+    struct ReadRadio {
+        asked: Vec<crate::ptt::Asked>,
+        answers: Vec<crate::ptt::Readings>,
+        dial: u64,
+        agc: &'static str,
+        /// Whether its S-meter answers.
+        meter: bool,
+    }
+
+    impl Ptt for ReadRadio {
+        fn key(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+
+        fn unkey(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+
+        fn describe(&self) -> String {
+            "a radio with a meter".to_owned()
+        }
+
+        fn frequency_hz(&mut self) -> Option<u64> {
+            Some(self.dial)
+        }
+
+        fn can_tune(&self) -> bool {
+            true
+        }
+
+        fn reads_meter(&self) -> bool {
+            true
+        }
+
+        fn request_readings(&mut self, asked: crate::ptt::Asked) {
+            self.asked.push(asked);
+            let meter = (asked.meter && self.meter).then_some(crate::ptt::SMeter {
+                value: self.asked.len() as f64,
+                scale: "test",
+            });
+            self.answers.push(crate::ptt::Readings {
+                at: std::time::Instant::now(),
+                asked,
+                meter,
+                dial_hz: asked.dial.then_some(self.dial),
+                settings: if asked.settings {
+                    vec![("agc", self.agc.to_owned())]
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+
+        fn take_readings(&mut self) -> Vec<crate::ptt::Readings> {
+            std::mem::take(&mut self.answers)
+        }
+    }
+
+    fn reading_station(meter: bool, dir: &std::path::Path) -> Station<ReadRadio> {
+        Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                record_dir: Some(dir.to_path_buf()),
+                ..StationConfig::default()
+            },
+            ReadRadio {
+                dial: 7_082_000,
+                agc: "AUTO-MID",
+                meter,
+                ..ReadRadio::default()
+            },
+            1,
+        )
+    }
+
+    /// Feed `seconds` of silence, a tenth of a second at a time.
+    fn listen<P: Ptt>(station: &mut Station<P>, seconds: f64) {
+        let tenth = vec![0.0f32; station.config.params.audio_rate / 10];
+        for _ in 0..(seconds * 10.0).round() as usize {
+            station.capture(&tenth).expect("capture");
+        }
+    }
+
+    #[test]
+    fn a_recording_keeps_the_radios_meter_its_dial_changes_and_its_settings() {
+        // the busy detector's investigation (00-recording-plan.md): the S-meter follows the AGC
+        // itself, and a change at the radio explains a change of level the audio cannot
+        let dir = std::env::temp_dir().join(format!("aether-radio-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut station = reading_station(true, &dir);
+        listen(&mut station, 2.0);
+        assert!(
+            station.ptt.inner().asked.is_empty(),
+            "the radio was asked with nothing recording"
+        );
+        station
+            .start_recording(Some("radio"), None)
+            .expect("start the recording");
+        listen(&mut station, 3.0);
+        station.ptt.inner_mut().dial = 7_074_000;
+        station.ptt.inner_mut().agc = "AUTO-SLOW";
+        listen(&mut station, 7.0);
+        let asked = station.ptt.inner().asked.clone();
+        let count = |pick: fn(&crate::ptt::Asked) -> bool| asked.iter().filter(|a| pick(a)).count();
+        let meters = count(|a| a.meter);
+        assert!(
+            (36..=44).contains(&meters),
+            "four meter readings a second for ten seconds: {meters}"
+        );
+        assert!(
+            (9..=11).contains(&count(|a| a.dial)),
+            "the dial once a second"
+        );
+        assert!(
+            (2..=3).contains(&count(|a| a.settings)),
+            "the settings every five"
+        );
+        let summary = station.stop_recording().expect("a recording");
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let radio = &sidecar["radio"];
+        assert_eq!(radio["meter"]["scale"], "test");
+        let readings = radio["meter"]["readings"].as_array().expect("readings");
+        // the last one asked may still have been on its way when the recording stopped
+        assert!(
+            (meters - 1..=meters).contains(&readings.len()),
+            "{} readings kept of {meters} asked",
+            readings.len()
+        );
+        let times: Vec<f64> = readings
+            .iter()
+            .map(|r| r[0].as_f64().expect("t_s"))
+            .collect();
+        // the recording's time starts at its pre-roll: the two seconds heard before it
+        let preroll = sidecar["session"]["preroll_s"].as_f64().unwrap_or(0.0);
+        assert!(
+            times.windows(2).all(|w| w[1] > w[0])
+                && times[0] >= preroll - 0.01
+                && times[times.len() - 1] < preroll + 10.1,
+            "in the recording's own time, in order: {times:?} after {preroll} s of pre-roll"
+        );
+        let dial: Vec<u64> = radio["dial"]
+            .as_array()
+            .expect("dial")
+            .iter()
+            .map(|d| d[1].as_u64().expect("hertz"))
+            .collect();
+        assert_eq!(
+            dial,
+            [7_082_000, 7_074_000],
+            "the first reading and the change, nothing in between"
+        );
+        let settings: Vec<(&str, &str)> = radio["settings"]
+            .as_array()
+            .expect("settings")
+            .iter()
+            .map(|s| {
+                (
+                    s["name"].as_str().expect("name"),
+                    s["value"].as_str().expect("value"),
+                )
+            })
+            .collect();
+        assert_eq!(settings, [("agc", "AUTO-MID"), ("agc", "AUTO-SLOW")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_radio_is_not_asked_while_anything_waits_to_go_out() {
+        // a reading on the keying port must never sit in front of a key: none is asked while a
+        // transmission waits or a session, call, probe or Test is under way
+        let dir = std::env::temp_dir().join(format!("aether-radio-tx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut station = reading_station(true, &dir);
+        station
+            .start_recording(Some("busy"), None)
+            .expect("start the recording");
+        station.set_drive(1).expect("a drive burst queued");
+        listen(&mut station, 2.0);
+        assert!(
+            station.ptt.inner().asked.is_empty(),
+            "asked with a transmission waiting: {:?}",
+            station.ptt.inner().asked
+        );
+        let _ = station.stop_recording();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_radio_that_never_answers_its_meter_is_not_asked_for_it_all_recording() {
+        let dir = std::env::temp_dir().join(format!("aether-radio-mute-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut station = reading_station(false, &dir);
+        station
+            .start_recording(Some("mute"), None)
+            .expect("start the recording");
+        listen(&mut station, 6.0);
+        let asked = &station.ptt.inner().asked;
+        let meters = asked.iter().filter(|a| a.meter).count();
+        assert_eq!(
+            meters,
+            radio_reads::METER_GIVE_UP as usize,
+            "asked until it had gone unanswered {} times, then no more",
+            radio_reads::METER_GIVE_UP
+        );
+        assert!(
+            asked.iter().filter(|a| a.dial).count() >= 5,
+            "the dial is still read"
+        );
+        let summary = station.stop_recording().expect("a recording");
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        assert!(
+            sidecar["radio"]["meter"]["readings"]
+                .as_array()
+                .expect("readings")
+                .is_empty()
+        );
+        assert!(sidecar["radio"]["meter"]["scale"].is_null());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A radio whose keying command takes `key_s` to answer, as a CAT round trip does.

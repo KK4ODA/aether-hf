@@ -13,7 +13,9 @@ Then it finds every **AGC event** — the gain reading 6 dB or more under its le
 least half a second — and measures each: how deep and how
 long; how fast the noise came back (dB/s, from 90 % to 10 % of the depth); whether the signal that
 caused it was in the channel or outside it (which band's power rose at the onset); what the floor
-did; and how long the channel read busy by level after the gain came back (ADR-0078).
+did; and how long the channel read busy by level after the gain came back (ADR-0078). When the
+sidecar holds what the radio said of itself — its S-meter, dial and settings — and the operator's
+marks, those are listed too, the S-meter beside each event.
 
     python tools/floor_trace.py RECORDING.wav [--expect SIDECAR.json] [--bandwidth 500]
                                 [--variant normalised] [--daemon PATH] [--csv OUT] [--svg OUT]
@@ -149,6 +151,38 @@ def events(tr: dict[str, np.ndarray]) -> list[dict]:
     return found
 
 
+def radio_report(sidecar: dict, found: list[dict]) -> list[str]:
+    """What the radio said of itself while the recording ran (the sidecar's ``radio``, from the
+    beta after 0.2.0-beta.114) and the operator's marks: the S-meter beside each AGC event — the
+    meter follows the AGC itself — every change of dial and setting, and every mark."""
+    lines = []
+    radio = sidecar.get("radio") or {}
+    meter = radio.get("meter") or {}
+    readings = np.array(meter.get("readings") or [], dtype=float).reshape(-1, 2)
+    if len(readings):
+        lines.append(f"  S-meter: {len(readings)} readings ({meter.get('scale')})")
+
+        def median_in(a: float, b: float) -> float:
+            inside = readings[(readings[:, 0] >= a) & (readings[:, 0] < b), 1]
+            return float(np.median(inside)) if len(inside) else float("nan")
+
+        for e in found:
+            start, end = e["start_s"], e["start_s"] + e["length_s"]
+            lines.append(
+                f"    event at {start:8.1f} s: S-meter {median_in(start - 3.0, start - 0.5):.0f} "
+                f"before, {median_in(start + 0.25 * e['length_s'], end - 0.25 * e['length_s']):.0f}"
+                f" during, {median_in(end + 0.5, end + 3.0):.0f} after"
+            )
+    for t_s, hz in radio.get("dial") or []:
+        lines.append(f"  dial at {t_s:8.1f} s: {hz / 1e6:.6f} MHz")
+    for setting in radio.get("settings") or []:
+        lines.append(f"  {setting['name']} at {setting['t_s']:8.1f} s: {setting['value']}")
+    for event in sidecar.get("events") or []:
+        if event.get("event") == "mark":
+            lines.append(f"  mark {event.get('detail')} at {event.get('t_s', 0.0):8.1f} s")
+    return lines
+
+
 def write_svg(path: Path, tr: dict[str, np.ndarray], title: str) -> None:
     """Level, floor, the gain reading and busy, on one axis: the gain is drawn from the floor's
     median, so a cut shows as the noise would have gone with it."""
@@ -256,6 +290,9 @@ def main() -> int:
             f"    {t[a]:8.1f} s for {(b - a) * BLOCK_S:5.1f} s: level {np.median(tr['power_db'][a:b]):.1f}, "
             f"floor {tr['floor_db'][a]:.1f} → {tr['floor_db'][b - 1]:.1f}"
         )
+    if expect is not None:
+        for line in radio_report(json.loads(expect.read_text()), found):
+            print(line)
     if args.json:
         args.json.write_text(json.dumps(found, indent=1))
     if args.csv:

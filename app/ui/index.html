@@ -478,7 +478,11 @@
                 frame, its SNR and whether it decoded, and every change of the busy indicator. It
                 works at any time, just listening or during a session, and needs no other station.
                 It is what a bug report about the air should carry: <strong>Send files…</strong> on
-                the Log tab sends it. A test session leaves two files whose names end in
+                the Log tab sends it. With the radio keyed over CAT, rigctld or FLRig, a recording
+                also keeps the radio's S-meter, four times a second, its dial and, on a Yaesu, its
+                AGC, mode, filter, RF gain, attenuator and preamp whenever they change — read only
+                between sessions. <strong>Mark</strong> writes the moment you press it into the
+                report, numbered. A test session leaves two files whose names end in
                 <code>_test</code>: the <code>.json</code> report and the <code>.wav</code> audio.
               </p>
             </details>
@@ -486,6 +490,7 @@
           <p class="note" id="record-lede" title="What this box does">Saves what the radio hears to a file, whenever you like: just listening, or during a session. No other station is needed.</p>
           <div class="tool-row">
             <button id="btn-record" title="Start saving the radio's audio to a file; press again to stop and save">Start recording</button>
+            <button id="btn-mark" class="quiet" title="Mark this moment in the recording: each press writes the time, numbered, into the recording's report. Press it at each change a recording plan asks you to make, in place of a stopwatch" disabled>Mark</button>
             <input id="record-notes" title="Notes saved with the recording: what you are recording, such as the band, frequency, radio settings or the other station" type="text" placeholder="Notes: band, frequency, radio settings, the other station" aria-label="Notes for the recording" />
           </div>
           <dl class="rec-facts" title="Where recordings go">

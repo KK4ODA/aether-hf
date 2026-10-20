@@ -202,6 +202,7 @@ will run at, so a panel can say "this device is at 44.1 kHz" before the daemon r
 |---|---|---|
 | `record.start` | `name` (optional), `notes` (optional) | `path` of the WAV being written |
 | `record.stop` | — | `wav`, `sidecar`, `seconds`, `frames` found, `decoded` |
+| `record.mark` | `note?` | `mark` (numbered from 1 in each recording) and `t_s` (seconds into the recording): the moment kept in the running recording's sidecar as a `mark` event whose detail is the number, then `note` when one is given — the panel's **Mark** button, in place of a stopwatch. `refused` when nothing is being recorded |
 | `record.notes` | `notes` | accepted; kept for the next recording that starts on its own. Without one, an automatic recording carries the standing `[record] notes` from the configuration (a live key) — what an unattended station has to say about its band and antenna |
 | `heard.list` | — | `stations`: every station heard, most recent first — `callsign`, `first_heard_ms` and `last_heard_ms` (Unix milliseconds), `count`, `snr_db` (last) and `best_snr_db`, `frequency_hz` (when the radio could say), `mode`, `activity` (`beacon`, `calling`, `probing`, `answering`, `connected`, `datagram`), `detail` (whom it was calling, probing or answering), `connected` (whether a session with it has ever been up from here), `beacons` (how many of its beacons were heard: a station that beaconed and then called is one line whose activity says `calling`, and its beacons are counted here) and `last_beacon_ms`, `bandwidth_hz` (the bandwidth it runs, as the last of its frames that states one said — a beacon, a call, an answer, a probe or a probe's answer; null until one has, and in a list written before ADR-0035); `limit` (200) and the `path` of the file the list lives in |
 | `heard.clear` | — | `cleared`: how many were forgotten |
@@ -228,8 +229,23 @@ at the end,
 the `notes`, and `frequency_hz` when the keying backend can ask the rig (CAT, `rigctld` or FLRig; a
 serial keying line or a CM108 codec cannot, and the field is null rather than a guess). Times are seconds from the
 start of the file by the station's audio clock.
-The sidecar's `format` is `aether-hf-session/4`. `status` carries `recording` — the path and
-length so far — while one runs. With `[record] auto = true` every session records itself
+The sidecar's `radio` holds what the radio said of itself while the recording ran, read in the
+background over CAT, `rigctld` or FLRig and only while the station was idle — no session, call,
+probe or Test, nothing queued and not transmitting, so a reading never stands on the keying port in
+front of a key: `meter` — `scale`, what the numbers are on (`Yaesu SM0, 0-255`; `Kenwood SM0, the
+radio's own steps`; `Icom CI-V 15 02, 0-255 (S9 at 120 on most)`; `Hamlib STRENGTH, dB over S9`;
+`FLRig 0-100, S9 at 50`; null when none was read) and `readings`, `[t_s, value]` four times a
+second; `dial`, `[t_s, hertz]` for the first reading and every change, read once a second; and
+`settings`, `{t_s, name, value}` for the first reading of each and every change, read every five
+seconds — on a Yaesu over CAT `agc` (as it runs: `OFF`, `FAST`, `MID`, `SLOW`, `AUTO-FAST`,
+`AUTO-MID`, `AUTO-SLOW`), `mode` (`USB`, `DATA-U`, …), `width` (the CAT manual's width-table
+index; its hertz depend on the mode), `rf_gain` (0–255), `attenuator` and `preamp` (`IPO`,
+`AMP 1`, `AMP 2`), the FTDX10's published `GT`, `MD`, `SH`, `RG`, `RA` and `PA` commands; none on
+other radios. A radio that leaves eight S-meter questions in a row unanswered is not asked for it
+again in that recording, and a log line says so. The sidecar's `format` is `aether-hf-session/4`
+(the `radio` object and the `mark` events are additions a reader of an older one may ignore).
+`status` carries `recording` while one runs — its `path`, `seconds` so far, `marks` pressed,
+`meter_readings` kept and `reads_meter`, whether the keying interface reads the S-meter at all. With `[record] auto = true` every session records itself
 from connect to disconnect, one file each, named `YYYYMMDD-HHMMSS_<mycall>_<remote>`.
 
 `aetherd --replay <wav>` runs a recording back through the receiver and, with the sidecar

@@ -112,6 +112,12 @@ pub fn describe_control(payload: &[u8]) -> Option<String> {
     ))
 }
 
+/// Seconds to the millisecond: four readings a second for an hour, written every five seconds,
+/// are no place for seventeen digits each.
+fn millis(t: f64) -> f64 {
+    (t * 1000.0).round() / 1000.0
+}
+
 /// A recording in progress.
 #[derive(Debug)]
 pub struct Recording {
@@ -128,8 +134,25 @@ pub struct Recording {
     frames: Vec<FrameRecord>,
     sent: Vec<SentRecord>,
     events: Vec<Value>,
+    /// What the radio said of itself while recording: its S-meter, its dial, its settings.
+    radio: RadioTrack,
     /// Who and what: callsigns, settings, the operator's notes.
     meta: Value,
+}
+
+/// What a recording keeps of the radio's own readings, read in the background while it runs
+/// (the busy detector's investigation: the S-meter follows the AGC itself, and a change of
+/// dial or setting explains a change of level the audio alone cannot).
+#[derive(Debug, Default)]
+struct RadioTrack {
+    /// The scale the S-meter readings are on.
+    meter_scale: Option<&'static str>,
+    /// `[t_s, reading]`.
+    meter: Vec<[f64; 2]>,
+    /// `[t_s, hertz]`, the first reading and every change.
+    dial: Vec<(f64, u64)>,
+    /// The first reading of each setting and every change.
+    settings: Vec<Value>,
 }
 
 /// One frame this station put on the air.
@@ -206,6 +229,7 @@ impl Recording {
             frames: Vec::new(),
             sent: Vec::new(),
             events: Vec::new(),
+            radio: RadioTrack::default(),
             meta,
         };
         recording.write_sidecar(None)?;
@@ -309,6 +333,50 @@ impl Recording {
         }));
     }
 
+    /// Seconds into the recording at the station's clock `now_s`.
+    #[must_use]
+    pub fn time_of(&self, now_s: f64) -> f64 {
+        now_s - self.t0
+    }
+
+    /// The radio's S-meter at `now_s`, on `scale`.
+    pub fn meter(&mut self, now_s: f64, value: f64, scale: &'static str) {
+        self.radio.meter_scale.get_or_insert(scale);
+        self.radio.meter.push([millis(now_s - self.t0), value]);
+    }
+
+    /// How many S-meter readings the recording holds.
+    #[must_use]
+    pub fn meter_readings(&self) -> usize {
+        self.radio.meter.len()
+    }
+
+    /// The radio's dial at `now_s`: kept when it is the first or differs from the last.
+    pub fn dial(&mut self, now_s: f64, hz: u64) {
+        if self.radio.dial.last().is_none_or(|&(_, last)| last != hz) {
+            self.radio.dial.push((millis(now_s - self.t0), hz));
+        }
+    }
+
+    /// One of the radio's settings at `now_s`: kept when it is the first of its name or
+    /// differs from the last.
+    pub fn setting(&mut self, now_s: f64, name: &str, value: &str) {
+        let last = self
+            .radio
+            .settings
+            .iter()
+            .rev()
+            .find(|s| s["name"] == name)
+            .and_then(|s| s["value"].as_str());
+        if last != Some(value) {
+            self.radio.settings.push(json!({
+                "t_s": millis(now_s - self.t0),
+                "name": name,
+                "value": value,
+            }));
+        }
+    }
+
     /// Finish: patch the header, write the sidecar with the counters, close.
     ///
     /// # Errors
@@ -354,6 +422,14 @@ impl Recording {
             "events": self.events,
             "frames": self.frames,
             "sent": self.sent,
+            "radio": {
+                "meter": {
+                    "scale": self.radio.meter_scale,
+                    "readings": self.radio.meter,
+                },
+                "dial": self.radio.dial,
+                "settings": self.radio.settings,
+            },
             "counters": counters,
         });
         // written beside and renamed over, so a reader never sees half a document
@@ -859,6 +935,51 @@ mod tests {
         assert!((sidecar["events"][0]["t_s"].as_f64().unwrap() - 2.0).abs() < 1e-9);
         assert_eq!(sidecar["counters"]["frames_sent"], 3);
         assert!(sidecar["ended"].is_string());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_radios_readings_keep_every_meter_and_only_changes_of_dial_and_setting() {
+        let dir = temp_dir("radio");
+        let mut recording =
+            Recording::start(&dir, "radio", 48_000, 100.0, json!({})).expect("start");
+        for (i, t) in [100.25, 100.5, 100.75].into_iter().enumerate() {
+            recording.meter(t, 120.0 + i as f64, "Yaesu SM0, 0-255");
+        }
+        recording.dial(100.3, 3_590_000);
+        recording.dial(101.3, 3_590_000);
+        recording.dial(102.3, 7_082_000);
+        recording.setting(100.4, "agc", "AUTO-MID");
+        recording.setting(105.4, "agc", "AUTO-MID");
+        recording.setting(105.4, "rf_gain", "255");
+        recording.setting(110.4, "agc", "SLOW");
+        assert_eq!(recording.meter_readings(), 3);
+        assert!((recording.time_of(102.5) - 2.5).abs() < 1e-9);
+        let summary = recording.finish(&json!({})).expect("finish");
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let radio = &sidecar["radio"];
+        assert_eq!(radio["meter"]["scale"], "Yaesu SM0, 0-255");
+        assert_eq!(
+            radio["meter"]["readings"],
+            json!([[0.25, 120.0], [0.5, 121.0], [0.75, 122.0]])
+        );
+        assert_eq!(radio["dial"], json!([[0.3, 3_590_000], [2.3, 7_082_000]]));
+        let settings: Vec<(String, String)> = radio["settings"]
+            .as_array()
+            .expect("settings")
+            .iter()
+            .map(|s| (s["name"].to_string(), s["value"].to_string()))
+            .collect();
+        assert_eq!(
+            settings,
+            [
+                ("\"agc\"".to_owned(), "\"AUTO-MID\"".to_owned()),
+                ("\"rf_gain\"".to_owned(), "\"255\"".to_owned()),
+                ("\"agc\"".to_owned(), "\"SLOW\"".to_owned()),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

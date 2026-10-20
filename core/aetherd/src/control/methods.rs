@@ -83,6 +83,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "record.start"
             | "record.stop"
             | "record.notes"
+            | "record.mark"
             | "shutdown"
             | "config.set"
             | "ptt.test"
@@ -1159,7 +1160,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         }
         "drive.set" => drive_set(station, params, id),
         "audio.level" => Response::ok(id, level_json(&station.audio_level())),
-        "record.start" | "record.stop" | "record.notes" => record(station, request),
+        "record.start" | "record.stop" | "record.notes" | "record.mark" => record(station, request),
         "disconnect" => {
             // orderly: what is queued is sent and acknowledged first
             station.disconnect();
@@ -1891,10 +1892,18 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "link": link_json(station),
         "metrics": metrics(station),
-        "recording": station.recording().map(|(path, seconds)| json!({
-            "path": path.display().to_string(),
-            "seconds": seconds,
-        })),
+        "recording": station.recording().map(|(path, seconds)| {
+            let reads = station.recording_reads().unwrap_or_default();
+            json!({
+                "path": path.display().to_string(),
+                "seconds": seconds,
+                // the marks pressed, the radio's S-meter readings kept, and whether this keying
+                // interface reads the meter at all (CAT, rigctld, FLRig)
+                "marks": reads["marks"],
+                "meter_readings": reads["meter_readings"],
+                "reads_meter": reads["reads_meter"],
+            })
+        }),
         "test": station.test_brief(),
         // the repeating beacon and the beacons sent (ND1J's questions, 2026-09-25)
         "beacon": station.beacon_status(),
@@ -1949,6 +1958,17 @@ fn record<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
                 .map(str::to_owned);
             station.set_record_notes(notes);
             Response::ok(id, json!({ "accepted": true }))
+        }
+        // the operator's press of Mark: a moment kept in the running recording's sidecar
+        "record.mark" => {
+            let note = params.get("note").and_then(Value::as_str);
+            match station.mark_recording(note) {
+                Ok((mark, t_s)) => Response::ok(id, json!({ "mark": mark, "t_s": t_s })),
+                Err(reason) => Response::failed(
+                    id,
+                    ApiError::new("refused", format!("Cannot mark: {reason}."), false),
+                ),
+            }
         }
         _ => unreachable!("dispatched here by name"),
     }
@@ -3322,6 +3342,66 @@ mod tests {
             !call(&mut station, "record.stop", json!({})).ok,
             "stopped twice"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_is_marked_and_says_how_many() {
+        // the Mark button: each press keeps the moment in the running recording, numbered, in
+        // place of the stopwatch the recording plan asked for
+        let mut station = station();
+        let refused = call(&mut station, "record.mark", json!({}));
+        assert!(!refused.ok, "marked a recording that is not running");
+        assert_eq!(refused.error.expect("error").code, "refused");
+        assert!(is_mutating("record.mark"));
+
+        let dir = std::env::temp_dir().join(format!("aether-mark-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        station.set_recording(Some(dir.clone()), false, "");
+        assert!(call(&mut station, "record.start", json!({"name": "marks"})).ok);
+        station.capture(&vec![0.0f32; 48_000]).expect("capture");
+        let first = call(&mut station, "record.mark", json!({}));
+        assert!(first.ok, "{:?}", first.error);
+        let first = first.result.expect("mark");
+        assert_eq!(first["mark"], 1);
+        station.capture(&vec![0.0f32; 24_000]).expect("capture");
+        let second = call(&mut station, "record.mark", json!({"note": "carrier in"}))
+            .result
+            .expect("mark");
+        assert_eq!(second["mark"], 2);
+        let (t1, t2) = (
+            first["t_s"].as_f64().expect("t_s"),
+            second["t_s"].as_f64().expect("t_s"),
+        );
+        assert!((t2 - t1 - 0.5).abs() < 0.05, "{t1} then {t2}");
+        let status = call(&mut station, "status", json!({}))
+            .result
+            .expect("status");
+        assert_eq!(status["recording"]["marks"], 2);
+        assert_eq!(
+            status["recording"]["reads_meter"], false,
+            "a station keyed by nothing reads no meter"
+        );
+        assert!(call(&mut station, "record.stop", json!({})).ok);
+        let sidecar: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("marks.json")).expect("sidecar"),
+        )
+        .expect("json");
+        let marks: Vec<(&str, f64)> = sidecar["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .filter(|e| e["event"] == "mark")
+            .map(|e| {
+                (
+                    e["detail"].as_str().expect("detail"),
+                    e["t_s"].as_f64().expect("t_s"),
+                )
+            })
+            .collect();
+        assert_eq!(marks.len(), 2, "{marks:?}");
+        assert_eq!((marks[0].0, marks[1].0), ("1", "2 carrier in"));
+        assert!((marks[1].1 - t2).abs() < 1e-6, "the time the API said");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

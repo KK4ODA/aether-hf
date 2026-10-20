@@ -1838,7 +1838,21 @@ rebase moves the reference both ways, and a bandwidth move keeps the radio's lev
 Open: 80 m at night (the original case), MID and OFF, a radio filter narrower than ~1 kHz at 500 Hz
 (no bins to read: the floor behaves as before), a daemon started under a cut that returns within
 every minute (FT8 with a strong station every other period: as before ADR-0078), the S-meter as a
-witness.
+witness. **The recording tools (2026-10-20, the author's go; no wire change, no config key):** a
+recording keeps what the radio says of itself — `Ptt::s_meter` (Yaesu/Kenwood `SM0;`, Icom CI-V
+`15 02` as BCD, rigctld `l STRENGTH`, FLRig `rig.get_smeter` 0–100 with S9 at 50; each scale named),
+`Ptt::settings` (Yaesu only: `GT0` AGC as it runs — AUTO's pick too —, `MD0`, `SH0`, `RG0`, `RA0`,
+`PA0`, from the FTDX10 CAT manual) and the dial — read in the background: `Ptt::request_readings` /
+`take_readings`, a second, low-priority queue on `ThreadedPtt` that its thread serves only when the
+run loop has asked for nothing, never while keyed, one question out at a time (a key waits at most
+behind one reading on the wire). rigctld and FLRig keying now run on that thread too.
+`station/radio_reads.rs` asks only while recording and idle (`movable()`: no session, call, probe,
+Test, queue or transmission) — S-meter every 0.25 s, dial 1 s, settings 5 s, on their own beat
+(`next_due`); eight unanswered S-meter questions stop it for the recording. The sidecar's `radio`
+(`meter` {scale, readings [t, v]}, `dial` [t, Hz] changes only, `settings` changes only). **Mark**:
+`record.mark {note?}` → a numbered `mark` event (`Station::mark_recording`), the Session tab's
+button beside the record button, `status.recording` gains `marks`, `meter_readings`, `reads_meter`.
+`tools/floor_trace.py` lists them (the S-meter beside each AGC event).
 
 **ADR-0069 Step 5, protocol 7 retired (2026-10-20).** Protocol 8 shipped in beta.106 and held
 through beta.114, so the turn engine went in both suites: `LinkEngine` (`engine.py`,

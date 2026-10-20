@@ -1963,12 +1963,14 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
     Ok(match config {
         PttConfig::None => Box::new(NullPtt::default()),
         PttConfig::Serial { port, line } => Box::new(SerialPtt::open(port, (*line).into())?),
-        PttConfig::Rigctld { address } => {
-            Box::new(RigctldPtt::new(address, Duration::from_millis(500)))
-        }
-        PttConfig::Flrig { address } => Box::new(aetherd::ptt::FlrigPtt::new(
-            address,
-            Duration::from_millis(500),
+        // on the keying thread as CAT is: a rig-control server that stops answering must not
+        // stop the modem either, and the S-meter a recording keeps is read there in the
+        // background, between keying commands
+        PttConfig::Rigctld { address } => Box::new(aetherd::ptt::ThreadedPtt::spawn(
+            RigctldPtt::new(address, Duration::from_millis(500)),
+        )),
+        PttConfig::Flrig { address } => Box::new(aetherd::ptt::ThreadedPtt::spawn(
+            aetherd::ptt::FlrigPtt::new(address, Duration::from_millis(500)),
         )),
         PttConfig::Cat {
             port,

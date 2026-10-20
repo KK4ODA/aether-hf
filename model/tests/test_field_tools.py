@@ -266,3 +266,31 @@ def test_a_hypothetical_rung_takes_a_rungs_place_in_the_frame_it_borrows() -> No
         rung=rung,
     )
     assert row["ok"] == 1
+
+
+def test_floor_trace_lists_the_radios_readings_and_the_marks() -> None:
+    # the recording tools of the busy detector's investigation: the S-meter beside each AGC
+    # event, every dial and setting change, every mark
+    import floor_trace
+
+    sidecar = {
+        "radio": {
+            "meter": {
+                "scale": "Yaesu SM0, 0-255",
+                "readings": [[t / 4, 30.0 if 40 <= t < 80 else 120.0] for t in range(120)],
+            },
+            "dial": [[0.5, 7_082_000], [12.0, 7_074_000]],
+            "settings": [{"t_s": 0.6, "name": "agc", "value": "AUTO-MID"}],
+        },
+        "events": [{"t_s": 9.9, "event": "mark", "detail": "1 carrier in", "state": "Idle"}],
+    }
+    event = {"start_s": 10.0, "length_s": 10.0}
+    lines = floor_trace.radio_report(sidecar, [event])
+    text = "\n".join(lines)
+    assert "S-meter: 120 readings (Yaesu SM0, 0-255)" in text
+    assert "S-meter 120 before, 30 during, 120 after" in text
+    assert "7.074000 MHz" in text
+    assert "agc at" in text
+    assert "AUTO-MID" in text
+    assert "mark 1 carrier in at" in text
+    assert floor_trace.radio_report({}, [event]) == []
