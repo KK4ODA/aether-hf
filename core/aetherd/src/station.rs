@@ -11167,12 +11167,7 @@ mod tests {
         let sidecar: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
                 .expect("json");
-        assert!(
-            sidecar["radio"]["meter"]["readings"]
-                .as_array()
-                .expect("readings")
-                .is_empty()
-        );
+        assert_eq!(sidecar["radio"]["meter"]["readings"], serde_json::json!([]));
         assert!(sidecar["radio"]["meter"]["scale"].is_null());
         let _ = std::fs::remove_dir_all(&dir);
     }
