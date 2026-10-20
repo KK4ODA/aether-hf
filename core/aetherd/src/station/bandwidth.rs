@@ -701,6 +701,8 @@ impl<P: Ptt> Station<P> {
         self.transmitter = aether_phy::Modem::new(params, false);
         self.to_audio = aether_phy::BasebandToAudio::new(params);
         self.from_audio = aether_phy::AudioToBaseband::new(params);
+        // a move is between sessions: the new receiver starts on the dial (ADR-0079)
+        self.front_end_rebuilt(now, false);
         // the detector's floor was learned through the other band filter: it learns again; the
         // radio's levels on quiet are the radio's, and stay (ADR-0078 §5)
         let busy = crate::busy::BusyDetector::new(crate::busy::BusyConfig {

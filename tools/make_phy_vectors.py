@@ -532,6 +532,10 @@ def passband_input(n: int) -> NDArray[np.complex128]:
     return 0.3 * (real + 1j * imag)
 
 
+# an offset no carrier spacing divides, so a mixer that rounds it is caught
+MOVED_OFFSET_HZ = 73.25
+
+
 def passband_case() -> dict[str, object]:
     """Filter taps and a round trip through the audio front end.
 
@@ -548,6 +552,12 @@ def passband_case() -> dict[str, object]:
     baseband = passband_input(n)
     audio = BasebandToAudio(WIDE_2300).process(baseband)
     back = AudioToBaseband(WIDE_2300).process(audio)
+    # the receive mixer moved to a peer's offset partway through (ADR-0079)
+    moved = AudioToBaseband(WIDE_2300)
+    half = len(audio) // 2
+    first = moved.process(audio[:half])
+    moved.offset_hz = MOVED_OFFSET_HZ
+    back_moved = np.concatenate((first, moved.process(audio[half:])))
     return {
         "band_limit_taps": [float(x) for x in band_limit_taps(WIDE_2300)],
         "resample_taps": [float(x) for x in interpolation_taps(WIDE_2300)],
@@ -557,6 +567,9 @@ def passband_case() -> dict[str, object]:
         "stride": 37,
         "audio_out": [float(x) for x in audio[::37]],
         "baseband_back": complex_list(back[::37]),
+        "moved_after_audio": half,
+        "moved_offset_hz": MOVED_OFFSET_HZ,
+        "baseband_moved": complex_list(back_moved[::37]),
     }
 
 

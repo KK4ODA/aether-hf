@@ -301,6 +301,50 @@ def test_the_detector_finds_a_frame_up_to_150_hz_off(kind: M.ToneKind) -> None:
         assert abs(s.cfo_hz - cfo) < 1.0, (cfo, s.cfo_hz)
 
 
+def test_a_receiver_centred_on_its_peer_hears_a_rig_past_the_search() -> None:
+    """ADR-0079 (ADR-0064's open step): a peer 230 Hz off is past the floor's ±150 Hz search and
+    half out of the 500 Hz band filter. With the receive mixer moved to the offset the session's
+    frames measured, the frame sits near the centre again and is found, and its offset reads
+    from the mixer: the true one is the mixer's plus the detector's."""
+    from aether_model.phy.passband import AudioToBaseband, BasebandToAudio
+
+    kind = M.NARROW.tone_control
+    rng = np.random.default_rng(79)
+    burst = T.burst(kind, _payload(rng, kind), 0, 0)
+    lead = 3000
+    x = np.concatenate((np.zeros(lead, complex), burst, np.zeros(4000, complex)))
+    fs = NARROW_500.fs_baseband
+    off = 230.0
+    x = x * np.exp(2j * np.pi * off * np.arange(len(x)) / fs)
+    x = x + 0.05 * (rng.standard_normal(len(x)) + 1j * rng.standard_normal(len(x)))
+    audio = BasebandToAudio(NARROW_500).process(x)
+    det = T.ToneDetector((kind,))
+
+    plain = AudioToBaseband(NARROW_500)
+    assert det.detect(plain.process(audio)) == []
+
+    followed = AudioToBaseband(NARROW_500)
+    followed.offset_hz = 200.0
+    syncs = det.detect(followed.process(audio))
+    assert len(syncs) == 1
+    assert syncs[0].kind == kind
+    assert abs(followed.offset_hz + syncs[0].cfo_hz - off) < 1.0, syncs[0].cfo_hz
+
+
+def test_the_receive_mixer_at_no_offset_is_the_mixer_it_was() -> None:
+    """The offset is added to the centre; at none, the output is the same to the bit, so the
+    vectors and every recording replay as before."""
+    from aether_model.phy.passband import AudioToBaseband, BasebandToAudio
+
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal(4000) + 1j * rng.standard_normal(4000)
+    audio = BasebandToAudio(WIDE_2300).process(x)
+    a = AudioToBaseband(WIDE_2300)
+    b = AudioToBaseband(WIDE_2300)
+    b.offset_hz = 0.0
+    assert np.array_equal(a.process(audio), b.process(audio))
+
+
 @pytest.mark.parametrize("kind", FLOOR_KINDS, ids=lambda k: k.name)
 def test_the_detector_names_kind_rv_start_and_offset(kind: M.ToneKind) -> None:
     rng = np.random.default_rng(6)

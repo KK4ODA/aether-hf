@@ -83,3 +83,4 @@ context → decision → alternatives considered → consequences.
 | [0076](0076-the-test-pays-only-for-what-it-measures-and-a-frame-is-no-noise.md) | The Test pays only for what it measures, and a frame is no noise | accepted; the ladder's leftovers superseded by 0077 |
 | [0077](0077-the-ladder-measures-with-frames-of-its-own.md) | The ladder measures with frames of its own: link protocol 9 | accepted |
 | [0078](0078-the-busy-detectors-floor-follows-the-radios-gain.md) | The busy detector's floor follows the radio's gain, read from the noise across its whole passband | accepted |
+| [0079](0079-the-receiver-follows-a-session-station-off-frequency.md) | The receiver follows a session's station off frequency | accepted |

@@ -22,6 +22,7 @@
 
 mod bandwidth;
 mod beacons;
+mod centre;
 mod datagrams;
 mod fieldtest;
 mod gaps;
@@ -1030,6 +1031,8 @@ pub struct Station<P: Ptt> {
     transmitter: Modem,
     to_audio: BasebandToAudio,
     from_audio: AudioToBaseband,
+    /// Where the receive mixer is centred, and the station it follows (ADR-0079).
+    centre: centre::Centre,
     ptt: PttWatchdog<P>,
     busy: BusyDetector,
     /// How far the audio processed trails the air ([`CaptureLag`]).
@@ -1292,6 +1295,7 @@ impl<P: Ptt> Station<P> {
             transmitter: Modem::new(params, false),
             to_audio: BasebandToAudio::new(params),
             from_audio: AudioToBaseband::new(params),
+            centre: centre::Centre::default(),
             ptt: PttWatchdog::new(ptt, config.max_key_s),
             busy,
             capture_lag: CaptureLag::default(),
@@ -2959,6 +2963,7 @@ impl<P: Ptt> Station<P> {
         }
         self.pump();
         self.advance_identifier(now);
+        self.advance_centre(now);
         self.advance_recording_tail(now);
         self.advance_test();
         self.advance_beacons(now);
@@ -3053,6 +3058,9 @@ impl<P: Ptt> Station<P> {
             self.transmitting = true;
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
+            // deaf until the release: the receiver can move onto the session's station without
+            // cutting a frame in two (ADR-0079)
+            self.follow_at_key(now);
             // where its frames end if it plays whole: the slot it grants is anchored there, by
             // the other station on what its header stated, whatever cuts it short — from where
             // the air's clock stands once the key is up, then the card's output latency
@@ -3563,7 +3571,7 @@ impl<P: Ptt> Station<P> {
                     decoded.ok(),
                     decoded.frame.mode_confidence(),
                     detected,
-                    decoded.frame.cfo_hz(),
+                    self.true_cfo(decoded.frame.cfo_hz(), span_start),
                 ),
                 confidence: decoded.frame.mode_confidence(),
                 detect_confidence: detected,
@@ -3749,13 +3757,15 @@ impl<P: Ptt> Station<P> {
         let frame = &decoded.frame;
         let control = frame.is_control();
         let payload = decoded.payload.as_deref();
+        let span_start = (self.rx_origin + frame.start()) as f64 / self.config.params.fs_baseband;
         let mut report = FrameReport {
             t_s: now,
             kind: if control { "control" } else { "data" },
             mode: rung,
             rv: frame.rv(),
             snr_db: frame.snr_3k_db(),
-            cfo_hz: frame.cfo_hz(),
+            // the true offset: the receiver may be centred on the session's station (ADR-0079)
+            cfo_hz: self.true_cfo(frame.cfo_hz(), span_start),
             confidence: frame.mode_confidence(),
             detect_confidence: frame.detect_confidence(&self.air()),
             decoded: decoded.ok(),
@@ -3767,7 +3777,6 @@ impl<P: Ptt> Station<P> {
             follows: frame.follows(),
             capture_skip: false,
         };
-        let span_start = (self.rx_origin + frame.start()) as f64 / self.config.params.fs_baseband;
         let span_end =
             span_start + frame.samples(&self.air()) as f64 / self.config.params.fs_baseband;
         report.capture_skip = self.capture_skipped_within(span_start, span_end);
@@ -3826,6 +3835,8 @@ impl<P: Ptt> Station<P> {
             }
         }
         self.learn_from(&report, now);
+        // what the receiver follows, if this is the session's station (ADR-0079)
+        self.heard_offset(&report);
         self.note_other_session(control, payload, now);
         // a piece of somebody's datagram: joined with the others, and named by the first
         if report.kind == "datagram"
@@ -4735,6 +4746,9 @@ impl<P: Ptt> Station<P> {
         }
         self.audio_seen += samples;
         self.from_audio = AudioToBaseband::new(params);
+        // still in the session it was in: the receiver stays on the station it follows
+        let now = self.now();
+        self.front_end_rebuilt(now, true);
         self.baseband_seen += (samples as f64 * params.fs_baseband / rate).round() as usize;
         self.receiver = StreamingReceiver::new(params, 6.0, true);
         self.rx_origin = self.baseband_seen;
@@ -6274,6 +6288,48 @@ mod tests {
         /// not play on while its daemon stands still — shared, `b` came back to a card 45 s
         /// ahead of its own audio, and its gate dropped every answer as late.
         played: [u64; 2],
+        /// What each station's signal is shifted by on its way to the other: `[a to b, b to a]`
+        /// ([`Self::with_rig_offset`]).
+        shifts: [Option<Shift>; 2],
+    }
+
+    /// A rig off frequency as the other station hears it: audio shifted by `hz` — down to
+    /// baseband through the wide chain, turned, and up again — a block late.
+    pub(crate) struct Shift {
+        hz: f64,
+        n: usize,
+        down: AudioToBaseband,
+        up: BasebandToAudio,
+        out: VecDeque<f32>,
+    }
+
+    impl Shift {
+        fn new(hz: f64) -> Self {
+            Self {
+                hz,
+                n: 0,
+                down: AudioToBaseband::new(WIDE_2300),
+                up: BasebandToAudio::new(WIDE_2300),
+                out: std::iter::repeat_n(0.0, 4096).collect(),
+            }
+        }
+
+        fn process(&mut self, audio: &[f32]) -> Vec<f32> {
+            let fs = WIDE_2300.fs_baseband;
+            let turned: Vec<Complex> = self
+                .down
+                .process(audio)
+                .into_iter()
+                .map(|(re, im)| {
+                    let phase = 2.0 * std::f64::consts::PI * self.hz * self.n as f64 / fs;
+                    self.n += 1;
+                    let (sin, cos) = phase.sin_cos();
+                    (re * cos - im * sin, re * sin + im * cos)
+                })
+                .collect();
+            self.out.extend(self.up.process(&turned));
+            self.out.drain(..audio.len()).collect()
+        }
     }
 
     impl Air {
@@ -6304,7 +6360,15 @@ mod tests {
                 noise_sigma,
                 state: 0x1234_5678_9abc_def0,
                 played: [0, 0],
+                shifts: [None, None],
             }
+        }
+
+        /// Station `b`'s rig `hz` off frequency: `a` hears it that much high, and `b` hears `a`
+        /// that much low.
+        pub(crate) fn with_rig_offset(mut self, hz: f64) -> Self {
+            self.shifts = [Some(Shift::new(-hz)), Some(Shift::new(hz))];
+            self
         }
 
         fn noise(&mut self) -> f32 {
@@ -6370,6 +6434,12 @@ mod tests {
                 let handed_b = self.b.playback(&mut from_b).expect("playback");
                 self.a.device_drains_at(start_a + handed_a as u64);
                 self.b.device_drains_at(start_b + handed_b as u64);
+                if let Some(shift) = &mut self.shifts[0] {
+                    from_a = shift.process(&from_a);
+                }
+                if let Some(shift) = &mut self.shifts[1] {
+                    from_b = shift.process(&from_b);
+                }
 
                 let mut to_b = vec![0.0f32; self.block];
                 let mut to_a = vec![0.0f32; self.block];
@@ -6433,6 +6503,72 @@ mod tests {
         assert!(
             air.a.engine().stats.silent_slots > silent,
             "the caller heard the slot silent"
+        );
+    }
+
+    #[test]
+    fn the_receiver_centres_on_a_station_off_frequency_and_comes_back_to_the_dial() {
+        // ADR-0079: the called station's rig is 120 Hz high. Each receiver moves onto the
+        // other at its own key, by what the other's frames measured, and reports their offset
+        // true; once the session is over each is back on the dial, where calls are sent
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let message: Vec<u8> = (0..3_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 32) as u8
+            })
+            .collect();
+        let mut air = Air::new(1.0, 0.0005).with_rig_offset(120.0);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        air.a.send(&message);
+        air.run(120.0, |a, b| {
+            b.received_len() >= message.len() && a.engine().stats.bytes_acked >= message.len()
+        });
+        assert_eq!(air.b.received_len(), message.len(), "the message crossed");
+        let (a, b) = (air.a.rx_offset_hz(), air.b.rx_offset_hz());
+        assert!(
+            (a - 120.0).abs() < 6.0,
+            "the caller is centred {a:+.1} Hz off"
+        );
+        assert!(
+            (b + 120.0).abs() < 6.0,
+            "the called station is centred {b:+.1} Hz off"
+        );
+        let heard = air
+            .a
+            .last_frame
+            .as_ref()
+            .map(|f| f.cfo_hz)
+            .expect("a frame");
+        assert!(
+            (heard - 120.0).abs() < 6.0,
+            "reported {heard:+.1} Hz, not the true offset"
+        );
+        let said = air.a.take_events();
+        assert!(
+            said.iter()
+                .any(|e| e.starts_with("receiver:") && e.contains("KK4XYZ is +12")),
+            "{said:?}"
+        );
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle
+                && b.state() == State::Idle
+                && a.rx_offset_hz() == 0.0
+                && b.rx_offset_hz() == 0.0
+        });
+        assert_eq!((air.a.state(), air.b.state()), (State::Idle, State::Idle));
+        assert_eq!((air.a.rx_offset_hz(), air.b.rx_offset_hz()), (0.0, 0.0));
+        assert!(
+            air.a
+                .take_events()
+                .iter()
+                .any(|e| e == "receiver:back on the dial"),
+            "the caller said nothing of its return"
         );
     }
 

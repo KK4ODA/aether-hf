@@ -485,7 +485,10 @@ A conforming receiver is not required to use any particular algorithm, but must 
   robust OFDM mode's threshold — the reference receiver's partial-matched-filter/FFT bank
   searches ±300 Hz over both preamble sequences and acquires 100 % of frames at −5 dB and
   87 % at −7 dB — and of a tone frame at the tone floor's own threshold over at least
-  ±150 Hz, which is what the reference detector searches (§2.4; ADR-0064).
+  ±150 Hz, which is what the reference detector searches (§2.4; ADR-0064). The reference
+  receiver also centres itself on the station it is in session with, moving only while it
+  transmits and back on the dial between sessions, so a transmitter that drifts is followed
+  past either search (ADR-0079).
 * **Sample-rate offset** of at least ±50 ppm between the two stations' clocks.
 * **Residual carrier offset** estimation from the comb pilots; 64-QAM needs the frame's
   residual well below 0.1 Hz.

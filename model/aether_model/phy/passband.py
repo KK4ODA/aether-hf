@@ -8,6 +8,10 @@ Both directions are streaming objects with FIR state and phase-continuous mixers
 arbitrary block sizes give the same output as one big block (checked in tests). Group
 delays are fixed and known (``tx_delay_samples`` / ``rx_delay_samples`` at the audio rate);
 frame synchronization absorbs them.
+
+The receive mixer can be moved off ``centre_hz`` (``AudioToBaseband.offset_hz``) to centre the
+receiver, band filter and detectors' searches on a session peer whose rig is off frequency
+(ADR-0079). Its phase jumps where it moves, so it moves only while no frame is arriving.
 """
 
 from __future__ import annotations
@@ -99,6 +103,10 @@ class AudioToBaseband:
         self._band = _Fir(band_limit_taps(params))
         self._phase = 0  # decimation phase carried across blocks
         self._n0 = 0
+        # where the receiver centres, from ``centre_hz``: the session peer's carrier offset,
+        # followed so that a drifting rig stays inside the detectors' search (ADR-0079). A
+        # frame received with it set reads its offset from here, not from ``centre_hz``
+        self.offset_hz = 0.0
 
     @property
     def rx_delay_samples(self) -> int:
@@ -113,5 +121,5 @@ class AudioToBaseband:
         n = len(low)
         t = (self._n0 + np.arange(n)) / self.p.fs_baseband
         self._n0 += n
-        mixed = low * np.exp(-2j * np.pi * self.p.centre_hz * t)
+        mixed = low * np.exp(-2j * np.pi * (self.p.centre_hz + self.offset_hz) * t)
         return np.asarray(self._band(mixed) * 2.0, dtype=np.complex128)  # ×2 undoes Re{}'s halving
