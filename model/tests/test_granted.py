@@ -827,6 +827,38 @@ def test_an_aborting_slave_answers_the_next_header_with_a_disc(air: str) -> None
     assert sim.overlaps() == []
 
 
+def test_a_session_closed_without_its_disc_ack_is_left_unheard() -> None:
+    """A master whose DISCs all went unanswered closes "closed (no DISC_ACK)", which leaves the
+    other station perhaps still in the session: like an abort, that is a session left unheard,
+    and a DISC of it heard afterwards is answered (ADR-0052). The model listed the reason as
+    "closed (no disc ack)", which it never ended a session with, and the port did not: found
+    when protocol 7's engine, which held the list, was deleted (ADR-0069 Step 5)."""
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(
+        a,
+        b,
+        snr_db=10.0,
+        seed=7,
+        unheard=lambda rx, container, t0: rx == 0 and sim.t > closing and t0 > closing,
+    )
+    closing = math.inf
+    a.connect("KK4XYZ")
+    sim.run(until=20.0)
+    assert a.connected
+    closing = sim.t
+    a.disconnect()
+    sim.run(until=sim.t + 120.0)
+    assert "disconnected:closed (no DISC_ACK)" in sim.events(0), sim.events(0)
+    # the other station's DISC of that session, heard late, is answered with a DISC_ACK
+    disc = GrantFrame(GrantKind.DISC, a.session & 0x7F, fam=True).encode()
+    length = a.timing.control_frame_s_for(True)
+    frame = SimFrame(Container.CONTROL, 0, 0, 10.0, sim.t, sim.t + length, disc, 0.0, floor=True)
+    a.on_frame(frame, sim.t + length)
+    a.tick(sim.t + 30.0)
+    sent = [f for x in a.drain() if isinstance(x, Transmit) for f in x.frames]
+    assert [GrantFrame.decode(f.payload).kind for f in sent] == [GrantKind.DISC_ACK]
+
+
 def test_a_peer_that_calls_again_ends_the_old_session() -> None:
     """ADR-0056: the master aborts and calls again under a new session number; the slave, still
     in the old session, ends it and answers the call."""
