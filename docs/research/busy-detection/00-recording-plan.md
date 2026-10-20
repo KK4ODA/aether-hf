@@ -17,7 +17,7 @@ caused it sat.
   heard.
 - **The `.json` beside it**: your notes, the dial frequency when it started (read over CAT), every
   change of the busy indicator with the level, floor and reason, and every frame the modem found.
-- **From the next beta, also**: with CAT, rigctld or FLRig keying, the radio's S-meter four times a
+- **From beta.115, also**: with CAT, rigctld or FLRig keying, the radio's S-meter four times a
   second, every change of the dial (read once a second), and on a Yaesu the AGC as it runs (what
   AUTO picked too), the mode, the filter width, the RF gain, the attenuator and the preamp whenever
   they change; and every press of **Mark**. The radio is asked only while nothing else is going on,
@@ -31,10 +31,10 @@ caused it sat.
 1. **AGC times.** In the FTDX10's menu, find the AGC settings. Write down the FAST, MID and SLOW
    delay times.
 2. **AGC AUTO.** Write down what AUTO picks in the mode you run Aether in. The radio's manual has a
-   table; the display may show it too. (From the next beta a Yaesu records it by itself; write it
+   table; the display may show it too. (From beta.115 a Yaesu records it by itself; write it
    down anyway the first time.)
 3. **Mode and filter.** Write down the mode (USB or DATA-U) and the filter width (for example
-   3000 Hz). (The same: recorded by itself from the next beta.)
+   3000 Hz). (The same: recorded by itself from beta.115.)
 4. **USB audio.** Write down the radio's USB audio output level setting. Don't change it between
    recordings.
 5. **Aether.** Open *Help / About* and write down the version. Any beta from 113 on records the
@@ -62,7 +62,7 @@ caused it sat.
 5. **Start.**
    - Up to beta.114: the box is called *Recording*. Press **Record** to start and
      **Stop recording** to stop.
-   - From the next beta: the box is called *Record the radio's audio*. Press **Start recording**
+   - From beta.115: the box is called *Record the radio's audio*. Press **Start recording**
      to start and **Stop and save** to stop.
    - The line beside the box title says what was saved.
 6. **One recording per setting.** Stop and start a new recording each time you change the AGC
@@ -101,9 +101,9 @@ This one has a signal come and go on a schedule, so I can line the audio up with
 3. Put the "outside" frequency in VFO-B and the "inside" frequency in VFO-A. Then the A/B swap
    button moves the signal in and out in one press. (Moving the dial or using IF SHIFT also works;
    write down which you used.)
-4. From the next beta, press **Mark** (beside the record button) at every swap below, and skip the
+4. From beta.115, press **Mark** (beside the record button) at every swap below, and skip the
    stopwatch. With beta.114, start a phone stopwatch at the moment you press the record button.
-   (A swap with the A/B button changes what VFO-A holds, so from the next beta the dial changes
+   (A swap with the A/B button changes what VFO-A holds, so from beta.115 the dial changes
    are in the recording too.)
 
 **Run 1: the signal outside Aether's channel.**
@@ -153,10 +153,10 @@ PC's clock or the panel in the frame, so the video lines up with the recording.
 4. Tell you in a few lines what each recording showed, what is missing, and what to record again
    or differently, before you record the next batch.
 
-## Tools that make the data better (built after the first batch, in the next beta)
+## Tools that make the data better (built after the first batch, in beta.115)
 
-The author's go came on 2026-10-20; all three are built and tested, and reach the radio with the
-next beta. The S-meter and the dial are read over rigctld and FLRig too, and on a Yaesu the
+The author's go came on 2026-10-20; all three are built and tested, and reach the radio with
+beta.115. The S-meter and the dial are read over rigctld and FLRig too, and on a Yaesu the
 recording also keeps the AGC, mode, filter width, RF gain, attenuator and preamp. They are asked
 only between sessions, not merely while not transmitting: a reading on the keying port must never
 stand in front of a slot's key.
