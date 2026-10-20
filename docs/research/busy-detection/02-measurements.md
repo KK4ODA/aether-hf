@@ -336,3 +336,43 @@ afternoon of these recordings.
 What these recordings settle of §6: items 1–5 for 40 m in daylight with AUTO, FAST and SLOW. Still
 owed: part A, the original case (80 m at night, 15 minutes, AUTO), MID and OFF, part C with its times,
 and the radio's mode, AGC delays and USB level.
+
+## 10. The second batch: 80 m at dawn, with the recording tools (2026-10-20)
+
+One recording on beta.115, 3.590 MHz from 11:05Z (sunrise 11:50Z), 7.7 minutes with the 30 s before
+the button; AGC AUTO, DATA-U, the 3 kHz filter, 500 Hz. The author marked each signal's start and end.
+
+**The tools work on the FTDX10.** 1 722 S-meter readings (`SM0;`, 0–255), 0.25 s apart, 0.40 s at
+most; the settings read once and unchanged: AGC `AUTO-MID` — the radio says itself that AUTO runs MID
+in DATA-U, as §9's release rates suggested —, DATA-U, width index 18, RF gain 254, ATT off, IPO; the
+dial at 3.590 MHz throughout; four marks. Three capture skips of 18–28 ms, as the mini PC has shown
+since 2026-10-16.
+
+| Span | s | Where in the audio | S-meter median | Channel noise | Gain reading (median, 1st percentile) | Busy: fixed / before ADR-0078 |
+|---|---|---|---|---|---|---|
+| quiet | 40–150 | — | 1 | −34.9 dBFS | −0.1, −5.3 dB | 0 / 0 % |
+| signal 1 (marks 1–2) | 156–192 | 880–1 100 Hz, under the channel | 8 | −37.0 | −1.3, −5.2 | 0 / 0 % |
+| signal 2 (marks 3–4) | 212–245 | 1 780–2 000 Hz, on the channel's top edge | 10 | −36.6 | −1.5, −7.1 | 21 / 0 % |
+| quiet | 250–455 | — | 1 | −34.9 | 0.0, −5.2 | 0 / 0 % |
+
+**No AGC event.** Both signals were weak (S-meter 8–10 against 0–2 on quiet; static crashes reach 87)
+and cut the channel's noise by about 2 dB, under the 6 dB `floor_trace.py` counts. Neither detector
+read busy after either signal ended, and neither would have: the failure ADR-0078 is about needs a
+signal strong enough to hold the gain down, and this recording has none. The original case (80 m at
+night, a strong station nearby) is still owed.
+
+**Signal 2, read busy by the fixed floor only.** A 220 Hz-wide signal from 1 780 Hz, over the top of
+what Aether's own 500 Hz signal occupies (to 1 855 Hz by the 26 dB measure); its lower edge reached
+the busy detector's channel through the band filter's skirt (the level's 99th percentile −22.4 dBFS
+against −27 on quiet). The gain reading followed the radio's short dips — it tracks the S-meter
+(correlation −0.28 to −0.34 at the meter's rate; static crashes and the signal's peaks both pump the
+AGC) — and the floor drawn with it sat 3 dB or more down for 25 % of the signal's blocks, in spells
+of up to 1 s, against 4 % on quiet. The threshold fell under the edge's peaks, and the channel read
+busy in spells of about a second, 21 % of the signal; the floor before ADR-0078, unaware of any cut,
+stayed just over them. A station keying there would have overlapped the bottom of that signal, as
+with §9's MFSK signal at 19:23, so the reading is defensible; it is kept in view for the next
+recordings, which now carry the S-meter beside it.
+
+**Part C.** Nothing was heard on CHU's 3.330 MHz that morning, before sunrise. In daylight
+CHU's 7.850 MHz serves (VFO-A 7.8477 MHz puts its carrier at 2 300 Hz, 7.8485 MHz at 1 500 Hz;
+VFO-B 7.8540 MHz hears none of it).

@@ -1859,7 +1859,10 @@ Test, queue or transmission) — S-meter every 0.25 s, dial 1 s, settings 5 s, o
 (`meter` {scale, readings [t, v]}, `dial` [t, Hz] changes only, `settings` changes only). **Mark**:
 `record.mark {note?}` → a numbered `mark` event (`Station::mark_recording`), the Session tab's
 button beside the record button, `status.recording` gains `marks`, `meter_readings`, `reads_meter`.
-`tools/floor_trace.py` lists them (the S-meter beside each AGC event).
+`tools/floor_trace.py` lists them (the S-meter beside each AGC event). First use (beta.115, 80 m at dawn, `02-measurements.md`
+§10): the FTDX10 answers every read (`AUTO-MID` in DATA-U, S-meter 4/s); its two signals were weak
+(~2 dB cuts, no AGC event), so the night case is still owed; a signal on the 500 Hz channel's top
+edge read busy 21 % on the fixed floor (it follows the radio's short dips) and 0 % on the old one.
 
 **ADR-0069 Step 5, protocol 7 retired (2026-10-20).** Protocol 8 shipped in beta.106 and held
 through beta.114, so the turn engine went in both suites: `LinkEngine` (`engine.py`,
