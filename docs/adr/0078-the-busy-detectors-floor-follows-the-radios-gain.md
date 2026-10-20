@@ -6,9 +6,10 @@ floor slid to −47 dBFS (`docs/research/busy-detection/`: the recording plan, t
 measurements, the candidates and the criteria registered before they were run). The busy detector
 lives in the daemon alone (`aetherd/src/busy.rs`); there is no model of it to change first. **No
 wire change, no configuration key, no schema bump**: what a station sends is untouched, and a
-station on this build works with any protocol-9 station. The author's recordings
-(`00-recording-plan.md`) are owed: everything here was measured on synthetic audio and the
-harness, with the AGC model beta.17 measured.
+station on this build works with any protocol-9 station. §1–4 were measured on synthetic audio
+and the harness, with the AGC model beta.17 measured. **Amended 2026-10-20** (§5), before any
+release carried it, after the author's first recordings: the reference's rebase goes both ways,
+and a bandwidth move keeps the radio's levels on quiet.
 
 ## 1. Context
 
@@ -76,9 +77,12 @@ fix.
    exactly as the gain coming back would, and a station's own channel is what the detector must not
    miss; the price is a slow AGC's ramp read as busy until it is nearly done (§3).
 4. **When the hold runs out, the gain of the moment becomes the normal one** (`rebase`): the
-   levels on quiet move by it and the floor's units with it, so the floor in dBFS is unchanged. A
-   reading stuck under 0 dB — levels on quiet learned before an attenuator went in, say — would
-   otherwise keep a 2 300 Hz floor from following the gain back up after every cut.
+   floor's units move by the gain it is drawn at, so the floor in dBFS is unchanged, and the levels
+   on quiet by the reading, over 0 dB as well as under it (§5), so it reads 0 dB. A reading stuck
+   under 0 dB — levels on quiet learned before an attenuator went in, say — would otherwise keep a
+   2 300 Hz floor from following the gain back up after every cut; one stuck over it reads every
+   later cut as none. Only the hold's running out does this: a first floor is a first estimate,
+   drawn at the gain of the moment.
 5. **The operator is told.** While the gain reads 6 dB or more down, the Diagnostics tab's busy
    line says *radio gain −20 dB* (the metrics' `radio_gain_db`), and a busy transition logged then
    ends with `| radio gain −20 dB`.
@@ -167,7 +171,71 @@ against 24/30), no radiated overlap in either arm, nothing slower by the nightly
 * The busy detector now does an FFT of the radio's audio every 25 ms: 0.04 % of a core.
 * The field guide no longer needs to ask for AGC FAST or AUTO; it still prefers DATA-U to USB on
   an FTDX10 (AUTO is SLOW in USB).
-* Open: the author's recordings must show that a real radio's passband outside the channel follows
-  its gain as the model's does, fit the presets, and say where the signals that cut the gain sat
-  (`02-measurements.md` §6); the same recordings replayed through `tools/floor_trace.py` are the
-  field check of §2.4 of the criteria.
+* Open after the first recordings (§5): the original case itself (80 m at night), MID and OFF, a
+  radio filter narrower than about 1 kHz at 500 Hz, and a daemon started while a strong signal
+  holds the AGC down on a band where it comes back within every minute.
+
+## 5. Amended 2026-10-20: the author's first recordings
+
+Seven listening recordings from KK4ODA-1 on 2026-10-18 (17.6 minutes; the FTDX10 on 40 m with a
+3 kHz filter, Aether at 500 Hz; AGC AUTO on 7.082 and 7.074 MHz, FAST and SLOW with a strong signal
+tuned in and out by hand, SLOW and FAST on 7.082; `02-measurements.md` §9, `03-candidates.md` §3.5).
+
+**What they confirmed.** The passband outside the channel follows the radio's gain: on seven cuts of
+13–23 dB with nothing else near the channel, the channel's noise fell by the gain reading within
+2 dB. The radio's own audio noise sits 49–54 dB under the band noise, far below the deepest cut
+(23 dB). The AGC starts back as the strong signal ends and comes back at 40–150 dB/s on FAST, 49–74
+on AUTO and 25–27 on SLOW; the corpus's presets bracket that (SLOW at 15 dB/s, the harder case) and
+are kept. Every cut had its signal in the audio. Replayed alone, the slow-AGC recording read busy
+16.9, 21.1 and 40 s after its three 13 s cuts before this ADR, and 0.5, 0 and 0 s with it.
+
+**What they found.** Joined end to end, as a running daemon hears them, they failed. Eight seconds
+before the first recording, a setting changed at the radio raised the receive level 26 dB across the
+whole passband. Both floors read that busy for 68 s, until the hold ran out — by design, as for any
+rise of the band's noise. The floor then took the new level, but `rebase` moved the levels on quiet
+only by a gain under 0 dB, so the reading stayed 23 dB over them, and every cut after it read as no
+cut. The floor learned the cut-down noise, and the channel read busy for the rest of every FT8 period
+and for a minute after each slow-AGC cut — the failure this ADR is about, for the rest of the session.
+A higher RF gain, an attenuator off or a preamp on, a noisier band, a higher USB level or a start
+under a cut leave the same.
+
+**Changed.**
+
+1. `rebase` moves the reference by the reading of the moment, over 0 dB as well as under it (§2.4),
+   but not within the floor's 2 dB dead band, where the levels would wander with the reading; with no
+   reading, by the gain the floor was drawn at, as before. It runs only when the hold runs out: the
+   first floor a detector learns is a first estimate, drawn at the gain of the moment, and a cut then
+   is no environment. The plain floor's reference moves too, so the trace and the panel's *radio gain*
+   read the same in both. Test: `a_cut_after_the_receive_level_went_up_is_still_read` (fails on the
+   build before: busy all of the 37 s after the AGC let go).
+2. **A bandwidth move keeps the radio's levels on quiet** (`BusyDetector::keep_levels_from`,
+   `PassbandReference::for_channel`, called by `Station::move_to`). The floor learns again through the
+   new band filter, but the radio's audio is the same: the reference keeps everything it has heard —
+   the levels on quiet, the audio not yet read, its recent readings — and changes only which bins it
+   reads the gain and the channel from. Started over, it learned whatever the AGC was doing at the move
+   as the levels on quiet, and a 2 300 Hz station moves to 500 Hz to answer a narrow call while the
+   caller's signal may hold the AGC down. Test: `a_move_to_another_bandwidth_keeps_the_radios_levels_on_quiet`
+   (with the reference started over, the same scene reads busy after the AGC lets go).
+
+**Measured with the change.** The joined recordings: busy 8 % of the slow-AGC recording against 64 %,
+0 % of the next against 26 %, 28 % of the fast-AGC one on 7.074 against 99 %; busy by level for 20 s
+or more once (the 68 s of the rise itself) against six times (33–71 s). Where the fixed floor reads
+busy and the old did not, a signal sits in the channel or on its edge. The corpus: the first and third
+draws judged identically to run 7, clip by clip; on the second, one clip more fails criterion 4 by
+0.005 dB (`G-noise-step+10`, a median sitting on the edge of a clip half of whose blocks both floors
+read 10 dB off; its floors differ by 0.1 dB once the hold has run out). The harness: `02-measurements.md`
+§7.
+
+**Its price.** When the hold runs out on a wide signal that has lasted over a minute, the reference
+now takes it in with the floor; when the signal goes, the reading falls by its level and the floor is
+drawn down at once (`a_wide_signal_taken_for_the_environment_leaves_no_busy_when_it_ends`, both
+bandwidths). At 2 300 Hz the reading then stays under 0 dB until the hold next runs out, and the floor
+follows the gain back up after a cut only within 3 dB of 0 (§2.3): the first AGC cut after such a
+signal reads busy until the hold runs out once more, which puts it right. Before the change a rise of
+the receive level broke every cut for the rest of the session.
+
+**Not changed.** A daemon started while a strong signal holds the AGC down learns that level as quiet;
+the hold puts it right, unless the cut returns within every minute (the two 7.074 recordings replayed
+from their own starts, which begin inside a strong FT8 station's period: busy 75 % and 98 %, as
+the floor before this ADR, against 65 % and 28 % heard from before). Telling such a start from a wide
+signal needs more than the passband: a later witness (the S-meter), if the air shows it matters.

@@ -701,14 +701,17 @@ impl<P: Ptt> Station<P> {
         self.transmitter = aether_phy::Modem::new(params, false);
         self.to_audio = aether_phy::BasebandToAudio::new(params);
         self.from_audio = aether_phy::AudioToBaseband::new(params);
-        // the detector's floor was learned through the other band filter: it learns again
-        self.busy = crate::busy::BusyDetector::new(crate::busy::BusyConfig {
+        // the detector's floor was learned through the other band filter: it learns again; the
+        // radio's levels on quiet are the radio's, and stay (ADR-0078 §5)
+        let busy = crate::busy::BusyDetector::new(crate::busy::BusyConfig {
             fs: params.fs_baseband,
             passband_hz: params.occupied_bandwidth_hz(),
             centre_hz: params.centre_hz,
             threshold_db: self.busy.config().threshold_db,
             ..self.config.busy
         });
+        let before = std::mem::replace(&mut self.busy, busy);
+        self.busy.keep_levels_from(&before);
         self.was_busy = false;
         self.occupancy = crate::regulatory::occupancy::air(hz).ok();
         let top = self.top_rung();
