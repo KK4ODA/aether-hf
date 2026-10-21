@@ -104,6 +104,18 @@ control frames mostly. Decodes were unchanged except one control frame in 20 und
 impulses with no blanker in front (19 → 18 at −2 dB), and the median readings were unchanged
 except a few control frames' (+0.3–0.8 dB).
 
+**On the harness** (added 2026-10-21; ADR-0084 §3 has the whole A/B). Two draws ran slower with
+ADR-0082…0085 than on beta.117: `20m-dx-500` at seed 1058 (430 → 530 s, Moderate 6 dB) and
+`40m-winlink-exchange-2300` at 1031 (77 → 99 s, Good 10 dB). With this ADR alone left out they
+ran in 352 and 77 s. A daemon that logged every frame it followed showed the receiver following
+6 frames in the first session and one in the second, all near the cap (w 0.14–0.20). Recorded
+offline, every frame followed under the cap on Good, Moderate and Poor changed no decode, and
+there are few of them: 4 in about 1 350 frames at 500 Hz (−2 to +16 dB, three OFDM rungs) and
+none in about 1 500 at 2 300 Hz. One such frame's reading set the second session on another
+course; other draws went the other way. On flutter the frames followed at w 0.167–0.2 gained 10
+decodes of 44 at 500 Hz and 5 of 34 at 2 300 Hz, so a tighter cap would cost flutter for nothing
+the steady classes need.
+
 ## 4. Alternatives
 
 * **No time average at all** (the per-symbol estimate of §1): the best on flutter at high SNR,

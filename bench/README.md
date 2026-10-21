@@ -441,7 +441,7 @@ and Poor for three of them. Nothing is slower than beta.116; sessions from 0 to 
 fading classes run 8–20 % faster; against the receiver alone Poor at −6 dB is 2 % slower
 (ADR-0081 §3).
 
-## Fast fading and partial failures (`link_partial_failures.csv`, ADR-0082 … ADR-0084)
+## Fast fading and partial failures (`link_partial_failures.csv`, ADR-0082 … ADR-0085)
 
 Three receiver and controller changes after ADR-0081, measured with scratch benches whose numbers
 are in the ADRs: the OFDM receiver's time filter follows a channel that moves within the frame
@@ -463,6 +463,15 @@ Every session of both arms completed. The one loss past a percent, 2 300 Hz Mode
 8 kB sessions (−5 %, z −1.7), read −2.4 % (z −0.8) in a second run. Thresholds per channel
 class, the class known (its 10 % FER points from `fading_pipe.csv`), lost 5–47 % on the same
 bench (ADR-0084 §1).
+
+On the scenario harness, ADR-0082…0085 against beta.117, all 56 scenarios × 2 draws: 112 of 112
+pass on both, no radiated overlap, pooled air time −6.5 %, the Tests' file rate ×1.14 and
+message rate ×1.00 (medians over 15). `80m-qsb-dropout-500` −36 %, `80m-flutter-500` −23 %;
+the slowest, `40m-winlink-exchange-2300` +14 % and `20m-dx-500` +11 %, are one draw each that
+took another course (ADR-0082 §3). A third draw: 56 of 56. `scenarios.csv` is the three draws.
+ADR-0085 came out of the first A/B, where ADR-0084 alone lost `80m-agc-carrier-outside-500`'s
+message on its own draw in 2 of 8 runs; ADR-0085 §3 has those runs and the link bench, which is
+identical with it (the fading pipe seldom strands a frame).
 
 ## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
 

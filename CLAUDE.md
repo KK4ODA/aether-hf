@@ -2001,7 +2001,15 @@ below the frame's rung, that the body fits: tone-36 for a 22-byte body. Never in
 under an OFDM recommendation. Seed 31: 11 of 12 runs, message median 259 s (beta.117 9 of 10,
 286 s); the link bench identical (the fading pipe seldom strands a frame). Open: a body that fits
 no slower rung (72 bytes at rung 3, which this path decodes 2 in 20) is stranded for good on
-either build; splitting it needs a wire change.
+either build; splitting it needs a wire change. *On the harness* (ADR-0084 §3): ADR-0082…0085 against beta.117,
+56 scenarios × 2 draws, 112 of 112 pass, no radiated overlap, air −6.5 %, Tests' file rate
+×1.14; a third draw 56/56, and `bench/baselines/scenarios.csv` is the three draws (build
+`6389257`). Two draws ran slower (`20m-dx-500` s1058, `40m-winlink-exchange-2300` s1031): one
+followed frame each set the session on another course (a scratch daemon logged 6 and 1 frames
+followed, all at w 0.14–0.20); offline, the cap leaves 4 of ~1 350 ITU frames followed at 500 Hz
+and none of ~1 500 at 2 300 Hz, none with a changed decode (ADR-0082 §3). To isolate one change
+on the harness, build the daemon with it switched off in the source and run the same draw
+(`--variant K`) on each build.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
