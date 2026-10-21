@@ -79,7 +79,13 @@ less the noise:
   the neighbour's tone wherever it is;
 * **only on the floor's own kinds**, tone-24, tone-36 and the control frame: the whole frame at
   40 ms symbols. A fast kind's sync blocks alone hold too few triples and read lower, so a fast
-  kind reports none.
+  kind reports none;
+* **not in a bin another signal holds** (`interfered_bins`, `ECHO_QRM_SHARE`): a bin's mean
+  energy over the symbols where neither the symbol's tone, the bins beside it, nor its
+  neighbours' tones are is what no tone of the frame or its echo put there. A bin where that
+  stands more than 0.01 of the tones' mean energy above the median bin's holds an RTTY station, a
+  carrier or a birdie, and any triple with that bin is left out. An echo raises every bin
+  together, so it is measured against the median (§3).
 
 Measured (median of a frame's reading, 10 and 20 dB, detector timing): 0.0003 or less on AWGN and
 ITU Good, Moderate and Poor; 0.0013 for two rays 3 ms apart at 1 Hz; 0.0028 for 4 ms; 0.004–0.006
@@ -139,6 +145,37 @@ exception: 5 % of frames read up to 0.0057 at −3 to −5 dB, when a slow fade 
 down. If such a frame is the call or the acceptance, the session's first burst goes at rung 2
 rather than rung 3 or 4, and the next reading brings the smoothed echo back under the limit.
 
+**A narrowband signal in the span.** The first build of this decision read an RTTY station as an
+echo. On the harness's `40m-rtty-contest-2300`, station A has an RTTY station whose mark tone
+falls inside the floor's 400 Hz. Its frames read 0.01–0.18 on a Good path at +12 dB that carries
+rung 14, so the 2 300 Hz limit kept it at rung 4 and under. The Test's message went at 183 bit/s
+against beta.118's 310. A neighbour's tone and an RTTY tone look the same in one bin of one
+symbol. Over the frame they differ: the RTTY tone is in its bin whatever the frame sends, an
+echo only where a neighbour's tone was. The echo raises every bin a little, through the later
+ray's tone change landing inside the window: about 0.002 of the tones' energy at the median bin
+on ITU NVIS, up to 0.005 at the highest. So a bin is judged against the frame's median bin, not
+against the noise. Measured (12 frames of the control frame and 12 of tone-36 a point, both airs,
+the reading's median / 90th percentile):
+
+| Path, 12 dB | Before | With `interfered_bins` |
+|---|---|---|
+| Good, RTTY at the signal's power 250 Hz off the centre, 2 300 Hz | 0.0105 / 0.033 | 0.0009 / 0.0022 |
+| Good, the same RTTY on the centre, 500 Hz | 0.0282 / 0.078 | 0.0011 / 0.0028 |
+| Good, a carrier 10 dB down on a tone, 500 Hz | 0.0052 / 0.017 | 0.0001 / 0.0014 |
+| ITU NVIS at 10 dB, the RTTY 250 Hz off, 500 Hz | 0.0197 / 0.032 | 0.0089 / 0.0125 |
+| ITU NVIS at 10 dB, no RTTY, 500 Hz | 0.0111 / 0.018 | 0.0111 / 0.018 |
+
+On every path without one, from −5 dB up — AWGN, ITU Good, Moderate, Poor, flutter, NVIS, low-
+and high-latitude disturbed, two rays 4–7 ms apart — the highest bin stands at most 0.0097 above
+the median (Good at −5 dB, the 90th percentile), and at 3 dB and up no point loses a bin in more
+than one frame of 24. The exception is ITU high-latitude disturbed (7 ms at 30 Hz), which carries
+nothing (§2): 5 of the 7 frames the detector found there lost a bin. The readings `bench/baselines/echo.csv` holds were taken again with
+the rule, each point with its own seed. Every decode count came out the same, so they are the same
+frames. Ten values moved, in 4 of the 132 rows: three on ITU high-latitude disturbed and the 90th
+percentile of two rays 8 ms apart at 20 dB. The limits did not move. A threshold of 0.005 cleaned the RTTY
+further (0.0003 / 0.0015) but left bins out of up to 14 frames in 24 on NVIS paths without any
+signal in the span.
+
 **The link bench through the real modem** (`bench_link.run_point`, `phy` backend, one fade for
 the session; the base arm with the limits off):
 
@@ -164,8 +201,9 @@ moderate, both airs, at −3, +5 and +15 dB, two seeds each: every one delivered
 ruled out no rung in any of them. The highest smoothed echo any controller held was 0.0020,
 against limits of 0.0038 and 0.0073, so those sessions are beta.118's.
 
-**The scenario harness** (the eight scenarios on ITU NVIS, four draws each, against beta.118's
-daemon; then all 56 × 2) is reported in its own commit once it has run.
+**The scenario harness.** Its first full run, all 56 scenarios × 2 draws against beta.118's code
+on the same draws, passed 112 of 112 with no radiated overlap and found the RTTY case above. The
+run on this build, with `interfered_bins`, is reported in its own commit once it has run.
 
 ## 4. Alternatives
 

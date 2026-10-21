@@ -44,6 +44,7 @@ from aether_model.frame.modes import (
     TONE_FAST,
     TONE_NARROW,
     WIDE,
+    ToneKind,
 )
 from aether_model.phy import tone
 from aether_model.phy.constellation import constellation
@@ -490,15 +491,18 @@ def tone_receive_cases() -> list[dict[str, object]]:
     return out
 
 
-TONE_ECHO_CASES = (
-    (NARROW.tone_control, 56, 0.8, 0.9),
-    (NARROW.tone_data[0], 40, 1.0, 2.1),
-    (NARROW.tone_data[1], 16, 0.6, -1.3),
-    (TONE_NARROW[0], 56, 0.8, 0.9),
+TONE_ECHO_CASES: tuple[tuple[ToneKind, int, float, float, tuple[int, float] | None], ...] = (
+    (NARROW.tone_control, 56, 0.8, 0.9, None),
+    (NARROW.tone_data[0], 40, 1.0, 2.1, None),
+    (NARROW.tone_data[1], 16, 0.6, -1.3, None),
+    (TONE_NARROW[0], 56, 0.8, 0.9, None),
+    (NARROW.tone_control, 56, 0.8, 0.9, (11, 0.5)),
+    (NARROW.tone_data[1], 0, 0.0, 0.0, (4, 0.5)),
 )
 """A tone frame and its echo ``delay`` samples later (7, 5 and 2 ms at 8 kHz), ``amplitude``
 times as strong and turned by ``phase``: the floor's own kinds read it (ADR-0087), a fast kind
-reads none."""
+reads none. The last two add a carrier on tone ``bin`` of ``carrier`` amplitude — a narrowband
+signal in the span, whose bin the echo share leaves out (ADR-0087 §3)."""
 
 
 def tone_echo_cases() -> list[dict[str, object]]:
@@ -507,7 +511,7 @@ def tone_echo_cases() -> list[dict[str, object]]:
     to a tolerance (``None`` for a fast kind), the SNR to a tolerance."""
     out = []
     rng = np.random.default_rng(87)
-    for i, (kind, delay, amp, phase) in enumerate(TONE_ECHO_CASES):
+    for i, (kind, delay, amp, phase, carrier) in enumerate(TONE_ECHO_CASES):
         payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
         lead, cfo = 1600 + 113 * i, 18.75 - 11.5 * i
         x = tone.burst(kind, payload, 0)
@@ -517,8 +521,21 @@ def tone_echo_cases() -> list[dict[str, object]]:
         y[lead + delay : lead + delay + len(x)] += amp * np.exp(1j * phase) * x
         y *= np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
         y += tone_interference(n)
+        case: dict[str, object] = {}
+        if carrier is not None:
+            # on the bin's frequency as the receiver reads it, offset and all
+            hz = float(kind.num.tone_hz(np.array([carrier[0]]))[0]) + cfo
+            y += carrier[1] * np.exp(2j * np.pi * hz * np.arange(n) / 8000.0)
+            case = {"carrier_hz": hz, "carrier_amplitude": carrier[1]}
+            energies = tone.tone_energies(y, lead, cfo, kind.symbols, kind.num)
+            layout = kind.layout(0)
+            live = energies.max(axis=1) > 0
+            tones = np.where(live, np.where(layout >= 0, layout, energies.argmax(axis=1)), -1)
+            noise = tone.sync_noise(energies, layout, kind)
+            held = tone.interfered_bins(energies, tones, noise)
+            assert held[carrier[0]], (kind.name, held)
         frame = tone.demodulate(y, kind, 0, lead, cfo)
-        if kind.speed == 1:
+        if kind.speed == 1 and amp > 0:
             assert frame.echo is not None and frame.echo > 0.0, (kind.name, frame.echo)
         out.append(
             {
@@ -530,6 +547,7 @@ def tone_echo_cases() -> list[dict[str, object]]:
                 "lead": lead,
                 "cfo_hz": cfo,
                 "n_samples": n,
+                **case,
                 "snr_db": frame.snr_db,
                 "echo": frame.echo,
             }

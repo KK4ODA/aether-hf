@@ -1140,6 +1140,72 @@ pub fn snr_from_es(es_over_n0: f64) -> f64 {
 /// tone's energy into the bins beside it, an echo puts the neighbour's tone wherever it is.
 pub const ECHO_SPACING: usize = 2;
 
+/// How far above the frame's median bin, as a share of its tones' mean energy less the noise, a
+/// bin's energy where no tone of the frame put any may stand before [`echo_share`] leaves the bin
+/// out ([`interfered_bins`]). An echo's spill raises every bin together, by up to 0.005 on ITU
+/// NVIS; noise lifts one bin of a frame at −5 dB to 0.0097 at most; RTTY or a carrier inside the
+/// span stands at 0.02–0.2 in its own bins (ADR-0087 §3). The model's `tone.ECHO_QRM_SHARE`.
+pub const ECHO_QRM_SHARE: f64 = 0.01;
+
+/// The bins a narrowband signal not the frame's holds: a bin's mean energy over the symbols where
+/// neither the symbol's tone, the bins beside it, nor its neighbours' tones are — what no tone of
+/// the frame or its echo put there — standing more than [`ECHO_QRM_SHARE`] of the tones' mean
+/// energy above the median bin's. An RTTY station or a carrier in the span reads there as a
+/// neighbour's tone would, and [`echo_share`] took it for an echo: on the scenario harness's RTTY
+/// contest the floor's frames read 0.01–0.18 on a path that carried every rung. `heard` is each
+/// symbol's tone, `None` for a silent one. The model's `tone.interfered_bins`.
+#[must_use]
+pub fn interfered_bins(energies: &[f64], heard: &[Option<usize>], noise: f64) -> Vec<bool> {
+    let tones = TONE.tones;
+    let row = |s: usize| &energies[s * tones..(s + 1) * tones];
+    let mut total = vec![0.0; tones];
+    let mut count = vec![0usize; tones];
+    let (mut own, mut known) = (0.0, 0usize);
+    for (k, tone) in heard.iter().enumerate() {
+        let Some(b) = *tone else {
+            continue;
+        };
+        own += row(k)[b];
+        known += 1;
+        let mut cells = vec![true; tones];
+        cells[b.saturating_sub(1)..(b + 2).min(tones)].fill(false);
+        for j in [k.wrapping_sub(1), k + 1] {
+            if let Some(Some(t)) = heard.get(j) {
+                cells[*t] = false;
+            }
+        }
+        for (bin, &cell) in cells.iter().enumerate() {
+            if cell {
+                total[bin] += row(k)[bin];
+                count[bin] += 1;
+            }
+        }
+    }
+    if known == 0 {
+        return vec![false; tones];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let own = own / known as f64 - noise;
+    if own <= 0.0 {
+        return vec![false; tones];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let excess: Vec<f64> = (0..tones)
+        .map(|bin| {
+            if count[bin] > 0 {
+                (total[bin] / count[bin] as f64 - noise) / own
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let middle = median(&mut excess.clone());
+    excess
+        .iter()
+        .map(|&e| e - middle > ECHO_QRM_SHARE)
+        .collect()
+}
+
 /// How much of the neighbouring symbols' tones a symbol window holds, over its own tone's
 /// energy, each less the noise: what an echo spills across the symbol boundaries (ADR-0087).
 ///
@@ -1150,8 +1216,9 @@ pub const ECHO_SPACING: usize = 2;
 /// symbol's at its end: both sides are counted, so either ray reads the same; only neighbours
 /// [`ECHO_SPACING`] bins or more from the symbol's tone, so a Doppler spread does not; and only
 /// triples of known, heard tones — the sync symbols' and the data symbols' strongest. Only the
-/// floor's own kinds read it (a fast kind's sync blocks alone hold too few triples): `None` for
-/// a fast kind, or a frame that holds no such triple. The model's `tone.echo_share`.
+/// floor's own kinds read it (a fast kind's sync blocks alone hold too few triples). A triple
+/// with a bin another signal holds ([`interfered_bins`]) is left out. `None` for a fast kind, or
+/// a frame that holds no such triple. The model's `tone.echo_share`.
 #[must_use]
 pub fn echo_share(
     energies: &[f64],
@@ -1169,12 +1236,16 @@ pub fn echo_share(
         .enumerate()
         .map(|(s, role)| (!silent(row(s))).then(|| role.unwrap_or_else(|| argmax(row(s)))))
         .collect();
+    let held = interfered_bins(energies, &heard, noise);
     let (mut spill, mut own) = (0.0, 0.0);
     for k in 1..heard.len().saturating_sub(1) {
         let (Some(a), Some(b), Some(c)) = (heard[k - 1], heard[k], heard[k + 1]) else {
             continue;
         };
         if a == c || a.abs_diff(b) < ECHO_SPACING || c.abs_diff(b) < ECHO_SPACING {
+            continue;
+        }
+        if held[a] || held[b] || held[c] {
             continue;
         }
         let e = row(k);

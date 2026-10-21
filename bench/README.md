@@ -497,7 +497,9 @@ are drawn on), and probes at 0.1 and 10 Hz. `--limits` prints what `ECHO_LIMIT` 
 rung 5 above 0.0073. What a frame reads: 0.0003 or less on AWGN and ITU Good, Moderate and Poor,
 0.0028 for 4 ms, 0.004–0.006 for 5, 0.009 for 6, 0.012 for 7; flutter 0.001–0.0016. The probes
 show the reading's limits: frozen 7 ms multipath (0.1 Hz) reads 0.006 and carries 500 Hz rung 4
-three frames in four.
+three frames in four. The readings leave out a bin another signal holds (`tone.interfered_bins`);
+an RTTY station inside the span had read as an echo, and taken again with the rule, ten values
+in four rows moved and the limits did not.
 
 No link curve is committed: the fading pipe's frames carry no echo, and its link bench is
 beta.118's at every point (checked on both airs); through the real modem, 72 sessions on Good,
