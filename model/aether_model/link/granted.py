@@ -1375,8 +1375,22 @@ class GrantedEngine:
         return body_len == cap or body_len <= cap - 2
 
     def _reencode_target(self, body_len: int, from_mode: int, to_mode: int) -> int | None:
-        for mode in sorted(self.timing.data_capacity or {}):
-            if to_mode <= mode < from_mode and self._fits(body_len, mode):
+        """The rung a stranded frame goes at from now on: the most robust usable rung below
+        ``from_mode``, in the family of the recommendation ``to_mode``, that its body fits
+        (ADR-0085). Every data frame of a family is as long as the others, so a slower rung
+        than the recommendation costs that frame no air; and the recommendation may name a rung
+        the path has never carried. On ITU NVIS at 500 Hz, frames stranded at the first OFDM
+        rung went to the floor's top rung (tone4x100-93, whose 10 ms symbols a 7 ms echo
+        smears) and spent four more copies there, 86 s, where tone-36 carried them at once."""
+        capacity = self.timing.data_capacity or {}
+        floor = self.timing.is_floor(to_mode)
+        for mode in self.rate.modes:
+            if (
+                mode < from_mode
+                and mode in capacity
+                and self.timing.is_floor(mode) == floor
+                and self._fits(body_len, mode)
+            ):
                 return mode
         return None
 
