@@ -98,6 +98,22 @@ larger the gain: in a long session on a fading path the controller as it was rat
 up on every partial failure and gave it back slowly, by design (ADR-0007), so it drifted ever more
 cautious.
 
+**On the harness** (added 2026-10-21): ADR-0082…0085 together against beta.117, the 56
+scenarios × 2 draws each, the real daemons on the channel server. 112 of 112 runs pass on both
+builds, no radiated overlap, pooled air time 16 814 → 15 716 s (−6.5 %); the Tests' file rate
+×1.14 (median over 15 scenarios), message rate ×1.00. Fastest: `80m-qsb-dropout-500` −36 %,
+`80m-flutter-500` −23 % (message 60 → 106, file 74 → 127 bit/s), `40m-long-attachment-cwid-2300`
+−21 %, `80m-winlink-exchange-500` −20 %, `40m-hidden-vara-2300` −20 %. Slowest:
+`40m-winlink-exchange-2300` +14 % and `20m-dx-500` +11 %, each one draw of two: ADR-0082 §3 has
+why. A third draw of every scenario: 56 of 56. `bench/baselines/scenarios.csv` is these three
+draws.
+
+This rule alone, before ADR-0085, lost `80m-agc-carrier-outside-500`'s message on its own draw
+in 2 of 8 runs (beta.117: 1 in 10): it holds the recommendation higher after a partial failure,
+and on that NVIS path the frames stranded at the first OFDM rung were re-encoded at rung 4,
+which the path does not carry. ADR-0085 re-encodes them at the most robust rung of their family
+instead: 11 of 12.
+
 ## 4. Alternatives
 
 * **Thresholds per class**: §1. Even told the class, they lose 5–47 %.

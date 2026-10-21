@@ -61,6 +61,13 @@ OFDM rung) delivers in about 203 s on every build; one whose first burst goes at
 strands it there, and that is where the builds differ. The one lost run of beta.117 and the one
 of this build fail the same way, and not by this rule: §5.
 
+**The whole harness**, 56 scenarios × 2 draws, against the same run without this rule: 111 → 112
+of 112 runs pass, pooled air time −0.7 %, no radiated overlap. 39 frames were re-encoded across
+the 330 recordings. Where a scenario differs by more than a few percent, it either re-encoded
+(this one, −19 %) or ran a different course on the same draw with no re-encode at all
+(`80m-varac-chat-and-ping-500`, 94 → 113 s, and beta.117 104–141 s): the spread between runs of
+one build.
+
 **The link bench** (the fading pipe, the old rule against this one, the same seeds): identical
 at every point. 500 Hz, AWGN, Good, Moderate and Poor at −8, −4, 0 and +4 dB, 20 sessions of
 1 kB and 12 of 8 kB a point. The pipe seldom strands a frame (4 re-encodes in 45 sessions of
