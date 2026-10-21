@@ -59,3 +59,17 @@ def test_the_chat_bench_runs_a_conversation_on_each_air(bandwidth: int) -> None:
         row = bench_chat.run_session(point, 0)
         assert row["connected"] == 1 and row["lost"] == 0, row
         assert row["headers"] and row["answers"], row
+
+
+def test_the_echo_limits_are_the_benchs() -> None:
+    """ADR-0087: the rate controller's echo limits are what ``tools/bench_echo.py --limits``
+    draws from ``bench/baselines/echo.csv``."""
+    import csv
+
+    import bench_echo
+    from aether_model.link.rate import ECHO_LIMIT, NARROW_ECHO_LIMIT
+
+    with (ROOT / bench_echo.OUT).open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert bench_echo.limits(rows, 2300) == ECHO_LIMIT
+    assert bench_echo.limits(rows, 500) == NARROW_ECHO_LIMIT

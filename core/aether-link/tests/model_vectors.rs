@@ -515,3 +515,77 @@ fn the_rate_controller_follows_the_same_trace_as_the_model() {
         }
     }
 }
+
+#[test]
+fn the_echo_limits_match_the_model() {
+    // ADR-0087: the echo share above which each rung is kept off the ladder, by mode
+    use aether_link::rate::{ECHO_LIMIT, NARROW_ECHO_LIMIT};
+    let doc = vectors();
+    for (key, table) in [
+        ("echo_limits", ECHO_LIMIT.as_slice()),
+        ("narrow_echo_limits", NARROW_ECHO_LIMIT.as_slice()),
+    ] {
+        let want: Vec<Option<f64>> = doc[key]
+            .as_array()
+            .expect("echo limits")
+            .iter()
+            .map(Value::as_f64)
+            .collect();
+        assert_eq!(table, want.as_slice(), "{key}");
+    }
+}
+
+#[test]
+fn the_rate_controller_reads_the_echo_as_the_model_does() {
+    // ADR-0087: the 500 Hz controller with its echo limits, the same seeds, readings and
+    // bursts on both sides — the recommendation, the margin, the SNR and the echo after each
+    use aether_link::rate::{NARROW_ECHO_LIMIT, RateConfig};
+    for case in vectors()["echo_traces"].as_array().expect("echo traces") {
+        let name = case["name"].as_str().expect("name");
+        let steps = case["steps"].as_array().expect("steps");
+        let track = case["track"].as_array().expect("track");
+        assert_eq!(steps.len(), track.len(), "{name}");
+        let mut rc = RateController::for_table_timed(
+            RateConfig::default(),
+            &NARROW_AWGN_THRESHOLD_DB,
+            &NARROW_PAYLOAD_BYTES,
+            &NARROW_FRAME_S,
+        )
+        .with_floor(5, None)
+        .with_echo_limit(&NARROW_ECHO_LIMIT);
+        for (index, (step, want)) in steps.iter().zip(track).enumerate() {
+            let args = step["args"].as_array().expect("args");
+            match step["what"].as_str().expect("what") {
+                "echo" => rc.observe_echo(args[0].as_f64(), args[1].as_f64().expect("snr")),
+                "seed" => rc.seed(
+                    args[0].as_f64().expect("snr"),
+                    args[1].as_bool().expect("lower bound"),
+                ),
+                _ => rc.observe(
+                    args[0].as_f64(),
+                    args[1].as_u64().expect("ok") as usize,
+                    args[2].as_u64().expect("failed") as usize,
+                    args[3].as_u64().map(|m| m as usize),
+                ),
+            }
+            let at = format!("{name} step {index}");
+            assert_eq!(
+                rc.recommend() as u64,
+                want["recommend"].as_u64().expect("recommend"),
+                "{at}: recommendation"
+            );
+            let margin = want["margin_db"].as_f64().expect("margin");
+            assert!((rc.margin_db() - margin).abs() < 1e-9, "{at}: margin");
+            match (rc.snr_db(), want["snr_db"].as_f64()) {
+                (None, None) => {}
+                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{at}: SNR {got}"),
+                (got, w) => panic!("{at}: SNR {got:?} vs {w:?}"),
+            }
+            match (rc.echo(), want["echo"].as_f64()) {
+                (None, None) => {}
+                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-11, "{at}: echo {got}"),
+                (got, w) => panic!("{at}: echo {got:?} vs {w:?}"),
+            }
+        }
+    }
+}

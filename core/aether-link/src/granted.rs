@@ -580,6 +580,7 @@ struct Heard {
     snr_db: f64,
     trusted: bool,
     follows: Option<u8>,
+    echo: Option<f64>,
     t_start: f64,
     t_end: f64,
 }
@@ -593,6 +594,7 @@ impl Heard {
             snr_db: frame.snr_db(),
             trusted: frame.trusted(),
             follows: frame.follows(),
+            echo: frame.echo(),
             t_start: frame.t_start(),
             t_end: frame.t_end(),
         }
@@ -1043,7 +1045,9 @@ fn rate_controller_for(timing: &PhyTiming, config: RateConfig) -> RateController
             &frame_s,
         )
     };
-    controller.with_floor(timing.floor_modes, timing.floor_margin_db)
+    controller
+        .with_floor(timing.floor_modes, timing.floor_margin_db)
+        .with_echo_limit(&timing.echo_limit)
 }
 
 /// Whole steps of `step` in `x`, as the model's `int(x / step + 1e-9)`: truncated toward zero.
@@ -1317,6 +1321,13 @@ impl GrantedEngine {
     #[must_use]
     pub const fn current_mode(&self) -> usize {
         self.recommended
+    }
+
+    /// The path's echo as the session's frames have read it (ADR-0087), smoothed: what keeps
+    /// the rungs it breaks off the ladder. `None` before any reading.
+    #[must_use]
+    pub fn echo(&self) -> Option<f64> {
+        self.rate.echo()
     }
 
     /// The gap level in use: what a master grants, what a slave asks for.
@@ -2144,8 +2155,10 @@ impl GrantedEngine {
             .max(self.config.disc_patience_exchanges * self.exchange_s())
     }
 
-    /// A decoded frame of the session: the link is alive.
+    /// A decoded frame of the session: the link is alive, and what it read of the path's echo
+    /// goes to the rate controller (ADR-0087) — the call or the acceptance first.
     fn heard(&mut self, frame: &Heard) {
+        self.rate.observe_echo(frame.echo, frame.snr_db);
         self.heard_db = Some(frame.snr_db);
         self.heard_recent.push(frame.snr_db);
         let keep = self.config.family_readings;
@@ -4751,6 +4764,7 @@ mod tests {
             control_threshold_db: Some(CONTROL_THRESHOLD_DB),
             floor_margin_db: Some(1.0),
             floor_preamble_detect_s: Some(0.54),
+            echo_limit: Vec::new(),
         }
     }
 
@@ -4763,6 +4777,7 @@ mod tests {
                 snr_db: 8.5,
                 trusted: true,
                 follows: None,
+                echo: None,
                 t_start: 0.0,
                 t_end: 1.0,
             },

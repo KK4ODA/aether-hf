@@ -506,6 +506,11 @@ fn tone_frames_are_received_as_the_model_receives_them() {
             "{label}: SNR {}",
             frame.snr_db
         );
+        match (frame.echo, case["echo"].as_f64()) {
+            (None, None) => {}
+            (Some(got), Some(want)) => assert!(close(got, want), "{label}: echo {got}"),
+            (got, want) => panic!("{label}: echo {got:?}, the model has {want:?}"),
+        }
         let want = case["llr"].as_array().expect("llr");
         assert_eq!(frame.llr.len(), want.len(), "{label}: soft bits");
         for (index, (got, w)) in frame.llr.iter().zip(want).enumerate() {
@@ -521,6 +526,60 @@ fn tone_frames_are_received_as_the_model_receives_them() {
             Some(payload.as_slice()),
             "{label}: payload"
         );
+    }
+}
+
+#[test]
+fn tone_frames_on_two_rays_read_their_echo_as_the_model_does() {
+    // ADR-0087: a frame and its echo some milliseconds later, turned and under interference,
+    // demodulated at its known start and offset — the floor's own kinds read the echo, a fast
+    // kind reads none
+    let doc = vectors();
+    let tolerance = float(&doc, "tone_llr_tolerance");
+    let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
+    let cases = doc["tone_echo"].as_array().expect("tone echo");
+    assert!(!cases.is_empty(), "cases is empty");
+    let tau = 2.0 * std::f64::consts::PI;
+    for case in cases {
+        let kind = tone_kind(case["kind"].as_str().expect("kind"));
+        let label = kind.name;
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let codec = tone::ToneCodec::new(kind).expect("codec");
+        let x = tone::burst(&codec, &payload, 0).expect("burst");
+        let (lead, delay, n, cfo) = (
+            int(case, "lead"),
+            int(case, "delay"),
+            int(case, "n_samples"),
+            float(case, "cfo_hz"),
+        );
+        let (amp, phase) = (float(case, "amplitude"), float(case, "phase"));
+        let ray = (amp * phase.cos(), amp * phase.sin());
+        let mut y = vec![(0.0f64, 0.0f64); n];
+        y[lead..lead + x.len()].copy_from_slice(&x);
+        for (k, s) in x.iter().enumerate() {
+            let at = &mut y[lead + delay + k];
+            at.0 += ray.0 * s.0 - ray.1 * s.1;
+            at.1 += ray.0 * s.1 + ray.1 * s.0;
+        }
+        for (k, (sample, noise)) in y.iter_mut().zip(tone_interference(n)).enumerate() {
+            let turn = tau * cfo * k as f64 / 8000.0;
+            let (cos, sin) = (turn.cos(), turn.sin());
+            *sample = (
+                sample.0 * cos - sample.1 * sin + noise.0,
+                sample.0 * sin + sample.1 * cos + noise.1,
+            );
+        }
+        let frame = tone::demodulate(&y, kind, 0, lead, cfo).expect("in range");
+        assert!(
+            close(frame.snr_db, float(case, "snr_db")),
+            "{label}: SNR {}",
+            frame.snr_db
+        );
+        match (frame.echo, case["echo"].as_f64()) {
+            (None, None) => {}
+            (Some(got), Some(want)) => assert!(close(got, want), "{label}: echo {got}"),
+            (got, want) => panic!("{label}: echo {got:?}, the model has {want:?}"),
+        }
     }
 }
 

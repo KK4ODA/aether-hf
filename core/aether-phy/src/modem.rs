@@ -158,6 +158,16 @@ impl Received {
         }
     }
 
+    /// What of the path's echo the frame shows (ADR-0087, [`tone::echo_share`]): a tone frame of
+    /// the floor's own kinds reads it; `None` for every other frame.
+    #[must_use]
+    pub fn echo(&self) -> Option<f64> {
+        match self {
+            Self::Tone(frame, _) => frame.echo,
+            Self::Ofdm(_) => None,
+        }
+    }
+
     /// How sure the mode decision was: the chip metric over its runner-up for an OFDM DATA
     /// frame. A control frame has no chips, and a tone frame's kind is named by the sync
     /// pattern acquisition matched, so both report 1.0.

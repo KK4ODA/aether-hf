@@ -166,6 +166,19 @@ A rate controller seeded from a floor frame seeds again, once and upward only, f
 clean burst it measures on an OFDM rung, when that reads more than 3 dB above the floor's
 reading.
 
+The floor's 40 ms symbols carry a path whose echo breaks the faster rungs, and the SNR such a
+path reads cannot say so: on ITU-R F.1487's disturbed NVIS (two rays 7 ms apart) the floor reads
+about −3 dB whatever the SNR, as a quiet path at −3 dB reads. So the reference receiver also
+reads the echo on the floor's own frames — tone-24, tone-36 and the control frame, every call,
+acceptance and floor control frame among them: the energy at the neighbouring symbols' tones
+inside a symbol, both sides, where they stand two or more bins from its own, over its own tone,
+each less the noise (ADR-0087). A two-ray path reads about 0.003 at 4 ms and 0.012 at 7; AWGN
+and ITU's Good, Moderate and Poor paths read 0.0003 or less. Its rate controller keeps off the
+rungs the smoothed reading rules out — on the 500 Hz air rungs 3 and 4 above 0.0038, on the
+2 300 Hz air rung 5 above 0.0073 (`bench/baselines/echo.csv`) — and, since it climbs rung by
+rung, does not reach the rungs above one it keeps off. Nothing of this is on the air: a
+receiver that reads no echo recommends as before.
+
 The tones are spaced at the symbol rate about the passband centre and span 400 Hz, inside
 a 500 Hz channel on either air. Between symbols the frequency glides on a raised cosine and
 the phase runs on, which keeps the spectrum inside the channel (99.9 % of the power within

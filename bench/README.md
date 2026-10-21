@@ -486,6 +486,28 @@ message rate ×1.00 and file rate ×0.98, nothing outside `scenarios.csv`'s rang
 is unchanged. One run split a block; whole re-encodes fell from 39 to 7, a re-encode no longer
 going above the recommendation.
 
+## The echo the tone floor reads (`echo.csv`, ADR-0087)
+
+`echo.csv` is `tools/bench_echo.py`: for each air, path and SNR (10 and 20 dB), 16 frames of each
+rung measured through the air's own receiver — decoded or not — and, for the floor's own kinds,
+the 10th, 50th and 90th percentiles of the echo share their frames read. Paths are the ITU-R
+F.1487 profiles by name, two equal rays `D` ms apart at 1 Hz (`D@1`, the delay sweep the limits
+are drawn on), and probes at 0.1 and 10 Hz. `--limits` prints what `ECHO_LIMIT` and
+`NARROW_ECHO_LIMIT` hold (a test holds them to this file): 500 Hz rungs 3–4 above 0.0038, 2 300 Hz
+rung 5 above 0.0073. What a frame reads: 0.0003 or less on AWGN and ITU Good, Moderate and Poor,
+0.0028 for 4 ms, 0.004–0.006 for 5, 0.009 for 6, 0.012 for 7; flutter 0.001–0.0016. The probes
+show the reading's limits: frozen 7 ms multipath (0.1 Hz) reads 0.006 and carries 500 Hz rung 4
+three frames in four.
+
+No link curve is committed: the fading pipe's frames carry no echo, and its link bench is
+beta.118's at every point (checked on both airs); through the real modem, 72 sessions on Good,
+Moderate, Poor, flutter and the low- and high-latitude moderate profiles, both airs, at −3 to
++15 dB, never ruled a rung out (the highest smoothed echo 0.0020). Through the real modem on ITU's
+disturbed NVIS
+(`bench_link.run_point`, `phy` backend, one fade a session): 500 Hz 1 kB 256/254/253 →
+213/211/210 s at 5/10/15 dB (six seeds), 4 kB 840/830 → 819/797 s at 5/10 dB, 2 300 Hz 4 kB
+401/392 → 367/352 s (four seeds each). ADR-0087 §3 has the rest.
+
 ## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
 
 `calls.csv` is `tools/bench_calls.py`: per air, class and SNR, 30 calls and 30 probes on the

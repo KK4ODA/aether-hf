@@ -117,6 +117,19 @@ because twelve carriers carry ≈ 6.8 dB more per carrier than fifty-seven; belo
 tone floor, which reaches −19 dB where the OFDM floor it replaced (ADR-0009) reached −12. QPSK
 ⅓ on the ordinary frame was rung 4 until tone4x100-93 took its place (ADR-0081)."""
 
+ECHO_LIMIT: dict[int, float] = {5: 0.0073}
+"""The echo share (:func:`~aether_model.phy.tone.echo_share`) above which each rung of the
+2 300 Hz ladder that has one is kept off it (ADR-0087), from ``tools/bench_echo.py --limits``
+(``bench/baselines/echo.csv``; a test holds the two to each other): tone100-153, whose 100-baud
+symbols a 7 ms echo breaks. A rung without one is carried on some measured path that reads
+nearly as much echo as any path that refuses it — tone100-105's sixteen tones over 1 600 Hz
+carry a 6 ms path at a reading of 0.011."""
+
+NARROW_ECHO_LIMIT: dict[int, float] = {3: 0.0038, 4: 0.0038}
+"""The 500 Hz ladder's :data:`ECHO_LIMIT`: the four-tone kinds' 10 ms symbols at their two higher
+code rates, refused by two rays 5 ms apart (a reading of 0.004) and carried 4 ms apart (0.003).
+Rung 2 and the OFDM rungs have none; the climb stops under rung 3 all the same."""
+
 TONE_CONTROL_THRESHOLD_DB = -19.5
 """The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
 ``bench/baselines/tone_floor.csv``) — the same frame on both airs."""
@@ -240,6 +253,23 @@ class RateController:
     the 500 Hz floor below it carries an exchange better than the rung does once it loses
     frames (a fifth of rung 5's at 0 dB on Moderate and Poor), and holding the rung cost 3 %
     there."""
+    echo_limit: dict[int, float] = field(default_factory=dict)
+    """The echo share above which a rung is kept off the ladder (ADR-0087): the tone floor's
+    40 ms symbols carry a path whose echo smears the fast kinds' 10 ms ones and outruns OFDM's
+    5 ms prefix, and the SNR such a path reads cannot say so — the floor's reading saturates
+    near −3 dB whatever the SNR, as a quiet path at −3 dB reads, so on ITU's disturbed NVIS
+    (7 ms) the 500 Hz air went first to rung 4, which decodes only on a frame's third copy, then
+    to rung 3, then down to the rungs the path carries. :data:`ECHO_LIMIT`,
+    :data:`NARROW_ECHO_LIMIT`; empty, no rung has one."""
+    echo_weight: float = 0.4
+    """How much each reading moves :attr:`echo`: a frame's reading spreads by a factor of two
+    or so about its path's, and a session's first data goes on one or two of them."""
+    echo_min_snr_db: float = -6.0
+    """The weakest frame whose echo reading counts: below it the noise in the bins the reading
+    weighs is as large as a 4 ms echo's spill, and at those SNRs the rungs an echo refuses are
+    not on offer."""
+    echo: float | None = None
+    """The path's echo as the frames have read it, smoothed (:meth:`observe_echo`)."""
     reseed_margin_db: float = 3.0
     """How far above a lower-bound seed (:meth:`seed`) the first ordinary measurement must read
     to replace it. The tone floor's estimate is exact to about +10 dB on AWGN; a few decibels
@@ -338,6 +368,27 @@ class RateController:
                 self.margin_db = max(self.min_margin_db, self.margin_db - self.down_step_db)
             self._step_up()
 
+    def observe_echo(self, share: float | None, snr_db: float | None) -> None:
+        """A frame's echo reading (:func:`~aether_model.phy.tone.echo_share`, ADR-0087), read
+        at ``snr_db``. A recommendation the reading now rules out moves to the fastest rung
+        below that it allows and the SNR carries."""
+        if share is None or snr_db is None or snr_db < self.echo_min_snr_db:
+            return
+        w = self.echo_weight
+        self.echo = share if self.echo is None else (1.0 - w) * self.echo + w * share
+        if not self._echo_out(self._index):
+            return
+        for i in range(self._index - 1, -1, -1):
+            if not self._echo_out(i) and (self._fits(i) or i == 0):
+                self._index = i
+                return
+        self._index = 0
+
+    def _echo_out(self, index: int) -> bool:
+        """Whether the path's echo keeps the rung at ``index`` off the ladder."""
+        limit = self.echo_limit.get(self.modes[index])
+        return limit is not None and self.echo is not None and self.echo > limit
+
     def observe_snr(self, snr_db: float | None) -> None:
         """Take a burst's SNR and nothing else: for a burst sent faster than this station asked
         for, whose failure is the sender's choice and no news to this controller (ADR-0020) —
@@ -401,7 +452,7 @@ class RateController:
         ordinary = self._first_ordinary()
         fit = 0
         for i in range(1, len(self.modes)):
-            if self._required(i) > snr_db:
+            if self._required(i) > snr_db or self._echo_out(i):
                 break
             fit = i
         # the steps in hand stay in the family the measurement fits: a session the SNR puts
@@ -452,6 +503,8 @@ class RateController:
         return self.margin_db
 
     def _fits(self, index: int, extra_db: float = 0.0) -> bool:
+        if self._echo_out(index):
+            return False
         if self.snr_db is None:
             return index == 0
         return self.thresholds[self.modes[index]] + self._margin(index) + extra_db <= self.snr_db

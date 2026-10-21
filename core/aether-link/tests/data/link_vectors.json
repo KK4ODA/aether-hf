@@ -4418,5 +4418,636 @@
     }
    ]
   }
+ ],
+ "echo_traces": [
+  {
+   "name": "narrow_echo",
+   "steps": [
+    {
+     "what": "echo",
+     "args": [
+      0.011,
+      -3.0
+     ]
+    },
+    {
+     "what": "seed",
+     "args": [
+      -3.0,
+      true
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.05,
+      -9.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -2.5,
+      4,
+      2,
+      2
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.012,
+      -2.8
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      -3.0,
+      6,
+      0,
+      2
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.0002,
+      8.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      8.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.02,
+      6.0
+     ]
+    },
+    {
+     "what": "echo",
+     "args": [
+      0.02,
+      6.0
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      6.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      6.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      6.0,
+      6,
+      0,
+      null
+     ]
+    },
+    {
+     "what": "observe",
+     "args": [
+      6.0,
+      6,
+      0,
+      null
+     ]
+    }
+   ],
+   "track": [
+    {
+     "recommend": 0,
+     "margin_db": 3.0,
+     "snr_db": null,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 3.0,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.75,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.5,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.25,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.0,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.0,
+     "snr_db": -3.0,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 3.0,
+     "snr_db": -2.85,
+     "echo": 0.011
+    },
+    {
+     "recommend": 2,
+     "margin_db": 3.0,
+     "snr_db": -2.85,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 3.0,
+     "snr_db": -2.895,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 3.0,
+     "snr_db": -2.9265,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.75,
+     "snr_db": -2.94855,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 2.25,
+     "snr_db": -2.963985,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": -2.9747895,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": -2.98235265,
+     "echo": 0.0114
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": -2.98235265,
+     "echo": 0.00692
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": 0.312353145,
+     "echo": 0.00692
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": 0.312353145,
+     "echo": 0.004232
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": 2.618647201,
+     "echo": 0.004232
+    },
+    {
+     "recommend": 2,
+     "margin_db": 1.5,
+     "snr_db": 2.618647201,
+     "echo": 0.0026192
+    },
+    {
+     "recommend": 4,
+     "margin_db": 1.5,
+     "snr_db": 4.233053041,
+     "echo": 0.0026192
+    },
+    {
+     "recommend": 4,
+     "margin_db": 1.5,
+     "snr_db": 4.233053041,
+     "echo": 0.00165152
+    },
+    {
+     "recommend": 6,
+     "margin_db": 1.5,
+     "snr_db": 5.363137129,
+     "echo": 0.00165152
+    },
+    {
+     "recommend": 6,
+     "margin_db": 1.5,
+     "snr_db": 5.363137129,
+     "echo": 0.001070912
+    },
+    {
+     "recommend": 9,
+     "margin_db": 1.5,
+     "snr_db": 6.15419599,
+     "echo": 0.001070912
+    },
+    {
+     "recommend": 9,
+     "margin_db": 1.5,
+     "snr_db": 6.15419599,
+     "echo": 0.0007225472
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 6.707937193,
+     "echo": 0.0007225472
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 6.707937193,
+     "echo": 0.00051352832
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.095556035,
+     "echo": 0.00051352832
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.095556035,
+     "echo": 0.000388116992
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.366889225,
+     "echo": 0.000388116992
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.366889225,
+     "echo": 0.000312870195
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.556822457,
+     "echo": 0.000312870195
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.556822457,
+     "echo": 0.000267722117
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.68977572,
+     "echo": 0.000267722117
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.68977572,
+     "echo": 0.00816063327
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.68977572,
+     "echo": 0.012896379962
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 7.182843004,
+     "echo": 0.012896379962
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 6.827990103,
+     "echo": 0.012896379962
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 6.579593072,
+     "echo": 0.012896379962
+    },
+    {
+     "recommend": 11,
+     "margin_db": 1.5,
+     "snr_db": 6.40571515,
+     "echo": 0.012896379962
+    }
+   ]
+  }
+ ],
+ "echo_limits": [
+  null,
+  null,
+  null,
+  null,
+  null,
+  0.0073,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+ ],
+ "narrow_echo_limits": [
+  null,
+  null,
+  null,
+  0.0038,
+  0.0038,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
  ]
 }

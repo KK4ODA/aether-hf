@@ -2133,6 +2133,7 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "bandwidth_hz": frame.bandwidth_hz,
         "follows": frame.follows,
         "capture_skip": frame.capture_skip,
+        "echo": frame.echo,
     })
 }
 

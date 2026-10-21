@@ -422,6 +422,48 @@ def _logsumexp(a: FloatArray) -> FloatArray:
     return np.asarray(top + np.log(np.exp(a - top[:, None]).sum(axis=1)), dtype=np.float64)
 
 
+ECHO_SPACING = 2
+"""How many bins at least a neighbouring symbol's tone must stand from a symbol's own for its
+energy there to count as echo (:func:`echo_share`): a Doppler spread or a residual offset puts a
+tone's energy into the bins beside it, an echo puts the neighbour's tone wherever it is."""
+
+
+def echo_share(
+    energies: FloatArray, layout: IntArray, kind: ToneKind, noise: float
+) -> float | None:
+    """How much of the neighbouring symbols' tones a symbol window holds, over its own tone's
+    energy, each less the noise: what an echo spills across the symbol boundaries (ADR-0087).
+
+    The tone floor's symbols are 40 ms long, so a path's echo leaves them almost intact — they
+    decode at any SNR on a 7 ms two-ray path — while it smears the fast kinds' 10 ms symbols and
+    outruns OFDM's 5 ms prefix. The floor's SNR reading cannot tell that path from a quiet one at
+    a few decibels: the echo counts as noise and the reading saturates near −3 dB whatever the
+    SNR. What the echo does that noise does not is put the previous symbol's tone at the start of
+    a window and, the receiver's timing being on the later ray, the next symbol's tone at its end.
+    Both sides are counted, so either choice of ray reads the same; only neighbours at least
+    :data:`ECHO_SPACING` bins from the symbol's tone, so a Doppler spread does not; and only
+    triples of known tones — the sync symbols' and, for the floor's own kinds, the data symbols'
+    strongest. About 0 on AWGN and ITU Good, Moderate and Poor; 0.0015 for a 4 ms two-ray path,
+    0.0035 for 5, 0.006 for 6, 0.010 for 7 (``bench/baselines/echo.csv``). Only the floor's own
+    kinds read it — the control frame, every call, acceptance, header and answer on the floor
+    among them: a fast kind's sync blocks alone hold too few triples, and read lower. ``None``
+    for a fast kind, or a frame that holds no such triple."""
+    if kind.speed != 1:
+        return None
+    live = energies.max(axis=1) > 0
+    tones = np.where(live, np.where(layout >= 0, layout, energies.argmax(axis=1)), -1)
+    spill = own = 0.0
+    for k in range(1, len(tones) - 1):
+        a, b, c = int(tones[k - 1]), int(tones[k]), int(tones[k + 1])
+        if min(a, b, c) < 0 or a == c:
+            continue
+        if abs(a - b) < ECHO_SPACING or abs(c - b) < ECHO_SPACING:
+            continue
+        spill += float(energies[k, a] + energies[k, c]) - 2.0 * noise
+        own += max(float(energies[k, b]) - noise, 0.0)
+    return spill / own if own > 0 else None
+
+
 @dataclass(frozen=True)
 class ToneFrame:
     """A detected tone frame's soft information, ready to decode or to combine."""
@@ -431,6 +473,8 @@ class ToneFrame:
     llr: FloatArray
     snr_db: float
     """SNR (3 kHz) in the OFDM reference: what this path gives an ordinary frame."""
+    echo: float | None = None
+    """The frame's :func:`echo_share`: what of the path's echo its symbols show."""
 
     def decode(self, buffer: FloatArray | None = None) -> tuple[bytes | None, FloatArray]:
         return tone_codec(self.kind).decode(self.llr, self.rv, buffer)
@@ -452,7 +496,9 @@ def demodulate(
     llr = bit_llrs(metrics, kind.data.bits_per_symbol)
     idx = np.flatnonzero(layout >= 0)
     es = float(np.mean(energies[idx, layout[idx]])) / noise - 1.0
-    return ToneFrame(kind, rv, llr, snr_from_es(es, kind.num))
+    return ToneFrame(
+        kind, rv, llr, snr_from_es(es, kind.num), echo_share(energies, layout, kind, noise)
+    )
 
 
 def snr_from_es(es_over_n0: float, num: ToneNumerology = TONE_NUMEROLOGY) -> float:

@@ -919,3 +919,43 @@ def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:
     muted[lead + kind.samples // 2 : lead + kind.samples] = 0
     half = T.demodulate(muted, kind, 0, lead, 0.0)
     assert abs(half.snr_db - whole.snr_db) < 4.0, (half.snr_db, whole.snr_db)
+
+
+def test_the_echo_share_reads_an_echo_and_not_noise_or_doppler() -> None:
+    """ADR-0087: on a two-ray path 7 ms apart the floor's 40 ms symbols hold their neighbours'
+    tones at their edges; noise and a flutter path's Doppler spread put nothing there that the
+    reading counts. A fast kind reads none: its sync blocks alone hold too few triples."""
+    from aether_model.channel import ChannelProfile
+
+    kind = M.NARROW.tone_control
+    rng = np.random.default_rng(4)
+
+    def share(path: ChannelProfile | str) -> float:
+        reads = []
+        for _ in range(6):
+            payload = bytes(rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8))
+            x = T.burst(kind, payload, 0)
+            buf = np.concatenate((np.zeros(1500, complex), x, np.zeros(1500, complex)))
+            ch = make_channel(
+                path,
+                snr_db=10.0,
+                fs=kind.num.fs,
+                seed=int(rng.integers(0, 2**31)),
+                signal_power=1.0,
+            )
+            echo = T.demodulate(ch.process(buf), kind, 0, 1500, 0.0).echo
+            assert echo is not None
+            reads.append(echo)
+        return float(np.median(reads))
+
+    nvis = ChannelProfile("two rays 7 ms", (0.0, 7e-3), (1.0, 1.0), (0.0, 0.0))
+    assert share("awgn") < 0.0005
+    assert share("poor") < 0.001
+    assert share("flutter") < 0.003
+    assert share(nvis) > 0.005
+    fast = M.NARROW.tone_data[2]
+    payload = bytes(fast.payload_bytes)
+    x = np.concatenate(
+        (np.zeros(1500, complex), T.burst(fast, payload, 0), np.zeros(1500, complex))
+    )
+    assert T.demodulate(x, fast, 0, 1500, 0.0).echo is None
