@@ -118,9 +118,9 @@ Pat's configuration, with Aether keying the radio.
 * **A probe** (Session tab, *Probe*) is a one-frame check: it tells you how the other station
   hears you, and how you hear it, without starting a session. Try one before calling.
 * **A Test session** (Session tab, *Test session*) runs a fixed sequence against a listening
-  Aether station — a probe, a call, a message, a climb up the rungs from just under the message's, a file if
-  time allows — and records it.
-  It is the single most useful thing you can do on a new path.
+  Aether station — a probe, a call, a message, a file, then a climb up the rungs from just under
+  the fastest the transfers reached — and records it. It is the single most useful thing you can
+  do on a new path.
 
 ## 5. When something goes wrong
 
