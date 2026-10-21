@@ -959,3 +959,47 @@ def test_the_echo_share_reads_an_echo_and_not_noise_or_doppler() -> None:
         (np.zeros(1500, complex), T.burst(fast, payload, 0), np.zeros(1500, complex))
     )
     assert T.demodulate(x, fast, 0, 1500, 0.0).echo is None
+
+
+def test_a_narrowband_signal_in_the_span_is_not_read_as_an_echo() -> None:
+    """ADR-0087 §3: an RTTY station or a carrier inside the floor's span puts energy in bins no
+    tone of the frame put any, where a neighbour's tone would stand, and the echo share counted
+    it: on the harness's RTTY contest a Good path read 0.01–0.18 and its station kept off rungs
+    the path carried. The bins it holds are left out (``interfered_bins``); an echo with the
+    same RTTY still reads."""
+    from aether_model import qrm as Q
+    from aether_model.channel import ChannelProfile
+
+    kind = M.NARROW.tone_control
+    rng = np.random.default_rng(9)
+
+    def share(path: ChannelProfile | str, offset_hz: float, carrier: bool = False) -> float:
+        reads = []
+        for _ in range(6):
+            payload = bytes(rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8))
+            x = T.burst(kind, payload, 0)
+            buf = np.concatenate((np.zeros(1500, complex), x, np.zeros(1500, complex)))
+            ch = make_channel(
+                path,
+                snr_db=12.0,
+                fs=kind.num.fs,
+                seed=int(rng.integers(0, 2**31)),
+                signal_power=1.0,
+            )
+            y = ch.process(buf)
+            seed = int(rng.integers(0, 2**31))
+            source = (
+                Q.Carrier(kind.num.fs, offset_hz, -10.0, seed=seed, windows=[(0.0, 60.0)])
+                if carrier
+                else Q.RttyStation(kind.num.fs, offset_hz, -2.0, seed=seed, windows=[(0.0, 60.0)])
+            )
+            echo = T.demodulate(y + source.next(len(y)), kind, 0, 1500, 0.0).echo
+            assert echo is not None
+            reads.append(echo)
+        return float(np.median(reads))
+
+    nvis = ChannelProfile("two rays 7 ms", (0.0, 7e-3), (1.0, 1.0), (0.0, 0.0))
+    assert share("good", -250.0) < 0.002
+    assert share("good", 0.0) < 0.002
+    assert share("good", 60.0, carrier=True) < 0.002
+    assert share(nvis, -250.0) > 0.005

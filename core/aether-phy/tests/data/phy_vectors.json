@@ -152134,6 +152134,34 @@
    "n_samples": 46875,
    "snr_db": -3.312255993577015,
    "echo": null
+  },
+  {
+   "kind": "tone-control",
+   "payload": "a0bdab6b1de49d",
+   "delay": 56,
+   "amplitude": 0.8,
+   "phase": 0.9,
+   "lead": 2052,
+   "cfo_hz": -27.25,
+   "n_samples": 29708,
+   "carrier_hz": 60.25,
+   "carrier_amplitude": 0.5,
+   "snr_db": -5.1835302032211095,
+   "echo": 0.006356408687216451
+  },
+  {
+   "kind": "tone-36",
+   "payload": "6124f6eee3ab0e8e69bf2fac51ebbc3fab347e7704156f0cd5eba184bfe4cc65ca8915e2",
+   "delay": 0,
+   "amplitude": 0.0,
+   "phase": 0.0,
+   "lead": 2165,
+   "cfo_hz": -38.75,
+   "n_samples": 47045,
+   "carrier_hz": -126.25,
+   "carrier_amplitude": 0.5,
+   "snr_db": 5.15310456458228,
+   "echo": 0.0008409185573598734
   }
  ],
  "tone_counted_frames": [

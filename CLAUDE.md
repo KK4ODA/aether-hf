@@ -2055,7 +2055,10 @@ for a fast kind; `ToneFrame.echo`, `Received::echo`, `SoftFrame.echo`), the engi
 decoded session frame to the controller (`_heard`; the call or acceptance first), and
 `RateController.observe_echo` (EWMA `echo_weight` 0.4, frames under `echo_min_snr_db` −6 dB
 ignored) keeps off the rungs whose limit the echo exceeds (`_echo_out` in `_fits` and
-`first_mode`; the climb stops under them). Limits (`ECHO_LIMIT`, `NARROW_ECHO_LIMIT`, through
+`first_mode`; the climb stops under them). A triple with a bin another signal holds is left out
+(`interfered_bins`: a bin's energy where no tone of the frame put any, more than `ECHO_QRM_SHARE`
+0.01 of the tones' energy above the median bin's — an echo raises every bin together): the
+harness's RTTY contest had read 0.01–0.18 and held a +12 dB 2 300 Hz path at rung 4. Limits (`ECHO_LIMIT`, `NARROW_ECHO_LIMIT`, through
 `PhyTiming.echo_limit`): 500 Hz rungs 3–4 above 0.0038, 2 300 Hz rung 5 above 0.0073, from
 `tools/bench_echo.py` (`bench/baselines/echo.csv`, 704 points; `--limits`: a rung is refused on a
 path when a slower rung delivers more there at every SNR, the limit the lowest refusing path's

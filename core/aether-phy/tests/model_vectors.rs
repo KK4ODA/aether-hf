@@ -569,6 +569,16 @@ fn tone_frames_on_two_rays_read_their_echo_as_the_model_does() {
                 sample.0 * sin + sample.1 * cos + noise.1,
             );
         }
+        // a carrier on one of the frame's bins: a narrowband signal in the span, whose bin the
+        // echo share leaves out (ADR-0087 §3)
+        if let Some(hz) = case["carrier_hz"].as_f64() {
+            let amp = float(case, "carrier_amplitude");
+            for (k, sample) in y.iter_mut().enumerate() {
+                let turn = tau * hz * k as f64 / 8000.0;
+                sample.0 += amp * turn.cos();
+                sample.1 += amp * turn.sin();
+            }
+        }
         let frame = tone::demodulate(&y, kind, 0, lead, cfo).expect("in range");
         assert!(
             close(frame.snr_db, float(case, "snr_db")),

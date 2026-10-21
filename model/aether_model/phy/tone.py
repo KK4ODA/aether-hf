@@ -58,6 +58,7 @@ from aether_model.frame.modes import (
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
+BoolArray = NDArray[np.bool_]
 
 TONE_GAIN_DB = 5.5
 """Power of a tone-floor frame above an OFDM frame's average, both at the same transmit
@@ -427,6 +428,44 @@ ECHO_SPACING = 2
 energy there to count as echo (:func:`echo_share`): a Doppler spread or a residual offset puts a
 tone's energy into the bins beside it, an echo puts the neighbour's tone wherever it is."""
 
+ECHO_QRM_SHARE = 0.01
+"""How far above the frame's median bin, as a share of its tones' mean energy less the noise, a
+bin's energy where no tone of the frame put any may stand before :func:`echo_share` leaves the
+bin out (:func:`interfered_bins`). An echo's spill raises every bin together, by up to 0.005 on
+ITU NVIS; noise lifts one bin of a frame at −5 dB to 0.0097 at most; RTTY or a carrier inside the
+span stands at 0.02–0.2 in its own bins (ADR-0087 §3)."""
+
+
+def interfered_bins(energies: FloatArray, tones: IntArray, noise: float) -> BoolArray:
+    """The bins a narrowband signal not the frame's holds: a bin's mean energy over the symbols
+    where neither the symbol's tone, the bins beside it, nor its neighbours' tones are — what no
+    tone of the frame or its echo put there — standing more than :data:`ECHO_QRM_SHARE` of the
+    tones' mean energy above the median bin's. An RTTY station or a carrier in the span reads
+    there as a neighbour's tone would, and the echo share took it for an echo: on the scenario
+    harness's RTTY contest the floor's frames read 0.01–0.18 on a path that carried every rung."""
+    n, m = energies.shape
+    total = np.zeros(m)
+    count = np.zeros(m)
+    for k in range(n):
+        b = int(tones[k])
+        if b < 0:
+            continue
+        cells = np.ones(m, dtype=bool)
+        cells[max(0, b - 1) : b + 2] = False
+        for j in (k - 1, k + 1):
+            if 0 <= j < n and tones[j] >= 0:
+                cells[int(tones[j])] = False
+        total[cells] += energies[k, cells]
+        count[cells] += 1
+    known = tones >= 0
+    if not known.any():
+        return np.zeros(m, dtype=bool)
+    own = float(np.mean(energies[np.flatnonzero(known), tones[known]])) - noise
+    if own <= 0:
+        return np.zeros(m, dtype=bool)
+    excess = np.where(count > 0, total / np.maximum(count, 1) - noise, 0.0) / own
+    return np.asarray(excess - float(np.median(excess)) > ECHO_QRM_SHARE)
+
 
 def echo_share(
     energies: FloatArray, layout: IntArray, kind: ToneKind, noise: float
@@ -446,18 +485,22 @@ def echo_share(
     strongest. About 0 on AWGN and ITU Good, Moderate and Poor; 0.0015 for a 4 ms two-ray path,
     0.0035 for 5, 0.006 for 6, 0.010 for 7 (``bench/baselines/echo.csv``). Only the floor's own
     kinds read it — the control frame, every call, acceptance, header and answer on the floor
-    among them: a fast kind's sync blocks alone hold too few triples, and read lower. ``None``
-    for a fast kind, or a frame that holds no such triple."""
+    among them: a fast kind's sync blocks alone hold too few triples, and read lower. A triple
+    with a bin another signal holds (:func:`interfered_bins`) is left out. ``None`` for a fast
+    kind, or a frame that holds no such triple."""
     if kind.speed != 1:
         return None
     live = energies.max(axis=1) > 0
     tones = np.where(live, np.where(layout >= 0, layout, energies.argmax(axis=1)), -1)
+    held = interfered_bins(energies, tones, noise)
     spill = own = 0.0
     for k in range(1, len(tones) - 1):
         a, b, c = int(tones[k - 1]), int(tones[k]), int(tones[k + 1])
         if min(a, b, c) < 0 or a == c:
             continue
         if abs(a - b) < ECHO_SPACING or abs(c - b) < ECHO_SPACING:
+            continue
+        if held[a] or held[b] or held[c]:
             continue
         spill += float(energies[k, a] + energies[k, c]) - 2.0 * noise
         own += max(float(energies[k, b]) - noise, 0.0)
