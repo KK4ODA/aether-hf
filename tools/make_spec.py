@@ -37,7 +37,7 @@ from aether_model.frame.modes import (
     AirInterface,
     FrameLayout,
 )
-from aether_model.link.frames import CALL_BYTES, CONTROL_BYTES, DATA_HEADER, WINDOW
+from aether_model.link.frames import CALL_BYTES, CONTROL_BYTES, DATA_HEADER, FRAGMENT_HEADER, WINDOW
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     NARROW_AWGN_THRESHOLD_DB,
@@ -322,7 +322,10 @@ def constants_block() -> str:
         ["Redundancy versions", str(N_RV)],
         ["Peak reduction target, PSK modes", f"{CLIP_TARGET_DB:.1f} dB"],
         ["Peak reduction target, QAM modes", f"{CLIP_TARGET_DENSE_DB:.1f} dB"],
-        ["Link DATA header", f"{DATA_HEADER} bytes (5 with an explicit length)"],
+        [
+            "Link DATA header",
+            f"{DATA_HEADER} bytes (5 with an explicit length, {FRAGMENT_HEADER} more for a piece)",
+        ],
         ["Link CONTROL frame", f"{CONTROL_BYTES} bytes"],
         ["Callsign encoding", f"6 bits/character, 9 characters in {CALL_BYTES} bytes"],
         ["Selective-repeat window", f"{WINDOW} frames"],

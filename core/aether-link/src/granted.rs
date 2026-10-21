@@ -50,10 +50,11 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::{
     frames::{
-        CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, GrantFrame,
-        GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, ProbeBody, REPORT, WINDOW,
-        bandwidth_code, bandwidth_hz_of, data_capacity, data_kind, decode_data, encode_data,
-        in_window, level_of, pack_callsign, seq_after, seq_distance, with_level,
+        CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, FRAGMENT_HEADER,
+        GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, Piece, ProbeBody, REPORT,
+        WINDOW, bandwidth_code, bandwidth_hz_of, data_capacity, data_kind, decode_data,
+        encode_data, in_window, level_of, pack_callsign, pieces, seq_after, seq_distance,
+        with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
@@ -480,6 +481,8 @@ pub struct GrantStats {
     pub probe_replies: usize,
     /// Frames given another codeword at a slower rung.
     pub frames_reencoded: usize,
+    /// Stranded frames whose body fit no rung the path carries, sent in pieces (ADR-0086).
+    pub frames_split: usize,
     /// Frames of a session this station had left, answered with a DISC (ADR-0052).
     pub left_answered: usize,
     /// Transmissions handed over.
@@ -517,11 +520,54 @@ struct TxRecord {
     reencoded: usize,
     /// Sent in a transmission whose answer went unheard: whether it arrived is not known.
     unknown: bool,
+    /// The body in pieces at `mode` when it fits no rung the path carries whole (ADR-0086);
+    /// `None` for a frame sent whole.
+    pieces: Option<Vec<(Piece, Vec<u8>)>>,
+    /// How many times each piece has gone. Nothing says which pieces arrived, so a piece goes
+    /// again only once every piece of its block has gone as often.
+    piece_sends: Vec<usize>,
 }
 
 impl TxRecord {
     const fn sent(&self) -> bool {
         self.tx_count > 0 || self.reencoded > 0
+    }
+
+    /// The frames it takes to send.
+    fn frames(&self) -> usize {
+        self.pieces.as_ref().map_or(1, Vec::len)
+    }
+}
+
+/// The pieces of one block heard so far, placed by their offsets: the pieces of two splits at
+/// different boundaries still make the block (ADR-0086).
+#[derive(Debug, Clone, Default)]
+struct Pieces {
+    data: Vec<u8>,
+    have: Vec<bool>,
+    /// The block's length, once its last piece is heard.
+    total: Option<usize>,
+}
+
+impl Pieces {
+    fn place(&mut self, offset: usize, piece: &[u8], last: bool) {
+        let end = offset + piece.len();
+        if last {
+            self.total = Some(end);
+        }
+        if self.data.len() < end {
+            self.data.resize(end, 0);
+            self.have.resize(end, false);
+        }
+        self.data[offset..end].copy_from_slice(piece);
+        self.have[offset..end].fill(true);
+    }
+
+    /// The whole block, once every byte of it is heard.
+    fn body(&self) -> Option<Vec<u8>> {
+        let total = self.total?;
+        (self.have.len() >= total && self.have[..total].iter().all(|&h| h))
+            .then(|| self.data[..total].to_vec())
     }
 }
 
@@ -876,6 +922,9 @@ pub struct GrantedEngine {
     tx_next: u8,
     /// The rung this station's data goes at: what the other station recommends.
     recommended: usize,
+    /// The rung the other station last recommended, before any step down for silence: a
+    /// stranded frame goes in pieces only below it (ADR-0086).
+    peer_rung: Option<usize>,
     peer_snr_db: Option<f64>,
     heard_db: Option<f64>,
     /// The readings of the last `family_readings` frames of the other's decoded.
@@ -911,6 +960,10 @@ pub struct GrantedEngine {
     rx_buf: HashMap<u8, Vec<u8>>,
     max_seen: Option<u8>,
     harq: HashMap<u8, (HarqBuffer, usize, usize)>,
+    /// Blocks the other station is sending in pieces, as far as they are heard: while one is
+    /// incomplete, a frame that does not decode may be a piece of it, and no sequence number is
+    /// inferred for one (ADR-0086).
+    pieces: HashMap<u8, Pieces>,
     /// The frames heard of the other station's transmission being received.
     rx: Vec<RxRecord>,
     rx_t0: Option<f64>,
@@ -925,6 +978,9 @@ pub struct GrantedEngine {
     /// The transmission being received is a measurement: its frames are filler, and one that
     /// does not decode is never sent again — nothing to combine it with.
     rx_measure: bool,
+    /// A piece of a block has decoded in the transmission being received: its other frames are
+    /// pieces too, and none is combined or given a sequence number.
+    rx_pieces: bool,
     // the master
     level_asked: usize,
     silence_level: usize,
@@ -1016,6 +1072,7 @@ impl GrantedEngine {
             remote_call: String::new(),
             stats: GrantStats::default(),
             recommended: config.initial_mode,
+            peer_rung: None,
             timing,
             config,
             rng: Draws::new(seed),
@@ -1071,12 +1128,14 @@ impl GrantedEngine {
             rx_buf: HashMap::new(),
             max_seen: None,
             harq: HashMap::new(),
+            pieces: HashMap::new(),
             rx: Vec::new(),
             rx_t0: None,
             grid: None,
             ack_history: Vec::new(),
             measured: None,
             rx_measure: false,
+            rx_pieces: false,
             level_asked: 0,
             silence_level: 0,
             silent: 0,
@@ -1114,6 +1173,7 @@ impl GrantedEngine {
         self.tx_base = 0;
         self.tx_next = 0;
         self.recommended = self.config.initial_mode;
+        self.peer_rung = None;
         self.peer_snr_db = None;
         self.heard_db = None;
         self.heard_recent.clear();
@@ -1135,12 +1195,14 @@ impl GrantedEngine {
         self.rx_buf.clear();
         self.max_seen = None;
         self.harq.clear();
+        self.pieces.clear();
         self.rx.clear();
         self.rx_t0 = None;
         self.grid = None;
         self.ack_history.clear();
         self.measured = None;
         self.rx_measure = false;
+        self.rx_pieces = false;
         self.slot = None;
         self.level_asked = 0;
         self.silence_level = 0;
@@ -2169,18 +2231,44 @@ impl GrantedEngine {
     }
 
     /// The rung a stranded frame goes at from now on: the most robust usable rung below
-    /// `from_mode`, in the family of the recommendation `to_mode`, that its body fits
-    /// (ADR-0085). Every data frame of a family is as long as the others, so a slower rung than
-    /// the recommendation costs that frame no air, and the recommendation may name a rung the
-    /// path has never carried.
+    /// `from_mode`, in the family of the recommendation `to_mode` and no faster than it, that
+    /// its body fits (ADR-0085). Every data frame of a family is as long as the others, so a
+    /// slower rung than the recommendation costs that frame no air, and the recommendation may
+    /// name a rung the path has never carried. A body that fits nothing there goes in pieces
+    /// ([`split_rung`](Self::split_rung)): a rung above the recommendation strands it again
+    /// (ADR-0086).
     fn reencode_target(&self, body_len: usize, from_mode: usize, to_mode: usize) -> Option<usize> {
         let floor = self.timing.is_floor(to_mode);
         self.rate.modes().iter().copied().find(|&mode| {
             mode < from_mode
+                && mode <= to_mode
                 && mode < self.timing.data_capacity.len()
                 && self.timing.is_floor(mode) == floor
                 && self.fits(body_len, mode)
         })
+    }
+
+    /// The rung a stranded frame whose body fits no rung up to the recommendation `to_mode`
+    /// goes at in pieces: of the usable rungs below `from_mode`, in the recommendation's family
+    /// and no faster than it, the one that cuts the body into the fewest pieces, and of those the
+    /// most robust (ADR-0086). Every frame of a family is as long as the others, so the pieces
+    /// are the air: a 50-byte body is two pieces at 500 Hz rung 2 and two at rung 1, which goes.
+    fn split_rung(&self, body_len: usize, from_mode: usize, to_mode: usize) -> Option<usize> {
+        let floor = self.timing.is_floor(to_mode);
+        let mut best: Option<(usize, usize)> = None;
+        for &mode in self.rate.modes() {
+            if mode < from_mode
+                && mode <= to_mode
+                && mode < self.timing.data_capacity.len()
+                && self.timing.is_floor(mode) == floor
+                && data_capacity(self.timing.capacity(mode)) >= FRAGMENT_HEADER + 3
+                && let Ok(parts) = pieces(&vec![0; body_len], self.timing.capacity(mode))
+                && best.is_none_or(|(_, count)| parts.len() < count)
+            {
+                best = Some((mode, parts.len()));
+            }
+        }
+        best.map(|(mode, _)| mode)
     }
 
     // ── keying ────────────────────────────────────────────────────────
@@ -2366,6 +2454,7 @@ impl GrantedEngine {
             kind: DataKind::ConnectReq,
             seq: 0,
             session: self.session,
+            piece: None,
         };
         let Ok(body) = body.encode() else { return };
         let Ok(payload) = encode_data(&header, &body, self.timing.capacity(mode)) else {
@@ -2420,6 +2509,7 @@ impl GrantedEngine {
             kind: DataKind::Probe,
             seq: 0,
             session: 0,
+            piece: None,
         };
         let Ok(body) = body.encode() else { return };
         let Ok(payload) = encode_data(&header, &body, self.timing.capacity(mode)) else {
@@ -3506,7 +3596,13 @@ impl GrantedEngine {
 
     fn queued_frames(&self) -> usize {
         let cap = data_capacity(self.timing.capacity(self.burst_mode()));
-        let queued = self.unacked().len() + self.tx_queue.len().div_ceil(cap.max(1));
+        let unacked: usize = self
+            .unacked()
+            .iter()
+            .filter_map(|s| self.records.get(s))
+            .map(TxRecord::frames)
+            .sum();
+        let queued = unacked + self.tx_queue.len().div_ceil(cap.max(1));
         queued + self.measure_ask.map_or(0, |(_, frames)| frames)
     }
 
@@ -3531,6 +3627,7 @@ impl GrantedEngine {
             kind: DataKind::ConnectAck,
             seq: 0,
             session: self.session,
+            piece: None,
         };
         let Ok(body) = body.encode() else { return };
         let Ok(payload) = encode_data(&header, &body, self.timing.capacity(mode)) else {
@@ -3558,6 +3655,7 @@ impl GrantedEngine {
             kind: DataKind::ProbeAck,
             seq: 0,
             session: 0,
+            piece: None,
         };
         let Ok(body) = body.encode() else { return };
         let Ok(payload) = encode_data(&header, &body, self.timing.capacity(mode)) else {
@@ -3661,8 +3759,8 @@ impl GrantedEngine {
     }
 
     /// This station's data for a transmission, laid out as protocol 7 laid out a burst: the
-    /// unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones, one
-    /// family a transmission, as many as `room_s` and [`MAX_DATA`] allow. Each frame states how
+    /// unacknowledged frames first — re-encoded when stranded (ADR-0038), or in pieces
+    /// (ADR-0086) — then new ones, one family a transmission, as many as `room_s` and [`MAX_DATA`] allow. Each frame states how
     /// many follow it, three meaning three or more. A measurement asked for goes alone once
     /// nothing of this station's data is unacknowledged, and nothing goes while one waits for
     /// its report.
@@ -3692,18 +3790,54 @@ impl GrantedEngine {
             else {
                 continue;
             };
-            let due = if self.hopeless(rec_mode) {
+            let hopeless = self.hopeless(rec_mode);
+            let due = if hopeless {
                 self.config.reencode_early_after
             } else {
                 self.config.max_combines
             };
             if tx_count >= due && recommendation < rec_mode {
-                let target = self.reencode_target(body_len, rec_mode, recommendation);
-                if let (Some(target), Some(rec)) = (target, self.records.get_mut(&s)) {
+                if let Some(target) = self.reencode_target(body_len, rec_mode, recommendation) {
+                    if let Some(rec) = self.records.get_mut(&s) {
+                        rec.mode = target;
+                        rec.pieces = None;
+                        rec.reencoded += rec.tx_count;
+                        rec.tx_count = 0;
+                        self.stats.frames_reencoded += 1;
+                    }
+                    continue;
+                }
+                // a body that fits no rung the other station asked for goes in pieces, each a
+                // frame of its own at that rung (ADR-0086). Not on silence alone: with the band
+                // gone, frames of a fast rung split onto the floor made each try 25 s, and the
+                // master tried past where the timed-out slave reckons it gives up
+                let Some(asked) = self.peer_rung.map(|rung| rung.min(self.cap())) else {
+                    continue;
+                };
+                if asked >= rec_mode {
+                    continue;
+                }
+                // and not before the copy the receiver combines with every one it holds (it
+                // starts over only after that one fails), unless the report says combining
+                // cannot reach; pieces are never combined, so a block in pieces goes again in
+                // pieces at `due`
+                let whole = self.records.get(&s).is_some_and(|r| r.pieces.is_none());
+                if !hopeless && whole && tx_count <= due {
+                    continue;
+                }
+                let Some(target) = self.split_rung(body_len, rec_mode, asked) else {
+                    continue;
+                };
+                let capacity = self.timing.capacity(target);
+                if let Some(rec) = self.records.get_mut(&s)
+                    && let Ok(parts) = pieces(&rec.body, capacity)
+                {
                     rec.mode = target;
+                    rec.piece_sends = vec![0; parts.len()];
+                    rec.pieces = Some(parts);
                     rec.reencoded += rec.tx_count;
                     rec.tx_count = 0;
-                    self.stats.frames_reencoded += 1;
+                    self.stats.frames_split += 1;
                 }
             }
         }
@@ -3727,6 +3861,14 @@ impl GrantedEngine {
         }
         if room == 0 {
             return Vec::new();
+        }
+        let split: Vec<u8> = seqs
+            .iter()
+            .copied()
+            .filter(|s| self.records.get(s).is_some_and(|r| r.pieces.is_some()))
+            .collect();
+        if !split.is_empty() {
+            return self.piece_frames(&split, room);
         }
         seqs.truncate(room);
         // a measurement asked for waits only for what is in flight: nothing new goes before it
@@ -3756,6 +3898,8 @@ impl GrantedEngine {
                     acked: false,
                     reencoded: 0,
                     unknown: false,
+                    pieces: None,
+                    piece_sends: Vec::new(),
                 },
             );
             self.tx_next = seq_after(self.tx_next, 1);
@@ -3775,6 +3919,7 @@ impl GrantedEngine {
                 kind: DataKind::Data,
                 seq: rec.seq,
                 session: self.session,
+                piece: None,
             };
             let Ok(payload) = encode_data(&header, &rec.body, self.timing.capacity(rec.mode))
             else {
@@ -3788,6 +3933,76 @@ impl GrantedEngine {
                 payload,
                 mode: rec.mode,
                 rv,
+                floor: false,
+                follows,
+            });
+        }
+        self.stats.frames_sent += frames.len();
+        frames
+    }
+
+    /// A transmission of pieces, and of nothing else: the receiver gives a frame that does not
+    /// decode a sequence number by its slot, which a piece does not have, so pieces and whole
+    /// frames never share a transmission, and a piece goes at RV 0 — it is never combined
+    /// (ADR-0086). Nothing says which pieces arrived, so a block sends each piece once before any
+    /// again — as the unacknowledged frames of a block sent whole all go again — and the blocks
+    /// go in order, as many pieces as `room`. A repeat in the room left would cost a frame's air
+    /// whether or not its piece was lost, and pieces go at the rung the other station
+    /// recommends, where few are.
+    fn piece_frames(&mut self, seqs: &[u8], room: usize) -> Vec<TxFrame> {
+        let mut chosen: Vec<(u8, usize)> = Vec::new();
+        for &s in seqs {
+            let Some(rec) = self.records.get_mut(&s) else {
+                continue;
+            };
+            let Some(&least) = rec.piece_sends.iter().min() else {
+                continue;
+            };
+            let take: Vec<usize> = rec
+                .piece_sends
+                .iter()
+                .enumerate()
+                .filter(|&(_, &sends)| sends == least)
+                .map(|(k, _)| k)
+                .take(room - chosen.len())
+                .collect();
+            if take.is_empty() {
+                break;
+            }
+            rec.tx_count += 1;
+            if least > 0 {
+                self.stats.frames_resent += take.len();
+            }
+            for k in take {
+                rec.piece_sends[k] += 1;
+                chosen.push((s, k));
+            }
+        }
+        let count = chosen.len();
+        let mut frames = Vec::with_capacity(count);
+        for (i, &(s, k)) in chosen.iter().enumerate() {
+            let Some(rec) = self.records.get(&s) else {
+                continue;
+            };
+            let Some((piece, bytes)) = rec.pieces.as_ref().and_then(|p| p.get(k)) else {
+                continue;
+            };
+            let header = DataHeader {
+                kind: DataKind::Data,
+                seq: rec.seq,
+                session: self.session,
+                piece: Some(*piece),
+            };
+            let Ok(payload) = encode_data(&header, bytes, self.timing.capacity(rec.mode)) else {
+                continue;
+            };
+            let follows =
+                u8::try_from((count - 1 - i).min(usize::from(MAX_FOLLOWS))).unwrap_or(MAX_FOLLOWS);
+            frames.push(TxFrame {
+                container: Container::Data,
+                payload,
+                mode: rec.mode,
+                rv: 0,
                 floor: false,
                 follows,
             });
@@ -3823,6 +4038,7 @@ impl GrantedEngine {
                 kind: DataKind::Measure,
                 seq: index,
                 session: self.session,
+                piece: None,
             };
             let Ok(payload) =
                 encode_data(&header, &measure_body(self.session, index, body), capacity)
@@ -3893,6 +4109,7 @@ impl GrantedEngine {
         }
         if recommendation {
             self.recommended = self.cap().min(usize::from(ctl.rung));
+            self.peer_rung = Some(usize::from(ctl.rung));
         }
     }
 
@@ -3926,10 +4143,12 @@ impl GrantedEngine {
         });
         let index = self.rx.len() - 1;
         if let Some(payload) = payload {
-            return self.keep(index, payload);
+            return self.keep(index, &payload);
         }
-        if self.rx_measure {
-            self.stats.frames_failed += 1; // a measurement frame: never sent again
+        if self.rx_measure || self.rx_pieces || !self.pieces.is_empty() {
+            // a measurement frame is never sent again, and a piece has no slot of its own in
+            // the sequence (ADR-0086): nothing to combine either with
+            self.stats.frames_failed += 1;
             return Some(index);
         }
         let guess = self.infer_seq(slot);
@@ -3946,7 +4165,7 @@ impl GrantedEngine {
             let (combined, merged) = soft.decode(Some(&prev));
             if let Some(combined) = combined {
                 self.stats.harq_rescues += 1;
-                return self.keep(index, combined);
+                return self.keep(index, &combined);
             }
             let entry = if combines + 1 >= self.config.max_combines {
                 (buffer, 0, frame.mode)
@@ -3963,8 +4182,10 @@ impl GrantedEngine {
 
     /// The decoded payload of the record at `index`: kept if it is this session's data or a
     /// measurement frame of it, the record dropped otherwise.
-    fn keep(&mut self, index: usize, payload: Vec<u8>) -> Option<usize> {
-        let seq = match self.accept(&payload, false) {
+    fn keep(&mut self, index: usize, payload: &[u8]) -> Option<usize> {
+        // its own record is read before anything that looks over the transmission's others
+        self.rx[index].payload = Some(payload.to_vec());
+        let seq = match self.accept(payload, false) {
             Accepted::Data(seq) => Some(seq),
             Accepted::Measurement => None,
             Accepted::Not => {
@@ -3972,7 +4193,6 @@ impl GrantedEngine {
                 return None;
             }
         };
-        self.rx[index].payload = Some(payload);
         self.rx[index].seq = seq;
         Some(index)
     }
@@ -3982,6 +4202,38 @@ impl GrantedEngine {
         self.rx_t0 = None;
         self.grid = None;
         self.rx_measure = false;
+        self.rx_pieces = false;
+    }
+
+    /// A piece decoded: the transmission being received is of pieces, and what its frames that
+    /// did not decode were given — a sequence number by their slots, a buffer to combine — was
+    /// of a block they are not (ADR-0086).
+    fn pieces_heard(&mut self) {
+        if self.rx_pieces {
+            return;
+        }
+        self.rx_pieces = true;
+        for record in &mut self.rx {
+            if record.payload.is_none()
+                && let Some(seq) = record.seq.take()
+            {
+                self.harq.remove(&seq);
+            }
+        }
+    }
+
+    /// The block a decoded frame carries or completes: its body, or for a piece the block once
+    /// every piece of it is heard, `None` until then (ADR-0086).
+    fn block_of(&mut self, header: DataHeader, body: Vec<u8>) -> Option<Vec<u8>> {
+        let Some(piece) = header.piece else {
+            return Some(body);
+        };
+        if self.rx_buf.contains_key(&header.seq) {
+            return Some(body);
+        }
+        let held = self.pieces.entry(header.seq).or_default();
+        held.place(usize::from(piece.offset), &body, piece.last);
+        held.body()
     }
 
     /// What the other station's opening control frame says of its own frames: measurement
@@ -4142,16 +4394,24 @@ impl GrantedEngine {
             self.measured = None;
         }
         self.stats.frames_received += 1;
+        if header.piece.is_some() && !late {
+            self.pieces_heard();
+        }
         if in_window(header.seq, self.rx_base, WINDOW) {
             if self.max_seen.is_none_or(|seen| {
                 seq_distance(header.seq, self.rx_base) > seq_distance(seen, self.rx_base)
             }) {
                 self.max_seen = Some(header.seq);
             }
-            self.rx_buf.entry(header.seq).or_insert(body);
-            self.harq.remove(&header.seq);
+            // a block in pieces is acknowledged once whole
+            if let Some(block) = self.block_of(header, body) {
+                self.rx_buf.entry(header.seq).or_insert(block);
+                self.pieces.remove(&header.seq);
+                self.harq.remove(&header.seq);
+            }
             while let Some(data) = self.rx_buf.remove(&self.rx_base) {
                 self.harq.remove(&self.rx_base);
+                self.pieces.remove(&self.rx_base);
                 self.rx_base = seq_after(self.rx_base, 1);
                 self.stats.bytes_delivered += data.len();
                 if !data.is_empty() {
@@ -4551,6 +4811,39 @@ mod tests {
         // never into the floor while the recommendation is an OFDM rung
         let full = data_capacity(PAYLOAD_BYTES[9]);
         assert_eq!(engine.reencode_target(full, 9, 7), None);
+    }
+
+    #[test]
+    fn a_body_that_fits_no_rung_up_to_the_recommendation_goes_in_the_fewest_pieces() {
+        // ADR-0086, as test_granted.py has it: whole only up to the recommendation, in pieces
+        // when the body fits none — at the rung up to it that cuts the fewest, the most robust of
+        // those
+        let engine = GrantedEngine::new("W4ODA", wide(), GrantConfig::default(), 1);
+        // 60 bytes fit rung 3 whole, above a recommendation of rung 2: two pieces at rung 2,
+        // two at rung 1 (31 bytes a piece), which goes
+        assert_eq!(engine.reencode_target(60, 9, 2), None);
+        assert_eq!(engine.split_rung(60, 9, 2), Some(1));
+        // 72 bytes: two pieces at rung 2, three at rung 1
+        assert_eq!(engine.split_rung(72, 3, 2), Some(2));
+        // under an OFDM recommendation among the OFDM rungs: 100 bytes are two pieces at rungs
+        // 8 and 9, three at rung 7; below rung 0, nowhere
+        assert_eq!(engine.split_rung(100, 12, 9), Some(8));
+        assert_eq!(engine.split_rung(10, 0, 0), None);
+    }
+
+    #[test]
+    fn pieces_of_two_splits_make_their_block() {
+        // the receiver places pieces by offset: a piece of a split at rung 2 and the rest of one
+        // at rung 0 make the block (ADR-0086)
+        let block: Vec<u8> = (0..72).collect();
+        let mut held = Pieces::default();
+        let first = pieces(&block, 51).expect("rung 2's pieces");
+        held.place(usize::from(first[0].0.offset), &first[0].1, first[0].0.last);
+        assert_eq!(held.body(), None);
+        for (piece, bytes) in pieces(&block, 24).expect("rung 0's pieces").iter().skip(2) {
+            held.place(usize::from(piece.offset), bytes, piece.last);
+        }
+        assert_eq!(held.body(), Some(block));
     }
 
     #[test]

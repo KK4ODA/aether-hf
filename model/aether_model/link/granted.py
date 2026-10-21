@@ -61,12 +61,14 @@ from typing import TypedDict
 from aether_model.link.frames import (
     CAP_LEVEL_MASK,
     CONNECT_BODY_8_BYTES,
+    FRAGMENT_HEADER,
     MAX_BURST,
     MAX_FOLLOWS,
     PROTOCOL_VERSION,
     REPORT,
     WINDOW,
     ConnectBody,
+    DataFlags,
     DataHeader,
     DataKind,
     GrantFrame,
@@ -80,6 +82,7 @@ from aether_model.link.frames import (
     in_window,
     level_of,
     pack_callsign,
+    pieces,
     seq_after,
     seq_distance,
     with_level,
@@ -448,6 +451,8 @@ class GrantStats:
     probes_answered: int = 0
     probe_replies: int = 0
     frames_reencoded: int = 0
+    frames_split: int = 0
+    """Stranded frames whose body fit no rung the path carries, sent in pieces (ADR-0086)."""
     left_answered: int = 0
     transmissions: int = 0
     headers_elided: int = 0
@@ -472,10 +477,49 @@ class _TxRecord:
     reencoded: int = 0
     unknown: bool = False
     """Sent in a transmission whose answer went unheard: whether it arrived is not known."""
+    pieces: list[tuple[int, bytes, bool]] | None = None
+    """The body in pieces at :attr:`mode` — offset, bytes, last — when it fits no rung the
+    path carries whole (ADR-0086); ``None`` for a frame sent whole."""
+    piece_sends: list[int] = field(default_factory=list)
+    """How many times each piece has gone. Nothing says which pieces arrived, so a piece goes
+    again only once every piece of its block has gone as often."""
 
     @property
     def sent(self) -> bool:
         return self.tx_count > 0 or self.reencoded > 0
+
+    @property
+    def frames(self) -> int:
+        """The frames it takes to send."""
+        return len(self.pieces) if self.pieces is not None else 1
+
+
+@dataclass
+class _Pieces:
+    """The pieces of one block heard so far, placed by their offsets: the pieces of two splits
+    at different boundaries still make the block (ADR-0086)."""
+
+    data: bytearray = field(default_factory=bytearray)
+    have: bytearray = field(default_factory=bytearray)
+    total: int | None = None
+    """The block's length, once its last piece is heard."""
+
+    def place(self, offset: int, piece: bytes, last: bool) -> None:
+        end = offset + len(piece)
+        if last:
+            self.total = end
+        if len(self.data) < end:
+            grow = end - len(self.data)
+            self.data.extend(bytes(grow))
+            self.have.extend(bytes(grow))
+        self.data[offset:end] = piece
+        self.have[offset:end] = b"\x01" * len(piece)
+
+    def body(self) -> bytes | None:
+        """The whole block, once every byte of it is heard."""
+        if self.total is None or len(self.have) < self.total or not all(self.have[: self.total]):
+            return None
+        return bytes(self.data[: self.total])
 
 
 @dataclass
@@ -633,6 +677,9 @@ class GrantedEngine:
         self._tx_base = self._tx_next = 0
         self._recommended = self.cfg.initial_mode
         """The rung this station's data goes at: what the other station recommends."""
+        self._peer_rung: int | None = None
+        """The rung the other station last recommended, before any step down for silence: a
+        stranded frame goes in pieces only below it (ADR-0086)."""
         self.peer_snr_db: float | None = None
         """How the other station says it hears this one (every control frame carries it)."""
         self._heard_db: float | None = None
@@ -671,6 +718,10 @@ class GrantedEngine:
         self._rx_buf: dict[int, bytes] = {}
         self._max_seen: int | None = None
         self._harq: dict[int, tuple[object, int, int]] = {}
+        self._pieces: dict[int, _Pieces] = {}
+        """Blocks the other station is sending in pieces, as far as they are heard: while one
+        is incomplete, a frame that does not decode may be a piece of it, and no sequence number
+        is inferred for one (ADR-0086)."""
         self._rx: list[_RxRecord] = []
         """The frames heard of the other station's transmission being received."""
         self._rx_t0: float | None = None
@@ -685,6 +736,9 @@ class GrantedEngine:
         self._rx_measure = False
         """The transmission being received is a measurement: its frames are filler, and one that
         does not decode is never sent again — nothing to combine it with."""
+        self._rx_pieces = False
+        """A piece of a block has decoded in the transmission being received: its other frames
+        are pieces too, and none is combined or given a sequence number."""
         # the master
         self._recent_silent: list[bool] = []
         """Whether each of the last answer slots went silent, the latest last."""
@@ -1376,23 +1430,49 @@ class GrantedEngine:
 
     def _reencode_target(self, body_len: int, from_mode: int, to_mode: int) -> int | None:
         """The rung a stranded frame goes at from now on: the most robust usable rung below
-        ``from_mode``, in the family of the recommendation ``to_mode``, that its body fits
-        (ADR-0085). Every data frame of a family is as long as the others, so a slower rung
-        than the recommendation costs that frame no air; and the recommendation may name a rung
-        the path has never carried. On ITU NVIS at 500 Hz, frames stranded at the first OFDM
-        rung went to the floor's top rung (tone4x100-93, whose 10 ms symbols a 7 ms echo
-        smears) and spent four more copies there, 86 s, where tone-36 carried them at once."""
+        ``from_mode``, in the family of the recommendation ``to_mode`` and no faster than it,
+        that its body fits (ADR-0085). Every data frame of a family is as long as the others,
+        so a slower rung than the recommendation costs that frame no air; and the
+        recommendation may name a rung the path has never carried. On ITU NVIS at 500 Hz,
+        frames stranded at the first OFDM rung went to the floor's top rung (tone4x100-93,
+        whose 10 ms symbols a 7 ms echo smears) and spent four more copies there, 86 s, where
+        tone-36 carried them at once. A body that fits nothing there goes in pieces
+        (:meth:`_split_rung`): a rung above the recommendation strands it again (ADR-0086)."""
         capacity = self.timing.data_capacity or {}
         floor = self.timing.is_floor(to_mode)
         for mode in self.rate.modes:
             if (
                 mode < from_mode
+                and mode <= to_mode
                 and mode in capacity
                 and self.timing.is_floor(mode) == floor
                 and self._fits(body_len, mode)
             ):
                 return mode
         return None
+
+    def _split_rung(self, body_len: int, from_mode: int, to_mode: int) -> int | None:
+        """The rung a stranded frame whose body fits no rung up to the recommendation
+        ``to_mode`` goes at in pieces: of the usable rungs below ``from_mode``, in the
+        recommendation's family and no faster than it, the one that cuts the body into the
+        fewest pieces, and of those the most robust (ADR-0086). Every frame of a family is as
+        long as the others, so the pieces are the air: a 50-byte body is two pieces at 500 Hz
+        rung 2 and two at rung 1, which goes."""
+        capacity = self.timing.data_capacity or {}
+        floor = self.timing.is_floor(to_mode)
+        best: tuple[int, int] | None = None
+        for mode in self.rate.modes:
+            if (
+                mode < from_mode
+                and mode <= to_mode
+                and mode in capacity
+                and self.timing.is_floor(mode) == floor
+                and data_capacity(self.timing.capacity(mode)) - FRAGMENT_HEADER >= 3
+            ):
+                count = len(pieces(bytes(body_len), self.timing.capacity(mode)))
+                if best is None or count < best[1]:
+                    best = (mode, count)
+        return None if best is None else best[0]
 
     def _rate_controller(self) -> RateController:
         thresholds = self.timing.mode_threshold_db
@@ -2400,7 +2480,8 @@ class GrantedEngine:
 
     def _queued_frames(self) -> int:
         cap = data_capacity(self.timing.capacity(self._burst_mode()))
-        queued = len(self._unacked()) + math.ceil(len(self._tx_queue) / max(1, cap))
+        unacked = sum(self._records[s].frames for s in self._unacked())
+        queued = unacked + math.ceil(len(self._tx_queue) / max(1, cap))
         if self._measure_ask is not None:
             queued += self._measure_ask[1]
         return queued
@@ -2505,11 +2586,11 @@ class GrantedEngine:
 
     def _data_frames(self, room_s: float) -> list[TxFrame]:
         """This station's data for a transmission, laid out as protocol 7 laid out a burst:
-        the unacknowledged frames first — re-encoded when stranded (ADR-0038) — then new ones,
-        one family a transmission, as many as ``room_s`` and :data:`MAX_DATA`
-        allow. Each frame states how many follow it, three meaning three or more. A measurement
-        asked for goes alone once nothing of this station's data is unacknowledged, and nothing
-        goes while one waits for its report."""
+        the unacknowledged frames first — re-encoded when stranded (ADR-0038), or in pieces
+        (ADR-0086) — then new ones, one family a transmission, as many as ``room_s`` and
+        :data:`MAX_DATA` allow. Each frame states how many follow it, three meaning three or
+        more. A measurement asked for goes alone once nothing of this station's data is
+        unacknowledged, and nothing goes while one waits for its report."""
         if room_s <= 0 or self._measure_out is not None:
             return []
         if self._measure_ask is not None and not self._unacked():
@@ -2524,17 +2605,39 @@ class GrantedEngine:
             unacked = [s for s in unacked if not self._records[s].unknown]
         for s in unacked:
             rec = self._records[s]
-            if self._hopeless(rec.mode):
-                due = self.cfg.reencode_early_after
-            else:
-                due = self.cfg.max_combines
+            hopeless = self._hopeless(rec.mode)
+            due = self.cfg.reencode_early_after if hopeless else self.cfg.max_combines
             if rec.tx_count >= due and recommendation < rec.mode:
                 target = self._reencode_target(len(rec.body), rec.mode, recommendation)
                 if target is not None:
                     rec.mode = target
-                    rec.reencoded += rec.tx_count
-                    rec.tx_count = 0
+                    rec.pieces = None
                     self.stats.frames_reencoded += 1
+                else:
+                    # a body that fits no rung the other station asked for goes in pieces, each
+                    # a frame of its own at that rung (ADR-0086) — before, it went on at its
+                    # own rung until the session timed out. Not on silence alone: with the band
+                    # gone, frames of a fast rung split onto the floor made each try 25 s, and
+                    # the master tried past where the timed-out slave reckons it gives up
+                    asked = None if self._peer_rung is None else min(self._peer_rung, self._cap())
+                    if asked is None or asked >= rec.mode:
+                        continue
+                    # and not before the copy the receiver combines with every one it holds
+                    # (it starts over only after that one fails): split after four, a rung-4
+                    # frame's fifth copy that would have decoded never went, and the message
+                    # missed its budget — unless the report says combining cannot reach. Pieces
+                    # are never combined, so a block in pieces goes again in pieces at `due`
+                    if not hopeless and rec.pieces is None and rec.tx_count <= due:
+                        continue
+                    target = self._split_rung(len(rec.body), rec.mode, asked)
+                    if target is None:
+                        continue
+                    rec.mode = target
+                    rec.pieces = pieces(rec.body, self.timing.capacity(target))
+                    rec.piece_sends = [0] * len(rec.pieces)
+                    self.stats.frames_split += 1
+                rec.reencoded += rec.tx_count
+                rec.tx_count = 0
         family = self.timing.is_floor(mode)
         if unacked:
             family = self.timing.is_floor(self._records[unacked[0]].mode)
@@ -2545,6 +2648,9 @@ class GrantedEngine:
             room = min(room, int(room_s / frame_s + 1e-9))
         if room <= 0:
             return []
+        split = [s for s in seqs if self._records[s].pieces is not None]
+        if split:
+            return self._piece_frames(split, room)
         seqs = seqs[:room]
         # a measurement asked for waits only for what is in flight: nothing new goes before it
         new_frames = family == self.timing.is_floor(mode) and self._measure_ask is None
@@ -2580,6 +2686,42 @@ class GrantedEngine:
             rv = RV_SEQUENCE[(rec.tx_count - 1) % len(RV_SEQUENCE)]
             follows = min(MAX_FOLLOWS, len(seqs) - 1 - i)
             frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv, follows=follows))
+        self.stats.frames_sent += len(frames)
+        return frames
+
+    def _piece_frames(self, seqs: list[int], room: int) -> list[TxFrame]:
+        """A transmission of pieces, and of nothing else: the receiver gives a frame that does
+        not decode a sequence number by its slot, which a piece does not have, so pieces and
+        whole frames never share a transmission, and a piece goes at RV 0 — it is never
+        combined (ADR-0086). Nothing says which pieces arrived, so a block sends each piece once
+        before any again — as the unacknowledged frames of a block sent whole all go again —
+        and the blocks go in order, as many pieces as ``room``. A repeat in the room left would
+        cost a frame's air whether or not its piece was lost, and pieces go at the rung the other
+        station recommends, where few are."""
+        chosen: list[tuple[_TxRecord, int]] = []
+        for s in seqs:
+            rec = self._records[s]
+            least = min(rec.piece_sends)
+            due = [k for k, sends in enumerate(rec.piece_sends) if sends == least]
+            take = due[: room - len(chosen)]
+            if not take:
+                break
+            rec.tx_count += 1
+            if least:
+                self.stats.frames_resent += len(take)
+            for k in take:
+                rec.piece_sends[k] += 1
+                chosen.append((rec, k))
+        frames = []
+        for i, (rec, k) in enumerate(chosen):
+            assert rec.pieces is not None
+            offset, piece, last = rec.pieces[k]
+            header = DataHeader(
+                DataKind.DATA, rec.seq, self.session, DataFlags.FRAGMENT, offset=offset, last=last
+            )
+            payload = encode_data(header, piece, self.timing.capacity(rec.mode))
+            follows = min(MAX_FOLLOWS, len(chosen) - 1 - i)
+            frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=0, follows=follows))
         self.stats.frames_sent += len(frames)
         return frames
 
@@ -2651,6 +2793,7 @@ class GrantedEngine:
             self._patience_until = self.now + self._disc_patience()
         if recommendation:
             self._recommended = max(0, min(self._cap(), ctl.rung))
+            self._peer_rung = ctl.rung
 
     # ── receiving data ────────────────────────────────────────────────
 
@@ -2678,8 +2821,10 @@ class GrantedEngine:
             if not self._accept(rec, payload):
                 self._rx.remove(rec)
             return rec
-        if self._rx_measure:
-            self.stats.frames_failed += 1  # a measurement frame: never sent again
+        if self._rx_measure or self._rx_pieces or self._pieces:
+            # a measurement frame is never sent again, and a piece has no slot of its own in
+            # the sequence (ADR-0086): nothing to combine either with
+            self.stats.frames_failed += 1
             return rec
         guess = self._infer_seq(rec.slot)
         rec.seq = guess
@@ -2712,6 +2857,7 @@ class GrantedEngine:
         self._rx_t0 = None
         self._grid = None
         self._rx_measure = False
+        self._rx_pieces = False
 
     def _note_opening(self, ctl: GrantFrame) -> None:
         """What the other station's opening control frame says of its own frames: measurement
@@ -2823,16 +2969,22 @@ class GrantedEngine:
         rec.payload = payload
         rec.seq = header.seq
         self.stats.frames_received += 1
+        if header.fragment and not late:
+            self._pieces_heard()
         if in_window(header.seq, self._rx_base):
             if self._max_seen is None or seq_distance(header.seq, self._rx_base) > seq_distance(
                 self._max_seen, self._rx_base
             ):
                 self._max_seen = header.seq
-            self._rx_buf.setdefault(header.seq, body)
-            self._harq.pop(header.seq, None)
+            whole = self._whole(header, body)  # a block in pieces is acknowledged once whole
+            if whole is not None:
+                self._rx_buf.setdefault(header.seq, whole)
+                self._pieces.pop(header.seq, None)
+                self._harq.pop(header.seq, None)
             while self._rx_base in self._rx_buf:
                 data = self._rx_buf.pop(self._rx_base)
                 self._harq.pop(self._rx_base, None)
+                self._pieces.pop(self._rx_base, None)
                 self._rx_base = seq_after(self._rx_base)
                 self.stats.bytes_delivered += len(data)
                 if data:
@@ -2840,6 +2992,27 @@ class GrantedEngine:
             if self._max_seen is not None and seq_distance(self._max_seen, self._rx_base) >= WINDOW:
                 self._max_seen = None
         return True
+
+    def _whole(self, header: DataHeader, body: bytes) -> bytes | None:
+        """The block a decoded frame carries or completes: its body, or for a piece the block
+        once every piece of it is heard, ``None`` until then (ADR-0086)."""
+        if not header.fragment or header.seq in self._rx_buf:
+            return body
+        held = self._pieces.setdefault(header.seq, _Pieces())
+        held.place(header.offset, body, header.last)
+        return held.body()
+
+    def _pieces_heard(self) -> None:
+        """A piece decoded: the transmission being received is of pieces, and what its frames
+        that did not decode were given — a sequence number by their slots, a buffer to combine —
+        was of a block they are not (ADR-0086)."""
+        if self._rx_pieces:
+            return
+        self._rx_pieces = True
+        for rec in self._rx:
+            if rec.payload is None and rec.seq is not None:
+                self._harq.pop(rec.seq, None)
+                rec.seq = None
 
     def _observe(self, records: list[_RxRecord]) -> float | None:
         """What a transmission's data said of the path, to the rate controller (ADR-0020's

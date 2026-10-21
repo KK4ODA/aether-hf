@@ -5,14 +5,15 @@
 //! chips) and a CONTROL frame (seven bytes: the tone floor's control frame, or the SHORT layout at
 //! the control mode). The link layer puts its own header at the front of each.
 //!
-//! **DATA container**, three-byte header (five with an explicit length):
+//! **DATA container**, three-byte header (five with an explicit length, two more for a piece):
 //!
 //! | Offset | Field |
 //! |---|---|
 //! | 0 | kind (3 bits) \| flags (5 bits) |
 //! | 1 | sequence number |
 //! | 2 | session id |
-//! | 3–4 | data length, only when `PARTIAL` is set |
+//! | 3–4 | offset (12 bits) \| last (1) \| 0 (3), only when `FRAGMENT` is set |
+//! | then 2 bytes | data length, only when `PARTIAL` is set |
 //!
 //! **Nothing in this header may change between transmissions of the same sequence number.**
 //! A retransmission is the *same codeword* under another redundancy version, and the receiver
@@ -126,7 +127,19 @@ impl DataKind {
 pub mod data_flags {
     /// An explicit data length follows the header (the frame is not full).
     pub const PARTIAL: u8 = 0x01;
+    /// The frame carries a piece of the body of the frame with its sequence number (protocol
+    /// 11, ADR-0086): two more header bytes say where in that body the piece starts and whether
+    /// it ends it. A frame stranded at a rung its body fits, which the path refuses, is sent
+    /// again in pieces at a rung the other station recommends; its sequence number is
+    /// acknowledged once all its bytes have arrived. Pieces are placed by offset, so a body split
+    /// again later, at another rung and at other boundaries, still reassembles.
+    pub const FRAGMENT: u8 = 0x02;
 }
+
+/// The bytes a piece's header adds: the offset (12 bits) and the last flag.
+pub const FRAGMENT_HEADER: usize = 2;
+/// The largest offset a piece's header holds.
+pub const FRAGMENT_MAX_OFFSET: u16 = 0x0FFF;
 
 /// Anything malformed in a received frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +233,18 @@ pub struct DataHeader {
     pub seq: u8,
     /// Session id.
     pub session: u8,
+    /// Where the piece the frame carries sits in its frame's body (`FRAGMENT`); `None` for a
+    /// frame sent whole.
+    pub piece: Option<Piece>,
+}
+
+/// A piece's place in the body of the frame with its sequence number (ADR-0086).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Piece {
+    /// Where in the body the piece starts: twelve bits.
+    pub offset: u16,
+    /// The piece ends the body.
+    pub last: bool,
 }
 
 /// Encode a DATA container, padded to the PHY payload size.
@@ -231,17 +256,33 @@ pub fn encode_data(
     body: &[u8],
     capacity: usize,
 ) -> Result<Vec<u8>, FrameError> {
-    let partial = body.len() < capacity.saturating_sub(DATA_HEADER);
+    let extra = if header.piece.is_some() {
+        FRAGMENT_HEADER
+    } else {
+        0
+    };
+    let room = capacity.saturating_sub(DATA_HEADER + extra);
+    let partial = body.len() < room;
     let mut flags = 0u8;
     if partial {
         flags |= data_flags::PARTIAL;
+    }
+    if header.piece.is_some() {
+        flags |= data_flags::FRAGMENT;
     }
     let mut out = Vec::with_capacity(capacity);
     out.push((header.kind.to_bits() << 5) | (flags & 0x1F));
     out.push(header.seq);
     out.push(header.session);
+    if let Some(piece) = header.piece {
+        if piece.offset > FRAGMENT_MAX_OFFSET {
+            return Err(FrameError::OutOfRange);
+        }
+        let word = (piece.offset << 4) | (u16::from(piece.last) << 3);
+        out.extend_from_slice(&word.to_be_bytes());
+    }
     if partial {
-        if body.len() > capacity.saturating_sub(DATA_HEADER + 2) {
+        if body.len() > room.saturating_sub(2) {
             return Err(FrameError::BadLength);
         }
         let length = u16::try_from(body.len()).map_err(|_| FrameError::BadLength)?;
@@ -272,29 +313,75 @@ pub fn decode_data(payload: &[u8]) -> Result<(DataHeader, Vec<u8>), FrameError> 
     let kind_bits = payload[0] >> 5;
     let kind = DataKind::from_bits(kind_bits).ok_or(FrameError::UnknownKind(kind_bits))?;
     let flags = payload[0] & 0x1F;
+    let mut at = DATA_HEADER;
+    let mut piece = None;
+    if flags & data_flags::FRAGMENT != 0 {
+        if payload.len() < at + FRAGMENT_HEADER {
+            return Err(FrameError::TooShort);
+        }
+        let word = u16::from_be_bytes([payload[at], payload[at + 1]]);
+        piece = Some(Piece {
+            offset: word >> 4,
+            last: word & 0x08 != 0,
+        });
+        at += FRAGMENT_HEADER;
+    }
     let header = DataHeader {
         kind,
         seq: payload[1],
         session: payload[2],
+        piece,
     };
     if flags & data_flags::PARTIAL != 0 {
-        if payload.len() < DATA_HEADER + 2 {
+        if payload.len() < at + 2 {
             return Err(FrameError::TooShort);
         }
-        let length = usize::from(u16::from_be_bytes([payload[3], payload[4]]));
-        if length > payload.len() - (DATA_HEADER + 2) {
+        let length = usize::from(u16::from_be_bytes([payload[at], payload[at + 1]]));
+        if length > payload.len() - (at + 2) {
             return Err(FrameError::BadLength);
         }
-        let start = DATA_HEADER + 2;
+        let start = at + 2;
         return Ok((header, payload[start..start + length].to_vec()));
     }
-    Ok((header, payload[DATA_HEADER..].to_vec()))
+    Ok((header, payload[at..].to_vec()))
 }
 
 /// User bytes per full DATA frame for a PHY payload of the given size.
 #[must_use]
 pub const fn data_capacity(phy_payload_bytes: usize) -> usize {
     phy_payload_bytes.saturating_sub(DATA_HEADER)
+}
+
+/// `body` in pieces for frames of `phy_payload_bytes`, a full frame's worth at a time
+/// (ADR-0086). A piece one byte short of full is the one length the container cannot carry (a
+/// partial frame spends two bytes on its length), so such a last piece goes as two.
+///
+/// # Errors
+/// If a frame holds fewer than three bytes of a piece, or the body is longer than an offset
+/// reaches.
+pub fn pieces(body: &[u8], phy_payload_bytes: usize) -> Result<Vec<(Piece, Vec<u8>)>, FrameError> {
+    let room = phy_payload_bytes.saturating_sub(DATA_HEADER + FRAGMENT_HEADER);
+    if room < 3 {
+        return Err(FrameError::BadLength);
+    }
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    loop {
+        let mut take = room.min(body.len() - at);
+        if take == room - 1 && at + take == body.len() {
+            take -= 1;
+        }
+        let offset = u16::try_from(at)
+            .ok()
+            .filter(|&o| o <= FRAGMENT_MAX_OFFSET)
+            .ok_or(FrameError::OutOfRange)?;
+        let last = at + take == body.len();
+        out.push((Piece { offset, last }, body[at..at + take].to_vec()));
+        at += take;
+        if at >= body.len() {
+            return Ok(out);
+        }
+    }
 }
 
 /// Body of a connection request or acceptance: who is calling whom, and what they support.
@@ -408,8 +495,10 @@ pub const GRANTED_VERSION: u8 = 8;
 /// [`DataKind::Measure`] frame, the control frame's `measure` bit in the place of version 8's
 /// identifier request inside a session, and an acknowledgement that reports a measurement
 /// ([`REPORT`]), none of which a station of version 8 reads. 10 since tone4x100-93
-/// (ADR-0081): rung 4 of the 500 Hz ladder is a tone kind where it was QPSK ⅓.
-pub const PROTOCOL_VERSION: u8 = 10;
+/// (ADR-0081): rung 4 of the 500 Hz ladder is a tone kind where it was QPSK ⅓. 11 since a
+/// stuck frame is sent in pieces (ADR-0086): a DATA frame's `FRAGMENT` flag and its two header
+/// bytes, which a station of version 10 does not read.
+pub const PROTOCOL_VERSION: u8 = 11;
 
 /// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
 /// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called
@@ -824,6 +913,7 @@ mod tests {
                 kind: DataKind::Data,
                 seq: 200,
                 session: 42,
+                piece: None,
             };
             let frame = encode_data(&header, &body, capacity).expect("encode");
             assert_eq!(frame.len(), capacity);
@@ -834,6 +924,71 @@ mod tests {
     }
 
     #[test]
+    fn a_body_in_pieces_fits_its_frames_and_makes_the_body_again() {
+        // ADR-0086: every piece fits its frame, the one length the container cannot carry
+        // included, the offsets run on, and the last piece says so
+        for capacity in [24usize, 25, 51, 137, 732] {
+            let room = capacity - DATA_HEADER - FRAGMENT_HEADER;
+            for body_len in 1..3 * room + 3 {
+                let body: Vec<u8> = (0..body_len).map(|i| ((7 * i + 1) % 256) as u8).collect();
+                let parts = pieces(&body, capacity).expect("pieces");
+                let mut got = Vec::new();
+                for (n, (piece, bytes)) in parts.iter().enumerate() {
+                    assert_eq!(usize::from(piece.offset), got.len());
+                    assert!(!bytes.is_empty(), "an empty piece at {capacity}/{body_len}");
+                    assert_eq!(piece.last, n == parts.len() - 1);
+                    let header = DataHeader {
+                        kind: DataKind::Data,
+                        seq: 9,
+                        session: 42,
+                        piece: Some(*piece),
+                    };
+                    let frame = encode_data(&header, bytes, capacity).expect("encode");
+                    assert_eq!(frame.len(), capacity);
+                    assert_eq!(
+                        decode_data(&frame).expect("decode"),
+                        (header, bytes.clone())
+                    );
+                    got.extend_from_slice(bytes);
+                }
+                assert_eq!(got, body);
+                assert!(parts.len() <= body_len.div_ceil(room) + 1);
+            }
+        }
+        assert!(pieces(&[1, 2, 3], DATA_HEADER + FRAGMENT_HEADER + 2).is_err());
+    }
+
+    #[test]
+    fn a_piece_header_is_twelve_bits_of_offset_and_a_last_flag() {
+        let header = DataHeader {
+            kind: DataKind::Data,
+            seq: 3,
+            session: 4,
+            piece: Some(Piece {
+                offset: FRAGMENT_MAX_OFFSET,
+                last: true,
+            }),
+        };
+        let frame = encode_data(&header, b"xyz", 24).expect("encode");
+        assert_eq!(frame[..5], [0x03, 3, 4, 0xFF, 0xF8]); // DATA, FRAGMENT | PARTIAL
+        assert_eq!(
+            decode_data(&frame).expect("decode"),
+            (header, b"xyz".to_vec())
+        );
+        let too_far = DataHeader {
+            piece: Some(Piece {
+                offset: FRAGMENT_MAX_OFFSET + 1,
+                last: false,
+            }),
+            ..header
+        };
+        assert_eq!(
+            encode_data(&too_far, b"xyz", 24),
+            Err(FrameError::OutOfRange)
+        );
+    }
+
+    #[test]
     fn a_retransmission_encodes_identically() {
         // HARQ combines identical codewords, so the encoded bytes must depend on nothing
         // beyond (header, body, capacity).
@@ -841,6 +996,7 @@ mod tests {
             kind: DataKind::Data,
             seq: 7,
             session: 3,
+            piece: None,
         };
         let body: Vec<u8> = (0..100).collect();
         assert_eq!(
@@ -901,6 +1057,7 @@ mod tests {
             kind: DataKind::Beacon,
             seq: 0,
             session: 0,
+            piece: None,
         };
         let body = pack_callsign("W4ODA").expect("pack");
         let frame = encode_data(&header, &body, 26).expect("encode");
@@ -925,6 +1082,7 @@ mod tests {
                 kind,
                 seq: 5,
                 session: 9,
+                piece: None,
             };
             let frame = encode_data(&header, b"x", 26).expect("encode");
             assert_eq!(decode_data(&frame).expect("decode").0.kind, kind);

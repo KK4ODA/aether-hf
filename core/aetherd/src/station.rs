@@ -2393,6 +2393,7 @@ impl<P: Ptt> Station<P> {
             kind: DataKind::Beacon,
             seq: 0,
             session: 0,
+            piece: None,
         };
         // beacons go out on the tone floor, where calls and probes start (ADR-0016): the
         // slowest kind that carries a connect frame carries a callsign, and a beacon exists to
@@ -10029,6 +10030,7 @@ mod tests {
             kind: DataKind::ConnectReq,
             seq: 0,
             session: 9,
+            piece: None,
         };
         let mode = air.a.engine.robust_mode(true);
         let capacity = air.a.engine.timing().capacity(mode);
@@ -11024,6 +11026,7 @@ mod tests {
                 kind: DataKind::ConnectReq,
                 seq: 0,
                 session: 9,
+                piece: None,
             };
             encode_data(&header, &body, 64).expect("a frame")
         };

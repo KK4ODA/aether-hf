@@ -12,13 +12,18 @@ from aether_model.frame.modes import LONG, MODES, WIDE
 from aether_model.link.frames import (
     CONNECT_BODY_8_BYTES,
     CONNECT_BODY_BYTES,
+    DATA_HEADER,
+    FRAGMENT_HEADER,
+    FRAGMENT_MAX_OFFSET,
     ConnectBody,
+    DataFlags,
     DataHeader,
     DataKind,
     ProbeBody,
     decode_data,
     encode_data,
     pack_callsign,
+    pieces,
     unpack_callsign,
 )
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController, usable_modes
@@ -63,6 +68,44 @@ def test_data_frame_is_identical_across_retransmissions() -> None:
     body = bytes(range(100))
     h = DataHeader(DataKind.DATA, seq=7, session=3)
     assert encode_data(h, body, cap) == encode_data(h, body, cap)
+
+
+@pytest.mark.parametrize("cap", [24, 25, 51, 137, 732])
+def test_a_body_in_pieces_fits_its_frames_and_makes_the_body_again(cap: int) -> None:
+    """A stuck frame's body goes in pieces at a rung it does not fit whole (ADR-0086). Every
+    piece fits its frame, the one length the container cannot carry included, the offsets run
+    on from piece to piece, and the last one says so."""
+    room = cap - DATA_HEADER - FRAGMENT_HEADER
+    for body_len in range(1, 3 * room + 3):
+        body = bytes((7 * i + 1) % 256 for i in range(body_len))
+        parts = pieces(body, cap)
+        got = bytearray()
+        for n, (offset, piece, last) in enumerate(parts):
+            assert offset == len(got)
+            assert piece
+            assert last == (n == len(parts) - 1)
+            header = DataHeader(DataKind.DATA, 9, 42, DataFlags.FRAGMENT, offset=offset, last=last)
+            frame = encode_data(header, piece, cap)
+            assert len(frame) == cap
+            assert decode_data(frame) == (header, piece)
+            got += piece
+        assert bytes(got) == body
+        assert len(parts) <= math.ceil(body_len / room) + 1
+
+
+def test_a_piece_header_is_twelve_bits_of_offset_and_a_last_flag() -> None:
+    header = DataHeader(
+        DataKind.DATA, 3, 4, DataFlags.FRAGMENT, offset=FRAGMENT_MAX_OFFSET, last=True
+    )
+    frame = encode_data(header, b"xyz", 24)
+    assert frame[:5] == bytes([0x03, 3, 4, 0xFF, 0xF8])  # DATA, FRAGMENT | PARTIAL
+    assert decode_data(frame) == (header, b"xyz")
+    with pytest.raises(ValueError):
+        DataHeader(DataKind.DATA, 3, 4, DataFlags.FRAGMENT, offset=FRAGMENT_MAX_OFFSET + 1)
+    # a frame sent whole carries neither
+    whole = DataHeader(DataKind.DATA, 3, 4)
+    assert decode_data(encode_data(whole, b"xyz", 24)) == (whole, b"xyz")
+    assert not whole.fragment
 
 
 def test_connect_body_round_trip() -> None:

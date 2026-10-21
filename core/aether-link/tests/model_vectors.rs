@@ -16,8 +16,8 @@ use std::{fs, path::PathBuf};
 use aether_link::{
     datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
-        ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, ProbeBody, decode_data,
-        encode_data, level_of, pack_callsign, unpack_callsign,
+        ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, Piece, ProbeBody, decode_data,
+        encode_data, level_of, pack_callsign, pieces, unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
@@ -202,6 +202,7 @@ fn data_frame_encoding_matches_the_model() {
             kind,
             seq: int(case, "seq") as u8,
             session: int(case, "session") as u8,
+            piece: None,
         };
         let body = from_hex(case["body"].as_str().unwrap_or(""));
         let capacity = int(case, "capacity");
@@ -215,6 +216,52 @@ fn data_frame_encoding_matches_the_model() {
         let (got_header, got_body) = decode_data(&encoded).expect("decode");
         assert_eq!(got_header, header, "{label}: header round trip");
         assert_eq!(got_body, body, "{label}: body round trip");
+    }
+}
+
+#[test]
+fn pieces_match_the_model() {
+    // a stuck frame's body in pieces (ADR-0086): the same cuts, the same frames
+    for case in vectors()["pieces"].as_array().expect("pieces") {
+        let capacity = int(case, "capacity");
+        let body = from_hex(case["body"].as_str().expect("body"));
+        let expected = case["pieces"].as_array().expect("its pieces");
+        let label = format!("cap={capacity} body={}", body.len());
+        let got = pieces(&body, capacity).expect("pieces");
+        assert_eq!(got.len(), expected.len(), "{label}: how many pieces");
+        for ((piece, bytes), want) in got.iter().zip(expected) {
+            assert_eq!(
+                usize::from(piece.offset),
+                int(want, "offset"),
+                "{label}: offset"
+            );
+            assert_eq!(
+                piece.last,
+                want["last"].as_bool().expect("last"),
+                "{label}: last"
+            );
+            assert_eq!(
+                *bytes,
+                from_hex(want["piece"].as_str().unwrap_or("")),
+                "{label}: bytes"
+            );
+            let header = DataHeader {
+                kind: DataKind::Data,
+                seq: int(case, "seq") as u8,
+                session: int(case, "session") as u8,
+                piece: Some(Piece {
+                    offset: piece.offset,
+                    last: piece.last,
+                }),
+            };
+            let encoded = encode_data(&header, bytes, capacity).expect("encode");
+            let frame = from_hex(want["encoded"].as_str().expect("encoded"));
+            assert_eq!(encoded, frame, "{label}: frame at {}", piece.offset);
+            assert_eq!(
+                decode_data(&frame).expect("decode"),
+                (header, bytes.clone())
+            );
+        }
     }
 }
 

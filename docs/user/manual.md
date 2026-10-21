@@ -537,7 +537,10 @@ bit/s to 5.5 kbit/s. At **500 Hz**, rungs 0–4 are tone kinds from 36 to 139 bi
 5–14 OFDM up to about 1 kbit/s. Some rungs are never asked for, because another carries as
 much or more from less SNR: 8 at 500 Hz, 6 and 13 at 2300 Hz. The Test's ladder skips them too.
 Rung 4 at 500 Hz was an OFDM rung before 0.2.0-beta.117; the link protocol changed with it, so
-both stations need a version with the new protocol (see **Update required** above).
+both stations need a version with the new protocol (see **Update required** above). It changed
+again in 0.2.0-beta.118: a frame the path will not carry at any slower rung is sent in smaller
+pieces, so a transfer no longer stalls on it. Stations before and after beta.118 cannot
+connect.
 
 ## 14. Troubleshooting
 

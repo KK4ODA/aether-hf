@@ -340,7 +340,7 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
-fn stats(s: &GrantStats) -> [(&'static str, usize); 17] {
+fn stats(s: &GrantStats) -> [(&'static str, usize); 18] {
     [
         ("frames_sent", s.frames_sent),
         ("frames_resent", s.frames_resent),
@@ -353,6 +353,7 @@ fn stats(s: &GrantStats) -> [(&'static str, usize); 17] {
         ("probes_answered", s.probes_answered),
         ("probe_replies", s.probe_replies),
         ("frames_reencoded", s.frames_reencoded),
+        ("frames_split", s.frames_split),
         ("left_answered", s.left_answered),
         ("transmissions", s.transmissions),
         ("headers_elided", s.headers_elided),
