@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 9,
+Status: **draft**, tracking the reference model on `master` (link protocol version 11,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -543,12 +543,21 @@ DATA container:
 | 0 | kind (3 bits) \| flags (5 bits) |
 | 1 | sequence number |
 | 2 | session id |
-| 3–4 | data length, only when the PARTIAL flag is set |
+| 3–4 | a piece's place: offset (12 bits) \| last (1 bit) \| 0 (3 bits), only when the FRAGMENT flag is set |
+| then 2 bytes | data length, only when the PARTIAL flag is set |
 
-Flags: PARTIAL is bit 0 (0x01 of byte 0); the other four are zero. A body that fills the
-payload after the three header bytes is full; any shorter body is PARTIAL with its length in
-bytes 3–4, and the rest of the payload is zeros — so a body one byte short of full cannot be
-carried, and a sender leaves that byte for the next frame.
+Flags: PARTIAL is bit 0 (0x01 of byte 0) and FRAGMENT bit 1 (0x02, link protocol 11); the other
+three are zero. A body that fills the payload after the header bytes is full; any shorter body
+is PARTIAL with its length in the two bytes after the header, and the rest of the payload is
+zeros — so a body one byte short of full cannot be carried, and a sender leaves that byte for
+the next frame.
+
+A FRAGMENT frame carries a **piece** of the body of the `DATA` frame with its sequence number
+(ADR-0086, rule 9 of §7.2): the offset is where in that body the piece starts, in bytes, and
+`last` says the piece ends it. A receiver places pieces by offset — pieces of two splits at
+different boundaries make the body as well — and acknowledges the sequence number only once
+every byte of the body has arrived. A piece one byte short of a full frame is the one length
+the container cannot carry, so such a last piece goes as two.
 
 **Nothing in this header may differ between transmissions of the same codeword.** A
 retransmission is the same codeword under another redundancy version, and the receiver
@@ -573,7 +582,7 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 9 |
+| 15 | link protocol version: 11 |
 | 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
 | 17 | the sender's **turnaround**: bits 0–3, how long its radio takes to hear again after it stops sending (VOX hold, receiver recovery), in 0.1 s steps rounded up, 0–1.5 s; bits 4–7 reserved, zero |
 | 18 | the sender's **identifier**: its closing Morse identifier's length in 0.5 s steps rounded up, 0 for none |
@@ -586,8 +595,9 @@ Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the cont
 recommended mode to five bits (ADR-0014), 4 added the 500 Hz middle kinds (ADR-0015), 5 the
 burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), 7 the turn offered at the end of
 a burst (ADR-0047), 8 granted slots (ADR-0069: the control frame below, the connect body's two
-more bytes, and every rule of §7.2), 9 the measurement frames (ADR-0077), and 10 the 500 Hz
-rung 4, `tone4x100-93` in the place of QPSK ⅓ (ADR-0081). The same number
+more bytes, and every rule of §7.2), 9 the measurement frames (ADR-0077), 10 the 500 Hz
+rung 4, `tone4x100-93` in the place of QPSK ⅓ (ADR-0081), and 11 a stuck frame sent in pieces,
+the FRAGMENT flag (ADR-0086). The same number
 names different frames in different versions, so a session between two versions cannot run.
 
 The SNR byte is the **faster start**: a session used to begin at the most robust mode
@@ -784,9 +794,21 @@ deadline. The rules, numbered as in the formal specification
    decodes on its own when the first was never detected; the receiver reads the RV from the
    chips and combines any order). A frame sent four times unacknowledged at a rung the
    recommendation has since left, or after two copies one the other station measured further
-   under its rung than four copies can make up (ADR-0038), is re-encoded at the slowest rung from the recommendation up that
-   carries its body: a new codeword under the same sequence number, which the receiver does not
-   combine with the old one. A rung is offered only when no other carries as much data, after the
+   under its rung than four copies can make up (ADR-0038), is re-encoded at the most robust
+   usable rung below its own, in the recommendation's family and no faster than the
+   recommendation, that carries its body (ADR-0085): a new codeword under the same sequence
+   number, which the receiver does not combine with the old one. A body no such rung carries
+   goes **in pieces** (ADR-0086) after one copy more — the receiver combines a fifth copy with the
+   four it holds before it starts over — or after two when the report says combining cannot
+   reach, and only when the rung the other station itself last recommended — not a step down
+   for a silent slot — is below the frame's: at the usable rung of its family up to
+   that recommendation that cuts the body into the fewest pieces, the most robust of those (every
+   frame of a family is as long as the others, so the pieces are the air), each piece a full
+   FRAGMENT frame (§7.1), in transmissions of pieces
+   alone and always at RV 0, since the receiver gives a frame that does not decode a sequence
+   number by its slot and a piece has none; a block sends each piece once before any again. A
+   receiver that decodes a piece infers no sequence number for the transmission's other frames,
+   nor for any while a block it holds pieces of is incomplete. A rung is offered only when no other carries as much data, after the
    DATA header, per second of air from a threshold no higher (ADR-0073).
 10. **Ending.** The master leaves with a `DISC`, which grants the slave a slot for its
     `DISC_ACK`; it repeats it at most three times, then ends ("closed (no DISC_ACK)"). It sends
@@ -915,7 +937,7 @@ frames, and no more than fit in the transmitter's key time, one at least (ADR-00
 | Redundancy versions | 4 |
 | Peak reduction target, PSK modes | 5.0 dB |
 | Peak reduction target, QAM modes | 7.0 dB |
-| Link DATA header | 3 bytes (5 with an explicit length) |
+| Link DATA header | 3 bytes (5 with an explicit length, 2 more for a piece) |
 | Link CONTROL frame | 7 bytes |
 | Callsign encoding | 6 bits/character, 9 characters in 7 bytes |
 | Selective-repeat window | 16 frames |

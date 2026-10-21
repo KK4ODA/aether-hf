@@ -5,12 +5,13 @@ kind, or an OFDM mode on the LONG layout with the mode signalled in the pilot ch
 payload bytes) and a CONTROL frame (7 bytes: the tone floor's control frame, or the SHORT
 layout at the control mode). The link layer puts its own header at the front of each:
 
-DATA container, 3-byte header (5 with an explicit length)::
+DATA container, 3-byte header (5 with an explicit length, 2 more for a piece)::
 
     0: kind (3 bits) | flags (5 bits)
     1: seq                                         8-bit sequence number
     2: session id
-    3–4: data length (only when flags & PARTIAL)   otherwise the frame is full
+    3–4: offset (12 bits) | last (1) | 0 (3)       only when flags & FRAGMENT
+    then data length (2 bytes)                     only when flags & PARTIAL; otherwise full
 
 Nothing in the header may change between transmissions of the same codeword: a
 retransmission is the *same codeword* under another redundancy version, and the receiver
@@ -83,6 +84,18 @@ class DataFlags(IntFlag):
     NONE = 0
     PARTIAL = 0x01
     """An explicit data length follows the header (the frame is not full)."""
+    FRAGMENT = 0x02
+    """The frame carries a piece of the body of the frame with its sequence number (protocol 11,
+    ADR-0086): two more header bytes say where in that body the piece starts and whether it ends
+    it. A frame stranded at a rung its body fits, which the path refuses, is sent again in
+    pieces at a rung the other station recommends; its sequence number is acknowledged once all
+    its bytes have arrived. Pieces are placed by offset, so a body split again later, at another
+    rung and at other boundaries, still reassembles."""
+
+
+FRAGMENT_HEADER = 2
+"""The bytes a piece's header adds: the offset (12 bits) and the last flag."""
+FRAGMENT_MAX_OFFSET = 0x0FFF
 
 
 # ── callsigns ─────────────────────────────────────────────────────────
@@ -120,19 +133,32 @@ class DataHeader:
     seq: int
     session: int
     flags: DataFlags = DataFlags.NONE
+    offset: int = 0
+    """A piece's place in its frame's body (``flags & FRAGMENT``)."""
+    last: bool = False
+    """The piece ends its frame's body."""
 
     def __post_init__(self) -> None:
         if not 0 <= self.seq < SEQ_MOD or not 0 <= self.session < 256:
             raise ValueError("seq and session are 8-bit")
+        if not 0 <= self.offset <= FRAGMENT_MAX_OFFSET:
+            raise ValueError("a piece's offset is 12-bit")
+
+    @property
+    def fragment(self) -> bool:
+        return bool(self.flags & DataFlags.FRAGMENT)
 
 
 def encode_data(header: DataHeader, body: bytes, capacity: int) -> bytes:
     """Header + body padded to ``capacity`` (the PHY payload size for the mode)."""
-    partial = len(body) < capacity - DATA_HEADER
+    room = capacity - DATA_HEADER - (FRAGMENT_HEADER if header.fragment else 0)
+    partial = len(body) < room
     flags = header.flags | (DataFlags.PARTIAL if partial else DataFlags.NONE)
     out = bytes([(header.kind.value << 5) | int(flags), header.seq, header.session])
+    if header.fragment:
+        out += struct.pack(">H", (header.offset << 4) | (int(header.last) << 3))
     if partial:
-        if len(body) > capacity - DATA_HEADER - 2:
+        if len(body) > room - 2:
             raise ValueError("body does not fit with an explicit length")
         out += struct.pack(">H", len(body))
     out += body
@@ -146,20 +172,53 @@ def decode_data(payload: bytes) -> tuple[DataHeader, bytes]:
         raise ValueError("short DATA payload")
     kind = DataKind(payload[0] >> 5)
     flags = DataFlags(payload[0] & 0x1F)
+    at = DATA_HEADER
+    offset, last = 0, False
+    if flags & DataFlags.FRAGMENT:
+        if len(payload) < at + FRAGMENT_HEADER:
+            raise ValueError("short DATA payload")
+        (word,) = struct.unpack(">H", payload[at : at + FRAGMENT_HEADER])
+        offset, last = word >> 4, bool(word & 0x08)
+        at += FRAGMENT_HEADER
     header = DataHeader(
-        kind=kind, seq=payload[1], session=payload[2], flags=flags & ~DataFlags.PARTIAL
+        kind=kind,
+        seq=payload[1],
+        session=payload[2],
+        flags=flags & ~DataFlags.PARTIAL,
+        offset=offset,
+        last=last,
     )
     if flags & DataFlags.PARTIAL:
-        (length,) = struct.unpack(">H", payload[3:5])
-        if length > len(payload) - 5:
+        (length,) = struct.unpack(">H", payload[at : at + 2])
+        if length > len(payload) - at - 2:
             raise ValueError("corrupt DATA length")
-        return header, payload[5 : 5 + length]
-    return header, payload[DATA_HEADER:]
+        return header, payload[at + 2 : at + 2 + length]
+    return header, payload[at:]
 
 
 def data_capacity(phy_payload_bytes: int) -> int:
     """User bytes per full DATA frame for a PHY payload of the given size."""
     return phy_payload_bytes - DATA_HEADER
+
+
+def pieces(body: bytes, phy_payload_bytes: int) -> list[tuple[int, bytes, bool]]:
+    """``body`` in pieces for frames of ``phy_payload_bytes``: each ``(offset, piece, last)``,
+    a full frame's worth at a time (ADR-0086). A piece one byte short of full is the one length
+    the container cannot carry (a partial frame spends two bytes on its length), so such a last
+    piece goes as two."""
+    room = phy_payload_bytes - DATA_HEADER - FRAGMENT_HEADER
+    if room < 3:
+        raise ValueError("no room for a piece")
+    out: list[tuple[int, bytes, bool]] = []
+    at = 0
+    while True:
+        take = min(room, len(body) - at)
+        if take == room - 1 and at + take == len(body):
+            take -= 1
+        out.append((at, body[at : at + take], at + take == len(body)))
+        at += take
+        if at >= len(body):
+            return out
 
 
 CAP_COMPRESSION = 0x01
@@ -205,7 +264,7 @@ station one slot, defined by what it states; a station keys only in a slot grant
 decoded in time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes
 are not version 7's, and neither is any of its timing."""
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11
 """The link protocol a station speaks, in the connect body's version byte; what a release
 states (``link_protocol``); a station ignores a call of another, and says so. The same number
 names different frames in different versions, so a session between two versions cannot run.
@@ -221,7 +280,9 @@ the end of a burst (ADR-0047), the last of the turn engine, retired in ADR-0069'
 MEASURE frame, the control frame's ``measure`` bit in the place of version 8's identifier
 request inside a session, and an acknowledgement that reports a measurement (:data:`REPORT`),
 none of which a station of version 8 reads. 10 since tone4x100-93 (ADR-0081): rung 4 of the
-500 Hz ladder is a tone kind where it was QPSK ⅓."""
+500 Hz ladder is a tone kind where it was QPSK ⅓. 11 since a stuck frame is sent in pieces
+(ADR-0086): a DATA frame's FRAGMENT flag and its two header bytes, which a station of version 10
+does not read."""
 
 CAP_LEVEL_SHIFT = 3
 CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT

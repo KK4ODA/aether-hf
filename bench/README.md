@@ -473,6 +473,19 @@ ADR-0085 came out of the first A/B, where ADR-0084 alone lost `80m-agc-carrier-o
 message on its own draw in 2 of 8 runs; ADR-0085 §3 has those runs and the link bench, which is
 identical with it (the fading pipe seldom strands a frame).
 
+## A stuck frame in pieces (ADR-0086, link protocol 11)
+
+No committed curve: the link bench's fading pipe never strands a body that fits nothing slower,
+and ADR-0085's rules against this ADR's first build were identical at every point (both airs,
+AWGN, Good, Moderate and Poor at −8 … +4 dB, 1 kB and 8 kB sessions). The case lives on the
+scenario harness: `80m-agc-carrier-outside-500` at its own draw, which failed beta.118's release
+commit on CI, delivered its message in 12 of 12 runs here (ADR-0085's build 11 of 12); a build
+that split after four copies, not five, lost 6 of 24 (ADR-0086 §3). All 56 scenarios × 2 draws
+against beta.118's code: 112 of 112 on both, no radiated overlap, pooled air +0.3 %, Tests'
+message rate ×1.00 and file rate ×0.98, nothing outside `scenarios.csv`'s ranges, so the baseline
+is unchanged. One run split a block; whole re-encodes fell from 39 to 7, a re-encode no longer
+going above the recommendation.
+
 ## Calls, probes and beacons on the floor (`calls.csv`, `tone_snr_reading.csv`, `link_floor_calls.csv`, ADR-0016)
 
 `calls.csv` is `tools/bench_calls.py`: per air, class and SNR, 30 calls and 30 probes on the

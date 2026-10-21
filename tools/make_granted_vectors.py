@@ -330,19 +330,25 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
 
 
 def _pair(
-    air: AirInterface, *, latency: float = 0.0, seeds: tuple[int, int] = (11, 12), **cfg: Any
+    air: AirInterface,
+    *,
+    latency: float = 0.0,
+    seeds: tuple[int, int] = (11, 12),
+    sender: dict[str, Any] | None = None,
+    **cfg: Any,
 ) -> tuple[GrantedEngine, GrantedEngine, Recorder, Recorder]:
+    """Two stations on ``air``, configured alike but for ``sender``: the caller's own."""
     timing = replace(phy_timing(air.params), tx_latency_s=latency)
 
-    def config() -> GrantConfig:
+    def config(**own: Any) -> GrantConfig:
         return GrantConfig(
             capabilities=bandwidth_capabilities(air.params),
             max_mode=air.n_rungs - 1,
             max_burst_s=26.0,
-            **cfg,
+            **{**cfg, **own},
         )
 
-    a = GrantedEngine("W4ODA", timing, config(), seed=seeds[0])
+    a = GrantedEngine("W4ODA", timing, config(**(sender or {})), seed=seeds[0])
     b = GrantedEngine("KK4XYZ", timing, config(), seed=seeds[1])
     return a, b, Recorder(a, seeds[0]), Recorder(b, seeds[1])
 
@@ -901,7 +907,8 @@ def ramp() -> list[Recorder]:
 
 def stranded() -> list[Recorder]:
     """The master's data pinned far above what the path carries: every copy fails, the
-    receiver combines up to its limit and starts over, the frames are re-encoded."""
+    receiver combines up to its limit and starts over, and the frames, whose bodies fit no rung
+    up to the recommendation, go in pieces (ADR-0086)."""
     a, b, ra, rb = _pair(WIDE)
     rng = random.Random(15)
     sim = TwoStationSim(a, b, snr_db=4.0, seed=15)
@@ -917,11 +924,36 @@ def stranded() -> list[Recorder]:
     return [ra, rb]
 
 
+def split() -> list[Recorder]:
+    """A 500 Hz path that carries the floor's rungs 0-2 and nothing faster, as ITU NVIS did on
+    80m-agc-carrier-outside-500: frames stranded where no rung below fits their bodies go in
+    pieces, transmissions of their own; a block's first piece is lost at any rung but the
+    slowest, so blocks are split again at other boundaries (ADR-0086)."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(19)
+
+    def refused(frame: TxFrame) -> float:
+        if frame.container is not Container.DATA:
+            return 0.0
+        header = decode_data(frame.payload)[0]
+        first_piece = header.fragment and header.offset == 0 and frame.mode >= 1
+        return -40.0 if frame.mode >= 3 or first_piece else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=30, frame_snr_offset=refused)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 1000))
+    sim.run(until=700.0)
+    a.disconnect()
+    sim.run(until=850.0)
+    return [ra, rb]
+
+
 def harq_limit() -> list[Recorder]:
-    """Full frames pinned at the top rung, where nothing slower can carry them: no re-encoding,
-    so a block goes again and again at its rung, combined until the receiver's limit and
-    started over."""
-    a, b, ra, rb = _pair(WIDE)
+    """Full frames pinned at the top rung, where nothing slower can carry them whole: a block
+    goes again and again at its rung, combined until the receiver's limit and started over,
+    and only then in pieces — the sender gives a frame twice the copies the receiver combines
+    before it counts it stranded (ADR-0086)."""
+    a, b, ra, rb = _pair(WIDE, sender={"max_combines": 8})
     rng = random.Random(18)
     sim = TwoStationSim(a, b, snr_db=9.0, seed=18)
     a.connect("KK4XYZ")
@@ -1029,6 +1061,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "phantom-storm": phantom_storm,
     "ramp": ramp,
     "stranded": stranded,
+    "split": split,
     "harq-limit": harq_limit,
     "vox": vox,
     "cut-header": cut_header,

@@ -2007,6 +2007,8 @@ pub fn counters<P: Ptt>(station: &Station<P>) -> Value {
         "probes_answered": stats.probes_answered,
         "probe_replies": stats.probe_replies,
         "frames_reencoded": stats.frames_reencoded,
+        // stranded frames sent in pieces: their bodies fit no rung the path carries (ADR-0086)
+        "frames_split": stats.frames_split,
     })
 }
 

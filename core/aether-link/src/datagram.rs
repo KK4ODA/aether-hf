@@ -142,6 +142,7 @@ pub fn fragments(
                 kind: DataKind::Datagram,
                 seq: (index << 4) | last,
                 session: number,
+                piece: None,
             };
             encode_data(&header, piece, capacity).map_err(DatagramError::Frame)
         })

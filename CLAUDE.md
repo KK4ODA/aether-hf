@@ -2006,6 +2006,42 @@ and none of ~1 500 at 2 300 Hz, none with a changed decode (ADR-0082 §3). To is
 on the harness, build the daemon with it switched off in the source and run the same draw
 (`--variant K`) on each build.
 
+**A stuck frame in pieces (2026-10-21, ADR-0086, link protocol 11; the author's "let the sender
+split a stuck frame").** beta.118's release commit failed CI twice on `80m-agc-carrier-outside-500`
+seed 31: on that ITU NVIS path the 500 Hz air carries rungs 0–2 only, and 72-byte bodies at rung 3
+(or 50 at an OFDM rung) fit no rung below, so ADR-0085 left them at their rung for good. Model
+first: a DATA frame's flags gain `FRAGMENT` (0x02) with two header bytes (offset 12 bits, `last`
+1 bit) before a partial frame's length; `frames.pieces(body, capacity)` cuts full frames' worth
+(a last piece one byte short of full goes as two). A stranded frame is re-encoded whole only at a
+rung **up to** the recommendation (`_reencode_target`: `mode <= to_mode`; above it the frame
+strands again), else split at the usable rung of the recommendation's family up to it that cuts
+the body into the fewest pieces, the most robust of those (`_split_rung(body_len, …)`: the pieces
+are the air, every frame of a family being as long), **only below the rung the other station
+itself last recommended** (`_peer_rung`/`peer_rung`, set in `_take_ack`) — on R9's silence steps
+alone, OFDM frames split onto the floor made each try 25 s and the master outlasted the timed-out
+slave's reckoning: the two closing identifiers overlapped
+(`test_a_band_that_closes_ends_with_the_identifiers_apart`) — and only after `max_combines` + 1
+copies, or `reencode_early_after` when hopeless: the receiver combines the fifth copy with the
+four it holds before starting over, and split after four, a rung-4 frame's fifth copy, which
+would have decoded, never went (seed 31 lost its message in 6 runs of 24).
+Pieces go in transmissions of pieces alone (`_piece_frames`), always RV 0 (never combined), each
+piece of a block once before any again (`piece_sends`); a split block stranded again under a
+lower peer recommendation is split again at other boundaries. The receiver places pieces by
+offset (`_Pieces`/`Pieces`), acknowledges the sequence number once whole, and infers no sequence
+number for a transmission's undecoded frames once a piece decodes in it (`_pieces_heard`: their
+HARQ buffers dropped) nor while a block is incomplete. `frames_split` counter (stats, `counters`,
+the replay). Port: `Piece`, `DataHeader.piece`, `pieces()`, `split_rung`, `piece_frames`,
+`block_of`; `keep()` sets the record's payload before `accept` so `pieces_heard` skips it as the
+model does. Vectors: `link_vectors.json` `pieces`, the granted replay's `split` session, and
+`harq-limit` now gives its sender `max_combines = 8` (`_pair(sender=…)`) so the receiver's
+combining limit still comes before the split. The shell's `LINK_PROTOCOL` is 11. Measured: the
+model's path that refuses rungs 3 and up delivers 1 kB in 430 s (nothing in 900 s before);
+seed 31 12 of 12 runs, message median 266 s (ADR-0085 11 of 12); the link bench identical at
+every point (the pipe never strands such a body); the harness, 56 × 2 against beta.118's code,
+112/112, air +0.3 %, one run split a block, whole re-encodes 39 → 7, nothing outside
+`scenarios.csv`'s ranges (the baseline stays). No local run took CI's own course (rung 3 refused
+all session): CI's runner is its test.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

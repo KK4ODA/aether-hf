@@ -38,6 +38,7 @@ from aether_model.link.frames import (
     decode_data,
     encode_data,
     level_of,
+    pieces,
     with_level,
 )
 from aether_model.link.granted import (
@@ -1420,6 +1421,117 @@ def test_a_stranded_frame_goes_at_the_most_robust_rung_of_its_new_family() -> No
     assert w._reencode_target(body_len=20, from_mode=w.timing.floor_modes, to_mode=4) == 1
     assert w.timing.data_frame_s_for(1) == w.timing.data_frame_s_for(4)
     assert w._reencode_target(body_len=20, from_mode=9, to_mode=7) == 7
+
+
+def test_a_body_that_fits_no_rung_up_to_the_recommendation_goes_in_the_fewest_pieces() -> None:
+    """A stranded frame is re-encoded whole only at a rung up to the recommendation: one above
+    it strands it again. A body that fits none goes in pieces at the rung up to it, in its
+    family, that cuts it into the fewest — every frame of a family is as long as the others, so
+    the pieces are the air — and of those the most robust (ADR-0086)."""
+    a, _ = _pair(NARROW)
+    timing = a.timing
+
+    def body(mode: int) -> int:
+        return data_capacity(timing.capacity(mode))
+
+    # 72 bytes at rung 3 under a recommendation of rung 2: nothing below it fits them whole;
+    # two pieces at rung 2, three at rung 1
+    assert a._reencode_target(body(3), 3, 2) is None
+    assert a._split_rung(body(3), 3, 2) == 2
+    # 50 bytes of an OFDM rung fit rung 3 whole, above the recommendation; two pieces at rung 2
+    # and two at rung 1, which is the more robust
+    assert a._reencode_target(body(9), 9, 2) is None
+    assert a._split_rung(body(9), 9, 2) == 1
+    # under an OFDM recommendation among the OFDM rungs: 106 bytes are four pieces at rungs 6
+    # and 7, six at rung 5; below rung 0, nowhere
+    assert a._split_rung(body(12), 12, 7) == 6
+    assert a._split_rung(10, 0, 0) is None
+
+
+def test_a_stuck_frame_goes_in_pieces_and_its_block_arrives() -> None:
+    """80m-agc-carrier-outside-500, seed 31, on CI's runner: ITU NVIS at 500 Hz carried the
+    floor's rungs 0-2 and nothing faster, and frames stranded at rung 3 with 72 bytes, or at an
+    OFDM rung with 50, fit no rung below: they went on at their own rung until the session timed
+    out. Now such a frame goes in pieces at the recommendation, in transmissions of their own,
+    each at RV 0, and its sequence number is acknowledged once all of it is in. Here the path
+    loses a block's first piece too, at any rung but the slowest: the block is split again,
+    slower and at other boundaries, and still arrives (ADR-0086)."""
+    a, b = _pair(NARROW)
+
+    def refused(frame: SimFrame) -> float:
+        if frame.container is not Container.DATA:
+            return 0.0
+        header = decode_data(frame.payload)[0]
+        first_piece = header.fragment and header.offset == 0 and frame.mode >= 1
+        return -40.0 if frame.mode >= 3 or first_piece else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=30, frame_snr_offset=refused)
+    sent = _spy_data(sim, 0)
+    message = bytes(random.Random(1).randrange(256) for _ in range(1000))
+    a.connect("KK4XYZ")
+    a.send(message)
+    while sim.delivered(1) != message and sim.t < 900.0:
+        sim.run(until=sim.t + 5.0)
+    assert sim.delivered(1) == message
+    pieced = [tx for tx in sent if any(decode_data(f.payload)[0].fragment for f in tx)]
+    assert pieced
+    rungs: dict[int, set[int]] = {}
+    for tx in pieced:
+        assert all(decode_data(f.payload)[0].fragment for f in tx)  # pieces go alone
+        assert all(f.rv == 0 for f in tx)  # and are never combined
+        for f in tx:
+            rungs.setdefault(decode_data(f.payload)[0].seq, set()).add(f.mode)
+    assert any(len(modes) > 1 for modes in rungs.values())  # split again, and made whole
+    assert sim.overlaps() == []
+
+
+def test_a_frame_goes_in_pieces_only_after_the_copy_its_receiver_combines_last() -> None:
+    """The receiver tries a frame's fifth copy with the four it holds before it starts over: a
+    frame split after four leaves that behind, and on 80m-agc-carrier-outside-500 a rung-4
+    frame whose fifth copy would have decoded never got it (ADR-0086). Here no report says the
+    rungs refused are out of combining's reach (``reencode_hopeless_db`` off), so every block
+    goes whole at its last rung one copy past ``max_combines`` before it goes in pieces."""
+    a, b = _pair(NARROW, reencode_hopeless_db=100.0)
+
+    def refused(frame: SimFrame) -> float:
+        return -40.0 if frame.container is Container.DATA and frame.mode >= 3 else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=10.0, seed=30, frame_snr_offset=refused)
+    sent = _spy_data(sim, 0)
+    message = bytes(random.Random(1).randrange(256) for _ in range(1000))
+    a.connect("KK4XYZ")
+    a.send(message)
+    while sim.delivered(1) != message and sim.t < 900.0:
+        sim.run(until=sim.t + 5.0)
+    assert sim.delivered(1) == message
+    copies: dict[int, list[tuple[int, bool]]] = {}
+    for tx in sent:
+        for f in tx:
+            header = decode_data(f.payload)[0]
+            if header.kind is DataKind.DATA:
+                copies.setdefault(header.seq, []).append((f.mode, header.fragment))
+    split = {seq: c for seq, c in copies.items() if any(piece for _, piece in c)}
+    assert split
+    for seq, history in split.items():
+        whole = [mode for mode, piece in history[: [p for _, p in history].index(True)]]
+        at_last_rung = next(
+            (i for i, mode in enumerate(reversed(whole)) if mode != whole[-1]), len(whole)
+        )
+        assert at_last_rung >= a.cfg.max_combines + 1, (seq, history)
+    assert sim.overlaps() == []
+
+
+def test_pieces_of_two_splits_make_their_block() -> None:
+    """The receiver places pieces by their offsets: a block split at one rung and again at a
+    slower one, a piece of each heard, is whole once every byte of it is (ADR-0086)."""
+    block = bytes(range(72))
+    held = granted_module._Pieces()
+    for offset, piece, last in pieces(block, 51)[:1]:  # rung 2's first piece, 46 bytes
+        held.place(offset, piece, last)
+    assert held.body() is None
+    for offset, piece, last in pieces(block, 24)[2:]:  # rung 0's pieces from byte 38 on
+        held.place(offset, piece, last)
+    assert held.body() == block
 
 
 def _spy_data(sim: TwoStationSim, who: int) -> list[list[TxFrame]]:

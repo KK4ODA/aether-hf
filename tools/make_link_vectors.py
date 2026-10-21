@@ -28,6 +28,7 @@ from aether_model.link.frames import (
     PROTOCOL_VERSION,
     REPORT,
     ConnectBody,
+    DataFlags,
     DataHeader,
     DataKind,
     GrantFrame,
@@ -36,6 +37,7 @@ from aether_model.link.frames import (
     encode_data,
     level_of,
     pack_callsign,
+    pieces,
     with_level,
 )
 from aether_model.link.rate import (
@@ -78,6 +80,40 @@ def data_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                         "encoded": encode_data(header, body, capacity).hex(),
                     }
                 )
+    return out
+
+
+def piece_cases() -> list[dict]:  # type: ignore[type-arg]
+    """A stuck frame's body in pieces (ADR-0086): where it is cut, the one-byte-short last piece
+    that goes as two, and each piece's frame."""
+    out = []
+    for capacity in (24, 51, 137):
+        room = capacity - DATA_HEADER - 2
+        for body_len in (1, room - 2, room - 1, room, room + 1, 2 * room - 1, 72, 288):
+            body = bytes((i * 53 + 11) % 256 for i in range(body_len))
+            parts = pieces(body, capacity)
+            frames = []
+            for offset, piece, last in parts:
+                header = DataHeader(
+                    DataKind.DATA, 77, 200, DataFlags.FRAGMENT, offset=offset, last=last
+                )
+                frames.append(
+                    {
+                        "offset": offset,
+                        "last": last,
+                        "piece": piece.hex(),
+                        "encoded": encode_data(header, piece, capacity).hex(),
+                    }
+                )
+            out.append(
+                {
+                    "capacity": capacity,
+                    "body": body.hex(),
+                    "seq": 77,
+                    "session": 200,
+                    "pieces": frames,
+                }
+            )
     return out
 
 
@@ -343,6 +379,7 @@ def main() -> int:
         ],
         "callsigns": callsign_cases(),
         "data_frames": data_frame_cases(),
+        "pieces": piece_cases(),
         "connect_bodies": connect_body_cases(),
         "probe_bodies": probe_body_cases(),
         "datagrams": datagram_cases(),
