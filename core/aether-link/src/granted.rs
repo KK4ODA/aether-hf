@@ -4541,7 +4541,11 @@ mod tests {
         // ADR-0085, as test_granted.py has it: every data frame of a family is as long as the
         // others, so the body goes at the most robust usable rung it fits, not the recommendation
         let engine = GrantedEngine::new("W4ODA", wide(), GrantConfig::default(), 1);
-        assert_eq!(engine.reencode_target(20, 6, 4), Some(1), "tone-36 under the fast tones");
+        assert_eq!(
+            engine.reencode_target(20, 6, 4),
+            Some(1),
+            "tone-36 under the fast tones"
+        );
         // among the OFDM rungs the lowest usable one: rung 6 is beaten and off the ladder
         assert_eq!(engine.reencode_target(20, 9, 7), Some(7));
         // never into the floor while the recommendation is an OFDM rung
